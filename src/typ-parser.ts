@@ -55,6 +55,16 @@ export function typToDoc(src: string): TypImport {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i].trim();
+    const macroM = /^\/\/ typeset:math-macros (.*)$/.exec(line);
+    if (macroM) {
+      try {
+        settings.mathMacros = JSON.parse(macroM[1]) as string;
+      } catch {
+        warnings.push('could not decode math macros directive');
+      }
+      i++;
+      continue;
+    }
     if (!line || line.startsWith('//')) {
       i++;
       continue;
@@ -71,6 +81,17 @@ export function typToDoc(src: string): TypImport {
       if (paper) settings.page = paper === 'a4' ? 'a4' : 'letter';
       const margin = /margin:\s*([\d.]+)in/.exec(m[1])?.[1];
       if (margin) settings.marginIn = parseFloat(margin);
+      const numbering = /numbering:\s*"([^"]*)"/.exec(m[1])?.[1];
+      if (numbering !== undefined) {
+        settings.pageNumShow = true;
+        if (numbering === '1' || numbering === '— 1 —' || numbering === 'i' || numbering === '1 / 1') {
+          settings.pageNumFormat = numbering;
+        }
+      } else {
+        settings.pageNumShow = false;
+      }
+      const nAlign = /number-align:\s*(left|center|right)/.exec(m[1])?.[1];
+      if (nAlign) settings.pageNumAlign = nAlign as typeof settings.pageNumAlign;
       i++;
       continue;
     }
@@ -89,6 +110,19 @@ export function typToDoc(src: string): TypImport {
     if (/^#set math\.equation\(numbering:/.test(line)) {
       sawSet = true;
       sawNumbering = true;
+      i++;
+      continue;
+    }
+    if (/^#set heading\(numbering:/.test(line)) {
+      sawSet = true;
+      settings.numberSections = true;
+      i++;
+      continue;
+    }
+    const counterM = /^#counter\(page\)\.update\((\d+)\)$/.exec(line);
+    if (counterM) {
+      sawSet = true;
+      settings.pageNumStart = parseInt(counterM[1], 10);
       i++;
       continue;
     }
@@ -158,10 +192,17 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
-    // heading
+    // heading (with optional trailing <label>)
     m = /^(={1,3})\s+(.*)$/.exec(t);
     if (m && t === line.trimEnd()) {
-      out.push(schema.nodes.heading.create({ level: m[1].length }, parseInline(m[2])));
+      let text = m[2];
+      let label = '';
+      const lm = /\s*<([a-zA-Z0-9:._-]+)>$/.exec(text);
+      if (lm) {
+        label = lm[1];
+        text = text.slice(0, lm.index);
+      }
+      out.push(schema.nodes.heading.create({ level: m[1].length, label }, parseInline(text)));
       i++;
       continue;
     }

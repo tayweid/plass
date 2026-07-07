@@ -135,6 +135,20 @@ const tables = tableNodes({
 
 const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
   .append(tables)
+  // Headings carry an optional label so they can be @-referenced; the
+  // "1.2"-style number is painted by the numbering plugin, never stored.
+  .update('heading', {
+    ...base.spec.nodes.get('heading')!,
+    attrs: { level: { default: 1 }, label: { default: '' } },
+    parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({
+      tag: `h${level}`,
+      getAttrs: (el: HTMLElement | string) => ({
+        level,
+        label: typeof el === 'string' ? '' : (el.getAttribute('data-label') ?? ''),
+      }),
+    })),
+    toDOM: (node) => [`h${node.attrs.level}`, { 'data-label': node.attrs.label }, 0],
+  })
   // Table style presets (booktabs is the academic default: horizontal rules
   // only). Mirrored by editor CSS and by stroke/hline emission on export.
   .update('table', {

@@ -10,14 +10,16 @@ import { TextSelection, type Command } from 'prosemirror-state';
 import type { EditorView, NodeView } from 'prosemirror-view';
 import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
+import { getSettings, parseMathMacros } from './settings';
 
-function renderInto(el: HTMLElement, src: string, displayMode: boolean) {
+function renderInto(el: HTMLElement, src: string, displayMode: boolean, macros: Record<string, string> = {}) {
   if (!src.trim()) {
     el.innerHTML = `<span class="math-placeholder">${displayMode ? 'equation' : 'math'}</span>`;
     return;
   }
   try {
-    katex.render(src, el, { displayMode, throwOnError: false });
+    // KaTeX mutates the macros object (\def support) — hand it a copy.
+    katex.render(src, el, { displayMode, throwOnError: false, macros: { ...macros } });
   } catch {
     el.textContent = src;
   }
@@ -25,6 +27,7 @@ function renderInto(el: HTMLElement, src: string, displayMode: boolean) {
 
 export class MathView implements NodeView {
   dom: HTMLElement;
+  private lastMacros: string;
 
   constructor(
     private node: PMNode,
@@ -35,7 +38,8 @@ export class MathView implements NodeView {
     this.dom = document.createElement(display ? 'div' : 'span');
     this.dom.className = display ? 'math-display' : 'math-inline';
     this.dom.setAttribute('data-math', node.attrs.src);
-    renderInto(this.dom, node.attrs.src, display);
+    this.lastMacros = getSettings(view.state).mathMacros;
+    renderInto(this.dom, node.attrs.src, display, parseMathMacros(this.lastMacros));
     this.dom.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -54,9 +58,11 @@ export class MathView implements NodeView {
 
   update(node: PMNode): boolean {
     if (node.type !== this.node.type) return false;
-    if (node.attrs.src !== this.node.attrs.src) {
+    const macros = getSettings(this.view.state).mathMacros;
+    if (node.attrs.src !== this.node.attrs.src || macros !== this.lastMacros) {
+      this.lastMacros = macros;
       this.dom.setAttribute('data-math', node.attrs.src);
-      renderInto(this.dom, node.attrs.src, node.type.name === 'math_display');
+      renderInto(this.dom, node.attrs.src, node.type.name === 'math_display', parseMathMacros(macros));
     }
     this.node = node;
     return true;
@@ -99,7 +105,8 @@ export function openMathEditor(view: EditorView, pos: number) {
   input.value = node.attrs.src;
   if (labelInput) labelInput.value = node.attrs.label ?? '';
 
-  const updatePreview = () => renderInto(preview, input.value.trim() || '\\ldots', display);
+  const macros = parseMathMacros(getSettings(view.state).mathMacros);
+  const updatePreview = () => renderInto(preview, input.value.trim() || '\\ldots', display, macros);
   updatePreview();
   input.addEventListener('input', updatePreview);
 

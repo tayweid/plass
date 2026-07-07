@@ -11,6 +11,10 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { docToTyp } from './typ-serializer';
 
 const FONT_FILES = [
+  'NewCM10-Regular.otf',
+  'NewCM10-Italic.otf',
+  'NewCM10-Bold.otf',
+  'NewCM10-BoldItalic.otf',
   'STIXTwoText-Regular.otf',
   'STIXTwoText-Italic.otf',
   'STIXTwoText-Bold.otf',
@@ -24,7 +28,7 @@ const FONT_FILES = [
 ];
 
 /** Fonts guaranteed to exist in the compiler; used as #set text fallback. */
-const FONT_FALLBACK = ['STIX Two Text', 'Libertinus Serif'];
+const FONT_FALLBACK = ['New Computer Modern', 'STIX Two Text', 'Libertinus Serif'];
 
 interface TypstLike {
   addSource(path: string, content: string): Promise<void>;

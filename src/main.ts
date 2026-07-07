@@ -18,7 +18,7 @@ import { FigureView, figuresPlugin } from './figures';
 import { FootnoteView, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { refAutocomplete } from './ref-autocomplete';
-import { applySettings } from './settings';
+import { applySettings, formatPageNumber, getSettings } from './settings';
 import { FileManager } from './file-manager';
 
 const STORAGE_KEY = 'typeset-doc-v1';
@@ -88,7 +88,8 @@ function renderPages(info: PageInfo | null) {
   stackEl.classList.remove('unpaged');
   stackEl.style.height = `${info.count * (info.pageH + info.gap) - info.gap}px`;
   pageCount = info.count;
-  const sig = `${info.count}:${info.pageH}:${info.margin}`;
+  const s = getSettings(view.state);
+  const sig = `${info.count}:${info.pageH}:${info.margin}:${s.pageNumShow}:${s.pageNumFormat}:${s.pageNumAlign}:${s.pageNumStart}`;
   if (sig !== pageSignature) {
     pageSignature = sig;
     const frag = document.createDocumentFragment();
@@ -98,11 +99,15 @@ function renderPages(info: PageInfo | null) {
       box.className = 'page-box';
       box.style.top = `${top}px`;
       frag.appendChild(box);
-      const num = document.createElement('div');
-      num.className = 'page-num';
-      num.style.top = `${top + info.pageH - info.margin / 2 - 7}px`;
-      num.textContent = String(k + 1);
-      frag.appendChild(num);
+      if (s.pageNumShow) {
+        const num = document.createElement('div');
+        num.className = 'page-num';
+        num.style.top = `${top + info.pageH - info.margin / 2 - 7}px`;
+        num.style.textAlign = s.pageNumAlign;
+        num.style.padding = `0 ${info.margin}px`;
+        num.textContent = formatPageNumber(s, k + 1, info.count);
+        frag.appendChild(num);
+      }
     }
     pagesEl.replaceChildren(frag);
   }
@@ -132,10 +137,15 @@ const view = new EditorView(editorEl, {
   handleClick: (v, _pos, event) => footnoteMarkerClick(v, event),
   dispatchTransaction(tr) {
     const prevAttrs = view.state.doc.attrs;
+    const prevMacros = getSettings(view.state).mathMacros;
     const newState = view.state.apply(tr);
     view.updateState(newState);
     toolbar?.update(newState);
-    if (newState.doc.attrs !== prevAttrs) applySettings(newState);
+    if (newState.doc.attrs !== prevAttrs) {
+      applySettings(newState);
+      // Macro changes must re-render every math node view.
+      if (getSettings(newState).mathMacros !== prevMacros) queueMicrotask(refreshMathNodes);
+    }
     if (tr.docChanged) {
       scheduleSave(view);
       fileManager.noteChange();
@@ -186,6 +196,21 @@ window.addEventListener(
   },
   { capture: true },
 );
+
+/** Touch every math node (same attrs) so node views re-render with new macros. */
+function refreshMathNodes() {
+  let tr = view.state.tr;
+  view.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'math_inline' || node.type.name === 'math_display') {
+      tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs });
+    }
+    return true;
+  });
+  if (tr.steps.length) {
+    tr.setMeta('addToHistory', false);
+    view.dispatch(tr);
+  }
+}
 
 let messageTimer = 0;
 let statusMessage = '';

@@ -1,3 +1,35 @@
+/* ---------- fonts ---------- */
+
+/* New Computer Modern — the TeX look, shipped as webfonts so the editor and
+   the PDF use the same faces (same files feed the Typst compiler). */
+@font-face {
+  font-family: 'New Computer Modern';
+  src: url('/fonts/NewCM10-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'New Computer Modern';
+  src: url('/fonts/NewCM10-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+}
+
+@font-face {
+  font-family: 'New Computer Modern';
+  src: url('/fonts/NewCM10-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'New Computer Modern';
+  src: url('/fonts/NewCM10-BoldItalic.woff2') format('woff2');
+  font-weight: 700;
+  font-style: italic;
+}
+
 /* ---------- app chrome ---------- */
 
 :root {
@@ -292,6 +324,15 @@ body {
   padding-top: 0.2em;
 }
 
+/* Section numbers, painted by the numbering plugin. */
+.ProseMirror h1[data-secnum]::before,
+.ProseMirror h2[data-secnum]::before,
+.ProseMirror h3[data-secnum]::before {
+  content: attr(data-secnum) '\2002';
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .ProseMirror h2 {
   font-size: 1.4em;
 }
@@ -521,19 +562,74 @@ body {
   display: none;
 }
 
-.ts-table-wrap:not(.has-preview) > .ts-table-preview,
-.ts-table-wrap[data-editing] > .ts-table-preview {
+.ts-table-wrap:not(.has-preview) > .ts-table-preview {
   display: none;
+}
+
+/* While editing, keep the compiled result visible below the editable table —
+   live feedback for style/opts changes instead of styling blind. */
+.ts-table-wrap.has-preview[data-editing] > .ts-table-preview {
+  margin-top: 10px;
+  padding-top: 14px;
+  border-top: 1px dashed #c9c5bc;
+  cursor: default;
+}
+
+.ts-table-wrap.has-preview[data-editing] > .ts-table-preview::before {
+  content: 'Typst result — updates as you edit';
+  position: absolute;
+  top: 2px;
+  left: 0;
+  font: 10px var(--sans);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.ts-table-wrap.has-preview[data-editing] > .ts-table-preview:hover {
+  outline: none;
 }
 
 .ts-table-preview {
   cursor: pointer;
   border-radius: 3px;
+  position: relative;
 }
 
 .ts-table-preview:hover {
   outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
   outline-offset: 3px;
+}
+
+/* Per-cell hit regions over the compiled SVG: click to edit in place. */
+.ts-cell-hit {
+  position: absolute;
+  cursor: text;
+  border-radius: 3px;
+}
+
+.ts-cell-hit:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* Floating single-cell editor anchored to the compiled cell position. */
+.ts-cell-editor {
+  position: absolute;
+  z-index: 150;
+  font: inherit;
+  font-family: var(--doc-font, var(--serif));
+  font-size: 0.95em;
+  color: #1a1a1a;
+  background: #fff;
+  border: 1.5px solid var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+.ts-cell-editor:focus {
+  outline: none;
 }
 
 .ProseMirror table {
@@ -1014,6 +1110,17 @@ body {
 .settings-hint {
   font: 10.5px var(--sans);
   color: var(--ink-soft);
+  margin-top: 2px;
+}
+
+.settings-macros-btn {
+  font: 12px var(--sans);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 5px;
+  padding: 5px 10px;
+  cursor: pointer;
   margin-top: 2px;
 }
 

@@ -82,11 +82,25 @@ npm run build    # typecheck + production build (static site in dist/)
   measures justify badly.) For full Typst control, the **Opts** button
   stores raw `#table` arguments on the table (stroke/fill functions,
   `inset`, fractional column widths, …), emitted verbatim into the export
-  and PDF — presets are suppressed while custom args exist, and the editor
-  shows the preset look only. Imported tables keep unknown named arguments
-  the same way; forms we can't reconstruct faithfully (custom-positioned
-  rules, vlines) fall back to raw-Typst islands rather than being
-  simplified.
+  and PDF — presets are suppressed while custom args exist. And the editor
+  doesn't approximate custom styling: it **compiles that table with the
+  in-app Typst compiler and shows the compiled SVG in place** (same fonts,
+  same engine as the PDF) — and the compiled render is **directly editable**:
+  every cell body is link-wrapped during fragment compilation, so the SVG
+  carries exact per-cell hit geometry; click a cell on the preview and a
+  floating editor opens right there (Enter commits, Tab/Shift-Tab chain
+  through cells spreadsheet-style, Esc cancels), recompiling behind you.
+  While a cell editor is open, the (invisible) selection sits in the real
+  cell, so the toolbar's table commands stay live — clicking one (e.g.
+  +Row) commits the cell and hands over to the DOM form for the structural
+  change. Rich cells (math, refs), caret-arrowing into the table, or
+  double-clicking the preview open the DOM form explicitly — with the
+  compiled result kept visible as a live strip below it, recompiling as you
+  type. Otherwise the compiled table is the only one you see (~50 ms
+  recompiles, debounced). Imported tables keep
+  unknown named arguments the same way; forms we can't reconstruct
+  faithfully (custom-positioned rules, vlines) fall back to raw-Typst
+  islands rather than being simplified.
 - **Citations & bibliography** (hover the References block → Edit, or
   File → Edit/Import bibliography): the BibTeX is editable in-app (live entry
   count, ⌘Enter to save, Download .bib to get it back out; saves are
@@ -109,8 +123,19 @@ npm run build    # typecheck + production build (static site in dist/)
   are painted via decorations (never stored), so the document model stays
   clean. Exports as Typst `#set math.equation(numbering: "(1)")` +
   `<label>`/`@label`.
-- **Document settings** (⚙ in the toolbar): font, size, line spacing, paper
-  (US Letter/A4), margins, hyphenation, equation numbering. Settings are
+- **Document settings** (⚙ in the toolbar): font (New Computer Modern — the
+  TeX face — is the default, shipped as webfonts rebuilt to TrueType so
+  browsers accept them; the same family feeds the PDF), size, line spacing,
+  paper (US Letter/A4), margins, hyphenation, equation numbering, **section
+  numbering** ("1.2"-style painted on headings; headings then become
+  `@sec:` targets in the picker, auto-labeled on first reference and
+  exported as `= Title <label>` + `#set heading(numbering: "1.1")`), **page
+  numbers** (show/hide, formats 1 / — 1 — / roman / 1-of-N, position,
+  first-page number — mirrored in the painted chrome and exported as
+  `#set page(numbering:, number-align:)` + `#counter(page).update()`), and
+  **math macros** (define `\E = \mathbb{E}` once; live in every KaTeX
+  render and expanded to plain LaTeX on export so files compile anywhere;
+  persisted via a `// typeset:math-macros` header directive). Settings are
   document attributes — undoable, autosaved, applied live (the oracle
   re-measures and re-typesets), and exported as Typst `#set` rules. This is
   the WYSIWYG face of a preamble.
@@ -199,13 +224,14 @@ Design deviations from the spec, deliberate for the MVP:
   document is ~6–8 ms, dominated by the global pagination measure).
 - **M3 surface**: float placement for figures (drift to page top/bottom);
   image sidecar files on save (directory handle) so CLI compiles work
-  without swapping data URLs; math macros
-  (KaTeX `macros` option + mitex definitions); section numbering and heading
-  cross-references; Tier B print-preview (render the Typst compile back into
-  the editor as a pixel-exact preview — the compiler is already in the app).
+  without swapping data URLs; raw-island compiled previews; Tier B
+  whole-document preview (the fragment machinery generalizes).
 - **Typst-WASM oracle** (M0 of the spec proper): swap `layoutBlock` for
   typst.ts frame-tree output; gets float placement + page breaking "for
-  free". The compiler now ships in the app (PDF export), so this is an
-  experiment away rather than an integration away.
+  free". The compiler and renderer now ship in the app (PDF export +
+  compiled table previews prove the compile→SVG→display loop end to end),
+  so this is an experiment away rather than an integration away. The same
+  fragment-preview mechanism should extend to raw-Typst islands and a
+  whole-document Tier B preview next.
 - **v2**: executable Python cells via Pyodide (the computational-document
   vision).

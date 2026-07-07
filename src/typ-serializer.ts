@@ -4,18 +4,42 @@
 // mitex Typst package, which compiles LaTeX math inside Typst documents.
 
 import type { Node as PMNode } from 'prosemirror-model';
-import { DEFAULT_SETTINGS, type DocSettings } from './settings';
+import { DEFAULT_SETTINGS, parseMathMacros, type DocSettings } from './settings';
 
 export interface TypExportOptions {
   /** Rewrite image sources (e.g. data: URLs to VFS paths for compilation). */
   resolveImage?: (src: string) => string;
   /** Extra font families appended to #set text(font: …) as fallbacks. */
   fontFallback?: string[];
+  /**
+   * Preview-only: wrap each table cell body in #link("cell://row-col")[…] so
+   * compiled SVGs expose per-cell hit geometry for in-place editing.
+   */
+  cellLinks?: boolean;
 }
 
 let exportOpts: TypExportOptions = {};
 let eqLabels = new Set<string>();
 let docBib: { name: string; content: string } | null = null;
+let docMacros: Record<string, string> = {};
+
+/** Expand document math macros so exported LaTeX compiles anywhere. */
+function expandMacros(src: string): string {
+  let out = src;
+  for (let pass = 0; pass < 10; pass++) {
+    let changed = false;
+    for (const [name, expansion] of Object.entries(docMacros)) {
+      const re = new RegExp('\\\\' + name.slice(1) + '(?![a-zA-Z])', 'g');
+      const next = out.replace(re, expansion.replace(/\$/g, '$$$$'));
+      if (next !== out) {
+        out = next;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return out;
+}
 
 function imageSrc(src: string): string {
   return exportOpts.resolveImage ? exportOpts.resolveImage(src) : src;
@@ -39,7 +63,7 @@ function inlineToTyp(node: PMNode): string {
       if (marks.has('em')) t = `_${t}_`;
       out += t;
     } else if (child.type.name === 'math_inline') {
-      out += `#mi(\`${child.attrs.src}\`)`;
+      out += `#mi(\`${expandMacros(child.attrs.src)}\`)`;
     } else if (child.type.name === 'eq_ref') {
       // Equation refs render as "(1)" to match the editor (Typst's default
       // would be "Equation 1"); figure refs keep "Figure 1".
@@ -75,8 +99,10 @@ function blockToTyp(node: PMNode, indent = ''): string {
       if (/^[=\-+]/.test(s)) s = '\\' + s;
       return indent + s + '\n\n';
     }
-    case 'heading':
-      return indent + '='.repeat(node.attrs.level) + ' ' + inlineToTyp(node) + '\n\n';
+    case 'heading': {
+      const label = node.attrs.label ? ` <${node.attrs.label}>` : '';
+      return indent + '='.repeat(node.attrs.level) + ' ' + inlineToTyp(node) + label + '\n\n';
+    }
     case 'blockquote':
       return indent + '#quote(block: true)[\n' + blocksToTyp(node, indent + '  ') + indent + ']\n\n';
     case 'code_block':
@@ -85,7 +111,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
       return indent + '```' + (node.attrs.params ?? '') + '\n' + node.textContent + '\n```\n\n';
     case 'math_display': {
       const label = node.attrs.label ? ` <${node.attrs.label}>` : '';
-      return indent + '#mitex(`\n' + node.attrs.src + '\n`)' + label + '\n\n';
+      return indent + '#mitex(`\n' + expandMacros(node.attrs.src) + '\n`)' + label + '\n\n';
     }
     case 'figure': {
       // src is emitted verbatim (even data: URLs) so our own files round-trip
@@ -129,17 +155,20 @@ function blockToTyp(node: PMNode, indent = ''): string {
 
       let hasHeader = false;
       const rows: string[] = [];
-      node.forEach((row) => {
+      node.forEach((row, _rowOffset, rowIndex) => {
         const cells: string[] = [];
         let allHeader = row.childCount > 0;
         let col = 0;
-        row.forEach((cell) => {
+        row.forEach((cell, _cellOffset, cellIndex) => {
           if (cell.type.name !== 'table_header') allHeader = false;
           const parts: string[] = [];
           cell.forEach((block) => {
             if (block.isTextblock) parts.push(inlineToTyp(block));
           });
-          const content = parts.join(' ').trim();
+          let content = parts.join(' ').trim();
+          if (exportOpts.cellLinks) {
+            content = `#link("cell://${rowIndex}-${cellIndex}")[${content || '#h(1em)'}]`;
+          }
           const colspan = (cell.attrs.colspan as number) ?? 1;
           const rowspan = (cell.attrs.rowspan as number) ?? 1;
           const align = cell.attrs.align as string | null;
@@ -216,13 +245,19 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
   });
   try {
     const s: DocSettings = { ...DEFAULT_SETTINGS, ...((doc.attrs?.settings as Partial<DocSettings>) ?? {}) };
+    docMacros = parseMathMacros(s.mathMacros);
     let out = '// Exported from Typeset\n';
-    out += `#set page(paper: "${s.page === 'a4' ? 'a4' : 'us-letter'}", margin: ${s.marginIn}in)\n`;
+    const pageArgs = [`paper: "${s.page === 'a4' ? 'a4' : 'us-letter'}"`, `margin: ${s.marginIn}in`];
+    if (s.pageNumShow) pageArgs.push(`numbering: "${s.pageNumFormat}"`, `number-align: ${s.pageNumAlign}`);
+    out += `#set page(${pageArgs.join(', ')})\n`;
     out += '#set par(justify: true)\n';
     const fonts = [s.font, ...(opts.fontFallback ?? []).filter((f) => f !== s.font)];
     const fontSpec = fonts.length > 1 ? `(${fonts.map((f) => `"${f}"`).join(', ')})` : `"${fonts[0]}"`;
     out += `#set text(size: ${s.sizePt}pt, font: ${fontSpec}, hyphenate: ${s.hyphenate})\n`;
     if (s.numberEquations) out += '#set math.equation(numbering: "(1)")\n';
+    if (s.numberSections) out += '#set heading(numbering: "1.1")\n';
+    if (s.pageNumStart !== 1) out += `#counter(page).update(${s.pageNumStart})\n`;
+    if (s.mathMacros.trim()) out += `// typeset:math-macros ${JSON.stringify(s.mathMacros)}\n`;
     if (containsMath(doc)) out += '#import "@preview/mitex:0.2.5": mi, mitex\n';
     out += '\n';
     out += blocksToTyp(doc, '');

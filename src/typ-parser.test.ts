@@ -264,7 +264,54 @@ function firstDiff(a: string, b: string): string {
   check('custom-table export idempotent', out === again, firstDiff(out, again));
 }
 
-// --- 12. paragraph starting with list-like character survives ---
+// --- 12. polish bundle: page numbering, sections, macros, heading labels ---
+{
+  const src = [
+    '// Exported from Typeset',
+    '#set page(paper: "us-letter", margin: 1.25in, numbering: "— 1 —", number-align: right)',
+    '#set par(justify: true)',
+    '#set text(size: 12.5pt, font: "New Computer Modern", hyphenate: true)',
+    '#set math.equation(numbering: "(1)")',
+    '#set heading(numbering: "1.1")',
+    '#counter(page).update(3)',
+    '// typeset:math-macros "\\\\E = \\\\mathbb{E}"',
+    '#import "@preview/mitex:0.2.5": mi, mitex',
+    '',
+    '= Introduction <sec:intro>',
+    '',
+    'See @sec:intro and the mean #mi(`\\E[X]`).',
+  ].join('\n');
+  const { doc } = typToDoc(src + '\n');
+  const s = doc.attrs.settings;
+  check('page number format imported', s.pageNumFormat === '— 1 —' && s.pageNumShow === true);
+  check('page number align imported', s.pageNumAlign === 'right');
+  check('page start imported', s.pageNumStart === 3);
+  check('section numbering imported', s.numberSections === true);
+  check('macros imported', s.mathMacros === '\\E = \\mathbb{E}');
+  check('font default is New Computer Modern', s.font === 'New Computer Modern');
+  check('heading label imported', doc.child(0).attrs.label === 'sec:intro');
+  let refLabel = '';
+  doc.descendants((n) => {
+    if (n.type.name === 'eq_ref') refLabel = n.attrs.label;
+    return true;
+  });
+  check('heading ref imported', refLabel === 'sec:intro');
+  const out = docToTyp(doc);
+  check('macros expand on export', out.includes('\\mathbb{E}[X]') && !out.includes('#mi(`\\E[X]`)'));
+  check('macros directive re-emitted', out.includes('// typeset:math-macros'));
+  const again = docToTyp(typToDoc(out).doc);
+  check('polish round-trip idempotent', out === again, firstDiff(out, again));
+}
+
+// --- 13. page numbers hidden round-trips ---
+{
+  const { doc } = typToDoc('#set page(paper: "us-letter", margin: 1in)\n\nHello.\n');
+  check('no numbering param → page numbers off', doc.attrs.settings.pageNumShow === false);
+  const out = docToTyp(doc);
+  check('re-export omits numbering', !out.includes('numbering: "1"') || out.includes('math.equation'));
+}
+
+// --- 14. paragraph starting with list-like character survives ---
 {
   const src = docToTyp(typToDoc('\\- not a list, just a dash').doc);
   check('leading-dash paragraph stays a paragraph', src.includes('\\- not a list'));

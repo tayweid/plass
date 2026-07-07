@@ -44,14 +44,25 @@ function fnNumWidget(text: string) {
   };
 }
 
-function build(doc: PMNode, numberEquations: boolean): EqState {
+function build(doc: PMNode, numberEquations: boolean, numberSections: boolean): EqState {
   const labels = new Map<string, string>();
   const decos: Decoration[] = [];
   let eq = 0;
   let fig = 0;
   let fn = 0;
+  const sec = [0, 0, 0];
 
   doc.descendants((node, pos) => {
+    if (node.type.name === 'heading' && numberSections) {
+      const level = Math.min(3, node.attrs.level as number);
+      sec[level - 1]++;
+      for (let i = level; i < 3; i++) sec[i] = 0;
+      const num = sec.slice(0, level).join('.');
+      decos.push(Decoration.node(pos, pos + node.nodeSize, { 'data-secnum': num }));
+      const label = node.attrs.label as string;
+      if (label && !labels.has(label)) labels.set(label, `Section ${num}`);
+      return true;
+    }
     if (node.type.name === 'math_display') {
       eq++;
       const label = node.attrs.label as string;
@@ -105,7 +116,11 @@ function build(doc: PMNode, numberEquations: boolean): EqState {
 function findLabelTarget(doc: PMNode, label: string): number {
   let target = -1;
   doc.descendants((n, p) => {
-    if (target < 0 && (n.type.name === 'math_display' || n.type.name === 'figure') && n.attrs.label === label) {
+    if (
+      target < 0 &&
+      (n.type.name === 'math_display' || n.type.name === 'figure' || n.type.name === 'heading') &&
+      n.attrs.label === label
+    ) {
       target = p;
     }
     return target < 0;
@@ -117,9 +132,15 @@ export function equationsPlugin() {
   return new Plugin<EqState>({
     key: eqKey,
     state: {
-      init: (_, state) => build(state.doc, getSettings(state).numberEquations),
-      apply: (tr, val, _old, newState) =>
-        tr.docChanged ? build(newState.doc, getSettings(newState).numberEquations) : val,
+      init: (_, state) => {
+        const s = getSettings(state);
+        return build(state.doc, s.numberEquations, s.numberSections);
+      },
+      apply: (tr, val, _old, newState) => {
+        if (!tr.docChanged) return val;
+        const s = getSettings(newState);
+        return build(newState.doc, s.numberEquations, s.numberSections);
+      },
     },
     props: {
       decorations: (state) => eqKey.getState(state)?.decos,

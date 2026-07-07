@@ -59,7 +59,7 @@ inset: 6pt,
 fill: (x, y) => if calc.odd(y) { luma(245) },
 stroke: (x, y) => if y == 0 { (bottom: 0.7pt) }"></textarea>
       <div class="bib-editor-foot">
-        <span class="bib-editor-hint">Emitted verbatim into #table(…) — overrides the style preset in PDF; the editor shows the preset only. Leave empty to return to presets. <kbd>⌘Enter</kbd> save</span>
+        <span class="bib-editor-hint">Emitted verbatim into #table(…), replacing the style preset. With custom args the editor shows a Typst-compiled preview of the table whenever the caret is outside it — click the preview to edit. Leave empty to return to presets. <kbd>⌘Enter</kbd> save</span>
         <span class="bib-editor-actions">
           <button type="button" class="bib-cancel">Cancel</button>
           <button type="button" class="bib-save">Save</button>
@@ -75,7 +75,13 @@ stroke: (x, y) => if y == 0 { (bottom: 0.7pt) }"></textarea>
     view.focus();
   };
   const save = () => {
-    view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, params: text.value.trim() }));
+    const params = text.value.trim();
+    let tr = view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, params });
+    if (params) {
+      // Step out of the table so the compiled preview shows immediately.
+      tr = tr.setSelection(TextSelection.near(tr.doc.resolve(pos + node.nodeSize), 1));
+    }
+    view.dispatch(tr.scrollIntoView());
     close();
   };
   overlay.querySelector('.bib-save')!.addEventListener('click', save);

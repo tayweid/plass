@@ -12,12 +12,15 @@ import type { EditorView } from 'prosemirror-view';
 import { schema } from './schema';
 import { citeOrder, getBib } from './citations';
 import { bibAuthors } from './bibtex';
+import { getSettings } from './settings';
 
 interface LabelEntry {
   label: string;
-  display: string; // "(2)", "Figure 1", "[3]", "[·]"
+  display: string; // "(2)", "Figure 1", "§1.2", "[3]", "[·]"
   preview: string;
   kind: 'ref' | 'cite';
+  /** Heading position needing this label stamped on first use. */
+  assignPos?: number;
 }
 
 interface Active {
@@ -28,9 +31,34 @@ interface Active {
 
 function collectLabels(state: EditorState): LabelEntry[] {
   const out: LabelEntry[] = [];
+  const taken = new Set<string>();
+  state.doc.descendants((n) => {
+    if (n.attrs?.label) taken.add(n.attrs.label as string);
+    return true;
+  });
+  const numberSections = getSettings(state).numberSections;
   let eq = 0;
   let fig = 0;
-  state.doc.descendants((node) => {
+  const sec = [0, 0, 0];
+  state.doc.descendants((node, pos) => {
+    if (node.type.name === 'heading') {
+      if (!numberSections) return true;
+      const level = Math.min(3, node.attrs.level as number);
+      sec[level - 1]++;
+      for (let i = level; i < 3; i++) sec[i] = 0;
+      const num = sec.slice(0, level).join('.');
+      let label = node.attrs.label as string;
+      let assignPos: number | undefined;
+      if (!label) {
+        const slug = 'sec:' + (node.textContent.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 28) || 'section');
+        label = slug;
+        let k = 2;
+        while (taken.has(label)) label = `${slug}-${k++}`;
+        assignPos = pos;
+      }
+      out.push({ label, display: `§${num}`, preview: node.textContent.slice(0, 40), kind: 'ref', assignPos });
+      return true;
+    }
     if (node.type.name === 'math_display') {
       eq++;
       const label = node.attrs.label as string;
@@ -77,7 +105,7 @@ function activeRef(state: EditorState): Active | null {
 
 export function refAutocomplete() {
   let menu: HTMLElement | null = null;
-  let items: Array<{ label: string | null; kind: 'ref' | 'cite'; el: HTMLElement }> = [];
+  let items: Array<{ label: string | null; kind: 'ref' | 'cite'; assignPos?: number; el: HTMLElement }> = [];
   let selected = 0;
   let active: Active | null = null;
   let lastSignature = '';
@@ -90,11 +118,17 @@ export function refAutocomplete() {
     lastSignature = '';
   };
 
-  const insert = (view: EditorView, label: string | null, kind: 'ref' | 'cite') => {
+  const insert = (view: EditorView, label: string | null, kind: 'ref' | 'cite', assignPos?: number) => {
     if (!active || !label) return;
     const node =
       kind === 'cite' ? schema.nodes.citation.create({ key: label }) : schema.nodes.eq_ref.create({ label });
     let tr = view.state.tr.replaceWith(active.from, active.to, node);
+    if (assignPos !== undefined) {
+      // Stamp the auto-generated label onto the heading so the ref sticks.
+      const h = tr.doc.nodeAt(tr.mapping.map(assignPos, -1));
+      const hp = tr.mapping.map(assignPos, -1);
+      if (h && h.type === schema.nodes.heading) tr = tr.setNodeMarkup(hp, undefined, { ...h.attrs, label });
+    }
     if (kind === 'cite') {
       let hasBib = false;
       tr.doc.descendants((n) => {
@@ -141,18 +175,18 @@ export function refAutocomplete() {
       menu.replaceChildren();
       items = [];
 
-      const addItem = (label: string | null, kind: 'ref' | 'cite', html: string, cls = '') => {
+      const addItem = (label: string | null, kind: 'ref' | 'cite', html: string, cls = '', assignPos?: number) => {
         const el = document.createElement('div');
         el.className = 'ref-menu-item ' + cls;
         el.innerHTML = html;
         if (label !== null) {
           el.addEventListener('mousedown', (e) => {
             e.preventDefault();
-            insert(view, label, kind);
+            insert(view, label, kind, assignPos);
           });
         }
         menu!.appendChild(el);
-        items.push({ label, kind, el });
+        items.push({ label, kind, assignPos, el });
       };
 
       if (!all.length) {
@@ -168,6 +202,8 @@ export function refAutocomplete() {
             e.label,
             e.kind,
             `<span class="ref-menu-num">${e.display}</span><span class="ref-menu-label">@${e.label}</span><span class="ref-menu-preview">${e.preview.replace(/</g, '&lt;')}</span>`,
+            '',
+            e.assignPos,
           );
         }
         if (!matches.length || (!exact && found.query)) {
@@ -234,7 +270,7 @@ export function refAutocomplete() {
         }
         if ((e.key === 'Enter' || e.key === 'Tab') && sel.length) {
           const pick = items[selected]?.label !== null ? items[selected] : sel[0];
-          insert(view, pick.label, pick.kind);
+          insert(view, pick.label, pick.kind, pick.assignPos);
           return true;
         }
         return false;
