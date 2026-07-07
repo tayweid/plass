@@ -1,0 +1,221 @@
+import 'katex/dist/katex.min.css';
+import './style.css';
+
+import { EditorState } from 'prosemirror-state';
+import { EditorView } from 'prosemirror-view';
+import { history } from 'prosemirror-history';
+import { Node as PMNode } from 'prosemirror-model';
+import { schema } from './schema';
+import { baseKeys, buildInputRules, buildKeymap } from './editing';
+import { typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugin';
+import { MathView } from './math';
+import { demoDoc } from './demo-doc';
+import { buildToolbar, type Toolbar } from './toolbar';
+import { tableEditing } from 'prosemirror-tables';
+import { TablePreviewView, tablePreviewPlugin } from './table-preview';
+import { equationsPlugin } from './equations';
+import { FigureView, figuresPlugin } from './figures';
+import { FootnoteView, footnoteMarkerClick } from './footnotes';
+import { BibliographyView, citationsPlugin } from './citations';
+import { refAutocomplete } from './ref-autocomplete';
+import { applySettings } from './settings';
+import { FileManager } from './file-manager';
+
+const STORAGE_KEY = 'typeset-doc-v1';
+
+function loadDoc(): PMNode {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return PMNode.fromJSON(schema, JSON.parse(raw));
+  } catch (e) {
+    console.warn('Could not restore saved document, starting fresh.', e);
+  }
+  return demoDoc();
+}
+
+let saveTimer = 0;
+function scheduleSave(view: EditorView) {
+  clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(view.state.doc.toJSON()));
+    } catch (e) {
+      console.warn('Autosave failed.', e);
+    }
+  }, 400);
+}
+
+function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState {
+  return EditorState.create({
+    doc,
+    plugins: [
+      // Before the keymaps: the popup must see Enter/Tab/arrows first.
+      refAutocomplete(),
+      buildInputRules(),
+      buildKeymap(),
+      baseKeys,
+      history(),
+      equationsPlugin(),
+      citationsPlugin(),
+      figuresPlugin(),
+      tableEditing(),
+      tablePreviewPlugin(),
+      typesetPlugin({ onStats, onPages: renderPages }),
+    ],
+  });
+}
+
+const editorEl = document.getElementById('editor')!;
+const toolbarEl = document.getElementById('toolbar')!;
+const statusEl = document.getElementById('status')!;
+const stackEl = document.getElementById('stack')!;
+const pagesEl = document.getElementById('pages')!;
+
+let pageCount = 0;
+let pageSignature = '';
+
+/** Paint the page boxes + numbers behind the editor. */
+function renderPages(info: PageInfo | null) {
+  if (!info) {
+    stackEl.classList.add('unpaged');
+    stackEl.style.height = '';
+    pagesEl.replaceChildren();
+    pageSignature = '';
+    pageCount = 0;
+    updateStatus();
+    return;
+  }
+  stackEl.classList.remove('unpaged');
+  stackEl.style.height = `${info.count * (info.pageH + info.gap) - info.gap}px`;
+  pageCount = info.count;
+  const sig = `${info.count}:${info.pageH}:${info.margin}`;
+  if (sig !== pageSignature) {
+    pageSignature = sig;
+    const frag = document.createDocumentFragment();
+    for (let k = 0; k < info.count; k++) {
+      const top = k * (info.pageH + info.gap);
+      const box = document.createElement('div');
+      box.className = 'page-box';
+      box.style.top = `${top}px`;
+      frag.appendChild(box);
+      const num = document.createElement('div');
+      num.className = 'page-num';
+      num.style.top = `${top + info.pageH - info.margin / 2 - 7}px`;
+      num.textContent = String(k + 1);
+      frag.appendChild(num);
+    }
+    pagesEl.replaceChildren(frag);
+  }
+  updateStatus();
+}
+
+let toolbar: Toolbar;
+let lastStats: TypesetStats | null = null;
+
+function onStats(s: TypesetStats) {
+  lastStats = s;
+  toolbar?.stats(s);
+  updateStatus();
+}
+
+const view = new EditorView(editorEl, {
+  state: makeState(loadDoc(), onStats),
+  nodeViews: {
+    math_inline: (node, v, getPos) => new MathView(node, v, getPos),
+    math_display: (node, v, getPos) => new MathView(node, v, getPos),
+    figure: (node, v, getPos) => new FigureView(node, v, getPos),
+    footnote: (node) => new FootnoteView(node),
+    bibliography: (node, v) => new BibliographyView(node, v),
+    table: (node, v, getPos) => new TablePreviewView(node, v, getPos),
+  },
+  attributes: { spellcheck: 'true' },
+  handleClick: (v, _pos, event) => footnoteMarkerClick(v, event),
+  dispatchTransaction(tr) {
+    const prevAttrs = view.state.doc.attrs;
+    const newState = view.state.apply(tr);
+    view.updateState(newState);
+    toolbar?.update(newState);
+    if (newState.doc.attrs !== prevAttrs) applySettings(newState);
+    if (tr.docChanged) {
+      scheduleSave(view);
+      fileManager.noteChange();
+      updateStatus();
+    }
+  },
+});
+
+const fileManager = new FileManager({
+  getDoc: () => view.state.doc,
+  emptyDoc: () => schema.nodes.doc.create(null, [schema.nodes.paragraph.create()]),
+  setDoc(doc) {
+    view.updateState(makeState(doc, onStats));
+    applySettings(view.state);
+    toolbar?.update(view.state);
+    updateStatus();
+    scheduleSave(view);
+    view.focus();
+  },
+  onState() {
+    toolbar?.setFile(fileManager.name, fileManager.dirty);
+    document.title = `${fileManager.name}${fileManager.dirty ? ' •' : ''} — Typeset`;
+  },
+  message: showMessage,
+});
+
+toolbar = buildToolbar(toolbarEl, view, fileManager);
+toolbar.update(view.state);
+toolbar.setFile(fileManager.name, fileManager.dirty);
+applySettings(view.state);
+
+// Reconnect to the last open file if the browser still grants access.
+void fileManager.restoreLast();
+
+// App-level shortcuts (the browser's defaults would take over otherwise).
+window.addEventListener(
+  'keydown',
+  (e) => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    const key = e.key.toLowerCase();
+    if (key === 's') {
+      e.preventDefault();
+      void (e.shiftKey ? fileManager.saveAs() : fileManager.save());
+    } else if (key === 'o' && !e.shiftKey) {
+      e.preventDefault();
+      void fileManager.open();
+    }
+  },
+  { capture: true },
+);
+
+let messageTimer = 0;
+let statusMessage = '';
+function showMessage(text: string) {
+  statusMessage = text;
+  updateStatus();
+  clearTimeout(messageTimer);
+  messageTimer = window.setTimeout(() => {
+    statusMessage = '';
+    updateStatus();
+  }, 4000);
+}
+
+function updateStatus() {
+  const words = view.state.doc.textBetween(0, view.state.doc.content.size, ' ', ' ')
+    .split(/\s+/)
+    .filter(Boolean).length;
+  const oracle = lastStats ? `layout oracle: ${lastStats.ms.toFixed(1)} ms for ${lastStats.lines} lines` : '';
+  const pages = pageCount ? `${pageCount} page${pageCount === 1 ? '' : 's'} · ` : '';
+  const left = statusMessage ? `<b>${statusMessage}</b>` : oracle;
+  statusEl.innerHTML = `<span>${left}</span><span>${pages}${words} words</span>`;
+}
+updateStatus();
+
+view.focus();
+
+// Handy for debugging and scripted testing.
+declare global {
+  interface Window {
+    view: EditorView;
+  }
+}
+window.view = view;

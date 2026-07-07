@@ -1,0 +1,204 @@
+// Math nodes: KaTeX-rendered atoms with a popover source editor.
+//
+// Following spec §3.7: math nodes are atomic in the document; clicking one
+// opens a small editor with a live preview. v1 uses LaTeX syntax (KaTeX);
+// the .typ exporter wraps it with mitex so exported files still compile.
+
+import katex from 'katex';
+import type { Node as PMNode } from 'prosemirror-model';
+import { TextSelection, type Command } from 'prosemirror-state';
+import type { EditorView, NodeView } from 'prosemirror-view';
+import { InputRule } from 'prosemirror-inputrules';
+import { schema } from './schema';
+
+function renderInto(el: HTMLElement, src: string, displayMode: boolean) {
+  if (!src.trim()) {
+    el.innerHTML = `<span class="math-placeholder">${displayMode ? 'equation' : 'math'}</span>`;
+    return;
+  }
+  try {
+    katex.render(src, el, { displayMode, throwOnError: false });
+  } catch {
+    el.textContent = src;
+  }
+}
+
+export class MathView implements NodeView {
+  dom: HTMLElement;
+
+  constructor(
+    private node: PMNode,
+    private view: EditorView,
+    private getPos: () => number | undefined,
+  ) {
+    const display = node.type.name === 'math_display';
+    this.dom = document.createElement(display ? 'div' : 'span');
+    this.dom.className = display ? 'math-display' : 'math-inline';
+    this.dom.setAttribute('data-math', node.attrs.src);
+    renderInto(this.dom, node.attrs.src, display);
+    this.dom.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pos = this.getPos();
+      if (pos !== undefined) openMathEditor(this.view, pos);
+    });
+    // A brand-new empty node (from an input rule or toolbar button) wants its
+    // editor immediately.
+    if (!node.attrs.src && !mathEditorOpen) {
+      requestAnimationFrame(() => {
+        const pos = this.getPos();
+        if (pos !== undefined && !mathEditorOpen) openMathEditor(this.view, pos);
+      });
+    }
+  }
+
+  update(node: PMNode): boolean {
+    if (node.type !== this.node.type) return false;
+    if (node.attrs.src !== this.node.attrs.src) {
+      this.dom.setAttribute('data-math', node.attrs.src);
+      renderInto(this.dom, node.attrs.src, node.type.name === 'math_display');
+    }
+    this.node = node;
+    return true;
+  }
+
+  selectNode() {
+    this.dom.classList.add('math-selected');
+  }
+
+  deselectNode() {
+    this.dom.classList.remove('math-selected');
+  }
+
+  ignoreMutation() {
+    return true;
+  }
+}
+
+let mathEditorOpen = false;
+
+export function openMathEditor(view: EditorView, pos: number) {
+  const node = view.state.doc.nodeAt(pos);
+  if (!node || (node.type !== schema.nodes.math_inline && node.type !== schema.nodes.math_display)) return;
+  if (mathEditorOpen) return;
+  mathEditorOpen = true;
+
+  const display = node.type.name === 'math_display';
+
+  const panel = document.createElement('div');
+  panel.className = 'math-editor';
+  panel.innerHTML = `
+    <div class="math-editor-preview" aria-hidden="true"></div>
+    <textarea class="math-editor-input" rows="${display ? 3 : 1}"
+      placeholder="${display ? '\\int_a^b f(x)\\,dx' : 'e^{i\\pi}+1=0'}" spellcheck="false"></textarea>
+    ${display ? '<input class="math-editor-label" placeholder="label — reference in text with @label" spellcheck="false">' : ''}
+    <div class="math-editor-hint">LaTeX · <kbd>Enter</kbd> save · <kbd>Esc</kbd> cancel</div>`;
+  const preview = panel.querySelector('.math-editor-preview') as HTMLElement;
+  const input = panel.querySelector('.math-editor-input') as HTMLTextAreaElement;
+  const labelInput = panel.querySelector('.math-editor-label') as HTMLInputElement | null;
+  input.value = node.attrs.src;
+  if (labelInput) labelInput.value = node.attrs.label ?? '';
+
+  const updatePreview = () => renderInto(preview, input.value.trim() || '\\ldots', display);
+  updatePreview();
+  input.addEventListener('input', updatePreview);
+
+  document.body.appendChild(panel);
+  const target = view.nodeDOM(pos);
+  const rect =
+    target instanceof HTMLElement ? target.getBoundingClientRect() : view.coordsAtPos(pos);
+  const left = Math.min(Math.max(8, rect.left), window.innerWidth - panel.offsetWidth - 8);
+  const top =
+    rect.bottom + panel.offsetHeight + 16 > window.innerHeight
+      ? rect.top - panel.offsetHeight - 8
+      : rect.bottom + 8;
+  panel.style.left = `${left + window.scrollX}px`;
+  panel.style.top = `${top + window.scrollY}px`;
+
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    mathEditorOpen = false;
+    panel.remove();
+    view.focus();
+  };
+
+  const commit = () => {
+    if (closed) return;
+    const src = input.value.trim();
+    const label = (labelInput?.value ?? '').trim().replace(/[^a-zA-Z0-9:._-]/g, '-');
+    const current = view.state.doc.nodeAt(pos);
+    if (current && current.type === node.type) {
+      let tr;
+      if (src) {
+        const attrs = display ? { src, label } : { src };
+        tr = view.state.tr.setNodeMarkup(pos, undefined, attrs);
+        // Put the caret after the node so the user can keep typing.
+        tr.setSelection(TextSelection.near(tr.doc.resolve(pos + current.nodeSize), 1));
+      } else {
+        tr = view.state.tr.delete(pos, pos + current.nodeSize);
+      }
+      view.dispatch(tr);
+    }
+    close();
+  };
+
+  const cancel = () => {
+    if (closed) return;
+    const current = view.state.doc.nodeAt(pos);
+    // Cancelling a never-filled node removes it.
+    if (current && current.type === node.type && !current.attrs.src) {
+      view.dispatch(view.state.tr.delete(pos, pos + current.nodeSize));
+    }
+    close();
+  };
+
+  const onKeydown = (e: KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      commit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancel();
+    }
+  };
+  input.addEventListener('keydown', onKeydown);
+  labelInput?.addEventListener('keydown', onKeydown);
+  // Commit when focus truly leaves the panel (not when tabbing between fields).
+  panel.addEventListener('focusout', (e) => {
+    if (!panel.contains(e.relatedTarget as Node)) commit();
+  });
+
+  input.focus();
+  input.select();
+}
+
+/** Toolbar/keymap command: wrap the selection (or insert) as math. */
+export function insertMath(display: boolean): Command {
+  return (state, dispatch) => {
+    const type = display ? schema.nodes.math_display : schema.nodes.math_inline;
+    const { from, to, empty } = state.selection;
+    const src = empty ? '' : state.doc.textBetween(from, to, ' ');
+    const node = type.create({ src });
+    if (dispatch) dispatch(state.tr.replaceSelectionWith(node).scrollIntoView());
+    return true;
+  };
+}
+
+/** `$...$` becomes inline math as you type the closing dollar. */
+export const mathInlineRule = new InputRule(/\$([^$\s](?:[^$]*[^$\s])?)\$$/, (state, match, start, end) => {
+  return state.tr.replaceWith(start, end, schema.nodes.math_inline.create({ src: match[1] }));
+});
+
+/** `$$` on an empty line becomes a display-math block. */
+export const mathDisplayRule = new InputRule(/^\$\$$/, (state, _match, start, end) => {
+  const $start = state.doc.resolve(start);
+  if ($start.parent.type !== schema.nodes.paragraph) return null;
+  if ($start.parent.content.size > end - start) return null;
+  return state.tr.replaceRangeWith(
+    $start.before(),
+    $start.after(),
+    schema.nodes.math_display.create({ src: '' }),
+  );
+});
