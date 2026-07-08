@@ -1031,6 +1031,17 @@ body {
   padding: 2px 8px;
 }
 
+.toast-action {
+  margin-left: 10px;
+  font: 600 12px var(--sans);
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
 /* A project figure whose file is missing: show the path, keep the slot. */
 .ts-figure.fig-missing img {
   display: none;

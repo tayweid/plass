@@ -22,6 +22,11 @@ export interface FileHooks {
   /** Name/dirty changed — update chrome. */
   onState: () => void;
   message: (text: string) => void;
+  /** Toast with a click action. */
+  messageAction?: (text: string, action: { label: string; run: () => void }) => void;
+  /** The current document just became a fresh project (folder adopted,
+   *  document kept) — migrate embedded figures etc. */
+  onProjectKept?: () => void;
 }
 
 export interface RecentEntry {
@@ -186,6 +191,7 @@ export class FileManager {
     } catch (e) {
       console.warn('Could not persist file handle', e);
     }
+    this.hooks.onProjectKept?.();
     return 'kept';
   }
 
@@ -253,10 +259,28 @@ export class FileManager {
     }
   }
 
+  /** Does the current document contain any figures? */
+  private hasFigures(): boolean {
+    let found = false;
+    this.hooks.getDoc().descendants((n) => {
+      if (n.type.name === 'figure') found = true;
+      return !found;
+    });
+    return found;
+  }
+
   async saveAs() {
     if (!this.supportsFS) {
       this.exportCopy();
       return;
+    }
+    // A document with images is better off as a project (figures become
+    // files, exports stay CLI-compilable). Offer that first.
+    if (!this.inFolder && this.hasFigures() && typeof window.showDirectoryPicker === 'function') {
+      if (confirm('This document contains images. Save it as a project folder, with figures as files? (Cancel saves a single self-contained .typ instead.)')) {
+        await this.openFolder();
+        return;
+      }
     }
     try {
       const handle = await window.showSaveFilePicker!({
@@ -283,6 +307,12 @@ export class FileManager {
   /** Surface a transient status message. */
   notify(text: string) {
     this.hooks.message(text);
+  }
+
+  /** Toast with a click action (falls back to a plain message). */
+  notifyAction(text: string, action: { label: string; run: () => void }) {
+    if (this.hooks.messageAction) this.hooks.messageAction(text, action);
+    else this.hooks.message(text);
   }
 
   /** Rename the document; renames the on-disk file too when supported. */

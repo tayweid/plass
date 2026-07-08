@@ -380,7 +380,17 @@ export function insertFigureFromFile(view: EditorView, file: File) {
     return;
   }
   const reader = new FileReader();
-  reader.onload = () => insertFigureNode(view, String(reader.result), file.name);
+  reader.onload = () => {
+    insertFigureNode(view, String(reader.result), file.name);
+    // Nudge toward the file-based workflow (the embedded copy is frozen at
+    // paste time; a project keeps it a living file).
+    if (fmRef && typeof window.showDirectoryPicker === 'function') {
+      fmRef.notifyAction('Image embedded in the document', {
+        label: 'Make this a Project',
+        run: () => void fmRef?.openFolder(),
+      });
+    }
+  };
   reader.readAsDataURL(file);
 }
 

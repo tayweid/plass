@@ -159,6 +159,8 @@ const fileManager = new FileManager({
     document.title = `${fileManager.name}${fileManager.dirty ? ' •' : ''} — Typeset`;
   },
   message: showMessage,
+  messageAction: showMessage,
+  onProjectKept: () => void migrateEmbeddedFigures(view),
 });
 
 toolbar = buildToolbar(toolbarEl, view, fileManager);
@@ -207,15 +209,27 @@ function refreshMathNodes() {
 }
 
 let messageTimer = 0;
-function showMessage(text: string) {
+function showMessage(text: string, action?: { label: string; run: () => void }) {
   toastEl.textContent = text;
+  if (action) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toast-action';
+    btn.textContent = action.label;
+    btn.addEventListener('click', () => {
+      toastEl.classList.remove('show');
+      toastEl.hidden = true;
+      action.run();
+    });
+    toastEl.appendChild(btn);
+  }
   toastEl.hidden = false;
   toastEl.classList.add('show');
   clearTimeout(messageTimer);
   messageTimer = window.setTimeout(() => {
     toastEl.classList.remove('show');
     window.setTimeout(() => (toastEl.hidden = true), 250);
-  }, 3500);
+  }, action ? 8000 : 3500);
 }
 
 function updateStatus() {
