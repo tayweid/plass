@@ -103,10 +103,13 @@ a feature touches the oracle machinery.
   `figures/`, and referenced files poll for changes (regenerate the plot,
   alt-tab, the figure and pagination update). Embedded data URLs remain
   the single-file fallback.
-- ~~Editing-jitter polish~~ — done, two layers: (1) the edited paragraph
-  goes LIVE — its line decorations strip synchronously on the first
-  keystroke and CSS justification (inert on <br>-terminated oracle lines)
-  wraps it natively while typing; the rest of the document stays frozen.
-  (2) Edits settle after a 250ms pause; page starts persist as mapped
-  markers so pagination reuses the last oracle answer during recompiles.
+- ~~Editing-jitter polish~~ — done, the ownership model: the caret's
+  block belongs to the user — per-keystroke it re-typesets with instant
+  JS Knuth-Plass (hyphenation on) with all lines above the edit frozen;
+  the settle and even fresh oracle answers reproduce its current breaks
+  verbatim (zero motion); pagination holds the mapped page geometry.
+  Corrections apply only when motion is expected: the caret leaves the
+  block, or 4s idle. Measured over a 3-burst session with pauses: one
+  above-caret shift (real growth), zero pause-time motion, zero
+  half-lines, full convergence on release.
 - Dogfooding: write a real problem set / lecture note; harvest frictions.

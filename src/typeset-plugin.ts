@@ -151,6 +151,11 @@ class TypesetView {
   private pageOracle: PageOracle;
   private raf = 0;
   private liveRaf = 0;
+  /** The caret's textblock while actively editing: it belongs to the user —
+   *  no re-optimization (settle or oracle) touches it until the caret
+   *  leaves or a long idle passes. Corrections only when motion is expected. */
+  private owned: number | null = null;
+  private ownTimer = 0;
   private lastLiveDoc: PMNode | null = null;
   private editTimer = 0;
   private lastPageCount = 0;
@@ -206,9 +211,30 @@ class TypesetView {
       this.pageOracle.clear();
     }
     if (view.state.doc !== prevState.doc) {
+      this.owned = this.caretBlockPos();
+      clearTimeout(this.ownTimer);
+      this.ownTimer = window.setTimeout(() => {
+        this.owned = null;
+        this.schedule();
+      }, 4000);
       this.scheduleLive();
       this.scheduleAfterEdit();
+    } else if (view.state.selection !== prevState.selection && this.owned !== null) {
+      // Caret left the owned block: release it and apply the held layout.
+      if (this.caretBlockPos() !== this.owned) {
+        this.owned = null;
+        clearTimeout(this.ownTimer);
+        this.schedule();
+      }
     }
+  }
+
+  private caretBlockPos(): number | null {
+    const { $from } = this.view.state.selection;
+    for (let d = $from.depth; d > 0; d--) {
+      if ($from.node(d).isTextblock || $from.node(d).type.name === 'footnote') return $from.before(d);
+    }
+    return null;
   }
 
   /** Re-typeset just the edited blocks with the JS Knuth-Plass breaker on
@@ -354,6 +380,7 @@ class TypesetView {
     viewRegistry.delete(this.view);
     this.resizeObserver.disconnect();
     clearTimeout(this.editTimer);
+    clearTimeout(this.ownTimer);
     if (this.raf) cancelAnimationFrame(this.raf);
     if (this.liveRaf) cancelAnimationFrame(this.liveRaf);
     this.oracle.destroy();
@@ -535,6 +562,33 @@ class TypesetView {
       if (spec && okey && !oentry) this.oracle.request(okey, spec, measure, settings, skind);
       const ostatus = oentry?.status ?? 'none';
 
+      // The user owns this block: reproduce its current breaks verbatim (the
+      // oracle answer is requested above and applied on release). Zero motion.
+      if (pos === this.owned) {
+        const curState = typesetKey.getState(this.view.state);
+        const base0 = pos + 1;
+        const held = (curState?.decos.find(pos, pos + 1 + node.content.size, (sp) => {
+          const key = (sp as { key?: string } | null)?.key;
+          return !!key && /^(br|hy):/.test(key);
+        }) ?? [])
+          .map((d) => ({
+            at: d.from - base0,
+            hyphen: ((d.spec as { key?: string } | null)?.key ?? '').startsWith('hy'),
+          }))
+          .sort((x, y) => x.at - y.at);
+        const lines = layoutBlock(node, measure, this.measurer, atomWidth, {
+          ...layoutOpts,
+          ...extra,
+          prefixForced: held,
+        });
+        if (lines) {
+          paragraphs++;
+          lineCount += lines.length;
+          emitLines(node, pos, lines);
+          return;
+        }
+      }
+
       const indent = extra.firstLineIndent ?? 0;
       const scale = extra.scale ?? 1;
       let entry = this.cache.get(node);
@@ -560,10 +614,13 @@ class TypesetView {
 
       paragraphs++;
       lineCount += entry.lines.length;
+      emitLines(node, pos, entry.lines);
+    };
+
+    /** Emit line decorations (spacing + break widgets), skipping footnote
+     *  children — inline decos descend into nested editable content. */
+    const emitLines = (node: PMNode, pos: number, lines: LineLayout[]) => {
       const base = pos + 1;
-      // Inline decorations descend into nested editable content: a line's
-      // word-spacing would blanket a footnote's BODY text (which has its own
-      // oracle layout). Emit spacing around footnote children, never across.
       const fnRanges: Array<[number, number]> = [];
       node.forEach((child, offset) => {
         if (child.type.name === 'footnote') fnRanges.push([offset, offset + child.nodeSize]);
@@ -577,7 +634,7 @@ class TypesetView {
         }
         if (cur < to) decos.push(Decoration.inline(base + cur, base + to, { style }));
       };
-      for (const line of entry.lines) {
+      for (const line of lines) {
         if (Math.abs(line.spacing) > 0.01) {
           emitSpacing(line.from, line.to, `word-spacing:${line.spacing.toFixed(3)}px`);
         }
@@ -733,6 +790,23 @@ class TypesetView {
       if (sig) {
         const entry = this.pageOracle.get(sig);
         if (!entry) this.pageOracle.request(sig, view.state.doc, s, this.atomResolver());
+        // While a block is owned, hold the current page geometry (mapped
+        // markers) — fresh oracle answers apply on release, when motion is
+        // expected.
+        if (this.owned !== null) {
+          const marksHeld = typesetKey.getState(view.state)?.pageMarks.find() ?? [];
+          if (marksHeld.length) {
+            const stale = marksHeld
+              .map((m) => ({
+                pos: m.from,
+                line: (m.spec as { psLine: number }).psLine,
+                unit: (m.spec as { psUnit: string }).psUnit,
+              }))
+              .sort((a, b) => a.pos - b.pos);
+            const forced = this.paginateForced(stale, this.lastPageCount || stale.length + 1);
+            if (forced) return forced;
+          }
+        }
         if (entry?.status === 'ok' && entry.pageStarts) {
           const forced = this.paginateForced(entry.pageStarts, entry.pageCount ?? entry.pageStarts.length + 1);
           if (forced) {
