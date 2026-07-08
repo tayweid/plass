@@ -4,7 +4,7 @@
 // mitex Typst package, which compiles LaTeX math inside Typst documents.
 
 import type { Node as PMNode } from 'prosemirror-model';
-import { DEFAULT_SETTINGS, parseMathMacros, type DocSettings } from './settings';
+import { DEFAULT_SETTINGS, normalizeSettings, parseMathMacros, type DocSettings } from './settings';
 
 export interface TypExportOptions {
   /** Rewrite image sources (e.g. data: URLs to VFS paths for compilation). */
@@ -353,11 +353,15 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     return true;
   });
   try {
-    const s: DocSettings = { ...DEFAULT_SETTINGS, ...((doc.attrs?.settings as Partial<DocSettings>) ?? {}) };
+    const s: DocSettings = normalizeSettings(doc.attrs?.settings as Partial<DocSettings> | null);
     docMacros = parseMathMacros(s.mathMacros);
     let out = '// Exported from Typeset\n';
     const paperName = { letter: 'us-letter', a4: 'a4', legal: 'us-legal', b5: 'iso-b5' }[s.page] ?? 'us-letter';
-    const pageArgs = [`paper: "${paperName}"`, `margin: ${s.marginIn}in`];
+    const uniform = s.marginTop === s.marginRight && s.marginTop === s.marginBottom && s.marginTop === s.marginLeft;
+    const marginArg = uniform
+      ? `margin: ${s.marginTop}in`
+      : `margin: (top: ${s.marginTop}in, right: ${s.marginRight}in, bottom: ${s.marginBottom}in, left: ${s.marginLeft}in)`;
+    const pageArgs = [`paper: "${paperName}"`, marginArg];
     if (s.landscape) pageArgs.push('flipped: true');
     if (s.pageNumShow) pageArgs.push(`numbering: "${s.pageNumFormat}"`, `number-align: ${s.pageNumAlign}`);
     out += `#set page(${pageArgs.join(', ')})\n`;

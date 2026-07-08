@@ -86,7 +86,7 @@ export function typToDoc(src: string): TypImport {
       continue;
     }
     let m: RegExpExecArray | null;
-    if ((m = /^#set page\(([^)]*)\)$/.exec(line))) {
+    if ((m = /^#set page\((.*)\)$/.exec(line))) {
       sawSet = true;
       const paper = /paper:\s*"([^"]+)"/.exec(m[1])?.[1];
       if (paper) {
@@ -94,8 +94,23 @@ export function typToDoc(src: string): TypImport {
           ({ 'us-letter': 'letter', a4: 'a4', 'us-legal': 'legal', 'iso-b5': 'b5' } as const)[paper] ?? 'letter';
       }
       if (/flipped:\s*true/.test(m[1])) settings.landscape = true;
-      const margin = /margin:\s*([\d.]+)in/.exec(m[1])?.[1];
-      if (margin) settings.marginIn = parseFloat(margin);
+      const marginDict = /margin:\s*\(([^)]*)\)/.exec(m[1])?.[1];
+      if (marginDict) {
+        for (const [key, field] of [
+          ['top', 'marginTop'],
+          ['right', 'marginRight'],
+          ['bottom', 'marginBottom'],
+          ['left', 'marginLeft'],
+        ] as Array<[string, 'marginTop' | 'marginRight' | 'marginBottom' | 'marginLeft']>) {
+          const v = new RegExp(`${key}:\\s*([\\d.]+)in`).exec(marginDict)?.[1];
+          if (v) settings[field] = parseFloat(v);
+        }
+      } else {
+        const margin = /margin:\s*([\d.]+)in/.exec(m[1])?.[1];
+        if (margin) {
+          settings.marginTop = settings.marginRight = settings.marginBottom = settings.marginLeft = parseFloat(margin);
+        }
+      }
       const numbering = /numbering:\s*"([^"]*)"/.exec(m[1])?.[1];
       if (numbering !== undefined) {
         settings.pageNumShow = true;

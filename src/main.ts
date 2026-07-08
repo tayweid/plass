@@ -87,7 +87,7 @@ function renderPages(info: PageInfo | null) {
   stackEl.style.height = `${info.count * (info.pageH + info.gap) - info.gap}px`;
   pageCount = info.count;
   const s = getSettings(view.state);
-  const sig = `${info.count}:${info.pageH}:${info.margin}:${s.pageNumShow}:${s.pageNumFormat}:${s.pageNumAlign}:${s.pageNumStart}`;
+  const sig = `${info.count}:${info.pageH}:${info.marginBottom}:${info.marginLeft}:${info.marginRight}:${s.pageNumShow}:${s.pageNumFormat}:${s.pageNumAlign}:${s.pageNumStart}`;
   if (sig !== pageSignature) {
     pageSignature = sig;
     const frag = document.createDocumentFragment();
@@ -101,9 +101,9 @@ function renderPages(info: PageInfo | null) {
         const num = document.createElement('div');
         num.className = 'page-num';
         // Typst's folio: centered one third of the margin below the content.
-        num.style.top = `${top + info.pageH - (2 / 3) * info.margin - 0.55 * s.sizePt * (4 / 3)}px`;
+        num.style.top = `${top + info.pageH - (2 / 3) * info.marginBottom - 0.55 * s.sizePt * (4 / 3)}px`;
         num.style.textAlign = s.pageNumAlign;
-        num.style.padding = `0 ${info.margin}px`;
+        num.style.padding = `0 ${info.marginRight}px 0 ${info.marginLeft}px`;
         num.textContent = formatPageNumber(s, k + 1, info.count);
         frag.appendChild(num);
       }

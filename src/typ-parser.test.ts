@@ -47,7 +47,7 @@ function firstDiff(a: string, b: string): string {
   const { doc } = typToDoc(src);
   const s = doc.attrs.settings;
   check('paper imported', s.page === 'a4');
-  check('margin imported', s.marginIn === 1);
+  check('margin imported', s.marginTop === 1 && s.marginLeft === 1);
   check('size imported', s.sizePt === 11);
   const out = docToTyp(doc);
   check('modified settings re-export', out.includes('paper: "a4"') && out.includes('margin: 1in'));

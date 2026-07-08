@@ -51,10 +51,10 @@ a feature touches the oracle machinery.
 1. ~~**Manual page break**~~ — done: ⌘Enter / ⋯ menu; zero-height block
    with a floating chip; exports `#pagebreak()`; both engines break
    identically.
-2. **Margins UI** — per-side margins (top/bottom/left/right, and
-   inside/outside for two-sided). Uniform margin exists in Settings;
-   extend the setting shape, `#set page(margin: (…))` emission, parser,
-   and the paginator/parity constants (they read `marginIn` today).
+2. ~~**Margins UI**~~ — done: per-side T/R/B/L inputs in Settings;
+   uniform margins export as `margin: Xin` (back-compat), asymmetric as
+   the dict form; legacy `marginIn` migrates. (Inside/outside two-sided
+   still open.)
 3. ~~**Paper sizes**~~ — done: letter/A4/legal/B5 (custom dimensions still
    open).
 4. ~~**Orientation**~~ — done: landscape via `flipped: true`.

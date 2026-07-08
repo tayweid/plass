@@ -13,7 +13,10 @@ export interface DocSettings {
   lineHeight: number;
   page: 'letter' | 'a4' | 'legal' | 'b5';
   landscape: boolean;
-  marginIn: number;
+  marginTop: number;
+  marginRight: number;
+  marginBottom: number;
+  marginLeft: number;
   hyphenate: boolean;
   numberEquations: boolean;
   numberSections: boolean;
@@ -31,7 +34,10 @@ export const DEFAULT_SETTINGS: DocSettings = {
   lineHeight: 1.5,
   page: 'letter',
   landscape: false,
-  marginIn: 1.25,
+  marginTop: 1.25,
+  marginRight: 1.25,
+  marginBottom: 1.25,
+  marginLeft: 1.25,
   hyphenate: true,
   numberEquations: true,
   numberSections: false,
@@ -102,8 +108,19 @@ export function pageSize(s: Pick<DocSettings, 'page' | 'landscape'>): { w: numbe
 /** Visual gap between painted pages, px. */
 export const PAGE_GAP = 28;
 
+/** Merge stored settings over defaults (migrating legacy fields). */
+export function normalizeSettings(raw: Partial<DocSettings> | null | undefined): DocSettings {
+  const merged = { ...DEFAULT_SETTINGS, ...(raw ?? {}) };
+  // Legacy uniform margin (pre per-side margins).
+  const legacy = (raw as { marginIn?: number } | null | undefined)?.marginIn;
+  if (legacy !== undefined && (raw as Partial<DocSettings>)?.marginTop === undefined) {
+    merged.marginTop = merged.marginRight = merged.marginBottom = merged.marginLeft = legacy;
+  }
+  return merged;
+}
+
 export function getSettings(state: EditorState): DocSettings {
-  return { ...DEFAULT_SETTINGS, ...((state.doc.attrs.settings as Partial<DocSettings>) ?? {}) };
+  return normalizeSettings(state.doc.attrs.settings as Partial<DocSettings> | null);
 }
 
 /** Push the document settings into the page as CSS variables + @page rule. */
@@ -116,7 +133,11 @@ export function applySettings(state: EditorState) {
   const size = pageSize(s);
   root.setProperty('--page-w', `${size.w}px`);
   root.setProperty('--page-h', `${size.h}px`);
-  root.setProperty('--page-margin', `${s.marginIn * 96}px`);
+  root.setProperty('--page-margin', `${s.marginTop * 96}px`);
+  root.setProperty('--page-margin-top', `${s.marginTop * 96}px`);
+  root.setProperty('--page-margin-right', `${s.marginRight * 96}px`);
+  root.setProperty('--page-margin-bottom', `${s.marginBottom * 96}px`);
+  root.setProperty('--page-margin-left', `${s.marginLeft * 96}px`);
 
   let styleEl = document.getElementById('page-style') as HTMLStyleElement | null;
   if (!styleEl) {
@@ -125,7 +146,7 @@ export function applySettings(state: EditorState) {
     document.head.appendChild(styleEl);
   }
   const cssSize = { letter: 'letter', a4: 'A4', legal: 'legal', b5: 'B5' }[s.page] ?? 'letter';
-  styleEl.textContent = `@page { size: ${cssSize}${s.landscape ? ' landscape' : ''}; margin: ${s.marginIn}in; }`;
+  styleEl.textContent = `@page { size: ${cssSize}${s.landscape ? ' landscape' : ''}; margin: ${s.marginTop}in ${s.marginRight}in ${s.marginBottom}in ${s.marginLeft}in; }`;
 }
 
 let openPanel: HTMLElement | null = null;
@@ -185,7 +206,33 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   row('Line spacing', select([1.3, 1.4, 1.5, 1.65, 1.8].map((n) => [n, String(n)] as [number, string]), s.lineHeight, (v) => patch({ lineHeight: +v })));
   row('Paper', select([['letter', 'US Letter'], ['a4', 'A4'], ['legal', 'US Legal'], ['b5', 'B5']] as Array<[string, string]>, s.page, (v) => patch({ page: v as DocSettings['page'] })));
   row('Orientation', select([['portrait', 'Portrait'], ['landscape', 'Landscape']] as Array<[string, string]>, s.landscape ? 'landscape' : 'portrait', (v) => patch({ landscape: v === 'landscape' })));
-  row('Margin', select([0.75, 1, 1.25, 1.5].map((n) => [n, `${n} in`] as [number, string]), s.marginIn, (v) => patch({ marginIn: +v })));
+  {
+    const cluster = document.createElement('span');
+    cluster.className = 'settings-margins';
+    for (const [key, label] of [
+      ['marginTop', 'T'],
+      ['marginRight', 'R'],
+      ['marginBottom', 'B'],
+      ['marginLeft', 'L'],
+    ] as Array<[keyof DocSettings & string, string]>) {
+      const wrap = document.createElement('label');
+      wrap.className = 'settings-margin-field';
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = '0.05';
+      input.min = '0.2';
+      input.max = '3';
+      input.value = String(s[key]);
+      input.addEventListener('change', () => {
+        const v = Math.min(3, Math.max(0.2, parseFloat(input.value) || 1));
+        input.value = String(v);
+        patch({ [key]: v } as Partial<DocSettings>);
+      });
+      wrap.append(label, input);
+      cluster.appendChild(wrap);
+    }
+    row('Margins (in)', cluster);
+  }
   row('Hyphenation', checkbox(s.hyphenate, (v) => patch({ hyphenate: v })));
   row('Number equations', checkbox(s.numberEquations, (v) => patch({ numberEquations: v })));
   row('Number sections', checkbox(s.numberSections, (v) => patch({ numberSections: v })));

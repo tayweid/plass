@@ -52,7 +52,9 @@ export interface PageInfo {
   pageW: number;
   pageH: number;
   gap: number;
-  margin: number;
+  marginBottom: number;
+  marginLeft: number;
+  marginRight: number;
 }
 
 interface TypesetState {
@@ -230,10 +232,9 @@ class TypesetView {
     const host = this.view.dom.parentElement;
     if (!host) return;
     const s = getSettings(this.view.state);
-    const margin = s.marginIn * 96;
     const kind = this.unitKindOf(this.view.state.doc.firstChild);
     const adj = kind ? pageTopAdjustEm(s, kind) * this.bodyPx() : 0;
-    host.style.paddingTop = `${(margin + adj).toFixed(2)}px`;
+    host.style.paddingTop = `${(s.marginTop * 96 + adj).toFixed(2)}px`;
   }
 
   private run() {
@@ -261,7 +262,15 @@ class TypesetView {
 
     const s = getSettings(this.view.state);
     const size = pageSize(s);
-    this.opts.onPages?.({ count, pageW: size.w, pageH: size.h, gap: PAGE_GAP, margin: s.marginIn * 96 });
+    this.opts.onPages?.({
+      count,
+      pageW: size.w,
+      pageH: size.h,
+      gap: PAGE_GAP,
+      marginBottom: s.marginBottom * 96,
+      marginLeft: s.marginLeft * 96,
+      marginRight: s.marginRight * 96,
+    });
     this.opts.onStats?.({ ms: performance.now() - t0, paragraphs: stats.paragraphs, lines: stats.lines });
   }
 
@@ -424,8 +433,9 @@ class TypesetView {
     const view = this.view;
     const s = getSettings(view.state);
     const size = pageSize(s);
-    const margin = s.marginIn * 96;
-    const contentH = size.h - 2 * margin;
+    const marginTop = s.marginTop * 96;
+    const marginBottom = s.marginBottom * 96;
+    const contentH = size.h - marginTop - marginBottom;
     if (contentH < 120) return { spacers: [], count: 1 };
 
     // Page-break oracle: when Typst has told us where its pages break for
@@ -487,10 +497,10 @@ class TypesetView {
     let pageFnH = 0;
     const bottomFor = (extraFnH: number) => {
       const total = pageFnH + extraFnH;
-      return page * (size.h + PAGE_GAP) + size.h - margin - (total > 0 ? total + FN_SEP : 0);
+      return page * (size.h + PAGE_GAP) + size.h - marginBottom - (total > 0 ? total + FN_SEP : 0);
     };
     const breakBefore = (pos: number, y: number, kind: Spacer['kind']) => {
-      const delta = (page + 1) * (size.h + PAGE_GAP) + margin - (y + shift);
+      const delta = (page + 1) * (size.h + PAGE_GAP) + marginTop - (y + shift);
       page++;
       pageFnH = 0;
       if (delta > 0) {
@@ -657,7 +667,7 @@ class TypesetView {
     const view = this.view;
     const s = getSettings(view.state);
     const size = pageSize(s);
-    const margin = s.marginIn * 96;
+    const marginTop = s.marginTop * 96;
     const F = this.bodyPx();
     const host = view.dom.parentElement ?? view.dom;
     const stackTop = host.getBoundingClientRect().top;
@@ -694,7 +704,7 @@ class TypesetView {
       const adj = ps.unit === 'paragraph' || ps.unit === 'line' || ps.unit.startsWith('h')
         ? pageTopAdjustEm(s, adjKind) * F
         : 0;
-      const delta = page * (size.h + PAGE_GAP) + margin + adj - (y + shift);
+      const delta = page * (size.h + PAGE_GAP) + marginTop + adj - (y + shift);
       if (delta > 0) {
         spacers.push({ pos, height: delta, kind });
         shift += delta;
@@ -712,7 +722,7 @@ class TypesetView {
     const view = this.view;
     const s = getSettings(view.state);
     const size = pageSize(s);
-    const margin = s.marginIn * 96;
+    const marginBottom = s.marginBottom * 96;
     const host = view.dom.parentElement ?? view.dom;
     const stackTop = host.getBoundingClientRect().top;
 
@@ -735,7 +745,7 @@ class TypesetView {
     // ink adjustment shifts it away from exactly one margin).
     const pmOffset = view.dom.getBoundingClientRect().top - stackTop;
     for (const [page, list] of groups) {
-      const bottomLimit = page * (size.h + PAGE_GAP) + size.h - margin;
+      const bottomLimit = page * (size.h + PAGE_GAP) + size.h - marginBottom;
       const total = list.reduce((sum, f) => sum + f.height, 0) + FN_GAP * (list.length - 1);
       let y = bottomLimit - total - pmOffset;
       list.forEach((f, i) => {

@@ -637,7 +637,7 @@ body {
 #editor {
   position: relative;
   z-index: 1;
-  padding: var(--page-margin, 1.25in) var(--page-margin, 1.25in) 0;
+  padding: var(--page-margin-top, 1.25in) var(--page-margin-right, 1.25in) 0 var(--page-margin-left, 1.25in);
 }
 
 /* Fallback when the typeset oracle is toggled off: one continuous sheet. */
@@ -651,7 +651,7 @@ body {
 }
 
 #stack.unpaged #editor {
-  padding-bottom: var(--page-margin, 1.25in);
+  padding-bottom: var(--page-margin-bottom, 1.25in);
 }
 
 /* ---------- document typography (driven by document settings) ---------- */
@@ -1565,6 +1565,29 @@ body {
   font: 10.5px var(--sans);
   color: var(--ink-soft);
   margin-top: 2px;
+}
+
+.settings-margins {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.settings-margin-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font: 10.5px var(--sans);
+  color: var(--ink-soft);
+}
+
+.settings-margin-field input {
+  width: 44px;
+  font: 11.5px var(--sans);
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--chrome-border);
+  border-radius: 4px;
+  padding: 2px 4px;
 }
 
 .settings-macros-btn {
