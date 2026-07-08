@@ -126,22 +126,15 @@ is the next milestone. The first page's top offset also differs slightly
   measures justify badly.) For full Typst control, the **Opts** button
   stores raw `#table` arguments on the table (stroke/fill functions,
   `inset`, fractional column widths, …), emitted verbatim into the export
-  and PDF — presets are suppressed while custom args exist. And the editor
-  doesn't approximate custom styling: it **compiles that table with the
-  in-app Typst compiler and shows the compiled SVG in place** (same fonts,
-  same engine as the PDF) — and the compiled render is **directly editable**:
-  every cell body is link-wrapped during fragment compilation, so the SVG
-  carries exact per-cell hit geometry; click a cell on the preview and a
-  floating editor opens right there (Enter commits, Tab/Shift-Tab chain
-  through cells spreadsheet-style, Esc cancels), recompiling behind you.
-  While a cell editor is open, the (invisible) selection sits in the real
-  cell, so the toolbar's table commands stay live — clicking one (e.g.
-  +Row) commits the cell and hands over to the DOM form for the structural
-  change. Rich cells (math, refs), caret-arrowing into the table, or
-  double-clicking the preview open the DOM form explicitly — with the
-  compiled result kept visible as a live strip below it, recompiling as you
-  type. Otherwise the compiled table is the only one you see (~50 ms
-  recompiles, debounced). Imported tables keep
+  and PDF — presets are suppressed while custom args exist. The document
+  **always shows the compiled table** (the in-app Typst render — same
+  fonts, engine, and centering as the PDF). Clicking it opens a focused
+  **editing card**, following the math-editor pattern: a plain cell grid
+  (Tab/arrows to move, header row bold), structural controls (rows,
+  columns, header toggle, per-column alignment, style cycle, raw Opts),
+  and a live compiled result inside the card. ⌘Enter saves as one undoable
+  step; Esc cancels. Cells with rich content (math, references) are
+  preserved unless their text is edited. Imported tables keep
   unknown named arguments the same way; forms we can't reconstruct
   faithfully (custom-positioned rules, vlines) fall back to raw-Typst
   islands rather than being simplified.

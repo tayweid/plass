@@ -154,7 +154,7 @@ export function demoDoc(): PMNode {
     p(
       'Insert a table with ',
       { text: '⌘⌥T', marks: ['code'] },
-      '; Tab moves between cells, and controls float beside the table while you are inside one. Tables export as native Typst ',
+      '. What you see is the compiled table — click it to edit in a focused card (cells, rows, columns, alignment, style) with a live result. Tables export as native Typst ',
       { text: '#table', marks: ['code'] },
       ':',
     ),

@@ -5,22 +5,10 @@
 
 import type { Command, EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
-import {
-  addColumnAfter,
-  addRowAfter,
-  deleteColumn,
-  deleteRow,
-  deleteTable,
-  isInTable,
-  mergeCells,
-  splitCell,
-  toggleHeaderRow,
-} from 'prosemirror-tables';
-import { schema } from './schema';
 import { insertMath } from './math';
 import { insertFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
-import { alignColumn, cycleTableStyle, editTableOptions, insertTable } from './tables';
+import { insertTableWithEditor } from './table-editor';
 import { editBibliography, importBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
 import { isTypesetEnabled, toggleTypeset, type TypesetStats } from './typeset-plugin';
@@ -147,7 +135,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   barBtn(icon('save'), 'Save', 'Save (⌘S)', () => void fm.save());
   barDivider();
   barBtn(icon('image'), 'Figure', 'Insert figure (⌘⌥I) — or paste/drop an image', runCmd(insertFigureCmd));
-  barBtn(icon('table'), 'Table', 'Insert table (⌘⌥T)', runCmd(insertTable()));
+  barBtn(icon('table'), 'Table', 'Insert table (⌘⌥T)', () => insertTableWithEditor(view));
   barBtn('<span class="ico tico">Σ</span>', 'Math', 'Inline math (⌘M) — or type $x^2$; ⌘⇧M for display', runCmd(insertMath(false)));
   barBtn('<span class="ico tico">†</span>', 'Note', 'Footnote (⌘⌥F) — or type ^[', runCmd(insertFootnote));
   barDivider();
@@ -172,74 +160,6 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   menuBtn.textContent = '⋯';
   menuBtn.addEventListener('click', () => toggleMenu());
   container.append(menuBtn);
-
-  // ---------- floating table controls ----------
-
-  const pill = document.createElement('div');
-  pill.className = 'table-pill';
-  pill.hidden = true;
-  const pillButtons: Btn[] = [];
-  const addPill = (b: Btn) => {
-    pillButtons.push(b);
-    pill.appendChild(b.el);
-  };
-  addPill(button('+Col', 'Add column', addColumnAfter, view));
-  addPill(button('−Col', 'Delete column', deleteColumn, view));
-  addPill(button('+Row', 'Add row', addRowAfter, view));
-  addPill(button('−Row', 'Delete row', deleteRow, view));
-  addPill(button('⧉', 'Merge selected cells', mergeCells, view));
-  addPill(button('⊟', 'Split cell', splitCell, view));
-  addPill(button('Hdr', 'Toggle header row', toggleHeaderRow, view));
-  addPill(button('L', 'Align column left', alignColumn('left'), view));
-  addPill(button('C', 'Align column center', alignColumn('center'), view));
-  addPill(button('R', 'Align column right', alignColumn('right'), view));
-  addPill(button('Style', 'Cycle style: booktabs → grid → plain', cycleTableStyle, view));
-  const optsBtn = document.createElement('button');
-  optsBtn.type = 'button';
-  optsBtn.textContent = 'Opts';
-  optsBtn.title = 'Raw Typst #table arguments — full control';
-  optsBtn.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    editTableOptions(view);
-  });
-  pill.appendChild(optsBtn);
-  addPill(button('✕⊞', 'Delete table', deleteTable, view));
-  document.body.appendChild(pill);
-
-  const positionPill = (state: EditorState) => {
-    if (!isInTable(state)) {
-      pill.hidden = true;
-      return;
-    }
-    const { $from } = state.selection;
-    let tablePos = -1;
-    for (let d = $from.depth; d > 0; d--) {
-      if ($from.node(d).type === schema.nodes.table) {
-        tablePos = $from.before(d);
-        break;
-      }
-    }
-    if (tablePos < 0) {
-      pill.hidden = true;
-      return;
-    }
-    const dom = view.nodeDOM(tablePos);
-    if (!(dom instanceof HTMLElement)) {
-      pill.hidden = true;
-      return;
-    }
-    pill.hidden = false;
-    for (const b of pillButtons) b.update(state);
-    const rect = dom.getBoundingClientRect();
-    const topbar = container.getBoundingClientRect().bottom;
-    const above = rect.top - 40;
-    pill.style.top = `${Math.max(topbar + 6, above)}px`;
-    pill.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - pill.offsetWidth - 8))}px`;
-  };
-
-  document.getElementById('scroll')?.addEventListener('scroll', () => {
-    if (!pill.hidden) positionPill(view.state);
-  });
 
   // ---------- the ⋯ menu ----------
 
@@ -350,7 +270,6 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
 
   return {
     update(state) {
-      positionPill(state);
       texBtn.classList.toggle('active', isTypesetEnabled(state));
     },
     stats(s) {

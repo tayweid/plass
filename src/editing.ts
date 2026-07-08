@@ -14,7 +14,6 @@ import { keymap } from 'prosemirror-keymap';
 import { baseKeymap, chainCommands, exitCode, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import { redo, undo } from 'prosemirror-history';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
-import { goToNextCell } from 'prosemirror-tables';
 import type { MarkType } from 'prosemirror-model';
 import type { Command, Plugin } from 'prosemirror-state';
 import { schema } from './schema';
@@ -22,7 +21,6 @@ import { insertMath, mathDisplayRule, mathInlineRule } from './math';
 import { eqRefRule } from './equations';
 import { exitFigure } from './figures';
 import { exitFootnote, footnoteCloseRule, footnoteOpenRules, insertFootnote } from './footnotes';
-import { insertTable } from './tables';
 import { pickAndInsertFigure } from './figures';
 
 /**
@@ -102,14 +100,19 @@ export function buildKeymap(): Plugin {
     'Ctrl->': wrapIn(schema.nodes.blockquote),
     'Enter': chainCommands(exitFootnote, exitFigure, splitListItem(schema.nodes.list_item)),
     'Mod-Alt-f': insertFootnote,
-    'Mod-Alt-t': insertTable(),
+    'Mod-Alt-t': (state, dispatch, view) => {
+      if (dispatch && view) {
+        void import('./table-editor').then(({ insertTableWithEditor }) => insertTableWithEditor(view));
+      }
+      return true;
+    },
     'Mod-Alt-i': (state, dispatch, view) => {
       if (!state.selection.$from.parent.isTextblock) return false;
       if (dispatch && view) pickAndInsertFigure(view);
       return true;
     },
-    'Tab': chainCommands(goToNextCell(1), sinkListItem(schema.nodes.list_item)),
-    'Shift-Tab': chainCommands(goToNextCell(-1), liftListItem(schema.nodes.list_item)),
+    'Tab': sinkListItem(schema.nodes.list_item),
+    'Shift-Tab': liftListItem(schema.nodes.list_item),
     'Shift-Enter': chainCommands(exitCode, (state, dispatch) => {
       if (dispatch) {
         dispatch(state.tr.replaceSelectionWith(schema.nodes.hard_break.create()).scrollIntoView());

@@ -11,8 +11,7 @@ import { typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugi
 import { MathView } from './math';
 import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
-import { tableEditing } from 'prosemirror-tables';
-import { TablePreviewView, tablePreviewPlugin } from './table-preview';
+import { TablePreviewView } from './table-preview';
 import { equationsPlugin } from './equations';
 import { FigureView, figuresPlugin } from './figures';
 import { FootnoteView, footnoteMarkerClick } from './footnotes';
@@ -58,8 +57,6 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       equationsPlugin(),
       citationsPlugin(),
       figuresPlugin(),
-      tableEditing(),
-      tablePreviewPlugin(),
       typesetPlugin({ onStats, onPages: renderPages }),
     ],
   });

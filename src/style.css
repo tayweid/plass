@@ -302,6 +302,128 @@ body {
   transform: translateX(-50%) translateY(0);
 }
 
+/* ---------- tables: compiled block + editing card ---------- */
+
+.ts-table-block {
+  margin: 0 0 0.9em;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.ts-table-block:hover {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.ts-table-block.ts-table-selected {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.ts-table-render {
+  overflow-x: auto;
+}
+
+.ts-table-loading {
+  font: 12px var(--sans);
+  color: var(--ink-soft);
+}
+
+.table-card {
+  width: min(760px, calc(100vw - 48px));
+}
+
+.table-card-style {
+  font: 11px var(--mono);
+  color: var(--ink-soft);
+}
+
+.table-card-tools {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.table-card-tools button {
+  font: 12px var(--sans);
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--chrome-border);
+  border-radius: 5px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.table-card-tools button:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.table-card-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--chrome-border);
+  margin: 0 5px;
+}
+
+.table-card-grid {
+  max-height: 300px;
+  overflow: auto;
+  margin-bottom: 10px;
+}
+
+.table-card-grid table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.table-card-grid td,
+.table-card-grid th {
+  border: 1px solid var(--chrome-border);
+  padding: 0;
+}
+
+.table-card-grid input {
+  width: 100%;
+  min-width: 70px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font: 13px var(--sans);
+  padding: 6px 8px;
+  outline: none;
+}
+
+.table-card-grid th input {
+  font-weight: 600;
+}
+
+.table-card-grid input:focus {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.table-card-preview {
+  border: 1px solid var(--chrome-border);
+  border-radius: 6px;
+  padding: 8px 10px 12px;
+  margin-bottom: 10px;
+  background: var(--sheet);
+  max-height: 240px;
+  overflow: auto;
+}
+
+.table-card-preview-label {
+  font: 10px var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-soft);
+  margin-bottom: 6px;
+}
+
+.table-card-preview-body {
+  text-align: center;
+}
+
 /* ---------- file menu ---------- */
 
 .file-menu {
