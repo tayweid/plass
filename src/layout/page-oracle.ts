@@ -157,6 +157,14 @@ function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
           ? { kind: 'exact', pos, type: 'heading', level: node.attrs.level as number, spec, marker }
           : { kind: 'opaque', pos, type: 'heading', level: node.attrs.level as number },
       );
+    } else if (node.type.name === 'doc_title' || node.type.name === 'doc_authors' || node.type.name === 'doc_date') {
+      const spec = node.content.size ? buildSpec(node, resolveAtom) : null;
+      units.push(spec ? { kind: 'exact', pos, type: node.type.name, spec, marker } : { kind: 'opaque', pos, type: node.type.name });
+    } else if (node.type.name === 'abstract') {
+      // The painted "Abstract" label line is emitted but not stored; an
+      // opaque unit lets the matcher resync on the first body paragraph.
+      units.push({ kind: 'opaque', pos, type: 'abstract-label' });
+      node.forEach((child, off) => push(child, pos + 1 + off));
     } else if (node.type.name === 'bullet_list' || node.type.name === 'ordered_list' || node.type.name === 'blockquote') {
       node.forEach((child, off) => {
         const childPos = pos + 1 + off;

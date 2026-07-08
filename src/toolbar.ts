@@ -3,6 +3,7 @@
 // (no overflow menu): file actions, inserts, document tools, exports. The
 // only dropdown is Recents, which is inherently a dynamic list.
 
+import { TextSelection } from 'prosemirror-state';
 import type { Command, EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { schema } from './schema';
@@ -118,6 +119,28 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   barBtn(icon('saveas'), 'Save As', 'Save As… (⇧⌘S)', () => void fm.saveAs());
   barDivider();
   // ---------- insert ----------
+  barBtn('<span class="ico tico">T</span>', 'Title', 'Title block — title, authors, date, abstract', () => {
+    const { state, dispatch } = view;
+    const existing = state.doc.firstChild;
+    if (existing && ['doc_title', 'doc_authors', 'doc_date', 'abstract'].includes(existing.type.name)) {
+      dispatch(state.tr.setSelection(TextSelection.create(state.doc, 1)).scrollIntoView());
+      view.focus();
+      return;
+    }
+    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const nodes = [
+      schema.nodes.doc_title.create(null, [schema.text('Title')]),
+      schema.nodes.doc_authors.create(null, [schema.text('Author Name')]),
+      schema.nodes.doc_date.create(null, [schema.text(today)]),
+      schema.nodes.abstract.create(null, [
+        schema.nodes.paragraph.create(null, [schema.text('Abstract text.')]),
+      ]),
+    ];
+    let tr = state.tr.insert(0, nodes);
+    tr = tr.setSelection(TextSelection.create(tr.doc, 1, 1 + 'Title'.length));
+    dispatch(tr.scrollIntoView());
+    view.focus();
+  });
   barBtn(icon('image'), 'Figure', 'Insert figure (⌘⌥I) — or paste/drop an image', runCmd(insertFigureCmd));
   barBtn(icon('table'), 'Table', 'Insert table (⌘⌥T)', () => insertTableWithEditor(view));
   barBtn('<span class="ico tico">Σ</span>', 'Math', 'Inline math (⌘M) — or type $x^2$; ⌘⇧M for display', runCmd(insertMath(false)));

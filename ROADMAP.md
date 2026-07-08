@@ -63,10 +63,10 @@ a feature touches the oracle machinery.
    title, author, section name via `context`), page number placement in
    the header, different first page. Settings UI + emission + the painted
    page chrome mirroring it.
-7. **Title block / front matter** — title, author(s), date, abstract as
-   structured fields rendering the standard academic opening (and
-   exporting as proper Typst). Big quality-of-life for papers/problem
-   sets.
+7. ~~**Title block / front matter**~~ — done: Title bar button inserts
+   doc_title/doc_authors/doc_date/abstract nodes (typed in-flow, Enter
+   advances); exports centered Typst forms + padded abstract; raster
+   parity ≤2px; round-trips.
 8. **Keep-together controls** — "keep heading with next block",
    "avoid break inside block" toggles; the page oracle honors whatever
    Typst does, so this is mostly emission (`block(breakable: false)`) +

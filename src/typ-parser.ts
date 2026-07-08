@@ -301,6 +301,40 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
+    // front matter: title, then (position-gated) authors and date
+    {
+      const tm = /^#align\(center, text\(size: 1\.55em, weight: 700\)\[(.*)\]\)$/.exec(t);
+      if (tm) {
+        out.push(schema.nodes.doc_title.create(null, parseInline(tm[1])));
+        i++;
+        continue;
+      }
+      const prev = out.length ? out[out.length - 1].type.name : '';
+      const am = /^#align\(center\)\[(.*)\]$/.exec(t);
+      if (am && prev === 'doc_title') {
+        out.push(schema.nodes.doc_authors.create(null, parseInline(am[1])));
+        i++;
+        continue;
+      }
+      const dm2 = /^#align\(center, text\(style: "italic"\)\[(.*)\]\)$/.exec(t);
+      if (dm2 && (prev === 'doc_title' || prev === 'doc_authors')) {
+        out.push(schema.nodes.doc_date.create(null, parseInline(dm2[1])));
+        i++;
+        continue;
+      }
+    }
+
+    // abstract: label line + padded body
+    if (t === '#align(center, text(weight: 600)[Abstract])' && i + 1 < n && lines[i + 1].trim() === '#pad(x: 1.8em)[') {
+      const body: string[] = [];
+      i += 2;
+      while (i < n && lines[i].trim() !== ']') body.push(lines[i++].replace(/^  /, ''));
+      i++;
+      const inner = parseBlocks(body, warnings).filter((b) => b.type.name === 'paragraph');
+      out.push(schema.nodes.abstract.create(null, inner.length ? inner : [schema.nodes.paragraph.create()]));
+      continue;
+    }
+
     // blockquote
     if (t === '#quote(block: true)[') {
       const body: string[] = [];

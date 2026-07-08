@@ -196,6 +196,22 @@ function blockToTyp(node: PMNode, indent = ''): string {
       const label = node.attrs.label ? ` <${node.attrs.label}>` : '';
       return indent + '='.repeat(node.attrs.level) + ' ' + inlineToTyp(node) + label + '\n\n';
     }
+    case 'doc_title':
+      return indent + `#align(center, text(size: 1.55em, weight: 700)[${inlineToTyp(node)}])\n\n`;
+    case 'doc_authors':
+      return indent + `#align(center)[${inlineToTyp(node)}]\n\n`;
+    case 'doc_date':
+      return indent + `#align(center, text(style: "italic")[${inlineToTyp(node)}])\n\n`;
+    case 'abstract':
+      return (
+        indent +
+        '#align(center, text(weight: 600)[Abstract])\n' +
+        indent +
+        '#pad(x: 1.8em)[\n' +
+        blocksToTyp(node, indent + '  ') +
+        indent +
+        ']\n\n'
+      );
     case 'blockquote':
       return indent + '#quote(block: true)[\n' + blocksToTyp(node, indent + '  ') + indent + ']\n\n';
     case 'code_block':

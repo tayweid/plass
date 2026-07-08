@@ -81,6 +81,25 @@ export function buildInputRules(): Plugin {
   return inputRules({ rules });
 }
 
+/** Enter in title/authors/date moves on instead of splitting the block. */
+const exitFrontMatter: Command = (state, dispatch) => {
+  const { $from, empty } = state.selection;
+  if (!empty) return false;
+  const name = $from.parent.type.name;
+  if (!['doc_title', 'doc_authors', 'doc_date'].includes(name)) return false;
+  const after = $from.after();
+  if (dispatch) {
+    const next = state.doc.resolve(after).nodeAfter;
+    if (next && next.isTextblock) {
+      dispatch(state.tr.setSelection(TextSelection.create(state.doc, after + 1)).scrollIntoView());
+    } else {
+      const tr = state.tr.insert(after, schema.nodes.paragraph.create());
+      dispatch(tr.setSelection(TextSelection.create(tr.doc, after + 1)).scrollIntoView());
+    }
+  }
+  return true;
+};
+
 export function buildKeymap(): Plugin {
   const backToParagraph: Command = setBlockType(schema.nodes.paragraph);
   const keys: Record<string, Command> = {
@@ -99,7 +118,7 @@ export function buildKeymap(): Plugin {
     'Mod-Alt-2': setBlockType(schema.nodes.heading, { level: 2 }),
     'Mod-Alt-3': setBlockType(schema.nodes.heading, { level: 3 }),
     'Ctrl->': wrapIn(schema.nodes.blockquote),
-    'Enter': chainCommands(exitFootnote, exitFigure, splitListItem(schema.nodes.list_item)),
+    'Enter': chainCommands(exitFootnote, exitFigure, exitFrontMatter, splitListItem(schema.nodes.list_item)),
     'Mod-Alt-f': insertFootnote,
     'Mod-Enter': (state, dispatch) => {
       const { $from } = state.selection;

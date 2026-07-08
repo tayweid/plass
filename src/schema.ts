@@ -26,6 +26,41 @@ const pageBreak: NodeSpec = {
   toDOM: () => ['div', { 'data-page-break': '', class: 'ts-pagebreak', contenteditable: 'false' }],
 };
 
+// Front matter: title, authors, date — centered textblocks — and the
+// abstract (a narrower block of paragraphs; its "Abstract" heading is
+// painted by CSS and emitted by the exporter, never stored).
+const docTitle: NodeSpec = {
+  group: 'block',
+  content: 'inline*',
+  defining: true,
+  parseDOM: [{ tag: 'div[data-doc-title]' }],
+  toDOM: () => ['div', { 'data-doc-title': '', class: 'ts-doctitle' }, 0],
+};
+
+const docAuthors: NodeSpec = {
+  group: 'block',
+  content: 'inline*',
+  defining: true,
+  parseDOM: [{ tag: 'div[data-doc-authors]' }],
+  toDOM: () => ['div', { 'data-doc-authors': '', class: 'ts-docauthors' }, 0],
+};
+
+const docDate: NodeSpec = {
+  group: 'block',
+  content: 'inline*',
+  defining: true,
+  parseDOM: [{ tag: 'div[data-doc-date]' }],
+  toDOM: () => ['div', { 'data-doc-date': '', class: 'ts-docdate' }, 0],
+};
+
+const abstract: NodeSpec = {
+  group: 'block',
+  content: 'paragraph+',
+  defining: true,
+  parseDOM: [{ tag: 'div[data-abstract]' }],
+  toDOM: () => ['div', { 'data-abstract': '', class: 'ts-abstract' }, 0],
+};
+
 const mathDisplay: NodeSpec = {
   group: 'block',
   atom: true,
@@ -216,6 +251,10 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
   .addToEnd('citation', citation)
   .addToEnd('bibliography', bibliography)
   .addToEnd('eq_ref', eqRef)
-  .addToEnd('page_break', pageBreak);
+  .addToEnd('page_break', pageBreak)
+  .addToEnd('doc_title', docTitle)
+  .addToEnd('doc_authors', docAuthors)
+  .addToEnd('doc_date', docDate)
+  .addToEnd('abstract', abstract);
 
 export const schema = new Schema({ nodes, marks: base.spec.marks });

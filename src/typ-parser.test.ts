@@ -406,6 +406,27 @@ function firstDiff(a: string, b: string): string {
   check('sized table idempotent', out === again, firstDiff(out, again));
 }
 
+// --- 13e. front matter (title/authors/date/abstract) round-trips ---
+{
+  const { doc_title, doc_authors, doc_date, abstract, paragraph, doc: docType } = schema.nodes;
+  const d3 = docType.create(null, [
+    doc_title.create(null, [schema.text('On Widgets')]),
+    doc_authors.create(null, [schema.text('T. Weidman and A. Nother')]),
+    doc_date.create(null, [schema.text('July 8, 2026')]),
+    abstract.create(null, [paragraph.create(null, [schema.text('We study widgets carefully.')])]),
+    paragraph.create(null, [schema.text('Body starts here.')]),
+  ]);
+  const out = docToTyp(d3);
+  check('title emitted', out.includes('#align(center, text(size: 1.55em, weight: 700)[On Widgets])'));
+  check('abstract emitted', out.includes('#align(center, text(weight: 600)[Abstract])') && out.includes('#pad(x: 1.8em)['));
+  const back = typToDoc(out);
+  const names: string[] = [];
+  back.doc.forEach((n) => names.push(n.type.name));
+  check('front matter reimported', JSON.stringify(names) === JSON.stringify(['doc_title', 'doc_authors', 'doc_date', 'abstract', 'paragraph']), JSON.stringify(names));
+  const again = docToTyp(back.doc);
+  check('front matter idempotent', out === again, firstDiff(out, again));
+}
+
 // --- 14. paragraph starting with list-like character survives ---
 {
   const src = docToTyp(typToDoc('\\- not a list, just a dash').doc);

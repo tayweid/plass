@@ -203,6 +203,9 @@ class TypesetView {
     if (!node) return null;
     if (node.type.name === 'heading') return `h${Math.min(3, node.attrs.level as number)}` as 'h1' | 'h2' | 'h3';
     if (node.type.name === 'paragraph') return 'paragraph';
+    // Front-matter blocks are paragraph-class boxes (title's larger text
+    // scales its ascender the same way Typst does).
+    if (['doc_title', 'doc_authors', 'doc_date'].includes(node.type.name)) return 'paragraph';
     return null;
   }
 

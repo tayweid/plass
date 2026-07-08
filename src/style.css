@@ -985,6 +985,45 @@ body {
   -webkit-user-select: none;
 }
 
+/* ---------- front matter ---------- */
+
+.ProseMirror .ts-doctitle {
+  font-size: 1.55em;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.3;
+  margin: 0 0 0.6em;
+}
+
+.ProseMirror .ts-docauthors {
+  text-align: center;
+  margin: 0 0 1em;
+}
+
+.ProseMirror .ts-docdate {
+  text-align: center;
+  font-style: italic;
+  margin: 0 0 0.7em;
+}
+
+.ProseMirror .ts-abstract {
+  padding: 0 1.8em;
+  margin: 0 0 0.9em;
+}
+
+/* The label is painted, not stored — the exporter emits it. */
+.ProseMirror .ts-abstract::before {
+  content: 'Abstract';
+  display: block;
+  text-align: center;
+  font-weight: 600;
+  margin-bottom: 0.75em;
+}
+
+.ProseMirror .ts-abstract p:last-child {
+  margin-bottom: 0;
+}
+
 /* Manual page break: zero-height in flow (the next block starts the page
    exactly like the PDF); a floating chip marks it for editing. */
 .ts-pagebreak {
