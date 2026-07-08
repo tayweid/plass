@@ -15,6 +15,10 @@ const BIG_STRETCH = 1e6;
 const HYPHEN_PENALTY = 45;
 /** Justify to slightly under the measure so rounding never overflows a line. */
 const FIT_EPS = 0.5;
+/** Forced (oracle) lines must NEVER browser-rewrap — an overflow makes an
+ *  orphan word. Scaled contexts (footnote bodies) accumulate extra sub-pixel
+ *  error, so forced lines aim a bit further under the measure. */
+const FORCED_EPS = 1.5;
 
 type Kind = 'box' | 'space' | 'hyphen' | 'end' | 'nodebreak';
 
@@ -246,16 +250,20 @@ export function layoutBlock(
     // Justify lines that break at a space or hyphen; segment-final lines
     // (paragraph end, hard break) stay ragged, as in TeX.
     let spacing = 0;
+    // Scaled contexts (footnote bodies) carry a couple px of width-model
+    // error the canvas can't see; aim further under the measure there —
+    // ~0.3px of extra shrink per space, invisible, never an orphan.
+    const eps = (opts.forced ? FORCED_EPS : FIT_EPS) + (K !== 1 ? 4.5 : 0);
     if ((brk.kind === 'space' || hyphenKind) && spaces > 0) {
-      spacing = (measure - FIT_EPS - natural) / spaces;
+      spacing = (measure - eps - natural) / spaces;
       // Forced (oracle) lines must never overflow into a browser re-wrap:
       // Typst fit this content, so shrink as far as needed.
       const minS = opts.forced ? -0.9 * baseSpace : -0.45 * baseSpace;
       spacing = Math.max(minS, Math.min(spacing, 3 * baseSpace));
-    } else if (opts.forced && spaces > 0 && natural > measure - FIT_EPS) {
+    } else if (opts.forced && spaces > 0 && natural > measure - eps) {
       // Oracle-forced ragged line that the browser would wrap (its metrics
       // run a hair wider than Typst's): shrink it to fit — Typst fit it.
-      spacing = Math.max(-0.45 * baseSpace, (measure - FIT_EPS - natural) / spaces);
+      spacing = Math.max(-0.45 * baseSpace, (measure - eps - natural) / spaces);
     }
 
     out.push({

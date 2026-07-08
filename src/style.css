@@ -961,7 +961,8 @@ body {
   right: 0;
   visibility: hidden;
   /* Calibrated against the PDF: 0.85em text, 17px line pitch, first-line
-     indent, full ink. */
+     indent, full ink. These constants are mirrored in typeset-plugin's
+     fnIndent()/FN_SCALE — keep them in sync. */
   font-size: 0.85em;
   line-height: 1.2;
   color: #1a1a1a;

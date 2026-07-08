@@ -77,6 +77,13 @@ const FN_SEP = 30;
 
 const viewRegistry = new WeakMap<EditorView, TypesetView>();
 
+/** Canvas text width at an exact CSS font (for painted-prefix modeling). */
+const measureCtx = document.createElement('canvas').getContext('2d')!;
+function textWidth(text: string, font: string): number {
+  measureCtx.font = font;
+  return measureCtx.measureText(text).width;
+}
+
 /** Request a re-typeset without a document change (e.g. an image loaded). */
 export function scheduleTypeset(view: EditorView) {
   viewRegistry.get(view)?.requestRun();
@@ -119,6 +126,10 @@ interface CacheEntry {
   lines: LineLayout[];
   /** Which oracle state produced these lines ('none' = JS Knuth-Plass). */
   oracle: 'none' | 'ok' | 'fail';
+  /** Painted-prefix indent + em scale the lines were computed with (captions,
+   *  footnote bodies) — early runs can measure these before widgets paint. */
+  indent: number;
+  scale: number;
 }
 
 class TypesetView {
@@ -351,8 +362,16 @@ class TypesetView {
       if (spec && okey && !oentry) this.oracle.request(okey, spec, measure, settings, skind);
       const ostatus = oentry?.status ?? 'none';
 
+      const indent = extra.firstLineIndent ?? 0;
+      const scale = extra.scale ?? 1;
       let entry = this.cache.get(node);
-      if (!entry || Math.abs(entry.measure - measure) > 0.5 || entry.oracle !== ostatus) {
+      if (
+        !entry ||
+        Math.abs(entry.measure - measure) > 0.5 ||
+        entry.oracle !== ostatus ||
+        Math.abs(entry.indent - indent) > 0.5 ||
+        Math.abs(entry.scale - scale) > 0.01
+      ) {
         let lines: LineLayout[] | null = null;
         if (oentry?.status === 'ok') {
           lines = layoutBlock(node, measure, this.measurer, atomWidth, {
@@ -362,20 +381,32 @@ class TypesetView {
           });
         }
         if (!lines) lines = layoutBlock(node, measure, this.measurer, atomWidth, { ...layoutOpts, ...extra })!;
-        entry = { measure, lines, oracle: ostatus };
+        entry = { measure, lines, oracle: ostatus, indent, scale };
         this.cache.set(node, entry);
       }
 
       paragraphs++;
       lineCount += entry.lines.length;
       const base = pos + 1;
+      // Inline decorations descend into nested editable content: a line's
+      // word-spacing would blanket a footnote's BODY text (which has its own
+      // oracle layout). Emit spacing around footnote children, never across.
+      const fnRanges: Array<[number, number]> = [];
+      node.forEach((child, offset) => {
+        if (child.type.name === 'footnote') fnRanges.push([offset, offset + child.nodeSize]);
+      });
+      const emitSpacing = (from: number, to: number, style: string) => {
+        let cur = from;
+        for (const [a, bEnd] of fnRanges) {
+          if (bEnd <= cur || a >= to) continue;
+          if (a > cur) decos.push(Decoration.inline(base + cur, base + a, { style }));
+          cur = Math.max(cur, bEnd);
+        }
+        if (cur < to) decos.push(Decoration.inline(base + cur, base + to, { style }));
+      };
       for (const line of entry.lines) {
         if (Math.abs(line.spacing) > 0.01) {
-          decos.push(
-            Decoration.inline(base + line.from, base + line.to, {
-              style: `word-spacing:${line.spacing.toFixed(3)}px`,
-            }),
-          );
+          emitSpacing(line.from, line.to, `word-spacing:${line.spacing.toFixed(3)}px`);
         }
         if (line.breakPos !== null) {
           const at = base + line.breakPos;
@@ -399,26 +430,40 @@ class TypesetView {
       }
     };
 
-    /** Painted-prefix width (widget + its margin) inside a container. */
-    const prefixWidth = (container: HTMLElement, sel: string) => {
-      const el = container.querySelector(sel);
-      if (!(el instanceof HTMLElement)) return 0;
-      return el.getBoundingClientRect().width + (parseFloat(getComputedStyle(el).marginRight) || 0);
+    // Painted prefixes are DETERMINISTIC (the constants live in style.css:
+    // .fn-body 0.85em/0.9em indent, .fn-num 0.72em/0.15em, .fig-num 0.32em).
+    // Never measure them from the DOM: a run can land mid-update, before a
+    // widget paints, and cache a zero-indent layout that never heals.
+    const bodyPx = this.bodyPx();
+    const font = `"${settings.font}", Georgia, serif`;
+    const FN_SCALE = 0.85;
+    const fnIndent = (n: number) => {
+      const fnPx = FN_SCALE * bodyPx;
+      const numPx = 0.72 * fnPx;
+      return 0.9 * fnPx + textWidth(String(n), `${numPx}px ${font}`) + 0.15 * numPx;
     };
+    const capIndent = (n: number) => textWidth(`Figure ${n}:`, `${bodyPx}px ${font}`) + 0.32 * bodyPx;
 
+    let fnNo = 0;
     const handleFootnotes = (node: PMNode, pos: number) => {
       node.forEach((child, offset) => {
-        if (child.type.name !== 'footnote' || child.content.size === 0) return;
+        if (child.type.name !== 'footnote') return;
+        fnNo++;
+        if (child.content.size === 0) return;
         const fnPos = pos + 1 + offset;
         const wrap = this.view.nodeDOM(fnPos);
         const body = wrap instanceof HTMLElement ? wrap.querySelector('.fn-body') : null;
         if (!(body instanceof HTMLElement)) return;
         const bMeasure = body.clientWidth;
         if (!(bMeasure > 60)) return;
-        const bcs = getComputedStyle(body);
-        const scale = parseFloat(bcs.fontSize) / this.bodyPx();
-        const firstLineIndent = (parseFloat(bcs.textIndent) || 0) + prefixWidth(body, '.fn-num');
-        layoutInto(child, fnPos, bMeasure, { kind: 'footnote' }, { firstLineIndent, scale }, 'fn');
+        layoutInto(
+          child,
+          fnPos,
+          bMeasure,
+          { kind: 'footnote' },
+          { firstLineIndent: fnIndent(fnNo), scale: FN_SCALE },
+          'fn',
+        );
       });
     };
 
@@ -438,7 +483,7 @@ class TypesetView {
           pos,
           capMeasure,
           { kind: 'caption', figNo },
-          { firstLineIndent: prefixWidth(cap, '.fig-num') },
+          { firstLineIndent: capIndent(figNo) },
           `cap${figNo}`,
         );
         handleFootnotes(node, pos);
