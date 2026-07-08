@@ -733,7 +733,7 @@ body {
 }
 
 .ts-table-wrap table {
-  margin: 0;
+  margin: 0 auto;
 }
 
 .ts-table-wrap.has-preview:not([data-editing]) > table {
@@ -884,8 +884,37 @@ body {
 }
 
 .ts-bibliography {
+  position: relative;
   margin: 0 0 0.9em;
   font-size: 1em;
+}
+
+/* Compiled (exact) rendering replaces the DOM list once it arrives. */
+.ts-bibliography .bib-ink {
+  display: none;
+}
+
+.ts-bibliography.bib-has-ink .bib-ink {
+  display: block;
+}
+
+.ts-bibliography.bib-has-ink .bib-dom {
+  display: none;
+}
+
+.bib-edit-float {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  opacity: 0;
+}
+
+.ts-bibliography:not(.bib-has-ink) .bib-edit-float {
+  display: none;
+}
+
+.ts-bibliography.bib-has-ink:hover .bib-edit-float {
+  opacity: 1;
 }
 
 .bib-head {

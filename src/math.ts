@@ -90,11 +90,9 @@ export class MathView implements NodeView {
         svg.style.height = `${ink.heightPx.toFixed(2)}px`;
         if (!this.display) svg.style.verticalAlign = `${(-ink.descentPx).toFixed(2)}px`;
         else {
-          // Center the painted equation number on the ink (as Typst does);
-          // the fragment carries ~0.12em of line slack below the ink.
+          // Center the painted equation number on the ink (as Typst does).
           const cs = getComputedStyle(this.dom);
-          const F = parseFloat(cs.fontSize) || 16.67;
-          const center = parseFloat(cs.paddingTop) + (ink.heightPx - 0.12 * F) / 2;
+          const center = parseFloat(cs.paddingTop) + ink.heightPx / 2;
           this.dom.style.setProperty('--eqnum-center', `${center.toFixed(1)}px`);
         }
       }

@@ -232,8 +232,9 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
-    // table: #table( columns: N, table.header([..], …), [..], …, )
-    if (t.startsWith('#table(')) {
+    // table: #align(center, table(…)) — centered on export — or bare #table(…)
+    const centered = t.startsWith('#align(center, table(');
+    if (centered || t.startsWith('#table(')) {
       const body: string[] = [line];
       let depth = countParens(line);
       i++;
@@ -242,7 +243,12 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
         depth += countParens(lines[i]);
         i++;
       }
-      const table = parseTable(body.join('\n'));
+      let src = body.join('\n');
+      if (centered) {
+        // Strip the alignment wrapper: '#align(center, table(…))' → '#table(…)'
+        src = src.trim().replace(/^#align\(center,\s*table\(/, '#table(').replace(/\)\)$/, ')');
+      }
+      const table = parseTable(src);
       if (table) {
         out.push(table);
       } else {

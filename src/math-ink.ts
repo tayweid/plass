@@ -92,21 +92,22 @@ async function compileOne(
 ): Promise<MathInk | null> {
   const latex = expandMacrosWith(item.src, parseMathMacros(item.macros));
   if (!latex.trim()) return null;
-  const body = item.display
-    ? `#mitex(\`\n${latex}\n\`)`
-    : `#mi(\`${latex}\`)`;
-  // Hug the content; the trailing probe reports the baseline, the empty box
-  // anchors it in the flow (a trailing zero-width element drifts otherwise).
+  // Display equations hug the page tightly with no instrumentation (a
+  // trailing probe would start a phantom paragraph below the ink). Inline
+  // math needs the baseline probe; #box() anchors it in the flow.
   const src =
     `#set page(width: auto, height: auto, margin: 0pt)\n` +
     `#set text(size: ${item.sizePt}pt)\n` +
     '#import "@preview/mitex:0.2.5": mi, mitex\n\n' +
-    body +
-    '#context metadata(here().position());#box()\n';
+    (item.display
+      ? `#mitex(\`\n${latex}\n\`)\n`
+      : `#mi(\`${latex}\`)#context metadata(here().position());#box()\n`);
 
   const svg = await compileSvg(src);
   if (!svg) return null;
-  const pos = await typstQuery<{ func: string; value: { x: string; y: string } }>(src, 'metadata');
+  const pos = item.display
+    ? null
+    : await typstQuery<{ func: string; value: { x: string; y: string } }>(src, 'metadata');
   const baselinePt = pos?.[0]?.value ? parseFloat(pos[0].value.y) : NaN;
 
   const m = /viewBox="0 0 ([\d.]+) ([\d.]+)"/.exec(svg) ?? [];

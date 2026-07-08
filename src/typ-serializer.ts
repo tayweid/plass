@@ -93,9 +93,8 @@ export function parityRules(s: DocSettings): string {
   // same ratio) have identical advance widths.
   out += `#show raw.where(block: false): set text(font: "DejaVu Sans Mono", size: ${pt(0.8)})\n`;
   // Display math: the editor shows Typst's own ink inside 0.5em padding.
-  // (+0.12em: the ink fragment's page carries a sliver of line slack below.)
   const eqAbove = pSlackBelow + 0.9 + 0.5 - m.typDesc;
-  const eqBelow = 0.5 + 0.9 + 0.12 + pSlackAbove - m.typAsc;
+  const eqBelow = 0.5 + 0.9 + pSlackAbove - m.typAsc;
   out += `#show math.equation.where(block: true): set block(above: ${pt(eqAbove)}, below: ${pt(eqBelow)})\n`;
   return out;
 }
@@ -303,7 +302,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
           rows.push('  table.hline(stroke: 0.08em),');
         }
       }
-      return indent + `#table(\n${params.join('\n')}\n${rows.join('\n')}\n)\n\n`;
+      return indent + `#align(center, table(\n${params.join('\n')}\n${rows.join('\n')}\n))\n\n`;
     }
     case 'bibliography': {
       // Embedded inline so the .typ stays self-contained (bytes() source).

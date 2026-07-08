@@ -101,6 +101,9 @@ export function citationsPlugin() {
 /** Renders the cited entries, in citation order, from the document bib. */
 export class BibliographyView implements NodeView {
   dom: HTMLElement;
+  private inkKey = '';
+  private inkTimer = 0;
+  private destroyed = false;
 
   constructor(
     _node: PMNode,
@@ -110,6 +113,52 @@ export class BibliographyView implements NodeView {
     this.dom.className = 'ts-bibliography';
     this.dom.setAttribute('data-bibliography', '');
     this.render();
+  }
+
+  /**
+   * Exact PDF rendering: compile the export's own #bibliography through the
+   * in-app Typst (hidden citations establish first-use numbering) and show
+   * that SVG. The DOM list below is the instant fallback while compiling.
+   */
+  private scheduleInk() {
+    clearTimeout(this.inkTimer);
+    this.inkTimer = window.setTimeout(() => void this.compileInk(), 300);
+  }
+
+  private async compileInk() {
+    if (this.destroyed) return;
+    const state = this.view.state;
+    const bib = state.doc.attrs.bib as { content?: string } | null;
+    const order = citeOrder(state.doc);
+    const keys = [...order.entries()].sort((a, b) => a[1] - b[1]).map(([k]) => k);
+    if (!bib?.content || !keys.length) return;
+    const widthPx = this.dom.clientWidth || 576;
+    const { getSettings } = await import('./settings');
+    const { parityRules, textSetLine } = await import('./typ-serializer');
+    const { compileSvg, FONT_FALLBACK } = await import('./pdf');
+    const s = getSettings(state);
+    const src =
+      `#set page(width: ${(widthPx * 0.75).toFixed(2)}pt, height: auto, margin: 0pt)\n` +
+      parityRules(s) +
+      textSetLine(s, FONT_FALLBACK) +
+      '\n' +
+      `#place(hide[${keys.map((k) => '@' + k).join(' ')}])\n` +
+      `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "ieee")\n`;
+    if (src === this.inkKey) return;
+    const svg = await compileSvg(src);
+    if (this.destroyed || !svg) return;
+    this.inkKey = src;
+    const holder = this.dom.querySelector('.bib-ink');
+    if (!holder) return;
+    holder.innerHTML = svg;
+    const svgEl = holder.querySelector('svg');
+    if (svgEl) {
+      svgEl.style.width = `${(parseFloat(svgEl.getAttribute('width') ?? '0') * 4) / 3}px`;
+      svgEl.style.height = 'auto';
+    }
+    this.dom.classList.add('bib-has-ink');
+    const { scheduleTypeset } = await import('./typeset-plugin');
+    scheduleTypeset(this.view);
   }
 
   private render() {
@@ -138,18 +187,37 @@ export class BibliographyView implements NodeView {
         })
         .join('');
     }
-    this.dom.innerHTML = head + body;
+    this.dom.innerHTML = '<div class="bib-ink" contenteditable="false"></div>' + '<div class="bib-dom">' + head + body + '</div>';
+    this.dom.classList.remove('bib-has-ink');
+    this.inkKey = '';
     this.dom.querySelector('.bib-edit-btn')?.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
       editBibliography(this.view);
     });
+    const editHover = document.createElement('button');
+    editHover.type = 'button';
+    editHover.className = 'bib-edit-btn bib-edit-float';
+    editHover.contentEditable = 'false';
+    editHover.textContent = 'Edit';
+    editHover.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      editBibliography(this.view);
+    });
+    this.dom.appendChild(editHover);
+    this.scheduleInk();
   }
 
   update(node: PMNode): boolean {
     if (node.type !== schema.nodes.bibliography) return false;
     this.render();
     return true;
+  }
+
+  destroy() {
+    this.destroyed = true;
+    clearTimeout(this.inkTimer);
   }
 
   selectNode() {
