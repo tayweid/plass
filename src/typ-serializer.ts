@@ -188,6 +188,11 @@ function blockToTyp(node: PMNode, indent = ''): string {
   switch (node.type.name) {
     case 'paragraph': {
       let s = inlineToTyp(node);
+      // An empty paragraph is one blank line of vertical space — in the PDF
+      // too (a bare ~ renders as an empty line of full line height). Without
+      // this, Typst sees nothing where the editor shows a gap, and the page
+      // oracle's breaks drift below the editor's real heights.
+      if (!s.trim()) return indent + '~\n\n';
       // A leading =, - or + would re-parse as heading/list syntax.
       if (/^[=\-+]/.test(s)) s = '\\' + s;
       return indent + s + '\n\n';

@@ -335,6 +335,13 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
+    // a bare ~ is an empty paragraph (one blank line of space)
+    if (t === '~') {
+      out.push(schema.nodes.paragraph.create());
+      i++;
+      continue;
+    }
+
     // blockquote
     if (t === '#quote(block: true)[') {
       const body: string[] = [];

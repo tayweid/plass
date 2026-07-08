@@ -427,6 +427,25 @@ function firstDiff(a: string, b: string): string {
   check('front matter idempotent', out === again, firstDiff(out, again));
 }
 
+// --- 13f. empty paragraphs are blank lines in both worlds ---
+{
+  const { paragraph, doc: docType } = schema.nodes;
+  const d4 = docType.create(null, [
+    paragraph.create(null, [schema.text('Above.')]),
+    paragraph.create(),
+    paragraph.create(),
+    paragraph.create(null, [schema.text('Below.')]),
+  ]);
+  const out = docToTyp(d4);
+  check('empty paragraphs emit ~', /Above\.\n\n~\n\n~\n\nBelow\./.test(out));
+  const back = typToDoc(out);
+  const kinds: string[] = [];
+  back.doc.forEach((n) => kinds.push(n.type.name + ':' + n.content.size));
+  check('empty paragraphs reimported', JSON.stringify(kinds) === JSON.stringify(['paragraph:6', 'paragraph:0', 'paragraph:0', 'paragraph:6']), JSON.stringify(kinds));
+  const again = docToTyp(back.doc);
+  check('empty paragraph idempotent', out === again, firstDiff(out, again));
+}
+
 // --- 14. paragraph starting with list-like character survives ---
 {
   const src = docToTyp(typToDoc('\\- not a list, just a dash').doc);
