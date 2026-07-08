@@ -1593,25 +1593,35 @@ body {
 
 .settings-margins {
   display: inline-flex;
-  gap: 6px;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .settings-margin-field {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font: 10.5px var(--sans);
+  gap: 2px;
+  font: 10px var(--sans);
   color: var(--ink-soft);
 }
 
 .settings-margin-field input {
-  width: 44px;
-  font: 11.5px var(--sans);
+  width: 34px;
+  font: 11px var(--sans);
   color: var(--ink);
   background: var(--sheet);
   border: 1px solid var(--chrome-border);
   border-radius: 4px;
-  padding: 2px 4px;
+  padding: 2px 3px;
+  text-align: center;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.settings-margin-field input::-webkit-inner-spin-button,
+.settings-margin-field input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .settings-macros-btn {
