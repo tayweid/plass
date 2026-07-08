@@ -402,6 +402,28 @@ body {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+.tc-widths td {
+  border: none !important;
+  padding: 0 0 4px !important;
+  text-align: center;
+}
+
+.tc-widths select {
+  font: 10px var(--mono);
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 1px 2px;
+  cursor: pointer;
+  max-width: 100%;
+}
+
+.tc-widths select:hover {
+  border-color: var(--chrome-border);
+  color: var(--ink);
+}
+
 .tc-boundary td {
   height: 7px;
   padding: 0;

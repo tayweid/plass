@@ -10,10 +10,8 @@ a feature touches the oracle machinery.
    exports `#figure(table(...), caption: […]) <label>`; "Table N" numbers
    via a counter preset in fragments; `@tab:` works in the picker and
    paints "Table N"; round-trips byte-identically.
-2. **Column widths** — `auto` / `1fr` / fixed lengths per column. UI: a
-   width chip row above the grid in the card (click to cycle auto → 1fr →
-   custom), or drag column borders. Emits `columns: (auto, 1fr, 2cm)`;
-   parser already carries non-numeric columns specs via params.
+2. ~~**Column widths**~~ — done: per-column selects above the grid
+   (auto/1fr/2fr/3fr/custom length); emits `columns: (…)`; round-trips.
 3. **Decimal alignment** — align numbers on the decimal point (the econ
    signature). Typst has no native decimal tab; standard trick is
    splitting into two columns joined at the point, or padding via figure

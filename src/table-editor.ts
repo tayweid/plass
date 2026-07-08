@@ -35,9 +35,12 @@ interface GridModel {
   hlines: Set<number>;
   caption: string;
   label: string;
+  /** Per-column widths ('auto' | '1fr' | '2cm' | …). */
+  widths: string[];
 }
 
 const HLINE_RE = /table\.hline\(\s*y\s*:\s*(\d+)[^)]*\)\s*,?/g;
+const COLUMNS_RE = /columns\s*:\s*\(([^)]*)\)\s*,?/;
 
 function readModel(table: PMNode): GridModel {
   const rows: CellModel[][] = [];
@@ -61,15 +64,23 @@ function readModel(table: PMNode): GridModel {
   });
   const hlines = new Set<number>();
   const raw = (table.attrs.params as string) || '';
+  let widths: string[] = [];
   const params = raw
     .replace(HLINE_RE, (_, y) => {
       hlines.add(+y);
+      return '';
+    })
+    .replace(COLUMNS_RE, (_, tuple: string) => {
+      widths = tuple.split(',').map((w) => w.trim()).filter(Boolean);
       return '';
     })
     .replace(/,\s*,/g, ',')
     .replace(/^\s*,\s*/, '')
     .replace(/[,\s]+$/, '')
     .trim();
+  const colCount = Math.max(...rows.map((r) => r.reduce((n, c) => n + c.colspan, 0)));
+  while (widths.length < colCount) widths.push('auto');
+  widths = widths.slice(0, colCount);
   return {
     rows,
     style: (table.attrs.style as string) || 'booktabs',
@@ -77,12 +88,16 @@ function readModel(table: PMNode): GridModel {
     hlines,
     caption: (table.attrs.caption as string) || '',
     label: (table.attrs.label as string) || '',
+    widths,
   };
 }
 
 function composeParams(model: GridModel): string {
-  const rules = [...model.hlines].sort((a, b) => a - b).map((y) => `table.hline(y: ${y}, stroke: 0.05em)`);
-  return [model.params, ...rules].filter(Boolean).join(',\n');
+  const parts: string[] = [];
+  if (model.widths.some((w) => w !== 'auto')) parts.push(`columns: (${model.widths.join(', ')})`);
+  if (model.params) parts.push(model.params);
+  for (const y of [...model.hlines].sort((a, b) => a - b)) parts.push(`table.hline(y: ${y}, stroke: 0.05em)`);
+  return parts.join(',\n');
 }
 
 function buildNode(model: GridModel): PMNode {
@@ -116,6 +131,7 @@ function cloneModel(m: GridModel): GridModel {
     hlines: new Set(m.hlines),
     caption: m.caption,
     label: m.label,
+    widths: [...m.widths],
   };
 }
 
@@ -219,10 +235,56 @@ export function openTableEditor(view: EditorView, pos: number) {
   const noSpans = () => model.rows.every((r) => r.every((c) => c.colspan === 1 && c.rowspan === 1));
 
   // ---------- grid ----------
+  const WIDTH_CHOICES = ['auto', '1fr', '2fr', '3fr'];
   const renderGrid = (focus?: { r: number; c: number }) => {
     styleLabel.textContent = model.style + (model.params ? ' + opts' : '');
     const t = document.createElement('table');
     const totalCols = cols();
+    while (model.widths.length < totalCols) model.widths.push('auto');
+    model.widths.length = totalCols;
+    // Width chips: one select per column (auto / fractions / custom length).
+    {
+      const wtr = document.createElement('tr');
+      wtr.className = 'tc-widths';
+      for (let c = 0; c < totalCols; c++) {
+        const td = document.createElement('td');
+        const sel2 = document.createElement('select');
+        sel2.title = 'Column width';
+        const current = model.widths[c];
+        const opts = [...WIDTH_CHOICES];
+        if (!opts.includes(current)) opts.push(current);
+        for (const w of opts) {
+          const o = document.createElement('option');
+          o.value = w;
+          o.textContent = w;
+          sel2.appendChild(o);
+        }
+        const custom = document.createElement('option');
+        custom.value = '__custom__';
+        custom.textContent = 'custom…';
+        sel2.appendChild(custom);
+        sel2.value = current;
+        sel2.addEventListener('change', () => {
+          let v = sel2.value;
+          if (v === '__custom__') {
+            const entered = prompt('Column width (e.g. 2cm, 1in, 80pt, 1.5fr)', current === 'auto' ? '2cm' : current);
+            if (entered === null || !/^[\d.]+\s*(pt|mm|cm|in|em|fr|%)$/.test(entered.trim())) {
+              sel2.value = current;
+              return;
+            }
+            v = entered.trim();
+          }
+          snapshot();
+          model.widths[c] = v;
+          renderGrid({ r: lastFocus.r, c: lastFocus.c });
+          refreshPanel();
+          schedulePreview();
+        });
+        td.appendChild(sel2);
+        wtr.appendChild(td);
+      }
+      t.appendChild(wtr);
+    }
     model.rows.forEach((row, ri) => {
       if (ri > 0) {
         const btr = document.createElement('tr');
@@ -443,12 +505,14 @@ export function openTableEditor(view: EditorView, pos: number) {
         case 'col+':
           snapshot();
           model.rows.forEach((row) => row.splice(Math.min(f.c + 1, row.length), 0, blank(row[Math.min(f.c, row.length - 1)].header)));
+          model.widths.splice(Math.min(f.c + 1, model.widths.length), 0, 'auto');
           renderGrid({ r: f.r, c: f.c + 1 });
           break;
         case 'col-':
           if (cols() > 1) {
             snapshot();
             model.rows.forEach((row) => row.length > 1 && row.splice(Math.min(f.c, row.length - 1), 1));
+            model.widths.splice(Math.min(f.c, model.widths.length - 1), 1);
             renderGrid({ r: f.r, c: Math.max(0, f.c - 1) });
           }
           break;
