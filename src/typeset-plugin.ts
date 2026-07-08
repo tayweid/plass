@@ -59,10 +59,9 @@ export interface PageInfo {
 
 interface TypesetState {
   decos: DecorationSet;
-  enabled: boolean;
 }
 
-type Meta = { type: 'decos'; decos: DecorationSet } | { type: 'toggle'; enabled: boolean };
+type Meta = { type: 'decos'; decos: DecorationSet };
 
 interface Spacer {
   pos: number;
@@ -71,10 +70,6 @@ interface Spacer {
 }
 
 export const typesetKey = new PluginKey<TypesetState>('typeset');
-
-export function isTypesetEnabled(state: EditorState): boolean {
-  return typesetKey.getState(state)?.enabled ?? false;
-}
 
 /** Vertical gap between stacked footnote bodies / height of the separator zone (px). */
 const FN_GAP = 6;
@@ -87,32 +82,23 @@ export function scheduleTypeset(view: EditorView) {
   viewRegistry.get(view)?.requestRun();
 }
 
-export function toggleTypeset(view: EditorView) {
-  const enabled = !isTypesetEnabled(view.state);
-  view.dispatch(view.state.tr.setMeta(typesetKey, { type: 'toggle', enabled } satisfies Meta));
-}
-
 export function typesetPlugin(
-  opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo | null) => void } = {},
+  opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo) => void } = {},
 ) {
   return new Plugin<TypesetState>({
     key: typesetKey,
     state: {
-      init: () => ({ decos: DecorationSet.empty, enabled: true }),
+      init: () => ({ decos: DecorationSet.empty }),
       apply(tr, val) {
         const meta = tr.getMeta(typesetKey) as Meta | undefined;
-        if (meta?.type === 'decos') return { ...val, decos: meta.decos };
-        if (meta?.type === 'toggle') {
-          return { enabled: meta.enabled, decos: meta.enabled ? val.decos : DecorationSet.empty };
-        }
-        if (tr.docChanged) return { ...val, decos: val.decos.map(tr.mapping, tr.doc) };
+        if (meta?.type === 'decos') return { decos: meta.decos };
+        if (tr.docChanged) return { decos: val.decos.map(tr.mapping, tr.doc) };
         return val;
       },
     },
     props: {
       decorations(state) {
-        const s = typesetKey.getState(state);
-        return s?.enabled ? s.decos : null;
+        return typesetKey.getState(state)?.decos ?? null;
       },
     },
     view: (view) => new TypesetView(view, opts),
@@ -139,7 +125,7 @@ class TypesetView {
 
   constructor(
     private view: EditorView,
-    private opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo | null) => void },
+    private opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo) => void },
   ) {
     viewRegistry.set(view, this);
     this.measurer = new Measurer(view.dom);
@@ -176,12 +162,6 @@ class TypesetView {
   }
 
   update(view: EditorView, prevState: EditorState) {
-    const enabled = typesetKey.getState(view.state)?.enabled;
-    const wasEnabled = typesetKey.getState(prevState)?.enabled;
-    if (!enabled) {
-      if (wasEnabled) this.opts.onPages?.(null);
-      return;
-    }
     // Document settings (font, size, hyphenation, …) invalidate every metric.
     if (view.state.doc.attrs !== prevState.doc.attrs) {
       this.measurer.invalidate();
@@ -189,7 +169,7 @@ class TypesetView {
       this.oracle.clear();
       this.pageOracle.clear();
     }
-    if (view.state.doc !== prevState.doc || !wasEnabled) this.schedule();
+    if (view.state.doc !== prevState.doc) this.schedule();
   }
 
   destroy() {
@@ -239,7 +219,6 @@ class TypesetView {
 
   private run() {
     if (this.destroyed) return;
-    if (!typesetKey.getState(this.view.state)?.enabled) return;
 
     const t0 = performance.now();
     this.applyTopAdjust();

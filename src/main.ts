@@ -73,17 +73,7 @@ let pageCount = 0;
 let pageSignature = '';
 
 /** Paint the page boxes + numbers behind the editor. */
-function renderPages(info: PageInfo | null) {
-  if (!info) {
-    stackEl.classList.add('unpaged');
-    stackEl.style.height = '';
-    pagesEl.replaceChildren();
-    pageSignature = '';
-    pageCount = 0;
-    updateStatus();
-    return;
-  }
-  stackEl.classList.remove('unpaged');
+function renderPages(info: PageInfo) {
   stackEl.style.height = `${info.count * (info.pageH + info.gap) - info.gap}px`;
   pageCount = info.count;
   const s = getSettings(view.state);

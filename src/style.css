@@ -664,20 +664,6 @@ body {
   padding: var(--page-margin-top, 1.25in) var(--page-margin-right, 1.25in) 0 var(--page-margin-left, 1.25in);
 }
 
-/* Fallback when the typeset oracle is toggled off: one continuous sheet. */
-#stack.unpaged {
-  background: var(--sheet);
-  min-height: var(--page-h, 11in);
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.045),
-    0 10px 28px rgba(0, 0, 0, 0.05);
-  border-radius: 3px;
-}
-
-#stack.unpaged #editor {
-  padding-bottom: var(--page-margin-bottom, 1.25in);
-}
-
 /* ---------- document typography (driven by document settings) ---------- */
 
 .ProseMirror {
@@ -932,16 +918,6 @@ body {
   margin-right: 0.15em;
   user-select: none;
   -webkit-user-select: none;
-}
-
-/* Without the paginator (typeset toggled off), show bodies inline. */
-#stack.unpaged .fn-body {
-  position: static;
-  visibility: visible;
-  display: block;
-  margin: 0.3em 0 0.3em 1.5em;
-  padding-left: 0.6em;
-  border-left: 2px solid #d5d1c8;
 }
 
 /* Manual page break: zero-height in flow (the next block starts the page
