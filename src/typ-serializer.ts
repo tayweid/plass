@@ -314,7 +314,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
       const customAll = ((node.attrs.params as string) || '').trim();
       const userRules: string[] = [];
       const custom = customAll
-        .replace(/table\.hline\([^)]*\)\s*,?/g, (m) => {
+        .replace(/table\.[hv]line\([^)]*\)\s*,?/g, (m) => {
           userRules.push(m.replace(/,?\s*$/, ''));
           return '';
         })
@@ -327,8 +327,14 @@ function blockToTyp(node: PMNode, indent = ''): string {
       // Decimal columns double up: expand the count, the align tuple, and
       // any user width tuple (the pair gets the width plus an auto).
       let customExpanded = custom;
+      const mapVlineX = (src: string) =>
+        src.replace(/table\.vline\(\s*x\s*:\s*(\d+)/g, (_, x: string) => {
+          const n = parseInt(x, 10);
+          return `table.vline(x: ${n + decimalCols.filter((d) => d < n).length}`;
+        });
       if (decimalCols.length) {
-        customExpanded = custom.replace(/columns\s*:\s*\(([^)]*)\)/, (_, tuple: string) => {
+        for (let i = 0; i < userRules.length; i++) userRules[i] = mapVlineX(userRules[i]);
+        customExpanded = mapVlineX(custom).replace(/columns\s*:\s*\(([^)]*)\)/, (_, tuple: string) => {
           const widths = tuple.split(',').map((w: string) => w.trim());
           const out: string[] = [];
           widths.forEach((w, i) => {
@@ -369,15 +375,20 @@ function blockToTyp(node: PMNode, indent = ''): string {
         rows.push('  table.hline(stroke: 0.08em),');
       }
       for (const rule of userRules) params.push(`  ${rule},`);
-      const tableCall = `table(\n${params.join('\n')}\n${rows.join('\n')}\n)`;
+      let tableCall = `table(\n${params.join('\n')}\n${rows.join('\n')}\n)`;
+      const fontSize = (node.attrs.fontSize as string) || '';
+      if (fontSize) {
+        tableCall = `text(size: ${fontSize}, ${tableCall})`;
+      }
       const directive = decimalCols.length ? `// typeset:decimal-columns ${decimalCols.join(',')}\n` : '';
       const caption = (node.attrs.caption as string) || '';
       const tLabel = (node.attrs.label as string) || '';
       if (caption || tLabel) {
         // A captioned table is a figure: numbered "Table N", referenceable.
         const cap = caption ? `,\n  caption: [${escapeTyp(caption)}]` : '';
+        const kind = fontSize ? ',\n  kind: table' : '';
         const lab = tLabel ? ` <${tLabel}>` : '';
-        return indent + directive + `#figure(\n${tableCall.split('\n').map((l) => '  ' + l).join('\n')}${cap},\n)${lab}\n\n`;
+        return indent + directive + `#figure(\n${tableCall.split('\n').map((l) => '  ' + l).join('\n')}${cap}${kind},\n)${lab}\n\n`;
       }
       return indent + directive + `#align(center, ${tableCall})\n\n`;
     }

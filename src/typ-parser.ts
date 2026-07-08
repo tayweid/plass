@@ -223,6 +223,13 @@ function fuseDecimalColumns(table: PMNode, logicalDecimals: number[]): PMNode {
   });
   // Un-expand a width tuple in params: drop the auto that followed each pair.
   let params = (table.attrs.params as string) || '';
+  params = params.replace(/table\.vline\(\s*x\s*:\s*(\d+)/g, (_, x: string) => {
+    const n = parseInt(x, 10);
+    // Reverse the expansion: subtract one per decimal pair left of it.
+    let logical = n;
+    for (const e of expanded) if (e < n) logical--;
+    return `table.vline(x: ${logical}`;
+  });
   params = params.replace(/columns\s*:\s*\(([^)]*)\)/, (_, tuple: string) => {
     const widths = tuple.split(',').map((w: string) => w.trim());
     // Walk logical columns, skipping the extra auto that followed each pair.
@@ -341,8 +348,8 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
-    // table: #align(center, table(…)) — centered on export — or bare #table(…)
-    const centered = t.startsWith('#align(center, table(');
+    // table: #align(center, [text(size…, )]table(…)) or bare #table(…)
+    const centered = t.startsWith('#align(center, table(') || t.startsWith('#align(center, text(size:');
     if (centered || t.startsWith('#table(')) {
       const body: string[] = [line];
       let depth = countParens(line);
@@ -353,11 +360,19 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
         i++;
       }
       let src = body.join('\n');
+      let tableSize = '';
       if (centered) {
-        // Strip the alignment wrapper: '#align(center, table(…))' → '#table(…)'
-        src = src.trim().replace(/^#align\(center,\s*table\(/, '#table(').replace(/\)\)$/, ')');
+        src = src.trim();
+        const sized = /^#align\(center,\s*text\(size:\s*([\d.]+em),\s*table\(/.exec(src);
+        if (sized) {
+          tableSize = sized[1];
+          src = '#table(' + src.slice(sized[0].length).replace(/\)\)\)$/, ')');
+        } else {
+          src = src.replace(/^#align\(center,\s*table\(/, '#table(').replace(/\)\)$/, ')');
+        }
       }
-      const table = parseTable(src);
+      let table = parseTable(src);
+      if (table && tableSize) table = table.type.create({ ...table.attrs, fontSize: tableSize }, table.content);
       if (table) {
         out.push(pendingDecimals ? fuseDecimalColumns(table, pendingDecimals) : table);
         pendingDecimals = null;
@@ -408,7 +423,8 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
         i++;
       }
       const whole = body.join('\n');
-      const tStart = whole.indexOf('table(');
+      const figSize = /text\(size:\s*([\d.]+em),\s*table\(/.exec(whole)?.[1] ?? '';
+      const tStart = whole.indexOf('table(', whole.indexOf('(') + 1);
       if (tStart >= 0) {
         // Balanced span of the table(...) call.
         let d = 0;
@@ -440,7 +456,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
           if (table) {
             out.push(
               table.type.create(
-                { ...table.attrs, caption: unescapeTypText(caption), label },
+                { ...table.attrs, caption: unescapeTypText(caption), label, fontSize: figSize },
                 table.content,
               ),
             );
@@ -646,6 +662,10 @@ export function parseTable(src: string): PMNode | null {
       // bare rules are the style preset's own.
       if (/[(,]\s*y\s*:/.test(arg)) userHlines.push(arg);
       else hlines++;
+    } else if (arg.startsWith('table.vline(')) {
+      // Column rules with an explicit position round-trip via params.
+      if (/[(,]\s*x\s*:/.test(arg)) userHlines.push(arg);
+      else return null;
     } else if (arg.startsWith('table.header(')) {
       const hEnd = arg.lastIndexOf(')');
       if (hEnd < 0) return null;

@@ -19,13 +19,12 @@ a feature touches the oracle machinery.
 4. ~~**Fills**~~ — done: fill dropdown (none / header / zebra / both) as
    canonical `fill:` functions in params; hand-written fills show as
    "Custom fill" and are preserved. (Per-selection cell fills still open.)
-5. **Table font size** — papers often set tables at 0.8–0.9em. A size
-   control in the card; emits a wrapping `#[#set text(size: …) …]` or
-   `text(size:)` param. Interacts with parity (fragment + export must
-   agree — they share the serializer, so free).
-6. **Vertical rules** — same interaction as midrules: click a *column*
-   boundary in the grid. Emits `table.vline(x: n)`; parser treats
-   x-rules like y-rules (params passthrough).
+5. ~~**Table font size**~~ — done: size select (100–75%) wrapping the
+   table in `text(size: …)`; captioned tables carry `kind: table` so
+   numbering survives the wrapper; round-trips.
+6. ~~**Vertical rules**~~ — done: click a column boundary in the width
+   row; `table.vline(x: n)` via params; remaps across decimal-split
+   columns; round-trips.
 7. **Rule weights** — light/heavy midrule choice (booktabs toprule vs
    midrule); maybe a click-cycle on an active rule.
 8. **Cell insets** — density presets (compact / normal / roomy) →

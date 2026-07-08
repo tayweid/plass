@@ -39,9 +39,14 @@ interface GridModel {
   widths: string[];
   /** Fill preset ('none' | 'header' | 'zebra' | 'both' | 'custom'). */
   fill: string;
+  /** Table text size ('' = document size, else e.g. '0.85em'). */
+  fontSize: string;
+  /** Column boundaries (1..cols-1) carrying a vertical rule. */
+  vlines: Set<number>;
 }
 
 const HLINE_RE = /table\.hline\(\s*y\s*:\s*(\d+)[^)]*\)\s*,?/g;
+const VLINE_RE = /table\.vline\(\s*x\s*:\s*(\d+)[^)]*\)\s*,?/g;
 const COLUMNS_RE = /columns\s*:\s*\(([^)]*)\)\s*,?/;
 
 // Canonical fill presets (recognized on read, emitted on write).
@@ -72,11 +77,16 @@ function readModel(table: PMNode): GridModel {
     rows.push(cells);
   });
   const hlines = new Set<number>();
+  const vlines = new Set<number>();
   const raw = (table.attrs.params as string) || '';
   let widths: string[] = [];
   const params = raw
     .replace(HLINE_RE, (_, y) => {
       hlines.add(+y);
+      return '';
+    })
+    .replace(VLINE_RE, (_, x) => {
+      vlines.add(+x);
       return '';
     })
     .replace(COLUMNS_RE, (_, tuple: string) => {
@@ -111,6 +121,8 @@ function readModel(table: PMNode): GridModel {
     label: (table.attrs.label as string) || '',
     widths,
     fill,
+    fontSize: (table.attrs.fontSize as string) || '',
+    vlines,
   };
 }
 
@@ -120,6 +132,7 @@ function composeParams(model: GridModel): string {
   if (FILLS[model.fill]) parts.push(FILLS[model.fill]);
   if (model.params) parts.push(model.params);
   for (const y of [...model.hlines].sort((a, b) => a - b)) parts.push(`table.hline(y: ${y}, stroke: 0.05em)`);
+  for (const x of [...model.vlines].sort((a, b) => a - b)) parts.push(`table.vline(x: ${x}, stroke: 0.05em)`);
   return parts.join(',\n');
 }
 
@@ -141,7 +154,13 @@ function buildNode(model: GridModel): PMNode {
     ),
   );
   return table.create(
-    { style: model.style, params: composeParams(model), caption: model.caption, label: model.label },
+    {
+      style: model.style,
+      params: composeParams(model),
+      caption: model.caption,
+      label: model.label,
+      fontSize: model.fontSize,
+    },
     rows,
   );
 }
@@ -156,6 +175,8 @@ function cloneModel(m: GridModel): GridModel {
     label: m.label,
     widths: [...m.widths],
     fill: m.fill,
+    fontSize: m.fontSize,
+    vlines: new Set(m.vlines),
   };
 }
 
@@ -194,6 +215,7 @@ export function openTableEditor(view: EditorView, pos: number) {
     captionInput.value = model.caption;
     labelInput.value = model.label;
     fillSelect.value = model.fill;
+    sizeSelect.value = model.fontSize;
     refreshPanel();
     schedulePreview();
   };
@@ -220,6 +242,13 @@ export function openTableEditor(view: EditorView, pos: number) {
         <button type="button" data-act="alignD" title="Align focused column on the decimal point">.0</button>
         <span class="table-card-sep"></span>
         <button type="button" data-act="style">Style</button>
+        <select class="table-card-size" title="Table text size">
+          <option value="">100%</option>
+          <option value="0.9em">90%</option>
+          <option value="0.85em">85%</option>
+          <option value="0.8em">80%</option>
+          <option value="0.75em">75%</option>
+        </select>
         <select class="table-card-fill" title="Row shading">
           <option value="none">No fill</option>
           <option value="header">Header fill</option>
@@ -250,6 +279,20 @@ export function openTableEditor(view: EditorView, pos: number) {
   const previewBody = overlay.querySelector('.table-card-preview-body') as HTMLElement;
   const styleLabel = overlay.querySelector('.table-card-style') as HTMLElement;
   const typstText = overlay.querySelector('.table-card-typst-text') as HTMLTextAreaElement;
+  const sizeSelect = overlay.querySelector('.table-card-size') as HTMLSelectElement;
+  if (model.fontSize && ![...sizeSelect.options].some((o) => o.value === model.fontSize)) {
+    const opt = document.createElement('option');
+    opt.value = model.fontSize;
+    opt.textContent = model.fontSize;
+    sizeSelect.appendChild(opt);
+  }
+  sizeSelect.value = model.fontSize;
+  sizeSelect.addEventListener('change', () => {
+    snapshot();
+    model.fontSize = sizeSelect.value;
+    refreshPanel();
+    schedulePreview();
+  });
   const fillSelect = overlay.querySelector('.table-card-fill') as HTMLSelectElement;
   if (model.fill === 'custom') {
     const opt = document.createElement('option');
@@ -294,6 +337,23 @@ export function openTableEditor(view: EditorView, pos: number) {
       wtr.className = 'tc-widths';
       for (let c = 0; c < totalCols; c++) {
         const td = document.createElement('td');
+        td.className = 'tc-width-cell';
+        if (c < totalCols - 1) {
+          const vt = document.createElement('button');
+          vt.type = 'button';
+          vt.className = 'tc-vtoggle' + (model.vlines.has(c + 1) ? ' tc-vtoggle-on' : '');
+          vt.title = model.vlines.has(c + 1) ? 'Remove column rule' : 'Add a vertical rule at this boundary';
+          vt.addEventListener('click', (e) => {
+            e.stopPropagation();
+            snapshot();
+            if (model.vlines.has(c + 1)) model.vlines.delete(c + 1);
+            else model.vlines.add(c + 1);
+            renderGrid({ r: lastFocus.r, c: lastFocus.c });
+            refreshPanel();
+            schedulePreview();
+          });
+          td.appendChild(vt);
+        }
         const sel2 = document.createElement('select');
         sel2.title = 'Column width';
         const current = model.widths[c];
@@ -553,6 +613,7 @@ export function openTableEditor(view: EditorView, pos: number) {
           snapshot();
           model.rows.forEach((row) => row.splice(Math.min(f.c + 1, row.length), 0, blank(row[Math.min(f.c, row.length - 1)].header)));
           model.widths.splice(Math.min(f.c + 1, model.widths.length), 0, 'auto');
+          model.vlines = new Set([...model.vlines].map((x) => (x > f.c + 1 ? x + 1 : x)));
           renderGrid({ r: f.r, c: f.c + 1 });
           break;
         case 'col-':
@@ -560,6 +621,7 @@ export function openTableEditor(view: EditorView, pos: number) {
             snapshot();
             model.rows.forEach((row) => row.length > 1 && row.splice(Math.min(f.c, row.length - 1), 1));
             model.widths.splice(Math.min(f.c, model.widths.length - 1), 1);
+            model.vlines = new Set([...model.vlines].filter((x) => x <= cols()).map((x) => (x > f.c ? x - 1 : x)));
             renderGrid({ r: f.r, c: Math.max(0, f.c - 1) });
           }
           break;

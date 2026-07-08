@@ -376,6 +376,36 @@ function firstDiff(a: string, b: string): string {
   check('decimal round-trip idempotent', out === again, firstDiff(out, again));
 }
 
+// --- 13d. table font size + vlines round-trip ---
+{
+  const { table, table_row, table_cell, table_header, paragraph, doc: docType } = schema.nodes;
+  const mk2 = (text: string, header = false) =>
+    (header ? table_header : table_cell).create(null, [paragraph.create(null, text ? [schema.text(text)] : [])]);
+  const t = table.create(
+    { style: 'booktabs', fontSize: '0.85em', params: 'table.vline(x: 1, stroke: 0.05em)', caption: 'Sized', label: 'tab:sized' },
+    [
+      table_row.create(null, [mk2('A', true), mk2('B', true)]),
+      table_row.create(null, [mk2('1'), mk2('2')]),
+    ],
+  );
+  const d2 = docType.create(null, [t]);
+  const out = docToTyp(d2);
+  check('size wrapper emitted', out.includes('text(size: 0.85em, table('));
+  check('kind marker emitted', out.includes('kind: table'));
+  check('vline emitted', out.includes('table.vline(x: 1'));
+  const back = typToDoc(out);
+  let t3: import('prosemirror-model').Node | null = null;
+  back.doc.descendants((n) => {
+    if (!t3 && n.type.name === 'table') t3 = n;
+    return !t3;
+  });
+  const t3n = t3 as import('prosemirror-model').Node | null;
+  check('fontSize imported', t3n?.attrs.fontSize === '0.85em');
+  check('vline preserved', (t3n?.attrs.params as string)?.includes('table.vline(x: 1'));
+  const again = docToTyp(back.doc);
+  check('sized table idempotent', out === again, firstDiff(out, again));
+}
+
 // --- 14. paragraph starting with list-like character survives ---
 {
   const src = docToTyp(typToDoc('\\- not a list, just a dash').doc);

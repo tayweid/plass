@@ -168,6 +168,7 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
       params: { default: '' },
       caption: { default: '' },
       label: { default: '' },
+      fontSize: { default: '' },
     },
     parseDOM: [
       {
@@ -177,6 +178,7 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
           params: (el as HTMLElement).getAttribute('data-params') || '',
           caption: (el as HTMLElement).getAttribute('data-caption') || '',
           label: (el as HTMLElement).getAttribute('data-label') || '',
+          fontSize: (el as HTMLElement).getAttribute('data-font-size') || '',
         }),
       },
     ],
@@ -187,6 +189,7 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
         'data-params': node.attrs.params,
         'data-caption': node.attrs.caption,
         'data-label': node.attrs.label,
+        'data-font-size': node.attrs.fontSize,
         class: `ts-table-${node.attrs.style}`,
       },
       ['tbody', 0],

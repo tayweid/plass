@@ -359,6 +359,7 @@ body {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+.table-card-size,
 .table-card-fill {
   font: 12px var(--sans);
   color: var(--ink);
@@ -416,6 +417,38 @@ body {
   border: none !important;
   padding: 0 0 4px !important;
   text-align: center;
+  position: relative;
+}
+
+.tc-vtoggle {
+  position: absolute;
+  right: -5px;
+  top: -2px;
+  width: 10px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  z-index: 2;
+  padding: 0;
+}
+
+.tc-vtoggle::after {
+  content: '';
+  position: absolute;
+  left: 4.5px;
+  top: 2px;
+  bottom: 2px;
+  width: 1px;
+  background: transparent;
+}
+
+.tc-vtoggle:hover::after {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.tc-vtoggle-on::after {
+  background: var(--ink);
 }
 
 .tc-widths select {
