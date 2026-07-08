@@ -130,11 +130,17 @@ is the next milestone. The first page's top offset also differs slightly
   **always shows the compiled table** (the in-app Typst render — same
   fonts, engine, and centering as the PDF). Clicking it opens a focused
   **editing card**, following the math-editor pattern: a plain cell grid
-  (Tab/arrows to move, header row bold), structural controls (rows,
-  columns, header toggle, per-column alignment, style cycle, raw Opts),
-  and a live compiled result inside the card. ⌘Enter saves as one undoable
-  step; Esc cancels. Cells with rich content (math, references) are
-  preserved unless their text is edited. Imported tables keep
+  (Tab/arrows to move, header row bold, shift-click to select a range),
+  structural controls (rows, columns, merge/split, header toggle,
+  per-column alignment, style cycle), **clickable row boundaries** that
+  toggle booktabs midrules, a card-local **⌘Z/⌘⇧Z undo stack**, and a live
+  compiled result. The **Typst panel** at the bottom always shows the full
+  `#table(...)` arguments the current state compiles with — editing it
+  parses back through the importer, so GUI and source are two views of one
+  thing; custom arguments are additive with the style preset (add
+  `inset: 9pt` and booktabs stays). ⌘Enter saves as one undoable step; Esc
+  cancels. Cells with rich content (math, references) are preserved unless
+  their text is edited. Imported tables keep
   unknown named arguments the same way; forms we can't reconstruct
   faithfully (custom-positioned rules, vlines) fall back to raw-Typst
   islands rather than being simplified.

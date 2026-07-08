@@ -276,7 +276,19 @@ function blockToTyp(node: PMNode, indent = ''): string {
         rows.push(allHeader ? `  table.header(${cells.join(', ')}),` : `  ${cells.join(', ')},`);
       });
 
-      const custom = ((node.attrs.params as string) || '').trim();
+      // User midrules (table.hline(y: …)) coexist with style presets; the
+      // rest of the custom params replace the preset entirely.
+      const customAll = ((node.attrs.params as string) || '').trim();
+      const userRules: string[] = [];
+      const custom = customAll
+        .replace(/table\.hline\([^)]*\)\s*,?/g, (m) => {
+          userRules.push(m.replace(/,?\s*$/, ''));
+          return '';
+        })
+        .replace(/,\s*,/g, ',')
+        .replace(/^\s*,\s*/, '')
+        .replace(/[,\s]+$/, '')
+        .trim();
       const customHas = (name: string) => new RegExp(`(^|[\\s,(])${name}\\s*:`).test(custom);
 
       const params: string[] = [];
@@ -284,24 +296,26 @@ function blockToTyp(node: PMNode, indent = ''): string {
       if (anyAlign && !customHas('align')) {
         params.push(`  align: (${colAligns.map((a) => a ?? 'auto').join(', ')}),`);
       }
+      // Style preset and custom params are ADDITIVE: the preset renders
+      // unless a custom key overrides it (stroke overrides the preset
+      // stroke; the booktabs rules stay unless the style itself changes).
+      if (style !== 'grid' && !customHas('stroke')) params.push('  stroke: none,');
       if (custom) {
-        // Full-control mode: user's raw arguments replace the style preset.
         const block = custom
           .split('\n')
           .map((l) => '  ' + l.trim())
           .join('\n');
         params.push(block.replace(/,?\s*$/, ','));
-      } else {
-        if (style !== 'grid') params.push('  stroke: none,');
-        if (style === 'booktabs') {
-          rows.unshift('  table.hline(stroke: 0.08em),');
-          if (hasHeader) {
-            const idx = rows.findIndex((r) => r.includes('table.header('));
-            rows.splice(idx + 1, 0, '  table.hline(stroke: 0.05em),');
-          }
-          rows.push('  table.hline(stroke: 0.08em),');
-        }
       }
+      if (style === 'booktabs') {
+        rows.unshift('  table.hline(stroke: 0.08em),');
+        if (hasHeader) {
+          const idx = rows.findIndex((r) => r.includes('table.header('));
+          rows.splice(idx + 1, 0, '  table.hline(stroke: 0.05em),');
+        }
+        rows.push('  table.hline(stroke: 0.08em),');
+      }
+      for (const rule of userRules) params.push(`  ${rule},`);
       return indent + `#align(center, table(\n${params.join('\n')}\n${rows.join('\n')}\n))\n\n`;
     }
     case 'bibliography': {

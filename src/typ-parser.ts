@@ -431,7 +431,7 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
  * arguments we don't model are kept on the table (full-control escape
  * hatch) and re-emitted verbatim.
  */
-function parseTable(src: string): PMNode | null {
+export function parseTable(src: string): PMNode | null {
   const open = src.indexOf('(');
   if (open < 0) return null;
   let d = 0;
@@ -453,6 +453,7 @@ function parseTable(src: string): PMNode | null {
   let strokeNone = false;
   let alignTuple: string | null = null;
   let hlines = 0;
+  const userHlines: string[] = [];
   const customParams: string[] = [];
   const cells: ParsedCell[] = [];
 
@@ -475,7 +476,10 @@ function parseTable(src: string): PMNode | null {
     } else if (/^stroke\s*:\s*none$/.test(arg)) {
       strokeNone = true;
     } else if (arg.startsWith('table.hline(')) {
-      hlines++;
+      // Explicit-position rules (y:) are user midrules — carried in params;
+      // bare rules are the style preset's own.
+      if (/[(,]\s*y\s*:/.test(arg)) userHlines.push(arg);
+      else hlines++;
     } else if (arg.startsWith('table.header(')) {
       const hEnd = arg.lastIndexOf(')');
       if (hEnd < 0) return null;
@@ -499,18 +503,19 @@ function parseTable(src: string): PMNode | null {
   const hasHeader = cells.some((c) => c.header);
 
   // Style detection with fidelity guards: nonstandard rule layouts can't be
-  // reconstructed from presets, so those tables stay raw.
+  // reconstructed from presets, so those tables stay raw. Custom params are
+  // additive and coexist with presets.
   let style = 'grid';
-  if (customParams.length) {
-    if (hlines > 0) return null;
-    if (strokeNone) customParams.push('stroke: none');
-  } else if (strokeNone) {
+  if (strokeNone) {
     style = hlines ? 'booktabs' : 'plain';
     if (style === 'booktabs' && hlines !== (hasHeader ? 3 : 2)) return null;
   } else if (hlines > 0) {
     return null;
+  } else if (customParams.some((a) => /^stroke\s*:/.test(a))) {
+    // A custom stroke without preset markers: keep style neutral.
+    style = 'plain';
   }
-  const params = customParams.join(',\n');
+  const params = [...customParams, ...userHlines].join(',\n');
 
   const colAligns: Array<string | null> = new Array(columns).fill(null);
   if (alignTuple) {
