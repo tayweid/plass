@@ -13,7 +13,7 @@ import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
 import { TablePreviewView } from './table-preview';
 import { equationsPlugin } from './equations';
-import { FigureView, figuresPlugin, setFigureFileManager, startAssetWatch } from './figures';
+import { FigureView, figuresPlugin, migrateEmbeddedFigures, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { refAutocomplete } from './ref-autocomplete';
@@ -237,5 +237,9 @@ declare global {
   }
 }
 window.view = view;
-// Test hook: adopt a directory handle (e.g. OPFS) as the project folder.
+// Test hooks: adopt a directory handle (e.g. OPFS) as the project folder,
+// and run the app-instance embedded-figure migration (dynamic imports in a
+// test page can hit a second module instance under vite HMR).
 (window as unknown as { __fm: FileManager }).__fm = fileManager;
+(window as unknown as { __migrateEmbedded: () => Promise<void> }).__migrateEmbedded = () =>
+  migrateEmbeddedFigures(view);

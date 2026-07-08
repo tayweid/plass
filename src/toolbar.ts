@@ -115,7 +115,13 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     if (confirm('Replace the current document with an empty one?')) fm.newDoc();
   });
   barBtn(icon('open'), 'Open', 'Open… (⌘O)', () => void fm.open());
-  barBtn(icon('project'), 'Project', 'Open a project folder — figures live as files inside it', () => void fm.openFolder());
+  barBtn(icon('project'), 'Project', 'Make this a project folder — figures live as files inside it', () => {
+    void fm.openFolder().then((how) => {
+      if (how === 'kept') {
+        return import('./figures').then(({ migrateEmbeddedFigures }) => migrateEmbeddedFigures(view));
+      }
+    });
+  });
   const recentBtn = barBtn(icon('clock'), 'Recent', 'Recent files', () => toggleRecents());
   barBtn(icon('save'), 'Save', 'Save (⌘S)', () => void fm.save());
   barBtn(icon('saveas'), 'Save As', 'Save As… (⇧⌘S)', () => void fm.saveAs());

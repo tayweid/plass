@@ -135,22 +135,27 @@ export class FileManager {
   }
 
   /** Open a directory as a project: its .typ is the document, relative
-   *  image paths resolve inside it. */
-  async openFolder() {
+   *  image paths resolve inside it. Returns how the folder was adopted. */
+  async openFolder(): Promise<'kept' | 'loaded' | null> {
     if (typeof window.showDirectoryPicker !== 'function') {
       this.hooks.message('Project folders need the File System Access API (Chrome/Edge)');
-      return;
+      return null;
     }
     try {
       const dir = await window.showDirectoryPicker!({ mode: 'readwrite' });
-      await this.adoptFolder(dir);
+      return await this.adoptFolder(dir);
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') console.warn(e);
+      return null;
     }
   }
 
-  /** Use the folder's newest .typ, or create paper.typ in it. */
-  async adoptFolder(dir: FileSystemDirectoryHandle) {
+  /**
+   * Adopt a folder. If it contains a .typ, open (the newest) one; if it is
+   * a fresh folder, the CURRENT document moves in — that is how "make what
+   * I'm writing into a project" works.
+   */
+  async adoptFolder(dir: FileSystemDirectoryHandle): Promise<'kept' | 'loaded' | null> {
     let best: { handle: FileSystemFileHandle; time: number } | null = null;
     for await (const entry of dir.values()) {
       if (entry.kind === 'file' && /\.typ$/i.test(entry.name)) {
@@ -158,14 +163,30 @@ export class FileManager {
         if (!best || f.lastModified > best.time) best = { handle: entry as FileSystemFileHandle, time: f.lastModified };
       }
     }
-    let handle = best?.handle;
-    if (!handle) {
-      handle = await dir.getFileHandle('paper.typ', { create: true });
-      const w = await handle.createWritable();
-      await w.write(docToTyp(this.hooks.emptyDoc()));
-      await w.close();
+    if (best) {
+      if (this.dirty && !confirm(`Open ${best.handle.name} from this folder? Your current document has unsaved changes.`)) {
+        return null;
+      }
+      await this.loadHandle(best.handle, dir);
+      return 'loaded';
     }
-    await this.loadHandle(handle, dir);
+    // Fresh folder: the current document becomes the project's .typ.
+    const fileName = `${this.name === 'Untitled' ? 'paper' : this.name}.typ`;
+    const handle = await dir.getFileHandle(fileName, { create: true });
+    this.handle = handle;
+    this.dir = dir;
+    this.name = fileName.replace(/\.typ$/i, '');
+    await this.write(handle);
+    this.dirty = false;
+    this.hooks.onState();
+    this.hooks.message(`Project created — ${dir.name}/${fileName}`);
+    try {
+      await addRecent(handle, fileName, dir);
+      await idbSet('last', { handle, dir });
+    } catch (e) {
+      console.warn('Could not persist file handle', e);
+    }
+    return 'kept';
   }
 
   private async walkTo(path: string): Promise<FileSystemFileHandle | null> {

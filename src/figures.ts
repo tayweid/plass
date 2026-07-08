@@ -34,6 +34,50 @@ async function assetUrl(path: string): Promise<string | null> {
 
 const ASSET_EVENT = 'typeset-assets-changed';
 
+function dataUrlBytes(src: string): { blob: Blob; ext: string } | null {
+  const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[a-z0-9-]+)*),(.*)$/is.exec(src);
+  if (!m) return null;
+  const ext = m[1] === 'svg+xml' ? 'svg' : m[1] === 'jpeg' ? 'jpg' : m[1];
+  const mime = `image/${m[1]}`;
+  if (m[2].includes('base64')) {
+    const bin = atob(m[3]);
+    const data = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+    return { blob: new Blob([data.buffer], { type: mime }), ext };
+  }
+  return { blob: new Blob([decodeURIComponent(m[3])], { type: mime }), ext };
+}
+
+/** Write every embedded (data-URL) figure out to figures/ and swap the
+ *  document to file references. Called when a document becomes a project. */
+export async function migrateEmbeddedFigures(view: EditorView) {
+  if (!fmRef?.inFolder) return;
+  const found: Array<{ pos: number; src: string }> = [];
+  view.state.doc.descendants((n, pos) => {
+    if (n.type.name === 'figure' && /^data:/.test(n.attrs.src as string)) found.push({ pos, src: n.attrs.src as string });
+    return true;
+  });
+  if (!found.length) return;
+  const moves: Array<{ pos: number; path: string }> = [];
+  let n = 0;
+  for (const f of found) {
+    const decoded = dataUrlBytes(f.src);
+    if (!decoded) continue;
+    n++;
+    const name = (view.state.doc.nodeAt(f.pos)?.attrs.name as string) || `embedded-${n}.${decoded.ext}`;
+    const path = projectImagePath(name.includes('.') ? name : `${name}.${decoded.ext}`);
+    if (await fmRef.writeAsset(path, decoded.blob)) moves.push({ pos: f.pos, path });
+  }
+  if (!moves.length) return;
+  let tr = view.state.tr;
+  for (const m of moves) {
+    const node = tr.doc.nodeAt(m.pos);
+    if (node?.type.name === 'figure') tr = tr.setNodeMarkup(m.pos, undefined, { ...node.attrs, src: m.path });
+  }
+  view.dispatch(tr);
+  fmRef.notify(`${moves.length} embedded image${moves.length === 1 ? '' : 's'} moved to figures/`);
+}
+
 /**
  * Poll referenced images for on-disk changes (FSA has no watcher): the
  * regenerate-the-plot → alt-tab loop updates figures live. Checks on window
