@@ -12,11 +12,10 @@ a feature touches the oracle machinery.
    paints "Table N"; round-trips byte-identically.
 2. ~~**Column widths**~~ — done: per-column selects above the grid
    (auto/1fr/2fr/3fr/custom length); emits `columns: (…)`; round-trips.
-3. **Decimal alignment** — align numbers on the decimal point (the econ
-   signature). Typst has no native decimal tab; standard trick is
-   splitting into two columns joined at the point, or padding via figure
-   space. Design needed — possibly a per-column "decimal" align mode in
-   the card that transforms on export.
+3. ~~**Decimal alignment**~~ — done: ".0" per-column align mode in the
+   card; exports split the column into a right/left pair joined at the
+   point (zero inner inset, headers span, non-numerics span); a
+   `// typeset:decimal-columns` directive fuses on import; round-trips.
 4. **Fills** — header-row shading, zebra striping, per-selection fill.
    UI: a small fill control in the card tools (none / header / zebra /
    custom color for selection). Emits `fill:` function or per-cell

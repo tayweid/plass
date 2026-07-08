@@ -246,6 +246,15 @@ function blockToTyp(node: PMNode, indent = ''): string {
       });
       const anyAlign = colAligns.some(Boolean);
 
+      // Decimal columns split into paired sub-columns at the point (integer
+      // part right-aligned, fraction left-aligned, zero inner inset so the
+      // halves join). A directive comment lets the importer fuse them back.
+      const decimalCols: number[] = [];
+      colAligns.forEach((a, i) => {
+        if (a === 'decimal') decimalCols.push(i);
+      });
+      const decimalsIn = (c: number, span: number) => decimalCols.filter((d) => d >= c && d < c + span).length;
+
       let hasHeader = false;
       const rows: string[] = [];
       node.forEach((row, _rowOffset, rowIndex) => {
@@ -265,8 +274,32 @@ function blockToTyp(node: PMNode, indent = ''): string {
           const colspan = (cell.attrs.colspan as number) ?? 1;
           const rowspan = (cell.attrs.rowspan as number) ?? 1;
           const align = cell.attrs.align as string | null;
+
+          const inDecimal = decimalCols.includes(col) && colspan === 1;
+          if (inDecimal) {
+            const plain = cell.textContent.trim();
+            const isHeader = cell.type.name === 'table_header';
+            const numM = /^([-+]?[\d,]*)(\.\d*)?$/.exec(plain);
+            if (!isHeader && plain && numM && !exportOpts.cellLinks) {
+              const intPart = numM[1] ?? '';
+              const fracPart = numM[2] ?? '';
+              const rs = rowspan > 1 ? `, rowspan: ${rowspan}` : '';
+              cells.push(`table.cell(align: right, inset: (right: 0pt)${rs})[${escapeTyp(intPart)}]`);
+              cells.push(`table.cell(align: left, inset: (left: 0pt)${rs})[${escapeTyp(fracPart)}]`);
+            } else {
+              // Headers, empties, and non-numeric content span the pair.
+              const args = [`colspan: 2`];
+              if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
+              args.push(`align: ${isHeader ? 'center' : 'right'}`);
+              cells.push(`table.cell(${args.join(', ')})[${content}]`);
+            }
+            col += colspan;
+            return;
+          }
+
+          const emitSpan = colspan + decimalsIn(col, colspan);
           const args: string[] = [];
-          if (colspan > 1) args.push(`colspan: ${colspan}`);
+          if (emitSpan > 1) args.push(`colspan: ${emitSpan}`);
           if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
           if (align && align !== colAligns[col]) args.push(`align: ${align}`);
           cells.push(args.length ? `table.cell(${args.join(', ')})[${content}]` : `[${content}]`);
@@ -291,17 +324,37 @@ function blockToTyp(node: PMNode, indent = ''): string {
         .trim();
       const customHas = (name: string) => new RegExp(`(^|[\\s,(])${name}\\s*:`).test(custom);
 
+      // Decimal columns double up: expand the count, the align tuple, and
+      // any user width tuple (the pair gets the width plus an auto).
+      let customExpanded = custom;
+      if (decimalCols.length) {
+        customExpanded = custom.replace(/columns\s*:\s*\(([^)]*)\)/, (_, tuple: string) => {
+          const widths = tuple.split(',').map((w: string) => w.trim());
+          const out: string[] = [];
+          widths.forEach((w, i) => {
+            if (decimalCols.includes(i)) out.push(w === 'auto' ? 'auto' : w, 'auto');
+            else out.push(w);
+          });
+          return `columns: (${out.join(', ')})`;
+        });
+      }
+
       const params: string[] = [];
-      if (!customHas('columns')) params.push(`  columns: ${columns},`);
+      if (!customHas('columns')) params.push(`  columns: ${columns + decimalCols.length},`);
       if (anyAlign && !customHas('align')) {
-        params.push(`  align: (${colAligns.map((a) => a ?? 'auto').join(', ')}),`);
+        const emitted: string[] = [];
+        colAligns.forEach((a, i) => {
+          if (decimalCols.includes(i)) emitted.push('right', 'left');
+          else emitted.push(a === 'decimal' ? 'right' : (a ?? 'auto'));
+        });
+        params.push(`  align: (${emitted.join(', ')}),`);
       }
       // Style preset and custom params are ADDITIVE: the preset renders
       // unless a custom key overrides it (stroke overrides the preset
       // stroke; the booktabs rules stay unless the style itself changes).
       if (style !== 'grid' && !customHas('stroke')) params.push('  stroke: none,');
-      if (custom) {
-        const block = custom
+      if (customExpanded) {
+        const block = customExpanded
           .split('\n')
           .map((l) => '  ' + l.trim())
           .join('\n');
@@ -317,15 +370,16 @@ function blockToTyp(node: PMNode, indent = ''): string {
       }
       for (const rule of userRules) params.push(`  ${rule},`);
       const tableCall = `table(\n${params.join('\n')}\n${rows.join('\n')}\n)`;
+      const directive = decimalCols.length ? `// typeset:decimal-columns ${decimalCols.join(',')}\n` : '';
       const caption = (node.attrs.caption as string) || '';
       const tLabel = (node.attrs.label as string) || '';
       if (caption || tLabel) {
         // A captioned table is a figure: numbered "Table N", referenceable.
         const cap = caption ? `,\n  caption: [${escapeTyp(caption)}]` : '';
         const lab = tLabel ? ` <${tLabel}>` : '';
-        return indent + `#figure(\n${tableCall.split('\n').map((l) => '  ' + l).join('\n')}${cap},\n)${lab}\n\n`;
+        return indent + directive + `#figure(\n${tableCall.split('\n').map((l) => '  ' + l).join('\n')}${cap},\n)${lab}\n\n`;
       }
-      return indent + `#align(center, ${tableCall})\n\n`;
+      return indent + directive + `#align(center, ${tableCall})\n\n`;
     }
     case 'bibliography': {
       // Embedded inline so the .typ stays self-contained (bytes() source).

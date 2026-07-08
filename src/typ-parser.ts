@@ -65,6 +65,8 @@ export function typToDoc(src: string): TypImport {
       i++;
       continue;
     }
+    // Body directives (attached to specific blocks) end the header.
+    if (/^\/\/ typeset:decimal-columns /.test(line)) break;
     if (!line || line.startsWith('//')) {
       i++;
       continue;
@@ -167,6 +169,76 @@ export function typToDoc(src: string): TypImport {
   return { doc: schema.nodes.doc.create({ settings, bib: importBib }, blocks), warnings };
 }
 
+/**
+ * Reverse the decimal-column split: merge each (int, frac) sub-column pair
+ * back into one 'decimal'-aligned logical column, shrink spanning cells,
+ * and un-expand any width tuple carried in params.
+ */
+function fuseDecimalColumns(table: PMNode, logicalDecimals: number[]): PMNode {
+  // Logical index d sits at expanded index d + (#decimals before d).
+  const expanded = logicalDecimals.map((d, i) => d + i);
+  const rows: PMNode[] = [];
+  table.forEach((row) => {
+    const cells: PMNode[] = [];
+    let col = 0;
+    let skipNext = 0;
+    row.forEach((cell) => {
+      if (skipNext > 0) {
+        skipNext--;
+        col += (cell.attrs.colspan as number) ?? 1;
+        return;
+      }
+      const span = (cell.attrs.colspan as number) ?? 1;
+      if (expanded.includes(col)) {
+        if (span >= 2) {
+          // Header / non-numeric spanning cell: shrink back to one column.
+          cells.push(cell.type.create({ ...cell.attrs, colspan: span - 1, align: 'decimal' }, cell.content));
+        } else {
+          // Numeric pair: join this cell's text with the next (fraction) cell.
+          skipNext = 1;
+          let cellIdx = -1;
+          row.forEach((c2, _o, idx2) => {
+            if (cellIdx < 0 && c2 === cell) cellIdx = idx2;
+          });
+          const after = cellIdx >= 0 && cellIdx + 1 < row.childCount ? row.child(cellIdx + 1) : null;
+          const joined = (cell.textContent + (after ? after.textContent : '')).trim();
+          cells.push(
+            cell.type.create(
+              { ...cell.attrs, colspan: 1, align: 'decimal' },
+              [schema.nodes.paragraph.create(null, joined ? [schema.text(joined)] : [])],
+            ),
+          );
+        }
+      } else {
+        const coveredPairs = expanded.filter((e) => e > col && e < col + span).length;
+        if (coveredPairs > 0) {
+          cells.push(cell.type.create({ ...cell.attrs, colspan: span - coveredPairs }, cell.content));
+        } else {
+          cells.push(cell);
+        }
+      }
+      col += span;
+    });
+    rows.push(row.type.create(row.attrs, cells));
+  });
+  // Un-expand a width tuple in params: drop the auto that followed each pair.
+  let params = (table.attrs.params as string) || '';
+  params = params.replace(/columns\s*:\s*\(([^)]*)\)/, (_, tuple: string) => {
+    const widths = tuple.split(',').map((w: string) => w.trim());
+    // Walk logical columns, skipping the extra auto that followed each pair.
+    const fused: string[] = [];
+    let idx = 0;
+    let logical = 0;
+    while (idx < widths.length) {
+      fused.push(widths[idx]);
+      idx += logicalDecimals.includes(logical) ? 2 : 1;
+      logical++;
+    }
+    return `columns: (${fused.join(', ')})`;
+  });
+  return table.type.create({ ...table.attrs, params }, rows);
+}
+
 function unescapeTypText(t: string): string {
   return t.replace(/\\([\\#$*_`@<>\[\]])/g, '$1');
 }
@@ -175,10 +247,17 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
   const out: PMNode[] = [];
   const n = lines.length;
   let i = 0;
+  let pendingDecimals: number[] | null = null;
 
   while (i < n) {
     const line = lines[i];
     const t = line.trim();
+    const dm = /^\/\/ typeset:decimal-columns ([\d,]+)$/.exec(t);
+    if (dm) {
+      pendingDecimals = dm[1].split(',').map(Number);
+      i++;
+      continue;
+    }
     if (!t || t.startsWith('//')) {
       i++;
       continue;
@@ -280,7 +359,8 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       }
       const table = parseTable(src);
       if (table) {
-        out.push(table);
+        out.push(pendingDecimals ? fuseDecimalColumns(table, pendingDecimals) : table);
+        pendingDecimals = null;
       } else {
         warnings.push('kept as raw Typst: #table(…) (unrecognized form)');
         out.push(schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text(body.join('\n'))]));
@@ -352,7 +432,11 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
             if (capEnd > 0) caption = whole.slice(capStart + 1, capEnd);
           }
           const label = /<([a-zA-Z0-9:._-]+)>\s*$/.exec(whole)?.[1] ?? '';
-          const table = parseTable('#' + whole.slice(tStart, tEnd + 1));
+          let table = parseTable('#' + whole.slice(tStart, tEnd + 1));
+          if (table && pendingDecimals) {
+            table = fuseDecimalColumns(table, pendingDecimals);
+            pendingDecimals = null;
+          }
           if (table) {
             out.push(
               table.type.create(

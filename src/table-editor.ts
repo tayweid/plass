@@ -192,6 +192,7 @@ export function openTableEditor(view: EditorView, pos: number) {
         <button type="button" data-act="alignL" title="Align focused column left">L</button>
         <button type="button" data-act="alignC" title="Align focused column center">C</button>
         <button type="button" data-act="alignR" title="Align focused column right">R</button>
+        <button type="button" data-act="alignD" title="Align focused column on the decimal point">.0</button>
         <span class="table-card-sep"></span>
         <button type="button" data-act="style">Style</button>
       </div>
@@ -313,7 +314,7 @@ export function openTableEditor(view: EditorView, pos: number) {
         input.value = cell.text;
         input.dataset.r = String(ri);
         input.dataset.c = String(ci);
-        input.style.textAlign = cell.align ?? (cell.header ? 'center' : 'left');
+        input.style.textAlign = cell.align === 'decimal' ? 'right' : (cell.align ?? (cell.header ? 'center' : 'left'));
         if (cell.rich) input.title = 'Contains rich content (math/references) — editing replaces it with plain text';
         input.addEventListener('beforeinput', () => {
           const key = `${ri}:${ci}`;
@@ -564,9 +565,17 @@ export function openTableEditor(view: EditorView, pos: number) {
         }
         case 'alignL':
         case 'alignC':
-        case 'alignR': {
+        case 'alignR':
+        case 'alignD': {
           snapshot();
-          const a = btn.dataset.act === 'alignL' ? 'left' : btn.dataset.act === 'alignC' ? 'center' : 'right';
+          const a =
+            btn.dataset.act === 'alignL'
+              ? 'left'
+              : btn.dataset.act === 'alignC'
+                ? 'center'
+                : btn.dataset.act === 'alignR'
+                  ? 'right'
+                  : 'decimal';
           model.rows.forEach((row) => {
             if (row[f.c]) row[f.c].align = a === 'left' ? null : a;
           });

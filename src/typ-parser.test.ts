@@ -2,6 +2,7 @@
 import { demoDoc } from './demo-doc.ts';
 import { docToTyp } from './typ-serializer.ts';
 import { typToDoc } from './typ-parser.ts';
+import { schema } from './schema.ts';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = '') {
@@ -343,6 +344,36 @@ function firstDiff(a: string, b: string): string {
   check('figure re-emitted', out.includes('#figure(') && out.includes('caption: [Results of the thing]') && out.includes('<tab:results>'));
   const again = docToTyp(typToDoc(out).doc);
   check('captioned table idempotent', out === again, firstDiff(out, again));
+}
+
+// --- 13c. decimal-aligned column splits on export and fuses on import ---
+{
+  const { table, table_row, table_cell, table_header, paragraph, doc: docType } = schema.nodes;
+  const mk = (text: string, header = false, align: string | null = null) =>
+    (header ? table_header : table_cell).create({ align }, [paragraph.create(null, text ? [schema.text(text)] : [])]);
+  const t = table.create({ style: 'booktabs' }, [
+    table_row.create(null, [mk('Item', true), mk('Price', true, 'decimal')]),
+    table_row.create(null, [mk('Apples'), mk('12.5', false, 'decimal')]),
+    table_row.create(null, [mk('Pears'), mk('3.75', false, 'decimal')]),
+    table_row.create(null, [mk('Total'), mk('16', false, 'decimal')]),
+  ]);
+  const d = docType.create(null, [t]);
+  const out = docToTyp(d);
+  check('decimal directive emitted', out.includes('// typeset:decimal-columns 1'));
+  check('decimal split emitted', out.includes('inset: (right: 0pt))[12]') && out.includes('inset: (left: 0pt))[.5]'));
+  check('decimal header spans', out.includes('colspan: 2, align: center)[Price]'));
+  const back = typToDoc(out);
+  let t2: import('prosemirror-model').Node | null = null;
+  back.doc.descendants((n) => {
+    if (!t2 && n.type.name === 'table') t2 = n;
+    return !t2;
+  });
+  const t2n = t2 as import('prosemirror-model').Node | null;
+  check('fused back to 2 columns', t2n?.child(1)?.childCount === 2);
+  check('decimal align restored', t2n?.child(1)?.child(1)?.attrs.align === 'decimal');
+  check('cell text rejoined', t2n?.child(1)?.child(1)?.textContent === '12.5');
+  const again = docToTyp(back.doc);
+  check('decimal round-trip idempotent', out === again, firstDiff(out, again));
 }
 
 // --- 14. paragraph starting with list-like character survives ---
