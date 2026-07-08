@@ -103,6 +103,9 @@ a feature touches the oracle machinery.
   `figures/`, and referenced files poll for changes (regenerate the plot,
   alt-tab, the figure and pagination update). Embedded data URLs remain
   the single-file fallback.
-- Editing-jitter polish: map stale page-oracle results through edits
-  instead of falling back to local pagination while recompiling.
+- ~~Editing-jitter polish~~ — done: doc edits settle after a 250ms pause
+  (existing decorations map through keystrokes — stale but stable; mid-
+  burst oracle arrivals coalesce into the settle run), and page starts
+  persist as mapped markers so pagination reuses the last oracle answer
+  during recompiles instead of falling back to a disagreeing local guess.
 - Dogfooding: write a real problem set / lecture note; harvest frictions.

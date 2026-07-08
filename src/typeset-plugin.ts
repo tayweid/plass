@@ -59,9 +59,15 @@ export interface PageInfo {
 
 interface TypesetState {
   decos: DecorationSet;
+  /** Zero-width markers at the last oracle page starts — PM maps them
+   *  through every edit, giving stale-but-stable pagination while the
+   *  page oracle recompiles. Never rendered. */
+  pageMarks: DecorationSet;
 }
 
-type Meta = { type: 'decos'; decos: DecorationSet };
+type Meta =
+  | { type: 'decos'; decos: DecorationSet; pageMarks?: DecorationSet }
+  | { type: 'pageMarks'; pageMarks: DecorationSet };
 
 interface Spacer {
   pos: number;
@@ -104,11 +110,16 @@ export function typesetPlugin(
   return new Plugin<TypesetState>({
     key: typesetKey,
     state: {
-      init: () => ({ decos: DecorationSet.empty }),
+      init: () => ({ decos: DecorationSet.empty, pageMarks: DecorationSet.empty }),
       apply(tr, val) {
         const meta = tr.getMeta(typesetKey) as Meta | undefined;
-        if (meta?.type === 'decos') return { decos: meta.decos };
-        if (tr.docChanged) return { decos: val.decos.map(tr.mapping, tr.doc) };
+        if (meta?.type === 'decos') {
+          return { decos: meta.decos, pageMarks: meta.pageMarks ?? val.pageMarks.map(tr.mapping, tr.doc) };
+        }
+        if (meta?.type === 'pageMarks') return { decos: val.decos, pageMarks: meta.pageMarks };
+        if (tr.docChanged) {
+          return { decos: val.decos.map(tr.mapping, tr.doc), pageMarks: val.pageMarks.map(tr.mapping, tr.doc) };
+        }
         return val;
       },
     },
@@ -139,6 +150,9 @@ class TypesetView {
   private oracle: TypstOracle;
   private pageOracle: PageOracle;
   private raf = 0;
+  private editTimer = 0;
+  private lastPageCount = 0;
+  private pendingPageMarks: DecorationSet | null = null;
   private resizeObserver: ResizeObserver;
   private lastWidth = 0;
   private destroyed = false;
@@ -189,13 +203,26 @@ class TypesetView {
       this.oracle.clear();
       this.pageOracle.clear();
     }
-    if (view.state.doc !== prevState.doc) this.schedule();
+    if (view.state.doc !== prevState.doc) this.scheduleAfterEdit();
+  }
+
+  /** Doc edits settle after a pause: during a typing burst the existing
+   *  decorations (line breaks, page spacers) map through each keystroke —
+   *  stale but STABLE — instead of re-typesetting per key and ping-ponging
+   *  between the JS fallback and the oracle. */
+  private scheduleAfterEdit() {
+    clearTimeout(this.editTimer);
+    this.editTimer = window.setTimeout(() => {
+      this.editTimer = 0;
+      this.schedule();
+    }, 250);
   }
 
   destroy() {
     this.destroyed = true;
     viewRegistry.delete(this.view);
     this.resizeObserver.disconnect();
+    clearTimeout(this.editTimer);
     if (this.raf) cancelAnimationFrame(this.raf);
     this.oracle.destroy();
     this.pageOracle.destroy();
@@ -212,6 +239,10 @@ class TypesetView {
   }
 
   private schedule() {
+    // Mid-burst triggers (oracle results, figure loads) coalesce into the
+    // settle run — running them immediately would re-typeset under the
+    // user's fingers.
+    if (this.editTimer) return;
     if (this.raf) return;
     this.raf = requestAnimationFrame(() => {
       this.raf = 0;
@@ -263,6 +294,15 @@ class TypesetView {
       const blockSpacers: Spacer[] = [];
       for (const sp of spacers) (sp.kind === 'line' ? lineSpacers.set(sp.pos, sp) : blockSpacers.push(sp));
       this.dispatchDecos(lineSpacers, blockSpacers);
+    }
+
+    // Single-page runs skip the second dispatch — flush pending markers.
+    if (this.pendingPageMarks) {
+      const set = this.pendingPageMarks;
+      this.pendingPageMarks = null;
+      const tr = this.view.state.tr.setMeta(typesetKey, { type: 'pageMarks', pageMarks: set } satisfies Meta);
+      tr.setMeta('addToHistory', false);
+      this.view.dispatch(tr);
     }
 
     this.placeFootnotes(count);
@@ -518,7 +558,12 @@ class TypesetView {
     }
 
     const set = DecorationSet.create(state.doc, decos);
-    const tr = state.tr.setMeta(typesetKey, { type: 'decos', decos: set } satisfies Meta);
+    const meta: Meta = { type: 'decos', decos: set };
+    if (this.pendingPageMarks) {
+      meta.pageMarks = this.pendingPageMarks;
+      this.pendingPageMarks = null;
+    }
+    const tr = state.tr.setMeta(typesetKey, meta);
     tr.setMeta('addToHistory', false);
     this.view.dispatch(tr);
     return { paragraphs, lines: lineCount };
@@ -557,6 +602,34 @@ class TypesetView {
         if (!entry) this.pageOracle.request(sig, view.state.doc, s, this.atomResolver());
         if (entry?.status === 'ok' && entry.pageStarts) {
           const forced = this.paginateForced(entry.pageStarts, entry.pageCount ?? entry.pageStarts.length + 1);
+          if (forced) {
+            // Persist the starts as mapped markers for the next edit burst.
+            this.lastPageCount = entry.pageCount ?? entry.pageStarts.length + 1;
+            this.pendingPageMarks = DecorationSet.create(
+              view.state.doc,
+              entry.pageStarts.map((ps) =>
+                Decoration.widget(ps.pos, () => document.createElement('span'), {
+                  psLine: ps.line,
+                  psUnit: ps.unit,
+                }),
+              ),
+            );
+            return forced;
+          }
+        }
+        // Oracle still compiling for this revision: reuse the LAST starts,
+        // mapped through the edits — pages hold still instead of falling
+        // back to a local guess that disagrees by a line.
+        const marks = typesetKey.getState(view.state)?.pageMarks.find() ?? [];
+        if (marks.length) {
+          const stale = marks
+            .map((m) => ({
+              pos: m.from,
+              line: (m.spec as { psLine: number }).psLine,
+              unit: (m.spec as { psUnit: string }).psUnit,
+            }))
+            .sort((a, b) => a.pos - b.pos);
+          const forced = this.paginateForced(stale, this.lastPageCount || stale.length + 1);
           if (forced) return forced;
         }
       }
