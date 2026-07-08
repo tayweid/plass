@@ -43,9 +43,7 @@ per-font metric constants (`FONT_PARITY` in `typ-serializer.ts`, calibrated
 against live renders; baseline agreement measured at ≤0.04px across
 paragraphs and headings for the bundled fonts). Known remaining deltas:
 justification distributes sub-pixel differently (the editor underfills each
-line by ≤0.5px to keep the browser from re-wrapping); display equations
-keep matched *spacing* but their ink heights differ (KaTeX vs Typst math);
-figures/tables are raster-vs-vector comparisons; and page-break decisions
+line by ≤0.5px to keep the browser from re-wrapping); figures/tables are raster-vs-vector comparisons; and page-break decisions
 (footnote areas, widow rules) are still the editor's own — page-level parity
 is the next milestone. The first page's top offset also differs slightly
 (Typst suppresses leading block spacing at page top).
@@ -89,8 +87,12 @@ is the next milestone. The first page's top offset also differs slightly
   float beside the table only while the caret is inside one. Insert
   shortcuts: ⌘⌥T table, ⌘⌥I figure, ⌘⌥F footnote, ⌘M/⌘⇧M math.
 - **Math**: type `$e^{i\pi}+1=0$` for inline math, `$$` on an empty line for
-  display math. KaTeX-rendered atoms with a click-to-edit popover and live
-  preview. The oracle justifies around inline math as an unbreakable box.
+  display math. Formulas display **Typst's own ink** — each is compiled by
+  the in-app compiler (mitex + New Computer Modern Math) and shown as its
+  exact PDF rendering, baseline-aligned to the text (measured 0.0 px); KaTeX
+  renders instantly while you type and the compiled ink swaps in ~100 ms
+  later. Click-to-edit popover with live preview. The oracle justifies
+  around inline math using the Typst-exact atom width.
 - **Figures**: insert from the toolbar, or paste/drop an image. Editable
   inline captions with a painted "Figure N:" prefix that renumbers live; a
   label chip on the figure (hover top-right) names it for `@label`

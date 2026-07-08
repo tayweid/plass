@@ -76,9 +76,9 @@ export function parityRules(s: DocSettings): string {
   // Inline raw: pin Typst's defaults so editor code spans (same font file,
   // same ratio) have identical advance widths.
   out += `#show raw.where(block: false): set text(font: "DejaVu Sans Mono", size: ${pt(0.8)})\n`;
-  // Display math: editor box = 0.5em padding + KaTeX's internal 1em margins.
-  const eqAbove = pSlackBelow + 0.9 + 0.5 + 1.0 - m.typDesc;
-  const eqBelow = 1.0 + 0.5 + 0.9 + pSlackAbove - m.typAsc;
+  // Display math: the editor shows Typst's own ink inside 0.5em padding.
+  const eqAbove = pSlackBelow + 0.9 + 0.5 - m.typDesc;
+  const eqBelow = 0.5 + 0.9 + pSlackAbove - m.typAsc;
   out += `#show math.equation.where(block: true): set block(above: ${pt(eqAbove)}, below: ${pt(eqBelow)})\n`;
   return out;
 }

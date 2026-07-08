@@ -1,8 +1,9 @@
-// Math nodes: KaTeX-rendered atoms with a popover source editor.
+// Math nodes: Typst-rendered atoms with a popover source editor.
 //
 // Following spec §3.7: math nodes are atomic in the document; clicking one
-// opens a small editor with a live preview. v1 uses LaTeX syntax (KaTeX);
-// the .typ exporter wraps it with mitex so exported files still compile.
+// opens a small editor with a live KaTeX preview. Source syntax is LaTeX;
+// the document surface shows Typst's own ink (math-ink.ts) with KaTeX as
+// the instant echo, and the .typ exporter wraps sources with mitex.
 
 import katex from 'katex';
 import type { Node as PMNode } from 'prosemirror-model';
@@ -11,6 +12,8 @@ import type { EditorView, NodeView } from 'prosemirror-view';
 import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
 import { getSettings, parseMathMacros } from './settings';
+import { forgetInk, getInk, inkKey, onInk, requestInk } from './math-ink';
+import { scheduleTypeset } from './typeset-plugin';
 
 function renderInto(el: HTMLElement, src: string, displayMode: boolean, macros: Record<string, string> = {}) {
   if (!src.trim()) {
@@ -28,6 +31,9 @@ function renderInto(el: HTMLElement, src: string, displayMode: boolean, macros: 
 export class MathView implements NodeView {
   dom: HTMLElement;
   private lastMacros: string;
+  private display: boolean;
+  private inkApplied = '';
+  private stopInk: () => void;
 
   constructor(
     private node: PMNode,
@@ -35,11 +41,13 @@ export class MathView implements NodeView {
     private getPos: () => number | undefined,
   ) {
     const display = node.type.name === 'math_display';
+    this.display = display;
     this.dom = document.createElement(display ? 'div' : 'span');
     this.dom.className = display ? 'math-display' : 'math-inline';
     this.dom.setAttribute('data-math', node.attrs.src);
     this.lastMacros = getSettings(view.state).mathMacros;
-    renderInto(this.dom, node.attrs.src, display, parseMathMacros(this.lastMacros));
+    this.render();
+    this.stopInk = onInk(() => this.render());
     this.dom.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -56,13 +64,53 @@ export class MathView implements NodeView {
     }
   }
 
+  /**
+   * Render the formula: Typst ink (the PDF's exact drawing) when compiled,
+   * KaTeX instantly until then. Ink arrival re-runs the typesetter so line
+   * justification picks up the exact atom width.
+   */
+  private render() {
+    const src = this.node.attrs.src as string;
+    const settings = getSettings(this.view.state);
+    if (!src.trim()) {
+      this.inkApplied = '';
+      renderInto(this.dom, src, this.display);
+      return;
+    }
+    const key = inkKey(src, this.display, settings);
+    const ink = getInk(key);
+    if (ink) {
+      if (this.inkApplied === key) return;
+      this.inkApplied = key;
+      this.dom.innerHTML = ink.svg;
+      this.dom.classList.add('math-ink');
+      const svg = this.dom.querySelector('svg');
+      if (svg) {
+        svg.style.width = `${ink.widthPx.toFixed(2)}px`;
+        svg.style.height = `${ink.heightPx.toFixed(2)}px`;
+        if (!this.display) svg.style.verticalAlign = `${(-ink.descentPx).toFixed(2)}px`;
+      }
+      scheduleTypeset(this.view);
+      return;
+    }
+    if (this.inkApplied) {
+      this.inkApplied = '';
+      this.dom.classList.remove('math-ink');
+    }
+    renderInto(this.dom, src, this.display, parseMathMacros(this.lastMacros));
+    requestInk(key, src, this.display, settings);
+  }
+
   update(node: PMNode): boolean {
     if (node.type !== this.node.type) return false;
     const macros = getSettings(this.view.state).mathMacros;
     if (node.attrs.src !== this.node.attrs.src || macros !== this.lastMacros) {
       this.lastMacros = macros;
+      this.node = node;
       this.dom.setAttribute('data-math', node.attrs.src);
-      renderInto(this.dom, node.attrs.src, node.type.name === 'math_display', parseMathMacros(macros));
+      forgetInk(inkKey(node.attrs.src as string, this.display, getSettings(this.view.state)));
+      this.render();
+      return true;
     }
     this.node = node;
     return true;
@@ -74,6 +122,10 @@ export class MathView implements NodeView {
 
   deselectNode() {
     this.dom.classList.remove('math-selected');
+  }
+
+  destroy() {
+    this.stopInk();
   }
 
   ignoreMutation() {
