@@ -16,10 +16,9 @@ a feature touches the oracle machinery.
    card; exports split the column into a right/left pair joined at the
    point (zero inner inset, headers span, non-numerics span); a
    `// typeset:decimal-columns` directive fuses on import; round-trips.
-4. **Fills** — header-row shading, zebra striping, per-selection fill.
-   UI: a small fill control in the card tools (none / header / zebra /
-   custom color for selection). Emits `fill:` function or per-cell
-   `table.cell(fill: …)`.
+4. ~~**Fills**~~ — done: fill dropdown (none / header / zebra / both) as
+   canonical `fill:` functions in params; hand-written fills show as
+   "Custom fill" and are preserved. (Per-selection cell fills still open.)
 5. **Table font size** — papers often set tables at 0.8–0.9em. A size
    control in the card; emits a wrapping `#[#set text(size: …) …]` or
    `text(size:)` param. Interacts with parity (fragment + export must

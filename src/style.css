@@ -359,6 +359,16 @@ body {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+.table-card-fill {
+  font: 12px var(--sans);
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--chrome-border);
+  border-radius: 5px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
 .table-card-sep {
   width: 1px;
   height: 16px;

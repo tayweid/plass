@@ -37,10 +37,19 @@ interface GridModel {
   label: string;
   /** Per-column widths ('auto' | '1fr' | '2cm' | …). */
   widths: string[];
+  /** Fill preset ('none' | 'header' | 'zebra' | 'both' | 'custom'). */
+  fill: string;
 }
 
 const HLINE_RE = /table\.hline\(\s*y\s*:\s*(\d+)[^)]*\)\s*,?/g;
 const COLUMNS_RE = /columns\s*:\s*\(([^)]*)\)\s*,?/;
+
+// Canonical fill presets (recognized on read, emitted on write).
+const FILLS: Record<string, string> = {
+  header: 'fill: (x, y) => if y == 0 { luma(240) }',
+  zebra: 'fill: (x, y) => if calc.odd(y) { luma(248) }',
+  both: 'fill: (x, y) => if y == 0 { luma(240) } else if calc.odd(y) { luma(248) }',
+};
 
 function readModel(table: PMNode): GridModel {
   const rows: CellModel[][] = [];
@@ -81,20 +90,34 @@ function readModel(table: PMNode): GridModel {
   const colCount = Math.max(...rows.map((r) => r.reduce((n, c) => n + c.colspan, 0)));
   while (widths.length < colCount) widths.push('auto');
   widths = widths.slice(0, colCount);
+  let fill = 'none';
+  let cleaned = params;
+  // Most specific first — 'header' is a prefix of 'both'.
+  for (const mode of ['both', 'header', 'zebra']) {
+    const pattern = FILLS[mode];
+    if (cleaned.includes(pattern)) {
+      fill = mode;
+      cleaned = cleaned.replace(pattern, '').replace(/,\s*,/g, ',').replace(/^\s*,\s*/, '').replace(/[,\s]+$/, '').trim();
+      break;
+    }
+  }
+  if (fill === 'none' && /(^|[\s,(])fill\s*:/.test(cleaned)) fill = 'custom';
   return {
     rows,
     style: (table.attrs.style as string) || 'booktabs',
-    params,
+    params: cleaned,
     hlines,
     caption: (table.attrs.caption as string) || '',
     label: (table.attrs.label as string) || '',
     widths,
+    fill,
   };
 }
 
 function composeParams(model: GridModel): string {
   const parts: string[] = [];
   if (model.widths.some((w) => w !== 'auto')) parts.push(`columns: (${model.widths.join(', ')})`);
+  if (FILLS[model.fill]) parts.push(FILLS[model.fill]);
   if (model.params) parts.push(model.params);
   for (const y of [...model.hlines].sort((a, b) => a - b)) parts.push(`table.hline(y: ${y}, stroke: 0.05em)`);
   return parts.join(',\n');
@@ -132,6 +155,7 @@ function cloneModel(m: GridModel): GridModel {
     caption: m.caption,
     label: m.label,
     widths: [...m.widths],
+    fill: m.fill,
   };
 }
 
@@ -169,6 +193,7 @@ export function openTableEditor(view: EditorView, pos: number) {
     renderGrid();
     captionInput.value = model.caption;
     labelInput.value = model.label;
+    fillSelect.value = model.fill;
     refreshPanel();
     schedulePreview();
   };
@@ -195,6 +220,12 @@ export function openTableEditor(view: EditorView, pos: number) {
         <button type="button" data-act="alignD" title="Align focused column on the decimal point">.0</button>
         <span class="table-card-sep"></span>
         <button type="button" data-act="style">Style</button>
+        <select class="table-card-fill" title="Row shading">
+          <option value="none">No fill</option>
+          <option value="header">Header fill</option>
+          <option value="zebra">Zebra</option>
+          <option value="both">Header + zebra</option>
+        </select>
       </div>
       <div class="table-card-grid"></div>
       <div class="table-card-meta">
@@ -219,6 +250,20 @@ export function openTableEditor(view: EditorView, pos: number) {
   const previewBody = overlay.querySelector('.table-card-preview-body') as HTMLElement;
   const styleLabel = overlay.querySelector('.table-card-style') as HTMLElement;
   const typstText = overlay.querySelector('.table-card-typst-text') as HTMLTextAreaElement;
+  const fillSelect = overlay.querySelector('.table-card-fill') as HTMLSelectElement;
+  if (model.fill === 'custom') {
+    const opt = document.createElement('option');
+    opt.value = 'custom';
+    opt.textContent = 'Custom fill';
+    fillSelect.appendChild(opt);
+  }
+  fillSelect.value = model.fill;
+  fillSelect.addEventListener('change', () => {
+    snapshot();
+    model.fill = fillSelect.value;
+    refreshPanel();
+    schedulePreview();
+  });
   const captionInput = overlay.querySelector('.table-card-caption') as HTMLInputElement;
   const labelInput = overlay.querySelector('.table-card-label') as HTMLInputElement;
   captionInput.value = model.caption;
@@ -470,6 +515,7 @@ export function openTableEditor(view: EditorView, pos: number) {
       snapshot();
       model = readModel(parsed);
       renderGrid();
+      fillSelect.value = FILLS[model.fill] || model.fill === 'none' ? model.fill : 'custom';
       schedulePreview();
       styleLabel.textContent = model.style + (model.params ? ' + opts' : '');
     }, 500);
