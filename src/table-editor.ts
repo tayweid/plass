@@ -33,6 +33,8 @@ interface GridModel {
   params: string;
   /** Row boundaries (1-based: above row n) carrying a midrule. */
   hlines: Set<number>;
+  caption: string;
+  label: string;
 }
 
 const HLINE_RE = /table\.hline\(\s*y\s*:\s*(\d+)[^)]*\)\s*,?/g;
@@ -68,7 +70,14 @@ function readModel(table: PMNode): GridModel {
     .replace(/^\s*,\s*/, '')
     .replace(/[,\s]+$/, '')
     .trim();
-  return { rows, style: (table.attrs.style as string) || 'booktabs', params, hlines };
+  return {
+    rows,
+    style: (table.attrs.style as string) || 'booktabs',
+    params,
+    hlines,
+    caption: (table.attrs.caption as string) || '',
+    label: (table.attrs.label as string) || '',
+  };
 }
 
 function composeParams(model: GridModel): string {
@@ -93,7 +102,10 @@ function buildNode(model: GridModel): PMNode {
       }),
     ),
   );
-  return table.create({ style: model.style, params: composeParams(model) }, rows);
+  return table.create(
+    { style: model.style, params: composeParams(model), caption: model.caption, label: model.label },
+    rows,
+  );
 }
 
 function cloneModel(m: GridModel): GridModel {
@@ -102,6 +114,8 @@ function cloneModel(m: GridModel): GridModel {
     style: m.style,
     params: m.params,
     hlines: new Set(m.hlines),
+    caption: m.caption,
+    label: m.label,
   };
 }
 
@@ -137,6 +151,8 @@ export function openTableEditor(view: EditorView, pos: number) {
     sel = null;
     typingCell = null;
     renderGrid();
+    captionInput.value = model.caption;
+    labelInput.value = model.label;
     refreshPanel();
     schedulePreview();
   };
@@ -164,6 +180,10 @@ export function openTableEditor(view: EditorView, pos: number) {
         <button type="button" data-act="style">Style</button>
       </div>
       <div class="table-card-grid"></div>
+      <div class="table-card-meta">
+        <input class="table-card-caption" placeholder="Caption — makes this “Table N: …”, numbered and referenceable" spellcheck="false">
+        <input class="table-card-label" placeholder="label (@tab:…)" spellcheck="false">
+      </div>
       <div class="table-card-preview"><div class="table-card-preview-label">Result</div><div class="table-card-preview-body"></div></div>
       <details class="table-card-typst">
         <summary>Typst <span class="table-card-typst-hint">— the full arguments this table compiles with; edit to fine-tune</span></summary>
@@ -182,6 +202,18 @@ export function openTableEditor(view: EditorView, pos: number) {
   const previewBody = overlay.querySelector('.table-card-preview-body') as HTMLElement;
   const styleLabel = overlay.querySelector('.table-card-style') as HTMLElement;
   const typstText = overlay.querySelector('.table-card-typst-text') as HTMLTextAreaElement;
+  const captionInput = overlay.querySelector('.table-card-caption') as HTMLInputElement;
+  const labelInput = overlay.querySelector('.table-card-label') as HTMLInputElement;
+  captionInput.value = model.caption;
+  labelInput.value = model.label;
+  captionInput.addEventListener('input', () => {
+    model.caption = captionInput.value;
+    schedulePreview();
+  });
+  labelInput.addEventListener('input', () => {
+    model.label = labelInput.value.trim().replace(/[^a-zA-Z0-9:._-]/g, '-');
+    schedulePreview();
+  });
 
   const cols = () => Math.max(...model.rows.map((r) => r.reduce((n, c) => n + c.colspan, 0)));
   const noSpans = () => model.rows.every((r) => r.every((c) => c.colspan === 1 && c.rowspan === 1));
@@ -296,10 +328,27 @@ export function openTableEditor(view: EditorView, pos: number) {
   const emit = (): string => {
     const tempDoc = schema.nodes.doc.create(view.state.doc.attrs, [buildNode(model)]);
     const widthPx = view.dom.clientWidth || 576;
-    return docToTyp(tempDoc).replace(
-      /#set page\([^)]*\)/,
+    let src = docToTyp(tempDoc).replace(
+      /#set page\((.*)\)/,
       `#set page(width: ${(widthPx * 0.75).toFixed(2)}pt, height: auto, margin: 0pt)`,
     );
+    if (model.caption || model.label) {
+      let index = 0;
+      let seen = 0;
+      view.state.doc.descendants((n) => {
+        if (n.type.name === 'table') {
+          seen++;
+          if (n === view.state.doc.nodeAt(pos)) index = seen;
+          return false;
+        }
+        return true;
+      });
+      src = src.replace(
+        '\n\n#figure(',
+        `\n\n#counter(figure.where(kind: table)).update(${Math.max(0, index - 1)})\n#figure(`,
+      );
+    }
+    return src;
   };
   const compilePreview = async () => {
     try {

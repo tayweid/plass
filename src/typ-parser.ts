@@ -167,6 +167,10 @@ export function typToDoc(src: string): TypImport {
   return { doc: schema.nodes.doc.create({ settings, bib: importBib }, blocks), warnings };
 }
 
+function unescapeTypText(t: string): string {
+  return t.replace(/\\([\\#$*_`@<>\[\]])/g, '$1');
+}
+
 function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
   const out: PMNode[] = [];
   const n = lines.length;
@@ -310,6 +314,58 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       }
       const type = marker === '-' ? schema.nodes.bullet_list : schema.nodes.ordered_list;
       out.push(type.create(null, items));
+      continue;
+    }
+
+    // captioned table: #figure(\n  table(…),\n  caption: […],\n) <label>
+    if (/^#figure\(\s*$/.test(t) || /^#figure\(\s*table\(/.test(t)) {
+      const body: string[] = [line];
+      let depth = countParens(line);
+      i++;
+      while (i < n && depth > 0) {
+        body.push(lines[i]);
+        depth += countParens(lines[i]);
+        i++;
+      }
+      const whole = body.join('\n');
+      const tStart = whole.indexOf('table(');
+      if (tStart >= 0) {
+        // Balanced span of the table(...) call.
+        let d = 0;
+        let tEnd = -1;
+        for (let k = tStart + 'table('.length - 1; k < whole.length; k++) {
+          if (whole[k] === '(') d++;
+          else if (whole[k] === ')') {
+            d--;
+            if (d === 0) {
+              tEnd = k;
+              break;
+            }
+          }
+        }
+        if (tEnd > 0) {
+          const capM = /caption:\s*\[/.exec(whole.slice(tEnd));
+          let caption = '';
+          if (capM) {
+            const capStart = tEnd + capM.index + capM[0].length - 1;
+            const capEnd = matchBracket(whole, capStart);
+            if (capEnd > 0) caption = whole.slice(capStart + 1, capEnd);
+          }
+          const label = /<([a-zA-Z0-9:._-]+)>\s*$/.exec(whole)?.[1] ?? '';
+          const table = parseTable('#' + whole.slice(tStart, tEnd + 1));
+          if (table) {
+            out.push(
+              table.type.create(
+                { ...table.attrs, caption: unescapeTypText(caption), label },
+                table.content,
+              ),
+            );
+            continue;
+          }
+        }
+      }
+      warnings.push('kept as raw Typst: #figure(table…) (unrecognized form)');
+      out.push(schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text(whole)]));
       continue;
     }
 

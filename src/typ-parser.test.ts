@@ -311,6 +311,40 @@ function firstDiff(a: string, b: string): string {
   check('re-export omits numbering', !out.includes('numbering: "1"') || out.includes('math.equation'));
 }
 
+// --- 13b. captioned table (figure) round-trips with number/label/midrule ---
+{
+  const src = [
+    '#set page(paper: "us-letter", margin: 1.25in)',
+    '',
+    '#figure(',
+    '  table(',
+    '    columns: 2,',
+    '    stroke: none,',
+    '    table.hline(stroke: 0.08em),',
+    '    table.header([A], [B]),',
+    '    table.hline(stroke: 0.05em),',
+    '    [1], [2],',
+    '    table.hline(stroke: 0.08em),',
+    '  ),',
+    '  caption: [Results of the thing],',
+    ') <tab:results>',
+  ].join('\n');
+  const { doc } = typToDoc(src + '\n');
+  let table: import('prosemirror-model').Node | null = null;
+  doc.descendants((n) => {
+    if (!table && n.type.name === 'table') table = n;
+    return !table;
+  });
+  const tAttrs = (table as import('prosemirror-model').Node | null)?.attrs;
+  check('captioned table parsed', !!table);
+  check('caption imported', tAttrs?.caption === 'Results of the thing');
+  check('table label imported', tAttrs?.label === 'tab:results');
+  const out = docToTyp(doc);
+  check('figure re-emitted', out.includes('#figure(') && out.includes('caption: [Results of the thing]') && out.includes('<tab:results>'));
+  const again = docToTyp(typToDoc(out).doc);
+  check('captioned table idempotent', out === again, firstDiff(out, again));
+}
+
 // --- 14. paragraph starting with list-like character survives ---
 {
   const src = docToTyp(typToDoc('\\- not a list, just a dash').doc);

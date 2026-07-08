@@ -50,6 +50,7 @@ function build(doc: PMNode, numberEquations: boolean, numberSections: boolean): 
   let eq = 0;
   let fig = 0;
   let fn = 0;
+  let tab = 0;
   const sec = [0, 0, 0];
 
   doc.descendants((node, pos) => {
@@ -85,6 +86,12 @@ function build(doc: PMNode, numberEquations: boolean, numberSections: boolean): 
       // descend: captions may contain footnotes
       return true;
     }
+    if (node.type.name === 'table') {
+      tab++;
+      const label = node.attrs.label as string;
+      if (label && !labels.has(label)) labels.set(label, `Table ${tab}`);
+      return false;
+    }
     if (node.type.name === 'footnote') {
       fn++;
       // superscript marker (CSS ::before reads data-fn) …
@@ -118,7 +125,7 @@ function findLabelTarget(doc: PMNode, label: string): number {
   doc.descendants((n, p) => {
     if (
       target < 0 &&
-      (n.type.name === 'math_display' || n.type.name === 'figure' || n.type.name === 'heading') &&
+      (n.type.name === 'math_display' || n.type.name === 'figure' || n.type.name === 'heading' || n.type.name === 'table') &&
       n.attrs.label === label
     ) {
       target = p;

@@ -6,12 +6,10 @@ a feature touches the oracle machinery.
 
 ## Tables (the styling list)
 
-1. **Caption + label** — tables become numbered floats: "Table 1: …" with
-   `@tab:` references, exactly like figures. Export wraps in
-   `#figure(table(...), caption: [...]) <label>`. Needs: schema attrs
-   (caption content or attr, label), numbering-plugin extension, card
-   fields (caption text + label), serializer/parser round-trip. Highest
-   value: papers cite tables.
+1. ~~**Caption + label**~~ — done: caption/label fields in the card;
+   exports `#figure(table(...), caption: […]) <label>`; "Table N" numbers
+   via a counter preset in fragments; `@tab:` works in the picker and
+   paints "Table N"; round-trips byte-identically.
 2. **Column widths** — `auto` / `1fr` / fixed lengths per column. UI: a
    width chip row above the grid in the card (click to cycle auto → 1fr →
    custom), or drag column borders. Emits `columns: (auto, 1fr, 2cm)`;

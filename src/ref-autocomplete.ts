@@ -39,6 +39,7 @@ function collectLabels(state: EditorState): LabelEntry[] {
   const numberSections = getSettings(state).numberSections;
   let eq = 0;
   let fig = 0;
+  let tab = 0;
   const sec = [0, 0, 0];
   state.doc.descendants((node, pos) => {
     if (node.type.name === 'heading') {
@@ -69,6 +70,19 @@ function collectLabels(state: EditorState): LabelEntry[] {
       fig++;
       const label = node.attrs.label as string;
       if (label) out.push({ label, display: `Figure ${fig}`, preview: node.textContent.slice(0, 32), kind: 'ref' });
+      return false;
+    }
+    if (node.type.name === 'table') {
+      tab++;
+      const label = node.attrs.label as string;
+      if (label) {
+        out.push({
+          label,
+          display: `Table ${tab}`,
+          preview: ((node.attrs.caption as string) || node.textContent).slice(0, 32),
+          kind: 'ref',
+        });
+      }
       return false;
     }
     return true;

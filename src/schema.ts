@@ -163,13 +163,20 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
     ...tables.table,
     // style: screen preset; params: raw Typst #table arguments passed through
     // verbatim on export (full-control escape hatch).
-    attrs: { style: { default: 'booktabs' }, params: { default: '' } },
+    attrs: {
+      style: { default: 'booktabs' },
+      params: { default: '' },
+      caption: { default: '' },
+      label: { default: '' },
+    },
     parseDOM: [
       {
         tag: 'table',
         getAttrs: (el) => ({
           style: (el as HTMLElement).getAttribute('data-style') || 'booktabs',
           params: (el as HTMLElement).getAttribute('data-params') || '',
+          caption: (el as HTMLElement).getAttribute('data-caption') || '',
+          label: (el as HTMLElement).getAttribute('data-label') || '',
         }),
       },
     ],
@@ -178,6 +185,8 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
       {
         'data-style': node.attrs.style,
         'data-params': node.attrs.params,
+        'data-caption': node.attrs.caption,
+        'data-label': node.attrs.label,
         class: `ts-table-${node.attrs.style}`,
       },
       ['tbody', 0],

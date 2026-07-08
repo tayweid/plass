@@ -316,7 +316,16 @@ function blockToTyp(node: PMNode, indent = ''): string {
         rows.push('  table.hline(stroke: 0.08em),');
       }
       for (const rule of userRules) params.push(`  ${rule},`);
-      return indent + `#align(center, table(\n${params.join('\n')}\n${rows.join('\n')}\n))\n\n`;
+      const tableCall = `table(\n${params.join('\n')}\n${rows.join('\n')}\n)`;
+      const caption = (node.attrs.caption as string) || '';
+      const tLabel = (node.attrs.label as string) || '';
+      if (caption || tLabel) {
+        // A captioned table is a figure: numbered "Table N", referenceable.
+        const cap = caption ? `,\n  caption: [${escapeTyp(caption)}]` : '';
+        const lab = tLabel ? ` <${tLabel}>` : '';
+        return indent + `#figure(\n${tableCall.split('\n').map((l) => '  ' + l).join('\n')}${cap},\n)${lab}\n\n`;
+      }
+      return indent + `#align(center, ${tableCall})\n\n`;
     }
     case 'bibliography': {
       // Embedded inline so the .typ stays self-contained (bytes() source).

@@ -469,6 +469,30 @@ body {
   outline: 1px solid #b3452f;
 }
 
+.table-card-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.table-card-caption {
+  flex: 1;
+}
+
+.table-card-label {
+  width: 150px;
+  font-family: var(--mono) !important;
+}
+
+.table-card-meta input {
+  font: 12.5px var(--sans);
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--chrome-border);
+  border-radius: 5px;
+  padding: 5px 8px;
+}
+
 .table-card-preview {
   border: 1px solid var(--chrome-border);
   border-radius: 6px;
