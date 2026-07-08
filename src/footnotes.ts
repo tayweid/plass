@@ -122,3 +122,23 @@ export function footnoteMarkerClick(view: EditorView, event: MouseEvent): boolea
   view.focus();
   return true;
 }
+
+
+/**
+ * Horizontal arrows hop over footnote markers instead of dropping the caret
+ * into the (page-bottom) body — the body is entered by clicking the marker
+ * or the body itself, never by walking past the superscript.
+ */
+export function skipFootnote(dir: 1 | -1): Command {
+  return (state, dispatch) => {
+    const { $from, empty } = state.selection;
+    if (!empty || !$from.parent.isTextblock) return false;
+    const node = dir > 0 ? $from.nodeAfter : $from.nodeBefore;
+    if (!node || node.type !== schema.nodes.footnote) return false;
+    if (dispatch) {
+      const pos = $from.pos + dir * node.nodeSize;
+      dispatch(state.tr.setSelection(TextSelection.near(state.doc.resolve(pos), dir)).scrollIntoView());
+    }
+    return true;
+  };
+}

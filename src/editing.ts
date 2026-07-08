@@ -20,7 +20,7 @@ import { schema } from './schema';
 import { insertMath, mathDisplayRule, mathInlineRule } from './math';
 import { eqRefRule } from './equations';
 import { exitFigure } from './figures';
-import { exitFootnote, footnoteCloseRule, footnoteOpenRules, insertFootnote } from './footnotes';
+import { exitFootnote, footnoteCloseRule, footnoteOpenRules, insertFootnote, skipFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
 
 /**
@@ -100,6 +100,8 @@ export function buildKeymap(): Plugin {
     'Ctrl->': wrapIn(schema.nodes.blockquote),
     'Enter': chainCommands(exitFootnote, exitFigure, splitListItem(schema.nodes.list_item)),
     'Mod-Alt-f': insertFootnote,
+    'ArrowRight': skipFootnote(1),
+    'ArrowLeft': skipFootnote(-1),
     'Mod-Alt-t': (state, dispatch, view) => {
       if (dispatch && view) {
         void import('./table-editor').then(({ insertTableWithEditor }) => insertTableWithEditor(view));

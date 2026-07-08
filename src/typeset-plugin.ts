@@ -76,7 +76,7 @@ export function isTypesetEnabled(state: EditorState): boolean {
 
 /** Vertical gap between stacked footnote bodies / height of the separator zone (px). */
 const FN_GAP = 6;
-const FN_SEP = 18;
+const FN_SEP = 30;
 
 const viewRegistry = new WeakMap<EditorView, TypesetView>();
 
@@ -725,11 +725,13 @@ class TypesetView {
       return false;
     });
 
+    // The editor root's actual offset below the stack top (the page-top
+    // ink adjustment shifts it away from exactly one margin).
+    const pmOffset = view.dom.getBoundingClientRect().top - stackTop;
     for (const [page, list] of groups) {
       const bottomLimit = page * (size.h + PAGE_GAP) + size.h - margin;
       const total = list.reduce((sum, f) => sum + f.height, 0) + FN_GAP * (list.length - 1);
-      // .ProseMirror sits one margin below the stack top.
-      let y = bottomLimit - total - margin;
+      let y = bottomLimit - total - pmOffset;
       list.forEach((f, i) => {
         f.el.style.top = `${y.toFixed(1)}px`;
         f.el.classList.toggle('fn-first', i === 0);

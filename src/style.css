@@ -882,25 +882,30 @@ body {
   left: 0;
   right: 0;
   visibility: hidden;
+  /* Calibrated against the PDF: 0.85em text, 17px line pitch, first-line
+     indent, full ink. */
   font-size: 0.85em;
-  line-height: 1.45;
-  color: #333;
+  line-height: 1.2;
+  color: #1a1a1a;
   text-align: left;
+  text-indent: 0.9em;
 }
 
 /* Separator rule above the first footnote of a page. */
 .fn-body.fn-first::before {
   content: '';
   position: absolute;
-  top: -7px;
+  top: -9px;
   left: 0;
   width: 30%;
-  border-top: 1px solid #b5b1a8;
+  border-top: 0.5px solid #1a1a1a;
 }
 
 .fn-num {
-  font-weight: 600;
-  margin-right: 0.4em;
+  vertical-align: super;
+  font-size: 0.72em;
+  line-height: 0;
+  margin-right: 0.15em;
   user-select: none;
   -webkit-user-select: none;
 }

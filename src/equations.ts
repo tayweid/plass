@@ -91,7 +91,7 @@ function build(doc: PMNode, numberEquations: boolean, numberSections: boolean): 
       decos.push(Decoration.node(pos, pos + node.nodeSize, { 'data-fn': String(fn) }));
       // … and the number at the head of the body text.
       decos.push(
-        Decoration.widget(pos + 1, fnNumWidget(`${fn}.`), { side: -1, key: `fn:${pos}:${fn}` }),
+        Decoration.widget(pos + 1, fnNumWidget(String(fn)), { side: -1, key: `fn:${pos}:${fn}` }),
       );
       return true;
     }
