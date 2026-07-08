@@ -17,6 +17,39 @@ npm test         # Knuth-Plass oracle unit tests
 npm run build    # typecheck + production build (static site in dist/)
 ```
 
+## Fidelity
+
+**Line breaks are Typst's own.** The editor no longer trusts its JS
+Knuth-Plass for the final answer: paragraphs are compiled in the background
+by the in-app Typst (WASM) — the byte-exact fragment the PDF pipeline sees —
+and the chosen breaks are read back from the compiled SVG's text-selection
+layer (line-by-line text, matched to character offsets; hyphenation points
+arrive textually). Those breaks are imposed on the DOM via the existing
+decoration machinery, replacing the JS oracle's choices. The JS pass renders
+instantly on each keystroke; the Typst pass converges ~100-200 ms later
+(10-30 ms compiles, warm). Content the matcher can't align (e.g. Typst
+breaking inside a raw span) falls back to the JS breaker per-paragraph.
+Measured on the demo document: identical line count and break positions in
+every paragraph, mean right-edge difference 0.76 px, no line above 3 px
+(ink-edge measurement noise). Inline code spans render in the same DejaVu
+Sans Mono at Typst's 0.8em ratio (same font file feeds the compiler), so
+their widths agree exactly.
+
+The editor and the Typst PDF also share one vertical geometry. The exported
+header carries measured parity rules — `#set par(leading:, spacing:)`,
+per-level heading `set text/block/par` rules, list/enum spacing, and
+display-equation block spacing — derived from the editor's CSS model and
+per-font metric constants (`FONT_PARITY` in `typ-serializer.ts`, calibrated
+against live renders; baseline agreement measured at ≤0.04px across
+paragraphs and headings for the bundled fonts). Known remaining deltas:
+justification distributes sub-pixel differently (the editor underfills each
+line by ≤0.5px to keep the browser from re-wrapping); display equations
+keep matched *spacing* but their ink heights differ (KaTeX vs Typst math);
+figures/tables are raster-vs-vector comparisons; and page-break decisions
+(footnote areas, widow rules) are still the editor's own — page-level parity
+is the next milestone. The first page's top offset also differs slightly
+(Typst suppresses leading block spacing at page top).
+
 ## What works today
 
 - **Oracle layout** (spec §1.3): the document lives in the DOM — native
@@ -46,6 +79,15 @@ npm run build    # typecheck + production build (static site in dist/)
 - **Editing**: ProseMirror core. Markdown-style input rules (`#` headings,
   `**bold**`, `*italic*`, `` `code` ``, `>` quotes, `-`/`1.` lists, ` ``` `
   code blocks), keyboard shortcuts, undo/redo, autosave to localStorage.
+- **Typora-style chrome**: a slim quiet bar — filename on the left, and on
+  the right a row of small monochrome icon buttons (File / Insert /
+  Document / Export groups) whose **text labels slide out on hover**;
+  formatting itself is markdown rules + shortcuts (cheat-sheet behind the ?
+  button). Rare actions live in a small ⋯ overflow (demo, Save As, recents,
+  import .bib, print). A faint corner HUD shows pages · words (hover for
+  oracle timing), messages appear as transient toasts, and table controls
+  float beside the table only while the caret is inside one. Insert
+  shortcuts: ⌘⌥T table, ⌘⌥I figure, ⌘⌥F footnote, ⌘M/⌘⇧M math.
 - **Math**: type `$e^{i\pi}+1=0$` for inline math, `$$` on an empty line for
   display math. KaTeX-rendered atoms with a click-to-edit popover and live
   preview. The oracle justifies around inline math as an unbreakable box.

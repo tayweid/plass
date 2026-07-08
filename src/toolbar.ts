@@ -1,19 +1,10 @@
-// Minimal formatting toolbar + file actions + the TeX-layout toggle.
+// Chrome, Typora-style: a slim quiet bar (title + one ⋯ menu). Formatting
+// happens through markdown input rules and keyboard shortcuts; the menu
+// carries file/insert/document/export actions with their shortcuts, and
+// table controls float beside the table only while the caret is inside one.
 
-import { setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
-import { redo, undo } from 'prosemirror-history';
-import { wrapInList } from 'prosemirror-schema-list';
-import type { MarkType, NodeType } from 'prosemirror-model';
 import type { Command, EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
-import { schema } from './schema';
-import { insertMath } from './math';
-import { isTypesetEnabled, toggleTypeset, type TypesetStats } from './typeset-plugin';
-import { toggleSettingsPanel } from './settings';
-import { pickAndInsertFigure } from './figures';
-import { insertFootnote } from './footnotes';
-import { editBibliography, importBibliography } from './citations';
-import { alignColumn, cycleTableStyle, editTableOptions, insertTable } from './tables';
 import {
   addColumnAfter,
   addRowAfter,
@@ -25,17 +16,20 @@ import {
   splitCell,
   toggleHeaderRow,
 } from 'prosemirror-tables';
+import { schema } from './schema';
+import { insertMath } from './math';
+import { insertFootnote } from './footnotes';
+import { pickAndInsertFigure } from './figures';
+import { alignColumn, cycleTableStyle, editTableOptions, insertTable } from './tables';
+import { editBibliography, importBibliography } from './citations';
+import { toggleSettingsPanel } from './settings';
+import { isTypesetEnabled, toggleTypeset, type TypesetStats } from './typeset-plugin';
 import type { FileManager } from './file-manager';
 
-function markActive(state: EditorState, type: MarkType): boolean {
-  const { from, $from, to, empty } = state.selection;
-  if (empty) return !!type.isInSet(state.storedMarks || $from.marks());
-  return state.doc.rangeHasMark(from, to, type);
-}
-
-function blockActive(state: EditorState, type: NodeType, attrs: Record<string, unknown> = {}): boolean {
-  const { $from, to } = state.selection;
-  return to <= $from.end() && $from.parent.hasMarkup(type, attrs);
+export interface Toolbar {
+  update: (state: EditorState) => void;
+  stats: (s: TypesetStats) => void;
+  setFile: (name: string, dirty: boolean) => void;
 }
 
 interface Btn {
@@ -43,13 +37,7 @@ interface Btn {
   update: (state: EditorState) => void;
 }
 
-function button(
-  label: string,
-  title: string,
-  run: Command,
-  view: EditorView,
-  active?: (state: EditorState) => boolean,
-): Btn {
+function button(label: string, title: string, run: Command, view: EditorView): Btn {
   const el = document.createElement('button');
   el.type = 'button';
   el.innerHTML = label;
@@ -62,138 +50,311 @@ function button(
   return {
     el,
     update(state) {
-      el.classList.toggle('active', active ? active(state) : false);
       el.disabled = !run(state, undefined, view);
     },
   };
 }
 
-export interface Toolbar {
-  update: (state: EditorState) => void;
-  stats: (s: TypesetStats) => void;
-  setFile: (name: string, dirty: boolean) => void;
+const insertFigureCmd: Command = (state, dispatch, view) => {
+  if (!state.selection.$from.parent.isTextblock) return false;
+  if (dispatch && view) pickAndInsertFigure(view);
+  return true;
+};
+
+// Feather-style inline icons (stroke = currentColor).
+const ICONS: Record<string, string> = {
+  new: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/>',
+  open: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
+  table: '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="12" y1="3" x2="12" y2="21"/>',
+  book: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
+  sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+};
+
+function icon(name: string): string {
+  return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 }
 
 export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileManager): Toolbar {
-  const buttons: Btn[] = [];
-  const group = (cls = '') => {
-    const g = document.createElement('div');
-    g.className = 'tb-group ' + cls;
-    container.appendChild(g);
-    return g;
-  };
-
-  const fmt = group();
-  const add = (g: HTMLElement, b: Btn) => {
-    buttons.push(b);
-    g.appendChild(b.el);
-  };
-
-  add(fmt, button('<b>B</b>', 'Bold (⌘B)', toggleMark(schema.marks.strong), view, (s) => markActive(s, schema.marks.strong)));
-  add(fmt, button('<i>I</i>', 'Italic (⌘I)', toggleMark(schema.marks.em), view, (s) => markActive(s, schema.marks.em)));
-  add(fmt, button('<code>&lt;&gt;</code>', 'Code (⌘`)', toggleMark(schema.marks.code), view, (s) => markActive(s, schema.marks.code)));
-
-  const blocks = group();
-  add(blocks, button('H1', 'Heading 1 (⌘⌥1)', setBlockType(schema.nodes.heading, { level: 1 }), view, (s) => blockActive(s, schema.nodes.heading, { level: 1 })));
-  add(blocks, button('H2', 'Heading 2 (⌘⌥2)', setBlockType(schema.nodes.heading, { level: 2 }), view, (s) => blockActive(s, schema.nodes.heading, { level: 2 })));
-  add(blocks, button('H3', 'Heading 3 (⌘⌥3)', setBlockType(schema.nodes.heading, { level: 3 }), view, (s) => blockActive(s, schema.nodes.heading, { level: 3 })));
-  add(blocks, button('¶', 'Paragraph (⌘⌥0)', setBlockType(schema.nodes.paragraph), view));
-
-  const structure = group();
-  add(structure, button('•', 'Bullet list (⌘⇧8)', wrapInList(schema.nodes.bullet_list), view));
-  add(structure, button('1.', 'Numbered list (⌘⇧9)', wrapInList(schema.nodes.ordered_list), view));
-  add(structure, button('"', 'Block quote', wrapIn(schema.nodes.blockquote), view));
-  add(structure, button('√x', 'Inline math (⌘M) — or type $x^2$', insertMath(false), view));
-  add(structure, button('∑', 'Display math (⌘⇧M) — or type $$ on an empty line', insertMath(true), view));
-
-  add(structure, button('†', 'Footnote (⌘⌥F)', insertFootnote, view));
-
-  const figBtn = document.createElement('button');
-  figBtn.type = 'button';
-  figBtn.textContent = '🖼';
-  figBtn.title = 'Insert figure — or paste/drop an image';
-  figBtn.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    pickAndInsertFigure(view);
-  });
-  structure.appendChild(figBtn);
-
-  add(structure, button('⊞', 'Insert table', insertTable(), view));
-
-  // Table surgery — only shown while the selection is inside a table.
-  const tableGroup = group('tb-table');
-  add(tableGroup, button('+Col', 'Add column', addColumnAfter, view));
-  add(tableGroup, button('−Col', 'Delete column', deleteColumn, view));
-  add(tableGroup, button('+Row', 'Add row', addRowAfter, view));
-  add(tableGroup, button('−Row', 'Delete row', deleteRow, view));
-  add(tableGroup, button('⧉', 'Merge selected cells', mergeCells, view));
-  add(tableGroup, button('⊟', 'Split cell', splitCell, view));
-  add(tableGroup, button('Hdr', 'Toggle header row', toggleHeaderRow, view));
-  add(tableGroup, button('L', 'Align column left', alignColumn('left'), view));
-  add(tableGroup, button('C', 'Align column center', alignColumn('center'), view));
-  add(tableGroup, button('R', 'Align column right (numbers)', alignColumn('right'), view));
-  add(tableGroup, button('Style', 'Cycle table style: booktabs → grid → plain', cycleTableStyle, view));
-  const optsBtn = document.createElement('button');
-  optsBtn.type = 'button';
-  optsBtn.textContent = 'Opts';
-  optsBtn.title = 'Raw Typst #table arguments — full control (stroke/fill functions, column widths, …)';
-  optsBtn.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    editTableOptions(view);
-  });
-  tableGroup.appendChild(optsBtn);
-  add(tableGroup, button('✕⊞', 'Delete table', deleteTable, view));
-
-  const hist = group();
-  add(hist, button('↺', 'Undo (⌘Z)', undo, view));
-  add(hist, button('↻', 'Redo (⌘⇧Z)', redo, view));
-
-  // right side
-  const right = group('tb-right');
+  let lastStats: TypesetStats | null = null;
 
   const fileLabel = document.createElement('span');
   fileLabel.className = 'tb-file';
   fileLabel.textContent = 'Untitled';
-  right.appendChild(fileLabel);
+  fileLabel.title = 'Click to rename';
+  fileLabel.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.className = 'tb-file-input';
+    input.value = fm.name;
+    input.spellcheck = false;
+    fileLabel.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (commit: boolean) => {
+      if (done) return;
+      done = true;
+      input.replaceWith(fileLabel);
+      const name = input.value.trim();
+      if (commit && name) void fm.rename(name);
+      view.focus();
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        finish(true);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(false);
+      }
+    });
+    input.addEventListener('blur', () => finish(true));
+  });
 
-  const toggleWrap = document.createElement('label');
-  toggleWrap.className = 'tb-toggle';
-  toggleWrap.title = 'Toggle the Knuth–Plass layout oracle on/off to compare with plain browser layout';
-  const toggle = document.createElement('input');
-  toggle.type = 'checkbox';
-  toggle.checked = true;
-  toggle.addEventListener('change', () => {
+  container.append(fileLabel);
+  const titleDiv = document.createElement('span');
+  titleDiv.className = 'tb-div';
+  container.appendChild(titleDiv);
+
+  /** Icon button whose text label slides out on hover. */
+  const barBtn = (glyph: string, label: string, title: string, run: () => void) => {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'tb-btn';
+    el.title = title;
+    el.innerHTML = `${glyph}<span class="lbl">${label}</span>`;
+    el.addEventListener('mousedown', (e) => e.preventDefault());
+    el.addEventListener('click', () => run());
+    container.appendChild(el);
+    return el;
+  };
+  const barDivider = () => {
+    const d = document.createElement('span');
+    d.className = 'tb-div';
+    container.appendChild(d);
+  };
+  const runCmd = (c: Command) => () => {
+    c(view.state, view.dispatch, view);
+    view.focus();
+  };
+
+  barBtn(icon('new'), 'New', 'New document', () => {
+    if (confirm('Replace the current document with an empty one?')) fm.newDoc();
+  });
+  barBtn(icon('open'), 'Open', 'Open… (⌘O)', () => void fm.open());
+  barBtn(icon('save'), 'Save', 'Save (⌘S)', () => void fm.save());
+  barDivider();
+  barBtn(icon('image'), 'Figure', 'Insert figure (⌘⌥I) — or paste/drop an image', runCmd(insertFigureCmd));
+  barBtn(icon('table'), 'Table', 'Insert table (⌘⌥T)', runCmd(insertTable()));
+  barBtn('<span class="ico tico">Σ</span>', 'Math', 'Inline math (⌘M) — or type $x^2$; ⌘⇧M for display', runCmd(insertMath(false)));
+  barBtn('<span class="ico tico">†</span>', 'Note', 'Footnote (⌘⌥F) — or type ^[', runCmd(insertFootnote));
+  barDivider();
+  barBtn(icon('book'), 'Bib', 'Edit bibliography', () => editBibliography(view, (m) => fm.notify(m)));
+  barBtn(icon('sliders'), 'Settings', 'Document settings', () => toggleSettingsPanel(view, menuBtn));
+  const texBtn = barBtn('<span class="ico tico tex">TeX</span>', 'Layout', 'Toggle TeX typesetting', () => {
     toggleTypeset(view);
     view.focus();
   });
-  toggleWrap.append(toggle, document.createTextNode(' TeX layout'));
-  right.appendChild(toggleWrap);
+  barBtn('<span class="ico tico">?</span>', 'Help', 'Markdown & shortcuts', showHelp);
+  barDivider();
+  barBtn(icon('download'), 'PDF', 'Export PDF via Typst', () => {
+    const name = fm.name === 'Untitled' ? 'document' : fm.name;
+    void import('./pdf').then(({ exportPdf }) => exportPdf(fm.currentDoc(), name, (m) => fm.notify(m)));
+  });
 
-  const statsEl = document.createElement('span');
-  statsEl.className = 'tb-stats';
-  right.appendChild(statsEl);
+  const menuBtn = document.createElement('button');
+  menuBtn.type = 'button';
+  menuBtn.className = 'tb-menu-btn';
+  menuBtn.setAttribute('aria-label', 'More');
+  menuBtn.title = 'More…';
+  menuBtn.textContent = '⋯';
+  menuBtn.addEventListener('click', () => toggleMenu());
+  container.append(menuBtn);
 
-  const settingsBtn = document.createElement('button');
-  settingsBtn.type = 'button';
-  settingsBtn.textContent = '⚙ Settings';
-  settingsBtn.title = 'Document settings — font, paper, margins, hyphenation, equation numbering';
-  settingsBtn.addEventListener('click', () => toggleSettingsPanel(view, settingsBtn));
-  right.appendChild(settingsBtn);
+  // ---------- floating table controls ----------
 
-  const fileBtn = document.createElement('button');
-  fileBtn.type = 'button';
-  fileBtn.textContent = 'File ▾';
-  fileBtn.addEventListener('click', () => toggleFileMenu(fileBtn, view, fm));
-  right.appendChild(fileBtn);
+  const pill = document.createElement('div');
+  pill.className = 'table-pill';
+  pill.hidden = true;
+  const pillButtons: Btn[] = [];
+  const addPill = (b: Btn) => {
+    pillButtons.push(b);
+    pill.appendChild(b.el);
+  };
+  addPill(button('+Col', 'Add column', addColumnAfter, view));
+  addPill(button('−Col', 'Delete column', deleteColumn, view));
+  addPill(button('+Row', 'Add row', addRowAfter, view));
+  addPill(button('−Row', 'Delete row', deleteRow, view));
+  addPill(button('⧉', 'Merge selected cells', mergeCells, view));
+  addPill(button('⊟', 'Split cell', splitCell, view));
+  addPill(button('Hdr', 'Toggle header row', toggleHeaderRow, view));
+  addPill(button('L', 'Align column left', alignColumn('left'), view));
+  addPill(button('C', 'Align column center', alignColumn('center'), view));
+  addPill(button('R', 'Align column right', alignColumn('right'), view));
+  addPill(button('Style', 'Cycle style: booktabs → grid → plain', cycleTableStyle, view));
+  const optsBtn = document.createElement('button');
+  optsBtn.type = 'button';
+  optsBtn.textContent = 'Opts';
+  optsBtn.title = 'Raw Typst #table arguments — full control';
+  optsBtn.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    editTableOptions(view);
+  });
+  pill.appendChild(optsBtn);
+  addPill(button('✕⊞', 'Delete table', deleteTable, view));
+  document.body.appendChild(pill);
+
+  const positionPill = (state: EditorState) => {
+    if (!isInTable(state)) {
+      pill.hidden = true;
+      return;
+    }
+    const { $from } = state.selection;
+    let tablePos = -1;
+    for (let d = $from.depth; d > 0; d--) {
+      if ($from.node(d).type === schema.nodes.table) {
+        tablePos = $from.before(d);
+        break;
+      }
+    }
+    if (tablePos < 0) {
+      pill.hidden = true;
+      return;
+    }
+    const dom = view.nodeDOM(tablePos);
+    if (!(dom instanceof HTMLElement)) {
+      pill.hidden = true;
+      return;
+    }
+    pill.hidden = false;
+    for (const b of pillButtons) b.update(state);
+    const rect = dom.getBoundingClientRect();
+    const topbar = container.getBoundingClientRect().bottom;
+    const above = rect.top - 40;
+    pill.style.top = `${Math.max(topbar + 6, above)}px`;
+    pill.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - pill.offsetWidth - 8))}px`;
+  };
+
+  document.getElementById('scroll')?.addEventListener('scroll', () => {
+    if (!pill.hidden) positionPill(view.state);
+  });
+
+  // ---------- the ⋯ menu ----------
+
+  let menu: HTMLElement | null = null;
+
+  const closeMenu = () => {
+    menu?.remove();
+    menu = null;
+  };
+
+  function toggleMenu() {
+    if (menu) {
+      closeMenu();
+      return;
+    }
+    menu = document.createElement('div');
+    menu.className = 'file-menu app-menu';
+
+    const mac = /Mac/.test(navigator.platform);
+    const mod = mac ? '⌘' : 'Ctrl+';
+
+    const head = (text: string) => {
+      const h = document.createElement('div');
+      h.className = 'file-menu-head';
+      h.textContent = text;
+      menu!.appendChild(h);
+    };
+    const item = (label: string, hint: string, run: () => void, disabled = false) => {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'file-menu-item';
+      el.disabled = disabled;
+      el.innerHTML = `<span>${label}</span><span class="file-menu-hint">${hint}</span>`;
+      el.addEventListener('click', () => {
+        closeMenu();
+        run();
+      });
+      menu!.appendChild(el);
+    };
+    const divider = () => {
+      const d = document.createElement('div');
+      d.className = 'file-menu-divider';
+      menu!.appendChild(d);
+    };
+    const cmd = (c: Command) => () => {
+      c(view.state, view.dispatch, view);
+      view.focus();
+    };
+
+    head('File');
+    item('Open demo document', '', () => {
+      if (confirm('Replace the current document with the demo? (Save yours first if it matters.)')) {
+        void import('./demo-doc').then(({ demoDoc }) => fm.newDoc(demoDoc(), 'Demo'));
+      }
+    });
+    item('Save As…', mac ? '⇧⌘S' : 'Ctrl+Shift+S', () => void fm.saveAs(), !fm.supportsFS);
+    const recentsHolder = document.createElement('div');
+    menu.appendChild(recentsHolder);
+
+    divider();
+    head('More');
+    item('Display math', `$$ · ${mod}⇧M`, cmd(insertMath(true)));
+    item('Import bibliography (.bib)…', '', () => importBibliography(view, (m) => fm.notify(m)));
+    item('Download copy (.typ)', '', () => fm.exportCopy());
+    item('Print / PDF', `${mod}P`, () => window.print());
+
+    if (lastStats) {
+      const foot = document.createElement('div');
+      foot.className = 'app-menu-foot';
+      foot.textContent = `oracle ${lastStats.ms.toFixed(1)} ms · ${lastStats.paragraphs}¶ · ${lastStats.lines} lines`;
+      menu.appendChild(foot);
+    }
+
+    document.body.appendChild(menu);
+    const rect = menuBtn.getBoundingClientRect();
+    menu.style.top = `${rect.bottom + 6 + window.scrollY}px`;
+    menu.style.left = `${Math.max(8, rect.right - menu.offsetWidth) + window.scrollX}px`;
+
+    void fm.recents().then((entries) => {
+      if (!menu || !entries.length) return;
+      for (const entry of entries.slice(0, 4)) {
+        const el = document.createElement('button');
+        el.type = 'button';
+        el.className = 'file-menu-item file-menu-recent';
+        el.innerHTML = `<span>↪ ${entry.name.replace(/</g, '&lt;')}</span>`;
+        el.addEventListener('click', () => {
+          closeMenu();
+          void fm.openRecent(entry);
+        });
+        recentsHolder.appendChild(el);
+      }
+    });
+
+    const onDown = (e: MouseEvent) => {
+      if (menu && !menu.contains(e.target as Node) && !menuBtn.contains(e.target as Node)) closeAll();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeAll();
+    };
+    const closeAll = () => {
+      closeMenu();
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+  }
 
   return {
     update(state) {
-      for (const b of buttons) b.update(state);
-      toggle.checked = isTypesetEnabled(state);
-      tableGroup.style.display = isInTable(state) ? '' : 'none';
+      positionPill(state);
+      texBtn.classList.toggle('active', isTypesetEnabled(state));
     },
     stats(s) {
-      statsEl.textContent = `oracle ${s.ms.toFixed(1)} ms · ${s.paragraphs}¶ · ${s.lines} lines`;
+      lastStats = s;
     },
     setFile(name, dirty) {
       fileLabel.textContent = name + (dirty ? ' •' : '');
@@ -202,103 +363,38 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   };
 }
 
-// ---------- File menu ----------
-
-let openMenu: HTMLElement | null = null;
-
-function toggleFileMenu(anchor: HTMLElement, view: EditorView, fm: FileManager) {
-  if (openMenu) {
-    closeMenu();
-    return;
-  }
-  const menu = document.createElement('div');
-  menu.className = 'file-menu';
-  openMenu = menu;
-
-  const mac = /Mac/.test(navigator.platform);
-  const mod = mac ? '⌘' : 'Ctrl+';
-
-  const item = (label: string, hint: string, run: () => void, disabled = false) => {
-    const el = document.createElement('button');
-    el.type = 'button';
-    el.className = 'file-menu-item';
-    el.disabled = disabled;
-    el.innerHTML = `<span>${label}</span><span class="file-menu-hint">${hint}</span>`;
-    el.addEventListener('click', () => {
-      closeMenu();
-      run();
-      view.focus();
-    });
-    menu.appendChild(el);
-    return el;
-  };
-  const divider = () => {
-    const d = document.createElement('div');
-    d.className = 'file-menu-divider';
-    menu.appendChild(d);
-  };
-
-  item('New', '', () => {
-    if (confirm('Replace the current document with an empty one?')) fm.newDoc();
+/** A small cheat-sheet of the markdown syntax and shortcuts. */
+function showHelp() {
+  document.querySelector('.help-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'bib-editor-overlay help-overlay';
+  overlay.innerHTML = `
+    <div class="bib-editor help-panel" role="dialog" aria-label="Markdown and shortcuts">
+      <div class="bib-editor-head"><span>Markdown &amp; shortcuts</span></div>
+      <div class="help-grid">
+        <code># ## ###</code><span>headings (⌘⌥1–3)</span>
+        <code>**bold** *italic* \`code\`</code><span>inline styles (⌘B / ⌘I / ⌘\`)</span>
+        <code>- item · 1. item</code><span>lists (Tab / ⇧Tab to nest)</span>
+        <code>&gt; quote · \`\`\`</code><span>block quote · code block</span>
+        <code>$x^2$ · $$</code><span>inline math · display equation (⌘M / ⌘⇧M)</span>
+        <code>@</code><span>reference or cite — picker lists equations, figures, sections, works</span>
+        <code>^[note] · \\footnote{…}</code><span>footnotes (⌘⌥F); ] or Enter exits</span>
+        <code>⌘⌥T · ⌘⌥I</code><span>insert table · insert figure (or paste/drop an image)</span>
+        <code>⌘O ⌘S ⇧⌘S</code><span>open · save · save as</span>
+      </div>
+      <div class="bib-editor-foot">
+        <span class="bib-editor-hint">Everything lives in the ⋯ menu, too. <kbd>Esc</kbd> to close</span>
+        <span class="bib-editor-actions"><button type="button" class="bib-save help-close">Done</button></span>
+      </div>
+    </div>`;
+  const close = () => overlay.remove();
+  overlay.querySelector('.help-close')!.addEventListener('click', close);
+  overlay.addEventListener('mousedown', (e) => {
+    if (!(e.target as HTMLElement).closest('.help-panel')) close();
   });
-  item('Open demo document', '', () => {
-    if (confirm('Replace the current document with the demo? (Save yours first if it matters.)')) {
-      void import('./demo-doc').then(({ demoDoc }) => fm.newDoc(demoDoc(), 'Demo'));
-    }
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
   });
-  item('Open…', `${mod}O`, () => void fm.open());
-  item('Save', `${mod}S`, () => void fm.save());
-  item('Save As…', mac ? '⇧⌘S' : 'Ctrl+Shift+S', () => void fm.saveAs(), !fm.supportsFS);
-  item('Edit bibliography…', '', () => editBibliography(view, (m) => fm.notify(m)));
-  item('Import bibliography (.bib)…', '', () => importBibliography(view, (m) => fm.notify(m)));
-  divider();
-  const recentsHolder = document.createElement('div');
-  menu.appendChild(recentsHolder);
-  divider();
-  item('Export PDF (Typst)', '', () => {
-    const name = fm.name === 'Untitled' ? 'document' : fm.name;
-    void import('./pdf').then(({ exportPdf }) => exportPdf(fm.currentDoc(), name, (m) => fm.notify(m)));
-  });
-  item('Download copy (.typ)', '', () => fm.exportCopy());
-  item('Print / PDF', `${mod}P`, () => window.print());
-
-  document.body.appendChild(menu);
-  const rect = anchor.getBoundingClientRect();
-  menu.style.top = `${rect.bottom + 6 + window.scrollY}px`;
-  menu.style.left = `${Math.max(8, rect.right - menu.offsetWidth) + window.scrollX}px`;
-
-  void fm.recents().then((entries) => {
-    if (!openMenu || !entries.length) return;
-    const head = document.createElement('div');
-    head.className = 'file-menu-head';
-    head.textContent = 'Recent';
-    recentsHolder.appendChild(head);
-    for (const entry of entries.slice(0, 6)) {
-      const el = document.createElement('button');
-      el.type = 'button';
-      el.className = 'file-menu-item';
-      el.innerHTML = `<span>${entry.name.replace(/</g, '&lt;')}</span>`;
-      el.addEventListener('click', () => {
-        closeMenu();
-        void fm.openRecent(entry);
-      });
-      recentsHolder.appendChild(el);
-    }
-  });
-
-  const onDown = (e: MouseEvent) => {
-    if (!menu.contains(e.target as Node) && !anchor.contains(e.target as Node)) closeMenu();
-  };
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') closeMenu();
-  };
-  document.addEventListener('mousedown', onDown, true);
-  document.addEventListener('keydown', onKey, true);
-
-  function closeMenu() {
-    menu.remove();
-    openMenu = null;
-    document.removeEventListener('mousedown', onDown, true);
-    document.removeEventListener('keydown', onKey, true);
-  }
+  document.body.appendChild(overlay);
+  (overlay.querySelector('.help-close') as HTMLElement).focus();
 }

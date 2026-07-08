@@ -30,12 +30,19 @@
   font-style: italic;
 }
 
+@font-face {
+  font-family: 'DejaVu Sans Mono';
+  src: url('/fonts/DejaVuSansMono.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+
 /* ---------- app chrome ---------- */
 
 :root {
-  --bg: #e8e6e1;
-  --chrome: #f7f6f3;
-  --chrome-border: #d9d6cf;
+  --bg: #f7f7f5;
+  --chrome: #fcfcfb;
+  --chrome-border: #e3e1dc;
   --ink: #1a1a1a;
   --ink-soft: #6b6b6b;
   --accent: #305c8a;
@@ -76,83 +83,223 @@ body {
 #toolbar {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 6px 16px;
-  background: var(--chrome);
-  border-bottom: 1px solid var(--chrome-border);
-  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 14px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
   position: sticky;
   top: 0;
   z-index: 10;
 }
 
-.tb-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.tb-group:not(:last-child):not(.tb-right)::after {
-  content: '';
-  width: 1px;
-  height: 18px;
-  background: var(--chrome-border);
-  margin-left: 12px;
-}
-
-.tb-right {
-  margin-left: auto;
-  gap: 10px;
-}
-
-#toolbar button {
-  font: 13px/1 var(--sans);
-  color: var(--ink);
-  background: transparent;
-  border: 1px solid transparent;
+.tb-file {
+  font: 12.5px var(--sans);
+  color: var(--ink-soft);
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+  padding: 3px 8px;
   border-radius: 5px;
+}
+
+.tb-file:hover {
+  background: color-mix(in srgb, var(--chrome-border) 45%, transparent);
+  color: var(--ink);
+}
+
+.tb-file-input {
+  font: 12.5px var(--sans);
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 2px 8px;
+  width: 20ch;
+}
+
+.tb-file-input:focus {
+  outline: none;
+}
+
+.tb-menu-btn {
+  font: 18px/1 var(--sans);
+  color: var(--ink-soft);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  width: 30px;
+  height: 26px;
+  cursor: pointer;
+  letter-spacing: 1px;
+}
+
+.tb-menu-btn:hover {
+  background: color-mix(in srgb, var(--chrome-border) 60%, transparent);
+  color: var(--ink);
+}
+
+/* Bar buttons: quiet icons; the name fades in as a caption below the icon —
+   absolutely positioned, so nothing in the bar ever moves. */
+.tb-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
   min-width: 28px;
-  padding: 5px 7px;
+  padding: 0 6px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--ink-soft);
   cursor: pointer;
 }
 
-#toolbar button:hover:not(:disabled) {
+.tb-btn:hover {
   background: color-mix(in srgb, var(--chrome-border) 55%, transparent);
+  color: var(--ink);
 }
 
-#toolbar button.active {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+.tb-btn.active {
+  color: var(--accent);
 }
 
-#toolbar button:disabled {
+.tb-btn .ico {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.tb-btn .tico {
+  font: 600 12.5px/15px var(--sans);
+  width: auto;
+  min-width: 15px;
+  text-align: center;
+}
+
+.tb-btn .tico.tex {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.tb-btn .lbl {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 50%;
+  transform: translateX(-50%);
+  font: 11px var(--sans);
+  color: var(--ink);
+  background: var(--chrome);
+  border: 1px solid var(--chrome-border);
+  border-radius: 5px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+  z-index: 20;
+}
+
+.tb-btn:hover .lbl,
+.tb-btn:focus-visible .lbl {
+  opacity: 1;
+}
+
+.tb-div {
+  width: 1px;
+  height: 16px;
+  background: var(--chrome-border);
+  margin: 0 6px;
+  flex: none;
+}
+
+/* Floating table controls — appear beside the table while the caret is in it. */
+.table-pill {
+  position: fixed;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  background: color-mix(in srgb, var(--chrome) 92%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--chrome-border);
+  border-radius: 8px;
+  padding: 3px 4px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.1);
+}
+
+.table-pill[hidden] {
+  display: none;
+}
+
+.table-pill button {
+  font: 11.5px/1 var(--sans);
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  padding: 5px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.table-pill button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.table-pill button:disabled {
   opacity: 0.35;
   cursor: default;
 }
 
-.tb-toggle {
-  font: 12px var(--sans);
+/* corner HUD + transient toast */
+#hud {
+  position: fixed;
+  right: 14px;
+  bottom: 10px;
+  z-index: 50;
+  font: 11px var(--sans);
   color: var(--ink-soft);
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s;
   user-select: none;
 }
 
-.tb-stats {
-  font: 11px var(--mono);
-  color: var(--ink-soft);
-  min-width: 15ch;
+#hud:hover {
+  opacity: 1;
 }
 
-.tb-file {
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%) translateY(6px);
+  z-index: 120;
   font: 12.5px var(--sans);
-  color: var(--ink);
-  max-width: 22ch;
+  color: #fff;
+  background: rgba(28, 28, 26, 0.88);
+  padding: 7px 16px;
+  border-radius: 16px;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+  pointer-events: none;
+  max-width: 70vw;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+#toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
 /* ---------- file menu ---------- */
@@ -214,20 +361,48 @@ body {
   padding: 4px 10px 2px;
 }
 
+.app-menu {
+  max-height: calc(100vh - 70px);
+  overflow-y: auto;
+  width: 262px;
+}
+
+.app-menu-foot {
+  font: 10.5px var(--mono);
+  color: var(--ink-soft);
+  padding: 6px 10px 3px;
+  border-top: 1px solid var(--chrome-border);
+  margin-top: 5px;
+}
+
+.file-menu-recent span {
+  color: var(--ink-soft);
+}
+
+/* help cheat-sheet */
+.help-panel {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.help-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 7px 16px;
+  font: 12.5px var(--sans);
+  color: var(--ink);
+  padding: 4px 2px;
+}
+
+.help-grid code {
+  font: 12px var(--mono);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
 #scroll {
   flex: 1;
   overflow: auto;
-  padding: 40px 16px 120px;
-}
-
-#status {
-  display: flex;
-  justify-content: space-between;
-  padding: 4px 16px;
-  font: 11px var(--mono);
-  color: var(--ink-soft);
-  background: var(--chrome);
-  border-top: 1px solid var(--chrome-border);
+  padding: 30px 16px 120px;
 }
 
 /* ---------- the page stack ---------- */
@@ -254,9 +429,10 @@ body {
   height: var(--page-h, 11in);
   background: var(--sheet);
   box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.12),
-    0 12px 40px rgba(0, 0, 0, 0.14);
-  border-radius: 2px;
+    0 0 0 1px rgba(0, 0, 0, 0.045),
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 10px 28px rgba(0, 0, 0, 0.05);
+  border-radius: 3px;
 }
 
 .page-num {
@@ -265,7 +441,7 @@ body {
   right: 0;
   text-align: center;
   font: 10.5px var(--sans);
-  color: #b0aca3;
+  color: #c4c0b8;
 }
 
 #editor {
@@ -279,9 +455,9 @@ body {
   background: var(--sheet);
   min-height: var(--page-h, 11in);
   box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.12),
-    0 12px 40px rgba(0, 0, 0, 0.14);
-  border-radius: 2px;
+    0 0 0 1px rgba(0, 0, 0, 0.045),
+    0 10px 28px rgba(0, 0, 0, 0.05);
+  border-radius: 3px;
 }
 
 #stack.unpaged #editor {
@@ -359,8 +535,10 @@ body {
 }
 
 .ProseMirror code {
-  font-family: var(--mono);
-  font-size: 0.82em;
+  /* Width parity with Typst's raw (DejaVu Sans Mono at 0.8em) — the same
+     font file feeds the PDF compiler, so advances agree exactly. */
+  font-family: 'DejaVu Sans Mono', var(--mono);
+  font-size: 0.8em;
   background: rgba(0, 0, 0, 0.05);
   /* The chip background must not add layout width: the oracle measures text
      runs, so inline padding is cancelled by negative margins. */
@@ -1135,7 +1313,9 @@ body {
 
 @media print {
   #toolbar,
-  #status,
+  #hud,
+  #toast,
+  .table-pill,
   #pages {
     display: none;
   }

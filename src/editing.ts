@@ -22,6 +22,8 @@ import { insertMath, mathDisplayRule, mathInlineRule } from './math';
 import { eqRefRule } from './equations';
 import { exitFigure } from './figures';
 import { exitFootnote, footnoteCloseRule, footnoteOpenRules, insertFootnote } from './footnotes';
+import { insertTable } from './tables';
+import { pickAndInsertFigure } from './figures';
 
 /**
  * `**bold**`, `_em_`, `` `code` `` style mark input rules.
@@ -100,6 +102,12 @@ export function buildKeymap(): Plugin {
     'Ctrl->': wrapIn(schema.nodes.blockquote),
     'Enter': chainCommands(exitFootnote, exitFigure, splitListItem(schema.nodes.list_item)),
     'Mod-Alt-f': insertFootnote,
+    'Mod-Alt-t': insertTable(),
+    'Mod-Alt-i': (state, dispatch, view) => {
+      if (!state.selection.$from.parent.isTextblock) return false;
+      if (dispatch && view) pickAndInsertFigure(view);
+      return true;
+    },
     'Tab': chainCommands(goToNextCell(1), sinkListItem(schema.nodes.list_item)),
     'Shift-Tab': chainCommands(goToNextCell(-1), liftListItem(schema.nodes.list_item)),
     'Shift-Enter': chainCommands(exitCode, (state, dispatch) => {

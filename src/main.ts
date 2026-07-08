@@ -67,7 +67,8 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
 
 const editorEl = document.getElementById('editor')!;
 const toolbarEl = document.getElementById('toolbar')!;
-const statusEl = document.getElementById('status')!;
+const hudEl = document.getElementById('hud')!;
+const toastEl = document.getElementById('toast')!;
 const stackEl = document.getElementById('stack')!;
 const pagesEl = document.getElementById('pages')!;
 
@@ -213,25 +214,24 @@ function refreshMathNodes() {
 }
 
 let messageTimer = 0;
-let statusMessage = '';
 function showMessage(text: string) {
-  statusMessage = text;
-  updateStatus();
+  toastEl.textContent = text;
+  toastEl.hidden = false;
+  toastEl.classList.add('show');
   clearTimeout(messageTimer);
   messageTimer = window.setTimeout(() => {
-    statusMessage = '';
-    updateStatus();
-  }, 4000);
+    toastEl.classList.remove('show');
+    window.setTimeout(() => (toastEl.hidden = true), 250);
+  }, 3500);
 }
 
 function updateStatus() {
   const words = view.state.doc.textBetween(0, view.state.doc.content.size, ' ', ' ')
     .split(/\s+/)
     .filter(Boolean).length;
-  const oracle = lastStats ? `layout oracle: ${lastStats.ms.toFixed(1)} ms for ${lastStats.lines} lines` : '';
-  const pages = pageCount ? `${pageCount} page${pageCount === 1 ? '' : 's'} · ` : '';
-  const left = statusMessage ? `<b>${statusMessage}</b>` : oracle;
-  statusEl.innerHTML = `<span>${left}</span><span>${pages}${words} words</span>`;
+  const pages = pageCount ? `${pageCount} p · ` : '';
+  hudEl.textContent = `${pages}${words} words`;
+  hudEl.title = lastStats ? `layout oracle: ${lastStats.ms.toFixed(1)} ms for ${lastStats.lines} lines` : '';
 }
 updateStatus();
 

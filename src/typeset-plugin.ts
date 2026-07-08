@@ -30,7 +30,15 @@ import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { Measurer } from './layout/measure';
 import { layoutBlock, type LineLayout } from './layout/paragraph';
-import { getSettings, PAGE_GAP, PAGE_SIZES } from './settings';
+import { buildSpec, TypstOracle, type AtomResolver } from './layout/typst-oracle';
+import { getSettings, PAGE_GAP, PAGE_SIZES, parseMathMacros } from './settings';
+import { escapeTyp, expandMacrosWith } from './typ-serializer';
+import { FONT_FALLBACK } from './pdf';
+import { citeOrder } from './citations';
+import { eqKey } from './equations';
+
+/** Fonts with editor↔Typst parity; the oracle only runs for these. */
+const ORACLE_FONTS = new Set(['New Computer Modern', 'STIX Two Text', 'Libertinus Serif']);
 
 export interface TypesetStats {
   ms: number;
@@ -111,11 +119,14 @@ export function typesetPlugin(
 interface CacheEntry {
   measure: number;
   lines: LineLayout[];
+  /** Which oracle state produced these lines ('none' = JS Knuth-Plass). */
+  oracle: 'none' | 'ok' | 'fail';
 }
 
 class TypesetView {
   private cache = new WeakMap<PMNode, CacheEntry>();
   private measurer: Measurer;
+  private oracle: TypstOracle;
   private raf = 0;
   private resizeObserver: ResizeObserver;
   private lastWidth = 0;
@@ -127,6 +138,10 @@ class TypesetView {
   ) {
     viewRegistry.set(view, this);
     this.measurer = new Measurer(view.dom);
+    this.oracle = new TypstOracle(() => {
+      if (!this.destroyed) this.schedule();
+    }, FONT_FALLBACK);
+    if (import.meta.env.DEV) (window as unknown as { __oracle?: TypstOracle }).__oracle = this.oracle;
     this.resizeObserver = new ResizeObserver(() => {
       const w = this.view.dom.clientWidth;
       if (Math.abs(w - this.lastWidth) > 0.5) {
@@ -159,6 +174,7 @@ class TypesetView {
     if (view.state.doc.attrs !== prevState.doc.attrs) {
       this.measurer.invalidate();
       this.cache = new WeakMap();
+      this.oracle.clear();
     }
     if (view.state.doc !== prevState.doc || !wasEnabled) this.schedule();
   }
@@ -168,6 +184,7 @@ class TypesetView {
     viewRegistry.delete(this.view);
     this.resizeObserver.disconnect();
     if (this.raf) cancelAnimationFrame(this.raf);
+    this.oracle.destroy();
     this.measurer.destroy();
   }
 
@@ -211,11 +228,59 @@ class TypesetView {
     this.opts.onStats?.({ ms: performance.now() - t0, paragraphs: stats.paragraphs, lines: stats.lines });
   }
 
+  /**
+   * The oracle probe needs each inline atom rendered exactly as the PDF
+   * will render it (same glyphs, same widths): citations as their painted
+   * "[n]", references as "(1)", footnote markers as superscripts.
+   */
+  private atomResolver(): AtomResolver {
+    const state = this.view.state;
+    const labels = eqKey.getState(state)?.labels ?? new Map<string, string>();
+    const order = citeOrder(state.doc);
+    const macros = parseMathMacros(getSettings(state).mathMacros);
+    const fnNums = new Map<PMNode, number>();
+    let fn = 0;
+    state.doc.descendants((n) => {
+      if (n.type.name === 'footnote') {
+        fnNums.set(n, ++fn);
+        return false;
+      }
+      return true;
+    });
+    return (child) => {
+      switch (child.type.name) {
+        case 'math_inline':
+          return { markup: '#mi(`' + expandMacrosWith(child.attrs.src as string, macros) + '`)' };
+        case 'citation': {
+          const t = `[${order.get(child.attrs.key as string) ?? '?'}]`;
+          return { markup: escapeTyp(t), text: t };
+        }
+        case 'eq_ref': {
+          const t = (labels.get(child.attrs.label as string) as string) ?? '(?)';
+          return { markup: escapeTyp(t), text: t };
+        }
+        case 'footnote': {
+          // Real #footnote with the counter preset: the marker must have the
+          // exact width the exported document will have (the body renders at
+          // the compiled page's bottom, out of the line flow).
+          const n = fnNums.get(child) ?? 1;
+          return { markup: `#counter(footnote).update(${n - 1});#footnote[.]`, text: String(n) };
+        }
+        default:
+          return null;
+      }
+    };
+  }
+
   /** Build the full decoration set (lines + spacers) and dispatch it. */
   private dispatchDecos(lineSpacers: Map<number, Spacer>, blockSpacers: Spacer[]) {
     const { state } = this.view;
     const decos: Decoration[] = [];
-    const layoutOpts = { hyphenate: getSettings(state).hyphenate };
+    const settings = getSettings(state);
+    const layoutOpts = { hyphenate: settings.hyphenate };
+    const useOracle = ORACLE_FONTS.has(settings.font);
+    const resolveAtom = useOracle ? this.atomResolver() : null;
+    const settingsSig = `${settings.font}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}`;
     let paragraphs = 0;
     let lineCount = 0;
 
@@ -233,21 +298,31 @@ class TypesetView {
       const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
       if (!(measure > 60)) return false;
 
+      const atomWidth = (offset: number, child: PMNode) => {
+        const dom = this.view.nodeDOM(pos + 1 + offset);
+        if (dom instanceof HTMLElement) return dom.getBoundingClientRect().width;
+        // Fallback estimate if the atom has no DOM yet.
+        return child.nodeSize * 8;
+      };
+
+      // Ask the Typst oracle for this paragraph's authoritative breaks.
+      const spec = resolveAtom ? buildSpec(node, resolveAtom) : null;
+      const okey = spec ? `${settingsSig}|w${measure.toFixed(1)}|${spec.key}` : null;
+      const oentry = okey ? this.oracle.get(okey) : undefined;
+      if (spec && okey && !oentry) this.oracle.request(okey, spec, measure, settings);
+      const ostatus = oentry?.status ?? 'none';
+
       let entry = this.cache.get(node);
-      if (!entry || Math.abs(entry.measure - measure) > 0.5) {
-        const lines = layoutBlock(
-          node,
-          measure,
-          this.measurer,
-          (offset, child) => {
-            const dom = this.view.nodeDOM(pos + 1 + offset);
-            if (dom instanceof HTMLElement) return dom.getBoundingClientRect().width;
-            // Fallback estimate if the atom has no DOM yet.
-            return child.nodeSize * 8;
-          },
-          layoutOpts,
-        );
-        entry = { measure, lines };
+      if (!entry || Math.abs(entry.measure - measure) > 0.5 || entry.oracle !== ostatus) {
+        let lines: LineLayout[] | null = null;
+        if (oentry?.status === 'ok') {
+          lines = layoutBlock(node, measure, this.measurer, atomWidth, {
+            ...layoutOpts,
+            forced: oentry.breaks,
+          });
+        }
+        if (!lines) lines = layoutBlock(node, measure, this.measurer, atomWidth, layoutOpts)!;
+        entry = { measure, lines, oracle: ostatus };
         this.cache.set(node, entry);
       }
 

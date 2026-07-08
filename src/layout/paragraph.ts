@@ -23,6 +23,8 @@ interface SItem {
   from: number; // offsets relative to the block's content start
   to: number;
   kind: Kind;
+  /** Break after an existing '-': no hyphen glyph needs to be injected. */
+  glyphless?: boolean;
 }
 
 export interface LineLayout {
@@ -39,16 +41,64 @@ export interface LineLayout {
 
 export interface LayoutOptions {
   hyphenate?: boolean;
+  /**
+   * Authoritative break decisions from the Typst oracle. When present the
+   * KP search is skipped and lines are cut exactly here; offsets must land
+   * on a space (word-end) or a syllable boundary. Null result = mismatch,
+   * caller falls back to the KP path.
+   */
+  forced?: ForcedBreak[];
 }
 
-/** Compute typeset line layouts for one paragraph node. */
+export interface ForcedBreak {
+  /** Offset of the space (word end) or intra-word split point. */
+  at: number;
+  hyphen: boolean;
+}
+
+/** Partition the item list at oracle-chosen break offsets. */
+function partitionAt(items: SItem[], forced: ForcedBreak[]): Array<{ start: number; end: number }> | null {
+  const lines: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  let j = 0;
+  for (const f of forced) {
+    let found = -1;
+    for (; j < items.length; j++) {
+      const it = items[j];
+      // Hard breaks cut mandatorily; the oracle doesn't report them.
+      if (it.kind === 'nodebreak' && it.from < f.at) {
+        lines.push({ start, end: j });
+        start = j + 1;
+        continue;
+      }
+      if (f.hyphen ? it.kind === 'hyphen' && it.from === f.at : it.kind === 'space' && it.from === f.at) {
+        found = j;
+        break;
+      }
+      // Passing the target offset means the oracle's break has no matching
+      // item in our stream (segmentation mismatch) — bail to the KP path.
+      if (it.from > f.at && (it.kind === 'space' || it.kind === 'hyphen')) return null;
+    }
+    if (found < 0) return null;
+    lines.push({ start, end: found });
+    start = found + 1;
+    j = found + 1;
+  }
+  lines.push({ start, end: items.length - 1 });
+  return lines;
+}
+
+/**
+ * Compute typeset line layouts for one paragraph node.
+ * Returns null only when opts.forced doesn't match the item stream.
+ */
 export function layoutBlock(
   block: PMNode,
   measure: number,
   measurer: Measurer,
   atomWidth: (offset: number, child: PMNode) => number,
   opts: LayoutOptions = {},
-): LineLayout[] {
+): LineLayout[] | null {
   const items: SItem[] = [];
 
   const pushEndOfSegment = (from: number, to: number, kind: Kind) => {
@@ -111,11 +161,14 @@ export function layoutBlock(
           });
         } else {
           if (seg.hyphenBefore) {
+            // A boundary after an existing '-' breaks without adding a glyph.
+            const glyphless = text[seg.start - 1] === '-';
             items.push({
-              kp: { type: 'penalty', width: hyphenW, penalty: HYPHEN_PENALTY, flagged: true },
+              kp: { type: 'penalty', width: glyphless ? 0 : hyphenW, penalty: HYPHEN_PENALTY, flagged: true },
               from: offset + seg.start,
               to: offset + seg.start,
               kind: 'hyphen',
+              glyphless,
             });
           }
           items.push({
@@ -145,10 +198,17 @@ export function layoutBlock(
   const baseFont = measurer.fontFor([]);
   const baseSpace = measurer.spaceWidth(baseFont);
 
-  const lines = breakLines(
-    items.map((i) => i.kp),
-    measure,
-  );
+  let lines: Array<{ start: number; end: number }>;
+  if (opts.forced) {
+    const cut = partitionAt(items, opts.forced);
+    if (!cut) return null;
+    lines = cut;
+  } else {
+    lines = breakLines(
+      items.map((i) => i.kp),
+      measure,
+    );
+  }
 
   const out: LineLayout[] = [];
   for (const line of lines) {
@@ -167,23 +227,31 @@ export function layoutBlock(
         spaces++;
       }
     }
-    const hyphen = brk.kind === 'hyphen';
-    if (hyphen && brk.kp.type === 'penalty') natural += brk.kp.width;
+    const hyphenKind = brk.kind === 'hyphen';
+    const hyphenGlyph = hyphenKind && !brk.glyphless;
+    if (hyphenKind && brk.kp.type === 'penalty') natural += brk.kp.width;
 
     // Justify lines that break at a space or hyphen; segment-final lines
     // (paragraph end, hard break) stay ragged, as in TeX.
     let spacing = 0;
-    if ((brk.kind === 'space' || hyphen) && spaces > 0) {
+    if ((brk.kind === 'space' || hyphenKind) && spaces > 0) {
       spacing = (measure - FIT_EPS - natural) / spaces;
-      spacing = Math.max(-0.45 * baseSpace, Math.min(spacing, 3 * baseSpace));
+      // Forced (oracle) lines must never overflow into a browser re-wrap:
+      // Typst fit this content, so shrink as far as needed.
+      const minS = opts.forced ? -0.9 * baseSpace : -0.45 * baseSpace;
+      spacing = Math.max(minS, Math.min(spacing, 3 * baseSpace));
+    } else if (opts.forced && spaces > 0 && natural > measure - FIT_EPS) {
+      // Oracle-forced ragged line that the browser would wrap (its metrics
+      // run a hair wider than Typst's): shrink it to fit — Typst fit it.
+      spacing = Math.max(-0.45 * baseSpace, (measure - FIT_EPS - natural) / spaces);
     }
 
     out.push({
       from: items[line.start].from,
       to: items[e].to,
       spacing,
-      breakPos: brk.kind === 'space' ? brk.to : hyphen ? brk.from : null,
-      hyphen,
+      breakPos: brk.kind === 'space' ? brk.to : hyphenKind ? brk.from : null,
+      hyphen: hyphenGlyph,
     });
   }
   return out;

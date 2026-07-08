@@ -18,17 +18,82 @@ export interface TypExportOptions {
   cellLinks?: boolean;
 }
 
+// ---------- editor↔Typst vertical parity ----------
+//
+// The editor lays text on a CSS grid (line-height, margins, paddings); Typst
+// spaces tight glyph boxes (leading, par spacing, block above/below). These
+// measured font constants + the formulas below make the exported document
+// reproduce the editor's baseline geometry exactly (calibrated empirically;
+// see README "Fidelity").
+//   cssA/cssD: Chrome's ascent/descent for the font (line-box placement)
+//   typAsc/typDesc: Typst's first/last-baseline offsets from block edges
+//   extent: Typst's baseline pitch at leading 0
+interface ParityMetrics {
+  cssA: number;
+  cssD: number;
+  typAsc: number;
+  typDesc: number;
+  extent: number;
+}
+
+const FONT_PARITY: Record<string, ParityMetrics> = {
+  'New Computer Modern': { cssA: 1.127, cssD: 0.29, typAsc: 0.6723, typDesc: 0.0123, extent: 0.6828 },
+  'STIX Two Text': { cssA: 0.762, cssD: 0.238, typAsc: 0.657, typDesc: -0.0001, extent: 0.657 },
+  'Libertinus Serif': { cssA: 0.9, cssD: 0.25, typAsc: 0.6547, typDesc: -0.0053, extent: 0.6582 },
+};
+
+// Heading scale mirrored from the editor CSS (.ProseMirror h1/h2/h3).
+// `shift` is a measured per-level baseline correction (em of body size):
+// Typst places heading baselines slightly lower than the metric model
+// predicts; calibrated against the live editor (NCM defaults).
+const HEADINGS: Array<{ level: number; hs: number; padTop: number; marginBottom: number; shift: number }> = [
+  { level: 1, hs: 1.9, padTop: 0.2, marginBottom: 0.5, shift: 0.1932 },
+  { level: 2, hs: 1.4, padTop: 1.4, marginBottom: 0.5, shift: 0.1269 },
+  { level: 3, hs: 1.15, padTop: 1.4, marginBottom: 0.5, shift: 0.1833 },
+];
+
+/** The parity header: set/show rules reproducing editor spacing in Typst. */
+export function parityRules(s: DocSettings): string {
+  const m = FONT_PARITY[s.font] ?? FONT_PARITY['New Computer Modern'];
+  const lh = s.lineHeight;
+  const pt = (em: number) => `${(em * s.sizePt).toFixed(3)}pt`;
+  // Baseline → block-edge slack of a body paragraph line (em).
+  const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
+  const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
+  let out = '';
+  out += `#set par(justify: true, leading: ${pt(lh - m.extent)}, spacing: ${pt(lh + 0.9 - m.extent)})\n`;
+  out += `#set list(spacing: ${pt(lh + 0.25 - m.extent)})\n`;
+  out += `#set enum(spacing: ${pt(lh + 0.25 - m.extent)})\n`;
+  for (const h of HEADINGS) {
+    const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
+    const hSlackBelow = (h.hs * (1.25 + m.cssD - m.cssA)) / 2;
+    const above = pSlackBelow + 0.9 + h.padTop * h.hs + hSlackAbove - (m.typDesc + m.typAsc * h.hs) - h.shift;
+    const below = hSlackBelow + h.marginBottom * h.hs + pSlackAbove - (m.typDesc * h.hs + m.typAsc) + h.shift;
+    out += `#show heading.where(level: ${h.level}): set text(size: ${pt(h.hs)})\n`;
+    out += `#show heading.where(level: ${h.level}): set block(above: ${pt(above)}, below: ${pt(below)})\n`;
+    out += `#show heading.where(level: ${h.level}): set par(leading: ${pt((1.25 - m.extent) * h.hs)})\n`;
+  }
+  // Inline raw: pin Typst's defaults so editor code spans (same font file,
+  // same ratio) have identical advance widths.
+  out += `#show raw.where(block: false): set text(font: "DejaVu Sans Mono", size: ${pt(0.8)})\n`;
+  // Display math: editor box = 0.5em padding + KaTeX's internal 1em margins.
+  const eqAbove = pSlackBelow + 0.9 + 0.5 + 1.0 - m.typDesc;
+  const eqBelow = 1.0 + 0.5 + 0.9 + pSlackAbove - m.typAsc;
+  out += `#show math.equation.where(block: true): set block(above: ${pt(eqAbove)}, below: ${pt(eqBelow)})\n`;
+  return out;
+}
+
 let exportOpts: TypExportOptions = {};
 let eqLabels = new Set<string>();
 let docBib: { name: string; content: string } | null = null;
 let docMacros: Record<string, string> = {};
 
-/** Expand document math macros so exported LaTeX compiles anywhere. */
-function expandMacros(src: string): string {
+/** Expand math macros so exported LaTeX compiles anywhere. */
+export function expandMacrosWith(src: string, macros: Record<string, string>): string {
   let out = src;
   for (let pass = 0; pass < 10; pass++) {
     let changed = false;
-    for (const [name, expansion] of Object.entries(docMacros)) {
+    for (const [name, expansion] of Object.entries(macros)) {
       const re = new RegExp('\\\\' + name.slice(1) + '(?![a-zA-Z])', 'g');
       const next = out.replace(re, expansion.replace(/\$/g, '$$$$'));
       if (next !== out) {
@@ -41,11 +106,23 @@ function expandMacros(src: string): string {
   return out;
 }
 
+function expandMacros(src: string): string {
+  return expandMacrosWith(src, docMacros);
+}
+
+/** The #set text(...) header line (shared with the layout oracle's probes). */
+export function textSetLine(s: DocSettings, fontFallback?: string[]): string {
+  const fonts = fontFallback?.length
+    ? `(${[s.font, ...fontFallback.filter((f) => f !== s.font)].map((f) => `"${f}"`).join(', ')})`
+    : `"${s.font}"`;
+  return `#set text(size: ${s.sizePt}pt, font: ${fonts}, hyphenate: ${s.hyphenate})\n`;
+}
+
 function imageSrc(src: string): string {
   return exportOpts.resolveImage ? exportOpts.resolveImage(src) : src;
 }
 
-function escapeTyp(text: string): string {
+export function escapeTyp(text: string): string {
   return text.replace(/[\\#$*_`@<>[\]]/g, (c) => '\\' + c);
 }
 
@@ -250,7 +327,7 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     const pageArgs = [`paper: "${s.page === 'a4' ? 'a4' : 'us-letter'}"`, `margin: ${s.marginIn}in`];
     if (s.pageNumShow) pageArgs.push(`numbering: "${s.pageNumFormat}"`, `number-align: ${s.pageNumAlign}`);
     out += `#set page(${pageArgs.join(', ')})\n`;
-    out += '#set par(justify: true)\n';
+    out += parityRules(s);
     const fonts = [s.font, ...(opts.fontFallback ?? []).filter((f) => f !== s.font)];
     const fontSpec = fonts.length > 1 ? `(${fonts.map((f) => `"${f}"`).join(', ')})` : `"${fonts[0]}"`;
     out += `#set text(size: ${s.sizePt}pt, font: ${fontSpec}, hyphenate: ${s.hyphenate})\n`;

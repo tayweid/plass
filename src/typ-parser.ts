@@ -74,6 +74,17 @@ export function typToDoc(src: string): TypImport {
       i++;
       continue;
     }
+    // Spacing-parity rules (regenerated from settings on export).
+    if (
+      /^#set (list|enum)\(spacing:/.test(line) ||
+      /^#show heading\.where\(level: \d+\): set (text|block|par)\(/.test(line) ||
+      /^#show raw\.where\(block: false\): set text\(/.test(line) ||
+      /^#show math\.equation\.where\(block: true\): set block\(/.test(line)
+    ) {
+      sawSet = true;
+      i++;
+      continue;
+    }
     let m: RegExpExecArray | null;
     if ((m = /^#set page\(([^)]*)\)$/.exec(line))) {
       sawSet = true;

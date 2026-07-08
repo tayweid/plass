@@ -166,6 +166,39 @@ export class FileManager {
     this.hooks.message(text);
   }
 
+  /** Rename the document; renames the on-disk file too when supported. */
+  async rename(raw: string) {
+    const name = raw.replace(/\.typ$/i, '').replace(/[\\/:*?"<>|]/g, '-').trim();
+    if (!name || name === this.name) return;
+    if (this.handle) {
+      const move = (this.handle as { move?: (n: string) => Promise<void> }).move;
+      if (typeof move === 'function') {
+        try {
+          await move.call(this.handle, `${name}.typ`);
+          this.name = name;
+          this.hooks.onState();
+          this.hooks.message(`Renamed to ${name}.typ`);
+          try {
+            await addRecent(this.handle, `${name}.typ`);
+            await idbSet('last', this.handle);
+          } catch {
+            /* non-fatal */
+          }
+        } catch (e) {
+          console.warn('rename failed', e);
+          this.hooks.message('Could not rename the file on disk');
+        }
+        return;
+      }
+      this.name = name;
+      this.hooks.onState();
+      this.hooks.message(`Name set to “${name}” — the file on disk keeps its old name (Save As to write a new one)`);
+      return;
+    }
+    this.name = name;
+    this.hooks.onState();
+  }
+
   /** The current document node (for exporters). */
   currentDoc() {
     return this.hooks.getDoc();
