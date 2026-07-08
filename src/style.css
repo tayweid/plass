@@ -989,6 +989,48 @@ body {
   -webkit-user-select: none;
 }
 
+.fig-path-chip {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  font: 10.5px var(--mono);
+  color: var(--ink-soft);
+  background: var(--chrome);
+  border: 1px solid var(--chrome-border);
+  border-radius: 10px;
+  padding: 2px 9px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-figure:hover .fig-path-chip,
+.ts-figure.figure-selected .fig-path-chip,
+.ts-figure.fig-missing .fig-path-chip {
+  opacity: 1;
+}
+
+.fig-path-chip.embedded {
+  font-style: italic;
+}
+
+.fig-path-input {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  width: 60%;
+  font: 11px var(--mono);
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+
 /* A project figure whose file is missing: show the path, keep the slot. */
 .ts-figure.fig-missing img {
   display: none;

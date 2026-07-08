@@ -68,6 +68,7 @@ export class FigureView implements NodeView {
   contentDOM: HTMLElement;
   private img: HTMLImageElement;
   private chip: HTMLButtonElement;
+  private pathChip: HTMLButtonElement;
 
   constructor(
     private node: PMNode,
@@ -103,8 +104,78 @@ export class FigureView implements NodeView {
     });
     this.updateChip();
 
+    this.pathChip = document.createElement('button');
+    this.pathChip.type = 'button';
+    this.pathChip.className = 'fig-path-chip';
+    this.pathChip.contentEditable = 'false';
+    this.pathChip.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.editPath();
+    });
+    this.updatePathChip();
+
     this.contentDOM = document.createElement('figcaption');
-    this.dom.append(this.img, this.chip, this.contentDOM);
+    this.dom.append(this.img, this.chip, this.pathChip, this.contentDOM);
+  }
+
+  private updatePathChip() {
+    const src = this.node.attrs.src as string;
+    if (isPathSrc(src)) {
+      this.pathChip.textContent = src;
+      this.pathChip.title = 'The image file this figure references — click to change';
+      this.pathChip.classList.remove('embedded');
+      this.pathChip.style.display = '';
+    } else if (fmRef?.inFolder) {
+      this.pathChip.textContent = 'embedded';
+      this.pathChip.title = 'Stored inside the document — click to reference a project file instead';
+      this.pathChip.classList.add('embedded');
+      this.pathChip.style.display = '';
+    } else {
+      this.pathChip.style.display = 'none';
+    }
+  }
+
+  private editPath() {
+    const src = this.node.attrs.src as string;
+    const input = document.createElement('input');
+    input.className = 'fig-path-input';
+    input.value = isPathSrc(src) ? src : 'figures/';
+    input.placeholder = 'figures/plot.svg';
+    input.spellcheck = false;
+    this.pathChip.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (commit: boolean) => {
+      if (done) return;
+      done = true;
+      input.replaceWith(this.pathChip);
+      const path = input.value.trim().replace(/^\.?\//, '');
+      if (commit && path && path !== src) {
+        const pos = this.getPos();
+        if (pos !== undefined) {
+          this.view.dispatch(this.view.state.tr.setNodeMarkup(pos, undefined, { ...this.node.attrs, src: path }));
+          if (fmRef?.inFolder) {
+            void fmRef.readAsset(path).then((f) => {
+              if (!f) fmRef?.notify(`No file at ${path} yet — the figure will fill in when it appears`);
+            });
+          }
+        }
+      }
+      this.view.focus();
+    };
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        finish(true);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(false);
+      }
+    });
+    input.addEventListener('blur', () => finish(true));
   }
 
   private updateChip() {
@@ -185,6 +256,7 @@ export class FigureView implements NodeView {
     if (node.attrs.src !== this.node.attrs.src) this.setSrc(node.attrs.src as string);
     this.node = node;
     this.updateChip();
+    this.updatePathChip();
     return true;
   }
 
@@ -202,7 +274,10 @@ export class FigureView implements NodeView {
 
   stopEvent(e: Event) {
     // Events on the label chip/input are ours, not the editor's.
-    return e.target instanceof HTMLElement && !!e.target.closest('.fig-label-chip, .fig-label-input');
+    return (
+      e.target instanceof HTMLElement &&
+      !!e.target.closest('.fig-label-chip, .fig-label-input, .fig-path-chip, .fig-path-input')
+    );
   }
 
   ignoreMutation(m: ViewMutationRecord) {
