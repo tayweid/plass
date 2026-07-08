@@ -125,18 +125,20 @@ export class FigureView implements NodeView {
       this.pathChip.textContent = src;
       this.pathChip.title = 'The image file this figure references — click to change';
       this.pathChip.classList.remove('embedded');
-      this.pathChip.style.display = '';
-    } else if (fmRef?.inFolder) {
-      this.pathChip.textContent = 'embedded';
-      this.pathChip.title = 'Stored inside the document — click to reference a project file instead';
-      this.pathChip.classList.add('embedded');
-      this.pathChip.style.display = '';
     } else {
-      this.pathChip.style.display = 'none';
+      this.pathChip.textContent = 'embedded';
+      this.pathChip.classList.add('embedded');
+      this.pathChip.title = fmRef?.inFolder
+        ? 'Stored inside the document — click to reference a project file instead'
+        : 'Stored inside the document — open a project folder (Project button) to use file paths';
     }
   }
 
   private editPath() {
+    if (!fmRef?.inFolder && !isPathSrc(this.node.attrs.src as string)) {
+      fmRef?.notify('Open a project folder first (Project button) — then figures can reference files by path');
+      return;
+    }
     const src = this.node.attrs.src as string;
     const input = document.createElement('input');
     input.className = 'fig-path-input';
