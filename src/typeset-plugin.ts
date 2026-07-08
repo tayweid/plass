@@ -30,7 +30,7 @@ import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { Measurer } from './layout/measure';
 import { layoutBlock, type LineLayout } from './layout/paragraph';
-import { buildSpec, TypstOracle, type AtomResolver } from './layout/typst-oracle';
+import { buildSpec, TypstOracle, type AtomResolver, type SpecKind } from './layout/typst-oracle';
 import { PageOracle } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros } from './settings';
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
@@ -311,21 +311,18 @@ class TypesetView {
     const settingsSig = `${settings.font}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}`;
     let paragraphs = 0;
     let lineCount = 0;
+    let figNo = 0;
 
-    state.doc.descendants((node, pos) => {
-      // Table cells keep browser layout (narrow measures justify badly).
-      if (node.type.name === 'table') return false;
-      if (!node.isTextblock) return true;
-      // Only body paragraphs are justified; headings and code stay ragged.
-      if (node.type.name !== 'paragraph') return false;
-      if (node.content.size === 0) return false;
-
-      const el = this.view.nodeDOM(pos);
-      if (!(el instanceof HTMLElement)) return false;
-      const cs = getComputedStyle(el);
-      const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-      if (!(measure > 60)) return false;
-
+    /** Lay one textblock (paragraph / caption / footnote body) and emit its
+     *  spacing + break decorations. */
+    const layoutInto = (
+      node: PMNode,
+      pos: number,
+      measure: number,
+      skind: SpecKind,
+      extra: { firstLineIndent?: number; scale?: number },
+      keyTag: string,
+    ) => {
       const atomWidth = (offset: number, child: PMNode) => {
         const dom = this.view.nodeDOM(pos + 1 + offset);
         if (dom instanceof HTMLElement) return dom.getBoundingClientRect().width;
@@ -333,11 +330,11 @@ class TypesetView {
         return child.nodeSize * 8;
       };
 
-      // Ask the Typst oracle for this paragraph's authoritative breaks.
+      // Ask the Typst oracle for this block's authoritative breaks.
       const spec = resolveAtom ? buildSpec(node, resolveAtom) : null;
-      const okey = spec ? `${settingsSig}|w${measure.toFixed(1)}|${spec.key}` : null;
+      const okey = spec ? `${settingsSig}|${keyTag}|w${measure.toFixed(1)}|${spec.key}` : null;
       const oentry = okey ? this.oracle.get(okey) : undefined;
-      if (spec && okey && !oentry) this.oracle.request(okey, spec, measure, settings);
+      if (spec && okey && !oentry) this.oracle.request(okey, spec, measure, settings, skind);
       const ostatus = oentry?.status ?? 'none';
 
       let entry = this.cache.get(node);
@@ -346,10 +343,11 @@ class TypesetView {
         if (oentry?.status === 'ok') {
           lines = layoutBlock(node, measure, this.measurer, atomWidth, {
             ...layoutOpts,
+            ...extra,
             forced: oentry.breaks,
           });
         }
-        if (!lines) lines = layoutBlock(node, measure, this.measurer, atomWidth, layoutOpts)!;
+        if (!lines) lines = layoutBlock(node, measure, this.measurer, atomWidth, { ...layoutOpts, ...extra })!;
         entry = { measure, lines, oracle: ostatus };
         this.cache.set(node, entry);
       }
@@ -385,6 +383,69 @@ class TypesetView {
           }
         }
       }
+    };
+
+    /** Painted-prefix width (widget + its margin) inside a container. */
+    const prefixWidth = (container: HTMLElement, sel: string) => {
+      const el = container.querySelector(sel);
+      if (!(el instanceof HTMLElement)) return 0;
+      return el.getBoundingClientRect().width + (parseFloat(getComputedStyle(el).marginRight) || 0);
+    };
+
+    const handleFootnotes = (node: PMNode, pos: number) => {
+      node.forEach((child, offset) => {
+        if (child.type.name !== 'footnote' || child.content.size === 0) return;
+        const fnPos = pos + 1 + offset;
+        const wrap = this.view.nodeDOM(fnPos);
+        const body = wrap instanceof HTMLElement ? wrap.querySelector('.fn-body') : null;
+        if (!(body instanceof HTMLElement)) return;
+        const bMeasure = body.clientWidth;
+        if (!(bMeasure > 60)) return;
+        const bcs = getComputedStyle(body);
+        const scale = parseFloat(bcs.fontSize) / this.bodyPx();
+        const firstLineIndent = (parseFloat(bcs.textIndent) || 0) + prefixWidth(body, '.fn-num');
+        layoutInto(child, fnPos, bMeasure, { kind: 'footnote' }, { firstLineIndent, scale }, 'fn');
+      });
+    };
+
+    state.doc.descendants((node, pos) => {
+      // Table cells keep browser layout (narrow measures justify badly).
+      if (node.type.name === 'table') return false;
+      if (node.type.name === 'figure') {
+        figNo++;
+        if (node.content.size === 0) return false;
+        const el = this.view.nodeDOM(pos);
+        const cap = el instanceof HTMLElement ? el.querySelector('figcaption') : null;
+        if (!(cap instanceof HTMLElement)) return false;
+        const capMeasure = cap.clientWidth;
+        if (!(capMeasure > 60)) return false;
+        layoutInto(
+          node,
+          pos,
+          capMeasure,
+          { kind: 'caption', figNo },
+          { firstLineIndent: prefixWidth(cap, '.fig-num') },
+          `cap${figNo}`,
+        );
+        handleFootnotes(node, pos);
+        return false;
+      }
+      if (!node.isTextblock) return true;
+      // Only body paragraphs are justified; headings and code stay ragged.
+      if (node.type.name !== 'paragraph') return false;
+      if (node.content.size === 0) {
+        handleFootnotes(node, pos);
+        return false;
+      }
+
+      const el = this.view.nodeDOM(pos);
+      if (!(el instanceof HTMLElement)) return false;
+      const cs = getComputedStyle(el);
+      const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      if (!(measure > 60)) return false;
+
+      layoutInto(node, pos, measure, { kind: 'body' }, {}, 'p');
+      handleFootnotes(node, pos);
       return false;
     });
 

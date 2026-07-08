@@ -874,11 +874,11 @@ body {
 
 .ts-figure figcaption {
   margin-top: 0.55em;
-  /* Typst renders captions at full body size and ink, justified with a
-     centered last line — match it exactly or the wrap points drift. */
+  /* Typst renders captions at full body size and ink; line breaks and
+     per-line justification come from the line oracle, and centering a
+     stretched-to-measure line is a no-op, so plain center matches. */
   color: #1a1a1a;
-  text-align: justify;
-  text-align-last: center;
+  text-align: center;
 }
 
 .fig-num {
@@ -965,8 +965,8 @@ body {
   font-size: 0.85em;
   line-height: 1.2;
   color: #1a1a1a;
-  /* Typst justifies footnote bodies (they inherit #set par(justify)). */
-  text-align: justify;
+  /* Justification comes from the line oracle's per-line word-spacing. */
+  text-align: left;
   text-indent: 0.9em;
 }
 

@@ -48,6 +48,10 @@ export interface LayoutOptions {
    * caller falls back to the KP path.
    */
   forced?: ForcedBreak[];
+  /** Width a painted prefix/indent consumes at the start of line 1. */
+  firstLineIndent?: number;
+  /** Multiply text-measurement widths (content rendered at a smaller em). */
+  scale?: number;
 }
 
 export interface ForcedBreak {
@@ -100,6 +104,14 @@ export function layoutBlock(
   opts: LayoutOptions = {},
 ): LineLayout[] | null {
   const items: SItem[] = [];
+  const K = opts.scale ?? 1;
+
+  // A painted prefix ("Figure N: ", footnote marker + indent) occupies the
+  // start of line 1: model it as a zero-content box so both the KP search
+  // and per-line justification account for it.
+  if (opts.firstLineIndent) {
+    items.push({ kp: { type: 'box', width: opts.firstLineIndent }, from: 0, to: 0, kind: 'box' });
+  }
 
   const pushEndOfSegment = (from: number, to: number, kind: Kind) => {
     // Spaces immediately before a break are discarded by CSS white-space
@@ -113,7 +125,7 @@ export function layoutBlock(
   block.forEach((child, offset) => {
     if (child.isText && child.text) {
       const font = measurer.fontFor(child.marks);
-      const hyphenW = measurer.hyphenWidth(font);
+      const hyphenW = measurer.hyphenWidth(font) * K;
       const text = child.text;
 
       // Split the run into contiguous segments (spaces, and syllables within
@@ -148,7 +160,7 @@ export function layoutBlock(
       );
 
       segs.forEach((seg, i) => {
-        const w = widths[i];
+        const w = widths[i] * K;
         if (seg.space) {
           // Leading spaces (paragraph start / after a hard break) collapse.
           const last = items[items.length - 1];
@@ -196,7 +208,7 @@ export function layoutBlock(
   pushEndOfSegment(block.content.size, block.content.size, 'end');
 
   const baseFont = measurer.fontFor([]);
-  const baseSpace = measurer.spaceWidth(baseFont);
+  const baseSpace = measurer.spaceWidth(baseFont) * K;
 
   let lines: Array<{ start: number; end: number }>;
   if (opts.forced) {

@@ -145,9 +145,13 @@ export interface OracleEntry {
   reason?: string;
 }
 
+/** What context a spec compiles in (affects wrapping + painted prefixes). */
+export type SpecKind = { kind: 'body' } | { kind: 'caption'; figNo: number } | { kind: 'footnote' };
+
 interface Queued {
   spec: ParagraphSpec;
   widthPx: number;
+  skind: SpecKind;
 }
 
 const MAX_RESULTS = 800;
@@ -171,9 +175,9 @@ export class TypstOracle {
     return this.results.get(key);
   }
 
-  request(key: string, spec: ParagraphSpec, widthPx: number, settings: DocSettings) {
+  request(key: string, spec: ParagraphSpec, widthPx: number, settings: DocSettings, skind: SpecKind = { kind: 'body' }) {
     if (this.disposed || this.results.has(key) || this.queue.has(key)) return;
-    this.queue.set(key, { spec, widthPx });
+    this.queue.set(key, { spec, widthPx, skind });
     this.settings = settings;
     clearTimeout(this.timer);
     this.timer = window.setTimeout(() => void this.flush(), 80);
@@ -193,11 +197,15 @@ export class TypstOracle {
     if (this.disposed || this.inflight || !this.queue.size || !this.settings) return;
     this.inflight = true;
     // One compile per measure: indented paragraphs (quotes, list items) have
-    // narrower lines and must be broken at their own width.
-    const width0 = [...this.queue.values()][0].widthPx;
+    // narrower lines and must be broken at their own width. Footnote specs
+    // compile separately — their lines render at the page bottom, after all
+    // content lines, so mixing kinds would scramble the cursor order.
+    const first = [...this.queue.values()][0];
+    const isFn = first.skind.kind === 'footnote';
+    const width0 = first.widthPx;
     const batch: Array<[string, Queued]> = [];
     for (const [k, q] of this.queue) {
-      if (Math.abs(q.widthPx - width0) < 0.5) {
+      if (Math.abs(q.widthPx - width0) < 0.5 && (q.skind.kind === 'footnote') === isFn) {
         batch.push([k, q]);
         this.queue.delete(k);
       }
@@ -211,7 +219,20 @@ export class TypstOracle {
       src += textSetLine(s, this.fontFallback);
       if (hasMath) src += '#import "@preview/mitex:0.2.5": mi, mitex\n';
       src += '\n';
-      src += batch.map(([, q]) => q.spec.src).join('\n\n');
+      if (isFn) {
+        // One anchor paragraph carrying every marker; the bodies render in
+        // Typst's real footnote-entry context (its size, leading, indent).
+        src += '#h(0pt)' + batch.map(([, q]) => `#footnote[${q.spec.src}]`).join('') + '\n';
+      } else {
+        src += batch
+          .map(([, q]) =>
+            q.skind.kind === 'caption'
+              ? `#counter(figure.where(kind: image)).update(${q.skind.figNo - 1})\n` +
+                `#figure(rect(height: 0pt, stroke: none), kind: image, supplement: [Figure], caption: [${q.spec.src}])`
+              : q.spec.src,
+          )
+          .join('\n\n');
+      }
 
       const { compileSvg } = await import('../pdf');
       const svg = await compileSvg(src);
@@ -221,13 +242,19 @@ export class TypstOracle {
       const pitch = s.lineHeight * s.sizePt;
       const paraGap = (s.lineHeight + 0.45) * s.sizePt; // between pitch and paragraph pitch
       const lines = svg ? extractLines(svg, pitch / 2) : null;
-      let cursor = 0;
+      let cursor = isFn ? 1 : 0; // footnotes: skip the anchor-markers line
       for (const [key, q] of batch) {
         if (!lines) {
           this.results.set(key, { status: 'fail', reason: 'compile failed' });
           continue;
         }
-        const res = matchParagraph(q.spec, lines, cursor);
+        const stripFirst =
+          q.skind.kind === 'caption'
+            ? /^Figure \d+:\s*/
+            : q.skind.kind === 'footnote'
+              ? /^\d+\s*/
+              : undefined;
+        const res = matchParagraph(q.spec, lines, cursor, stripFirst);
         if (res.status === 'ok') {
           cursor = res.next;
           this.results.set(key, res.entry);
@@ -307,6 +334,7 @@ export function matchParagraph(
   spec: ParagraphSpec,
   lines: SvgLine[],
   cursor: number,
+  stripFirst?: RegExp,
 ): { status: 'ok'; next: number; entry: OracleEntry } | { status: 'fail'; entry: OracleEntry } {
   const fail = (reason: string) => ({ status: 'fail' as const, entry: { status: 'fail' as const, reason } });
   const breaks: ForcedBreak[] = [];
@@ -319,6 +347,8 @@ export function matchParagraph(
   while (ti < tokens.length || pendingSuffix) {
     if (li >= lines.length) return fail('ran out of lines');
     let text = lines[li].text.replace(/\s+/g, ' ').trim();
+    // Painted prefixes ("Figure N: ", the entry number) are not tokens.
+    if (stripFirst && li === cursor) text = text.replace(stripFirst, '');
     const lineStartTi = ti;
     let brokeWithHyphen = false;
 
