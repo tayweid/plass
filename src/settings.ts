@@ -11,7 +11,8 @@ export interface DocSettings {
   font: string;
   sizePt: number;
   lineHeight: number;
-  page: 'letter' | 'a4';
+  page: 'letter' | 'a4' | 'legal' | 'b5';
+  landscape: boolean;
   marginIn: number;
   hyphenate: boolean;
   numberEquations: boolean;
@@ -29,6 +30,7 @@ export const DEFAULT_SETTINGS: DocSettings = {
   sizePt: 12.5,
   lineHeight: 1.5,
   page: 'letter',
+  landscape: false,
   marginIn: 1.25,
   hyphenate: true,
   numberEquations: true,
@@ -84,10 +86,18 @@ export function formatPageNumber(s: DocSettings, page: number, total: number): s
 }
 
 /** Page geometry in CSS px (96/in). Shared by CSS vars, the paginator, and chrome. */
-export const PAGE_SIZES: Record<DocSettings['page'], { w: number; h: number }> = {
+const PAPER: Record<DocSettings['page'], { w: number; h: number }> = {
   letter: { w: 816, h: 1056 },
   a4: { w: 794, h: 1123 },
+  legal: { w: 816, h: 1344 },
+  b5: { w: 665, h: 945 },
 };
+
+/** Effective page size in px (orientation applied). */
+export function pageSize(s: Pick<DocSettings, 'page' | 'landscape'>): { w: number; h: number } {
+  const p = PAPER[s.page] ?? PAPER.letter;
+  return s.landscape ? { w: p.h, h: p.w } : p;
+}
 
 /** Visual gap between painted pages, px. */
 export const PAGE_GAP = 28;
@@ -103,7 +113,7 @@ export function applySettings(state: EditorState) {
   root.setProperty('--doc-font', `"${s.font}", Georgia, serif`);
   root.setProperty('--doc-size', `${s.sizePt}pt`);
   root.setProperty('--doc-line', String(s.lineHeight));
-  const size = PAGE_SIZES[s.page];
+  const size = pageSize(s);
   root.setProperty('--page-w', `${size.w}px`);
   root.setProperty('--page-h', `${size.h}px`);
   root.setProperty('--page-margin', `${s.marginIn * 96}px`);
@@ -114,7 +124,8 @@ export function applySettings(state: EditorState) {
     styleEl.id = 'page-style';
     document.head.appendChild(styleEl);
   }
-  styleEl.textContent = `@page { size: ${s.page === 'a4' ? 'A4' : 'letter'}; margin: ${s.marginIn}in; }`;
+  const cssSize = { letter: 'letter', a4: 'A4', legal: 'legal', b5: 'B5' }[s.page] ?? 'letter';
+  styleEl.textContent = `@page { size: ${cssSize}${s.landscape ? ' landscape' : ''}; margin: ${s.marginIn}in; }`;
 }
 
 let openPanel: HTMLElement | null = null;
@@ -172,7 +183,8 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   row('Font', select(FONTS.map((f) => [f, f]), s.font, (v) => patch({ font: v })));
   row('Size', select([10, 11, 12, 12.5, 13, 14].map((n) => [n, `${n} pt`] as [number, string]), s.sizePt, (v) => patch({ sizePt: +v })));
   row('Line spacing', select([1.3, 1.4, 1.5, 1.65, 1.8].map((n) => [n, String(n)] as [number, string]), s.lineHeight, (v) => patch({ lineHeight: +v })));
-  row('Paper', select([['letter', 'US Letter'], ['a4', 'A4']] as Array<[string, string]>, s.page, (v) => patch({ page: v as DocSettings['page'] })));
+  row('Paper', select([['letter', 'US Letter'], ['a4', 'A4'], ['legal', 'US Legal'], ['b5', 'B5']] as Array<[string, string]>, s.page, (v) => patch({ page: v as DocSettings['page'] })));
+  row('Orientation', select([['portrait', 'Portrait'], ['landscape', 'Landscape']] as Array<[string, string]>, s.landscape ? 'landscape' : 'portrait', (v) => patch({ landscape: v === 'landscape' })));
   row('Margin', select([0.75, 1, 1.25, 1.5].map((n) => [n, `${n} in`] as [number, string]), s.marginIn, (v) => patch({ marginIn: +v })));
   row('Hyphenation', checkbox(s.hyphenate, (v) => patch({ hyphenate: v })));
   row('Number equations', checkbox(s.numberEquations, (v) => patch({ numberEquations: v })));

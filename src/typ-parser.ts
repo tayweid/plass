@@ -89,7 +89,11 @@ export function typToDoc(src: string): TypImport {
     if ((m = /^#set page\(([^)]*)\)$/.exec(line))) {
       sawSet = true;
       const paper = /paper:\s*"([^"]+)"/.exec(m[1])?.[1];
-      if (paper) settings.page = paper === 'a4' ? 'a4' : 'letter';
+      if (paper) {
+        settings.page =
+          ({ 'us-letter': 'letter', a4: 'a4', 'us-legal': 'legal', 'iso-b5': 'b5' } as const)[paper] ?? 'letter';
+      }
+      if (/flipped:\s*true/.test(m[1])) settings.landscape = true;
       const margin = /margin:\s*([\d.]+)in/.exec(m[1])?.[1];
       if (margin) settings.marginIn = parseFloat(margin);
       const numbering = /numbering:\s*"([^"]*)"/.exec(m[1])?.[1];

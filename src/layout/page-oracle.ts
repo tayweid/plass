@@ -15,7 +15,7 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { buildSpec, matchParagraph, type AtomResolver, type SvgLine, type ParagraphSpec } from './typst-oracle';
-import { formatPageNumber, PAGE_SIZES, type DocSettings } from '../settings';
+import { formatPageNumber, pageSize, type DocSettings } from '../settings';
 
 export interface PageStart {
   /** Document position of the block that begins the page. */
@@ -223,7 +223,7 @@ function stripFootnoteLines(lines: PagedLine[], heads: string[]): PagedLine[] {
 
 function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver): PageOracleEntry {
   const pitch = settings.lineHeight * settings.sizePt;
-  const pageHPt = PAGE_SIZES[settings.page].h * 0.75;
+  const pageHPt = pageSize(settings).h * 0.75;
   const raw = extractPages(svg, pitch / 2, pageHPt);
   const pageCount = (raw as PagedLine[] & { pageCount?: number }).pageCount ?? 1;
   if (!raw.length) return { status: 'fail', reason: 'no text layer' };

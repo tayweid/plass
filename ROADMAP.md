@@ -48,16 +48,16 @@ a feature touches the oracle machinery.
 
 ## Page setup
 
-1. **Manual page break** — an insertable block emitting `#pagebreak()`.
-   Small, frequently wanted, and the page oracle already forces breaks —
-   the editor just needs the node + a painted "page break" divider.
+1. ~~**Manual page break**~~ — done: ⌘Enter / ⋯ menu; zero-height block
+   with a floating chip; exports `#pagebreak()`; both engines break
+   identically.
 2. **Margins UI** — per-side margins (top/bottom/left/right, and
    inside/outside for two-sided). Uniform margin exists in Settings;
    extend the setting shape, `#set page(margin: (…))` emission, parser,
    and the paginator/parity constants (they read `marginIn` today).
-3. **Paper sizes** — beyond letter/A4: legal, B5, and custom width ×
-   height. Mostly plumbing through PAGE_SIZES + parser.
-4. **Orientation** — landscape (`flipped: true`).
+3. ~~**Paper sizes**~~ — done: letter/A4/legal/B5 (custom dimensions still
+   open).
+4. ~~**Orientation**~~ — done: landscape via `flipped: true`.
 5. **Multiple columns** — `#set page(columns: 2)`. The big one, flagged
    honestly: this reshapes the whole oracle pipeline. The line-break
    oracle needs the per-column measure; the page oracle needs per-column

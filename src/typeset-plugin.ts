@@ -32,7 +32,7 @@ import { Measurer } from './layout/measure';
 import { layoutBlock, type LineLayout } from './layout/paragraph';
 import { buildSpec, TypstOracle, type AtomResolver } from './layout/typst-oracle';
 import { PageOracle } from './layout/page-oracle';
-import { getSettings, PAGE_GAP, PAGE_SIZES, parseMathMacros } from './settings';
+import { getSettings, PAGE_GAP, pageSize, parseMathMacros } from './settings';
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
 import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
@@ -260,7 +260,7 @@ class TypesetView {
     this.placeFootnotes(count);
 
     const s = getSettings(this.view.state);
-    const size = PAGE_SIZES[s.page];
+    const size = pageSize(s);
     this.opts.onPages?.({ count, pageW: size.w, pageH: size.h, gap: PAGE_GAP, margin: s.marginIn * 96 });
     this.opts.onStats?.({ ms: performance.now() - t0, paragraphs: stats.paragraphs, lines: stats.lines });
   }
@@ -423,7 +423,7 @@ class TypesetView {
   private paginate(): { spacers: Spacer[]; count: number } {
     const view = this.view;
     const s = getSettings(view.state);
-    const size = PAGE_SIZES[s.page];
+    const size = pageSize(s);
     const margin = s.marginIn * 96;
     const contentH = size.h - 2 * margin;
     if (contentH < 120) return { spacers: [], count: 1 };
@@ -656,7 +656,7 @@ class TypesetView {
   ): { spacers: Spacer[]; count: number } | null {
     const view = this.view;
     const s = getSettings(view.state);
-    const size = PAGE_SIZES[s.page];
+    const size = pageSize(s);
     const margin = s.marginIn * 96;
     const F = this.bodyPx();
     const host = view.dom.parentElement ?? view.dom;
@@ -711,7 +711,7 @@ class TypesetView {
   private placeFootnotes(count: number) {
     const view = this.view;
     const s = getSettings(view.state);
-    const size = PAGE_SIZES[s.page];
+    const size = pageSize(s);
     const margin = s.marginIn * 96;
     const host = view.dom.parentElement ?? view.dom;
     const stackTop = host.getBoundingClientRect().top;

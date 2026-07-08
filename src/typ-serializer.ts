@@ -356,7 +356,9 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     const s: DocSettings = { ...DEFAULT_SETTINGS, ...((doc.attrs?.settings as Partial<DocSettings>) ?? {}) };
     docMacros = parseMathMacros(s.mathMacros);
     let out = '// Exported from Typeset\n';
-    const pageArgs = [`paper: "${s.page === 'a4' ? 'a4' : 'us-letter'}"`, `margin: ${s.marginIn}in`];
+    const paperName = { letter: 'us-letter', a4: 'a4', legal: 'us-legal', b5: 'iso-b5' }[s.page] ?? 'us-letter';
+    const pageArgs = [`paper: "${paperName}"`, `margin: ${s.marginIn}in`];
+    if (s.landscape) pageArgs.push('flipped: true');
     if (s.pageNumShow) pageArgs.push(`numbering: "${s.pageNumFormat}"`, `number-align: ${s.pageNumAlign}`);
     out += `#set page(${pageArgs.join(', ')})\n`;
     out += parityRules(s);
