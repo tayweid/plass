@@ -120,6 +120,13 @@ interface Asset {
   data: Uint8Array;
 }
 
+/** Reads project-relative asset paths (set by the app's FileManager). */
+let assetReader: ((path: string) => Promise<Uint8Array | null>) | null = null;
+
+export function setAssetReader(fn: (path: string) => Promise<Uint8Array | null>) {
+  assetReader = fn;
+}
+
 function dataUrlToBytes(src: string): { data: Uint8Array; ext: string } | null {
   const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[a-z0-9-]+)*),(.*)$/is.exec(src);
   if (!m) return null;
@@ -171,6 +178,15 @@ async function prepareAssets(doc: PMNode): Promise<{ map: Map<string, string>; a
       } catch {
         missing++;
       }
+      continue;
+    }
+    // Project-relative path: register at the same path in the VFS, so the
+    // emitted image("figures/x.png") resolves against /main.typ untouched —
+    // the exported file stays CLI-compilable.
+    if (!src.startsWith('/') && assetReader) {
+      const data = await assetReader(src);
+      if (data) assets.push({ path: '/' + src, data });
+      else missing++;
     }
   }
   return { map, assets, missing };

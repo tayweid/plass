@@ -32,6 +32,7 @@ const insertFigureCmd: Command = (state, dispatch, view) => {
 const ICONS: Record<string, string> = {
   new: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/>',
   open: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+  project: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><circle cx="12" cy="14" r="2.4"/><line x1="12" y1="9.5" x2="12" y2="11.6"/>',
   clock: '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/>',
   save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
   saveas: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="7 3 7 8 15 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/>',
@@ -114,6 +115,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     if (confirm('Replace the current document with an empty one?')) fm.newDoc();
   });
   barBtn(icon('open'), 'Open', 'Open… (⌘O)', () => void fm.open());
+  barBtn(icon('project'), 'Project', 'Open a project folder — figures live as files inside it', () => void fm.openFolder());
   const recentBtn = barBtn(icon('clock'), 'Recent', 'Recent files', () => toggleRecents());
   barBtn(icon('save'), 'Save', 'Save (⌘S)', () => void fm.save());
   barBtn(icon('saveas'), 'Save As', 'Save As… (⇧⌘S)', () => void fm.saveAs());

@@ -97,7 +97,12 @@ a feature touches the oracle machinery.
 - Raw-Typst-island compiled previews (same pattern as tables/math/bib).
 - Incremental pagination for 50+ page documents (performance).
 - Table/figure float placement (`placement: auto` — drift to page top).
-- Image sidecar files on save (CLI-compilable exports without data URLs).
+- ~~Image sidecar files~~ — done via project folders: Open a folder as a
+  project; figures are files referenced by relative path (`figures/x.png`),
+  exports compile with the stock Typst CLI, pasted images write into
+  `figures/`, and referenced files poll for changes (regenerate the plot,
+  alt-tab, the figure and pagination update). Embedded data URLs remain
+  the single-file fallback.
 - Editing-jitter polish: map stale page-oracle results through edits
   instead of falling back to local pagination while recompiling.
 - Dogfooding: write a real problem set / lecture note; harvest frictions.

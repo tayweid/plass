@@ -45,3 +45,12 @@ declare module 'hyphenation.en-us' {
   };
   export default language;
 }
+
+interface Window {
+  showDirectoryPicker?: (opts?: { mode?: 'read' | 'readwrite'; id?: string }) => Promise<FileSystemDirectoryHandle>;
+}
+
+interface FileSystemDirectoryHandle {
+  values(): AsyncIterableIterator<FileSystemFileHandle | FileSystemDirectoryHandle>;
+  resolve(handle: FileSystemHandle): Promise<string[] | null>;
+}

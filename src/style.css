@@ -989,6 +989,22 @@ body {
   -webkit-user-select: none;
 }
 
+/* A project figure whose file is missing: show the path, keep the slot. */
+.ts-figure.fig-missing img {
+  display: none;
+}
+
+.ts-figure.fig-missing::before {
+  content: 'missing: ' attr(data-missing-path);
+  display: block;
+  padding: 1.2em;
+  border: 1px dashed var(--chrome-border);
+  border-radius: 6px;
+  font: 12px var(--mono);
+  color: var(--ink-soft);
+  text-align: center;
+}
+
 /* ---------- front matter ---------- */
 
 .ProseMirror .ts-doctitle {

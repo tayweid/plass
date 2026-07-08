@@ -82,6 +82,15 @@ export function scheduleTypeset(view: EditorView) {
   viewRegistry.get(view)?.requestRun();
 }
 
+/** An asset changed on disk (image rewritten): page geometry may have moved
+ *  even though the document — and so the page-oracle signature — did not. */
+export function invalidatePageLayout(view: EditorView) {
+  const tv = viewRegistry.get(view);
+  if (!tv) return;
+  tv.invalidatePages();
+  tv.requestRun();
+}
+
 export function typesetPlugin(
   opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo) => void } = {},
 ) {
@@ -180,6 +189,11 @@ class TypesetView {
     this.oracle.destroy();
     this.pageOracle.destroy();
     this.measurer.destroy();
+  }
+
+  /** Drop cached page-break decisions (asset bytes changed under same sig). */
+  invalidatePages() {
+    this.pageOracle.clear();
   }
 
   requestRun() {

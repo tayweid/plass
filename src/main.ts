@@ -13,7 +13,7 @@ import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
 import { TablePreviewView } from './table-preview';
 import { equationsPlugin } from './equations';
-import { FigureView, figuresPlugin } from './figures';
+import { FigureView, figuresPlugin, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { refAutocomplete } from './ref-autocomplete';
@@ -162,6 +162,11 @@ const fileManager = new FileManager({
 });
 
 toolbar = buildToolbar(toolbarEl, view, fileManager);
+setFigureFileManager(fileManager);
+startAssetWatch(view);
+void import('./pdf').then(({ setAssetReader }) =>
+  setAssetReader(async (path) => (await fileManager.readAsset(path))?.data ?? null),
+);
 toolbar.update(view.state);
 toolbar.setFile(fileManager.name, fileManager.dirty);
 applySettings(view.state);
@@ -232,3 +237,5 @@ declare global {
   }
 }
 window.view = view;
+// Test hook: adopt a directory handle (e.g. OPFS) as the project folder.
+(window as unknown as { __fm: FileManager }).__fm = fileManager;
