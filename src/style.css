@@ -708,9 +708,11 @@ body {
 }
 
 .ProseMirror blockquote {
-  /* Typst's #quote(block: true): plain indentation, no bar, full ink. */
-  margin: 0 0 1em;
-  padding: 0 1em;
+  /* Typst's #quote(block: true): plain indentation, no bar; vertical box
+     calibrated to Typst's quote spacing (top via padding — margins must
+     not collapse or pagination spacers lose height). */
+  margin: 0 0 0.9em;
+  padding: 0.66em 1em 0;
 }
 
 .ProseMirror ul,
@@ -1078,9 +1080,17 @@ body {
   font-size: 1em;
 }
 
-/* Compiled (exact) rendering replaces the DOM list once it arrives. */
+/* Compiled (exact) rendering replaces the DOM list once it arrives. The
+   fragment compiles at its own page top, which suppresses the title's
+   block-above spacing — restore it here (calibrated against the PDF). */
 .ts-bibliography .bib-ink {
   display: none;
+}
+
+.ts-bibliography.bib-has-ink .bib-ink {
+  /* padding, not margin — a margin collapses through the block edge.
+     (+0.75em: the fragment page-top suppresses the title's block-above.) */
+  padding-top: 0.75em;
 }
 
 .ts-bibliography.bib-has-ink .bib-ink {

@@ -132,7 +132,9 @@ export class BibliographyView implements NodeView {
     const order = citeOrder(state.doc);
     const keys = [...order.entries()].sort((a, b) => a[1] - b[1]).map(([k]) => k);
     if (!bib?.content || !keys.length) return;
-    const widthPx = this.dom.clientWidth || 576;
+    // Measure the column from the editor root — the node view's own box
+    // may not be laid out yet when this first runs.
+    const widthPx = this.view.dom.clientWidth || 576;
     const { getSettings } = await import('./settings');
     const { parityRules, textSetLine } = await import('./typ-serializer');
     const { compileSvg, FONT_FALLBACK } = await import('./pdf');
