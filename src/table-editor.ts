@@ -477,6 +477,7 @@ export function openTableEditor(view: EditorView, pos: number) {
     cardOpen = false;
     clearTimeout(previewTimer);
     clearTimeout(panelTimer);
+    document.removeEventListener('keydown', onKey, true);
     overlay.remove();
     view.focus();
   };
@@ -496,7 +497,10 @@ export function openTableEditor(view: EditorView, pos: number) {
     // can detach the event target, which must not read as "outside".
     if (e.target === overlay) close();
   });
-  overlay.addEventListener('keydown', (e) => {
+  // Document-level while the card is open: boundary clicks and tool buttons
+  // leave nothing focused inside the overlay, and the browser's own ⌘Z
+  // (Safari: "reopen closed tab") must never win.
+  const onKey = (e: KeyboardEvent) => {
     const mod = e.metaKey || e.ctrlKey;
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -518,7 +522,8 @@ export function openTableEditor(view: EditorView, pos: number) {
         restore(undoStack.pop()!);
       }
     }
-  });
+  };
+  document.addEventListener('keydown', onKey, true);
 
   document.body.appendChild(overlay);
   renderGrid({ r: model.rows[0]?.[0]?.header && model.rows.length > 1 ? 1 : 0, c: 0 });
