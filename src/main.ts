@@ -103,7 +103,8 @@ function renderPages(info: PageInfo | null) {
       if (s.pageNumShow) {
         const num = document.createElement('div');
         num.className = 'page-num';
-        num.style.top = `${top + info.pageH - info.margin / 2 - 7}px`;
+        // Typst's folio: centered one third of the margin below the content.
+        num.style.top = `${top + info.pageH - (2 / 3) * info.margin - 0.55 * s.sizePt * (4 / 3)}px`;
         num.style.textAlign = s.pageNumAlign;
         num.style.padding = `0 ${info.margin}px`;
         num.textContent = formatPageNumber(s, k + 1, info.count);

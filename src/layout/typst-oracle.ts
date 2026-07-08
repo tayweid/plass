@@ -192,11 +192,19 @@ export class TypstOracle {
   private async flush() {
     if (this.disposed || this.inflight || !this.queue.size || !this.settings) return;
     this.inflight = true;
-    const batch = [...this.queue];
-    this.queue = new Map();
+    // One compile per measure: indented paragraphs (quotes, list items) have
+    // narrower lines and must be broken at their own width.
+    const width0 = [...this.queue.values()][0].widthPx;
+    const batch: Array<[string, Queued]> = [];
+    for (const [k, q] of this.queue) {
+      if (Math.abs(q.widthPx - width0) < 0.5) {
+        batch.push([k, q]);
+        this.queue.delete(k);
+      }
+    }
     try {
       const s = this.settings;
-      const widthPt = batch[0][1].widthPx * 0.75;
+      const widthPt = width0 * 0.75;
       const hasMath = batch.some(([, q]) => q.spec.hasMath);
       let src = `#set page(width: ${widthPt.toFixed(3)}pt, height: auto, margin: 0pt)\n`;
       src += parityRules(s);
@@ -239,7 +247,7 @@ export class TypstOracle {
       this.inflight = false;
       if (!this.disposed && this.queue.size) {
         clearTimeout(this.timer);
-        this.timer = window.setTimeout(() => void this.flush(), 30);
+        this.timer = window.setTimeout(() => void this.flush(), 20);
       }
     }
     if (!this.disposed) this.onResults();

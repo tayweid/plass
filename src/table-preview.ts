@@ -14,9 +14,9 @@ import { schema } from './schema';
 import { docToTyp } from './typ-serializer';
 import { scheduleTypeset } from './typeset-plugin';
 
-/** Preview only when the DOM look would lie (custom params present). */
+/** Preview whenever the fragment can compile standalone — the compiled
+ *  table IS the PDF's table, so it should be what you see. */
 function wantsPreview(node: PMNode): boolean {
-  if (!(node.attrs.params as string)?.trim()) return false;
   // Citations/references need document context the fragment lacks.
   let ok = true;
   node.descendants((n) => {
