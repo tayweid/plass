@@ -52,6 +52,12 @@ export interface LayoutOptions {
    * caller falls back to the KP path.
    */
   forced?: ForcedBreak[];
+  /**
+   * Freeze these breaks for the paragraph's PREFIX and re-optimize only the
+   * tail (live typing: lines above the edit hold still; the settle restores
+   * the global optimum). Ignored when `forced` is present.
+   */
+  prefixForced?: ForcedBreak[];
   /** Width a painted prefix/indent consumes at the start of line 1. */
   firstLineIndent?: number;
   /** Multiply text-measurement widths (content rendered at a smaller em). */
@@ -62,6 +68,39 @@ export interface ForcedBreak {
   /** Offset of the space (word end) or intra-word split point. */
   at: number;
   hyphen: boolean;
+}
+
+/** Partition only the given prefix breaks; the caller lays the tail. */
+function partitionPrefix(
+  items: SItem[],
+  prefix: ForcedBreak[],
+): { lines: Array<{ start: number; end: number }>; restStart: number } | null {
+  const lines: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  let j = 0;
+  for (const f of prefix) {
+    let found = -1;
+    for (; j < items.length; j++) {
+      const it = items[j];
+      if (it.kind === 'nodebreak' && it.from < f.at) {
+        lines.push({ start, end: j });
+        start = j + 1;
+        continue;
+      }
+      // Break widgets sit at the END of a space run (line.breakPos = to);
+      // accept either edge here.
+      if (f.hyphen ? it.kind === 'hyphen' && it.from === f.at : it.kind === 'space' && (it.from === f.at || it.to === f.at)) {
+        found = j;
+        break;
+      }
+      if (it.from > f.at && (it.kind === 'space' || it.kind === 'hyphen')) return null;
+    }
+    if (found < 0) return null;
+    lines.push({ start, end: found });
+    start = found + 1;
+    j = found + 1;
+  }
+  return { lines, restStart: start };
 }
 
 /** Partition the item list at oracle-chosen break offsets. */
@@ -219,6 +258,23 @@ export function layoutBlock(
     const cut = partitionAt(items, opts.forced);
     if (!cut) return null;
     lines = cut;
+  } else if (opts.prefixForced?.length) {
+    const cut = partitionPrefix(items, opts.prefixForced);
+    if (!cut) {
+      lines = breakLines(
+        items.map((i) => i.kp),
+        measure,
+      );
+    } else {
+      const tail = breakLines(
+        items.slice(cut.restStart).map((i) => i.kp),
+        measure,
+      );
+      lines = [
+        ...cut.lines,
+        ...tail.map((l) => ({ start: l.start + cut.restStart, end: l.end + cut.restStart })),
+      ];
+    }
   } else {
     lines = breakLines(
       items.map((i) => i.kp),

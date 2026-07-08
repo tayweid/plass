@@ -118,35 +118,7 @@ export function typesetPlugin(
         }
         if (meta?.type === 'pageMarks') return { decos: val.decos, pageMarks: meta.pageMarks };
         if (tr.docChanged) {
-          let decos = val.decos.map(tr.mapping, tr.doc);
-          // The edited textblock goes LIVE: drop its line decorations so the
-          // browser rewraps it naturally (CSS-justified) while typing — no
-          // half lines pinned to stale break positions. The settle run
-          // restores the oracle layout. Page spacers (pg:) stay: removing
-          // them would collapse the page geometry mid-burst.
-          const blocks: Array<[number, number]> = [];
-          tr.mapping.maps.forEach((stepMap, i) => {
-            const rest = tr.mapping.slice(i + 1);
-            stepMap.forEach((_a, _b, from, to) => {
-              const f = rest.map(from, -1);
-              const t = rest.map(to, 1);
-              tr.doc.nodesBetween(Math.min(f, tr.doc.content.size), Math.min(t, tr.doc.content.size), (node, pos) => {
-                if (node.isTextblock) {
-                  blocks.push([pos + 1, pos + 1 + node.content.size]);
-                  return false;
-                }
-                return true;
-              });
-            });
-          });
-          for (const [f, t] of blocks) {
-            const found = decos.find(f, t, (spec) => {
-              const key = (spec as { key?: string }).key;
-              return !key || /^(br|hy):/.test(key);
-            });
-            if (found.length) decos = decos.remove(found);
-          }
-          return { decos, pageMarks: val.pageMarks.map(tr.mapping, tr.doc) };
+          return { decos: val.decos.map(tr.mapping, tr.doc), pageMarks: val.pageMarks.map(tr.mapping, tr.doc) };
         }
         return val;
       },
@@ -178,6 +150,8 @@ class TypesetView {
   private oracle: TypstOracle;
   private pageOracle: PageOracle;
   private raf = 0;
+  private liveRaf = 0;
+  private lastLiveDoc: PMNode | null = null;
   private editTimer = 0;
   private lastPageCount = 0;
   private pendingPageMarks: DecorationSet | null = null;
@@ -231,7 +205,136 @@ class TypesetView {
       this.oracle.clear();
       this.pageOracle.clear();
     }
-    if (view.state.doc !== prevState.doc) this.scheduleAfterEdit();
+    if (view.state.doc !== prevState.doc) {
+      this.scheduleLive();
+      this.scheduleAfterEdit();
+    }
+  }
+
+  /** Re-typeset just the edited blocks with the JS Knuth-Plass breaker on
+   *  the next frame — same algorithm family as Typst (hyphenation and all),
+   *  so per-keystroke transitions barely move; the settle swaps in the
+   *  oracle's authoritative breaks. */
+  private scheduleLive() {
+    if (this.liveRaf) return;
+    this.liveRaf = requestAnimationFrame(() => {
+      this.liveRaf = 0;
+      this.liveRun();
+    });
+  }
+
+  private liveRun() {
+    if (this.destroyed) return;
+    const state = this.view.state;
+    const prev = this.lastLiveDoc;
+    this.lastLiveDoc = state.doc;
+    if (!prev || prev === state.doc) return;
+    const start = prev.content.findDiffStart(state.doc.content);
+    if (start == null) return;
+    const endDiff = prev.content.findDiffEnd(state.doc.content);
+    const from = Math.min(start, state.doc.content.size);
+    const to = Math.min(Math.max(endDiff ? endDiff.b : start, from), state.doc.content.size);
+
+    const settings = getSettings(state);
+    const blocks: Array<{ node: PMNode; pos: number; para: boolean }> = [];
+    state.doc.nodesBetween(from, to, (node, pos) => {
+      if (node.type.name === 'table') return false;
+      if (node.isTextblock) {
+        blocks.push({ node, pos, para: node.type.name === 'paragraph' });
+        return false;
+      }
+      return true;
+    });
+    // Edits inside a footnote body: the body block is nested inline content.
+    const $from = state.doc.resolve(from);
+    for (let d = $from.depth; d > 0; d--) {
+      if ($from.node(d).type.name === 'footnote') {
+        blocks.push({ node: $from.node(d), pos: $from.before(d), para: false });
+        break;
+      }
+    }
+    if (!blocks.length) return;
+
+    let decos = typesetKey.getState(state)?.decos ?? DecorationSet.empty;
+    const fresh: Decoration[] = [];
+    for (const b of blocks) {
+      const blockTo = b.pos + 1 + b.node.content.size;
+      const stale = decos.find(b.pos, blockTo, (spec) => {
+        const key = (spec as { key?: string } | null)?.key;
+        return !key || /^(br|hy):/.test(key);
+      });
+      // remove() nulls out entries of the array it's given — pass a copy,
+      // stale is read again below for the frozen prefix.
+      if (stale.length) decos = decos.remove(stale.slice());
+      // Non-paragraph blocks (captions, footnote bodies) fall back to CSS
+      // justification while live; paragraphs get instant KP.
+      if (!b.para || b.node.content.size === 0) continue;
+      // Lines above the edit hold their breaks (Word-stable); only the tail
+      // re-optimizes. The settle restores the global optimum.
+      const base0 = b.pos + 1;
+      const editAt = Math.max(0, from - base0);
+      const prefixForced = stale
+        .filter((d) => {
+          const key = (d.spec as { key?: string } | null)?.key;
+          return !!key && /^(br|hy):/.test(key) && d.from - base0 < editAt - 1;
+        })
+        .map((d) => ({
+          at: d.from - base0,
+          hyphen: ((d.spec as { key?: string } | null)?.key ?? '').startsWith('hy'),
+        }))
+        .sort((x, y) => x.at - y.at);
+      const el = this.view.nodeDOM(b.pos);
+      if (!(el instanceof HTMLElement)) continue;
+      const cs = getComputedStyle(el);
+      const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      if (!(measure > 60)) continue;
+      const atomWidth = (offset: number, child: PMNode) => {
+        const dom = this.view.nodeDOM(b.pos + 1 + offset);
+        if (dom instanceof HTMLElement) return dom.getBoundingClientRect().width;
+        return child.nodeSize * 8;
+      };
+      const lines = layoutBlock(b.node, measure, this.measurer, atomWidth, {
+        hyphenate: settings.hyphenate,
+        prefixForced,
+      });
+      if (!lines) continue;
+      const base = b.pos + 1;
+      const fnRanges: Array<[number, number]> = [];
+      b.node.forEach((child, offset) => {
+        if (child.type.name === 'footnote') fnRanges.push([offset, offset + child.nodeSize]);
+      });
+      for (const line of lines) {
+        if (Math.abs(line.spacing) > 0.01 && line.to > line.from) {
+          let cur = line.from;
+          for (const [a2, b2] of fnRanges) {
+            if (b2 <= cur || a2 >= line.to) continue;
+            if (a2 > cur) fresh.push(Decoration.inline(base + cur, base + a2, { style: `word-spacing:${line.spacing.toFixed(3)}px` }));
+            cur = Math.max(cur, b2);
+          }
+          if (cur < line.to) fresh.push(Decoration.inline(base + cur, base + line.to, { style: `word-spacing:${line.spacing.toFixed(3)}px` }));
+        }
+        if (line.breakPos !== null) {
+          const at = base + line.breakPos;
+          // A mapped page spacer near this break already breaks the line.
+          const nearSpacer = decos.find(Math.max(0, at - 2), at + 2, (spec) => {
+            const key = (spec as { key?: string } | null)?.key;
+            return !!key && key.startsWith('pg');
+          });
+          if (!nearSpacer.length) {
+            fresh.push(
+              Decoration.widget(at, line.hyphen ? hyphenWidget : brWidget, {
+                side: -1,
+                key: `${line.hyphen ? 'hy' : 'br'}:${at}`,
+              }),
+            );
+          }
+        }
+      }
+    }
+    const set = fresh.length ? decos.add(state.doc, fresh) : decos;
+    const tr = state.tr.setMeta(typesetKey, { type: 'decos', decos: set } satisfies Meta);
+    tr.setMeta('addToHistory', false);
+    this.view.dispatch(tr);
   }
 
   /** Doc edits settle after a pause: during a typing burst the existing
@@ -252,6 +355,7 @@ class TypesetView {
     this.resizeObserver.disconnect();
     clearTimeout(this.editTimer);
     if (this.raf) cancelAnimationFrame(this.raf);
+    if (this.liveRaf) cancelAnimationFrame(this.liveRaf);
     this.oracle.destroy();
     this.pageOracle.destroy();
     this.measurer.destroy();
@@ -306,6 +410,7 @@ class TypesetView {
 
   private run() {
     if (this.destroyed) return;
+    this.lastLiveDoc = this.view.state.doc;
 
     const t0 = performance.now();
     this.applyTopAdjust();
