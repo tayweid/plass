@@ -71,9 +71,14 @@ a feature touches the oracle machinery.
    "avoid break inside block" toggles; the page oracle honors whatever
    Typst does, so this is mostly emission (`block(breakable: false)`) +
    an editor affordance.
-9. **Footnote options** — per-page vs continuous numbering, separator
-   rule length/weight; footnote-body ink parity (bodies still browser-
-   laid-out; same fragment treatment as bibliography would finish it).
+9. **Footnote + caption line-break parity** — bodies and figure captions
+   now justify with correct size/ink/weight (CSS), but their wrap points
+   can drift a word from the PDF: Typst's Knuth-Plass compresses spaces
+   to fit more per line, greedy browser breaking can't. Fix = extend the
+   line oracle to figcaption and .fn-body specs (caption: body-size spec
+   with a "Figure N: " prefix token; footnote: 0.85em set-text compile
+   context + marker token). Also still open: per-page vs continuous
+   numbering, separator options.
 10. **Section-scoped numbering** — roman front matter → arabic body
     (counter update exists; needs a "restart numbering here" block).
 11. **Draft niceties** — line spacing presets (1.5/double for review),
