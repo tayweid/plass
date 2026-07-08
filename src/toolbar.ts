@@ -10,7 +10,7 @@ import { insertMath } from './math';
 import { insertFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
 import { insertTableWithEditor } from './table-editor';
-import { editBibliography, importBibliography } from './citations';
+import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
 import { isTypesetEnabled, toggleTypeset, type TypesetStats } from './typeset-plugin';
 import type { FileManager } from './file-manager';
@@ -142,10 +142,6 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   barDivider();
   barBtn(icon('book'), 'Bib', 'Edit bibliography', () => editBibliography(view, (m) => fm.notify(m)));
   barBtn(icon('sliders'), 'Settings', 'Document settings', () => toggleSettingsPanel(view, menuBtn));
-  const texBtn = barBtn('<span class="ico tico tex">TeX</span>', 'Layout', 'Toggle TeX typesetting', () => {
-    toggleTypeset(view);
-    view.focus();
-  });
   barBtn('<span class="ico tico">?</span>', 'Help', 'Markdown & shortcuts', showHelp);
   barDivider();
   barBtn(icon('download'), 'PDF', 'Export PDF via Typst', () => {
@@ -222,7 +218,6 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
 
     divider();
     head('More');
-    item('Display math', `$$ · ${mod}⇧M`, cmd(insertMath(true)));
     item('Page break', `${mod}⏎`, () => {
       const { state, dispatch } = view;
       const { $from } = state.selection;
@@ -231,9 +226,11 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       dispatch(tr.scrollIntoView());
       view.focus();
     });
-    item('Import bibliography (.bib)…', '', () => importBibliography(view, (m) => fm.notify(m)));
-    item('Download copy (.typ)', '', () => fm.exportCopy());
-    item('Print / PDF', `${mod}P`, () => window.print());
+    item('Download .typ copy', '', () => fm.exportCopy());
+    item(`${isTypesetEnabled(view.state) ? '✓ ' : ''}TeX layout`, '', () => {
+      toggleTypeset(view);
+      view.focus();
+    });
 
     if (lastStats) {
       const foot = document.createElement('div');
@@ -278,9 +275,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   }
 
   return {
-    update(state) {
-      texBtn.classList.toggle('active', isTypesetEnabled(state));
-    },
+    update() {},
     stats(s) {
       lastStats = s;
     },

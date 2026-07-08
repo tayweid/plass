@@ -307,6 +307,7 @@ export function editBibliography(view: EditorView, message: (m: string) => void 
       <div class="bib-editor-foot">
         <span class="bib-editor-hint">Stored inside the document · <kbd>⌘Enter</kbd> save · <kbd>Esc</kbd> cancel</span>
         <span class="bib-editor-actions">
+          <button type="button" class="bib-import">Import .bib…</button>
           <button type="button" class="bib-dl">Download .bib</button>
           <button type="button" class="bib-cancel">Cancel</button>
           <button type="button" class="bib-save">Save</button>
@@ -317,6 +318,20 @@ export function editBibliography(view: EditorView, message: (m: string) => void 
   const text = overlay.querySelector('.bib-editor-text') as HTMLTextAreaElement;
   const count = overlay.querySelector('.bib-editor-count') as HTMLElement;
   text.value = bib?.content ?? BIB_TEMPLATE;
+
+  overlay.querySelector('.bib-import')?.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.bib,text/plain';
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      text.value = await file.text();
+      updateCount();
+      text.focus();
+    });
+    input.click();
+  });
 
   const updateCount = () => {
     const n = parseBibTeX(text.value).length;
