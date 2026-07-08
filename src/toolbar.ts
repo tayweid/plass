@@ -5,6 +5,7 @@
 
 import type { Command, EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
+import { schema } from './schema';
 import { insertMath } from './math';
 import { insertFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
@@ -222,6 +223,14 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     divider();
     head('More');
     item('Display math', `$$ · ${mod}⇧M`, cmd(insertMath(true)));
+    item('Page break', `${mod}⏎`, () => {
+      const { state, dispatch } = view;
+      const { $from } = state.selection;
+      const pos = $from.after($from.depth > 0 ? 1 : 0);
+      const tr = state.tr.insert(pos, schema.nodes.page_break.create());
+      dispatch(tr.scrollIntoView());
+      view.focus();
+    });
     item('Import bibliography (.bib)…', '', () => importBibliography(view, (m) => fm.notify(m)));
     item('Download copy (.typ)', '', () => fm.exportCopy());
     item('Print / PDF', `${mod}P`, () => window.print());

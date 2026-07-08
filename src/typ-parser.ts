@@ -218,6 +218,13 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
+    // manual page break
+    if (t === '#pagebreak()') {
+      out.push(schema.nodes.page_break.create());
+      i++;
+      continue;
+    }
+
     // horizontal rule
     if (/^#line\(/.test(t)) {
       out.push(schema.nodes.horizontal_rule.create());

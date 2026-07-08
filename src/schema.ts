@@ -18,6 +18,14 @@ const mathInline: NodeSpec = {
   toDOM: (node) => ['span', { 'data-math': node.attrs.src, class: 'math-inline' }, node.attrs.src],
 };
 
+const pageBreak: NodeSpec = {
+  group: 'block',
+  atom: true,
+  selectable: true,
+  parseDOM: [{ tag: 'div[data-page-break]' }],
+  toDOM: () => ['div', { 'data-page-break': '', class: 'ts-pagebreak', contenteditable: 'false' }],
+};
+
 const mathDisplay: NodeSpec = {
   group: 'block',
   atom: true,
@@ -195,6 +203,7 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
   .addToEnd('footnote', footnote)
   .addToEnd('citation', citation)
   .addToEnd('bibliography', bibliography)
-  .addToEnd('eq_ref', eqRef);
+  .addToEnd('eq_ref', eqRef)
+  .addToEnd('page_break', pageBreak);
 
 export const schema = new Schema({ nodes, marks: base.spec.marks });

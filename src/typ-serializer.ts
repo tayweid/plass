@@ -324,6 +324,8 @@ function blockToTyp(node: PMNode, indent = ''): string {
       if (!bib?.content) return '';
       return indent + `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "ieee")\n\n`;
     }
+    case 'page_break':
+      return indent + '#pagebreak()\n\n';
     case 'horizontal_rule':
       return indent + '#line(length: 100%)\n\n';
     case 'image':

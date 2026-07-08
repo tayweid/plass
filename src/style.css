@@ -920,6 +920,47 @@ body {
   border-left: 2px solid #d5d1c8;
 }
 
+/* Manual page break: zero-height in flow (the next block starts the page
+   exactly like the PDF); a floating chip marks it for editing. */
+.ts-pagebreak {
+  height: 0;
+  position: relative;
+}
+
+.ts-pagebreak::after {
+  content: 'page break';
+  position: absolute;
+  left: 50%;
+  top: -9px;
+  transform: translateX(-50%);
+  font: 9.5px var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  background: var(--bg);
+  border: 1px solid var(--chrome-border);
+  border-radius: 8px;
+  padding: 1px 8px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.ProseMirror-selectednode.ts-pagebreak::after {
+  color: var(--accent);
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+@media print {
+  .ts-pagebreak {
+    break-after: page;
+  }
+
+  .ts-pagebreak::after {
+    display: none;
+  }
+}
+
 /* ---------- tables ---------- */
 
 /* Custom-styled tables show a Typst-compiled preview; the DOM table is the

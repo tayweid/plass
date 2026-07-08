@@ -626,6 +626,12 @@ class TypesetView {
 
     view.state.doc.forEach((node, offset) => {
       switch (node.type.name) {
+        case 'page_break': {
+          const r = rectOf(offset);
+          if (r) breakBefore(offset + node.nodeSize, stackY(r.bottom), 'block');
+          pageFnH += takeFnH(offset + node.nodeSize);
+          break;
+        }
         case 'paragraph':
           paragraph(offset, node);
           break;

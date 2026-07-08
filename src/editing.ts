@@ -11,6 +11,7 @@ import {
   wrappingInputRule,
 } from 'prosemirror-inputrules';
 import { keymap } from 'prosemirror-keymap';
+import { TextSelection } from 'prosemirror-state';
 import { baseKeymap, chainCommands, exitCode, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import { redo, undo } from 'prosemirror-history';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
@@ -100,6 +101,15 @@ export function buildKeymap(): Plugin {
     'Ctrl->': wrapIn(schema.nodes.blockquote),
     'Enter': chainCommands(exitFootnote, exitFigure, splitListItem(schema.nodes.list_item)),
     'Mod-Alt-f': insertFootnote,
+    'Mod-Enter': (state, dispatch) => {
+      const { $from } = state.selection;
+      const pos = $from.after($from.depth > 0 ? 1 : 0);
+      if (dispatch) {
+        const tr = state.tr.insert(pos, schema.nodes.page_break.create());
+        dispatch(tr.setSelection(TextSelection.near(tr.doc.resolve(pos + 1), 1)).scrollIntoView());
+      }
+      return true;
+    },
     'ArrowRight': skipFootnote(1),
     'ArrowLeft': skipFootnote(-1),
     'Mod-Alt-t': (state, dispatch, view) => {
