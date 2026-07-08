@@ -28,7 +28,7 @@ export interface TypExportOptions {
 //   cssA/cssD: Chrome's ascent/descent for the font (line-box placement)
 //   typAsc/typDesc: Typst's first/last-baseline offsets from block edges
 //   extent: Typst's baseline pitch at leading 0
-interface ParityMetrics {
+export interface ParityMetrics {
   cssA: number;
   cssD: number;
   typAsc: number;
@@ -36,11 +36,27 @@ interface ParityMetrics {
   extent: number;
 }
 
-const FONT_PARITY: Record<string, ParityMetrics> = {
+export const FONT_PARITY: Record<string, ParityMetrics> = {
   'New Computer Modern': { cssA: 1.127, cssD: 0.29, typAsc: 0.6723, typDesc: 0.0123, extent: 0.6828 },
   'STIX Two Text': { cssA: 0.762, cssD: 0.238, typAsc: 0.657, typDesc: -0.0001, extent: 0.657 },
   'Libertinus Serif': { cssA: 0.9, cssD: 0.25, typAsc: 0.6547, typDesc: -0.0053, extent: 0.6582 },
 };
+
+/**
+ * First-baseline offset difference (Typst − editor CSS) in body em for a
+ * unit type standing at a page top: Typst suppresses leading block spacing
+ * and places the first baseline one ascender below the margin, while the
+ * editor's CSS line boxes/padding still apply. The paginator shifts its
+ * page spacers by this amount so page-top ink coincides with the PDF.
+ */
+export function pageTopAdjustEm(s: DocSettings, unit: 'paragraph' | 'line' | 'h1' | 'h2' | 'h3'): number {
+  const m = FONT_PARITY[s.font] ?? FONT_PARITY['New Computer Modern'];
+  const pSlackAbove = s.lineHeight / 2 + (m.cssA - m.cssD) / 2;
+  if (unit === 'paragraph' || unit === 'line') return m.typAsc - pSlackAbove;
+  const h = HEADINGS[unit === 'h1' ? 0 : unit === 'h2' ? 1 : 2];
+  const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
+  return m.typAsc * h.hs - (h.padTop * h.hs + hSlackAbove);
+}
 
 // Heading scale mirrored from the editor CSS (.ProseMirror h1/h2/h3).
 // `shift` is a measured per-level baseline correction (em of body size):
@@ -77,8 +93,9 @@ export function parityRules(s: DocSettings): string {
   // same ratio) have identical advance widths.
   out += `#show raw.where(block: false): set text(font: "DejaVu Sans Mono", size: ${pt(0.8)})\n`;
   // Display math: the editor shows Typst's own ink inside 0.5em padding.
+  // (+0.12em: the ink fragment's page carries a sliver of line slack below.)
   const eqAbove = pSlackBelow + 0.9 + 0.5 - m.typDesc;
-  const eqBelow = 0.5 + 0.9 + pSlackAbove - m.typAsc;
+  const eqBelow = 0.5 + 0.9 + 0.12 + pSlackAbove - m.typAsc;
   out += `#show math.equation.where(block: true): set block(above: ${pt(eqAbove)}, below: ${pt(eqBelow)})\n`;
   return out;
 }

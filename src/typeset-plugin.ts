@@ -31,8 +31,9 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { Measurer } from './layout/measure';
 import { layoutBlock, type LineLayout } from './layout/paragraph';
 import { buildSpec, TypstOracle, type AtomResolver } from './layout/typst-oracle';
+import { PageOracle } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, PAGE_SIZES, parseMathMacros } from './settings';
-import { escapeTyp, expandMacrosWith } from './typ-serializer';
+import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
 import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
 import { eqKey } from './equations';
@@ -125,8 +126,10 @@ interface CacheEntry {
 
 class TypesetView {
   private cache = new WeakMap<PMNode, CacheEntry>();
+  private docSig = new WeakMap<PMNode, string>();
   private measurer: Measurer;
   private oracle: TypstOracle;
+  private pageOracle: PageOracle;
   private raf = 0;
   private resizeObserver: ResizeObserver;
   private lastWidth = 0;
@@ -141,7 +144,14 @@ class TypesetView {
     this.oracle = new TypstOracle(() => {
       if (!this.destroyed) this.schedule();
     }, FONT_FALLBACK);
-    if (import.meta.env.DEV) (window as unknown as { __oracle?: TypstOracle }).__oracle = this.oracle;
+    this.pageOracle = new PageOracle(() => {
+      if (!this.destroyed) this.schedule();
+    });
+    if (import.meta.env.DEV) {
+      const w = window as unknown as { __oracle?: TypstOracle; __pageOracle?: PageOracle };
+      w.__oracle = this.oracle;
+      w.__pageOracle = this.pageOracle;
+    }
     this.resizeObserver = new ResizeObserver(() => {
       const w = this.view.dom.clientWidth;
       if (Math.abs(w - this.lastWidth) > 0.5) {
@@ -175,6 +185,7 @@ class TypesetView {
       this.measurer.invalidate();
       this.cache = new WeakMap();
       this.oracle.clear();
+      this.pageOracle.clear();
     }
     if (view.state.doc !== prevState.doc || !wasEnabled) this.schedule();
   }
@@ -185,6 +196,7 @@ class TypesetView {
     this.resizeObserver.disconnect();
     if (this.raf) cancelAnimationFrame(this.raf);
     this.oracle.destroy();
+    this.pageOracle.destroy();
     this.measurer.destroy();
   }
 
@@ -200,11 +212,36 @@ class TypesetView {
     });
   }
 
+  /** Font size in px (body em). */
+  private bodyPx(): number {
+    return parseFloat(getComputedStyle(this.view.dom).fontSize) || 16.67;
+  }
+
+  private unitKindOf(node: PMNode | null): 'paragraph' | 'h1' | 'h2' | 'h3' | null {
+    if (!node) return null;
+    if (node.type.name === 'heading') return `h${Math.min(3, node.attrs.level as number)}` as 'h1' | 'h2' | 'h3';
+    if (node.type.name === 'paragraph') return 'paragraph';
+    return null;
+  }
+
+  /** Align page-1 ink with the PDF: Typst's first baseline sits one
+   *  ascender below the margin; CSS line boxes/padding sit lower. */
+  private applyTopAdjust() {
+    const host = this.view.dom.parentElement;
+    if (!host) return;
+    const s = getSettings(this.view.state);
+    const margin = s.marginIn * 96;
+    const kind = this.unitKindOf(this.view.state.doc.firstChild);
+    const adj = kind ? pageTopAdjustEm(s, kind) * this.bodyPx() : 0;
+    host.style.paddingTop = `${(margin + adj).toFixed(2)}px`;
+  }
+
   private run() {
     if (this.destroyed) return;
     if (!typesetKey.getState(this.view.state)?.enabled) return;
 
     const t0 = performance.now();
+    this.applyTopAdjust();
 
     // Pass 1: line layout, no page spacers. Applying it synchronously gives
     // us the document's natural (continuous) geometry to paginate against.
@@ -390,6 +427,28 @@ class TypesetView {
     const margin = s.marginIn * 96;
     const contentH = size.h - 2 * margin;
     if (contentH < 120) return { spacers: [], count: 1 };
+
+    // Page-break oracle: when Typst has told us where its pages break for
+    // exactly this document, obey; otherwise paginate ourselves and ask.
+    if (ORACLE_FONTS.has(s.font)) {
+      let sig = this.docSig.get(view.state.doc);
+      if (!sig) {
+        try {
+          sig = docToTyp(view.state.doc);
+          this.docSig.set(view.state.doc, sig);
+        } catch {
+          sig = undefined;
+        }
+      }
+      if (sig) {
+        const entry = this.pageOracle.get(sig);
+        if (!entry) this.pageOracle.request(sig, view.state.doc, s, this.atomResolver());
+        if (entry?.status === 'ok' && entry.pageStarts) {
+          const forced = this.paginateForced(entry.pageStarts, entry.pageCount ?? entry.pageStarts.length + 1);
+          if (forced) return forced;
+        }
+      }
+    }
 
     // Origin: the stack top. view.dom (.ProseMirror) sits inside #editor's
     // page-margin padding, so anchor to its parent, whose top is the top of
@@ -582,6 +641,60 @@ class TypesetView {
     });
 
     return { spacers, count: page + 1 };
+  }
+
+  /** Apply Typst's page starts verbatim (with per-unit ink offsets). */
+  private paginateForced(
+    pageStarts: Array<{ pos: number; line: number; unit: string }>,
+    pageCount: number,
+  ): { spacers: Spacer[]; count: number } | null {
+    const view = this.view;
+    const s = getSettings(view.state);
+    const size = PAGE_SIZES[s.page];
+    const margin = s.marginIn * 96;
+    const F = this.bodyPx();
+    const host = view.dom.parentElement ?? view.dom;
+    const stackTop = host.getBoundingClientRect().top;
+
+    const spacers: Spacer[] = [];
+    let shift = 0;
+    let page = 0;
+    for (const ps of pageStarts) {
+      page++;
+      let pos = ps.pos;
+      let y: number;
+      let kind: Spacer['kind'] = 'block';
+      let adjKind: 'paragraph' | 'line' | 'h1' | 'h2' | 'h3' = 'paragraph';
+      if (ps.unit === 'line' && ps.line > 0) {
+        const node = view.state.doc.nodeAt(ps.pos);
+        const entry = node ? this.cache.get(node) : undefined;
+        if (!node || !entry || ps.line >= entry.lines.length) return null;
+        const base = ps.pos + 1;
+        const el = view.nodeDOM(ps.pos);
+        if (!(el instanceof HTMLElement)) return null;
+        const lineH = parseFloat(getComputedStyle(el).lineHeight) || 24;
+        const c = view.coordsAtPos(base + entry.lines[ps.line].from);
+        y = c.top - stackTop - Math.max(0, (lineH - (c.bottom - c.top)) / 2);
+        pos = base + entry.lines[ps.line].from;
+        kind = 'line';
+        adjKind = 'line';
+      } else {
+        const el = view.nodeDOM(ps.pos);
+        if (!(el instanceof HTMLElement)) return null;
+        y = el.getBoundingClientRect().top - stackTop;
+        if (ps.unit === 'h1' || ps.unit === 'h2' || ps.unit === 'h3') adjKind = ps.unit;
+        else adjKind = 'paragraph';
+      }
+      const adj = ps.unit === 'paragraph' || ps.unit === 'line' || ps.unit.startsWith('h')
+        ? pageTopAdjustEm(s, adjKind) * F
+        : 0;
+      const delta = page * (size.h + PAGE_GAP) + margin + adj - (y + shift);
+      if (delta > 0) {
+        spacers.push({ pos, height: delta, kind });
+        shift += delta;
+      }
+    }
+    return { spacers, count: Math.max(pageCount, page + 1) };
   }
 
   /**

@@ -223,6 +223,27 @@ export function typstQuery<T = unknown>(
   });
 }
 
+/**
+ * Compile the full document (with embedded assets) to a multi-page SVG —
+ * the page-break oracle's channel. Returns null on failure.
+ */
+export function compileDocSvg(doc: PMNode, onMsg: (m: string) => void = () => {}): Promise<string | null> {
+  return serialized(async () => {
+    try {
+      const typst = await loadTypst(onMsg);
+      const { map, assets } = await prepareAssets(doc);
+      const src = docToTyp(doc, { resolveImage: (s) => map.get(s) ?? s, fontFallback: FONT_FALLBACK });
+      await typst.resetShadow();
+      for (const a of assets) await typst.mapShadow(a.path, a.data);
+      await typst.addSource('/main.typ', src);
+      return await typst.svg({ mainFilePath: '/main.typ' } as unknown as { mainContent: string });
+    } catch (e) {
+      console.warn('doc svg compile failed', e);
+      return null;
+    }
+  });
+}
+
 /** Compile raw Typst source to PDF bytes (assets must already be mapped). */
 export function compileTyp(src: string, onMsg: (m: string) => void = () => {}): Promise<Uint8Array | undefined> {
   return serialized(async () => {

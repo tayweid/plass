@@ -246,7 +246,7 @@ export class TypstOracle {
   }
 }
 
-interface SvgLine {
+export interface SvgLine {
   text: string;
   y: number;
 }
@@ -257,7 +257,7 @@ interface SvgLine {
  * runs stay in DOCUMENT ORDER (Typst emits reading order) and merge into a
  * line while their y stays put.
  */
-function extractLines(svg: string, yTol: number): SvgLine[] {
+export function extractLines(svg: string, yTol: number): SvgLine[] {
   const div = document.createElement('div');
   div.innerHTML = svg;
   div.style.cssText = 'position:absolute;visibility:hidden;left:-99999px;top:0;';
@@ -295,7 +295,7 @@ function skipParagraph(lines: SvgLine[], from: number, paraGap: number): number 
  * token. Hyphenations show up textually: a line ends with a prefix of the
  * pending word.
  */
-function matchParagraph(
+export function matchParagraph(
   spec: ParagraphSpec,
   lines: SvgLine[],
   cursor: number,
