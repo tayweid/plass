@@ -747,6 +747,10 @@ body {
 
 .ProseMirror p {
   margin: 0 0 0.9em;
+  /* Inert on oracle-laid lines (they end in <br>, which CSS justification
+     skips — their word-spacing decorations do the work) and takes over for
+     the LIVE paragraph being edited, whose decorations are stripped. */
+  text-align: justify;
 }
 
 /* Blocks use bottom margins only (top spacing via padding) so margins never
@@ -874,11 +878,12 @@ body {
 
 .ts-figure figcaption {
   margin-top: 0.55em;
-  /* Typst renders captions at full body size and ink; line breaks and
-     per-line justification come from the line oracle, and centering a
-     stretched-to-measure line is a no-op, so plain center matches. */
+  /* Typst renders captions at full body size and ink, justified with a
+     centered last line. Oracle-laid lines end in <br> (exempt from CSS
+     justify); while being edited, CSS takes over with the same shape. */
   color: #1a1a1a;
-  text-align: center;
+  text-align: justify;
+  text-align-last: center;
 }
 
 .fig-num {
@@ -966,8 +971,10 @@ body {
   font-size: 0.85em;
   line-height: 1.2;
   color: #1a1a1a;
-  /* Justification comes from the line oracle's per-line word-spacing. */
-  text-align: left;
+  /* Oracle-laid lines end in <br> (CSS justify skips them; word-spacing
+     decos do the work); while being edited, decos are stripped and CSS
+     justification takes over. */
+  text-align: justify;
   text-indent: 0.9em;
 }
 

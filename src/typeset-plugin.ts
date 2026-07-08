@@ -118,7 +118,35 @@ export function typesetPlugin(
         }
         if (meta?.type === 'pageMarks') return { decos: val.decos, pageMarks: meta.pageMarks };
         if (tr.docChanged) {
-          return { decos: val.decos.map(tr.mapping, tr.doc), pageMarks: val.pageMarks.map(tr.mapping, tr.doc) };
+          let decos = val.decos.map(tr.mapping, tr.doc);
+          // The edited textblock goes LIVE: drop its line decorations so the
+          // browser rewraps it naturally (CSS-justified) while typing — no
+          // half lines pinned to stale break positions. The settle run
+          // restores the oracle layout. Page spacers (pg:) stay: removing
+          // them would collapse the page geometry mid-burst.
+          const blocks: Array<[number, number]> = [];
+          tr.mapping.maps.forEach((stepMap, i) => {
+            const rest = tr.mapping.slice(i + 1);
+            stepMap.forEach((_a, _b, from, to) => {
+              const f = rest.map(from, -1);
+              const t = rest.map(to, 1);
+              tr.doc.nodesBetween(Math.min(f, tr.doc.content.size), Math.min(t, tr.doc.content.size), (node, pos) => {
+                if (node.isTextblock) {
+                  blocks.push([pos + 1, pos + 1 + node.content.size]);
+                  return false;
+                }
+                return true;
+              });
+            });
+          });
+          for (const [f, t] of blocks) {
+            const found = decos.find(f, t, (spec) => {
+              const key = (spec as { key?: string }).key;
+              return !key || /^(br|hy):/.test(key);
+            });
+            if (found.length) decos = decos.remove(found);
+          }
+          return { decos, pageMarks: val.pageMarks.map(tr.mapping, tr.doc) };
         }
         return val;
       },
