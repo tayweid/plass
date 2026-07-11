@@ -98,12 +98,17 @@ body {
   width: max-content;
   max-width: calc(100vw - 24px);
   z-index: 10;
-  opacity: 0.18;
+}
+
+/* The island itself stays solid (whole-element opacity over white paper
+   composites to a milky fog); only its CONTENTS sleep until approached. */
+#toolbar > * {
+  opacity: 0.35;
   transition: opacity 0.3s ease;
 }
 
-#toolbar:hover,
-#toolbar:focus-within {
+#toolbar:hover > *,
+#toolbar:focus-within > * {
   opacity: 1;
 }
 
