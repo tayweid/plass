@@ -51,7 +51,7 @@
   /* Chrome floating over the graphite (toolbar, HUD). */
   --bar-ink: #e8e6e1;
   --bar-ink-soft: #97958f;
-  --bar-glass: rgba(26, 25, 28, 0.82);
+  --bar-glass: rgba(28, 27, 30, 0.94);
   --bar-hairline: rgba(255, 255, 255, 0.09);
   --serif: 'STIX Two Text', 'Charter', 'Iowan Old Style', 'Palatino', 'Georgia', serif;
   --mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
