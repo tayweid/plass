@@ -107,69 +107,74 @@ body {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
 }
 
-.tb-pod > * {
+.tb-pod .tb-btn,
+.tb-pod .tb-file {
   opacity: 0.35;
   transition: opacity 0.3s ease;
 }
 
-#toolbar:hover .tb-pod > *,
-#toolbar:focus-within .tb-pod > * {
+#toolbar:hover .tb-pod .tb-btn,
+#toolbar:hover .tb-pod .tb-file,
+#toolbar:focus-within .tb-pod .tb-btn,
+#toolbar:focus-within .tb-pod .tb-file {
   opacity: 1;
 }
 
-/* The rest of a group: an attached shelf capsule just below the rep (the
-   two-lozenge Dynamic-Island split). The rep row never changes width. */
+/* ONE continuous lozenge: the collapsible pod is just a fixed slot in the
+   row; its glass lives on an absolutely-anchored shell that stretches
+   DOWNWARD over the page to reveal the group. The row never resizes. */
 .tb-collapsible {
   position: relative;
+  width: 44px;
+  height: 42px;
+  background: none;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  padding: 0;
 }
 
-.tb-pod-rest {
+.tb-shell {
   position: absolute;
-  top: calc(100% + 6px);
-  left: 50%;
+  top: 0;
+  left: 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  width: 42px;
-  padding: 6px 0;
+  padding: 5px 0;
   background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
   border-radius: 999px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
-  opacity: 0;
-  transform: translateX(-50%) translateY(-6px) scaleY(0.9);
-  transform-origin: top center;
-  pointer-events: none;
-  visibility: hidden;
-  transition: opacity 0.14s ease, transform 0.16s cubic-bezier(0.32, 1.2, 0.55, 1), visibility 0s 0.16s;
+  transition: height 0.16s cubic-bezier(0.32, 1.15, 0.55, 1);
+  z-index: 12;
+}
+
+.tb-open .tb-shell {
   z-index: 15;
 }
 
-.tb-open .tb-pod-rest {
-  opacity: 1;
-  transform: translateX(-50%);
-  pointer-events: auto;
-  visibility: visible;
-  transition: opacity 0.12s ease, transform 0.16s cubic-bezier(0.32, 1.2, 0.55, 1);
-}
-
-/* Shelf contents are always awake (the shelf only exists on approach). */
-.tb-pod-rest > * {
-  opacity: 1;
+.tb-pod-rest {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
 }
 
 /* Vertical shelf: hover chips sit beside the buttons, not below. */
 .tb-pod-rest .tb-btn .lbl {
   top: 50%;
-  left: calc(100% + 10px);
+  left: calc(100% + 12px);
   transform: translateY(-50%);
 }
 
-/* The open shelf replaces the rep's own hover chip (they share the space). */
-.tb-open > .tb-btn .lbl {
+/* The open lozenge replaces the rep's own hover chip (it points into it). */
+.tb-open .tb-shell > .tb-btn .lbl {
   opacity: 0 !important;
 }
 

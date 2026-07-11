@@ -107,17 +107,22 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     const rest = document.createElement('div');
     rest.className = 'tb-pod-rest';
     for (const b of buttons) if (b !== rep) rest.appendChild(b);
-    wrap.replaceChildren(rep, rest);
+    // ONE continuous lozenge: the shell carries the pod's glass and simply
+    // stretches downward to reveal the tools — the row slot never resizes.
+    const shell = document.createElement('div');
+    shell.className = 'tb-shell';
+    shell.append(rep, rest);
+    wrap.replaceChildren(shell);
 
-    // The rest opens as an attached SHELF below the rep (the two-lozenge
-    // Dynamic-Island split): the row of reps never changes width, so
-    // nothing ever shifts under the cursor — no pinning, no drift.
     let open = false;
     let timer = 0;
     const collapseNow = () => {
       if (!open) return;
       open = false;
       wrap.classList.remove('tb-open');
+      rest.style.display = 'none';
+      shell.style.height = '';
+      shell.style.overflow = '';
       if (activePod?.wrap === wrap) activePod = null;
     };
     const expand = () => {
@@ -126,7 +131,43 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       if (activePod && activePod.wrap !== wrap) activePod.collapseNow();
       activePod = { wrap, collapseNow };
       wrap.classList.add('tb-open');
+      rest.style.display = 'flex';
+      const target = shell.scrollHeight;
+      shell.style.overflow = 'hidden';
+      shell.style.height = '42px';
+      requestAnimationFrame(() => {
+        shell.style.height = `${target}px`;
+        const done = () => {
+          shell.removeEventListener('transitionend', done);
+          if (open) {
+            shell.style.height = '';
+            shell.style.overflow = '';
+          }
+        };
+        shell.addEventListener('transitionend', done);
+      });
     };
+    const collapse = () => {
+      if (!open) return;
+      open = false;
+      wrap.classList.remove('tb-open');
+      if (activePod?.wrap === wrap) activePod = null;
+      shell.style.overflow = 'hidden';
+      shell.style.height = `${shell.scrollHeight}px`;
+      requestAnimationFrame(() => {
+        shell.style.height = '42px';
+        const done = () => {
+          shell.removeEventListener('transitionend', done);
+          if (!open) {
+            rest.style.display = 'none';
+            shell.style.height = '';
+            shell.style.overflow = '';
+          }
+        };
+        shell.addEventListener('transitionend', done);
+      });
+    };
+    rest.style.display = 'none';
     wrap.addEventListener('mouseenter', () => {
       clearTimeout(timer);
       // Moving between groups feels continuous: no intent delay mid-session.
@@ -135,7 +176,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     });
     wrap.addEventListener('mouseleave', () => {
       clearTimeout(timer);
-      timer = window.setTimeout(collapseNow, 140);
+      timer = window.setTimeout(collapse, 140);
     });
     wrap.addEventListener('focusin', expand);
   };
