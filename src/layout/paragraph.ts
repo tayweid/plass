@@ -260,12 +260,9 @@ export function layoutBlock(
     lines = cut;
   } else if (opts.prefixForced?.length) {
     const cut = partitionPrefix(items, opts.prefixForced);
-    if (!cut) {
-      lines = breakLines(
-        items.map((i) => i.kp),
-        measure,
-      );
-    } else {
+    let accepted = false;
+    lines = [];
+    if (cut) {
       const tail = breakLines(
         items.slice(cut.restStart).map((i) => i.kp),
         measure,
@@ -274,6 +271,23 @@ export function layoutBlock(
         ...cut.lines,
         ...tail.map((l) => ({ start: l.start + cut.restStart, end: l.end + cut.restStart })),
       ];
+      // Quality backstop: if any frozen line is pathologically loose
+      // (its content fills well under the measure), the prefix is stale —
+      // reject it and re-optimize the whole paragraph.
+      accepted = cut.lines.every((line) => {
+        let natural = 0;
+        for (let j = line.start; j <= line.end; j++) {
+          const kp = items[j]?.kp;
+          if (kp && (kp.type === 'box' || kp.type === 'glue')) natural += kp.width;
+        }
+        return natural > measure * 0.6;
+      });
+    }
+    if (!accepted) {
+      lines = breakLines(
+        items.map((i) => i.kp),
+        measure,
+      );
     }
   } else {
     lines = breakLines(

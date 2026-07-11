@@ -303,6 +303,10 @@ class TypesetView {
       // re-optimizes. The settle restores the global optimum.
       const base0 = b.pos + 1;
       const editAt = Math.max(0, from - base0);
+      // Freeze breaks before the edit — EXCEPT the last two boundaries.
+      // A break can be stale after a deletion (it was right for longer
+      // text), and it sits before the caret: giving the breaker the last
+      // two lines lets it repair locally instead of preserving damage.
       const prefixForced = stale
         .filter((d) => {
           const key = (d.spec as { key?: string } | null)?.key;
@@ -312,7 +316,8 @@ class TypesetView {
           at: d.from - base0,
           hyphen: ((d.spec as { key?: string } | null)?.key ?? '').startsWith('hy'),
         }))
-        .sort((x, y) => x.at - y.at);
+        .sort((x, y) => x.at - y.at)
+        .slice(0, -2);
       const el = this.view.nodeDOM(b.pos);
       if (!(el instanceof HTMLElement)) continue;
       const cs = getComputedStyle(el);
@@ -586,7 +591,8 @@ class TypesetView {
             hyphen: ((d.spec as { key?: string } | null)?.key ?? '').startsWith('hy'),
           }))
           .filter((bk) => bk.at < editAt - 1)
-          .sort((x, y) => x.at - y.at);
+          .sort((x, y) => x.at - y.at)
+          .slice(0, -2);
         const lines = layoutBlock(node, measure, this.measurer, atomWidth, {
           ...layoutOpts,
           ...extra,
