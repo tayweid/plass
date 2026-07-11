@@ -52,6 +52,7 @@
   --bar-ink: #2c2b29;
   --bar-ink-soft: #85837e;
   --bar-glass: rgba(251, 250, 248, 0.92);
+  --bar-glass-rest: rgba(251, 250, 248, 0.45);
   --bar-hairline: rgba(0, 0, 0, 0.08);
   --bar-press: rgba(0, 0, 0, 0.07);
   --serif: 'STIX Two Text', 'Charter', 'Iowan Old Style', 'Palatino', 'Georgia', serif;
@@ -100,12 +101,18 @@ body {
   gap: 2px;
   height: 42px;
   padding: 0 6px;
-  background: var(--bar-glass);
+  background: var(--bar-glass-rest);
+  transition: background 0.3s ease;
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
   border-radius: 999px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
+}
+
+#toolbar:hover .tb-pod,
+#toolbar:focus-within .tb-pod {
+  background: var(--bar-glass);
 }
 
 .tb-btn,
