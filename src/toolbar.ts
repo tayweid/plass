@@ -34,6 +34,7 @@ const ICONS: Record<string, string> = {
   open: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
   project: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><circle cx="12" cy="14" r="2.4"/><line x1="12" y1="9.5" x2="12" y2="11.6"/>',
   clock: '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/>',
+  plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
   save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
   saveas: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="7 3 7 8 15 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
@@ -83,13 +84,78 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     input.addEventListener('blur', () => finish(true));
   });
 
-  // iOS-style capsule clusters: each group is its own floating pod.
+  // iOS-style capsule clusters. Pods with a head glyph collapse to it and
+  // spring open in place on approach (the Dynamic-Island move).
   let currentPod: HTMLElement;
-  const pod = () => {
-    currentPod = document.createElement('div');
-    currentPod.className = 'tb-pod';
-    container.appendChild(currentPod);
-    return currentPod;
+  const pod = (headGlyph?: string, headTitle?: string) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'tb-pod';
+    container.appendChild(wrap);
+    if (!headGlyph) {
+      currentPod = wrap;
+      return wrap;
+    }
+    wrap.classList.add('tb-collapsible');
+    const head = document.createElement('span');
+    head.className = 'tb-pod-head';
+    head.title = headTitle ?? '';
+    head.innerHTML = headGlyph;
+    wrap.appendChild(head);
+    const tools = document.createElement('div');
+    tools.className = 'tb-pod-tools';
+    wrap.appendChild(tools);
+    currentPod = tools;
+
+    // Width morph via measured FLIP: overflow is hidden only DURING the
+    // animation, so the hover chips below the buttons stay visible at rest.
+    let open = false;
+    let timer = 0;
+    const expand = () => {
+      if (open) return;
+      open = true;
+      wrap.classList.add('tb-open');
+      tools.style.display = '';
+      const w = tools.scrollWidth;
+      tools.style.overflow = 'hidden';
+      tools.style.width = '0px';
+      requestAnimationFrame(() => {
+        tools.style.width = `${w}px`;
+        const done = () => {
+          tools.removeEventListener('transitionend', done);
+          if (open) {
+            tools.style.width = '';
+            tools.style.overflow = '';
+          }
+        };
+        tools.addEventListener('transitionend', done);
+      });
+    };
+    const collapse = () => {
+      if (!open) return;
+      open = false;
+      wrap.classList.remove('tb-open');
+      tools.style.overflow = 'hidden';
+      tools.style.width = `${tools.scrollWidth}px`;
+      requestAnimationFrame(() => {
+        tools.style.width = '0px';
+        const done = () => {
+          tools.removeEventListener('transitionend', done);
+          if (!open) tools.style.display = 'none';
+        };
+        tools.addEventListener('transitionend', done);
+      });
+    };
+    tools.style.display = 'none';
+    wrap.addEventListener('mouseenter', () => {
+      clearTimeout(timer);
+      timer = window.setTimeout(expand, 120);
+    });
+    wrap.addEventListener('mouseleave', () => {
+      clearTimeout(timer);
+      timer = window.setTimeout(collapse, 300);
+    });
+    wrap.addEventListener('focusin', expand);
+    return wrap;
   };
   pod().appendChild(fileLabel);
 
@@ -107,16 +173,13 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     currentPod.appendChild(el);
     return el;
   };
-  const barDivider = () => {
-    pod();
-  };
   const runCmd = (c: Command) => () => {
     c(view.state, view.dispatch, view);
     view.focus();
   };
 
   // ---------- file ----------
-  pod();
+  pod(icon('open'), 'File');
   barBtn(icon('new'), 'New', 'New document', () => {
     if (confirm('Replace the current document with an empty one?')) fm.newDoc();
   });
@@ -131,7 +194,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   const recentBtn = barBtn(icon('clock'), 'Recent', 'Recent files', () => toggleRecents());
   barBtn(icon('save'), 'Save', 'Save (⌘S)', () => void fm.save());
   barBtn(icon('saveas'), 'Save As', 'Save As… (⇧⌘S)', () => void fm.saveAs());
-  barDivider();
+  pod(icon('plus'), 'Insert');
   // ---------- insert ----------
   barBtn('<span class="ico tico">T</span>', 'Title', 'Title block — title, authors, date, abstract', () => {
     const { state, dispatch } = view;
@@ -166,12 +229,12 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     dispatch(state.tr.insert(pos, schema.nodes.page_break.create()).scrollIntoView());
     view.focus();
   });
-  barDivider();
+  pod(icon('sliders'), 'Document');
   // ---------- document ----------
   barBtn(icon('book'), 'Bib', 'Edit bibliography', () => editBibliography(view, (m) => fm.notify(m)));
   const settingsBtn = barBtn(icon('sliders'), 'Settings', 'Document settings', () => toggleSettingsPanel(view, settingsBtn));
   barBtn('<span class="ico tico">?</span>', 'Help', 'Markdown & shortcuts', () => showHelp(fm));
-  barDivider();
+  pod(icon('download'), 'Export');
   // ---------- export ----------
   barBtn(icon('download'), 'PDF', 'Export PDF via Typst', () => {
     const name = fm.name === 'Untitled' ? 'document' : fm.name;
