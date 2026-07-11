@@ -814,23 +814,6 @@ class TypesetView {
       if (sig) {
         const entry = this.pageOracle.get(sig);
         if (!entry) this.pageOracle.request(sig, view.state.doc, s, this.atomResolver());
-        // While a block is owned, hold the current page geometry (mapped
-        // markers) — fresh oracle answers apply on release, when motion is
-        // expected.
-        if (this.owned !== null) {
-          const marksHeld = typesetKey.getState(view.state)?.pageMarks.find() ?? [];
-          if (marksHeld.length) {
-            const stale = marksHeld
-              .map((m) => ({
-                pos: m.from,
-                line: (m.spec as { psLine: number }).psLine,
-                unit: (m.spec as { psUnit: string }).psUnit,
-              }))
-              .sort((a, b) => a.pos - b.pos);
-            const forced = this.paginateForced(stale, this.lastPageCount || stale.length + 1);
-            if (forced) return forced;
-          }
-        }
         if (entry?.status === 'ok' && entry.pageStarts) {
           const forced = this.paginateForced(entry.pageStarts, entry.pageCount ?? entry.pageStarts.length + 1);
           if (forced) {
@@ -1114,6 +1097,10 @@ class TypesetView {
       if (delta > 0) {
         spacers.push({ pos, height: delta, kind });
         shift += delta;
+      } else if (delta < -2) {
+        // Content has outgrown this break (edits added lines above it):
+        // these starts are stale — let live pagination move the break NOW.
+        return null;
       }
     }
     return { spacers, count: Math.max(pageCount, page + 1) };
