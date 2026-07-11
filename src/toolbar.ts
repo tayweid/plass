@@ -97,22 +97,27 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     return wrap;
   };
 
-  /** The pod whose shelf is currently open (at most one). */
+  /** The group whose shelf is currently open (at most one). */
   let activePod: { wrap: HTMLElement; collapseNow: () => void } | null = null;
 
+  /** A category inside the shared tools pill: rep + fading shelf below. */
+  let toolsPill: HTMLElement | null = null;
+  const group = (rep: string) => {
+    const g = document.createElement('span');
+    g.className = 'tb-group';
+    (toolsPill ?? currentPod).appendChild(g);
+    currentPod = g;
+    groups.push({ wrap: g, rep });
+    return g;
+  };
+
   const collapsify = (wrap: HTMLElement, repLabel: string) => {
-    wrap.classList.add('tb-collapsible');
     const buttons = [...wrap.children] as HTMLElement[];
     const rep = buttons.find((b) => b.dataset.label === repLabel) ?? buttons[0];
     const rest = document.createElement('div');
     rest.className = 'tb-pod-rest';
     for (const b of buttons) if (b !== rep) rest.appendChild(b);
-    // ONE continuous lozenge: the shell carries the pod's glass and simply
-    // stretches downward to reveal the tools — the row slot never resizes.
-    const shell = document.createElement('div');
-    shell.className = 'tb-shell';
-    shell.append(rep, rest);
-    wrap.replaceChildren(shell);
+    wrap.replaceChildren(rep, rest);
 
     let open = false;
     let timer = 0;
@@ -120,9 +125,6 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       if (!open) return;
       open = false;
       wrap.classList.remove('tb-open');
-      rest.style.display = 'none';
-      shell.style.height = '';
-      shell.style.overflow = '';
       if (activePod?.wrap === wrap) activePod = null;
     };
     const expand = () => {
@@ -131,43 +133,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       if (activePod && activePod.wrap !== wrap) activePod.collapseNow();
       activePod = { wrap, collapseNow };
       wrap.classList.add('tb-open');
-      rest.style.display = 'flex';
-      const target = shell.scrollHeight;
-      shell.style.overflow = 'hidden';
-      shell.style.height = '42px';
-      requestAnimationFrame(() => {
-        shell.style.height = `${target}px`;
-        const done = () => {
-          shell.removeEventListener('transitionend', done);
-          if (open) {
-            shell.style.height = '';
-            shell.style.overflow = '';
-          }
-        };
-        shell.addEventListener('transitionend', done);
-      });
     };
-    const collapse = () => {
-      if (!open) return;
-      open = false;
-      wrap.classList.remove('tb-open');
-      if (activePod?.wrap === wrap) activePod = null;
-      shell.style.overflow = 'hidden';
-      shell.style.height = `${shell.scrollHeight}px`;
-      requestAnimationFrame(() => {
-        shell.style.height = '42px';
-        const done = () => {
-          shell.removeEventListener('transitionend', done);
-          if (!open) {
-            rest.style.display = 'none';
-            shell.style.height = '';
-            shell.style.overflow = '';
-          }
-        };
-        shell.addEventListener('transitionend', done);
-      });
-    };
-    rest.style.display = 'none';
     wrap.addEventListener('mouseenter', () => {
       clearTimeout(timer);
       // Moving between groups feels continuous: no intent delay mid-session.
@@ -176,7 +142,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     });
     wrap.addEventListener('mouseleave', () => {
       clearTimeout(timer);
-      timer = window.setTimeout(collapse, 140);
+      timer = window.setTimeout(collapseNow, 140);
     });
     wrap.addEventListener('focusin', expand);
   };
@@ -202,8 +168,10 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     view.focus();
   };
 
+  // ---------- all tools share one pill ----------
+  toolsPill = pod();
   // ---------- file ----------
-  pod('Open');
+  group('Open');
   barBtn(icon('new'), 'New', 'New document', () => {
     if (confirm('Replace the current document with an empty one?')) fm.newDoc();
   });
@@ -218,7 +186,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   const recentBtn = barBtn(icon('clock'), 'Recent', 'Recent files', () => toggleRecents());
   barBtn(icon('save'), 'Save', 'Save (⌘S)', () => void fm.save());
   barBtn(icon('saveas'), 'Save As', 'Save As… (⇧⌘S)', () => void fm.saveAs());
-  pod('Table');
+  group('Table');
   // ---------- insert ----------
   barBtn('<span class="ico tico">T</span>', 'Title', 'Title block — title, authors, date, abstract', () => {
     const { state, dispatch } = view;
@@ -253,12 +221,12 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     dispatch(state.tr.insert(pos, schema.nodes.page_break.create()).scrollIntoView());
     view.focus();
   });
-  pod('Settings');
+  group('Settings');
   // ---------- document ----------
   barBtn(icon('book'), 'Bib', 'Edit bibliography', () => editBibliography(view, (m) => fm.notify(m)));
   const settingsBtn = barBtn(icon('sliders'), 'Settings', 'Document settings', () => toggleSettingsPanel(view, settingsBtn));
   barBtn('<span class="ico tico">?</span>', 'Help', 'Markdown & shortcuts', () => showHelp(fm));
-  pod('PDF');
+  group('PDF');
   // ---------- export ----------
   barBtn(icon('download'), 'PDF', 'Export PDF via Typst', () => {
     const name = fm.name === 'Untitled' ? 'document' : fm.name;
