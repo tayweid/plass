@@ -240,15 +240,11 @@ class TypesetView {
     return null;
   }
 
-  /** Re-typeset just the edited blocks with the JS Knuth-Plass breaker IN
-   *  THE SAME PAINT as the keystroke: a microtask runs after ProseMirror's
-   *  DOM update but before the browser renders, so the character and its
-   *  re-justified line land as ONE visual move — never a bulge frame
-   *  followed by a correction frame. */
+  /** Re-typeset just the edited blocks with the JS Knuth-Plass breaker on
+   *  the next frame. */
   private scheduleLive() {
     if (this.liveRaf) return;
-    this.liveRaf = 1;
-    queueMicrotask(() => {
+    this.liveRaf = requestAnimationFrame(() => {
       this.liveRaf = 0;
       this.liveRun();
     });
@@ -260,6 +256,9 @@ class TypesetView {
     const prev = this.lastLiveDoc;
     this.lastLiveDoc = state.doc;
     if (!prev || prev === state.doc) return;
+    // The doc changed: no previously-dispatched layout may be considered
+    // current, whatever path we take out of here.
+    this.lastDecoSig = '';
     const start = prev.content.findDiffStart(state.doc.content);
     if (start == null) return;
     const endDiff = prev.content.findDiffEnd(state.doc.content);
@@ -364,8 +363,6 @@ class TypesetView {
       }
     }
     const set = fresh.length ? decos.add(state.doc, fresh) : decos;
-    // Any full-set signature is stale after a live edit.
-    this.lastDecoSig = '';
     const tr = state.tr.setMeta(typesetKey, { type: 'decos', decos: set } satisfies Meta);
     tr.setMeta('addToHistory', false);
     this.view.dispatch(tr);
@@ -390,6 +387,7 @@ class TypesetView {
     clearTimeout(this.editTimer);
     clearTimeout(this.ownTimer);
     if (this.raf) cancelAnimationFrame(this.raf);
+    if (this.liveRaf) cancelAnimationFrame(this.liveRaf);
     this.oracle.destroy();
     this.pageOracle.destroy();
     this.measurer.destroy();
@@ -569,11 +567,16 @@ class TypesetView {
       if (spec && okey && !oentry) this.oracle.request(okey, spec, measure, settings, skind);
       const ostatus = oentry?.status ?? 'none';
 
-      // The user owns this block: reproduce its current breaks verbatim (the
-      // oracle answer is requested above and applied on release). Zero motion.
+      // The user owns this block: lines above the caret keep their breaks
+      // (zero motion under the eyes); the tail below is RE-DERIVED each
+      // settle — the same policy as the live layout — so any transient bad
+      // break self-heals instead of being preserved verbatim. The oracle
+      // answer, requested above, applies on release.
       if (pos === this.owned) {
         const curState = typesetKey.getState(this.view.state);
         const base0 = pos + 1;
+        const caret = this.view.state.selection.$from.pos;
+        const editAt = Math.max(0, caret - base0);
         const held = (curState?.decos.find(pos, pos + 1 + node.content.size, (sp) => {
           const key = (sp as { key?: string } | null)?.key;
           return !!key && /^(br|hy):/.test(key);
@@ -582,6 +585,7 @@ class TypesetView {
             at: d.from - base0,
             hyphen: ((d.spec as { key?: string } | null)?.key ?? '').startsWith('hy'),
           }))
+          .filter((bk) => bk.at < editAt - 1)
           .sort((x, y) => x.at - y.at);
         const lines = layoutBlock(node, measure, this.measurer, atomWidth, {
           ...layoutOpts,
