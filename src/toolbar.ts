@@ -83,12 +83,27 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     input.addEventListener('blur', () => finish(true));
   });
 
-  // iOS-style capsule clusters: each group is its own floating pod.
+  // Two capsules: the title, and one tools pill of pipe-separated groups.
   let currentPod: HTMLElement;
+  let toolsPill: HTMLElement | null = null;
   const pod = () => {
     currentPod = document.createElement('div');
     currentPod.className = 'tb-pod';
     container.appendChild(currentPod);
+    return currentPod;
+  };
+  const group = () => {
+    if (!toolsPill) {
+      toolsPill = pod();
+      toolsPill.classList.add('tb-tools');
+    } else {
+      const div = document.createElement('span');
+      div.className = 'tb-div';
+      toolsPill.appendChild(div);
+    }
+    currentPod = document.createElement('span');
+    currentPod.className = 'tb-group';
+    toolsPill.appendChild(currentPod);
     return currentPod;
   };
   pod().appendChild(fileLabel);
@@ -99,16 +114,14 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     el.type = 'button';
     el.className = 'tb-btn';
     el.title = title;
-    // Surface the shortcut from the title in the hover chip.
-    const kbd = /\(([^)]*[⌘⇧⌥⌃⏎][^)]*)\)/.exec(title)?.[1];
-    el.innerHTML = `${glyph}<span class="lbl">${label}${kbd ? `<kbd>${kbd}</kbd>` : ''}</span>`;
+    el.innerHTML = `${glyph}<span class="lbl">${label}</span>`;
     el.addEventListener('mousedown', (e) => e.preventDefault());
     el.addEventListener('click', () => run());
     currentPod.appendChild(el);
     return el;
   };
   const barDivider = () => {
-    pod();
+    group();
   };
   const runCmd = (c: Command) => () => {
     c(view.state, view.dispatch, view);
@@ -116,7 +129,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   };
 
   // ---------- file ----------
-  pod();
+  group();
   barBtn(icon('new'), 'New', 'New document', () => {
     if (confirm('Replace the current document with an empty one?')) fm.newDoc();
   });

@@ -107,14 +107,24 @@ body {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
 }
 
-.tb-pod > * {
+.tb-btn,
+.tb-file {
   opacity: 0.35;
   transition: opacity 0.3s ease;
 }
 
-#toolbar:hover .tb-pod > *,
-#toolbar:focus-within .tb-pod > * {
+/* Only the hovered group wakes (the title pill wakes on its own hover). */
+.tb-group:hover .tb-btn,
+.tb-group:focus-within .tb-btn,
+.tb-pod:hover > .tb-file,
+.tb-pod:focus-within .tb-file-input {
   opacity: 1;
+}
+
+.tb-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .tb-file {
@@ -241,21 +251,6 @@ body {
 .tb-btn:hover .lbl,
 .tb-btn:focus-visible .lbl {
   opacity: 1;
-}
-
-.tb-btn .lbl {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-}
-
-.tb-btn .lbl kbd {
-  font: 10px var(--sans);
-  color: var(--bar-ink-soft);
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
-  padding: 1px 5px;
 }
 
 .tb-div {
