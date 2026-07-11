@@ -139,9 +139,22 @@ const view = new EditorView(editorEl, {
       scheduleSave(view);
       fileManager.noteChange();
       updateStatus();
+      chromeRecede();
     }
   },
 });
+
+// Chrome recedes while typing; any mouse movement brings it back.
+function chromeRecede() {
+  document.body.classList.add('typing');
+}
+window.addEventListener(
+  'mousemove',
+  () => {
+    document.body.classList.remove('typing');
+  },
+  { passive: true },
+);
 
 const fileManager = new FileManager({
   getDoc: () => view.state.doc,

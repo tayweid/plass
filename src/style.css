@@ -40,26 +40,22 @@
 /* ---------- app chrome ---------- */
 
 :root {
-  --bg: #f7f7f5;
+  /* The reading room: a warm graphite canvas; the page is the only light. */
+  --bg: #2b2a2d;
   --chrome: #fcfcfb;
   --chrome-border: #e3e1dc;
   --ink: #1a1a1a;
   --ink-soft: #6b6b6b;
   --accent: #305c8a;
   --sheet: #ffffff;
+  /* Chrome floating over the graphite (toolbar, HUD). */
+  --bar-ink: #e8e6e1;
+  --bar-ink-soft: #97958f;
+  --bar-glass: rgba(30, 29, 32, 0.55);
+  --bar-hairline: rgba(255, 255, 255, 0.07);
   --serif: 'STIX Two Text', 'Charter', 'Iowan Old Style', 'Palatino', 'Georgia', serif;
   --mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #2e2c29;
-    --chrome: #262522;
-    --chrome-border: #3a3833;
-    --ink: #e8e6e1;
-    --ink-soft: #a3a19b;
-  }
 }
 
 * {
@@ -85,20 +81,27 @@ body {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  height: 38px;
+  height: 40px;
   padding: 0 14px;
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  background: var(--bar-glass);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border-bottom: 1px solid var(--bar-hairline);
   position: sticky;
   top: 0;
   z-index: 10;
+  transition: opacity 0.35s ease;
+}
+
+/* Chrome recedes while typing; any mouse movement brings it back. */
+body.typing #toolbar,
+body.typing #hud {
+  opacity: 0.18;
 }
 
 .tb-file {
   font: 12.5px var(--sans);
-  color: var(--ink-soft);
+  color: var(--bar-ink-soft);
   max-width: 32ch;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -109,8 +112,8 @@ body {
 }
 
 .tb-file:hover {
-  background: color-mix(in srgb, var(--chrome-border) 45%, transparent);
-  color: var(--ink);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--bar-ink);
 }
 
 .tb-file-input {
@@ -157,8 +160,14 @@ body {
   background: transparent;
   border: none;
   border-radius: 6px;
-  color: var(--ink-soft);
+  color: var(--bar-ink-soft);
   cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+
+.tb-btn:hover {
+  color: var(--bar-ink);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .tb-btn:hover {
@@ -190,17 +199,17 @@ body {
 
 .tb-btn .lbl {
   position: absolute;
-  top: calc(100% + 3px);
+  top: calc(100% + 5px);
   left: 50%;
   transform: translateX(-50%);
   font: 11px var(--sans);
-  color: var(--ink);
-  background: var(--chrome);
-  border: 1px solid var(--chrome-border);
+  color: var(--bar-ink);
+  background: rgba(24, 23, 26, 0.92);
+  border: 1px solid var(--bar-hairline);
   border-radius: 5px;
   padding: 2px 8px;
   white-space: nowrap;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.16s ease;
@@ -215,7 +224,7 @@ body {
 .tb-div {
   width: 1px;
   height: 16px;
-  background: var(--chrome-border);
+  background: var(--bar-hairline);
   margin: 0 6px;
   flex: none;
 }
@@ -267,9 +276,9 @@ body {
   bottom: 10px;
   z-index: 50;
   font: 11px var(--sans);
-  color: var(--ink-soft);
+  color: var(--bar-ink-soft);
   opacity: 0.55;
-  transition: opacity 0.15s;
+  transition: opacity 0.35s;
   user-select: none;
 }
 
@@ -680,7 +689,28 @@ body {
 #scroll {
   flex: 1;
   overflow: auto;
-  padding: 30px 16px 120px;
+  padding: 42px 16px 140px;
+}
+
+#scroll::-webkit-scrollbar {
+  width: 11px;
+}
+
+#scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+#scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+  border: 3px solid transparent;
+  background-clip: content-box;
 }
 
 /* ---------- the page stack ---------- */
@@ -707,10 +737,9 @@ body {
   height: var(--page-h, 11in);
   background: var(--sheet);
   box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.045),
-    0 1px 2px rgba(0, 0, 0, 0.04),
-    0 10px 28px rgba(0, 0, 0, 0.05);
-  border-radius: 3px;
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 18px 50px rgba(0, 0, 0, 0.4);
+  border-radius: 2px;
 }
 
 .page-num {
@@ -730,6 +759,11 @@ body {
 }
 
 /* ---------- document typography (driven by document settings) ---------- */
+
+.ProseMirror ::selection,
+.ProseMirror::selection {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
 
 .ProseMirror {
   outline: none;
@@ -1121,13 +1155,13 @@ body {
   font: 9.5px var(--sans);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--ink-soft);
-  background: var(--bg);
-  border: 1px solid var(--chrome-border);
+  color: var(--bar-ink-soft);
+  background: rgba(24, 23, 26, 0.9);
+  border: 1px solid var(--bar-hairline);
   border-radius: 8px;
   padding: 1px 8px;
   cursor: pointer;
-  opacity: 0.75;
+  opacity: 0.9;
 }
 
 .ProseMirror-selectednode.ts-pagebreak::after {
