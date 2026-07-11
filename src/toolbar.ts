@@ -83,74 +83,13 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     input.addEventListener('blur', () => finish(true));
   });
 
-  // iOS-style capsule clusters. A collapsible pod rests as its MOST-USED
-  // button; approaching it springs the rest of the group open to its right,
-  // so the mouse is already on the workhorse when the pod opens.
+  // iOS-style capsule clusters: each group is its own floating pod.
   let currentPod: HTMLElement;
-  const groups: Array<{ wrap: HTMLElement; rep: string }> = [];
-  const pod = (rep?: string) => {
-    const wrap = document.createElement('div');
-    wrap.className = 'tb-pod';
-    container.appendChild(wrap);
-    currentPod = wrap;
-    if (rep) groups.push({ wrap, rep });
-    return wrap;
-  };
-
-  /** The group whose shelf is currently open (at most one). */
-  let activePod: { wrap: HTMLElement; collapseNow: () => void } | null = null;
-
-  /** A category inside the shared tools pill: rep + fading shelf below. */
-  let toolsPill: HTMLElement | null = null;
-  const group = (rep: string) => {
-    const g = document.createElement('span');
-    g.className = 'tb-group';
-    (toolsPill ?? currentPod).appendChild(g);
-    currentPod = g;
-    groups.push({ wrap: g, rep });
-    return g;
-  };
-
-  const collapsify = (wrap: HTMLElement, repLabel: string) => {
-    const buttons = [...wrap.children] as HTMLElement[];
-    const rep = buttons.find((b) => b.dataset.label === repLabel) ?? buttons[0];
-    const rest = document.createElement('div');
-    rest.className = 'tb-pod-rest';
-    // The shelf INCLUDES the rep: a clone sits at its exact position, so the
-    // popup reads as one capsule containing the button you're hovering.
-    const repClone = rep.cloneNode(true) as HTMLElement;
-    repClone.addEventListener('mousedown', (e) => e.preventDefault());
-    repClone.addEventListener('click', () => rep.click());
-    rest.appendChild(repClone);
-    for (const b of buttons) if (b !== rep) rest.appendChild(b);
-    wrap.replaceChildren(rep, rest);
-
-    let open = false;
-    let timer = 0;
-    const collapseNow = () => {
-      if (!open) return;
-      open = false;
-      wrap.classList.remove('tb-open');
-      if (activePod?.wrap === wrap) activePod = null;
-    };
-    const expand = () => {
-      if (open) return;
-      open = true;
-      if (activePod && activePod.wrap !== wrap) activePod.collapseNow();
-      activePod = { wrap, collapseNow };
-      wrap.classList.add('tb-open');
-    };
-    wrap.addEventListener('mouseenter', () => {
-      clearTimeout(timer);
-      // Moving between groups feels continuous: no intent delay mid-session.
-      if (activePod && activePod.wrap !== wrap) expand();
-      else timer = window.setTimeout(expand, 40);
-    });
-    wrap.addEventListener('mouseleave', () => {
-      clearTimeout(timer);
-      timer = window.setTimeout(collapseNow, 140);
-    });
-    wrap.addEventListener('focusin', expand);
+  const pod = () => {
+    currentPod = document.createElement('div');
+    currentPod.className = 'tb-pod';
+    container.appendChild(currentPod);
+    return currentPod;
   };
   pod().appendChild(fileLabel);
 
@@ -160,7 +99,6 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     el.type = 'button';
     el.className = 'tb-btn';
     el.title = title;
-    el.dataset.label = label;
     // Surface the shortcut from the title in the hover chip.
     const kbd = /\(([^)]*[⌘⇧⌥⌃⏎][^)]*)\)/.exec(title)?.[1];
     el.innerHTML = `${glyph}<span class="lbl">${label}${kbd ? `<kbd>${kbd}</kbd>` : ''}</span>`;
@@ -169,15 +107,16 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     currentPod.appendChild(el);
     return el;
   };
+  const barDivider = () => {
+    pod();
+  };
   const runCmd = (c: Command) => () => {
     c(view.state, view.dispatch, view);
     view.focus();
   };
 
-  // ---------- all tools share one pill ----------
-  toolsPill = pod();
   // ---------- file ----------
-  group('Open');
+  pod();
   barBtn(icon('new'), 'New', 'New document', () => {
     if (confirm('Replace the current document with an empty one?')) fm.newDoc();
   });
@@ -192,7 +131,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   const recentBtn = barBtn(icon('clock'), 'Recent', 'Recent files', () => toggleRecents());
   barBtn(icon('save'), 'Save', 'Save (⌘S)', () => void fm.save());
   barBtn(icon('saveas'), 'Save As', 'Save As… (⇧⌘S)', () => void fm.saveAs());
-  group('Table');
+  barDivider();
   // ---------- insert ----------
   barBtn('<span class="ico tico">T</span>', 'Title', 'Title block — title, authors, date, abstract', () => {
     const { state, dispatch } = view;
@@ -227,20 +166,18 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     dispatch(state.tr.insert(pos, schema.nodes.page_break.create()).scrollIntoView());
     view.focus();
   });
-  group('Settings');
+  barDivider();
   // ---------- document ----------
   barBtn(icon('book'), 'Bib', 'Edit bibliography', () => editBibliography(view, (m) => fm.notify(m)));
   const settingsBtn = barBtn(icon('sliders'), 'Settings', 'Document settings', () => toggleSettingsPanel(view, settingsBtn));
   barBtn('<span class="ico tico">?</span>', 'Help', 'Markdown & shortcuts', () => showHelp(fm));
-  group('PDF');
+  barDivider();
   // ---------- export ----------
   barBtn(icon('download'), 'PDF', 'Export PDF via Typst', () => {
     const name = fm.name === 'Untitled' ? 'document' : fm.name;
     void import('./pdf').then(({ exportPdf }) => exportPdf(fm.currentDoc(), name, (m) => fm.notify(m)));
   });
   barBtn(icon('filedown'), '.typ', 'Download a .typ copy', () => fm.exportCopy());
-
-  for (const g of groups) collapsify(g.wrap, g.rep);
 
   // ---------- recents dropdown ----------
   let recentsMenu: HTMLElement | null = null;

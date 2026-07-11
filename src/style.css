@@ -107,68 +107,14 @@ body {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
 }
 
-.tb-pod .tb-btn,
-.tb-pod .tb-file {
+.tb-pod > * {
   opacity: 0.35;
   transition: opacity 0.3s ease;
 }
 
-#toolbar:hover .tb-pod .tb-btn,
-#toolbar:hover .tb-pod .tb-file,
-#toolbar:focus-within .tb-pod .tb-btn,
-#toolbar:focus-within .tb-pod .tb-file {
+#toolbar:hover .tb-pod > *,
+#toolbar:focus-within .tb-pod > * {
   opacity: 1;
-}
-
-/* Categories inside the shared tools pill: the rep sits in the row; its
-   group fades in as a quiet capsule below. Nothing moves, ever. */
-.tb-group {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-.tb-pod-rest {
-  position: absolute;
-  top: -5px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  width: 42px;
-  padding: 5px 0;
-  background: var(--bar-glass);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
-  border: 1px solid var(--bar-hairline);
-  border-radius: 999px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.12s linear, visibility 0s 0.12s;
-  z-index: 15;
-}
-
-.tb-open .tb-pod-rest {
-  opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
-  transition: opacity 0.12s linear;
-}
-
-/* Vertical shelf: hover chips sit beside the buttons, not below. */
-.tb-pod-rest .tb-btn .lbl {
-  top: 50%;
-  left: calc(100% + 12px);
-  transform: translateY(-50%);
-}
-
-/* The open shelf replaces the rep's own hover chip. */
-.tb-open > .tb-btn .lbl {
-  opacity: 0 !important;
 }
 
 .tb-file {
