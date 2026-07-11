@@ -243,13 +243,19 @@ body {
   opacity: 1;
 }
 
+.tb-btn .lbl {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
 .tb-btn .lbl kbd {
   font: 10px var(--sans);
   color: var(--bar-ink-soft);
   background: rgba(255, 255, 255, 0.1);
   border-radius: 4px;
   padding: 1px 5px;
-  margin-left: 7px;
 }
 
 .tb-div {
