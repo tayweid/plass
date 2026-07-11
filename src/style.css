@@ -85,7 +85,7 @@ body {
   justify-content: center;
   gap: 8px;
   position: fixed;
-  top: 10px;
+  bottom: 12px;
   left: 50%;
   transform: translateX(-50%);
   width: max-content;
@@ -231,7 +231,7 @@ body {
 
 .tb-btn .lbl {
   position: absolute;
-  top: calc(100% + 5px);
+  bottom: calc(100% + 7px);
   left: 50%;
   transform: translateX(-50%);
   font: 11px var(--sans);
@@ -305,7 +305,7 @@ body {
 #hud {
   position: fixed;
   right: 14px;
-  bottom: 10px;
+  bottom: 16px;
   z-index: 50;
   font: 11px var(--sans);
   color: var(--bar-ink-soft);
@@ -723,7 +723,7 @@ body {
 #scroll {
   flex: 1;
   overflow: auto;
-  padding: 68px 16px 140px;
+  padding: 24px 16px 84px;
 }
 
 #scroll::-webkit-scrollbar {
