@@ -55,6 +55,12 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   fileLabel.textContent = 'Untitled';
   fileLabel.title = 'Click to rename';
   fileLabel.addEventListener('click', () => {
+    // An unsaved paper's title is the save affordance: one click, one
+    // question — where should it live?
+    if (!fm.saved) {
+      void fm.save();
+      return;
+    }
     const input = document.createElement('input');
     input.className = 'tb-file-input';
     input.value = fm.name;
@@ -134,16 +140,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     if (confirm('Replace the current document with an empty one?')) fm.newDoc();
   });
   barBtn(icon('open'), 'Open', 'Open… (⌘O)', () => void fm.open());
-  barBtn(icon('project'), 'Project', 'Make this a project folder — figures live as files inside it', () => {
-    void fm.openFolder().then((how) => {
-      if (how === 'kept') {
-        return import('./figures').then(({ migrateEmbeddedFigures }) => migrateEmbeddedFigures(view));
-      }
-    });
-  });
-  const recentBtn = barBtn(icon('clock'), 'Recent', 'Recent files', () => toggleRecents());
-  barBtn(icon('save'), 'Save', 'Save (⌘S)', () => void fm.save());
-  barBtn(icon('saveas'), 'Save As', 'Save As… (⇧⌘S)', () => void fm.saveAs());
+  const recentBtn = barBtn(icon('clock'), 'Recent', 'Your papers', () => toggleRecents());
   barDivider();
   // ---------- insert ----------
   barBtn('<span class="ico tico">T</span>', 'Title', 'Title block — title, authors, date, abstract', () => {
@@ -219,8 +216,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     void fm.recents().then((entries) => {
       if (!recentsMenu) return;
       if (!entries.length) {
-        recentsMenu.innerHTML = '<div class="file-menu-hint" style="padding:6px 10px">No recent files yet.</div>';
-        return;
+        recentsMenu.innerHTML = '<div class="file-menu-hint" style="padding:6px 10px">No papers yet — they appear here once saved.</div>';
       }
       for (const entry of entries.slice(0, 8)) {
         const el = document.createElement('button');
@@ -233,6 +229,18 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
         });
         recentsMenu.appendChild(el);
       }
+      const div = document.createElement('div');
+      div.className = 'file-menu-divider';
+      recentsMenu.appendChild(div);
+      const openFolder = document.createElement('button');
+      openFolder.type = 'button';
+      openFolder.className = 'file-menu-item';
+      openFolder.innerHTML = '<span>Open project folder…</span>';
+      openFolder.addEventListener('click', () => {
+        closeRecents();
+        void fm.openFolder('open');
+      });
+      recentsMenu.appendChild(openFolder);
     });
   }
 
@@ -240,8 +248,13 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     update() {},
     stats() {},
     setFile(name, dirty) {
+      if (!fm.saved) {
+        fileLabel.textContent = `${name} — not saved`;
+        fileLabel.title = 'Click to save — you pick the folder your paper lives in';
+        return;
+      }
       fileLabel.textContent = name + (dirty ? ' •' : '');
-      fileLabel.title = dirty ? `${name} — unsaved changes` : name;
+      fileLabel.title = dirty ? `${name} — unsaved changes` : `${name} — click to rename`;
     },
   };
 }
@@ -263,7 +276,7 @@ function showHelp(fm: FileManager) {
         <code>@</code><span>reference or cite — picker lists equations, figures, tables, sections, works</span>
         <code>^[note] · \\footnote{…}</code><span>footnotes (⌘⌥F); ] or Enter exits</span>
         <code>⌘⌥T · ⌘⌥I · ⌘⏎</code><span>insert table · insert figure · page break</span>
-        <code>⌘O ⌘S ⇧⌘S</code><span>open · save · save as</span>
+        <code>⌘O ⌘S</code><span>open · save (first save picks the paper's folder)</span>
       </div>
       <div class="bib-editor-foot">
         <span class="bib-editor-hint"><kbd>Esc</kbd> to close</span>

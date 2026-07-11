@@ -184,7 +184,7 @@ window.addEventListener(
     const key = e.key.toLowerCase();
     if (key === 's') {
       e.preventDefault();
-      void (e.shiftKey ? fileManager.saveAs() : fileManager.save());
+      void fileManager.save();
     } else if (key === 'o' && !e.shiftKey) {
       e.preventDefault();
       void fileManager.open();

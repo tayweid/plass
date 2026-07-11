@@ -97,12 +97,12 @@ a feature touches the oracle machinery.
 - Raw-Typst-island compiled previews (same pattern as tables/math/bib).
 - Incremental pagination for 50+ page documents (performance).
 - Table/figure float placement (`placement: auto` — drift to page top).
-- ~~Image sidecar files~~ — done via project folders: Open a folder as a
-  project; figures are files referenced by relative path (`figures/x.png`),
-  exports compile with the stock Typst CLI, pasted images write into
-  `figures/`, and referenced files poll for changes (regenerate the plot,
-  alt-tab, the figure and pagination update). Embedded data URLs remain
-  the single-file fallback.
+- ~~Image sidecar files~~ — done via project folders, now PROJECT-FIRST:
+  a paper lives in a folder, period. First save asks one question (which
+  folder); figures are files referenced by relative path, exports compile
+  with the stock Typst CLI, referenced files poll for changes. The single
+  .typ with embedded images is an EXPORT (Download .typ copy), not a
+  working mode; Save As and the Project button no longer exist.
 - ~~Editing-jitter polish~~ — done, the ownership model: the caret's
   block belongs to the user — per-keystroke it re-typesets with instant
   JS Knuth-Plass (hyphenation on) with all lines above the edit frozen;

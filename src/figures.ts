@@ -386,8 +386,8 @@ export function insertFigureFromFile(view: EditorView, file: File) {
     // paste time; a project keeps it a living file).
     if (fmRef && typeof window.showDirectoryPicker === 'function') {
       fmRef.notifyAction('Image embedded in the document', {
-        label: 'Make this a Project',
-        run: () => void fmRef?.openFolder(),
+        label: 'Save as project',
+        run: () => void fmRef?.openFolder('save'),
       });
     }
   };

@@ -139,16 +139,21 @@ export class FileManager {
     return this.dir !== null;
   }
 
-  /** Open a directory as a project: its .typ is the document, relative
-   *  image paths resolve inside it. Returns how the folder was adopted. */
-  async openFolder(): Promise<'kept' | 'loaded' | null> {
+  /** Does the document have a home on disk yet? */
+  get saved(): boolean {
+    return this.handle !== null;
+  }
+
+  /** Open a directory as a project. intent 'open' loads the folder's
+   *  document; intent 'save' gives the CURRENT document a home there. */
+  async openFolder(intent: 'open' | 'save' = 'open'): Promise<'kept' | 'loaded' | null> {
     if (typeof window.showDirectoryPicker !== 'function') {
       this.hooks.message('Project folders need the File System Access API (Chrome/Edge)');
       return null;
     }
     try {
       const dir = await window.showDirectoryPicker!({ mode: 'readwrite' });
-      return await this.adoptFolder(dir);
+      return await this.adoptFolder(dir, intent);
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') console.warn(e);
       return null;
@@ -160,23 +165,35 @@ export class FileManager {
    * a fresh folder, the CURRENT document moves in — that is how "make what
    * I'm writing into a project" works.
    */
-  async adoptFolder(dir: FileSystemDirectoryHandle): Promise<'kept' | 'loaded' | null> {
-    let best: { handle: FileSystemFileHandle; time: number } | null = null;
-    for await (const entry of dir.values()) {
-      if (entry.kind === 'file' && /\.typ$/i.test(entry.name)) {
-        const f = await (entry as FileSystemFileHandle).getFile();
-        if (!best || f.lastModified > best.time) best = { handle: entry as FileSystemFileHandle, time: f.lastModified };
+  async adoptFolder(dir: FileSystemDirectoryHandle, intent: 'open' | 'save' = 'open'): Promise<'kept' | 'loaded' | null> {
+    if (intent === 'open') {
+      let best: { handle: FileSystemFileHandle; time: number } | null = null;
+      for await (const entry of dir.values()) {
+        if (entry.kind === 'file' && /\.typ$/i.test(entry.name)) {
+          const f = await (entry as FileSystemFileHandle).getFile();
+          if (!best || f.lastModified > best.time) best = { handle: entry as FileSystemFileHandle, time: f.lastModified };
+        }
+      }
+      if (best) {
+        if (this.dirty && !confirm(`Open ${best.handle.name} from this folder? Your current document has unsaved changes.`)) {
+          return null;
+        }
+        await this.loadHandle(best.handle, dir);
+        return 'loaded';
       }
     }
-    if (best) {
-      if (this.dirty && !confirm(`Open ${best.handle.name} from this folder? Your current document has unsaved changes.`)) {
-        return null;
-      }
-      await this.loadHandle(best.handle, dir);
-      return 'loaded';
-    }
-    // Fresh folder: the current document becomes the project's .typ.
+    // The current document moves in.
     const fileName = `${this.name === 'Untitled' ? 'paper' : this.name}.typ`;
+    if (intent === 'save') {
+      let exists = false;
+      try {
+        await dir.getFileHandle(fileName);
+        exists = true;
+      } catch {
+        /* not there — good */
+      }
+      if (exists && !confirm(`${fileName} already exists in this folder — overwrite it?`)) return null;
+    }
     const handle = await dir.getFileHandle(fileName, { create: true });
     this.handle = handle;
     this.dir = dir;
@@ -184,7 +201,7 @@ export class FileManager {
     await this.write(handle);
     this.dirty = false;
     this.hooks.onState();
-    this.hooks.message(`Project created — ${dir.name}/${fileName}`);
+    this.hooks.message(`Saved — ${dir.name}/${fileName}`);
     try {
       await addRecent(handle, fileName, dir);
       await idbSet('last', { handle, dir });
@@ -247,61 +264,25 @@ export class FileManager {
   }
 
   async save() {
-    if (!this.handle) return this.saveAs();
-    try {
-      await this.write(this.handle);
-      this.dirty = false;
-      this.hooks.onState();
-      this.hooks.message(`Saved ${this.name}.typ`);
-    } catch (e) {
-      console.warn(e);
-      this.hooks.message('Save failed — try Save As…');
+    if (this.handle) {
+      try {
+        await this.write(this.handle);
+        this.dirty = false;
+        this.hooks.onState();
+        this.hooks.message(`Saved ${this.name}.typ`);
+      } catch (e) {
+        console.warn(e);
+        this.hooks.message('Save failed');
+      }
+      return;
     }
-  }
-
-  /** Does the current document contain any figures? */
-  private hasFigures(): boolean {
-    let found = false;
-    this.hooks.getDoc().descendants((n) => {
-      if (n.type.name === 'figure') found = true;
-      return !found;
-    });
-    return found;
-  }
-
-  async saveAs() {
-    if (!this.supportsFS) {
+    // First save: the paper gets a home. One question — where should it
+    // live? — and the folder IS the project from then on.
+    if (typeof window.showDirectoryPicker !== 'function') {
       this.exportCopy();
       return;
     }
-    // A document with images is better off as a project (figures become
-    // files, exports stay CLI-compilable). Offer that first.
-    if (!this.inFolder && this.hasFigures() && typeof window.showDirectoryPicker === 'function') {
-      if (confirm('This document contains images. Save it as a project folder, with figures as files? (Cancel saves a single self-contained .typ instead.)')) {
-        await this.openFolder();
-        return;
-      }
-    }
-    try {
-      const handle = await window.showSaveFilePicker!({
-        suggestedName: `${this.name === 'Untitled' ? 'document' : this.name}.typ`,
-        types: TYP_TYPE,
-      });
-      await this.write(handle);
-      this.handle = handle;
-      this.name = handle.name.replace(/\.typ$/i, '');
-      this.dirty = false;
-      this.hooks.onState();
-      this.hooks.message(`Saved ${handle.name}`);
-      try {
-        await addRecent(handle, handle.name);
-        await idbSet('last', handle);
-      } catch (err) {
-        console.warn('Could not persist file handle', err);
-      }
-    } catch (e) {
-      if ((e as DOMException)?.name !== 'AbortError') console.warn(e);
-    }
+    await this.openFolder('save');
   }
 
   /** Surface a transient status message. */
