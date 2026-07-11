@@ -52,7 +52,10 @@
   --bar-ink: #2c2b29;
   --bar-ink-soft: #85837e;
   --bar-glass: rgba(251, 250, 248, 0.92);
-  --bar-glass-rest: rgba(251, 250, 248, 0.45);
+  /* Dormant chrome wears the room's graphite; it turns porcelain awake. */
+  --bar-glass-rest: rgba(36, 35, 38, 0.93);
+  --bar-hairline-rest: rgba(255, 255, 255, 0.09);
+  --bar-ink-rest: #a3a19b;
   --bar-hairline: rgba(0, 0, 0, 0.08);
   --bar-press: rgba(0, 0, 0, 0.07);
   --serif: 'STIX Two Text', 'Charter', 'Iowan Old Style', 'Palatino', 'Georgia', serif;
@@ -102,10 +105,10 @@ body {
   height: 42px;
   padding: 0 6px;
   background: var(--bar-glass-rest);
-  transition: background 0.3s ease;
+  transition: background 0.3s ease, border-color 0.3s ease;
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
-  border: 1px solid var(--bar-hairline);
+  border: 1px solid var(--bar-hairline-rest);
   border-radius: 999px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
 }
@@ -113,12 +116,22 @@ body {
 #toolbar:hover .tb-pod,
 #toolbar:focus-within .tb-pod {
   background: var(--bar-glass);
+  border-color: var(--bar-hairline);
 }
 
 .tb-btn,
 .tb-file {
-  opacity: 0.35;
-  transition: opacity 0.3s ease;
+  opacity: 0.55;
+  color: var(--bar-ink-rest);
+  transition: opacity 0.3s ease, color 0.3s ease;
+}
+
+#toolbar:hover .tb-btn,
+#toolbar:hover .tb-file,
+#toolbar:focus-within .tb-btn,
+#toolbar:focus-within .tb-file {
+  color: var(--bar-ink-soft);
+  opacity: 0.6;
 }
 
 /* Only the hovered group wakes (the title pill wakes on its own hover). */
@@ -266,9 +279,15 @@ body {
 .tb-div {
   width: 1px;
   height: 16px;
-  background: var(--bar-hairline);
+  background: var(--bar-hairline-rest);
   margin: 0 6px;
   flex: none;
+  transition: background 0.3s ease;
+}
+
+#toolbar:hover .tb-div,
+#toolbar:focus-within .tb-div {
+  background: var(--bar-hairline);
 }
 
 /* Floating table controls — appear beside the table while the caret is in it. */
