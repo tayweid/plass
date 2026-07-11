@@ -108,17 +108,20 @@ body {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
 }
 
-.tb-btn,
-.tb-file {
+.tb-btn {
   opacity: 0.35;
   transition: opacity 0.3s ease;
 }
 
-/* Only the hovered group wakes (the title pill wakes on its own hover). */
+/* The title is the document's name — always fully present. */
+.tb-file {
+  opacity: 1;
+  color: var(--bar-ink);
+}
+
+/* Only the hovered group wakes. */
 .tb-group:hover .tb-btn,
-.tb-group:focus-within .tb-btn,
-.tb-pod:hover > .tb-file,
-.tb-pod:focus-within .tb-file-input {
+.tb-group:focus-within .tb-btn {
   opacity: 1;
 }
 
