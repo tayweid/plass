@@ -97,25 +97,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     return wrap;
   };
 
-  // Growing a pod would shift buttons out from under the cursor (the bar is
-  // center-anchored): pin the container's left edge while any pod is open.
-  let openPods = 0;
-  const pinContainer = () => {
-    if (openPods++ === 0) {
-      const r = container.getBoundingClientRect();
-      container.style.left = `${r.left}px`;
-      container.style.transform = 'none';
-    }
-  };
-  const unpinContainer = () => {
-    openPods = Math.max(0, openPods - 1);
-    if (openPods === 0) {
-      container.style.left = '';
-      container.style.transform = '';
-    }
-  };
-
-  /** The pod whose group is currently open (at most one). */
+  /** The pod whose shelf is currently open (at most one). */
   let activePod: { wrap: HTMLElement; collapseNow: () => void } | null = null;
 
   const collapsify = (wrap: HTMLElement, repLabel: string) => {
@@ -127,67 +109,24 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     for (const b of buttons) if (b !== rep) rest.appendChild(b);
     wrap.replaceChildren(rep, rest);
 
+    // The rest opens as an attached SHELF below the rep (the two-lozenge
+    // Dynamic-Island split): the row of reps never changes width, so
+    // nothing ever shifts under the cursor — no pinning, no drift.
     let open = false;
     let timer = 0;
-    const expand = () => {
-      if (open) return;
-      open = true;
-      pinContainer();
-      // Swapping groups: snap the previous pod shut and re-shift the pinned
-      // bar so OUR rep stays exactly under the cursor — the old pod's
-      // collapse must never drag the target sideways mid-flight.
-      if (activePod && activePod.wrap !== wrap) {
-        const ax = rep.getBoundingClientRect().left;
-        activePod.collapseNow();
-        const dx = rep.getBoundingClientRect().left - ax;
-        if (dx !== 0) container.style.left = `${parseFloat(container.style.left) - dx}px`;
-      }
-      activePod = { wrap, collapseNow };
-      rest.style.display = '';
-      const w = rest.scrollWidth;
-      rest.style.overflow = 'hidden';
-      rest.style.width = '0px';
-      requestAnimationFrame(() => {
-        rest.style.width = `${w}px`;
-        const done = () => {
-          rest.removeEventListener('transitionend', done);
-          if (open) {
-            rest.style.width = '';
-            rest.style.overflow = '';
-          }
-        };
-        rest.addEventListener('transitionend', done);
-      });
-    };
     const collapseNow = () => {
       if (!open) return;
       open = false;
       wrap.classList.remove('tb-open');
-      rest.style.display = 'none';
-      rest.style.width = '';
-      rest.style.overflow = '';
       if (activePod?.wrap === wrap) activePod = null;
-      unpinContainer();
     };
-    const collapse = () => {
-      if (!open) return;
-      open = false;
-      if (activePod?.wrap === wrap) activePod = null;
-      rest.style.overflow = 'hidden';
-      rest.style.width = `${rest.scrollWidth}px`;
-      requestAnimationFrame(() => {
-        rest.style.width = '0px';
-        const done = () => {
-          rest.removeEventListener('transitionend', done);
-          if (!open) {
-            rest.style.display = 'none';
-            unpinContainer();
-          }
-        };
-        rest.addEventListener('transitionend', done);
-      });
+    const expand = () => {
+      if (open) return;
+      open = true;
+      if (activePod && activePod.wrap !== wrap) activePod.collapseNow();
+      activePod = { wrap, collapseNow };
+      wrap.classList.add('tb-open');
     };
-    rest.style.display = 'none';
     wrap.addEventListener('mouseenter', () => {
       clearTimeout(timer);
       // Moving between groups feels continuous: no intent delay mid-session.
@@ -196,7 +135,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     });
     wrap.addEventListener('mouseleave', () => {
       clearTimeout(timer);
-      timer = window.setTimeout(collapse, 140);
+      timer = window.setTimeout(collapseNow, 140);
     });
     wrap.addEventListener('focusin', expand);
   };

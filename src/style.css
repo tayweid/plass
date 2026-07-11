@@ -117,14 +117,52 @@ body {
   opacity: 1;
 }
 
-/* The rest of a collapsed group, springing open to the right of its
-   representative button. */
+/* The rest of a group: an attached shelf capsule just below the rep (the
+   two-lozenge Dynamic-Island split). The rep row never changes width. */
+.tb-collapsible {
+  position: relative;
+}
+
 .tb-pod-rest {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
   display: flex;
   align-items: center;
   gap: 2px;
-  min-width: 0;
-  transition: width 0.16s cubic-bezier(0.32, 1.15, 0.55, 1);
+  height: 42px;
+  padding: 0 6px;
+  background: var(--bar-glass);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 999px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transform: translateY(-5px) scale(0.92);
+  transform-origin: top left;
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity 0.14s ease, transform 0.16s cubic-bezier(0.32, 1.2, 0.55, 1), visibility 0s 0.16s;
+  z-index: 15;
+}
+
+.tb-open .tb-pod-rest {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  visibility: visible;
+  transition: opacity 0.12s ease, transform 0.16s cubic-bezier(0.32, 1.2, 0.55, 1);
+}
+
+/* Shelf contents are always awake (the shelf only exists on approach). */
+.tb-pod-rest > * {
+  opacity: 1;
+}
+
+/* The open shelf replaces the rep's own hover chip (they share the space). */
+.tb-open > .tb-btn .lbl {
+  opacity: 0 !important;
 }
 
 .tb-file {
