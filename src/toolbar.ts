@@ -115,6 +115,9 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     }
   };
 
+  /** The pod whose group is currently open (at most one). */
+  let activePod: { wrap: HTMLElement; collapseNow: () => void } | null = null;
+
   const collapsify = (wrap: HTMLElement, repLabel: string) => {
     wrap.classList.add('tb-collapsible');
     const buttons = [...wrap.children] as HTMLElement[];
@@ -130,6 +133,16 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       if (open) return;
       open = true;
       pinContainer();
+      // Swapping groups: snap the previous pod shut and re-shift the pinned
+      // bar so OUR rep stays exactly under the cursor — the old pod's
+      // collapse must never drag the target sideways mid-flight.
+      if (activePod && activePod.wrap !== wrap) {
+        const ax = rep.getBoundingClientRect().left;
+        activePod.collapseNow();
+        const dx = rep.getBoundingClientRect().left - ax;
+        if (dx !== 0) container.style.left = `${parseFloat(container.style.left) - dx}px`;
+      }
+      activePod = { wrap, collapseNow };
       rest.style.display = '';
       const w = rest.scrollWidth;
       rest.style.overflow = 'hidden';
@@ -146,9 +159,20 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
         rest.addEventListener('transitionend', done);
       });
     };
+    const collapseNow = () => {
+      if (!open) return;
+      open = false;
+      wrap.classList.remove('tb-open');
+      rest.style.display = 'none';
+      rest.style.width = '';
+      rest.style.overflow = '';
+      if (activePod?.wrap === wrap) activePod = null;
+      unpinContainer();
+    };
     const collapse = () => {
       if (!open) return;
       open = false;
+      if (activePod?.wrap === wrap) activePod = null;
       rest.style.overflow = 'hidden';
       rest.style.width = `${rest.scrollWidth}px`;
       requestAnimationFrame(() => {
@@ -166,7 +190,9 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     rest.style.display = 'none';
     wrap.addEventListener('mouseenter', () => {
       clearTimeout(timer);
-      timer = window.setTimeout(expand, 40);
+      // Moving between groups feels continuous: no intent delay mid-session.
+      if (activePod && activePod.wrap !== wrap) expand();
+      else timer = window.setTimeout(expand, 40);
     });
     wrap.addEventListener('mouseleave', () => {
       clearTimeout(timer);
