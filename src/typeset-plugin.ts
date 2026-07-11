@@ -240,11 +240,14 @@ class TypesetView {
     return null;
   }
 
-  /** Re-typeset just the edited blocks with the JS Knuth-Plass breaker on
-   *  the next frame. */
+  /** Re-typeset just the edited blocks with the JS Knuth-Plass breaker IN
+   *  THE SAME PAINT as the keystroke (microtask: after ProseMirror's DOM
+   *  update, before the browser renders). The corruption once blamed on
+   *  this timing was the frozen-prefix bug, since identified and fixed. */
   private scheduleLive() {
     if (this.liveRaf) return;
-    this.liveRaf = requestAnimationFrame(() => {
+    this.liveRaf = 1;
+    queueMicrotask(() => {
       this.liveRaf = 0;
       this.liveRun();
     });
@@ -392,7 +395,6 @@ class TypesetView {
     clearTimeout(this.editTimer);
     clearTimeout(this.ownTimer);
     if (this.raf) cancelAnimationFrame(this.raf);
-    if (this.liveRaf) cancelAnimationFrame(this.liveRaf);
     this.oracle.destroy();
     this.pageOracle.destroy();
     this.measurer.destroy();
@@ -417,6 +419,38 @@ class TypesetView {
       this.raf = 0;
       this.run();
     });
+  }
+
+  /** The page spacers currently in the document, read back from the live
+   *  decoration set (they carry their height in spec.h). */
+  private currentSpacers(): { lineMap: Map<number, Spacer>; blocks: Spacer[]; sorted: Array<{ pos: number; height: number }> } {
+    const set = typesetKey.getState(this.view.state)?.decos;
+    const lineMap = new Map<number, Spacer>();
+    const blocks: Spacer[] = [];
+    const sorted: Array<{ pos: number; height: number }> = [];
+    for (const d of set?.find(undefined, undefined, (spec) => {
+      const k = (spec as { key?: string } | null)?.key;
+      return !!k && k.startsWith('pg');
+    }) ?? []) {
+      const spec = d.spec as { key?: string; h?: number };
+      const h = spec.h ?? 0;
+      if (!(h > 0)) continue;
+      if (spec.key?.startsWith('pgb:')) blocks.push({ pos: d.from, height: h, kind: 'block' });
+      else lineMap.set(d.from, { pos: d.from, height: h, kind: 'line' });
+      sorted.push({ pos: d.from, height: h });
+    }
+    sorted.sort((a, b) => a.pos - b.pos);
+    return { lineMap, blocks, sorted };
+  }
+
+  /** Cumulative existing-spacer height above a document position. */
+  private static spacersAbove(sorted: Array<{ pos: number; height: number }>, pos: number): number {
+    let h = 0;
+    for (const sp of sorted) {
+      if (sp.pos <= pos) h += sp.height;
+      else break;
+    }
+    return h;
   }
 
   /** Font size in px (body em). */
@@ -452,9 +486,12 @@ class TypesetView {
     const t0 = performance.now();
     this.applyTopAdjust();
 
-    // Pass 1: line layout, no page spacers. Applying it synchronously gives
-    // us the document's natural (continuous) geometry to paginate against.
-    const stats = this.dispatchDecos(new Map(), []);
+    // Pass 1: line layout with the CURRENT page spacers kept in place — in
+    // the quiescent case this set equals the live one and the signature
+    // suppresses the dispatch entirely (zero DOM writes, zero reflows).
+    // Pagination then measures through the spacers by subtracting them.
+    const held = this.currentSpacers();
+    const stats = this.dispatchDecos(held.lineMap, held.blocks);
 
     // Pass 2: measure natural geometry, compute page breaks, re-dispatch with
     // spacers. Both dispatches share one task, so nothing paints in between.
@@ -663,6 +700,8 @@ class TypesetView {
               Decoration.widget(at, () => pageGapWidget(spacer.height, line.hyphen), {
                 side: -1,
                 key: `pg:${at}:${Math.round(spacer.height)}:${line.hyphen ? 'h' : ''}`,
+                h: spacer.height,
+                hy: line.hyphen,
               }),
             );
           } else {
@@ -760,6 +799,7 @@ class TypesetView {
         Decoration.widget(sp.pos, () => pageGapWidget(sp.height, false), {
           side: -1,
           key: `pgb:${sp.pos}:${Math.round(sp.height)}`,
+          h: sp.height,
         }),
       );
     }
@@ -854,7 +894,11 @@ class TypesetView {
     // the first painted page.
     const host = view.dom.parentElement ?? view.dom;
     const stackTop = host.getBoundingClientRect().top;
-    const stackY = (clientTop: number) => clientTop - stackTop;
+    // Measurements run with the current spacers still in the DOM: convert
+    // to NATURAL (continuous) geometry by subtracting the spacers above.
+    const existing = this.currentSpacers().sorted;
+    const stackY = (clientTop: number, pos: number) =>
+      clientTop - stackTop - TypesetView.spacersAbove(existing, pos);
 
     // Footnote bodies, in document order, consumed as units are placed.
     const fnList: Array<{ pos: number; height: number }> = [];
@@ -910,7 +954,7 @@ class TypesetView {
         pageFnH += takeFnH(endPos);
         return;
       }
-      const y = stackY(r.top);
+      const y = stackY(r.top, pos);
       const ufH = takeFnH(endPos);
       if (y + shift + r.height > bottomFor(ufH) + 0.5 && r.height <= contentH) {
         breakBefore(pos, y, 'block');
@@ -925,7 +969,7 @@ class TypesetView {
         pageFnH += takeFnH(endPos);
         return;
       }
-      const yTop = stackY(r.top);
+      const yTop = stackY(r.top, pos);
       // Whole-paragraph fast path: fits together with its footnotes.
       if (yTop + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
         pageFnH += takeFnH(endPos);
@@ -941,7 +985,7 @@ class TypesetView {
         const c = view.coordsAtPos(base + line.from);
         // coordsAtPos returns the caret box; back off half-leading to
         // approximate the line-box top.
-        return { pos: base + line.from, y: stackY(c.top) - Math.max(0, (lineH - (c.bottom - c.top)) / 2) };
+        return { pos: base + line.from, y: stackY(c.top, base + line.from) - Math.max(0, (lineH - (c.bottom - c.top)) / 2) };
       });
 
       const n = lineTops.length;
@@ -1001,7 +1045,7 @@ class TypesetView {
         pageFnH += takeFnH(endPos);
         return;
       }
-      if (stackY(r.top) + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
+      if (stackY(r.top, pos) + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
         pageFnH += takeFnH(endPos);
         return;
       }
@@ -1013,7 +1057,7 @@ class TypesetView {
           pageFnH += takeFnH(childEnd);
           return;
         }
-        const y = stackY(cr.top);
+        const y = stackY(cr.top, childPos);
         const ufH = takeFnH(childEnd);
         if (y + shift + cr.height > bottomFor(ufH) + 0.5 && cr.height <= contentH) {
           breakBefore(childPos, y, 'block');
@@ -1027,7 +1071,7 @@ class TypesetView {
       switch (node.type.name) {
         case 'page_break': {
           const r = rectOf(offset);
-          if (r) breakBefore(offset + node.nodeSize, stackY(r.bottom), 'block');
+          if (r) breakBefore(offset + node.nodeSize, stackY(r.bottom, offset), 'block');
           pageFnH += takeFnH(offset + node.nodeSize);
           break;
         }
@@ -1060,6 +1104,9 @@ class TypesetView {
     const F = this.bodyPx();
     const host = view.dom.parentElement ?? view.dom;
     const stackTop = host.getBoundingClientRect().top;
+    const existing = this.currentSpacers().sorted;
+    const natural = (clientTop: number, pos: number) =>
+      clientTop - stackTop - TypesetView.spacersAbove(existing, pos);
 
     const spacers: Spacer[] = [];
     let shift = 0;
@@ -1079,14 +1126,14 @@ class TypesetView {
         if (!(el instanceof HTMLElement)) return null;
         const lineH = parseFloat(getComputedStyle(el).lineHeight) || 24;
         const c = view.coordsAtPos(base + entry.lines[ps.line].from);
-        y = c.top - stackTop - Math.max(0, (lineH - (c.bottom - c.top)) / 2);
         pos = base + entry.lines[ps.line].from;
+        y = natural(c.top, pos) - Math.max(0, (lineH - (c.bottom - c.top)) / 2);
         kind = 'line';
         adjKind = 'line';
       } else {
         const el = view.nodeDOM(ps.pos);
         if (!(el instanceof HTMLElement)) return null;
-        y = el.getBoundingClientRect().top - stackTop;
+        y = natural(el.getBoundingClientRect().top, ps.pos);
         if (ps.unit === 'h1' || ps.unit === 'h2' || ps.unit === 'h3') adjKind = ps.unit;
         else adjKind = 'paragraph';
       }
