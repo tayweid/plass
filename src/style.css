@@ -126,12 +126,13 @@ body {
 .tb-pod-rest {
   position: absolute;
   top: calc(100% + 6px);
-  left: 0;
+  left: 50%;
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 2px;
-  height: 42px;
-  padding: 0 6px;
+  width: 42px;
+  padding: 6px 0;
   background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
@@ -139,8 +140,8 @@ body {
   border-radius: 999px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
   opacity: 0;
-  transform: translateY(-5px) scale(0.92);
-  transform-origin: top left;
+  transform: translateX(-50%) translateY(-6px) scaleY(0.9);
+  transform-origin: top center;
   pointer-events: none;
   visibility: hidden;
   transition: opacity 0.14s ease, transform 0.16s cubic-bezier(0.32, 1.2, 0.55, 1), visibility 0s 0.16s;
@@ -149,7 +150,7 @@ body {
 
 .tb-open .tb-pod-rest {
   opacity: 1;
-  transform: none;
+  transform: translateX(-50%);
   pointer-events: auto;
   visibility: visible;
   transition: opacity 0.12s ease, transform 0.16s cubic-bezier(0.32, 1.2, 0.55, 1);
@@ -158,6 +159,13 @@ body {
 /* Shelf contents are always awake (the shelf only exists on approach). */
 .tb-pod-rest > * {
   opacity: 1;
+}
+
+/* Vertical shelf: hover chips sit beside the buttons, not below. */
+.tb-pod-rest .tb-btn .lbl {
+  top: 50%;
+  left: calc(100% + 10px);
+  transform: translateY(-50%);
 }
 
 /* The open shelf replaces the rep's own hover chip (they share the space). */
