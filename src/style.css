@@ -48,11 +48,12 @@
   --ink-soft: #6b6b6b;
   --accent: #305c8a;
   --sheet: #ffffff;
-  /* Chrome floating over the graphite (toolbar, HUD). */
-  --bar-ink: #e8e6e1;
-  --bar-ink-soft: #97958f;
-  --bar-glass: rgba(28, 27, 30, 0.94);
-  --bar-hairline: rgba(255, 255, 255, 0.09);
+  /* Chrome floating over the room: light frosted glass, dark ink. */
+  --bar-ink: #2c2b29;
+  --bar-ink-soft: #85837e;
+  --bar-glass: rgba(251, 250, 248, 0.92);
+  --bar-hairline: rgba(0, 0, 0, 0.08);
+  --bar-press: rgba(0, 0, 0, 0.07);
   --serif: 'STIX Two Text', 'Charter', 'Iowan Old Style', 'Palatino', 'Georgia', serif;
   --mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
@@ -85,7 +86,7 @@ body {
   justify-content: center;
   gap: 8px;
   position: fixed;
-  bottom: 12px;
+  top: 10px;
   left: 50%;
   transform: translateX(-50%);
   width: max-content;
@@ -140,7 +141,7 @@ body {
 }
 
 .tb-file:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bar-press);
   color: var(--bar-ink);
 }
 
@@ -195,7 +196,7 @@ body {
 
 .tb-btn:hover {
   color: var(--bar-ink);
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--bar-press);
 }
 
 .tb-btn:active {
@@ -231,17 +232,19 @@ body {
 
 .tb-btn .lbl {
   position: absolute;
-  bottom: calc(100% + 7px);
+  top: calc(100% + 5px);
   left: 50%;
   transform: translateX(-50%);
   font: 11px var(--sans);
   color: var(--bar-ink);
-  background: rgba(24, 23, 26, 0.92);
+  background: var(--bar-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--bar-hairline);
   border-radius: 5px;
   padding: 2px 8px;
   white-space: nowrap;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.16s ease;
@@ -308,7 +311,7 @@ body {
   bottom: 16px;
   z-index: 50;
   font: 11px var(--sans);
-  color: var(--bar-ink-soft);
+  color: #97958f;
   opacity: 0.55;
   transition: opacity 0.35s;
   user-select: none;
@@ -626,7 +629,7 @@ body {
 .file-menu {
   position: absolute;
   z-index: 100;
-  background: rgba(30, 29, 32, 0.94);
+  background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
@@ -655,7 +658,7 @@ body {
 }
 
 .file-menu-item:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--bar-press);
 }
 
 .file-menu-item:disabled {
@@ -723,7 +726,7 @@ body {
 #scroll {
   flex: 1;
   overflow: auto;
-  padding: 24px 16px 84px;
+  padding: 64px 16px 56px;
 }
 
 #scroll::-webkit-scrollbar {
@@ -1190,7 +1193,7 @@ body {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--bar-ink-soft);
-  background: rgba(24, 23, 26, 0.9);
+  background: var(--bar-glass);
   border: 1px solid var(--bar-hairline);
   border-radius: 8px;
   padding: 1px 8px;
@@ -1777,7 +1780,7 @@ body {
 .settings-panel {
   position: absolute;
   z-index: 100;
-  background: rgba(30, 29, 32, 0.94);
+  background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
@@ -1803,7 +1806,7 @@ body {
 .settings-row select {
   font: 12px var(--sans);
   color: var(--bar-ink);
-  background: rgba(255, 255, 255, 0.09);
+  background: rgba(0, 0, 0, 0.045);
   border: 1px solid var(--bar-hairline);
   border-radius: 8px;
   padding: 3px 6px;
@@ -1838,7 +1841,7 @@ body {
   width: 34px;
   font: 11px var(--sans);
   color: var(--bar-ink);
-  background: rgba(255, 255, 255, 0.09);
+  background: rgba(0, 0, 0, 0.045);
   border: 1px solid var(--bar-hairline);
   border-radius: 6px;
   padding: 2px 3px;

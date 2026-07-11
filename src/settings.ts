@@ -272,7 +272,7 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
 
   document.body.appendChild(panel);
   const rect = anchor.getBoundingClientRect();
-  panel.style.bottom = `${window.innerHeight - rect.top + 8}px`;
+  panel.style.top = `${rect.bottom + 8 + window.scrollY}px`;
   panel.style.left = `${Math.max(8, rect.right - panel.offsetWidth) + window.scrollX}px`;
 
   const onDown = (e: MouseEvent) => {

@@ -209,7 +209,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     recentsMenu = document.createElement('div');
     recentsMenu.className = 'file-menu recents-menu';
     const rect = recentBtn.getBoundingClientRect();
-    recentsMenu.style.bottom = `${window.innerHeight - rect.top + 8}px`;
+    recentsMenu.style.top = `${rect.bottom + 8 + window.scrollY}px`;
     recentsMenu.style.left = `${Math.max(8, rect.left - 40) + window.scrollX}px`;
     document.body.appendChild(recentsMenu);
     document.addEventListener('mousedown', onDocDown, true);
