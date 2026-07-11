@@ -117,29 +117,14 @@ body {
   opacity: 1;
 }
 
-/* Collapsed category head: a quiet glyph; dims further once its tools are
-   out (it becomes a group label, not the actor). */
-.tb-pod-head {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  flex: none;
-  color: var(--bar-ink-soft);
-  transition: opacity 0.2s;
-}
-
-.tb-open .tb-pod-head {
-  opacity: 0.45 !important;
-}
-
-.tb-pod-tools {
+/* The rest of a collapsed group, springing open to the right of its
+   representative button. */
+.tb-pod-rest {
   display: flex;
   align-items: center;
   gap: 2px;
   min-width: 0;
-  transition: width 0.32s cubic-bezier(0.3, 1.25, 0.5, 1);
+  transition: width 0.16s cubic-bezier(0.32, 1.15, 0.55, 1);
 }
 
 .tb-file {
