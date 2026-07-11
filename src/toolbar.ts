@@ -116,6 +116,12 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     const rep = buttons.find((b) => b.dataset.label === repLabel) ?? buttons[0];
     const rest = document.createElement('div');
     rest.className = 'tb-pod-rest';
+    // The shelf INCLUDES the rep: a clone sits at its exact position, so the
+    // popup reads as one capsule containing the button you're hovering.
+    const repClone = rep.cloneNode(true) as HTMLElement;
+    repClone.addEventListener('mousedown', (e) => e.preventDefault());
+    repClone.addEventListener('click', () => rep.click());
+    rest.appendChild(repClone);
     for (const b of buttons) if (b !== rep) rest.appendChild(b);
     wrap.replaceChildren(rep, rest);
 

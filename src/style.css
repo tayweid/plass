@@ -130,7 +130,7 @@ body {
 
 .tb-pod-rest {
   position: absolute;
-  top: calc(100% + 11px);
+  top: -5px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -138,7 +138,7 @@ body {
   align-items: center;
   gap: 2px;
   width: 42px;
-  padding: 6px 0;
+  padding: 5px 0;
   background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
@@ -148,7 +148,7 @@ body {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.13s ease, visibility 0s 0.13s;
+  transition: opacity 0.12s linear, visibility 0s 0.12s;
   z-index: 15;
 }
 
@@ -156,7 +156,7 @@ body {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
-  transition: opacity 0.13s ease;
+  transition: opacity 0.12s linear;
 }
 
 /* Vertical shelf: hover chips sit beside the buttons, not below. */
