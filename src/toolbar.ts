@@ -83,10 +83,15 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     input.addEventListener('blur', () => finish(true));
   });
 
-  container.append(fileLabel);
-  const titleDiv = document.createElement('span');
-  titleDiv.className = 'tb-div';
-  container.appendChild(titleDiv);
+  // iOS-style capsule clusters: each group is its own floating pod.
+  let currentPod: HTMLElement;
+  const pod = () => {
+    currentPod = document.createElement('div');
+    currentPod.className = 'tb-pod';
+    container.appendChild(currentPod);
+    return currentPod;
+  };
+  pod().appendChild(fileLabel);
 
   /** Icon button whose text label fades in on hover. */
   const barBtn = (glyph: string, label: string, title: string, run: () => void) => {
@@ -97,13 +102,11 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     el.innerHTML = `${glyph}<span class="lbl">${label}</span>`;
     el.addEventListener('mousedown', (e) => e.preventDefault());
     el.addEventListener('click', () => run());
-    container.appendChild(el);
+    currentPod.appendChild(el);
     return el;
   };
   const barDivider = () => {
-    const d = document.createElement('span');
-    d.className = 'tb-div';
-    container.appendChild(d);
+    pod();
   };
   const runCmd = (c: Command) => () => {
     c(view.state, view.dispatch, view);
@@ -111,6 +114,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   };
 
   // ---------- file ----------
+  pod();
   barBtn(icon('new'), 'New', 'New document', () => {
     if (confirm('Replace the current document with an empty one?')) fm.newDoc();
   });

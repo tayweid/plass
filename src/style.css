@@ -76,21 +76,14 @@ body {
   flex-direction: column;
 }
 
-/* A floating glass island over the paper: rests translucent, wakes on
-   approach. Content slides underneath it. */
+/* Floating capsule clusters over the paper (iOS toolbar language): each
+   group is its own stadium-shaped glass pod. Pods stay solid; their
+   CONTENTS sleep at rest and wake when the mouse approaches the cluster. */
 #toolbar {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  height: 42px;
-  padding: 0 12px;
-  background: var(--bar-glass);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
-  border: 1px solid var(--bar-hairline);
-  border-radius: 13px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
+  gap: 8px;
   position: fixed;
   top: 10px;
   left: 50%;
@@ -100,15 +93,27 @@ body {
   z-index: 10;
 }
 
-/* The island itself stays solid (whole-element opacity over white paper
-   composites to a milky fog); only its CONTENTS sleep until approached. */
-#toolbar > * {
+.tb-pod {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 42px;
+  padding: 0 6px;
+  background: var(--bar-glass);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 999px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
+}
+
+.tb-pod > * {
   opacity: 0.35;
   transition: opacity 0.3s ease;
 }
 
-#toolbar:hover > *,
-#toolbar:focus-within > * {
+#toolbar:hover .tb-pod > *,
+#toolbar:focus-within .tb-pod > * {
   opacity: 1;
 }
 
@@ -167,20 +172,24 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 26px;
-  min-width: 28px;
-  padding: 0 6px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0 7px;
   background: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: 999px;
   color: var(--bar-ink-soft);
   cursor: pointer;
-  transition: color 0.12s, background 0.12s;
+  transition: color 0.12s, background 0.12s, transform 0.08s;
 }
 
 .tb-btn:hover {
   color: var(--bar-ink);
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.tb-btn:active {
+  transform: scale(0.92);
 }
 
 .tb-btn:hover {
@@ -607,10 +616,12 @@ body {
 .file-menu {
   position: absolute;
   z-index: 100;
-  background: var(--chrome);
-  border: 1px solid var(--chrome-border);
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  background: rgba(30, 29, 32, 0.94);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 16px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 18px 50px rgba(0, 0, 0, 0.45);
   padding: 6px;
   width: 240px;
   display: flex;
@@ -623,10 +634,10 @@ body {
   align-items: center;
   gap: 12px;
   font: 13px var(--sans);
-  color: var(--ink);
+  color: var(--bar-ink);
   background: transparent;
   border: none;
-  border-radius: 5px;
+  border-radius: 10px;
   padding: 6px 10px;
   cursor: pointer;
   text-align: left;
@@ -634,7 +645,7 @@ body {
 }
 
 .file-menu-item:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .file-menu-item:disabled {
@@ -644,12 +655,12 @@ body {
 
 .file-menu-hint {
   font: 11px var(--sans);
-  color: var(--ink-soft);
+  color: var(--bar-ink-soft);
 }
 
 .file-menu-divider {
   height: 1px;
-  background: var(--chrome-border);
+  background: var(--bar-hairline);
   margin: 5px 8px;
 }
 
@@ -657,7 +668,7 @@ body {
   font: 10.5px var(--sans);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--ink-soft);
+  color: var(--bar-ink-soft);
   padding: 4px 10px 2px;
 }
 
@@ -1756,12 +1767,14 @@ body {
 .settings-panel {
   position: absolute;
   z-index: 100;
-  background: var(--chrome);
-  border: 1px solid var(--chrome-border);
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
-  padding: 12px 14px;
-  width: 280px;
+  background: rgba(30, 29, 32, 0.94);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 20px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 18px 50px rgba(0, 0, 0, 0.45);
+  padding: 14px 16px;
+  width: 284px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1773,29 +1786,27 @@ body {
   justify-content: space-between;
   gap: 12px;
   font: 12.5px var(--sans);
-  color: var(--ink);
+  color: var(--bar-ink);
   cursor: pointer;
 }
 
 .settings-row select {
   font: 12px var(--sans);
-  color: var(--ink);
-  background: var(--sheet);
-  border: 1px solid var(--chrome-border);
-  border-radius: 5px;
+  color: var(--bar-ink);
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 8px;
   padding: 3px 6px;
   max-width: 150px;
 }
 
-@media (prefers-color-scheme: dark) {
-  .settings-row select {
-    background: #1d1c1a;
-  }
+.settings-row input[type='checkbox'] {
+  accent-color: var(--accent);
 }
 
 .settings-hint {
   font: 10.5px var(--sans);
-  color: var(--ink-soft);
+  color: var(--bar-ink-soft);
   margin-top: 2px;
 }
 
@@ -1810,16 +1821,16 @@ body {
   align-items: center;
   gap: 2px;
   font: 10px var(--sans);
-  color: var(--ink-soft);
+  color: var(--bar-ink-soft);
 }
 
 .settings-margin-field input {
   width: 34px;
   font: 11px var(--sans);
-  color: var(--ink);
-  background: var(--sheet);
-  border: 1px solid var(--chrome-border);
-  border-radius: 4px;
+  color: var(--bar-ink);
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 6px;
   padding: 2px 3px;
   text-align: center;
   appearance: textfield;
@@ -1833,14 +1844,14 @@ body {
 }
 
 .settings-macros-btn {
-  font: 12px var(--sans);
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-radius: 5px;
-  padding: 5px 10px;
+  font: 12.5px var(--sans);
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 999px;
+  padding: 6px 12px;
   cursor: pointer;
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .math-editor-hint kbd {
