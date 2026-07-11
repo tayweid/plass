@@ -609,17 +609,20 @@ class TypesetView {
       if (spec && okey && !oentry) this.oracle.request(okey, spec, measure, settings, skind);
       const ostatus = oentry?.status ?? 'none';
 
-      // The user owns this block: lines above the caret keep their breaks
-      // (zero motion under the eyes); the tail below is RE-DERIVED each
-      // settle — the same policy as the live layout — so any transient bad
-      // break self-heals instead of being preserved verbatim. The oracle
-      // answer, requested above, applies on release.
-      if (pos === this.owned) {
+      // HOLD instead of guess: while this block is owned (caret inside) or
+      // its oracle answer is still compiling, keep the current breaks —
+      // owned blocks re-derive the lines around the caret (live policy),
+      // pending blocks hold verbatim. The local engine never makes global
+      // guesses; text moves only at a keystroke (locally) or when Typst's
+      // verdict lands (once). The quality backstop still rejects a
+      // pathological held prefix.
+      const pending = ostatus === 'none' && spec !== null;
+      if (pos === this.owned || pending) {
         const curState = typesetKey.getState(this.view.state);
         const base0 = pos + 1;
         const caret = this.view.state.selection.$from.pos;
-        const editAt = Math.max(0, caret - base0);
-        const held = (curState?.decos.find(pos, pos + 1 + node.content.size, (sp) => {
+        const editAt = pos === this.owned ? Math.max(0, caret - base0) : Infinity;
+        let held = (curState?.decos.find(pos, pos + 1 + node.content.size, (sp) => {
           const key = (sp as { key?: string } | null)?.key;
           return !!key && /^(br|hy):/.test(key);
         }) ?? [])
@@ -628,18 +631,20 @@ class TypesetView {
             hyphen: ((d.spec as { key?: string } | null)?.key ?? '').startsWith('hy'),
           }))
           .filter((bk) => bk.at < editAt - 1)
-          .sort((x, y) => x.at - y.at)
-          .slice(0, -2);
-        const lines = layoutBlock(node, measure, this.measurer, atomWidth, {
-          ...layoutOpts,
-          ...extra,
-          prefixForced: held,
-        });
-        if (lines) {
-          paragraphs++;
-          lineCount += lines.length;
-          emitLines(node, pos, lines);
-          return;
+          .sort((x, y) => x.at - y.at);
+        if (pos === this.owned) held = held.slice(0, -2);
+        if (held.length || pos === this.owned) {
+          const lines = layoutBlock(node, measure, this.measurer, atomWidth, {
+            ...layoutOpts,
+            ...extra,
+            prefixForced: held,
+          });
+          if (lines) {
+            paragraphs++;
+            lineCount += lines.length;
+            emitLines(node, pos, lines);
+            return;
+          }
         }
       }
 
