@@ -151,6 +151,9 @@ class TypesetView {
   private pageOracle: PageOracle;
   private raf = 0;
   private liveRaf = 0;
+  /** Signature of the last dispatched decoration set: identical layouts are
+   *  never re-dispatched, so no-op runs cause zero paints. */
+  private lastDecoSig = '';
   /** The caret's textblock while actively editing: it belongs to the user —
    *  no re-optimization (settle or oracle) touches it until the caret
    *  leaves or a long idle passes. Corrections only when motion is expected. */
@@ -237,13 +240,15 @@ class TypesetView {
     return null;
   }
 
-  /** Re-typeset just the edited blocks with the JS Knuth-Plass breaker on
-   *  the next frame — same algorithm family as Typst (hyphenation and all),
-   *  so per-keystroke transitions barely move; the settle swaps in the
-   *  oracle's authoritative breaks. */
+  /** Re-typeset just the edited blocks with the JS Knuth-Plass breaker IN
+   *  THE SAME PAINT as the keystroke: a microtask runs after ProseMirror's
+   *  DOM update but before the browser renders, so the character and its
+   *  re-justified line land as ONE visual move — never a bulge frame
+   *  followed by a correction frame. */
   private scheduleLive() {
     if (this.liveRaf) return;
-    this.liveRaf = requestAnimationFrame(() => {
+    this.liveRaf = 1;
+    queueMicrotask(() => {
       this.liveRaf = 0;
       this.liveRun();
     });
@@ -331,13 +336,14 @@ class TypesetView {
       });
       for (const line of lines) {
         if (Math.abs(line.spacing) > 0.01 && line.to > line.from) {
+          const style = `word-spacing:${line.spacing.toFixed(3)}px`;
           let cur = line.from;
           for (const [a2, b2] of fnRanges) {
             if (b2 <= cur || a2 >= line.to) continue;
-            if (a2 > cur) fresh.push(Decoration.inline(base + cur, base + a2, { style: `word-spacing:${line.spacing.toFixed(3)}px` }));
+            if (a2 > cur) fresh.push(Decoration.inline(base + cur, base + a2, { style }, { sig: style }));
             cur = Math.max(cur, b2);
           }
-          if (cur < line.to) fresh.push(Decoration.inline(base + cur, base + line.to, { style: `word-spacing:${line.spacing.toFixed(3)}px` }));
+          if (cur < line.to) fresh.push(Decoration.inline(base + cur, base + line.to, { style }, { sig: style }));
         }
         if (line.breakPos !== null) {
           const at = base + line.breakPos;
@@ -358,6 +364,8 @@ class TypesetView {
       }
     }
     const set = fresh.length ? decos.add(state.doc, fresh) : decos;
+    // Any full-set signature is stale after a live edit.
+    this.lastDecoSig = '';
     const tr = state.tr.setMeta(typesetKey, { type: 'decos', decos: set } satisfies Meta);
     tr.setMeta('addToHistory', false);
     this.view.dispatch(tr);
@@ -382,7 +390,6 @@ class TypesetView {
     clearTimeout(this.editTimer);
     clearTimeout(this.ownTimer);
     if (this.raf) cancelAnimationFrame(this.raf);
-    if (this.liveRaf) cancelAnimationFrame(this.liveRaf);
     this.oracle.destroy();
     this.pageOracle.destroy();
     this.measurer.destroy();
@@ -629,10 +636,10 @@ class TypesetView {
         let cur = from;
         for (const [a, bEnd] of fnRanges) {
           if (bEnd <= cur || a >= to) continue;
-          if (a > cur) decos.push(Decoration.inline(base + cur, base + a, { style }));
+          if (a > cur) decos.push(Decoration.inline(base + cur, base + a, { style }, { sig: style }));
           cur = Math.max(cur, bEnd);
         }
-        if (cur < to) decos.push(Decoration.inline(base + cur, base + to, { style }));
+        if (cur < to) decos.push(Decoration.inline(base + cur, base + to, { style }, { sig: style }));
       };
       for (const line of lines) {
         if (Math.abs(line.spacing) > 0.01) {
@@ -747,6 +754,13 @@ class TypesetView {
       );
     }
 
+    const sig = decos
+      .map((d) => `${d.from}:${d.to}:${((d.spec as { key?: string } | null)?.key ?? (d.spec as { sig?: string } | null)?.sig ?? '')}`)
+      .join('|');
+    if (sig === this.lastDecoSig && !this.pendingPageMarks) {
+      return { paragraphs, lines: lineCount };
+    }
+    this.lastDecoSig = sig;
     const set = DecorationSet.create(state.doc, decos);
     const meta: Meta = { type: 'decos', decos: set };
     if (this.pendingPageMarks) {
@@ -1131,7 +1145,9 @@ class TypesetView {
       const total = list.reduce((sum, f) => sum + f.height, 0) + FN_GAP * (list.length - 1);
       let y = bottomLimit - total - pmOffset;
       list.forEach((f, i) => {
-        f.el.style.top = `${y.toFixed(1)}px`;
+        // Hysteresis: sub-pixel re-measurements must not nudge the body.
+        const prev = parseFloat(f.el.style.top);
+        if (!(Math.abs(prev - y) < 0.75)) f.el.style.top = `${y.toFixed(1)}px`;
         f.el.classList.toggle('fn-first', i === 0);
         f.el.style.visibility = 'visible';
         y += f.height + FN_GAP;
