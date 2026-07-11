@@ -99,7 +99,9 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     el.type = 'button';
     el.className = 'tb-btn';
     el.title = title;
-    el.innerHTML = `${glyph}<span class="lbl">${label}</span>`;
+    // Surface the shortcut from the title in the hover chip.
+    const kbd = /\(([^)]*[⌘⇧⌥⌃⏎][^)]*)\)/.exec(title)?.[1];
+    el.innerHTML = `${glyph}<span class="lbl">${label}${kbd ? `<kbd>${kbd}</kbd>` : ''}</span>`;
     el.addEventListener('mousedown', (e) => e.preventDefault());
     el.addEventListener('click', () => run());
     currentPod.appendChild(el);
