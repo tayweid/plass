@@ -153,18 +153,14 @@ body {
   transform: scale(1.12);
 }
 
-/* Save-state edge on the title pill: a quiet green ring when the paper is
-   safely on disk, warm red while it is not. */
-.tb-file {
-  border: 1px solid transparent;
+/* Save-state edge on the title pill (the floating pod): a quiet green
+   ring when the paper is safely on disk, warm red while it is not. */
+.tb-pod-saved {
+  border-color: rgba(110, 165, 120, 0.6);
 }
 
-.tb-file-saved {
-  border-color: rgba(110, 165, 120, 0.55);
-}
-
-.tb-file-unsaved {
-  border-color: rgba(205, 110, 95, 0.55);
+.tb-pod-unsaved {
+  border-color: rgba(205, 110, 95, 0.6);
 }
 
 .tb-file:hover {
@@ -1899,11 +1895,29 @@ body {
   max-width: 150px;
 }
 
+/* Settings toggles render as a quiet dot (native checkboxes sit taller
+   than the row text and won't center). Hollow = off, filled = on. */
 .settings-row input[type='checkbox'] {
-  accent-color: var(--accent);
-  /* Checkboxes carry UA margins that push their row off-center. */
+  appearance: none;
+  -webkit-appearance: none;
   margin: 0;
   display: block;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bar-hairline);
+  background: transparent;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+
+.settings-row input[type='checkbox']:hover {
+  border-color: var(--bar-ink-soft);
+}
+
+.settings-row input[type='checkbox']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .settings-hint {

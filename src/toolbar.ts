@@ -249,8 +249,10 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     stats() {},
     setFile(name, dirty) {
       const unsaved = !fm.saved || dirty;
-      fileLabel.classList.toggle('tb-file-saved', !unsaved);
-      fileLabel.classList.toggle('tb-file-unsaved', unsaved);
+      // The save-state ring lives on the floating pill itself.
+      const pod = fileLabel.closest('.tb-pod') ?? fileLabel.parentElement;
+      pod?.classList.toggle('tb-pod-saved', !unsaved);
+      pod?.classList.toggle('tb-pod-unsaved', unsaved);
       if (!fm.saved) {
         fileLabel.textContent = name;
         fileLabel.title = 'Click to save — you pick the folder your paper lives in';
