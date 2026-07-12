@@ -185,9 +185,6 @@ body {
 }
 
 
-.tb-file-input:focus {
-  outline: none;
-}
 
 .tb-menu-btn {
   font: 18px/1 var(--sans);
@@ -337,7 +334,10 @@ body {
 /* corner HUD + transient toast */
 #hud {
   position: fixed;
-  right: 14px;
+  /* Sit just inside the PAGE's right edge (pages are centered at
+     var(--page-w)); fall back to a viewport inset when the window is
+     narrower than the paper. */
+  right: max(14px, calc(50vw - var(--page-w, 816px) / 2 + 18px));
   bottom: 16px;
   z-index: 50;
   font: 11px var(--sans);
