@@ -143,6 +143,30 @@ body {
   border-radius: 5px;
 }
 
+.tb-btn .ico,
+.tb-btn svg {
+  transition: transform 120ms ease;
+}
+
+.tb-btn:hover .ico,
+.tb-btn:hover svg {
+  transform: scale(1.12);
+}
+
+/* Save-state edge on the title pill: a quiet green ring when the paper is
+   safely on disk, warm red while it is not. */
+.tb-file {
+  border: 1px solid transparent;
+}
+
+.tb-file-saved {
+  border-color: rgba(110, 165, 120, 0.55);
+}
+
+.tb-file-unsaved {
+  border-color: rgba(205, 110, 95, 0.55);
+}
+
 .tb-file:hover {
   background: var(--bar-press);
   color: var(--bar-ink);
@@ -1877,6 +1901,9 @@ body {
 
 .settings-row input[type='checkbox'] {
   accent-color: var(--accent);
+  /* Checkboxes carry UA margins that push their row off-center. */
+  margin: 0;
+  display: block;
 }
 
 .settings-hint {

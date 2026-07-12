@@ -248,12 +248,15 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     update() {},
     stats() {},
     setFile(name, dirty) {
+      const unsaved = !fm.saved || dirty;
+      fileLabel.classList.toggle('tb-file-saved', !unsaved);
+      fileLabel.classList.toggle('tb-file-unsaved', unsaved);
       if (!fm.saved) {
-        fileLabel.textContent = `${name} — not saved`;
+        fileLabel.textContent = name;
         fileLabel.title = 'Click to save — you pick the folder your paper lives in';
         return;
       }
-      fileLabel.textContent = name + (dirty ? ' •' : '');
+      fileLabel.textContent = name;
       fileLabel.title = dirty ? `${name} — unsaved changes` : `${name} — click to rename`;
     },
   };

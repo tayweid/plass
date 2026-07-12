@@ -163,10 +163,13 @@ export function applySettings(state: EditorState) {
 }
 
 let openPanel: HTMLElement | null = null;
+/** Closer for the CURRENTLY open panel — the toggle's close branch must
+ * not call this invocation's own (TDZ) closePanel. */
+let closeOpen: (() => void) | null = null;
 
 export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   if (openPanel) {
-    closePanel();
+    closeOpen?.();
     return;
   }
   const s = getSettings(view.state);
@@ -219,7 +222,7 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   {
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'none — try: Short Title · {page}';
+    input.placeholder = 'Title · Name · {page}';
     input.value = s.headerText;
     input.addEventListener('change', () => patch({ headerText: input.value }));
     row('Header', input);
@@ -353,9 +356,11 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   function closePanel() {
     panel.remove();
     openPanel = null;
+    closeOpen = null;
     document.removeEventListener('mousedown', onDown, true);
     document.removeEventListener('keydown', onKey, true);
   }
+  closeOpen = closePanel;
 }
 
 /** Modal editor for document-level math macros (KaTeX + expanded on export). */
