@@ -77,7 +77,10 @@ export function parityRules(s: DocSettings): string {
   const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
   const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
   let out = '';
-  out += `#set par(justify: true, leading: ${pt(lh - m.extent)}, spacing: ${pt(lh + 0.9 - m.extent)})\n`;
+  // Classic (indented) paragraphs flow with no extra gap: spacing = leading.
+  const parGapEm = s.parIndent ? 0 : 0.9;
+  out += `#set par(justify: true, leading: ${pt(lh - m.extent)}, spacing: ${pt(lh + parGapEm - m.extent)})\n`;
+  if (s.parIndent) out += `#set par(first-line-indent: 1.5em)\n`;
   out += `#set list(spacing: ${pt(lh + 0.25 - m.extent)})\n`;
   out += `#set enum(spacing: ${pt(lh + 0.25 - m.extent)})\n`;
   for (const h of HEADINGS) {

@@ -18,6 +18,8 @@ export interface DocSettings {
   marginBottom: number;
   marginLeft: number;
   hyphenate: boolean;
+  /** Classic academic paragraphs: first-line indent, no inter-paragraph gap. */
+  parIndent: boolean;
   numberEquations: boolean;
   numberSections: boolean;
   pageNumShow: boolean;
@@ -39,6 +41,7 @@ export const DEFAULT_SETTINGS: DocSettings = {
   marginBottom: 1.25,
   marginLeft: 1.25,
   hyphenate: true,
+  parIndent: false,
   numberEquations: true,
   numberSections: false,
   pageNumShow: true,
@@ -130,6 +133,8 @@ export function applySettings(state: EditorState) {
   root.setProperty('--doc-font', `"${s.font}", Georgia, serif`);
   root.setProperty('--doc-size', `${s.sizePt}pt`);
   root.setProperty('--doc-line', String(s.lineHeight));
+  root.setProperty('--par-margin', s.parIndent ? '0em' : '0.9em');
+  root.setProperty('--par-indent', s.parIndent ? '1.5em' : '0em');
   const size = pageSize(s);
   root.setProperty('--page-w', `${size.w}px`);
   root.setProperty('--page-h', `${size.h}px`);
@@ -203,6 +208,7 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
 
   row('Font', select(FONTS.map((f) => [f, f]), s.font, (v) => patch({ font: v })));
   row('Size', select([10, 11, 12, 12.5, 13, 14].map((n) => [n, `${n} pt`] as [number, string]), s.sizePt, (v) => patch({ sizePt: +v })));
+  row('Paragraphs', select([['block', 'Block (spaced)'], ['indent', 'Indented (classic)']] as Array<[string, string]>, s.parIndent ? 'indent' : 'block', (v) => patch({ parIndent: v === 'indent' })));
   row('Line spacing', select([1.3, 1.4, 1.5, 1.65, 1.8].map((n) => [n, String(n)] as [number, string]), s.lineHeight, (v) => patch({ lineHeight: +v })));
   row('Paper', select([['letter', 'US Letter'], ['a4', 'A4'], ['legal', 'US Legal'], ['b5', 'B5']] as Array<[string, string]>, s.page, (v) => patch({ page: v as DocSettings['page'] })));
   row('Orientation', select([['portrait', 'Portrait'], ['landscape', 'Landscape']] as Array<[string, string]>, s.landscape ? 'landscape' : 'portrait', (v) => patch({ landscape: v === 'landscape' })));

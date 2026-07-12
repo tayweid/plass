@@ -104,6 +104,19 @@ const FN_SEP = 30;
 
 const viewRegistry = new WeakMap<EditorView, TypesetView>();
 
+/** keyTag for the compare hook, matching layoutInto's scheme. */
+function indentedTag(settings: { parIndent: boolean }, doc: PMNode, pos: number): string {
+  return settings.parIndent && consecutivePara(doc, pos) ? 'pi' : 'p';
+}
+
+/** Whether the paragraph at pos directly follows a sibling paragraph
+ * (Typst's condition for the first-line indent in classic mode). */
+function consecutivePara(doc: PMNode, pos: number): boolean {
+  const $pos = doc.resolve(pos);
+  const idx = $pos.index();
+  return idx > 0 && $pos.parent.child(idx - 1).type.name === 'paragraph';
+}
+
 /** Bounding rect of the node at a position, if it has a DOM element. */
 function rectOfNode(view: EditorView, pos: number): DOMRect | null {
   const el = view.nodeDOM(pos);
@@ -216,7 +229,7 @@ class TypesetView {
         const state = this.view.state;
         const settings = getSettings(state);
         const resolveAtom = this.atomResolver();
-        const settingsSig = `${settings.font}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}`;
+        const settingsSig = `${settings.font}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}|${settings.parIndent}`;
         const out: unknown[] = [];
         state.doc.descendants((node, pos) => {
           if (!node.isTextblock || node.type.name !== 'paragraph') return true;
@@ -226,15 +239,17 @@ class TypesetView {
           const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
           const spec = buildSpec(node, resolveAtom);
           if (!spec) return false;
-          const okey = `${settingsSig}|body|w${measure.toFixed(1)}|${spec.key}`;
+          const okey = `${settingsSig}|${indentedTag(settings, state.doc, pos)}|w${measure.toFixed(1)}|${spec.key}`;
           const oentry = this.oracle.get(okey);
           const atomWidth = (offset: number, child: PMNode) => {
             const dom = this.view.nodeDOM(pos + 1 + offset);
             return dom instanceof HTMLElement ? dom.getBoundingClientRect().width : child.nodeSize * 8;
           };
+          const indented = settings.parIndent && consecutivePara(state.doc, pos);
           const port = portBreaks(node, measure, atomWidth, {
             sizePt: settings.sizePt,
             hyphenate: settings.hyphenate,
+            firstLineIndentPx: indented ? 1.5 * this.bodyPx() : undefined,
             atomWidthPt: this.typstAtomWidthPt(),
           });
           const fmt = (b: { at: number; hyphen: boolean }[] | null | undefined) =>
@@ -368,6 +383,8 @@ class TypesetView {
       // Non-paragraph blocks (captions, footnote bodies) fall back to CSS
       // justification while live; paragraphs get instant KP.
       if (!b.para || b.node.content.size === 0) continue;
+      const liveIndent =
+        settings.parIndent && consecutivePara(state.doc, b.pos) ? 1.5 * this.bodyPx() : undefined;
       const el = this.view.nodeDOM(b.pos);
       if (!(el instanceof HTMLElement)) continue;
       const cs = getComputedStyle(el);
@@ -387,11 +404,13 @@ class TypesetView {
           const forced = portBreaks(b.node, measure, atomWidth, {
             sizePt: settings.sizePt,
             hyphenate: settings.hyphenate,
+            firstLineIndentPx: liveIndent,
             atomWidthPt: this.typstAtomWidthPt(),
           });
           if (forced) {
             lines = layoutBlock(b.node, measure, this.measurer, atomWidth, {
               hyphenate: settings.hyphenate,
+              firstLineIndent: liveIndent,
               forced,
             });
             if (lines) portHits++;
@@ -407,6 +426,7 @@ class TypesetView {
         legacyHits++;
         lines = layoutBlock(b.node, measure, this.measurer, atomWidth, {
           hyphenate: settings.hyphenate,
+          firstLineIndent: liveIndent,
         });
       }
       if (!lines) continue;
@@ -702,7 +722,7 @@ class TypesetView {
     const layoutOpts = { hyphenate: settings.hyphenate };
     const useOracle = ORACLE_FONTS.has(settings.font);
     const resolveAtom = useOracle ? this.atomResolver() : null;
-    const settingsSig = `${settings.font}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}`;
+    const settingsSig = `${settings.font}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}|${settings.parIndent}`;
     let paragraphs = 0;
     let lineCount = 0;
     let figNo = 0;
@@ -728,7 +748,10 @@ class TypesetView {
       const spec = resolveAtom ? buildSpec(node, resolveAtom) : null;
       const okey = spec ? `${settingsSig}|${keyTag}|w${measure.toFixed(1)}|${spec.key}` : null;
       const oentry = okey ? this.oracle.get(okey) : undefined;
-      if (spec && okey && !oentry) this.oracle.request(okey, spec, measure, settings, skind);
+      if (spec && okey && !oentry) {
+        const indented = skind.kind === 'body' && !!extra.firstLineIndent;
+        this.oracle.request(okey, spec, measure, settings, skind, indented);
+      }
       const ostatus = oentry?.status ?? 'none';
 
       const indent = extra.firstLineIndent ?? 0;
@@ -903,7 +926,17 @@ class TypesetView {
       const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
       if (!(measure > 60)) return false;
 
-      layoutInto(node, pos, measure, { kind: 'body' }, {}, 'p');
+      // Classic mode: consecutive paragraphs carry a first-line indent
+      // (Typst's first-line-indent default rule = CSS p + p).
+      const indented = settings.parIndent && consecutivePara(state.doc, pos);
+      layoutInto(
+        node,
+        pos,
+        measure,
+        { kind: 'body' },
+        indented ? { firstLineIndent: 1.5 * bodyPx } : {},
+        indented ? 'pi' : 'p',
+      );
       handleFootnotes(node, pos);
       return false;
     });

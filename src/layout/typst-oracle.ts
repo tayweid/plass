@@ -152,6 +152,8 @@ interface Queued {
   spec: ParagraphSpec;
   widthPx: number;
   skind: SpecKind;
+  /** Body paragraph carrying the classic first-line indent. */
+  indented: boolean;
 }
 
 const MAX_RESULTS = 800;
@@ -175,9 +177,9 @@ export class TypstOracle {
     return this.results.get(key);
   }
 
-  request(key: string, spec: ParagraphSpec, widthPx: number, settings: DocSettings, skind: SpecKind = { kind: 'body' }) {
+  request(key: string, spec: ParagraphSpec, widthPx: number, settings: DocSettings, skind: SpecKind = { kind: 'body' }, indented = false) {
     if (this.disposed || this.results.has(key) || this.queue.has(key)) return;
-    this.queue.set(key, { spec, widthPx, skind });
+    this.queue.set(key, { spec, widthPx, skind, indented });
     this.settings = settings;
     clearTimeout(this.timer);
     this.timer = window.setTimeout(() => void this.flush(), 80);
@@ -205,7 +207,11 @@ export class TypstOracle {
     const width0 = first.widthPx;
     const batch: Array<[string, Queued]> = [];
     for (const [k, q] of this.queue) {
-      if (Math.abs(q.widthPx - width0) < 0.5 && (q.skind.kind === 'footnote') === isFn) {
+      if (
+        Math.abs(q.widthPx - width0) < 0.5 &&
+        (q.skind.kind === 'footnote') === isFn &&
+        q.indented === first.indented
+      ) {
         batch.push([k, q]);
         this.queue.delete(k);
       }
@@ -218,6 +224,13 @@ export class TypstOracle {
       src += parityRules(s);
       src += textSetLine(s, this.fontFallback);
       if (hasMath) src += '#import "@preview/mitex:0.2.5": mi, mitex\n';
+      // Fragments batch several paragraphs into one compile, so "consecutive"
+      // is an artifact of batching, not of the document. Pin the indent
+      // explicitly: on (all lines) for indented specs, off for everything
+      // else — parityRules' document-level rule must not leak in.
+      src += first.indented && !isFn
+        ? '#set par(first-line-indent: (amount: 1.5em, all: true))\n'
+        : '#set par(first-line-indent: 0pt)\n';
       src += '\n';
       if (isFn) {
         // One anchor paragraph carrying every marker; the bodies render in

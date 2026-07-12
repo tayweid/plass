@@ -71,6 +71,12 @@ export function typToDoc(src: string): TypImport {
       i++;
       continue;
     }
+    if (/^#set par\(first-line-indent:/.test(line)) {
+      sawSet = true;
+      settings.parIndent = true;
+      i++;
+      continue;
+    }
     if (/^#import "@preview\/mitex/.test(line) || /^#set par\(/.test(line)) {
       sawSet = true;
       i++;

@@ -820,11 +820,17 @@ body {
 }
 
 .ProseMirror p {
-  margin: 0 0 0.9em;
+  margin: 0 0 var(--par-margin, 0.9em);
   /* Inert on oracle-laid lines (they end in <br>, which CSS justification
      skips — their word-spacing decorations do the work) and takes over for
      the LIVE paragraph being edited, whose decorations are stripped. */
   text-align: justify;
+}
+
+/* Classic mode: consecutive paragraphs indent their first line (matches
+   Typst's first-line-indent default: not after headings or blocks). */
+.ProseMirror p + p {
+  text-indent: var(--par-indent, 0em);
 }
 
 /* Blocks use bottom margins only (top spacing via padding) so margins never
