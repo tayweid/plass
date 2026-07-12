@@ -198,6 +198,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
       if (!s.trim()) return indent + '~\n\n';
       // A leading =, - or + would re-parse as heading/list syntax.
       if (/^[=\-+]/.test(s)) s = '\\' + s;
+      if (node.attrs.keep) return indent + `#block(breakable: false)[${s}]\n\n`;
       return indent + s + '\n\n';
     }
     case 'heading': {

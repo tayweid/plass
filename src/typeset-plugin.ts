@@ -1096,6 +1096,15 @@ class TypesetView {
       return el instanceof HTMLElement ? el.getBoundingClientRect() : null;
     };
 
+    // Sticky anchor: a heading immediately above the current block — a break
+    // at the block's start must carry the heading along (Typst headings are
+    // sticky by default; the oracle already does this, the fallback must too).
+    let sticky: { pos: number; y: number } | null = null;
+    const breakStart = (pos: number, y: number) => {
+      const a = sticky ?? { pos, y };
+      breakBefore(a.pos, a.y, 'block');
+    };
+
     const atomic = (pos: number, node: PMNode) => {
       const endPos = pos + node.nodeSize;
       const r = rectOf(pos);
@@ -1106,7 +1115,7 @@ class TypesetView {
       const y = stackY(r.top, pos);
       const ufH = takeFnH(endPos);
       if (y + shift + r.height > bottomFor(ufH) + 0.5 && r.height <= contentH) {
-        breakBefore(pos, y, 'block');
+        breakStart(pos, y);
       }
       pageFnH += ufH;
     };
@@ -1153,7 +1162,7 @@ class TypesetView {
 
         if (k === 0) {
           // First line doesn't fit: the paragraph starts on the next page.
-          breakBefore(pos, yTop, 'block');
+          breakStart(pos, yTop);
           pageFnH += ufH;
           continue;
         }
@@ -1173,7 +1182,7 @@ class TypesetView {
         // instead (unless it is taller than a page and must split somewhere).
         if (segStart === 0 && kb < 2) {
           if (r.height <= contentH) {
-            breakBefore(pos, yTop, 'block');
+            breakStart(pos, yTop);
             pageFnH += ufH;
             continue;
           }
@@ -1225,7 +1234,8 @@ class TypesetView {
           break;
         }
         case 'paragraph':
-          paragraph(offset, node);
+          if (node.attrs.keep) atomic(offset, node);
+          else paragraph(offset, node);
           break;
         case 'bullet_list':
         case 'ordered_list':
@@ -1235,6 +1245,12 @@ class TypesetView {
         default:
           atomic(offset, node);
           break;
+      }
+      if (node.type.name === 'heading') {
+        const hr = rectOf(offset);
+        sticky = sticky ?? (hr ? { pos: offset, y: stackY(hr.top, offset) } : null);
+      } else {
+        sticky = null;
       }
     });
 

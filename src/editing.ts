@@ -210,6 +210,19 @@ export function buildKeymap(): Plugin {
       }
       return true;
     },
+    'Mod-Alt-k': (state, dispatch) => {
+      const { $from } = state.selection;
+      for (let d = $from.depth; d > 0; d--) {
+        const node = $from.node(d);
+        if (node.type === schema.nodes.paragraph) {
+          if (dispatch) {
+            dispatch(state.tr.setNodeMarkup($from.before(d), undefined, { ...node.attrs, keep: !node.attrs.keep }));
+          }
+          return true;
+        }
+      }
+      return false;
+    },
     'ArrowRight': skipFootnote(1),
     'ArrowLeft': skipFootnote(-1),
     'ArrowUp': verticalCaret(-1),

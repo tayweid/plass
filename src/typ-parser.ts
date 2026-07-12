@@ -285,6 +285,14 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
+    // Keep-together paragraph: #block(breakable: false)[...]
+    const keepM = /^#block\(breakable: false\)\[(.*)\]$/.exec(t);
+    if (keepM) {
+      out.push(schema.nodes.paragraph.create({ keep: true }, parseInline(keepM[1])));
+      i++;
+      continue;
+    }
+
     // fenced code block
     let m = /^```(.*)$/.exec(t);
     if (m) {

@@ -178,6 +178,16 @@ const tables = tableNodes({
 
 const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
   .append(tables)
+  // Paragraphs may be kept together across page breaks (block(breakable:
+  // false) on export; the paginator treats them as atomic).
+  .update('paragraph', {
+    ...base.spec.nodes.get('paragraph')!,
+    attrs: { keep: { default: false } },
+    parseDOM: [{ tag: 'p', getAttrs: (el: HTMLElement | string) => ({ keep: typeof el !== 'string' && el.getAttribute('data-keep') === '1' }) }],
+    toDOM(node) {
+      return node.attrs.keep ? ['p', { 'data-keep': '1', class: 'ts-keep' }, 0] : ['p', 0];
+    },
+  })
   // Headings carry an optional label so they can be @-referenced; the
   // "1.2"-style number is painted by the numbering plugin, never stored.
   .update('heading', {

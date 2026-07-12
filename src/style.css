@@ -827,6 +827,12 @@ body {
   text-align: justify;
 }
 
+/* Keep-together paragraphs (⌘⌥K): a whisper of an indicator on the left
+   edge — visible enough to know the flag is set, quiet enough to ignore. */
+.ProseMirror p.ts-keep {
+  box-shadow: inset 2px 0 0 rgba(140, 140, 150, 0.25);
+}
+
 /* Classic mode: consecutive paragraphs indent their first line (matches
    Typst's first-line-indent default: not after headings or blocks). */
 .ProseMirror p + p {
