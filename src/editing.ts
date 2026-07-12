@@ -210,15 +210,6 @@ export function buildKeymap(): Plugin {
       }
       return true;
     },
-    'Mod-Shift-Enter': (state, dispatch) => {
-      const { $from } = state.selection;
-      const pos = $from.after($from.depth > 0 ? 1 : 0);
-      if (dispatch) {
-        const tr = state.tr.insert(pos, schema.nodes.numbering_restart.create());
-        dispatch(tr.setSelection(TextSelection.near(tr.doc.resolve(pos + 1), 1)).scrollIntoView());
-      }
-      return true;
-    },
     'Mod-Alt-k': (state, dispatch) => {
       const { $from } = state.selection;
       for (let d = $from.depth; d > 0; d--) {

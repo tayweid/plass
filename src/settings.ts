@@ -225,6 +225,49 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
     row('Header', input);
   }
   row('Header align', select([['left', 'Left'], ['center', 'Center'], ['right', 'Right']] as Array<[string, string]>, s.headerAlign, (v) => patch({ headerAlign: v as DocSettings['headerAlign'] })));
+  {
+    // The marker is a document position, but its placement is structural:
+    // right after the leading front-matter blocks. The setting manages it.
+    const FRONT = new Set(['doc_title', 'doc_authors', 'doc_date', 'abstract']);
+    const hasMarker = () => {
+      let found = false;
+      view.state.doc.forEach((n) => {
+        if (n.type.name === 'numbering_restart') found = true;
+      });
+      return found;
+    };
+    row(
+      'Front matter',
+      select(
+        [
+          ['same', 'Numbered with body'],
+          ['roman', 'Roman · body restarts at 1'],
+        ] as Array<[string, string]>,
+        hasMarker() ? 'roman' : 'same',
+        (v) => {
+          const doc = view.state.doc;
+          if (v === 'roman') {
+            if (hasMarker()) return;
+            let pos = 0;
+            for (let i = 0; i < doc.childCount; i++) {
+              const child = doc.child(i);
+              if (i === 0 || FRONT.has(child.type.name)) pos += child.nodeSize;
+              else break;
+            }
+            view.dispatch(view.state.tr.insert(pos, view.state.schema.nodes.numbering_restart.create()));
+          } else {
+            let tr = view.state.tr;
+            const cuts: Array<[number, number]> = [];
+            doc.forEach((n, offset) => {
+              if (n.type.name === 'numbering_restart') cuts.push([offset, offset + n.nodeSize]);
+            });
+            for (const [a, b] of cuts.reverse()) tr = tr.delete(a, b);
+            if (cuts.length) view.dispatch(tr);
+          }
+        },
+      ),
+    );
+  }
   row('Paragraphs', select([['block', 'Block (spaced)'], ['indent', 'Indented (classic)']] as Array<[string, string]>, s.parIndent ? 'indent' : 'block', (v) => patch({ parIndent: v === 'indent' })));
   row('Line spacing', select([1.3, 1.4, 1.5, 1.65, 1.8].map((n) => [n, String(n)] as [number, string]), s.lineHeight, (v) => patch({ lineHeight: +v })));
   row('Paper', select([['letter', 'US Letter'], ['a4', 'A4'], ['legal', 'US Legal'], ['b5', 'B5']] as Array<[string, string]>, s.page, (v) => patch({ page: v as DocSettings['page'] })));
