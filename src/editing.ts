@@ -210,7 +210,7 @@ export function buildKeymap(): Plugin {
       }
       return true;
     },
-    'Mod-Alt-n': (state, dispatch) => {
+    'Mod-Shift-Enter': (state, dispatch) => {
       const { $from } = state.selection;
       const pos = $from.after($from.depth > 0 ? 1 : 0);
       if (dispatch) {
