@@ -1198,6 +1198,41 @@ body {
   margin-bottom: 0;
 }
 
+/* Numbering restart: front matter (roman) ends here; the body restarts at
+   page 1 in the document's numbering format. Same chip pattern as the
+   manual page break. */
+.ts-numrestart {
+  height: 0;
+  position: relative;
+}
+.ts-numrestart::after {
+  content: 'main matter · page 1';
+  position: absolute;
+  left: 50%;
+  top: -9px;
+  transform: translateX(-50%);
+  font: 9.5px var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(120, 120, 130, 0.85);
+  background: var(--bar-glass, rgba(251, 250, 248, 0.92));
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.ProseMirror-selectednode.ts-numrestart::after {
+  border-color: rgba(70, 110, 255, 0.6);
+}
+@media print {
+  .ts-numrestart {
+    break-after: page;
+  }
+  .ts-numrestart::after {
+    display: none;
+  }
+}
+
 /* Manual page break: zero-height in flow (the next block starts the page
    exactly like the PDF); a floating chip marks it for editing. */
 .ts-pagebreak {

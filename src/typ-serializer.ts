@@ -425,6 +425,10 @@ function blockToTyp(node: PMNode, indent = ''): string {
     }
     case 'page_break':
       return indent + '#pagebreak()\n\n';
+    case 'numbering_restart':
+      // Front matter ends: switch to the document's numbering format and
+      // restart at 1 (the set page rule itself starts a new page).
+      return indent + `#set page(numbering: "${docNumFormat}")\n#counter(page).update(1)\n\n`;
     case 'horizontal_rule':
       return indent + '#line(length: 100%)\n\n';
     case 'image':
@@ -442,6 +446,8 @@ function containsMath(doc: PMNode): boolean {
   });
   return found;
 }
+
+let docNumFormat = '1';
 
 export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
   exportOpts = opts;
@@ -462,7 +468,14 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
       : `margin: (top: ${s.marginTop}in, right: ${s.marginRight}in, bottom: ${s.marginBottom}in, left: ${s.marginLeft}in)`;
     const pageArgs = [`paper: "${paperName}"`, marginArg];
     if (s.landscape) pageArgs.push('flipped: true');
-    if (s.pageNumShow) pageArgs.push(`numbering: "${s.pageNumFormat}"`, `number-align: ${s.pageNumAlign}`);
+    let hasRestart = false;
+    doc.forEach((n) => {
+      if (n.type.name === 'numbering_restart') hasRestart = true;
+    });
+    docNumFormat = s.pageNumFormat;
+    // With a restart marker, front-matter pages number in roman.
+    const frontFormat = hasRestart ? 'i' : s.pageNumFormat;
+    if (s.pageNumShow) pageArgs.push(`numbering: "${frontFormat}"`, `number-align: ${s.pageNumAlign}`);
     if (s.headerText) {
       const inner = escapeTyp(s.headerText).replace(/\\\{page\\\}|\{page\}/g, '#context counter(page).display()');
       const body = `align(${s.headerAlign})[${inner}]`;

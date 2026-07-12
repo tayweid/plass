@@ -26,6 +26,14 @@ const pageBreak: NodeSpec = {
   toDOM: () => ['div', { 'data-page-break': '', class: 'ts-pagebreak', contenteditable: 'false' }],
 };
 
+const numberingRestart: NodeSpec = {
+  group: 'block',
+  atom: true,
+  selectable: true,
+  parseDOM: [{ tag: 'div[data-numbering-restart]' }],
+  toDOM: () => ['div', { 'data-numbering-restart': '', class: 'ts-numrestart', contenteditable: 'false' }],
+};
+
 // Front matter: title, authors, date — centered textblocks — and the
 // abstract (a narrower block of paragraphs; its "Abstract" heading is
 // painted by CSS and emitted by the exporter, never stored).
@@ -262,6 +270,7 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
   .addToEnd('bibliography', bibliography)
   .addToEnd('eq_ref', eqRef)
   .addToEnd('page_break', pageBreak)
+  .addToEnd('numbering_restart', numberingRestart)
   .addToEnd('doc_title', docTitle)
   .addToEnd('doc_authors', docAuthors)
   .addToEnd('doc_date', docDate)

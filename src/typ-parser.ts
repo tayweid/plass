@@ -179,7 +179,11 @@ export function typToDoc(src: string): TypImport {
   // hand-written files get the default.
   settings.numberEquations = sawSet ? sawNumbering : DEFAULT_SETTINGS.numberEquations;
 
+  restartFormat = null;
   const blocks = parseBlocks(lines.slice(i), warnings);
+  if (restartFormat === '1' || restartFormat === '— 1 —' || restartFormat === 'i' || restartFormat === '1 / 1') {
+    settings.pageNumFormat = restartFormat;
+  }
   if (!blocks.length) blocks.push(schema.nodes.paragraph.create());
   return { doc: schema.nodes.doc.create({ settings, bib: importBib }, blocks), warnings };
 }
@@ -264,6 +268,9 @@ function fuseDecimalColumns(table: PMNode, logicalDecimals: number[]): PMNode {
 function unescapeTypText(t: string): string {
   return t.replace(/\\([\\#$*_`@<>\[\]])/g, '$1');
 }
+
+/** Body numbering format captured from a numbering-restart marker. */
+let restartFormat: string | null = null;
 
 function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
   const out: PMNode[] = [];
@@ -392,6 +399,17 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     }
 
     // manual page break
+    {
+      const nm = /^#set page\(numbering: "([^"]*)"\)$/.exec(t);
+      if (nm && lines[i + 1]?.trim() === '#counter(page).update(1)') {
+        out.push(schema.nodes.numbering_restart.create());
+        // The marker line carries the BODY numbering format; the doc-level
+        // set page held the roman front-matter format.
+        restartFormat = nm[1];
+        i += 2;
+        continue;
+      }
+    }
     if (t === '#pagebreak()') {
       out.push(schema.nodes.page_break.create());
       i++;

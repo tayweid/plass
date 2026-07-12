@@ -78,7 +78,32 @@ function renderPages(info: PageInfo) {
   stackEl.style.height = `${info.count * (info.pageH + info.gap) - info.gap}px`;
   pageCount = info.count;
   const s = getSettings(view.state);
-  const sig = `${info.count}:${info.pageH}:${info.marginBottom}:${info.marginLeft}:${info.marginRight}:${s.pageNumShow}:${s.pageNumFormat}:${s.pageNumAlign}:${s.pageNumStart}:${s.headerText}:${s.headerAlign}:${s.headerFirstPage}`;
+  // A numbering-restart marker splits the document: roman front matter,
+  // then the body restarts at 1 in the document's format.
+  let restartPage = -1;
+  {
+    let markerPos = -1;
+    view.state.doc.forEach((node, offset) => {
+      if (markerPos < 0 && node.type.name === 'numbering_restart') markerPos = offset;
+    });
+    if (markerPos >= 0) {
+      try {
+        const host = view.dom.parentElement ?? view.dom;
+        const stackTop = host.getBoundingClientRect().top;
+        const c = view.coordsAtPos(markerPos + 1);
+        restartPage = Math.min(info.count - 1, Math.max(0, Math.round((c.top - stackTop) / (info.pageH + info.gap))));
+      } catch {
+        restartPage = -1;
+      }
+    }
+  }
+  const folio = (k: number) =>
+    restartPage < 0
+      ? formatPageNumber(s, k + 1, info.count)
+      : k < restartPage
+        ? formatPageNumber({ ...s, pageNumFormat: 'i' }, k + 1, restartPage)
+        : formatPageNumber(s, k - restartPage + 1, info.count - restartPage);
+  const sig = `${info.count}:${info.pageH}:${info.marginBottom}:${info.marginLeft}:${info.marginRight}:${s.pageNumShow}:${s.pageNumFormat}:${s.pageNumAlign}:${s.pageNumStart}:${s.headerText}:${s.headerAlign}:${s.headerFirstPage}:${restartPage}`;
   if (sig !== pageSignature) {
     pageSignature = sig;
     const frag = document.createDocumentFragment();
@@ -97,7 +122,12 @@ function renderPages(info: PageInfo) {
         head.style.top = `${top + 0.7 * (s.marginTop * 96) - 1.2 * em}px`;
         head.style.textAlign = s.headerAlign;
         head.style.padding = `0 ${info.marginRight}px 0 ${info.marginLeft}px`;
-        head.textContent = s.headerText.replace(/\{page\}/g, formatPageNumber({ ...s, pageNumFormat: '1' }, k + 1, info.count));
+        head.textContent = s.headerText.replace(
+          /\{page\}/g,
+          restartPage < 0 || k >= restartPage
+            ? formatPageNumber({ ...s, pageNumFormat: '1' }, restartPage < 0 ? k + 1 : k - restartPage + 1, info.count)
+            : formatPageNumber({ ...s, pageNumFormat: 'i' }, k + 1, restartPage),
+        );
         frag.appendChild(head);
       }
       if (s.pageNumShow) {
@@ -107,7 +137,7 @@ function renderPages(info: PageInfo) {
         num.style.top = `${top + info.pageH - (2 / 3) * info.marginBottom - 0.55 * s.sizePt * (4 / 3)}px`;
         num.style.textAlign = s.pageNumAlign;
         num.style.padding = `0 ${info.marginRight}px 0 ${info.marginLeft}px`;
-        num.textContent = formatPageNumber(s, k + 1, info.count);
+        num.textContent = folio(k);
         frag.appendChild(num);
       }
     }
