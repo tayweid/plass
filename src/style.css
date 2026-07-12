@@ -156,11 +156,13 @@ body {
 /* Save-state edge on the title pill (the floating pod): a quiet green
    ring when the paper is safely on disk, warm red while it is not. */
 .tb-pod-saved {
-  border-color: rgba(110, 165, 120, 0.6);
+  border-color: rgba(90, 155, 100, 0.9);
+  box-shadow: 0 0 0 1px rgba(90, 155, 100, 0.35), 0 8px 24px rgba(0, 0, 0, 0.08);
 }
 
 .tb-pod-unsaved {
-  border-color: rgba(205, 110, 95, 0.6);
+  border-color: rgba(200, 95, 80, 0.9);
+  box-shadow: 0 0 0 1px rgba(200, 95, 80, 0.35), 0 8px 24px rgba(0, 0, 0, 0.08);
 }
 
 .tb-file:hover {
@@ -1895,10 +1897,28 @@ body {
   max-width: 150px;
 }
 
+/* Settings toggles: a quiet dot — hollow off, accent-filled on. */
 .settings-row input[type='checkbox'] {
-  accent-color: var(--accent);
+  appearance: none;
+  -webkit-appearance: none;
   margin: 0;
   display: block;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bar-hairline);
+  background: transparent;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+
+.settings-row input[type='checkbox']:hover {
+  border-color: var(--bar-ink-soft);
+}
+
+.settings-row input[type='checkbox']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 /* Custom dropdown (replaces native selects: OS option lists have tall,
