@@ -26,6 +26,11 @@ export interface DocSettings {
   pageNumFormat: '1' | '— 1 —' | 'i' | '1 / 1';
   pageNumAlign: 'left' | 'center' | 'right';
   pageNumStart: number;
+  /** Running header text ('' = none). Use {page} for the page number. */
+  headerText: string;
+  headerAlign: 'left' | 'center' | 'right';
+  /** Show the header on page 1 (off = academic convention). */
+  headerFirstPage: boolean;
   /** One definition per line: \name = expansion (KaTeX macros). */
   mathMacros: string;
 }
@@ -48,6 +53,9 @@ export const DEFAULT_SETTINGS: DocSettings = {
   pageNumFormat: '1',
   pageNumAlign: 'center',
   pageNumStart: 1,
+  headerText: '',
+  headerAlign: 'right',
+  headerFirstPage: false,
   mathMacros: '',
 };
 
@@ -208,6 +216,15 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
 
   row('Font', select(FONTS.map((f) => [f, f]), s.font, (v) => patch({ font: v })));
   row('Size', select([10, 11, 12, 12.5, 13, 14].map((n) => [n, `${n} pt`] as [number, string]), s.sizePt, (v) => patch({ sizePt: +v })));
+  {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'none — try: Short Title · {page}';
+    input.value = s.headerText;
+    input.addEventListener('change', () => patch({ headerText: input.value }));
+    row('Header', input);
+  }
+  row('Header align', select([['left', 'Left'], ['center', 'Center'], ['right', 'Right']] as Array<[string, string]>, s.headerAlign, (v) => patch({ headerAlign: v as DocSettings['headerAlign'] })));
   row('Paragraphs', select([['block', 'Block (spaced)'], ['indent', 'Indented (classic)']] as Array<[string, string]>, s.parIndent ? 'indent' : 'block', (v) => patch({ parIndent: v === 'indent' })));
   row('Line spacing', select([1.3, 1.4, 1.5, 1.65, 1.8].map((n) => [n, String(n)] as [number, string]), s.lineHeight, (v) => patch({ lineHeight: +v })));
   row('Paper', select([['letter', 'US Letter'], ['a4', 'A4'], ['legal', 'US Legal'], ['b5', 'B5']] as Array<[string, string]>, s.page, (v) => patch({ page: v as DocSettings['page'] })));

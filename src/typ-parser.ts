@@ -130,6 +130,15 @@ export function typToDoc(src: string): TypImport {
       }
       const nAlign = /number-align:\s*(left|center|right)/.exec(m[1])?.[1];
       if (nAlign) settings.pageNumAlign = nAlign as typeof settings.pageNumAlign;
+      // Running header: header: [context if(...) {] align(X)[text] [}]
+      const header = /header:\s*(context if\(counter\(page\)\.get\(\)\.first\(\) > 1\) \{ )?align\((left|center|right)\)\[(.*?)\](?: \})?(?:,|$)/.exec(m[1]);
+      if (header) {
+        settings.headerFirstPage = !header[1];
+        settings.headerAlign = header[2] as typeof settings.headerAlign;
+        settings.headerText = unescapeTypText(
+          header[3].replace(/#context counter\(page\)\.display\(\)/g, '{page}'),
+        );
+      }
       i++;
       continue;
     }

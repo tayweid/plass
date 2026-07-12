@@ -78,7 +78,7 @@ function renderPages(info: PageInfo) {
   stackEl.style.height = `${info.count * (info.pageH + info.gap) - info.gap}px`;
   pageCount = info.count;
   const s = getSettings(view.state);
-  const sig = `${info.count}:${info.pageH}:${info.marginBottom}:${info.marginLeft}:${info.marginRight}:${s.pageNumShow}:${s.pageNumFormat}:${s.pageNumAlign}:${s.pageNumStart}`;
+  const sig = `${info.count}:${info.pageH}:${info.marginBottom}:${info.marginLeft}:${info.marginRight}:${s.pageNumShow}:${s.pageNumFormat}:${s.pageNumAlign}:${s.pageNumStart}:${s.headerText}:${s.headerAlign}:${s.headerFirstPage}`;
   if (sig !== pageSignature) {
     pageSignature = sig;
     const frag = document.createDocumentFragment();
@@ -88,6 +88,18 @@ function renderPages(info: PageInfo) {
       box.className = 'page-box';
       box.style.top = `${top}px`;
       frag.appendChild(box);
+      if (s.headerText && (s.headerFirstPage || k > 0)) {
+        const head = document.createElement('div');
+        head.className = 'page-num page-header';
+        // Typst header: block bottom sits header-ascent (30%) above the
+        // content area, i.e. at 0.7 * top margin.
+        const em = s.sizePt * (4 / 3);
+        head.style.top = `${top + 0.7 * (s.marginTop * 96) - 1.2 * em}px`;
+        head.style.textAlign = s.headerAlign;
+        head.style.padding = `0 ${info.marginRight}px 0 ${info.marginLeft}px`;
+        head.textContent = s.headerText.replace(/\{page\}/g, formatPageNumber({ ...s, pageNumFormat: '1' }, k + 1, info.count));
+        frag.appendChild(head);
+      }
       if (s.pageNumShow) {
         const num = document.createElement('div');
         num.className = 'page-num';

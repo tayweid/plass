@@ -462,6 +462,15 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     const pageArgs = [`paper: "${paperName}"`, marginArg];
     if (s.landscape) pageArgs.push('flipped: true');
     if (s.pageNumShow) pageArgs.push(`numbering: "${s.pageNumFormat}"`, `number-align: ${s.pageNumAlign}`);
+    if (s.headerText) {
+      const inner = escapeTyp(s.headerText).replace(/\\\{page\\\}|\{page\}/g, '#context counter(page).display()');
+      const body = `align(${s.headerAlign})[${inner}]`;
+      pageArgs.push(
+        s.headerFirstPage
+          ? `header: ${body}`
+          : `header: context if(counter(page).get().first() > 1) { ${body} }`,
+      );
+    }
     out += `#set page(${pageArgs.join(', ')})\n`;
     out += parityRules(s);
     const fonts = [s.font, ...(opts.fontFallback ?? []).filter((f) => f !== s.font)];
