@@ -1895,29 +1895,92 @@ body {
   max-width: 150px;
 }
 
-/* Settings toggles render as a quiet dot (native checkboxes sit taller
-   than the row text and won't center). Hollow = off, filled = on. */
 .settings-row input[type='checkbox'] {
-  appearance: none;
-  -webkit-appearance: none;
+  accent-color: var(--accent);
   margin: 0;
   display: block;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  border: 1.5px solid var(--bar-hairline);
-  background: transparent;
+}
+
+/* Custom dropdown (replaces native selects: OS option lists have tall,
+   checkmarked rows that never align with 12px panel type). */
+.ts-select {
+  position: relative;
+  display: inline-block;
+}
+
+.ts-select-btn {
+  font: 12px var(--sans);
+  color: var(--bar-ink);
+  background: rgba(0, 0, 0, 0.045);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 8px;
+  padding: 3px 22px 3px 8px;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
-  transition: background 100ms ease, border-color 100ms ease;
+  position: relative;
 }
 
-.settings-row input[type='checkbox']:hover {
-  border-color: var(--bar-ink-soft);
+.ts-select-btn::after {
+  content: '';
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1.4px solid var(--bar-ink-soft);
+  border-bottom: 1.4px solid var(--bar-ink-soft);
+  transform: translateY(-70%) rotate(45deg);
 }
 
-.settings-row input[type='checkbox']:checked {
+.ts-select-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 60;
+  min-width: 100%;
+  background: var(--bar-glass);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+}
+
+.ts-select-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font: 12px var(--sans);
+  color: var(--bar-ink);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px 4px 7px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ts-select-item:hover {
+  background: var(--bar-press);
+}
+
+.ts-select-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: transparent;
+  flex: none;
+}
+
+.ts-select-on .ts-select-dot {
   background: var(--accent);
-  border-color: var(--accent);
 }
 
 .settings-hint {

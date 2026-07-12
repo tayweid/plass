@@ -192,21 +192,62 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
     panel.appendChild(r);
   };
 
+  // Custom dropdown: native <select> option lists are OS-rendered (tall
+  // rows, checkmarks that don't align). This one is compact, marks the
+  // current choice with a small dot, and matches the panel's type.
   const select = <T extends string | number>(
     options: Array<[T, string]>,
     value: T,
     onChange: (v: string) => void,
   ) => {
-    const sel = document.createElement('select');
-    for (const [v, text] of options) {
-      const o = document.createElement('option');
-      o.value = String(v);
-      o.textContent = text;
-      if (v === value) o.selected = true;
-      sel.appendChild(o);
-    }
-    sel.addEventListener('change', () => onChange(sel.value));
-    return sel;
+    let current = String(value);
+    const wrap = document.createElement('span');
+    wrap.className = 'ts-select';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ts-select-btn';
+    const labelFor = (v: string) => options.find(([ov]) => String(ov) === v)?.[1] ?? v;
+    btn.textContent = labelFor(current);
+    wrap.appendChild(btn);
+    let menu: HTMLElement | null = null;
+    const closeMenu = () => {
+      menu?.remove();
+      menu = null;
+      document.removeEventListener('mousedown', onOutside, true);
+    };
+    const onOutside = (e: MouseEvent) => {
+      if (menu && !wrap.contains(e.target as Node)) closeMenu();
+    };
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (menu) {
+        closeMenu();
+        return;
+      }
+      menu = document.createElement('div');
+      menu.className = 'ts-select-menu';
+      for (const [v, text] of options) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'ts-select-item' + (String(v) === current ? ' ts-select-on' : '');
+        item.innerHTML = `<span class="ts-select-dot"></span>${text}`;
+        item.addEventListener('click', () => {
+          current = String(v);
+          btn.textContent = labelFor(current);
+          closeMenu();
+          onChange(current);
+        });
+        menu.appendChild(item);
+      }
+      wrap.appendChild(menu);
+      document.addEventListener('mousedown', onOutside, true);
+    });
+    // Value setter for callers that patch it programmatically.
+    (wrap as HTMLElement & { set?: (v: string) => void }).set = (v: string) => {
+      current = v;
+      btn.textContent = labelFor(v);
+    };
+    return wrap;
   };
 
   const checkbox = (value: boolean, onChange: (v: boolean) => void) => {
