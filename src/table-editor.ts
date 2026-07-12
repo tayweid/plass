@@ -31,8 +31,9 @@ interface GridModel {
   style: string;
   /** Custom #table params (midrules excluded — they live in `hlines`). */
   params: string;
-  /** Row boundaries (1-based: above row n) carrying a midrule. */
-  hlines: Set<number>;
+  /** Row boundaries (1-based: above row n) carrying a midrule, with its
+   * weight ('light' 0.05em | 'heavy' 0.08em). */
+  hlines: Map<number, 'light' | 'heavy'>;
   caption: string;
   label: string;
   /** Per-column widths ('auto' | '1fr' | '2cm' | …). */
@@ -43,11 +44,16 @@ interface GridModel {
   fontSize: string;
   /** Column boundaries (1..cols-1) carrying a vertical rule. */
   vlines: Set<number>;
+  /** Cell inset preset ('' = Typst default, else a canonical length). */
+  inset: string;
 }
 
-const HLINE_RE = /table\.hline\(\s*y\s*:\s*(\d+)[^)]*\)\s*,?/g;
+const HLINE_RE = /table\.hline\(\s*y\s*:\s*(\d+)(?:[^)]*?stroke\s*:\s*([\d.]+)em)?[^)]*\)\s*,?/g;
 const VLINE_RE = /table\.vline\(\s*x\s*:\s*(\d+)[^)]*\)\s*,?/g;
 const COLUMNS_RE = /columns\s*:\s*\(([^)]*)\)\s*,?/;
+// Density presets: Typst's table default inset is 5pt.
+const INSETS: Record<string, string> = { compact: '3pt', roomy: '8pt' };
+const INSET_RE = /(^|[\s,(])inset\s*:\s*(3pt|8pt)\s*,?/;
 
 // Canonical fill presets (recognized on read, emitted on write).
 const FILLS: Record<string, string> = {
@@ -76,13 +82,14 @@ function readModel(table: PMNode): GridModel {
     });
     rows.push(cells);
   });
-  const hlines = new Set<number>();
+  const hlines = new Map<number, 'light' | 'heavy'>();
   const vlines = new Set<number>();
+  let inset = '';
   const raw = (table.attrs.params as string) || '';
   let widths: string[] = [];
   const params = raw
-    .replace(HLINE_RE, (_, y) => {
-      hlines.add(+y);
+    .replace(HLINE_RE, (_, y, stroke) => {
+      hlines.set(+y, parseFloat(stroke ?? '0.05') >= 0.07 ? 'heavy' : 'light');
       return '';
     })
     .replace(VLINE_RE, (_, x) => {
@@ -92,6 +99,10 @@ function readModel(table: PMNode): GridModel {
     .replace(COLUMNS_RE, (_, tuple: string) => {
       widths = tuple.split(',').map((w) => w.trim()).filter(Boolean);
       return '';
+    })
+    .replace(INSET_RE, (_, pre: string, val: string) => {
+      inset = val;
+      return pre;
     })
     .replace(/,\s*,/g, ',')
     .replace(/^\s*,\s*/, '')
@@ -123,6 +134,7 @@ function readModel(table: PMNode): GridModel {
     fill,
     fontSize: (table.attrs.fontSize as string) || '',
     vlines,
+    inset,
   };
 }
 
@@ -130,8 +142,11 @@ function composeParams(model: GridModel): string {
   const parts: string[] = [];
   if (model.widths.some((w) => w !== 'auto')) parts.push(`columns: (${model.widths.join(', ')})`);
   if (FILLS[model.fill]) parts.push(FILLS[model.fill]);
+  if (model.inset) parts.push(`inset: ${model.inset}`);
   if (model.params) parts.push(model.params);
-  for (const y of [...model.hlines].sort((a, b) => a - b)) parts.push(`table.hline(y: ${y}, stroke: 0.05em)`);
+  for (const [y, w] of [...model.hlines.entries()].sort((a, b) => a[0] - b[0])) {
+    parts.push(`table.hline(y: ${y}, stroke: ${w === 'heavy' ? '0.08' : '0.05'}em)`);
+  }
   for (const x of [...model.vlines].sort((a, b) => a - b)) parts.push(`table.vline(x: ${x}, stroke: 0.05em)`);
   return parts.join(',\n');
 }
@@ -170,13 +185,14 @@ function cloneModel(m: GridModel): GridModel {
     rows: m.rows.map((r) => r.map((c) => ({ ...c }))),
     style: m.style,
     params: m.params,
-    hlines: new Set(m.hlines),
+    hlines: new Map(m.hlines),
     caption: m.caption,
     label: m.label,
     widths: [...m.widths],
     fill: m.fill,
     fontSize: m.fontSize,
     vlines: new Set(m.vlines),
+    inset: m.inset,
   };
 }
 
@@ -249,6 +265,11 @@ export function openTableEditor(view: EditorView, pos: number) {
           <option value="0.8em">80%</option>
           <option value="0.75em">75%</option>
         </select>
+        <select class="table-card-inset" title="Cell density">
+          <option value="">Normal</option>
+          <option value="3pt">Compact</option>
+          <option value="8pt">Roomy</option>
+        </select>
         <select class="table-card-fill" title="Row shading">
           <option value="none">No fill</option>
           <option value="header">Header fill</option>
@@ -304,6 +325,14 @@ export function openTableEditor(view: EditorView, pos: number) {
   fillSelect.addEventListener('change', () => {
     snapshot();
     model.fill = fillSelect.value;
+    refreshPanel();
+    schedulePreview();
+  });
+  const insetSelect = overlay.querySelector('.table-card-inset') as HTMLSelectElement;
+  insetSelect.value = model.inset;
+  insetSelect.addEventListener('change', () => {
+    snapshot();
+    model.inset = insetSelect.value;
     refreshPanel();
     schedulePreview();
   });
@@ -394,15 +423,19 @@ export function openTableEditor(view: EditorView, pos: number) {
     model.rows.forEach((row, ri) => {
       if (ri > 0) {
         const btr = document.createElement('tr');
-        btr.className = 'tc-boundary' + (model.hlines.has(ri) ? ' tc-boundary-on' : '');
-        btr.title = model.hlines.has(ri) ? 'Remove midrule' : 'Add midrule here';
+        const w = model.hlines.get(ri);
+        btr.className = 'tc-boundary' + (w ? ' tc-boundary-on' : '') + (w === 'heavy' ? ' tc-boundary-heavy' : '');
+        btr.title = !w ? 'Add midrule here' : w === 'light' ? 'Make midrule heavy' : 'Remove midrule';
         const btd = document.createElement('td');
         btd.colSpan = totalCols;
         btr.appendChild(btd);
         btr.addEventListener('click', () => {
           snapshot();
-          if (model.hlines.has(ri)) model.hlines.delete(ri);
-          else model.hlines.add(ri);
+          // Cycle: none -> light -> heavy -> none.
+          const cur = model.hlines.get(ri);
+          if (!cur) model.hlines.set(ri, 'light');
+          else if (cur === 'light') model.hlines.set(ri, 'heavy');
+          else model.hlines.delete(ri);
           renderGrid();
           refreshPanel();
           schedulePreview();
@@ -605,7 +638,11 @@ export function openTableEditor(view: EditorView, pos: number) {
           if (model.rows.length > 1) {
             snapshot();
             model.rows.splice(f.r, 1);
-            model.hlines = new Set([...model.hlines].filter((y) => y <= model.rows.length - 1).map((y) => (y > f.r ? y - 1 : y)));
+            model.hlines = new Map(
+              [...model.hlines.entries()]
+                .filter(([y]) => y <= model.rows.length - 1)
+                .map(([y, w]) => [y > f.r ? y - 1 : y, w] as [number, 'light' | 'heavy']),
+            );
             renderGrid({ r: Math.max(0, f.r - 1), c: f.c });
           }
           break;

@@ -536,6 +536,11 @@ body {
   background: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+.tc-boundary-heavy td::after {
+  height: 2.5px !important;
+  background: rgba(30, 30, 40, 0.85) !important;
+}
+
 .tc-boundary-on td::after {
   background: var(--ink);
 }
