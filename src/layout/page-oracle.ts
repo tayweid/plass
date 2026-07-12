@@ -236,10 +236,30 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
   const pageCount = (raw as PagedLine[] & { pageCount?: number }).pageCount ?? 1;
   if (!raw.length) return { status: 'fail', reason: 'no text layer' };
 
-  // Page numbers render in the footer and reach the text layer too.
-  const all = settings.pageNumShow
-    ? raw.filter((l) => l.text.trim() !== formatPageNumber(settings, l.page + 1, pageCount))
-    : raw;
+  // Page numbers render in the footer and reach the text layer too. A
+  // numbering-restart marker makes folio values non-sequential (roman
+  // front matter, body restarting at 1), so match folio PATTERNS for the
+  // formats in play rather than one exact per-page value.
+  let hasRestart = false;
+  doc.forEach((n) => {
+    if (n.type.name === 'numbering_restart') hasRestart = true;
+  });
+  const folioRe = (fmt: DocSettings['pageNumFormat']): RegExp =>
+    fmt === '1'
+      ? /^\d+$/
+      : fmt === '— 1 —'
+        ? /^— \d+ —$/
+        : fmt === 'i'
+          ? /^[ivxlcdm]+$/
+          : /^\d+ \/ \d+$/;
+  const folioPatterns = hasRestart
+    ? [folioRe(settings.pageNumFormat), folioRe('i')]
+    : [folioRe(settings.pageNumFormat)];
+  const isFolio = (l: PagedLine) =>
+    hasRestart
+      ? folioPatterns.some((re) => re.test(l.text.trim()))
+      : l.text.trim() === formatPageNumber(settings, l.page + 1, pageCount);
+  const all = settings.pageNumShow ? raw.filter((l) => !isFolio(l)) : raw;
 
   const units = buildUnits(doc, resolveAtom);
   const lines = stripFootnoteLines(all, footnoteHeads(doc));
