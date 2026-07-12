@@ -839,6 +839,13 @@ body {
   text-indent: var(--par-indent, 0em);
 }
 
+/* text-indent inherits into inline-block chips (citations, refs, code) and
+   would indent their own first line — only the paragraph's first line may
+   indent. */
+.ProseMirror p * {
+  text-indent: 0;
+}
+
 /* Blocks use bottom margins only (top spacing via padding) so margins never
    collapse: page-gap spacers then insert exactly their own height. */
 .ProseMirror h1,
