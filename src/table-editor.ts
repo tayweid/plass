@@ -508,11 +508,7 @@ export function openTableEditor(view: EditorView, pos: number) {
       t.appendChild(tr);
     });
     gridEl.replaceChildren(t);
-    const spanFree = noSpans();
-    overlay.querySelectorAll<HTMLButtonElement>('[data-act="row+"],[data-act="row-"],[data-act="col+"],[data-act="col-"]').forEach((b) => {
-      b.disabled = !spanFree;
-      b.title = spanFree ? '' : 'Split merged cells before changing the table shape';
-    });
+
     if (focus) {
       const target = gridEl.querySelector<HTMLInputElement>(`input[data-r="${focus.r}"][data-c="${focus.c}"]`);
       (target ?? gridEl.querySelector('input'))?.focus();
@@ -625,40 +621,183 @@ export function openTableEditor(view: EditorView, pos: number) {
   };
   const blank = (header: boolean): CellModel => ({ text: '', align: null, colspan: 1, rowspan: 1, header, rich: null });
 
+  /** Occupancy grid: for each (row, grid-col), which cell covers it.
+   *  origin marks the covering cell's top-left corner. */
+  interface Occ {
+    r: number;
+    ci: number;
+    g0: number;
+    origin: boolean;
+  }
+  const occupancy = (): Array<Array<Occ | null>> => {
+    const width = cols();
+    const grid: Array<Array<Occ | null>> = model.rows.map(() => new Array<Occ | null>(width).fill(null));
+    model.rows.forEach((row, r) => {
+      let gc = 0;
+      row.forEach((cell, ci) => {
+        while (gc < width && grid[r][gc]) gc++;
+        for (let dr = 0; dr < cell.rowspan; dr++) {
+          for (let dc = 0; dc < cell.colspan; dc++) {
+            if (grid[r + dr]) grid[r + dr][gc + dc] = { r, ci, g0: gc, origin: dr === 0 && dc === 0 };
+          }
+        }
+        gc += cell.colspan;
+      });
+    });
+    return grid;
+  };
+  /** Grid column of the focused cell's LEFT edge. */
+  const gridColOf = (f: { r: number; c: number }): number => {
+    const grid = occupancy();
+    for (const cell of grid[f.r] ?? []) {
+      if (cell && cell.r === f.r && cell.ci === f.c) return cell.g0;
+    }
+    return 0;
+  };
+  /** Insert a blank grid column at boundary G (cells spanning G widen). */
+  const insertGridCol = (G: number) => {
+    const grid = occupancy();
+    const widened = new Set<string>();
+    model.rows.forEach((row, r) => {
+      const left = G > 0 ? grid[r][G - 1] : null;
+      const right = G < grid[r].length ? grid[r][G] : null;
+      if (left && right && left.r === right.r && left.ci === right.ci) {
+        // One cell spans the boundary: widen it (once, at its origin row).
+        const key = `${left.r}:${left.ci}`;
+        if (!widened.has(key)) {
+          widened.add(key);
+          model.rows[left.r][left.ci].colspan++;
+        }
+        return;
+      }
+      if (right && right.r !== r) return; // covered by a rowspan from above
+      // Insert a blank before the cell that starts at/after G.
+      const at = right ? right.ci : row.length;
+      row.splice(at, 0, blank(row[Math.min(at, row.length - 1)]?.header ?? false));
+    });
+    model.widths.splice(Math.min(G, model.widths.length), 0, 'auto');
+    model.vlines = new Set([...model.vlines].map((x) => (x >= G ? x + 1 : x)));
+  };
+  /** Delete grid column G (cells spanning it shrink). */
+  const deleteGridCol = (G: number) => {
+    const grid = occupancy();
+    const shrunk = new Set<string>();
+    for (let r = model.rows.length - 1; r >= 0; r--) {
+      const hit = grid[r][G];
+      if (!hit || hit.r !== r) continue; // covered from above: owner handles it
+      const cell = model.rows[hit.r][hit.ci];
+      const key = `${hit.r}:${hit.ci}`;
+      if (cell.colspan > 1) {
+        if (!shrunk.has(key)) {
+          shrunk.add(key);
+          cell.colspan--;
+        }
+      } else {
+        model.rows[hit.r].splice(hit.ci, 1);
+      }
+    }
+    model.widths.splice(Math.min(G, model.widths.length - 1), 1);
+    model.vlines = new Set([...model.vlines].filter((x) => x <= cols()).map((x) => (x > G ? x - 1 : x)));
+  };
+  /** Insert a blank row after row R (rowspans crossing the seam widen). */
+  const insertRowAfter = (R: number) => {
+    const grid = occupancy();
+    const width = cols();
+    const newRow: CellModel[] = [];
+    const grown = new Set<string>();
+    for (let g = 0; g < width; g++) {
+      const above = grid[R][g];
+      const below = R + 1 < grid.length ? grid[R + 1][g] : null;
+      if (above && below && above.r === below.r && above.ci === below.ci) {
+        // A rowspan crosses the seam: grow it instead of adding a cell.
+        const key = `${above.r}:${above.ci}`;
+        if (!grown.has(key)) {
+          grown.add(key);
+          model.rows[above.r][above.ci].rowspan++;
+        }
+        g = above.g0 + model.rows[above.r][above.ci].colspan - 1;
+        continue;
+      }
+      newRow.push(blank(false));
+    }
+    model.rows.splice(R + 1, 0, newRow);
+    model.hlines = new Map(
+      [...model.hlines.entries()].map(([y, w]) => [y > R + 1 ? y + 1 : y, w] as [number, 'light' | 'heavy']),
+    );
+  };
+  /** Delete row R (rowspans through it shrink; origins in it push their
+   *  remainder down). */
+  const deleteRow = (R: number) => {
+    const grid = occupancy();
+    const width = cols();
+    // Cells ORIGINATING in row R with rowspan > 1 continue below: move the
+    // remainder into row R+1 at the right position.
+    const moves: Array<{ g0: number; cell: CellModel }> = [];
+    const handled = new Set<string>();
+    for (let g = 0; g < width; g++) {
+      const hit = grid[R][g];
+      if (!hit) continue;
+      const key = `${hit.r}:${hit.ci}`;
+      if (handled.has(key)) continue;
+      handled.add(key);
+      const cell = model.rows[hit.r][hit.ci];
+      if (hit.r === R) {
+        if (cell.rowspan > 1) moves.push({ g0: hit.g0, cell: { ...cell, rowspan: cell.rowspan - 1 } });
+      } else {
+        cell.rowspan--; // spans through R from above
+      }
+    }
+    model.rows.splice(R, 1);
+    if (moves.length && R < model.rows.length) {
+      const target = model.rows[R];
+      const tGrid = occupancy();
+      for (const mv of moves.sort((a, b) => a.g0 - b.g0)) {
+        // Insertion index: before the first origin cell at/after g0.
+        let at = target.length;
+        for (let g = mv.g0; g < width; g++) {
+          const hit2 = tGrid[R]?.[g];
+          if (hit2 && hit2.r === R) {
+            at = hit2.ci;
+            break;
+          }
+        }
+        target.splice(at, 0, mv.cell);
+      }
+    }
+    model.hlines = new Map(
+      [...model.hlines.entries()]
+        .filter(([y]) => y <= model.rows.length - 1)
+        .map(([y, w]) => [y > R ? y - 1 : y, w] as [number, 'light' | 'heavy']),
+    );
+  };
+
   overlay.querySelectorAll<HTMLButtonElement>('.table-card-tools button').forEach((btn) => {
     btn.addEventListener('click', () => {
       const f = focused();
       switch (btn.dataset.act) {
         case 'row+':
           snapshot();
-          model.rows.splice(f.r + 1, 0, model.rows[f.r].map(() => blank(false)));
-          renderGrid({ r: f.r + 1, c: f.c });
+          insertRowAfter(f.r);
+          renderGrid({ r: f.r + 1, c: 0 });
           break;
         case 'row-':
           if (model.rows.length > 1) {
             snapshot();
-            model.rows.splice(f.r, 1);
-            model.hlines = new Map(
-              [...model.hlines.entries()]
-                .filter(([y]) => y <= model.rows.length - 1)
-                .map(([y, w]) => [y > f.r ? y - 1 : y, w] as [number, 'light' | 'heavy']),
-            );
-            renderGrid({ r: Math.max(0, f.r - 1), c: f.c });
+            deleteRow(f.r);
+            renderGrid({ r: Math.max(0, f.r - 1), c: 0 });
           }
           break;
-        case 'col+':
+        case 'col+': {
           snapshot();
-          model.rows.forEach((row) => row.splice(Math.min(f.c + 1, row.length), 0, blank(row[Math.min(f.c, row.length - 1)].header)));
-          model.widths.splice(Math.min(f.c + 1, model.widths.length), 0, 'auto');
-          model.vlines = new Set([...model.vlines].map((x) => (x > f.c + 1 ? x + 1 : x)));
+          const cell = model.rows[f.r]?.[f.c];
+          insertGridCol(gridColOf(f) + (cell?.colspan ?? 1));
           renderGrid({ r: f.r, c: f.c + 1 });
           break;
+        }
         case 'col-':
           if (cols() > 1) {
             snapshot();
-            model.rows.forEach((row) => row.length > 1 && row.splice(Math.min(f.c, row.length - 1), 1));
-            model.widths.splice(Math.min(f.c, model.widths.length - 1), 1);
-            model.vlines = new Set([...model.vlines].filter((x) => x <= cols()).map((x) => (x > f.c ? x - 1 : x)));
+            deleteGridCol(gridColOf(f));
             renderGrid({ r: f.r, c: Math.max(0, f.c - 1) });
           }
           break;
