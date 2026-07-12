@@ -31,12 +31,33 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { Measurer } from './layout/measure';
 import { layoutBlock, type LineLayout } from './layout/paragraph';
 import { buildSpec, TypstOracle, type AtomResolver, type SpecKind } from './layout/typst-oracle';
+import { portBreaks } from './layout/port/adapter';
+import { loadPrimitives, primitives } from './layout/primitives';
 import { PageOracle } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros } from './settings';
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
 import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
 import { eqKey } from './equations';
+
+/** Phase-3 flag (PORT.md): drive live typing with the ported Typst
+ * breaker. Console: __usePort(false) to A/B against the legacy path;
+ * __portStats() reports how often each path ran. */
+let USE_PORT = true;
+let portHits = 0;
+let legacyHits = 0;
+let adapterNulls = 0;
+let partitionMisses = 0;
+if (typeof window !== 'undefined') {
+  const w = window as unknown as {
+    __usePort: (v: boolean) => void;
+    __portStats: () => { port: number; legacy: number };
+  };
+  w.__usePort = (v) => {
+    USE_PORT = v;
+  };
+  w.__portStats = () => ({ port: portHits, legacy: legacyHits, adapterNulls, partitionMisses });
+}
 
 /** Fonts with editor↔Typst parity; the oracle only runs for these. */
 const ORACLE_FONTS = new Set(['New Computer Modern', 'STIX Two Text', 'Libertinus Serif']);
@@ -82,6 +103,12 @@ const FN_GAP = 6;
 const FN_SEP = 30;
 
 const viewRegistry = new WeakMap<EditorView, TypesetView>();
+
+/** Bounding rect of the node at a position, if it has a DOM element. */
+function rectOfNode(view: EditorView, pos: number): DOMRect | null {
+  const el = view.nodeDOM(pos);
+  return el instanceof HTMLElement ? el.getBoundingClientRect() : null;
+}
 
 /** Canvas text width at an exact CSS font (for painted-prefix modeling). */
 const measureCtx = document.createElement('canvas').getContext('2d')!;
@@ -154,11 +181,6 @@ class TypesetView {
   /** Signature of the last dispatched decoration set: identical layouts are
    *  never re-dispatched, so no-op runs cause zero paints. */
   private lastDecoSig = '';
-  /** The caret's textblock while actively editing: it belongs to the user —
-   *  no re-optimization (settle or oracle) touches it until the caret
-   *  leaves or a long idle passes. Corrections only when motion is expected. */
-  private owned: number | null = null;
-  private ownTimer = 0;
   private lastLiveDoc: PMNode | null = null;
   private editTimer = 0;
   private lastPageCount = 0;
@@ -173,6 +195,9 @@ class TypesetView {
   ) {
     viewRegistry.set(view, this);
     this.measurer = new Measurer(view.dom);
+    // The ported Typst line breaker (PORT.md): loads the sidecar WASM +
+    // fonts in the background; until ready, liveRun uses the legacy path.
+    loadPrimitives().catch((e) => console.warn('sidecar primitives failed to load', e));
     this.oracle = new TypstOracle(() => {
       if (!this.destroyed) this.schedule();
     }, FONT_FALLBACK);
@@ -180,9 +205,58 @@ class TypesetView {
       if (!this.destroyed) this.schedule();
     });
     if (import.meta.env.DEV) {
-      const w = window as unknown as { __oracle?: TypstOracle; __pageOracle?: PageOracle };
+      const w = window as unknown as {
+        __oracle?: TypstOracle;
+        __pageOracle?: PageOracle;
+        __breakSig?: () => string;
+      };
       w.__oracle = this.oracle;
       w.__pageOracle = this.pageOracle;
+      (w as unknown as { __comparePort: () => unknown }).__comparePort = () => {
+        const state = this.view.state;
+        const settings = getSettings(state);
+        const resolveAtom = this.atomResolver();
+        const settingsSig = `${settings.font}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}`;
+        const out: unknown[] = [];
+        state.doc.descendants((node, pos) => {
+          if (!node.isTextblock || node.type.name !== 'paragraph') return true;
+          const el = this.view.nodeDOM(pos);
+          if (!(el instanceof HTMLElement)) return false;
+          const cs = getComputedStyle(el);
+          const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+          const spec = buildSpec(node, resolveAtom);
+          if (!spec) return false;
+          const okey = `${settingsSig}|body|w${measure.toFixed(1)}|${spec.key}`;
+          const oentry = this.oracle.get(okey);
+          const atomWidth = (offset: number, child: PMNode) => {
+            const dom = this.view.nodeDOM(pos + 1 + offset);
+            return dom instanceof HTMLElement ? dom.getBoundingClientRect().width : child.nodeSize * 8;
+          };
+          const port = portBreaks(node, measure, atomWidth, {
+            sizePt: settings.sizePt,
+            hyphenate: settings.hyphenate,
+            atomWidthPt: this.typstAtomWidthPt(),
+          });
+          const fmt = (b: { at: number; hyphen: boolean }[] | null | undefined) =>
+            b ? b.map((x) => (x.hyphen ? 'hy' : 'br') + x.at).join(',') : String(b);
+          if (oentry?.status === 'ok' && port && fmt(oentry.breaks) !== fmt(port)) {
+            out.push({ pos, text: node.textContent.slice(0, 40), oracle: fmt(oentry.breaks), port: fmt(port) });
+          }
+          return false;
+        });
+        return out;
+      };
+      w.__breakSig = () => {
+        const st = typesetKey.getState(this.view.state);
+        if (!st) return '';
+        const keys: string[] = [];
+        st.decos.find(undefined, undefined, (spec) => {
+          const k = (spec as { key?: string } | null)?.key;
+          if (k && /^(br|hy):/.test(k)) keys.push(k);
+          return false;
+        });
+        return keys.sort().join('|');
+      };
     }
     this.resizeObserver = new ResizeObserver(() => {
       const w = this.view.dom.clientWidth;
@@ -214,30 +288,9 @@ class TypesetView {
       this.pageOracle.clear();
     }
     if (view.state.doc !== prevState.doc) {
-      this.owned = this.caretBlockPos();
-      clearTimeout(this.ownTimer);
-      this.ownTimer = window.setTimeout(() => {
-        this.owned = null;
-        this.schedule();
-      }, 4000);
       this.scheduleLive();
       this.scheduleAfterEdit();
-    } else if (view.state.selection !== prevState.selection && this.owned !== null) {
-      // Caret left the owned block: release it and apply the held layout.
-      if (this.caretBlockPos() !== this.owned) {
-        this.owned = null;
-        clearTimeout(this.ownTimer);
-        this.schedule();
-      }
     }
-  }
-
-  private caretBlockPos(): number | null {
-    const { $from } = this.view.state.selection;
-    for (let d = $from.depth; d > 0; d--) {
-      if ($from.node(d).isTextblock || $from.node(d).type.name === 'footnote') return $from.before(d);
-    }
-    return null;
   }
 
   /** Re-typeset just the edited blocks with the JS Knuth-Plass breaker IN
@@ -292,35 +345,29 @@ class TypesetView {
     const fresh: Decoration[] = [];
     for (const b of blocks) {
       const blockTo = b.pos + 1 + b.node.content.size;
-      const stale = decos.find(b.pos, blockTo, (spec) => {
-        const key = (spec as { key?: string } | null)?.key;
-        return !key || /^(br|hy):/.test(key);
-      });
+      // Footnote bodies are DOM-nested inside the paragraph: their break +
+      // justification decorations must survive the strip, or the footnote
+      // visibly re-wraps on every keystroke in its anchor paragraph.
+      const fnSpans: Array<[number, number]> = [];
+      if (b.para) {
+        b.node.forEach((child, offset) => {
+          if (child.type.name === 'footnote') {
+            fnSpans.push([b.pos + 1 + offset, b.pos + 1 + offset + child.nodeSize]);
+          }
+        });
+      }
+      const stale = decos
+        .find(b.pos, blockTo, (spec) => {
+          const key = (spec as { key?: string } | null)?.key;
+          return !key || /^(br|hy):/.test(key);
+        })
+        .filter((d) => !fnSpans.some(([a, z]) => d.from >= a && d.from < z));
       // remove() nulls out entries of the array it's given — pass a copy,
       // stale is read again below for the frozen prefix.
       if (stale.length) decos = decos.remove(stale.slice());
       // Non-paragraph blocks (captions, footnote bodies) fall back to CSS
       // justification while live; paragraphs get instant KP.
       if (!b.para || b.node.content.size === 0) continue;
-      // Lines above the edit hold their breaks (Word-stable); only the tail
-      // re-optimizes. The settle restores the global optimum.
-      const base0 = b.pos + 1;
-      const editAt = Math.max(0, from - base0);
-      // Freeze breaks before the edit — EXCEPT the last two boundaries.
-      // A break can be stale after a deletion (it was right for longer
-      // text), and it sits before the caret: giving the breaker the last
-      // two lines lets it repair locally instead of preserving damage.
-      const prefixForced = stale
-        .filter((d) => {
-          const key = (d.spec as { key?: string } | null)?.key;
-          return !!key && /^(br|hy):/.test(key) && d.from - base0 < editAt - 1;
-        })
-        .map((d) => ({
-          at: d.from - base0,
-          hyphen: ((d.spec as { key?: string } | null)?.key ?? '').startsWith('hy'),
-        }))
-        .sort((x, y) => x.at - y.at)
-        .slice(0, -2);
       const el = this.view.nodeDOM(b.pos);
       if (!(el instanceof HTMLElement)) continue;
       const cs = getComputedStyle(el);
@@ -331,10 +378,37 @@ class TypesetView {
         if (dom instanceof HTMLElement) return dom.getBoundingClientRect().width;
         return child.nodeSize * 8;
       };
-      const lines = layoutBlock(b.node, measure, this.measurer, atomWidth, {
-        hyphenate: settings.hyphenate,
-        prefixForced,
-      });
+      // The ported Typst breaker: full-paragraph, globally optimal, and
+      // identical to what the oracle will confirm. Plain KP is the
+      // degraded-mode fallback (sidecar not loaded, unmapped content).
+      let lines: LineLayout[] | null = null;
+      if (USE_PORT && primitives()) {
+        try {
+          const forced = portBreaks(b.node, measure, atomWidth, {
+            sizePt: settings.sizePt,
+            hyphenate: settings.hyphenate,
+            atomWidthPt: this.typstAtomWidthPt(),
+          });
+          if (forced) {
+            lines = layoutBlock(b.node, measure, this.measurer, atomWidth, {
+              hyphenate: settings.hyphenate,
+              forced,
+            });
+            if (lines) portHits++;
+            else partitionMisses++;
+          } else {
+            adapterNulls++;
+          }
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn('port breaker failed, using legacy path', e);
+        }
+      }
+      if (!lines) {
+        legacyHits++;
+        lines = layoutBlock(b.node, measure, this.measurer, atomWidth, {
+          hyphenate: settings.hyphenate,
+        });
+      }
       if (!lines) continue;
       const base = b.pos + 1;
       const fnRanges: Array<[number, number]> = [];
@@ -393,7 +467,6 @@ class TypesetView {
     viewRegistry.delete(this.view);
     this.resizeObserver.disconnect();
     clearTimeout(this.editTimer);
-    clearTimeout(this.ownTimer);
     if (this.raf) cancelAnimationFrame(this.raf);
     this.oracle.destroy();
     this.pageOracle.destroy();
@@ -533,6 +606,55 @@ class TypesetView {
    * will render it (same glyphs, same widths): citations as their painted
    * "[n]", references as "(1)", footnote markers as superscripts.
    */
+  /** Typst-true inline atom widths in pt via the sidecar (footnote markers
+   * at the font's OS/2 superscript scale, citations/refs as shaped text).
+   * Returns null for atoms whose DOM width is already Typst's (math ink). */
+  private typstAtomWidthPt(): (offset: number, child: PMNode) => number | null {
+    const prim = primitives();
+    if (!prim) return () => null;
+    const state = this.view.state;
+    const s = getSettings(state);
+    let order: Map<string, number> | null = null;
+    let labels: Map<string, string> | null = null;
+    let fnNums: WeakMap<PMNode, number> | null = null;
+    const upem = prim.upem('regular');
+    const shapeW = (text: string, sizePt: number) => {
+      let em = 0;
+      for (const g of prim.shape('regular', text)) em += g.xAdvance / upem;
+      return em * sizePt;
+    };
+    return (_offset, child) => {
+      switch (child.type.name) {
+        case 'citation': {
+          order ??= citeOrder(state.doc);
+          return shapeW('[' + (order.get(child.attrs.key as string) ?? '?') + ']', s.sizePt);
+        }
+        case 'eq_ref': {
+          labels ??= eqKey.getState(state)?.labels ?? new Map<string, string>();
+          return shapeW((labels.get(child.attrs.label as string) as string) ?? '(?)', s.sizePt);
+        }
+        case 'footnote': {
+          if (!fnNums) {
+            fnNums = new WeakMap();
+            let fn = 0;
+            state.doc.descendants((n) => {
+              if (n.type.name === 'footnote') {
+                fnNums!.set(n, ++fn);
+                return false;
+              }
+              return true;
+            });
+          }
+          const n = fnNums.get(child) ?? 1;
+          const sup = prim.superscriptHeight('regular') || 0.6;
+          return shapeW(String(n), sup * s.sizePt);
+        }
+        default:
+          return null;
+      }
+    };
+  }
+
   private atomResolver(): AtomResolver {
     const state = this.view.state;
     const labels = eqKey.getState(state)?.labels ?? new Map<string, string>();
@@ -609,45 +731,6 @@ class TypesetView {
       if (spec && okey && !oentry) this.oracle.request(okey, spec, measure, settings, skind);
       const ostatus = oentry?.status ?? 'none';
 
-      // HOLD instead of guess: while this block is owned (caret inside) or
-      // its oracle answer is still compiling, keep the current breaks —
-      // owned blocks re-derive the lines around the caret (live policy),
-      // pending blocks hold verbatim. The local engine never makes global
-      // guesses; text moves only at a keystroke (locally) or when Typst's
-      // verdict lands (once). The quality backstop still rejects a
-      // pathological held prefix.
-      const pending = ostatus === 'none' && spec !== null;
-      if (pos === this.owned || pending) {
-        const curState = typesetKey.getState(this.view.state);
-        const base0 = pos + 1;
-        const caret = this.view.state.selection.$from.pos;
-        const editAt = pos === this.owned ? Math.max(0, caret - base0) : Infinity;
-        let held = (curState?.decos.find(pos, pos + 1 + node.content.size, (sp) => {
-          const key = (sp as { key?: string } | null)?.key;
-          return !!key && /^(br|hy):/.test(key);
-        }) ?? [])
-          .map((d) => ({
-            at: d.from - base0,
-            hyphen: ((d.spec as { key?: string } | null)?.key ?? '').startsWith('hy'),
-          }))
-          .filter((bk) => bk.at < editAt - 1)
-          .sort((x, y) => x.at - y.at);
-        if (pos === this.owned) held = held.slice(0, -2);
-        if (held.length || pos === this.owned) {
-          const lines = layoutBlock(node, measure, this.measurer, atomWidth, {
-            ...layoutOpts,
-            ...extra,
-            prefixForced: held,
-          });
-          if (lines) {
-            paragraphs++;
-            lineCount += lines.length;
-            emitLines(node, pos, lines);
-            return;
-          }
-        }
-      }
-
       const indent = extra.firstLineIndent ?? 0;
       const scale = extra.scale ?? 1;
       let entry = this.cache.get(node);
@@ -665,6 +748,32 @@ class TypesetView {
             ...extra,
             forced: oentry.breaks,
           });
+        }
+        // The ported Typst breaker stands in wherever the compiled oracle
+        // has no answer (pending, failed to match, or its breaks don't
+        // partition) — the port IS the same algorithm, computed locally.
+        if (!lines && USE_PORT && primitives()) {
+          try {
+            const forced = portBreaks(node, measure, atomWidth, {
+              sizePt: settings.sizePt,
+              hyphenate: settings.hyphenate,
+              // Captions: the prefix is real text in Typst (proven exact by
+              // the context differ); footnotes keep the indent model.
+              firstLineIndentPx: skind.kind === 'caption' ? undefined : extra.firstLineIndent,
+              prefixText: skind.kind === 'caption' ? `Figure ${skind.figNo}: ` : undefined,
+              scale: extra.scale,
+              atomWidthPt: this.typstAtomWidthPt(),
+            });
+            if (forced) {
+              lines = layoutBlock(node, measure, this.measurer, atomWidth, {
+                ...layoutOpts,
+                ...extra,
+                forced,
+              });
+            }
+          } catch (e) {
+            if (import.meta.env.DEV) console.warn('port breaker (settle) failed', e);
+          }
         }
         if (!lines) lines = layoutBlock(node, measure, this.measurer, atomWidth, { ...layoutOpts, ...extra })!;
         entry = { measure, lines, oracle: ostatus, indent, scale };
@@ -878,8 +987,10 @@ class TypesetView {
         }
         // Oracle still compiling for this revision: reuse the LAST starts,
         // mapped through the edits — pages hold still instead of falling
-        // back to a local guess that disagrees by a line.
-        const marks = typesetKey.getState(view.state)?.pageMarks.find() ?? [];
+        // back to a local guess that disagrees by a line. Only while
+        // PENDING: a failed match must not hold stale geometry forever.
+        const marks =
+          entry?.status === 'fail' ? [] : (typesetKey.getState(view.state)?.pageMarks.find() ?? []);
         if (marks.length) {
           const stale = marks
             .map((m) => ({
@@ -888,7 +999,7 @@ class TypesetView {
               unit: (m.spec as { psUnit: string }).psUnit,
             }))
             .sort((a, b) => a.pos - b.pos);
-          const forced = this.paginateForced(stale, this.lastPageCount || stale.length + 1);
+          const forced = this.paginateForced(stale, this.lastPageCount || stale.length + 1, true);
           if (forced) return forced;
         }
       }
@@ -1101,6 +1212,9 @@ class TypesetView {
   private paginateForced(
     pageStarts: Array<{ pos: number; line: number; unit: string }>,
     pageCount: number,
+    /** Mapped-through-edits starts (not a fresh oracle answer): bail when
+     * the hold would leave an implausibly large gap. */
+    stale = false,
   ): { spacers: Spacer[]; count: number } | null {
     const view = this.view;
     const s = getSettings(view.state);
@@ -1146,6 +1260,19 @@ class TypesetView {
         ? pageTopAdjustEm(s, adjKind) * F
         : 0;
       const delta = page * (size.h + PAGE_GAP) + marginTop + adj - (y + shift);
+      if (stale && delta > 0) {
+        // Content above SHRANK (deleted lines): holding this start would
+        // manufacture empty space. A hold is only plausible while the gap
+        // could not fit the unit it pushes down (widow/orphan groups and
+        // footnote reservations included, generously). Beyond that, the
+        // break must move up — bail to live pagination.
+        const lineH = F * s.lineHeight;
+        const unitH =
+          kind === 'line'
+            ? lineH
+            : (rectOfNode(view, ps.pos)?.height ?? lineH);
+        if (delta > unitH + 3 * lineH + 80) return null;
+      }
       if (delta > 0) {
         spacers.push({ pos, height: delta, kind });
         shift += delta;

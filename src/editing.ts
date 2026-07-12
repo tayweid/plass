@@ -100,6 +100,87 @@ const exitFrontMatter: Command = (state, dispatch) => {
   return true;
 };
 
+/**
+ * Geometric vertical caret motion. The browser's native ArrowUp/Down is
+ * unreliable over the typeset DOM: at a soft line break the column-0 caret
+ * position IS the previous line's end position (the <br> is a widget), and
+ * the browser reads its goal column from the wrong side — arrowing up from
+ * the left edge lands the caret at the END of the line above. We move the
+ * caret ourselves: from the caret's rendered x, probe upward/downward one
+ * line pitch at a time (page gaps need several probes) and place the caret
+ * at the first position that made vertical progress.
+ */
+// Goal column for consecutive vertical presses: clamping through a short
+// line (a heading) must not lose the original x — browsers remember it
+// until any other action moves the selection.
+let goalX: number | null = null;
+let goalHead = -1;
+
+function verticalCaret(dir: -1 | 1): Command {
+  return (state, dispatch, view) => {
+    if (!view) return false;
+    const sel = state.selection;
+    if (!(sel instanceof TextSelection) || !sel.empty) return false;
+    const $head = sel.$head;
+    if (!$head.parent.isTextblock) return false;
+    let c: { left: number; top: number; bottom: number };
+    try {
+      c = view.coordsAtPos(sel.head, 1);
+    } catch {
+      return false;
+    }
+    const continuing = sel.head === goalHead && goalX !== null;
+    const gx = continuing ? (goalX as number) : c.left;
+    if (!continuing) goalX = c.left;
+    const domRef = view.domAtPos(sel.head);
+    const el =
+      domRef.node instanceof HTMLElement ? domRef.node : domRef.node.parentElement;
+    const lineH = (el && parseFloat(getComputedStyle(el).lineHeight)) || 24;
+    const yStart = dir < 0 ? c.top : c.bottom;
+    // Probe in HALF-line steps — a full step can jump clean over a line
+    // whose pitch is smaller than this block's (paragraph lines after a
+    // heading). 80 half-steps cover a page gap.
+    for (let step = 1; step <= 80; step++) {
+      const y = yStart + dir * lineH * 0.5 * step;
+      const found = view.posAtCoords({ left: gx, top: y });
+      if (!found) continue;
+      // A hit in the gap BETWEEN blocks (inside === -1) is not a caret
+      // line — it reports degenerate zero-height coords at the block edge.
+      // Keep probing until we reach a real line.
+      if (found.inside === -1) continue;
+      let pos = Math.max(0, Math.min(found.pos, state.doc.content.size));
+      if (pos === sel.head) continue;
+      let target: { top: number; bottom: number };
+      try {
+        target = view.coordsAtPos(pos, 1);
+      } catch {
+        continue;
+      }
+      // Require a real line box making real vertical progress (skip
+      // same-line hits and degenerate geometry).
+      if (!(target.bottom > target.top)) continue;
+      if (dir < 0 ? target.top > c.top - lineH * 0.4 : target.bottom < c.bottom + lineH * 0.4) {
+        continue;
+      }
+      // A probe that fell short of the goal column (snapped to a block
+      // edge) loses x. Re-query at the landed LINE's vertical center with
+      // the original goal x.
+      const refined = view.posAtCoords({ left: gx, top: (target.top + target.bottom) / 2 });
+      if (refined && refined.inside !== -1) {
+        const rp = Math.max(0, Math.min(refined.pos, state.doc.content.size));
+        if (rp !== sel.head) pos = rp;
+      }
+      if (dispatch) {
+        const next = TextSelection.near(state.doc.resolve(pos), dir);
+        goalHead = next.head;
+        dispatch(state.tr.setSelection(next).scrollIntoView());
+      }
+      return true;
+    }
+    return false; // no target below/above (doc edge): browser default
+  };
+}
+
 export function buildKeymap(): Plugin {
   const backToParagraph: Command = setBlockType(schema.nodes.paragraph);
   const keys: Record<string, Command> = {
@@ -131,6 +212,8 @@ export function buildKeymap(): Plugin {
     },
     'ArrowRight': skipFootnote(1),
     'ArrowLeft': skipFootnote(-1),
+    'ArrowUp': verticalCaret(-1),
+    'ArrowDown': verticalCaret(1),
     'Mod-Alt-t': (state, dispatch, view) => {
       if (dispatch && view) {
         void import('./table-editor').then(({ insertTableWithEditor }) => insertTableWithEditor(view));

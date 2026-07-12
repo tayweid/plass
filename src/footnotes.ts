@@ -4,9 +4,9 @@
 // positions the body (style attributes on .fn-body are presentation, not
 // content). Numbering is painted by the numbering plugin.
 
-import { TextSelection, type Command } from 'prosemirror-state';
+import { Plugin, TextSelection, type Command } from 'prosemirror-state';
 import type { EditorView, NodeView, ViewMutationRecord } from 'prosemirror-view';
-import type { Node as PMNode } from 'prosemirror-model';
+import type { Node as PMNode, ResolvedPos } from 'prosemirror-model';
 import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
 
@@ -118,9 +118,43 @@ export function footnoteMarkerClick(view: EditorView, event: MouseEvent): boolea
   if (!target.classList?.contains('ts-footnote')) return false;
   const pos = view.posAtDOM(target, 0);
   if (pos < 0) return false;
-  view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)));
+  view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).setMeta('fn-enter', true));
   view.focus();
   return true;
+}
+
+/**
+ * Vertical arrows (browser caret geometry) can drop the caret into a
+ * footnote body — it renders at the page bottom but lives DOM-inside the
+ * anchor paragraph. A footnote body is only entered deliberately: by
+ * clicking it, clicking its marker, or creating one. Any other selection
+ * move that lands inside from outside gets bounced past the anchor block
+ * in the direction of travel.
+ */
+export function footnoteGuard(): Plugin {
+  const fnDepth = ($pos: ResolvedPos): number => {
+    for (let d = $pos.depth; d > 0; d--) {
+      if ($pos.node(d).type === schema.nodes.footnote) return d;
+    }
+    return 0;
+  };
+  return new Plugin({
+    appendTransaction(trs, oldState, newState) {
+      if (!trs.some((tr) => tr.selectionSet)) return null;
+      if (trs.some((tr) => tr.docChanged || tr.getMeta('pointer') || tr.getMeta('fn-enter'))) return null;
+      if (!newState.selection.empty) return null;
+      const $from = newState.selection.$from;
+      const depth = fnDepth($from);
+      if (!depth || fnDepth(oldState.selection.$from)) return null;
+      // Entered a footnote via keyboard/geometric motion: hop over the
+      // anchor textblock in the direction of travel.
+      const dir = newState.selection.from >= oldState.selection.from ? 1 : -1;
+      const anchorDepth = depth - 1; // the textblock containing the marker
+      const target = dir > 0 ? $from.after(anchorDepth) : $from.before(anchorDepth);
+      const $target = newState.doc.resolve(Math.max(0, Math.min(target, newState.doc.content.size)));
+      return newState.tr.setSelection(TextSelection.near($target, dir)).scrollIntoView();
+    },
+  });
 }
 
 

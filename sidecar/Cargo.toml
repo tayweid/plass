@@ -1,0 +1,27 @@
+[package]
+name = "typeset-sidecar"
+version = "0.1.0"
+edition = "2021"
+description = "Data-exact primitives for the Typst line-break port: the same ICU segmentation, hypher hyphenation, and rustybuzz shaping (same crate versions, same ICU blob) that typst 951788cc uses."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Versions pinned to typst's Cargo.lock at commit 951788cc614cd805d5d786e17
+# bbf93796df73d10 (the commit embedded in @myriaddreamin/typst-ts-web-compiler
+# 0.7.0). Do not bump these independently of the compiler WASM.
+[dependencies]
+wasm-bindgen = "0.2"
+hypher = "=0.1.5"
+icu_properties = { version = "=1.5.1", features = ["serde"] }
+icu_provider = { version = "=1.5.0", features = ["sync"] }
+icu_provider_adapters = "=1.5.0"
+icu_provider_blob = "=1.5.0"
+icu_segmenter = { version = "=1.5.0", features = ["serde"] }
+rustybuzz = "=0.20.1"
+typst-assets = "=0.14.2"
+unicode-segmentation = "=1.12.0"
+
+[profile.release]
+opt-level = "s"
+lto = true

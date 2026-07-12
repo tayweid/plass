@@ -14,7 +14,7 @@ import { buildToolbar, type Toolbar } from './toolbar';
 import { TablePreviewView } from './table-preview';
 import { equationsPlugin } from './equations';
 import { FigureView, figuresPlugin, migrateEmbeddedFigures, setFigureFileManager, startAssetWatch } from './figures';
-import { FootnoteView, footnoteMarkerClick } from './footnotes';
+import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { refAutocomplete } from './ref-autocomplete';
 import { applySettings, formatPageNumber, getSettings } from './settings';
@@ -57,6 +57,7 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       equationsPlugin(),
       citationsPlugin(),
       figuresPlugin(),
+      footnoteGuard(),
       typesetPlugin({ onStats, onPages: renderPages }),
     ],
   });

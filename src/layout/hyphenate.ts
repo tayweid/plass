@@ -23,10 +23,10 @@ function hyphenateCore(word: string): string[] {
  */
 export function syllabify(token: string): string[] {
   if (token.length < 5) return [token];
-  const segs = token.split(/(?<=-)/); // keep '-' attached to the left part
+  const segs = token.split(/(?<=[-–—])/); // keep the dash attached to the left part
   const out: string[] = [];
   for (const seg of segs) {
-    const m = /^([^a-zA-Z]*)([a-zA-Z]+)([^a-zA-Z]*-?)$/.exec(seg);
+    const m = /^([^a-zA-Z]*)([a-zA-Z]+)([^a-zA-Z]*[-–—]?)$/.exec(seg);
     if (!m || m[2].length < 5) {
       out.push(seg);
       continue;
