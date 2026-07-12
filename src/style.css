@@ -165,20 +165,25 @@ body {
   box-shadow: 0 0 0 1px rgba(200, 95, 80, 0.35), 0 8px 24px rgba(0, 0, 0, 0.08);
 }
 
+.tb-file-editing {
+  background: var(--bar-press);
+  color: var(--bar-ink);
+  outline: none;
+  cursor: text;
+  caret-color: var(--accent);
+  /* Editing needs the full name visible, not an ellipsis. */
+  text-overflow: clip;
+}
+
+.tb-file-editing::selection {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 .tb-file:hover {
   background: var(--bar-press);
   color: var(--bar-ink);
 }
 
-.tb-file-input {
-  font: 12.5px var(--sans);
-  color: var(--ink);
-  background: var(--sheet);
-  border: 1px solid var(--accent);
-  border-radius: 5px;
-  padding: 2px 8px;
-  width: 20ch;
-}
 
 .tb-file-input:focus {
   outline: none;

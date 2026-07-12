@@ -61,23 +61,38 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       void fm.save();
       return;
     }
-    const input = document.createElement('input');
-    input.className = 'tb-file-input';
-    input.value = fm.name;
-    input.spellcheck = false;
-    fileLabel.replaceWith(input);
-    input.focus();
-    input.select();
+    // Rename IN PLACE: the pill text itself becomes editable — no element
+    // swap, no native input chrome, nothing moves. A caret appears, the
+    // name is selected, and Enter/blur commit (Escape cancels).
+    if (fileLabel.isContentEditable) return;
+    fileLabel.textContent = fm.name;
+    try {
+      fileLabel.contentEditable = 'plaintext-only';
+    } catch {
+      fileLabel.contentEditable = 'true';
+    }
+    fileLabel.spellcheck = false;
+    fileLabel.classList.add('tb-file-editing');
+    fileLabel.focus();
+    const range = document.createRange();
+    range.selectNodeContents(fileLabel);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
     let done = false;
     const finish = (commit: boolean) => {
       if (done) return;
       done = true;
-      input.replaceWith(fileLabel);
-      const name = input.value.trim();
-      if (commit && name) void fm.rename(name);
+      fileLabel.removeEventListener('keydown', onKey);
+      fileLabel.removeEventListener('blur', onBlur);
+      fileLabel.contentEditable = 'false';
+      fileLabel.classList.remove('tb-file-editing');
+      const name = (fileLabel.textContent ?? '').trim();
+      if (commit && name && name !== fm.name) void fm.rename(name);
+      else fileLabel.textContent = fm.name;
       view.focus();
     };
-    input.addEventListener('keydown', (e) => {
+    const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Enter') {
         e.preventDefault();
         finish(true);
@@ -85,8 +100,10 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
         e.preventDefault();
         finish(false);
       }
-    });
-    input.addEventListener('blur', () => finish(true));
+    };
+    const onBlur = () => finish(true);
+    fileLabel.addEventListener('keydown', onKey);
+    fileLabel.addEventListener('blur', onBlur);
   });
 
   // Two capsules: the title, and one tools pill of pipe-separated groups.
