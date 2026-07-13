@@ -142,6 +142,30 @@ function dataUrlToBytes(src: string): { data: Uint8Array; ext: string } | null {
 }
 
 /** Decode embedded/remote images into VFS assets; return a src → path map. */
+/** A gray dashed "missing image" PNG, generated once — registered in place
+ * of unreadable assets so exports and oracle compiles never hard-fail. */
+let placeholderPng: Uint8Array | null = null;
+async function missingPlaceholder(): Promise<Uint8Array> {
+  if (placeholderPng) return placeholderPng;
+  const cv = document.createElement('canvas');
+  cv.width = 600;
+  cv.height = 380;
+  const g = cv.getContext('2d')!;
+  g.fillStyle = '#f0efec';
+  g.fillRect(0, 0, 600, 380);
+  g.strokeStyle = '#c9c7c1';
+  g.lineWidth = 3;
+  g.setLineDash([12, 10]);
+  g.strokeRect(6, 6, 588, 368);
+  g.fillStyle = '#8f8d87';
+  g.font = '28px system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.fillText('missing image', 300, 200);
+  const blob: Blob = await new Promise((r) => cv.toBlob((b) => r(b!), 'image/png'));
+  placeholderPng = new Uint8Array(await blob.arrayBuffer());
+  return placeholderPng;
+}
+
 async function prepareAssets(doc: PMNode): Promise<{ map: Map<string, string>; assets: Asset[]; missing: number }> {
   const map = new Map<string, string>();
   const assets: Asset[] = [];
@@ -176,6 +200,10 @@ async function prepareAssets(doc: PMNode): Promise<{ map: Map<string, string>; a
         map.set(src, path);
         assets.push({ path, data: buf });
       } catch {
+        n++;
+        const path = `/assets/img-${n}.png`;
+        map.set(src, path);
+        assets.push({ path, data: await missingPlaceholder() });
         missing++;
       }
       continue;
@@ -185,8 +213,14 @@ async function prepareAssets(doc: PMNode): Promise<{ map: Map<string, string>; a
     // the exported file stays CLI-compilable.
     if (!src.startsWith('/') && assetReader) {
       const data = await assetReader(src);
-      if (data) assets.push({ path: '/' + src, data });
-      else missing++;
+      if (data) {
+        assets.push({ path: '/' + src, data });
+      } else {
+        // File deleted/renamed on disk: compile with a placeholder at the
+        // same path instead of failing the whole export.
+        assets.push({ path: '/' + src, data: await missingPlaceholder() });
+        missing++;
+      }
     }
   }
   return { map, assets, missing };
@@ -298,7 +332,7 @@ export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string
     URL.revokeObjectURL(a.href);
     onMsg(
       `Exported ${a.download} in ${((performance.now() - t0) / 1000).toFixed(1)}s` +
-        (missing ? ` — ${missing} remote image(s) could not be fetched` : ''),
+        (missing ? ` — ${missing} missing image(s) exported as placeholders` : ''),
     );
   } catch (e) {
     console.error('PDF export failed', e);
