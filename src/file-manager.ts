@@ -335,6 +335,19 @@ export class FileManager {
   }
 
   /** Plain download of the current document (works everywhere). */
+  exportTexCopy() {
+    void import('./tex-serializer').then(({ docToTex }) => {
+      const text = docToTex(this.hooks.getDoc());
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${this.name === 'Untitled' ? 'document' : this.name}.tex`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      this.hooks.message(`Downloaded ${a.download} — vanilla LaTeX for journal submission`);
+    });
+  }
+
   exportCopy() {
     const text = docToTyp(this.hooks.getDoc());
     const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });

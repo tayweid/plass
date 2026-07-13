@@ -205,6 +205,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     void import('./pdf').then(({ exportPdf }) => exportPdf(fm.currentDoc(), name, (m) => fm.notify(m)));
   });
   barBtn(icon('filedown'), '.typ', 'Download a .typ copy', () => fm.exportCopy());
+  barBtn(icon('filedown'), '.tex', 'Download a .tex copy (vanilla LaTeX for journals)', () => fm.exportTexCopy());
 
   // ---------- recents dropdown ----------
   let recentsMenu: HTMLElement | null = null;
