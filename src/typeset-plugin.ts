@@ -431,6 +431,20 @@ class TypesetView {
       }
       if (!lines) continue;
       const base = b.pos + 1;
+      // Page spacers glued to mapped text positions break lines MID-LINE
+      // once the paragraph re-wraps around an edit above them. Strip them
+      // here and re-emit each at the nearest freshly-chosen break (same
+      // height — geometry stays stale-but-stable until repagination).
+      const pgStale = decos.find(b.pos, blockTo, (spec) => {
+        const key = (spec as { key?: string } | null)?.key;
+        return !!key && key.startsWith('pg:');
+      });
+      let pgList = pgStale.map((d) => ({
+        from: d.from,
+        h: (d.spec as { h?: number }).h ?? 0,
+        hy: !!(d.spec as { hy?: boolean }).hy,
+      }));
+      if (pgStale.length) decos = decos.remove(pgStale.slice());
       const fnRanges: Array<[number, number]> = [];
       b.node.forEach((child, offset) => {
         if (child.type.name === 'footnote') fnRanges.push([offset, offset + child.nodeSize]);
@@ -448,12 +462,21 @@ class TypesetView {
         }
         if (line.breakPos !== null) {
           const at = base + line.breakPos;
-          // A mapped page spacer near this break already breaks the line.
-          const nearSpacer = decos.find(Math.max(0, at - 2), at + 2, (spec) => {
-            const key = (spec as { key?: string } | null)?.key;
-            return !!key && key.startsWith('pg');
-          });
-          if (!nearSpacer.length) {
+          // A spacer whose text position falls on this line moves to the
+          // line's break: pages only break at line boundaries.
+          const spIdx = pgList.findIndex((sp) => sp.from > base + line.from - 1 && sp.from <= at + 2);
+          if (spIdx >= 0) {
+            const sp = pgList[spIdx];
+            pgList = pgList.filter((_, i) => i !== spIdx);
+            fresh.push(
+              Decoration.widget(at, () => pageGapWidget(sp.h, line.hyphen), {
+                side: -1,
+                key: `pg:${at}:${Math.round(sp.h)}:${line.hyphen ? 'h' : ''}`,
+                h: sp.h,
+                hy: line.hyphen,
+              }),
+            );
+          } else {
             fresh.push(
               Decoration.widget(at, line.hyphen ? hyphenWidget : brWidget, {
                 side: -1,
@@ -462,6 +485,20 @@ class TypesetView {
             );
           }
         }
+      }
+      // Spacers past the last chosen break (the page split the final line,
+      // which has since re-wrapped): snap to the block boundary — pages
+      // only break at line boundaries, and repagination corrects at settle.
+      for (const sp of pgList) {
+        const at = Math.min(sp.from, blockTo - 1) === sp.from && sp.from < blockTo ? blockTo - 1 : sp.from;
+        fresh.push(
+          Decoration.widget(at, () => pageGapWidget(sp.h, false), {
+            side: -1,
+            key: `pg:${at}:${Math.round(sp.h)}:`,
+            h: sp.h,
+            hy: false,
+          }),
+        );
       }
     }
     const set = fresh.length ? decos.add(state.doc, fresh) : decos;
