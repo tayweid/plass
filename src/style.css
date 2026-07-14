@@ -86,13 +86,17 @@ body {
   display: flex;
   flex-direction: row;
   align-items: center;
+  /* Composition, not a queue: the name owns the left edge, the tools
+     the right, and the empty center keeps them from reading as one
+     cluttered row. */
+  justify-content: space-between;
   gap: 12px;
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   height: 48px;
-  padding: 0 14px;
+  padding: 0 18px;
   background: var(--bg);
   z-index: 10;
 }
@@ -140,9 +144,9 @@ body {
 }
 
 .doc-title .tb-file {
-  font: 14px/1.5 'New Computer Modern', var(--serif);
+  font: 15px/1.5 'New Computer Modern', var(--serif);
   letter-spacing: 0.09em;
-  color: rgba(252, 252, 251, 0.62);
+  color: rgba(252, 252, 251, 0.78);
   max-width: 56ch;
   overflow: hidden;
   text-overflow: ellipsis;
