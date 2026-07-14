@@ -80,33 +80,31 @@ body {
 /* Floating capsule clusters over the paper (iOS toolbar language): each
    group is its own stadium-shaped glass pod. Pods stay solid; their
    CONTENTS sleep at rest and wake when the mouse approaches the cluster. */
+/* One plain bar: the room's own black, a straight line across the top.
+   The document's name sits on the left, the tools to its right. */
 #toolbar {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 7px;
+  gap: 12px;
   position: fixed;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  padding: 0 14px;
+  background: var(--bg);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
   z-index: 10;
 }
 
-/* The tool rail hangs from the slug, persistent but asleep: a dark
-   silhouette row in the room's band that wakes to full ink on
-   approach. Nothing appears or moves — only contrast changes. */
+/* The tools are bare on the bar — no capsule. Asleep at rest, waking
+   on approach. */
 .tb-pod {
   display: inline-flex;
   flex-direction: row;
   align-items: center;
   gap: 2px;
-  height: 44px;
-  padding: 0 8px;
-  background: color-mix(in srgb, var(--bg) 76%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 999px;
   opacity: 0.55;
   transition: opacity 0.25s ease;
 }
@@ -138,12 +136,8 @@ body {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 4px 14px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg) 72%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  z-index: 9;
+  padding: 0 4px;
+  flex: none;
 }
 
 .doc-title .tb-file {
@@ -819,8 +813,8 @@ body {
 #scroll {
   flex: 1;
   overflow: auto;
-  /* The top band clears the persistent slug + rail assembly. */
-  padding: 106px 16px 56px;
+  /* The top band clears the fixed bar. */
+  padding: 96px 16px 56px;
 }
 
 #scroll::-webkit-scrollbar {
