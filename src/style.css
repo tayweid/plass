@@ -160,6 +160,35 @@ body {
   max-width: 50vw;
 }
 
+/* Rest state: the document glyph; hover/rename: the name. */
+.tb-file-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  color: var(--bar-ink-soft);
+}
+
+.tb-file-ico .ico {
+  width: 22px;
+  height: 22px;
+}
+
+.tb-pod:has(.tb-file):hover .tb-file-ico,
+.tb-pod:has(.tb-file):focus-within .tb-file-ico {
+  display: none;
+}
+
+.tb-pod:has(.tb-file) .tb-file {
+  display: none;
+}
+
+.tb-pod:has(.tb-file):hover .tb-file,
+.tb-pod:has(.tb-file):focus-within .tb-file {
+  display: block;
+}
+
 .tb-file {
   font: 16px var(--sans);
   color: var(--bar-ink-soft);

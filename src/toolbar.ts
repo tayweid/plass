@@ -34,6 +34,7 @@ const ICONS: Record<string, string> = {
   open: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
   project: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><circle cx="12" cy="14" r="2.4"/><line x1="12" y1="9.5" x2="12" y2="11.6"/>',
   clock: '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/>',
+  doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/>',
   save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
   saveas: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="7 3 7 8 15 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
@@ -129,7 +130,17 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     toolsPill.appendChild(currentPod);
     return currentPod;
   };
-  pod().appendChild(fileLabel);
+  {
+    // At rest the title pod is a circle showing a document glyph; the
+    // name replaces it when the pod opens on hover (or while renaming).
+    const fileIcon = document.createElement('span');
+    fileIcon.className = 'tb-file-ico';
+    fileIcon.innerHTML = icon('doc');
+    fileIcon.setAttribute('aria-hidden', 'true');
+    const p0 = pod();
+    p0.appendChild(fileIcon);
+    p0.appendChild(fileLabel);
+  }
 
   /** Icon button whose text label fades in on hover. */
   const barBtn = (glyph: string, label: string, title: string, run: () => void) => {
