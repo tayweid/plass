@@ -87,12 +87,11 @@ body {
   gap: 8px;
   position: fixed;
   top: 50%;
-  /* Centered ON the paper's left edge: half the bar over the sheet, half
-     in the room. Clamped so it never leaves the viewport entirely.
-     The width is FIXED so the -50% translate is a constant: anything
-     that grows (the title pill on hover) overflows to the right without
-     moving the bar. */
-  left: max(30px, calc(50vw - var(--page-w, 816px) / 2));
+  /* Centered in the paper's left margin — the bar lives on the page,
+     in the whitespace beside the text column. Clamped so it never
+     leaves the viewport entirely. The width is FIXED so the -50%
+     translate is a constant. */
+  left: max(30px, calc(50vw - var(--page-w, 816px) / 2 + var(--page-margin-left, 96px) / 2));
   transform: translate(-50%, -50%);
   width: 52px;
   max-height: calc(100vh - 20px);
@@ -110,7 +109,9 @@ body {
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
   border-radius: 999px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
+  /* Flat: the bar sits ON the paper now — a hairline and the faintest
+     contact shadow, no floating halo. */
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .tb-btn {
