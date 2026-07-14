@@ -227,6 +227,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     titleBar.appendChild(dot);
 
     flyout(titleBar, icon('new'), 'File — new, open, recent papers', [
+      { glyph: icon('open'), label: 'Open', title: 'Open… (⌘O)', run: () => void fm.open() },
       {
         glyph: icon('new'),
         label: 'New',
@@ -235,7 +236,6 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
           if (confirm('Replace the current document with an empty one?')) fm.newDoc();
         },
       },
-      { glyph: icon('open'), label: 'Open', title: 'Open… (⌘O)', run: () => void fm.open() },
       {
         glyph: icon('clock'),
         label: 'Recent',
@@ -329,6 +329,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     div.className = 'tb-div';
     toolsPill!.appendChild(div);
     flyout(toolsPill!, icon('download'), 'Export — PDF, .typ, .tex', [
+      { glyph: icon('filedown'), label: '.typ', title: 'Download a .typ copy', run: () => fm.exportCopy() },
       {
         glyph: icon('download'),
         label: 'PDF',
@@ -338,7 +339,6 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
           void import('./pdf').then(({ exportPdf }) => exportPdf(fm.currentDoc(), name, (m) => fm.notify(m)));
         },
       },
-      { glyph: icon('filedown'), label: '.typ', title: 'Download a .typ copy', run: () => fm.exportCopy() },
       {
         glyph: icon('filedown'),
         label: '.tex',

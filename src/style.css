@@ -87,7 +87,7 @@ body {
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 7px;
   position: fixed;
   top: 0;
   left: 0;
@@ -109,7 +109,9 @@ body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
+  /* The side facing the title pill flattens — two soft bodies pressed
+     together. */
+  border-radius: 14px 999px 999px 14px;
 }
 
 /* Sleep/wake tiers: soft at rest, everything wakes near the bar, the
@@ -152,7 +154,7 @@ body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
+  border-radius: 999px 14px 14px 999px;
 }
 
 /* The lifecycle triggers ride quietly at the pill's end. */
@@ -188,11 +190,11 @@ body {
 
 .tb-flyout {
   position: absolute;
-  /* The first (representative) icon lands exactly on the trigger:
-     50% = trigger center; 29px = border + padding + half a button. */
-  left: calc(50% - 29px);
+  /* Centered on the trigger; the items are ordered so the
+     representative icon is the MIDDLE one, landing on the trigger. */
+  left: 50%;
   top: 50%;
-  transform: translateY(-50%);
+  transform: translate(-50%, -50%);
   display: flex;
   flex-direction: row;
   align-items: center;
