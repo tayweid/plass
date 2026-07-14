@@ -204,6 +204,11 @@ interface CacheEntry {
   lines: LineLayout[];
   /** Which oracle state produced these lines ('none' = JS Knuth-Plass). */
   oracle: 'none' | 'ok' | 'fail';
+  /** The oracle key the lines were computed against. Resolved atom TEXTS
+   *  live in it — an equation reference flipping between "(1)" and
+   *  "@label" changes the paragraph's layout without changing the node,
+   *  and the stale entry would keep the old justification forever. */
+  key: string | null;
   /** Painted-prefix indent + em scale the lines were computed with (captions,
    *  footnote bodies) — early runs can measure these before widgets paint. */
   indent: number;
@@ -825,6 +830,7 @@ class TypesetView {
         !entry ||
         Math.abs(entry.measure - measure) > 0.5 ||
         entry.oracle !== ostatus ||
+        entry.key !== okey ||
         Math.abs(entry.indent - indent) > 0.5 ||
         Math.abs(entry.scale - scale) > 0.01
       ) {
@@ -863,7 +869,7 @@ class TypesetView {
           }
         }
         if (!lines) lines = layoutBlock(node, measure, this.measurer, atomWidth, { ...layoutOpts, ...extra })!;
-        entry = { measure, lines, oracle: ostatus, indent, scale };
+        entry = { measure, lines, oracle: ostatus, key: okey, indent, scale };
         this.cache.set(node, entry);
       }
 
