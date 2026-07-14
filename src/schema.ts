@@ -72,13 +72,19 @@ const abstract: NodeSpec = {
 const mathDisplay: NodeSpec = {
   group: 'block',
   atom: true,
-  attrs: { src: { default: '' }, label: { default: '' } },
+  attrs: { src: { default: '' }, label: { default: '' }, numbered: { default: null } },
   parseDOM: [
     {
       tag: 'div[data-math]',
       getAttrs: (el) => ({
         src: (el as HTMLElement).getAttribute('data-math') ?? '',
         label: (el as HTMLElement).getAttribute('data-label') ?? '',
+        numbered:
+          (el as HTMLElement).getAttribute('data-numbered') === 'on'
+            ? true
+            : (el as HTMLElement).getAttribute('data-numbered') === 'off'
+              ? false
+              : null,
       }),
     },
   ],

@@ -10,6 +10,7 @@
 
 import { parseMathMacros, type DocSettings } from './settings';
 import { expandMacrosWith } from './typ-serializer';
+import { wrapAligned } from './math-src';
 
 export interface MathInk {
   svg: string;
@@ -90,7 +91,7 @@ async function compileOne(
   compileSvg: (s: string) => Promise<string | null>,
   typstQuery: <T>(s: string, sel: string) => Promise<T[] | null>,
 ): Promise<MathInk | null> {
-  const latex = expandMacrosWith(item.src, parseMathMacros(item.macros));
+  const latex = expandMacrosWith(item.display ? wrapAligned(item.src) : item.src, parseMathMacros(item.macros));
   if (!latex.trim()) return null;
   // Display equations hug the page tightly with no instrumentation (a
   // trailing probe would start a phantom paragraph below the ink). Inline

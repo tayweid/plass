@@ -5,6 +5,7 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { DEFAULT_SETTINGS, normalizeSettings, parseMathMacros, type DocSettings } from './settings';
+import { wrapAligned } from './math-src';
 
 export interface TypExportOptions {
   /** Rewrite image sources (e.g. data: URLs to VFS paths for compilation). */
@@ -229,7 +230,13 @@ function blockToTyp(node: PMNode, indent = ''): string {
       return indent + '```' + (node.attrs.params ?? '') + '\n' + node.textContent + '\n```\n\n';
     case 'math_display': {
       const label = node.attrs.label ? ` <${node.attrs.label}>` : '';
-      return indent + '#mitex(`\n' + expandMacros(node.attrs.src) + '\n`)' + label + '\n\n';
+      const body = '#mitex(`\n' + expandMacros(wrapAligned(node.attrs.src as string)) + '\n`)' + label;
+      const numbered = node.attrs.numbered as boolean | null;
+      // Per-equation override, scoped so it can't leak (unnumbered
+      // equations don't step Typst's counter — dense, like the editor).
+      if (numbered === false) return indent + '#[#set math.equation(numbering: none)\n' + body + '\n]\n\n';
+      if (numbered === true) return indent + '#[#set math.equation(numbering: "(1)")\n' + body + '\n]\n\n';
+      return indent + body + '\n\n';
     }
     case 'figure': {
       // src is emitted verbatim (even data: URLs) so our own files round-trip

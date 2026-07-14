@@ -198,10 +198,16 @@ function blockToTex(node: PMNode, s: DocSettings): string {
     case 'math_display': {
       const label = node.attrs.label ? `\\label{${node.attrs.label}}` : '';
       const src = node.attrs.src as string;
-      if (s.numberEquations || node.attrs.label) {
-        return `\\begin{equation}${label}\n${src}\n\\end{equation}\n\n`;
+      const numbered = (node.attrs.numbered as boolean | null) ?? (s.numberEquations || !!node.attrs.label);
+      // Multi-line sources become an aligned block (one number, Typst-style).
+      const lines = src.split('\n').map((l) => l.trim()).filter(Boolean);
+      const body = lines.length > 1 && !src.includes('\\begin{')
+        ? `\\begin{aligned}\n${lines.join(' \\\\\n')}\n\\end{aligned}`
+        : src;
+      if (numbered) {
+        return `\\begin{equation}${label}\n${body}\n\\end{equation}\n\n`;
       }
-      return `\\[\n${src}\n\\]\n\n`;
+      return `\\[\n${body}\n\\]\n\n`;
     }
     case 'figure': {
       const label = node.attrs.label ? `\\label{${node.attrs.label}}\n` : '';

@@ -11,11 +11,15 @@ import { TextSelection, type Command } from 'prosemirror-state';
 import type { EditorView, NodeView } from 'prosemirror-view';
 import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
+import { wrapAligned } from './math-src';
 import { getSettings, parseMathMacros } from './settings';
 import { forgetInk, getInk, inkKey, onInk, requestInk } from './math-ink';
 import { scheduleTypeset } from './typeset-plugin';
 
+export { wrapAligned };
+
 function renderInto(el: HTMLElement, src: string, displayMode: boolean, macros: Record<string, string> = {}) {
+  if (displayMode) src = wrapAligned(src);
   if (!src.trim()) {
     el.innerHTML = `<span class="math-placeholder">${displayMode ? 'equation' : 'math'}</span>`;
     return;
@@ -156,12 +160,27 @@ export function openMathEditor(view: EditorView, pos: number) {
     <textarea class="math-editor-input" rows="${display ? 3 : 1}"
       placeholder="${display ? '\\int_a^b f(x)\\,dx' : 'e^{i\\pi}+1=0'}" spellcheck="false"></textarea>
     ${display ? '<input class="math-editor-label" placeholder="label — reference in text with @label" spellcheck="false">' : ''}
-    <div class="math-editor-hint">LaTeX · <kbd>Enter</kbd> save · <kbd>Esc</kbd> cancel</div>`;
+    ${display ? '<button type="button" class="math-editor-num" title="Toggle numbering for this equation"></button>' : ''}
+    <div class="math-editor-hint">LaTeX${display ? ' · <kbd>&amp;</kbd> aligns · <kbd>Enter</kbd> new line · <kbd>⌘Enter</kbd> save' : ' · <kbd>Enter</kbd> save'} · <kbd>Esc</kbd> cancel</div>`;
   const preview = panel.querySelector('.math-editor-preview') as HTMLElement;
   const input = panel.querySelector('.math-editor-input') as HTMLTextAreaElement;
   const labelInput = panel.querySelector('.math-editor-label') as HTMLInputElement | null;
+  const numBtn = panel.querySelector('.math-editor-num') as HTMLButtonElement | null;
   input.value = node.attrs.src;
   if (labelInput) labelInput.value = node.attrs.label ?? '';
+  // Binary toggle: numbered (default / attr null or true) vs unnumbered.
+  let eqNumbered: boolean | null = node.attrs.numbered as boolean | null;
+  const paintNum = () => {
+    if (!numBtn) return;
+    const on = eqNumbered !== false;
+    numBtn.textContent = on ? '(1) numbered' : 'unnumbered';
+    numBtn.classList.toggle('math-editor-num-off', !on);
+  };
+  paintNum();
+  numBtn?.addEventListener('click', () => {
+    eqNumbered = eqNumbered === false ? null : false;
+    paintNum();
+  });
 
   const macros = parseMathMacros(getSettings(view.state).mathMacros);
   const updatePreview = () => renderInto(preview, input.value.trim() || '\\ldots', display, macros);
@@ -197,7 +216,7 @@ export function openMathEditor(view: EditorView, pos: number) {
     if (current && current.type === node.type) {
       let tr;
       if (src) {
-        const attrs = display ? { src, label } : { src };
+        const attrs = display ? { src, label, numbered: eqNumbered } : { src };
         tr = view.state.tr.setNodeMarkup(pos, undefined, attrs);
         // Put the caret after the node so the user can keep typing.
         tr.setSelection(TextSelection.near(tr.doc.resolve(pos + current.nodeSize), 1));
@@ -220,7 +239,12 @@ export function openMathEditor(view: EditorView, pos: number) {
   };
 
   const onKeydown = (e: KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      commit();
+    } else if (e.key === 'Enter' && !e.shiftKey && !(display && e.target === input)) {
+      // Display sources are multi-line: plain Enter inserts a line there;
+      // everywhere else (inline math, the label field) it saves.
       e.preventDefault();
       commit();
     } else if (e.key === 'Escape') {

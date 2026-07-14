@@ -11,6 +11,7 @@
 
 import type { Mark, Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
+import { unwrapAligned } from './math-src';
 import { DEFAULT_SETTINGS, type DocSettings } from './settings';
 import { parseBibTeX } from './bibtex';
 
@@ -313,6 +314,30 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
+    // Per-equation numbering override: #[#set math.equation(numbering: X)
+    // followed by the mitex block and a closing ].
+    {
+      const nm = /^#\[#set math\.equation\(numbering: (none|"\(1\)")\)$/.exec(t);
+      if (nm && lines[i + 1]?.trim() === '#mitex(`') {
+        const numbered = nm[1] !== 'none';
+        const body: string[] = [];
+        let label = '';
+        i += 2;
+        while (i < n) {
+          const close = /^`\)\s*(?:<([^>]+)>)?\s*$/.exec(lines[i].trim());
+          if (close) {
+            label = close[1] ?? '';
+            i++;
+            break;
+          }
+          body.push(lines[i++]);
+        }
+        if (lines[i]?.trim() === ']') i++;
+        out.push(schema.nodes.math_display.create({ src: unwrapAligned(body.join('\n').trim()), label, numbered }));
+        continue;
+      }
+    }
+
     // display math: #mitex(` … `) <label>
     if (t === '#mitex(`') {
       const body: string[] = [];
@@ -327,7 +352,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
         }
         body.push(lines[i++]);
       }
-      out.push(schema.nodes.math_display.create({ src: body.join('\n').trim(), label }));
+      out.push(schema.nodes.math_display.create({ src: unwrapAligned(body.join('\n').trim()), label }));
       continue;
     }
 

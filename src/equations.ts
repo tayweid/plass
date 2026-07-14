@@ -65,10 +65,14 @@ function build(doc: PMNode, numberEquations: boolean, numberSections: boolean): 
       return true;
     }
     if (node.type.name === 'math_display') {
-      eq++;
+      // Per-equation override: numbered attr beats the document setting.
+      // Unnumbered equations do not consume a number (dense numbering —
+      // Typst behaves identically).
+      const numbered = (node.attrs.numbered as boolean | null) ?? numberEquations;
+      if (numbered) eq++;
       const label = node.attrs.label as string;
-      if (label && !labels.has(label)) labels.set(label, numberEquations ? `(${eq})` : `@${label}`);
-      if (numberEquations) {
+      if (label && !labels.has(label)) labels.set(label, numbered ? `(${eq})` : `@${label}`);
+      if (numbered) {
         decos.push(Decoration.node(pos, pos + node.nodeSize, { 'data-eqnum': `(${eq})` }));
       }
       return false;

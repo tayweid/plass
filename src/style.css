@@ -1804,6 +1804,23 @@ body {
   }
 }
 
+.math-editor-num {
+  font: 11.5px var(--sans);
+  color: var(--bar-ink);
+  background: rgba(0, 0, 0, 0.045);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 7px;
+  padding: 3px 8px;
+  margin-top: 4px;
+  width: fit-content;
+  cursor: pointer;
+}
+
+.math-editor-num-off {
+  color: var(--bar-ink-soft);
+  text-decoration: line-through;
+}
+
 .math-editor-hint {
   font: 10.5px var(--sans);
   color: var(--ink-soft);
