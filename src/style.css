@@ -167,32 +167,62 @@ body {
   height: 17px;
 }
 
-/* Hover flyouts: a vertical pill of the group's icons, laid over its
-   trigger so the cursor never crosses a gap. */
+/* Hover flyouts: a pill of the group's icons, laid over its trigger so
+   the cursor never crosses a gap. */
 .tb-flyout-wrap {
   position: relative;
   display: inline-flex;
 }
 
+/* Both pills carry backdrop-filter (a stacking context), so a flyout's
+   z-index is trapped inside its own pill and a LATER sibling pill paints
+   over it. Lift whichever pill the cursor is in above its neighbors. */
+#toolbar > * {
+  position: relative;
+}
+
+#toolbar > *:hover,
+#toolbar > *:focus-within {
+  z-index: 20;
+}
+
 .tb-flyout {
   position: absolute;
-  left: -8px;
+  /* The first (representative) icon lands exactly on the trigger:
+     50% = trigger center; 29px = border + padding + half a button. */
+  left: calc(50% - 29px);
   top: 50%;
   transform: translateY(-50%);
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 2px;
-  padding: 4px 6px;
-  background: color-mix(in srgb, #17161a 88%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 5px 8px;
+  /* A step bigger and a shade lighter than the pill it covers: the
+     flyout reads as a card sitting ON TOP of the bar. */
+  background: color-mix(in srgb, #3a3840 94%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 999px;
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.45);
   opacity: 0;
   visibility: hidden;
   transition: opacity 0.14s ease;
   z-index: 30;
+}
+
+/* Flyout buttons at full rail size, even when the trigger is one of the
+   compact title-pill buttons — the open state is the bigger object. */
+.tb-flyout .tb-btn {
+  height: 40px;
+  min-width: 40px;
+  padding: 0 8px;
+}
+
+.tb-flyout .tb-btn .ico {
+  width: 22px;
+  height: 22px;
 }
 
 .tb-flyout-wrap:hover .tb-flyout,

@@ -179,6 +179,41 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     menu.appendChild(div);
   };
 
+  // Hover flyouts: mousing over a group trigger lays a pill of the
+  // group's own icon buttons OVER the trigger — same icons, no dropdown,
+  // one click to act. Pure :hover, and the flyout overlaps its trigger,
+  // so the cursor never crosses a gap.
+  const flyout = (
+    parent: HTMLElement,
+    glyph: string,
+    title: string,
+    items: Array<{ glyph: string; label: string; title: string; run: (btn: HTMLElement) => void }>,
+  ) => {
+    const wrap = document.createElement('span');
+    wrap.className = 'tb-flyout-wrap';
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'tb-btn';
+    trigger.title = title;
+    trigger.innerHTML = glyph;
+    trigger.addEventListener('mousedown', (e) => e.preventDefault());
+    wrap.appendChild(trigger);
+    const fly = document.createElement('span');
+    fly.className = 'tb-flyout';
+    for (const it of items) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tb-btn';
+      b.title = it.title;
+      b.innerHTML = `${it.glyph}<span class="lbl">${it.label}</span>`;
+      b.addEventListener('mousedown', (e) => e.preventDefault());
+      b.addEventListener('click', () => it.run(b));
+      fly.appendChild(b);
+    }
+    wrap.appendChild(fly);
+    parent.appendChild(wrap);
+  };
+
   {
     // The title pill: the document's identity plus its lifecycle — the
     // name, the save dot, and two popup menus (file, export). Everything
@@ -191,40 +226,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     titleBar.appendChild(fileLabel);
     titleBar.appendChild(dot);
 
-    // Hover flyouts: mousing over a group trigger opens a vertical pill
-    // OVER the icon with the group's own icon buttons — same icons, no
-    // dropdown, one click to act. Pure :hover, so moving from trigger to
-    // options never flickers (the flyout overlaps its trigger).
-    const flyout = (
-      glyph: string,
-      title: string,
-      items: Array<{ glyph: string; label: string; title: string; run: (btn: HTMLElement) => void }>,
-    ) => {
-      const wrap = document.createElement('span');
-      wrap.className = 'tb-flyout-wrap';
-      const trigger = document.createElement('button');
-      trigger.type = 'button';
-      trigger.className = 'tb-btn';
-      trigger.title = title;
-      trigger.innerHTML = glyph;
-      trigger.addEventListener('mousedown', (e) => e.preventDefault());
-      wrap.appendChild(trigger);
-      const fly = document.createElement('span');
-      fly.className = 'tb-flyout';
-      for (const it of items) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'tb-btn';
-        b.title = it.title;
-        b.innerHTML = `${it.glyph}<span class="lbl">${it.label}</span>`;
-        b.addEventListener('mousedown', (e) => e.preventDefault());
-        b.addEventListener('click', () => it.run(b));
-        fly.appendChild(b);
-      }
-      wrap.appendChild(fly);
-      titleBar.appendChild(wrap);
-    };
-    flyout(icon('open'), 'File — new, open, recent papers', [
+    flyout(titleBar, icon('new'), 'File — new, open, recent papers', [
       {
         glyph: icon('new'),
         label: 'New',
@@ -256,24 +258,6 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
               menuItem(menu, 'Open project folder…', () => void fm.openFolder('open'));
             });
           }),
-      },
-    ]);
-    flyout(icon('download'), 'Export — PDF, .typ, .tex', [
-      {
-        glyph: icon('download'),
-        label: 'PDF',
-        title: 'Export PDF via Typst',
-        run: () => {
-          const name = fm.name === 'Untitled' ? 'document' : fm.name;
-          void import('./pdf').then(({ exportPdf }) => exportPdf(fm.currentDoc(), name, (m) => fm.notify(m)));
-        },
-      },
-      { glyph: icon('filedown'), label: '.typ', title: 'Download a .typ copy', run: () => fm.exportCopy() },
-      {
-        glyph: icon('filedown'),
-        label: '.tex',
-        title: 'Download a .tex copy (vanilla LaTeX for journals)',
-        run: () => fm.exportTexCopy(),
       },
     ]);
     container.appendChild(titleBar);
@@ -339,6 +323,30 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   barBtn(icon('book'), 'Bib', 'Edit bibliography', () => editBibliography(view, (m) => fm.notify(m)));
   const settingsBtn = barBtn(icon('sliders'), 'Settings', 'Document settings', () => toggleSettingsPanel(view, settingsBtn));
   barBtn('<span class="ico tico">?</span>', 'Help', 'Markdown & shortcuts', () => showHelp(fm));
+  {
+    // Exports live at the rail's right end, behind one trigger.
+    const div = document.createElement('span');
+    div.className = 'tb-div';
+    toolsPill!.appendChild(div);
+    flyout(toolsPill!, icon('download'), 'Export — PDF, .typ, .tex', [
+      {
+        glyph: icon('download'),
+        label: 'PDF',
+        title: 'Export PDF via Typst',
+        run: () => {
+          const name = fm.name === 'Untitled' ? 'document' : fm.name;
+          void import('./pdf').then(({ exportPdf }) => exportPdf(fm.currentDoc(), name, (m) => fm.notify(m)));
+        },
+      },
+      { glyph: icon('filedown'), label: '.typ', title: 'Download a .typ copy', run: () => fm.exportCopy() },
+      {
+        glyph: icon('filedown'),
+        label: '.tex',
+        title: 'Download a .tex copy (vanilla LaTeX for journals)',
+        run: () => fm.exportTexCopy(),
+      },
+    ]);
+  }
 
   return {
     update() {},
