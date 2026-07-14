@@ -140,7 +140,8 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     dot.setAttribute('aria-hidden', 'true');
     titleBar.appendChild(fileLabel);
     titleBar.appendChild(dot);
-    document.body.appendChild(titleBar);
+    // The slug is the toolbar's handle: the tool rail drops out of it.
+    container.appendChild(titleBar);
   }
 
   /** Icon button whose text label fades in on hover. */

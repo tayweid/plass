@@ -83,56 +83,51 @@ body {
 #toolbar {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
+  align-items: center;
+  gap: 7px;
   position: fixed;
-  top: 50%;
-  /* Centered in the paper's left margin — the bar lives on the page,
-     in the whitespace beside the text column. Clamped so it never
-     leaves the viewport entirely. The width is FIXED so the -50%
-     translate is a constant. */
-  left: max(30px, calc(50vw - var(--page-w, 816px) / 2 + var(--page-margin-left, 96px) / 2));
-  transform: translate(-50%, -50%);
-  width: 52px;
-  max-height: calc(100vh - 20px);
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 10;
 }
 
+/* The tool rail is a drawer hanging from the slug: same dark glass,
+   hidden at rest, dropping out when the assembly is moused over. */
 .tb-pod {
   display: inline-flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   gap: 2px;
-  padding: 6px 5px;
-  background: var(--bar-glass);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
-  border: 1px solid var(--bar-hairline);
+  height: 44px;
+  padding: 0 8px;
+  background: color-mix(in srgb, var(--bg) 76%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 999px;
-  /* Flat: the bar sits ON the paper now — a hairline and the faintest
-     contact shadow, no floating halo. */
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  opacity: 0;
+  transform: translateY(-5px);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
 }
 
-.tb-btn {
-  opacity: 0.35;
-  transition: opacity 0.3s ease;
-}
-
-/* Approaching the bar wakes everything softly; the group under the
-   cursor comes up to full ink. */
-#toolbar:hover .tb-btn {
+#toolbar:hover .tb-pod,
+#toolbar:focus-within .tb-pod {
   opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
+/* Dark-glass ink tiers: soft at rest, the hovered group at full ink. */
 .tb-group:hover .tb-btn,
 .tb-group:focus-within .tb-btn {
-  color: var(--bar-ink);
+  color: rgba(240, 238, 233, 0.95);
 }
 
 .tb-group {
   display: inline-flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   gap: 2px;
 }
@@ -143,10 +138,6 @@ body {
    serif, letterspaced, quiet — the galley slug for the manuscript below.
    A faint dark glass keeps it legible when pages scroll beneath it. */
 .doc-title {
-  position: fixed;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 9px;
@@ -246,14 +237,14 @@ body {
   background: transparent;
   border: none;
   border-radius: 999px;
-  color: var(--bar-ink-soft);
+  color: rgba(235, 233, 228, 0.55);
   cursor: pointer;
   transition: color 0.12s, background 0.12s, transform 0.08s;
 }
 
 .tb-btn:hover {
-  color: #000;
-  background: rgba(0, 0, 0, 0.1);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .tb-btn:active {
@@ -284,9 +275,9 @@ body {
 
 .tb-btn .lbl {
   position: absolute;
-  left: calc(100% + 10px);
-  top: 50%;
-  transform: translateY(-50%);
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
   font: 11px var(--sans);
   color: var(--bar-ink);
   background: var(--bar-glass);
@@ -309,17 +300,11 @@ body {
 }
 
 .tb-div {
-  width: 16px;
-  height: 1px;
-  background: var(--bar-hairline);
-  margin: 6px 0;
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.14);
+  margin: 0 6px;
   flex: none;
-  transition: background 0.3s ease;
-}
-
-/* The dividers wake with the buttons. */
-#toolbar:hover .tb-div {
-  background: rgba(0, 0, 0, 0.26);
 }
 
 /* Floating table controls — appear beside the table while the caret is in it. */
