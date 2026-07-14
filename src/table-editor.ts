@@ -329,7 +329,7 @@ export function openTableEditor(view: EditorView, pos: number) {
         <textarea class="table-card-typst-text" rows="7" spellcheck="false"></textarea>
       </details>
       <div class="bib-editor-foot">
-        <span class="bib-editor-hint">Click a cell edge for a rule on just that edge (light · heavy · off) · the dots at the ends toggle the whole line · <kbd>⌘Z</kbd> undo · <kbd>⌘Enter</kbd> save · <kbd>Esc</kbd> cancel</span>
+        <span class="bib-editor-hint">Click a cell edge for a rule on just that edge (light · heavy · off) · the pills at the left / top toggle whole lines · <kbd>⌘Z</kbd> undo · <kbd>⌘Enter</kbd> save · <kbd>Esc</kbd> cancel</span>
         <span class="bib-editor-actions">
           <button type="button" class="bib-cancel">Cancel</button>
           <button type="button" class="bib-save">Save</button>
@@ -700,10 +700,12 @@ export function openTableEditor(view: EditorView, pos: number) {
         seg.title = ruleTitle(w === 'none' ? undefined : w) + ' (this cell edge only)';
         return seg;
       };
-      const handleEl = (title: string, on: boolean, x: number, y: number): HTMLElement => {
+      // Whole-line handles: a tiny rule-shaped pill (horizontal for row
+      // boundaries, vertical for columns) — the shape says what it toggles.
+      const handleEl = (horizontal: boolean, title: string, on: boolean, x: number, y: number): HTMLElement => {
         const h = document.createElement('button');
         h.type = 'button';
-        h.className = 'tc-handle' + (on ? ' tc-handle-on' : '');
+        h.className = (horizontal ? 'tc-handle-h' : 'tc-handle-v') + (on ? ' tc-handle-on' : '');
         h.title = title;
         h.style.left = `${x}px`;
         h.style.top = `${y}px`;
@@ -734,23 +736,19 @@ export function openTableEditor(view: EditorView, pos: number) {
         });
         const eff = effective(model.hlines, y, preset);
         const whole = handleEl(
-          'Whole line: ' + ruleTitle(eff === 'none' ? undefined : eff).toLowerCase(),
+          true,
+          'Whole row boundary: ' + ruleTitle(eff === 'none' ? undefined : eff).toLowerCase(),
           arr.some((w) => !!w),
-          colBox(0).l - 16,
-          rowTop - 1.5,
+          colBox(0).l - 21,
+          rowTop + 1.5,
         );
-        const wholeR = whole.cloneNode(true) as HTMLElement;
-        wholeR.style.left = `${colBox(totalCols - 1).r + 6}px`;
-        const onWhole = () => {
+        whole.addEventListener('click', () => {
           snapshot();
           for (let k = model.hspans.length - 1; k >= 0; k--) if (model.hspans[k].i === y) model.hspans.splice(k, 1);
           cycleRule(model.hlines, y, presetH(y));
           commit();
-        };
-        whole.addEventListener('click', onWhole);
-        wholeR.addEventListener('click', onWhole);
+        });
         gridEl.appendChild(whole);
-        gridEl.appendChild(wholeR);
       }
 
       // Vertical boundaries: per-row segments + whole-column handles above
@@ -777,23 +775,19 @@ export function openTableEditor(view: EditorView, pos: number) {
         });
         const eff = effective(model.vlines, x, preset);
         const whole = handleEl(
-          'Whole line: ' + ruleTitle(eff === 'none' ? undefined : eff).toLowerCase(),
+          false,
+          'Whole column boundary: ' + ruleTitle(eff === 'none' ? undefined : eff).toLowerCase(),
           arr.some((w) => !!w),
-          at - 5,
-          top + st - 13,
+          at - 1.5,
+          top + st - 18,
         );
-        const wholeB = whole.cloneNode(true) as HTMLElement;
-        wholeB.style.top = `${top + st + height + 3}px`;
-        const onWhole = () => {
+        whole.addEventListener('click', () => {
           snapshot();
           for (let k = model.vspans.length - 1; k >= 0; k--) if (model.vspans[k].i === x) model.vspans.splice(k, 1);
           cycleRule(model.vlines, x, presetV());
           commit();
-        };
-        whole.addEventListener('click', onWhole);
-        wholeB.addEventListener('click', onWhole);
+        });
         gridEl.appendChild(whole);
-        gridEl.appendChild(wholeB);
       }
     }
 

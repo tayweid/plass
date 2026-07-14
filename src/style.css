@@ -571,22 +571,34 @@ body {
   background: rgba(30, 30, 40, 0.85);
 }
 
-/* Whole-line handles: settings-style dots at the ends of each boundary. */
-.tc-handle {
+/* Whole-line handles: little rule-shaped pills — horizontal to the left
+   of each row boundary, vertical above each column boundary — so the
+   shape reads as "this whole line". */
+.tc-handle-h,
+.tc-handle-v {
   position: absolute;
-  width: 10px;
-  height: 10px;
   padding: 0;
-  border: 1.5px solid var(--ink-soft);
-  border-radius: 50%;
+  border: 1px solid var(--ink-soft);
+  border-radius: 999px;
   background: transparent;
   cursor: pointer;
   z-index: 2;
 }
 
-.tc-handle:hover {
+.tc-handle-h {
+  width: 14px;
+  height: 4px;
+}
+
+.tc-handle-v {
+  width: 4px;
+  height: 14px;
+}
+
+.tc-handle-h:hover,
+.tc-handle-v:hover {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .tc-handle-on {
