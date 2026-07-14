@@ -4,7 +4,8 @@
  * Dependency-free: imported by browser modules and serializers alike. */
 export function wrapAligned(src: string): string {
   const lines = src.split('\n').map((l) => l.trim()).filter(Boolean);
-  if (lines.length < 2 || src.includes('\\begin{')) return src;
+  const hasAnchor = /(?<!\\)&/.test(src);
+  if ((lines.length < 2 && !hasAnchor) || src.includes('\\begin{')) return src;
   return '\\begin{aligned}\n' + lines.join(' \\\\\n') + '\n\\end{aligned}';
 }
 

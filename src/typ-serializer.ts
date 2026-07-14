@@ -164,9 +164,11 @@ function inlineToTyp(node: PMNode): string {
     } else if (child.type.name === 'eq_ref') {
       // Equation refs render as "(1)" to match the editor (Typst's default
       // would be "Equation 1"); figure refs keep "Figure 1".
-      out += eqLabels.has(child.attrs.label)
-        ? `(#ref(<${child.attrs.label}>, supplement: none))`
-        : `@${child.attrs.label}`;
+      out += unnumberedEqLabels.has(child.attrs.label as string)
+        ? escapeTyp(`@${child.attrs.label}`)
+        : eqLabels.has(child.attrs.label)
+          ? `(#ref(<${child.attrs.label}>, supplement: none))`
+          : `@${child.attrs.label}`;
     } else if (child.type.name === 'citation') {
       out += `@${child.attrs.key}`;
     } else if (child.type.name === 'footnote') {
@@ -229,13 +231,24 @@ function blockToTyp(node: PMNode, indent = ''): string {
       if (node.attrs.params === 'typst-raw') return indent + node.textContent + '\n\n';
       return indent + '```' + (node.attrs.params ?? '') + '\n' + node.textContent + '\n```\n\n';
     case 'math_display': {
-      const label = node.attrs.label ? ` <${node.attrs.label}>` : '';
+      const numberedAttr = node.attrs.numbered as boolean | null;
+      const effNumbered = numberedAttr ?? emitNumberEquations;
+      // A label on an unnumbered equation would make every reference to it
+      // a compile error (Typst: cannot ref an unnumbered equation) — drop
+      // it; the references degrade to literal placeholders.
+      const label = node.attrs.label && effNumbered ? ` <${node.attrs.label}>` : '';
       const body = '#mitex(`\n' + expandMacros(wrapAligned(node.attrs.src as string)) + '\n`)' + label;
       const numbered = node.attrs.numbered as boolean | null;
-      // Per-equation override, scoped so it can't leak (unnumbered
-      // equations don't step Typst's counter — dense, like the editor).
-      if (numbered === false) return indent + '#[#set math.equation(numbering: none)\n' + body + '\n]\n\n';
-      if (numbered === true) return indent + '#[#set math.equation(numbering: "(1)")\n' + body + '\n]\n\n';
+      // Per-equation override as bare set/restore rules: a wrapping content
+      // block (#[...]) changes Typst's block spacing (~0.5em) and shifted
+      // the whole page when toggling; set rules are style-only.
+      const docNum = emitNumberEquations ? '"(1)"' : 'none';
+      if (numbered === false && emitNumberEquations) {
+        return indent + '#set math.equation(numbering: none)\n' + body + '\n#set math.equation(numbering: ' + docNum + ')\n\n';
+      }
+      if (numbered === true && !emitNumberEquations) {
+        return indent + '#set math.equation(numbering: "(1)")\n' + body + '\n#set math.equation(numbering: ' + docNum + ')\n\n';
+      }
       return indent + body + '\n\n';
     }
     case 'figure': {
@@ -455,13 +468,19 @@ function containsMath(doc: PMNode): boolean {
 }
 
 let docNumFormat = '1';
+let emitNumberEquations = true;
+let unnumberedEqLabels = new Set<string>();
 
 export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
   exportOpts = opts;
   docBib = (doc.attrs?.bib as { name: string; content: string } | null) ?? null;
   eqLabels = new Set();
+  unnumberedEqLabels = new Set();
   doc.descendants((n) => {
-    if (n.type.name === 'math_display' && n.attrs.label) eqLabels.add(n.attrs.label as string);
+    if (n.type.name === 'math_display' && n.attrs.label) {
+      eqLabels.add(n.attrs.label as string);
+      if (n.attrs.numbered === false) unnumberedEqLabels.add(n.attrs.label as string);
+    }
     return true;
   });
   try {
@@ -497,6 +516,7 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     const fonts = [s.font, ...(opts.fontFallback ?? []).filter((f) => f !== s.font)];
     const fontSpec = fonts.length > 1 ? `(${fonts.map((f) => `"${f}"`).join(', ')})` : `"${fonts[0]}"`;
     out += `#set text(size: ${s.sizePt}pt, font: ${fontSpec}, hyphenate: ${s.hyphenate})\n`;
+    emitNumberEquations = s.numberEquations;
     if (s.numberEquations) out += '#set math.equation(numbering: "(1)")\n';
     if (s.numberSections) out += '#set heading(numbering: "1.1")\n';
     if (s.pageNumStart !== 1) out += `#counter(page).update(${s.pageNumStart})\n`;

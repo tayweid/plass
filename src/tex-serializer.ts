@@ -11,6 +11,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { normalizeSettings, parseMathMacros, type DocSettings } from './settings';
 
 let macros: Record<string, string> = {};
+let unnumberedEq = new Set<string>();
 
 /** Escape plain text for LaTeX (backslash first, then specials). */
 export function escapeTex(s: string): string {
@@ -52,7 +53,11 @@ function inlineToTex(node: PMNode): string {
       out += `$${child.attrs.src}$`;
     } else if (child.type.name === 'eq_ref') {
       const label = child.attrs.label as string;
-      out += /^(fig|tab|sec):/.test(label) ? `\\ref{${label}}` : `\\eqref{${label}}`;
+      out += unnumberedEq.has(label)
+        ? escapeTex(`@${label}`)
+        : /^(fig|tab|sec):/.test(label)
+          ? `\\ref{${label}}`
+          : `\\eqref{${label}}`;
     } else if (child.type.name === 'citation') {
       out += `\\cite{${child.attrs.key}}`;
     } else if (child.type.name === 'footnote') {
@@ -201,7 +206,7 @@ function blockToTex(node: PMNode, s: DocSettings): string {
       const numbered = (node.attrs.numbered as boolean | null) ?? (s.numberEquations || !!node.attrs.label);
       // Multi-line sources become an aligned block (one number, Typst-style).
       const lines = src.split('\n').map((l) => l.trim()).filter(Boolean);
-      const body = lines.length > 1 && !src.includes('\\begin{')
+      const body = (lines.length > 1 || /(?<!\\)&/.test(src)) && !src.includes('\\begin{')
         ? `\\begin{aligned}\n${lines.join(' \\\\\n')}\n\\end{aligned}`
         : src;
       if (numbered) {
@@ -281,6 +286,13 @@ export function docToTex(doc: PMNode): string {
   doc.descendants((n) => {
     if ((n.type.name === 'table_cell' || n.type.name === 'table_header') && ((n.attrs.rowspan as number) ?? 1) > 1) {
       usesMultirow = true;
+    }
+    return true;
+  });
+  unnumberedEq = new Set();
+  doc.descendants((n) => {
+    if (n.type.name === 'math_display' && n.attrs.label && n.attrs.numbered === false) {
+      unnumberedEq.add(n.attrs.label as string);
     }
     return true;
   });

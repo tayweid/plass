@@ -314,8 +314,32 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
+    // Per-equation numbering override (set/restore form): a bare
+    // #set math.equation(...) line, the mitex block, then the restore line.
+    {
+      const nm = /^#set math\.equation\(numbering: (none|"\(1\)")\)$/.exec(t);
+      if (nm && lines[i + 1]?.trim() === '#mitex(`') {
+        const numbered = nm[1] !== 'none';
+        const body: string[] = [];
+        let label = '';
+        i += 2;
+        while (i < n) {
+          const close = /^`\)\s*(?:<([^>]+)>)?\s*$/.exec(lines[i].trim());
+          if (close) {
+            label = close[1] ?? '';
+            i++;
+            break;
+          }
+          body.push(lines[i++]);
+        }
+        if (/^#set math\.equation\(numbering: /.test(lines[i]?.trim() ?? '')) i++;
+        out.push(schema.nodes.math_display.create({ src: unwrapAligned(body.join('\n').trim()), label, numbered }));
+        continue;
+      }
+    }
+
     // Per-equation numbering override: #[#set math.equation(numbering: X)
-    // followed by the mitex block and a closing ].
+    // followed by the mitex block and a closing ] (legacy form).
     {
       const nm = /^#\[#set math\.equation\(numbering: (none|"\(1\)")\)$/.exec(t);
       if (nm && lines[i + 1]?.trim() === '#mitex(`') {
