@@ -158,7 +158,34 @@ export function typesetPlugin(
         }
         if (meta?.type === 'pageMarks') return { decos: val.decos, pageMarks: meta.pageMarks };
         if (tr.docChanged) {
-          return { decos: val.decos.map(tr.mapping, tr.doc), pageMarks: val.pageMarks.map(tr.mapping, tr.doc) };
+          let decos = val.decos.map(tr.mapping, tr.doc);
+          // A replace whose boundary coincides with a page spacer widget
+          // (e.g. the table card swapping the block that ENDS at a page
+          // start) silently drops the spacer, and the page below visibly
+          // jumps until the settle run. Spacers are load-bearing geometry:
+          // re-anchor any that mapping discarded.
+          const isSpacer = (spec: unknown) => !!(spec as { key?: string })?.key?.startsWith('pg');
+          const had = val.decos.find(undefined, undefined, isSpacer);
+          if (had.length) {
+            const kept = new Set(
+              decos.find(undefined, undefined, isSpacer).map((d) => (d.spec as { key: string }).key),
+            );
+            const lost = had.filter((d) => !kept.has((d.spec as { key: string }).key));
+            if (lost.length) {
+              const revived = lost.map((d) => {
+                const spec = d.spec as { key: string; h: number; hy?: boolean };
+                const pos = Math.min(tr.mapping.map(d.from, -1), tr.doc.content.size);
+                return Decoration.widget(pos, () => pageGapWidget(spec.h, !!spec.hy), {
+                  side: -1,
+                  key: spec.key,
+                  h: spec.h,
+                  hy: spec.hy,
+                });
+              });
+              decos = decos.add(tr.doc, revived);
+            }
+          }
+          return { decos, pageMarks: val.pageMarks.map(tr.mapping, tr.doc) };
         }
         return val;
       },
@@ -1363,16 +1390,14 @@ class TypesetView {
       const delta = page * (size.h + PAGE_GAP) + marginTop + adj - (y + shift);
       if (stale && delta > 0) {
         // Content above SHRANK (deleted lines): holding this start would
-        // manufacture empty space. A hold is only plausible while the gap
-        // could not fit the unit it pushes down (widow/orphan groups and
-        // footnote reservations included, generously). Beyond that, the
-        // break must move up — bail to live pagination.
+        // manufacture empty space. Steady state recreates each existing
+        // spacer at its own height, so the plausibility test is GROWTH
+        // over the spacer this start had before (matched by ordinal —
+        // page k's start owns the k-th spacer), not the absolute gap:
+        // page gaps are routinely hundreds of px when a block moved whole.
         const lineH = F * s.lineHeight;
-        const unitH =
-          kind === 'line'
-            ? lineH
-            : (rectOfNode(view, ps.pos)?.height ?? lineH);
-        if (delta > unitH + 3 * lineH + 80) return null;
+        const prevH = existing[page - 1]?.height ?? 0;
+        if (delta - prevH > 3 * lineH + 80) return null;
       }
       if (delta > 0) {
         spacers.push({ pos, height: delta, kind });
