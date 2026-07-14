@@ -159,8 +159,12 @@ export function openMathEditor(view: EditorView, pos: number) {
     <div class="math-editor-preview" aria-hidden="true"></div>
     <textarea class="math-editor-input" rows="${display ? 3 : 1}"
       placeholder="${display ? '\\int_a^b f(x)\\,dx' : 'e^{i\\pi}+1=0'}" spellcheck="false"></textarea>
-    ${display ? '<input class="math-editor-label" placeholder="label — reference in text with @label" spellcheck="false">' : ''}
-    ${display ? '<button type="button" class="math-editor-num" title="Toggle numbering for this equation"></button>' : ''}
+    ${display
+      ? `<div class="math-editor-labelrow">
+          <button type="button" class="math-editor-num" title="Toggle numbering for this equation"></button>
+          <input class="math-editor-label" placeholder="label — reference in text with @label" spellcheck="false">
+        </div>`
+      : ''}
     <div class="math-editor-hint">LaTeX${display ? ' · <kbd>&amp;</kbd> aligns · <kbd>Enter</kbd> new line · <kbd>⌘Enter</kbd> save' : ' · <kbd>Enter</kbd> save'} · <kbd>Esc</kbd> cancel</div>`;
   const preview = panel.querySelector('.math-editor-preview') as HTMLElement;
   const input = panel.querySelector('.math-editor-input') as HTMLTextAreaElement;
@@ -173,8 +177,8 @@ export function openMathEditor(view: EditorView, pos: number) {
   const paintNum = () => {
     if (!numBtn) return;
     const on = eqNumbered !== false;
-    numBtn.textContent = on ? '(1) numbered' : 'unnumbered';
     numBtn.classList.toggle('math-editor-num-off', !on);
+    numBtn.title = on ? 'Numbered — click to remove the number' : 'Unnumbered — click to number';
   };
   paintNum();
   numBtn?.addEventListener('click', () => {
@@ -191,6 +195,8 @@ export function openMathEditor(view: EditorView, pos: number) {
   const target = view.nodeDOM(pos);
   const rect =
     target instanceof HTMLElement ? target.getBoundingClientRect() : view.coordsAtPos(pos);
+  // Display equations: the editor spans the full block width.
+  if (display && 'width' in rect && rect.width > 300) panel.style.width = `${rect.width}px`;
   const left = Math.min(Math.max(8, rect.left), window.innerWidth - panel.offsetWidth - 8);
   const top =
     rect.bottom + panel.offsetHeight + 16 > window.innerHeight

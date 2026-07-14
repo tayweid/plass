@@ -1678,6 +1678,17 @@ body {
   padding: 0 1px;
 }
 
+/* The Typst ink svg is inline and sits on the text baseline, leaving
+   descender slack below — visually ~3px high in its box. Pure paint
+   shift (transform): zero layout change, vertical parity untouched. */
+.math-display > svg {
+  transform: translateY(0.18em);
+}
+
+.ts-table-render svg {
+  transform: translateY(3px);
+}
+
 .math-display {
   display: block;
   position: relative;
@@ -1804,21 +1815,39 @@ body {
   }
 }
 
-.math-editor-num {
-  font: 11.5px var(--sans);
-  color: var(--bar-ink);
-  background: rgba(0, 0, 0, 0.045);
-  border: 1px solid var(--bar-hairline);
-  border-radius: 7px;
-  padding: 3px 8px;
-  margin-top: 4px;
-  width: fit-content;
-  cursor: pointer;
+.math-editor-labelrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
 }
 
-.math-editor-num-off {
-  color: var(--bar-ink-soft);
-  text-decoration: line-through;
+.math-editor-labelrow .math-editor-label {
+  flex: 1;
+  margin-top: 0;
+}
+
+/* Numbering dot: filled = numbered, hollow = unnumbered (same language
+   as the settings toggles). */
+.math-editor-num {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent);
+  background: var(--accent);
+  padding: 0;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+
+.math-editor-num.math-editor-num-off {
+  background: transparent;
+  border-color: var(--bar-hairline);
+}
+
+.math-editor-num:hover {
+  border-color: var(--accent);
 }
 
 .math-editor-hint {
