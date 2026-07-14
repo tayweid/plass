@@ -118,12 +118,6 @@ body {
   transition: opacity 0.3s ease;
 }
 
-/* The title is the document's name — always fully present. */
-.tb-file {
-  opacity: 1;
-  color: var(--bar-ink);
-}
-
 /* Approaching the bar wakes everything softly; the group under the
    cursor comes up to full ink. */
 #toolbar:hover .tb-btn {
@@ -142,63 +136,56 @@ body {
   gap: 2px;
 }
 
-/* The title pod IS the pill: natural (full-name) width, clipped to the
-   bar's width at rest by an animated max-width. Hovering or renaming
-   relaxes the clip and the whole pod — glass, ring and all — slides
-   open to the right; the bar itself never moves. */
-.tb-pod:has(.tb-file) {
-  width: max-content;
-  max-width: 100%;
-  height: 52px;
-  justify-content: center;
-  overflow: hidden;
-  transition: max-width 0.28s ease;
-}
+/* ---------- the document slug ---------- */
 
-.tb-pod:has(.tb-file):hover,
-.tb-pod:has(.tb-file):focus-within {
-  max-width: 50vw;
-}
-
-/* Rest state: the document glyph; hover/rename: the name. */
-.tb-file-ico {
+/* The name floats fixed over the room, centered above the page: small
+   serif, letterspaced, quiet — the galley slug for the manuscript below.
+   A faint dark glass keeps it legible when pages scroll beneath it. */
+.doc-title {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  color: var(--bar-ink-soft);
+  gap: 9px;
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  z-index: 9;
 }
 
-.tb-file-ico .ico {
-  width: 22px;
-  height: 22px;
-}
-
-.tb-pod:has(.tb-file):hover .tb-file-ico,
-.tb-pod:has(.tb-file):focus-within .tb-file-ico {
-  display: none;
-}
-
-.tb-pod:has(.tb-file) .tb-file {
-  display: none;
-}
-
-.tb-pod:has(.tb-file):hover .tb-file,
-.tb-pod:has(.tb-file):focus-within .tb-file {
-  display: block;
-}
-
-.tb-file {
-  font: 16px var(--sans);
-  color: var(--bar-ink-soft);
-  max-width: 100%;
+.doc-title .tb-file {
+  font: 14px/1.5 'New Computer Modern', var(--serif);
+  letter-spacing: 0.09em;
+  color: rgba(252, 252, 251, 0.62);
+  max-width: 56ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: text;
-  padding: 3px 12px;
-  border-radius: 999px;
+  padding: 1px 4px;
+  border-radius: 5px;
+}
+
+.doc-title .tb-file:hover {
+  color: rgba(252, 252, 251, 0.92);
+}
+
+/* The save state: a small honest dot beside the name. */
+.doc-title-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(205, 100, 82, 0.95);
+  flex: none;
+  transition: background 0.3s ease;
+}
+
+.doc-saved .doc-title-dot {
+  background: rgba(110, 165, 118, 0.9);
 }
 
 .tb-btn .ico,
@@ -211,43 +198,19 @@ body {
   transform: scale(1.12);
 }
 
-/* Save-state edge on the title pill (the floating pod): a quiet green
-   ring when the paper is safely on disk, warm red while it is not. */
-/* Same depth as the toolbar pill, but the shadow itself carries the
-   save-state color — the pill floats in a green or red light. */
-.tb-pod-saved {
-  border-color: rgba(90, 155, 100, 0.9);
-  box-shadow:
-    0 0 0 1px rgba(90, 155, 100, 0.3),
-    0 2px 6px rgba(45, 110, 60, 0.4),
-    0 14px 40px rgba(45, 110, 60, 0.35);
-}
-
-.tb-pod-unsaved {
-  border-color: rgba(200, 95, 80, 0.9);
-  box-shadow:
-    0 0 0 1px rgba(200, 95, 80, 0.3),
-    0 2px 6px rgba(150, 55, 40, 0.4),
-    0 14px 40px rgba(150, 55, 40, 0.35);
-}
-
 .tb-file-editing {
-  background: var(--bar-press);
-  color: var(--bar-ink);
+  background: rgba(255, 255, 255, 0.09);
+  color: rgba(252, 252, 251, 0.95);
   outline: none;
   cursor: text;
-  caret-color: var(--accent);
+  caret-color: #9db8d6;
   /* Editing needs the full name visible, not an ellipsis. */
   text-overflow: clip;
+  max-width: none;
 }
 
 .tb-file-editing::selection {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
-.tb-file:hover {
-  background: var(--bar-press);
-  color: var(--bar-ink);
+  background: rgba(157, 184, 214, 0.35);
 }
 
 
