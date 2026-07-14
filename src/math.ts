@@ -174,13 +174,28 @@ export function openMathEditor(view: EditorView, pos: number) {
   if (labelInput) labelInput.value = node.attrs.label ?? '';
   // Binary toggle: numbered (default / attr null or true) vs unnumbered.
   let eqNumbered: boolean | null = node.attrs.numbered as boolean | null;
+  // The number this equation gets while numbered: numbered equations
+  // before it in the document, plus one (dense numbering).
+  const eqNumber = (() => {
+    if (!display) return 0;
+    const docDefault = getSettings(view.state).numberEquations;
+    let n = 0;
+    view.state.doc.descendants((child, childPos) => {
+      if (childPos >= pos || child.type.name !== 'math_display') return childPos < pos;
+      if (((child.attrs.numbered as boolean | null) ?? docDefault) !== false) n++;
+      return false;
+    });
+    return n + 1;
+  })();
   const paintNum = () => {
     if (!numBtn) return;
     const on = eqNumbered !== false;
     numBtn.classList.toggle('math-editor-num-off', !on);
     numBtn.title = on ? 'Numbered — click to remove the number' : 'Unnumbered — click to number';
+    preview.classList.toggle('math-editor-preview-numbered', on);
+    if (on) preview.setAttribute('data-eqnum', `(${eqNumber})`);
+    else preview.removeAttribute('data-eqnum');
   };
-  paintNum();
   numBtn?.addEventListener('click', () => {
     eqNumbered = eqNumbered === false ? null : false;
     paintNum();
@@ -189,6 +204,7 @@ export function openMathEditor(view: EditorView, pos: number) {
   const macros = parseMathMacros(getSettings(view.state).mathMacros);
   const updatePreview = () => renderInto(preview, input.value.trim() || '\\ldots', display, macros);
   updatePreview();
+  paintNum();
   input.addEventListener('input', updatePreview);
 
   document.body.appendChild(panel);

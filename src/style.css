@@ -1813,6 +1813,20 @@ body {
   justify-content: center;
   padding: 6px 4px 10px;
   color: var(--ink);
+  position: relative;
+}
+
+/* Live equation number in the card preview — mirrors the document chip,
+   so toggling the dot shows exactly what save will produce. */
+.math-editor-preview-numbered::after {
+  content: attr(data-eqnum);
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.95em;
+  color: #333;
+  pointer-events: none;
 }
 
 .math-editor-input {
