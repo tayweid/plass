@@ -191,51 +191,91 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     titleBar.appendChild(fileLabel);
     titleBar.appendChild(dot);
 
-    const titleBtn = (glyph: string, title: string, onClick: (btn: HTMLElement) => void) => {
-      const el = document.createElement('button');
-      el.type = 'button';
-      el.className = 'tb-btn';
-      el.title = title;
-      el.innerHTML = glyph;
-      el.addEventListener('mousedown', (e) => e.preventDefault());
-      el.addEventListener('click', () => onClick(el));
-      titleBar.appendChild(el);
-      return el;
+    // Hover flyouts: mousing over a group trigger opens a vertical pill
+    // OVER the icon with the group's own icon buttons — same icons, no
+    // dropdown, one click to act. Pure :hover, so moving from trigger to
+    // options never flickers (the flyout overlaps its trigger).
+    const flyout = (
+      glyph: string,
+      title: string,
+      items: Array<{ glyph: string; label: string; title: string; run: (btn: HTMLElement) => void }>,
+    ) => {
+      const wrap = document.createElement('span');
+      wrap.className = 'tb-flyout-wrap';
+      const trigger = document.createElement('button');
+      trigger.type = 'button';
+      trigger.className = 'tb-btn';
+      trigger.title = title;
+      trigger.innerHTML = glyph;
+      trigger.addEventListener('mousedown', (e) => e.preventDefault());
+      wrap.appendChild(trigger);
+      const fly = document.createElement('span');
+      fly.className = 'tb-flyout';
+      for (const it of items) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'tb-btn';
+        b.title = it.title;
+        b.innerHTML = `${it.glyph}<span class="lbl">${it.label}</span>`;
+        b.addEventListener('mousedown', (e) => e.preventDefault());
+        b.addEventListener('click', () => it.run(b));
+        fly.appendChild(b);
+      }
+      wrap.appendChild(fly);
+      titleBar.appendChild(wrap);
     };
-    titleBtn(icon('open'), 'File — new, open, recent papers', (btn) =>
-      toggleMenu(btn, (menu) => {
-        menuItem(menu, 'New document', () => {
+    flyout(icon('open'), 'File — new, open, recent papers', [
+      {
+        glyph: icon('new'),
+        label: 'New',
+        title: 'New document',
+        run: () => {
           if (confirm('Replace the current document with an empty one?')) fm.newDoc();
-        });
-        menuItem(menu, 'Open…', () => void fm.open());
-        menuDivider(menu);
-        void fm.recents().then((entries) => {
-          if (!openMenu || openMenu !== menu) return;
-          if (!entries.length) {
-            const hint = document.createElement('div');
-            hint.className = 'file-menu-hint';
-            hint.style.padding = '6px 10px';
-            hint.textContent = 'No papers yet — they appear here once saved.';
-            menu.appendChild(hint);
-          }
-          for (const entry of entries.slice(0, 8)) {
-            menuItem(menu, entry.name, () => void fm.openRecent(entry));
-          }
-          menuDivider(menu);
-          menuItem(menu, 'Open project folder…', () => void fm.openFolder('open'));
-        });
-      }),
-    );
-    titleBtn(icon('download'), 'Export — PDF, .typ, .tex', (btn) =>
-      toggleMenu(btn, (menu) => {
-        menuItem(menu, 'Export PDF', () => {
+        },
+      },
+      { glyph: icon('open'), label: 'Open', title: 'Open… (⌘O)', run: () => void fm.open() },
+      {
+        glyph: icon('clock'),
+        label: 'Recent',
+        title: 'Your papers',
+        run: (btn) =>
+          toggleMenu(btn, (menu) => {
+            void fm.recents().then((entries) => {
+              if (!openMenu || openMenu !== menu) return;
+              if (!entries.length) {
+                const hint = document.createElement('div');
+                hint.className = 'file-menu-hint';
+                hint.style.padding = '6px 10px';
+                hint.textContent = 'No papers yet — they appear here once saved.';
+                menu.appendChild(hint);
+              }
+              for (const entry of entries.slice(0, 8)) {
+                menuItem(menu, entry.name, () => void fm.openRecent(entry));
+              }
+              menuDivider(menu);
+              menuItem(menu, 'Open project folder…', () => void fm.openFolder('open'));
+            });
+          }),
+      },
+    ]);
+    flyout(icon('download'), 'Export — PDF, .typ, .tex', [
+      {
+        glyph: icon('download'),
+        label: 'PDF',
+        title: 'Export PDF via Typst',
+        run: () => {
           const name = fm.name === 'Untitled' ? 'document' : fm.name;
           void import('./pdf').then(({ exportPdf }) => exportPdf(fm.currentDoc(), name, (m) => fm.notify(m)));
-        });
-        menuItem(menu, 'Download .typ copy', () => fm.exportCopy());
-        menuItem(menu, 'Download .tex copy (vanilla LaTeX)', () => fm.exportTexCopy());
-      }),
-    );
+        },
+      },
+      { glyph: icon('filedown'), label: '.typ', title: 'Download a .typ copy', run: () => fm.exportCopy() },
+      {
+        glyph: icon('filedown'),
+        label: '.tex',
+        title: 'Download a .tex copy (vanilla LaTeX for journals)',
+        run: () => fm.exportTexCopy(),
+      },
+    ]);
     container.appendChild(titleBar);
   }
 

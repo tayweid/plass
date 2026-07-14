@@ -167,6 +167,42 @@ body {
   height: 17px;
 }
 
+/* Hover flyouts: a vertical pill of the group's icons, laid over its
+   trigger so the cursor never crosses a gap. */
+.tb-flyout-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.tb-flyout {
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  background: color-mix(in srgb, #17161a 88%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.14s ease;
+  z-index: 30;
+}
+
+.tb-flyout-wrap:hover .tb-flyout,
+.tb-flyout-wrap:focus-within .tb-flyout {
+  opacity: 1;
+  visibility: visible;
+}
+
+
+
 .doc-title .tb-file {
   font: 15px/1.5 'New Computer Modern', var(--serif);
   letter-spacing: 0.09em;
