@@ -339,6 +339,9 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
         run: () => showHelp(fm),
       },
     ]);
+    const div = document.createElement('span');
+    div.className = 'tb-div';
+    docPod.appendChild(div);
     flyout(docPod, icon('download'), 'Export — PDF, .typ, .tex', [
       { glyph: icon('filedown'), label: '.typ', title: 'Download a .typ copy', run: () => fm.exportCopy() },
       {
