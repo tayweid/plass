@@ -413,7 +413,9 @@ function blockToTyp(node: PMNode, indent = ''): string {
       }
       if (style === 'booktabs') {
         rows.unshift('  table.hline(stroke: 0.08em),');
-        if (hasHeader) {
+        // The preset header midrule yields to an explicit y:1 rule (the
+        // card cycles it light/heavy/none via table.hline(y: 1, ...)).
+        if (hasHeader && !/table\.hline\(\s*y\s*:\s*1[,)]/.test(customAll)) {
           const idx = rows.findIndex((r) => r.includes('table.header('));
           rows.splice(idx + 1, 0, '  table.hline(stroke: 0.05em),');
         }

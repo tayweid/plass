@@ -32,8 +32,12 @@ interface GridModel {
   /** Custom #table params (midrules excluded — they live in `hlines`). */
   params: string;
   /** Row boundaries (1-based: above row n) carrying a midrule, with its
-   * weight ('light' 0.05em | 'heavy' 0.08em). */
-  hlines: Map<number, 'light' | 'heavy'>;
+   * weight ('light' 0.05em | 'heavy' 0.08em | 'none' = suppress a preset
+   * rule at this boundary). */
+  hlines: Map<number, 'light' | 'heavy' | 'none'>;
+  /** The header boundary's entry is the booktabs preset (not user-set):
+   * emit nothing for it unless the user changes it. */
+  implicitHeaderRule: boolean;
   caption: string;
   label: string;
   /** Per-column widths ('auto' | '1fr' | '2cm' | …). */
@@ -48,7 +52,7 @@ interface GridModel {
   inset: string;
 }
 
-const HLINE_RE = /table\.hline\(\s*y\s*:\s*(\d+)(?:[^)]*?stroke\s*:\s*([\d.]+)em)?[^)]*\)\s*,?/g;
+const HLINE_RE = /table\.hline\(\s*y\s*:\s*(\d+)(?:[^)]*?stroke\s*:\s*(none|[\d.]+em))?[^)]*\)\s*,?/g;
 const VLINE_RE = /table\.vline\(\s*x\s*:\s*(\d+)[^)]*\)\s*,?/g;
 const COLUMNS_RE = /columns\s*:\s*\(([^)]*)\)\s*,?/;
 // Density presets: Typst's table default inset is 5pt.
@@ -82,14 +86,17 @@ function readModel(table: PMNode): GridModel {
     });
     rows.push(cells);
   });
-  const hlines = new Map<number, 'light' | 'heavy'>();
+  const hlines = new Map<number, 'light' | 'heavy' | 'none'>();
   const vlines = new Set<number>();
   let inset = '';
   const raw = (table.attrs.params as string) || '';
   let widths: string[] = [];
   const params = raw
     .replace(HLINE_RE, (_, y, stroke) => {
-      hlines.set(+y, parseFloat(stroke ?? '0.05') >= 0.07 ? 'heavy' : 'light');
+      hlines.set(
+        +y,
+        stroke === 'none' ? 'none' : parseFloat(stroke ?? '0.05') >= 0.07 ? 'heavy' : 'light',
+      );
       return '';
     })
     .replace(VLINE_RE, (_, x) => {
@@ -123,9 +130,18 @@ function readModel(table: PMNode): GridModel {
     }
   }
   if (fill === 'none' && /(^|[\s,(])fill\s*:/.test(cleaned)) fill = 'custom';
+  // Booktabs draws a preset midrule under the header row: surface it in
+  // the model so boundary clicks can change or suppress it.
+  const style0 = (table.attrs.style as string) || 'booktabs';
+  const hasHeader0 = rows[0]?.some((c) => c.header) ?? false;
+  let implicitHeaderRule = false;
+  if (style0 === 'booktabs' && hasHeader0 && !hlines.has(1)) {
+    hlines.set(1, 'light');
+    implicitHeaderRule = true;
+  }
   return {
     rows,
-    style: (table.attrs.style as string) || 'booktabs',
+    style: style0,
     params: cleaned,
     hlines,
     caption: (table.attrs.caption as string) || '',
@@ -135,6 +151,7 @@ function readModel(table: PMNode): GridModel {
     fontSize: (table.attrs.fontSize as string) || '',
     vlines,
     inset,
+    implicitHeaderRule,
   };
 }
 
@@ -145,7 +162,8 @@ function composeParams(model: GridModel): string {
   if (model.inset) parts.push(`inset: ${model.inset}`);
   if (model.params) parts.push(model.params);
   for (const [y, w] of [...model.hlines.entries()].sort((a, b) => a[0] - b[0])) {
-    parts.push(`table.hline(y: ${y}, stroke: ${w === 'heavy' ? '0.08' : '0.05'}em)`);
+    if (y === 1 && model.implicitHeaderRule && w === 'light') continue; // the preset itself
+    parts.push(`table.hline(y: ${y}, stroke: ${w === 'none' ? 'none' : w === 'heavy' ? '0.08em' : '0.05em'})`);
   }
   for (const x of [...model.vlines].sort((a, b) => a - b)) parts.push(`table.vline(x: ${x}, stroke: 0.05em)`);
   return parts.join(',\n');
@@ -193,6 +211,7 @@ function cloneModel(m: GridModel): GridModel {
     fontSize: m.fontSize,
     vlines: new Set(m.vlines),
     inset: m.inset,
+    implicitHeaderRule: m.implicitHeaderRule,
   };
 }
 
@@ -288,7 +307,7 @@ export function openTableEditor(view: EditorView, pos: number) {
         <textarea class="table-card-typst-text" rows="7" spellcheck="false"></textarea>
       </details>
       <div class="bib-editor-foot">
-        <span class="bib-editor-hint">Click boundary between rows for a midrule · <kbd>⌘Z</kbd> undo · <kbd>⌘Enter</kbd> save · <kbd>Esc</kbd> cancel</span>
+        <span class="bib-editor-hint">Click between rows for a rule (cycles light · heavy · none) · between column widths for a vertical rule · <kbd>⌘Z</kbd> undo · <kbd>⌘Enter</kbd> save · <kbd>Esc</kbd> cancel</span>
         <span class="bib-editor-actions">
           <button type="button" class="bib-cancel">Cancel</button>
           <button type="button" class="bib-save">Save</button>
@@ -423,7 +442,8 @@ export function openTableEditor(view: EditorView, pos: number) {
     model.rows.forEach((row, ri) => {
       if (ri > 0) {
         const btr = document.createElement('tr');
-        const w = model.hlines.get(ri);
+        const w0 = model.hlines.get(ri);
+        const w = w0 === 'none' ? undefined : w0;
         btr.className = 'tc-boundary' + (w ? ' tc-boundary-on' : '') + (w === 'heavy' ? ' tc-boundary-heavy' : '');
         btr.title = !w ? 'Add midrule here' : w === 'light' ? 'Make midrule heavy' : 'Remove midrule';
         const btd = document.createElement('td');
@@ -431,11 +451,15 @@ export function openTableEditor(view: EditorView, pos: number) {
         btr.appendChild(btd);
         btr.addEventListener('click', () => {
           snapshot();
-          // Cycle: none -> light -> heavy -> none.
+          // Cycle: off -> light -> heavy -> off. On the booktabs header
+          // boundary, "off" is an explicit suppression of the preset rule.
           const cur = model.hlines.get(ri);
-          if (!cur) model.hlines.set(ri, 'light');
+          const presetBoundary = ri === 1 && model.implicitHeaderRule !== undefined && model.style === 'booktabs' && model.rows[0]?.some((c) => c.header);
+          if (!cur || cur === 'none') model.hlines.set(ri, 'light');
           else if (cur === 'light') model.hlines.set(ri, 'heavy');
+          else if (presetBoundary) model.hlines.set(ri, 'none');
           else model.hlines.delete(ri);
+          if (ri === 1) model.implicitHeaderRule = false;
           renderGrid();
           refreshPanel();
           schedulePreview();

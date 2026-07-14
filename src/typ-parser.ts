@@ -825,7 +825,11 @@ export function parseTable(src: string): PMNode | null {
   let style = 'grid';
   if (strokeNone) {
     style = hlines ? 'booktabs' : 'plain';
-    if (style === 'booktabs' && hlines !== (hasHeader ? 3 : 2)) return null;
+    // Booktabs: top + bottom rules, plus the header midrule — unless an
+    // explicit y:1 user rule replaced or suppressed it (only 2 positional
+    // rules then).
+    const headerRuleReplaced = userHlines.some((r) => /table\.hline\(\s*y\s*:\s*1[,)]/.test(r));
+    if (style === 'booktabs' && hlines !== (hasHeader && !headerRuleReplaced ? 3 : 2)) return null;
   } else if (hlines > 0) {
     return null;
   } else if (customParams.some((a) => /^stroke\s*:/.test(a))) {
