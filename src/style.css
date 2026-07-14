@@ -463,8 +463,8 @@ body {
   max-height: 300px;
   overflow: auto;
   margin-bottom: 10px;
-  position: relative; /* anchors the vertical boundary strips */
-  padding: 0 5px; /* room for the edge strips */
+  position: relative; /* anchors the boundary segments and handles */
+  padding: 14px 20px 16px; /* room for the whole-line handles */
 }
 
 .table-card-grid table {
@@ -508,87 +508,87 @@ body {
   position: relative;
 }
 
-/* Vertical boundary strips: overlay divs down each column boundary,
-   the vertical twin of the .tc-boundary rows. */
-.tc-vb {
+/* Boundary segments: one click target per cell edge, overlaid on the
+   boundary rows and column gaps. Adjacent segments meet at the gap
+   midpoints, so a uniform rule reads as one continuous line. */
+.tc-hseg {
   position: absolute;
-  width: 9px;
-  cursor: pointer;
+  height: 7px;
   z-index: 2;
+  cursor: pointer;
 }
 
-.tc-vb::after {
+.tc-hseg::after {
   content: '';
   position: absolute;
-  left: 4px;
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 1px;
+  background: transparent;
+}
+
+.tc-vseg {
+  position: absolute;
+  width: 9px;
+  z-index: 2;
+  cursor: pointer;
+}
+
+.tc-vseg::after {
+  content: '';
+  position: absolute;
   top: 0;
   bottom: 0;
+  left: 4px;
   width: 1px;
   background: transparent;
 }
 
-.tc-vb:hover::after {
-  background: color-mix(in srgb, var(--accent) 45%, transparent);
+.tc-hseg:hover::after,
+.tc-vseg:hover::after {
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
-.tc-vb-heavy::after {
-  width: 2.5px !important;
-  left: 3.25px;
-  background: rgba(30, 30, 40, 0.85) !important;
-}
-
-.tc-vb-on::after {
+.tc-seg-on::after {
   background: var(--ink);
 }
 
-/* Partial-rule segments (cmidrule-style): overlay bars on a boundary,
-   created by dragging along it. */
-.tc-seg {
-  position: absolute;
-  z-index: 3;
-  cursor: pointer;
-}
-
-.tc-seg-h {
-  height: 3px;
-  border-radius: 2px;
-}
-
-.tc-seg-v {
-  width: 3px;
-  border-radius: 2px;
-}
-
-.tc-seg-light {
-  background: var(--ink);
-}
-
-.tc-seg-heavy {
+.tc-hseg.tc-seg-heavy::after {
+  height: 2.5px;
   background: rgba(30, 30, 40, 0.85);
 }
 
-.tc-seg-h.tc-seg-heavy {
-  height: 4.5px;
+.tc-vseg.tc-seg-heavy::after {
+  width: 2.5px;
+  left: 3.25px;
+  background: rgba(30, 30, 40, 0.85);
 }
 
-.tc-seg-v.tc-seg-heavy {
-  width: 4.5px;
+/* Whole-line handles: settings-style dots at the ends of each boundary. */
+.tc-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 1.5px solid var(--ink-soft);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  z-index: 2;
 }
 
-/* A suppressed range of a preset rule: mask the line, keep a dashed
-   hint so it stays discoverable. */
-.tc-seg-none {
-  background: var(--chrome, #fcfcfb);
-  border-top: 1px dashed color-mix(in srgb, var(--ink-soft) 50%, transparent);
+.tc-handle:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
-.tc-seg-live {
-  background: color-mix(in srgb, var(--accent) 60%, transparent);
-  pointer-events: none;
+.tc-handle-on {
+  background: var(--ink-soft);
 }
 
-.tc-seg:hover {
-  outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+.tc-handle-on:hover {
+  background: color-mix(in srgb, var(--accent) 70%, var(--ink-soft));
 }
 
 .tc-widths select {
@@ -611,31 +611,6 @@ body {
   height: 7px;
   padding: 0;
   border: none !important;
-  cursor: pointer;
-  position: relative;
-}
-
-.tc-boundary td::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 3px;
-  height: 1px;
-  background: transparent;
-}
-
-.tc-boundary:hover td::after {
-  background: color-mix(in srgb, var(--accent) 45%, transparent);
-}
-
-.tc-boundary-heavy td::after {
-  height: 2.5px !important;
-  background: rgba(30, 30, 40, 0.85) !important;
-}
-
-.tc-boundary-on td::after {
-  background: var(--ink);
 }
 
 .tc-sel {
