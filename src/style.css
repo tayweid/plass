@@ -82,29 +82,32 @@ body {
    CONTENTS sleep at rest and wake when the mouse approaches the cluster. */
 #toolbar {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
   gap: 8px;
   position: fixed;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 50%;
+  /* Centered ON the paper's left edge: half the bar over the sheet, half
+     in the room. Clamped so it never leaves the viewport entirely. */
+  left: max(30px, calc(50vw - var(--page-w, 816px) / 2));
+  transform: translate(-50%, -50%);
   width: max-content;
-  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 20px);
   z-index: 10;
 }
 
 .tb-pod {
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   gap: 2px;
-  height: 42px;
-  padding: 0 6px;
+  width: 42px;
+  padding: 6px 0;
   background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
-  border-radius: 4px; /* same corner as .page-box — the bar and the paper rhyme */
+  border-radius: 999px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 40px rgba(0, 0, 0, 0.35);
 }
 
@@ -127,6 +130,7 @@ body {
 
 .tb-group {
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   gap: 2px;
 }
@@ -134,12 +138,14 @@ body {
 .tb-file {
   font: 12.5px var(--sans);
   color: var(--bar-ink-soft);
-  max-width: 32ch;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  max-height: 32ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: text;
-  padding: 3px 8px;
+  padding: 8px 3px;
   border-radius: 5px;
 }
 
@@ -223,7 +229,7 @@ body {
   padding: 0 7px;
   background: transparent;
   border: none;
-  border-radius: 4px;
+  border-radius: 999px;
   color: var(--bar-ink-soft);
   cursor: pointer;
   transition: color 0.12s, background 0.12s, transform 0.08s;
@@ -267,9 +273,9 @@ body {
 
 .tb-btn .lbl {
   position: absolute;
-  top: calc(100% + 5px);
-  left: 50%;
-  transform: translateX(-50%);
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
   font: 11px var(--sans);
   color: var(--bar-ink);
   background: var(--bar-glass);
@@ -292,10 +298,10 @@ body {
 }
 
 .tb-div {
-  width: 1px;
-  height: 16px;
+  width: 16px;
+  height: 1px;
   background: var(--bar-hairline);
-  margin: 0 6px;
+  margin: 6px 0;
   flex: none;
 }
 
