@@ -240,6 +240,7 @@ export function openTableEditor(view: EditorView, pos: number) {
     labelInput.value = model.label;
     fillSelect.value = model.fill;
     sizeSelect.value = model.fontSize;
+    styleBtn.textContent = model.style;
     refreshPanel();
     schedulePreview();
   };
@@ -265,7 +266,7 @@ export function openTableEditor(view: EditorView, pos: number) {
         <button type="button" data-act="alignR" title="Align focused column right">R</button>
         <button type="button" data-act="alignD" title="Align focused column on the decimal point">.0</button>
         <span class="table-card-sep"></span>
-        <button type="button" data-act="style">Style</button>
+        <span class="tc-style-select"></span>
         <select class="table-card-size" title="Table text size">
           <option value="">100%</option>
           <option value="0.9em">90%</option>
@@ -343,6 +344,52 @@ export function openTableEditor(view: EditorView, pos: number) {
     model.inset = insetSelect.value;
     refreshPanel();
     schedulePreview();
+  });
+  // Style picker: the settings-panel dropdown look, without the current-
+  // choice dot — picking a style is an action on this table, not a
+  // persisted preference.
+  const styleWrap = overlay.querySelector('.tc-style-select') as HTMLElement;
+  styleWrap.className = 'ts-select tc-style-select';
+  const styleBtn = document.createElement('button');
+  styleBtn.type = 'button';
+  styleBtn.className = 'ts-select-btn';
+  styleBtn.title = 'Table style';
+  styleBtn.textContent = model.style;
+  styleWrap.appendChild(styleBtn);
+  let styleMenu: HTMLElement | null = null;
+  const onOutsideStyle = (e: MouseEvent) => {
+    if (styleMenu && !styleWrap.contains(e.target as Node)) closeStyleMenu();
+  };
+  const closeStyleMenu = () => {
+    styleMenu?.remove();
+    styleMenu = null;
+    document.removeEventListener('mousedown', onOutsideStyle, true);
+  };
+  styleBtn.addEventListener('click', () => {
+    if (styleMenu) {
+      closeStyleMenu();
+      return;
+    }
+    styleMenu = document.createElement('div');
+    styleMenu.className = 'ts-select-menu';
+    for (const v of STYLES) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'ts-select-item';
+      item.textContent = v;
+      item.addEventListener('click', () => {
+        closeStyleMenu();
+        snapshot();
+        model.style = v;
+        styleBtn.textContent = v;
+        renderGrid({ r: lastFocus.r, c: lastFocus.c });
+        refreshPanel();
+        schedulePreview();
+      });
+      styleMenu.appendChild(item);
+    }
+    styleWrap.appendChild(styleMenu);
+    document.addEventListener('mousedown', onOutsideStyle, true);
   });
   const captionInput = overlay.querySelector('.table-card-caption') as HTMLInputElement;
   const labelInput = overlay.querySelector('.table-card-label') as HTMLInputElement;
@@ -539,10 +586,16 @@ export function openTableEditor(view: EditorView, pos: number) {
       const top = wtr.getBoundingClientRect().bottom - gridRect.top;
       const height = t.getBoundingClientRect().bottom - gridRect.top - top;
       for (let x = 0; x <= totalCols; x++) {
-        const ref = widthTds[Math.min(x, totalCols - 1)];
-        if (!ref) break;
-        const box = ref.getBoundingClientRect();
-        const at = (x < totalCols ? box.left : box.right) - gridRect.left;
+        const left = x > 0 ? widthTds[x - 1]?.getBoundingClientRect().right : undefined;
+        const right = x < totalCols ? widthTds[x]?.getBoundingClientRect().left : undefined;
+        if (left === undefined && right === undefined) break;
+        // Center in the border-spacing gap (edges: mirror the half-gap).
+        const at =
+          (left !== undefined && right !== undefined
+            ? (left + right) / 2
+            : left !== undefined
+              ? left + 4.5
+              : right! - 4.5) - gridRect.left;
         const strip = document.createElement('div');
         const eff = effective(model.vlines, x, presetV());
         const w = eff === 'none' ? undefined : eff;
@@ -660,6 +713,7 @@ export function openTableEditor(view: EditorView, pos: number) {
       fillSelect.value = FILLS[model.fill] || model.fill === 'none' ? model.fill : 'custom';
       schedulePreview();
       styleLabel.textContent = model.style + (model.params ? ' + opts' : '');
+      styleBtn.textContent = model.style;
     }, 500);
   });
   typstText.addEventListener('blur', () => refreshPanel());
@@ -922,11 +976,6 @@ export function openTableEditor(view: EditorView, pos: number) {
           renderGrid({ r: f.r, c: f.c });
           break;
         }
-        case 'style':
-          snapshot();
-          model.style = STYLES[(STYLES.indexOf(model.style) + 1) % STYLES.length];
-          renderGrid({ r: f.r, c: f.c });
-          break;
       }
       typingCell = null;
       refreshPanel();
@@ -937,6 +986,7 @@ export function openTableEditor(view: EditorView, pos: number) {
   // ---------- lifecycle ----------
   const close = () => {
     cardOpen = false;
+    closeStyleMenu();
     clearTimeout(previewTimer);
     clearTimeout(panelTimer);
     document.removeEventListener('keydown', onKey, true);

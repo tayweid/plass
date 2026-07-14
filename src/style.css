@@ -468,7 +468,11 @@ body {
 }
 
 .table-card-grid table {
-  border-collapse: collapse;
+  /* Separate borders with a horizontal gap: the gap is the click target
+     for the vertical boundary strips (the columns' twin of the 7px
+     boundary rows). */
+  border-collapse: separate;
+  border-spacing: 9px 0;
   width: 100%;
 }
 
