@@ -95,32 +95,41 @@ body {
   top: 0;
   left: 0;
   right: 0;
-  height: 48px;
-  padding: 0 18px;
-  background: var(--bg);
+  height: 60px;
+  padding: 0 14px;
   z-index: 10;
 }
 
-/* The tools are bare on the bar — no capsule. Asleep at rest, waking
-   on approach. */
+/* The tools pill: the floating glass capsule, on the persistent line. */
 .tb-pod {
   display: inline-flex;
   flex-direction: row;
   align-items: center;
   gap: 2px;
-  opacity: 0.55;
+  height: 42px;
+  padding: 0 6px;
+  background: var(--bar-glass);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 999px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+/* Sleep/wake tiers: soft at rest, everything wakes near the bar, the
+   hovered group at full ink. */
+.tb-btn {
+  opacity: 0.4;
   transition: opacity 0.25s ease;
 }
 
-#toolbar:hover .tb-pod,
-#toolbar:focus-within .tb-pod {
+#toolbar:hover .tb-btn {
   opacity: 1;
 }
 
-/* Dark-glass ink tiers: soft at rest, the hovered group at full ink. */
 .tb-group:hover .tb-btn,
 .tb-group:focus-within .tb-btn {
-  color: rgba(240, 238, 233, 0.95);
+  color: var(--bar-ink);
 }
 
 .tb-group {
@@ -135,18 +144,26 @@ body {
 /* The name floats fixed over the room, centered above the page: small
    serif, letterspaced, quiet — the galley slug for the manuscript below.
    A faint dark glass keeps it legible when pages scroll beneath it. */
+/* The title pill: same glass, the name in ink. */
 .doc-title {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 0 4px;
+  height: 42px;
+  padding: 0 16px;
   flex: none;
+  background: var(--bar-glass);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 999px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 .doc-title .tb-file {
   font: 15px/1.5 'New Computer Modern', var(--serif);
   letter-spacing: 0.09em;
-  color: rgba(252, 252, 251, 0.78);
+  color: var(--bar-ink);
   max-width: 56ch;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -157,7 +174,7 @@ body {
 }
 
 .doc-title .tb-file:hover {
-  color: rgba(252, 252, 251, 0.92);
+  color: #000;
 }
 
 /* The save state: a small honest dot beside the name. */
@@ -185,18 +202,18 @@ body {
 }
 
 .tb-file-editing {
-  background: rgba(255, 255, 255, 0.09);
-  color: rgba(252, 252, 251, 0.95);
+  background: var(--bar-press);
+  color: var(--bar-ink);
   outline: none;
   cursor: text;
-  caret-color: #9db8d6;
+  caret-color: var(--accent);
   /* Editing needs the full name visible, not an ellipsis. */
   text-overflow: clip;
   max-width: none;
 }
 
 .tb-file-editing::selection {
-  background: rgba(157, 184, 214, 0.35);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 
@@ -231,14 +248,14 @@ body {
   background: transparent;
   border: none;
   border-radius: 999px;
-  color: rgba(235, 233, 228, 0.55);
+  color: var(--bar-ink-soft);
   cursor: pointer;
   transition: color 0.12s, background 0.12s, transform 0.08s;
 }
 
 .tb-btn:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.12);
+  color: #000;
+  background: rgba(0, 0, 0, 0.1);
 }
 
 .tb-btn:active {
@@ -296,7 +313,7 @@ body {
 .tb-div {
   width: 1px;
   height: 16px;
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--bar-hairline);
   margin: 0 6px;
   flex: none;
 }
