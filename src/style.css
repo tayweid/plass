@@ -109,11 +109,11 @@ body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  /* The side facing the title pill is one continuous convex bulge —
-     elliptical corners whose vertical radii meet mid-edge, so there is
-     no straight segment and no sharp angle: two balloons pressed
-     together, held apart by the gap. */
-  border-radius: 22px 21px 21px 22px / 50% 50% 50% 50%;
+  /* Pressed seam: the facing side keeps a flat contact patch and turns
+     away through small CIRCULAR corners; outer ends stay full stadium.
+     (Explicit 21px, not 999px — an overflowing radius makes CSS scale
+     every corner down by one global factor.) */
+  border-radius: 6px 21px 21px 6px;
 }
 
 /* Sleep/wake tiers: soft at rest, everything wakes near the bar, the
@@ -156,7 +156,7 @@ body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 21px 22px 22px 21px / 50% 50% 50% 50%;
+  border-radius: 21px 6px 6px 21px;
 }
 
 /* The lifecycle triggers ride quietly at the pill's end. */
