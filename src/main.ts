@@ -65,6 +65,17 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
 
 const editorEl = document.getElementById('editor')!;
 const toolbarEl = document.getElementById('toolbar')!;
+const scrollEl = document.getElementById('scroll')!;
+
+// The page centers inside the scroll area, which is the window minus the
+// scrollbar; the fixed toolbar spans the full window. Inset its right edge
+// by the scrollbar width so the pills center on the page's axis, not the
+// window's.
+function syncToolbarInset() {
+  toolbarEl.style.right = `${window.innerWidth - scrollEl.clientWidth}px`;
+}
+window.addEventListener('resize', syncToolbarInset);
+requestAnimationFrame(syncToolbarInset);
 const hudEl = document.getElementById('hud')!;
 const toastEl = document.getElementById('toast')!;
 const stackEl = document.getElementById('stack')!;

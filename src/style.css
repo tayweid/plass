@@ -105,7 +105,7 @@ body {
   gap: 2px;
   height: 42px;
   padding: 0 6px;
-  background: color-mix(in srgb, #17161a 55%, transparent);
+  background: color-mix(in srgb, #17161a 80%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -148,7 +148,7 @@ body {
   height: 42px;
   padding: 0 16px;
   flex: none;
-  background: color-mix(in srgb, #17161a 55%, transparent);
+  background: color-mix(in srgb, #17161a 80%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
