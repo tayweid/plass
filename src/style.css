@@ -87,7 +87,7 @@ body {
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 5px;
   position: fixed;
   top: 0;
   left: 0;
@@ -109,9 +109,11 @@ body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  /* The side facing the title pill flattens — two soft bodies pressed
-     together. */
-  border-radius: 14px 999px 999px 14px;
+  /* The side facing the title pill is one continuous convex bulge —
+     elliptical corners whose vertical radii meet mid-edge, so there is
+     no straight segment and no sharp angle: two balloons pressed
+     together, held apart by the gap. */
+  border-radius: 22px 21px 21px 22px / 50% 50% 50% 50%;
 }
 
 /* Sleep/wake tiers: soft at rest, everything wakes near the bar, the
@@ -154,7 +156,7 @@ body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 999px 14px 14px 999px;
+  border-radius: 21px 22px 22px 21px / 50% 50% 50% 50%;
 }
 
 /* The lifecycle triggers ride quietly at the pill's end. */

@@ -226,8 +226,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     titleBar.appendChild(fileLabel);
     titleBar.appendChild(dot);
 
-    flyout(titleBar, icon('new'), 'File — new, open, recent papers', [
-      { glyph: icon('open'), label: 'Open', title: 'Open… (⌘O)', run: () => void fm.open() },
+    flyout(titleBar, icon('open'), 'File — new, open, recent papers', [
       {
         glyph: icon('new'),
         label: 'New',
@@ -236,6 +235,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
           if (confirm('Replace the current document with an empty one?')) fm.newDoc();
         },
       },
+      { glyph: icon('open'), label: 'Open', title: 'Open… (⌘O)', run: () => void fm.open() },
       {
         glyph: icon('clock'),
         label: 'Recent',
@@ -274,9 +274,6 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     el.addEventListener('click', () => run());
     currentPod.appendChild(el);
     return el;
-  };
-  const barDivider = () => {
-    group();
   };
   const runCmd = (c: Command) => () => {
     c(view.state, view.dispatch, view);
@@ -318,11 +315,33 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     dispatch(state.tr.insert(pos, schema.nodes.page_break.create()).scrollIntoView());
     view.focus();
   });
-  barDivider();
-  // ---------- document ----------
-  barBtn(icon('book'), 'Bib', 'Edit bibliography', () => editBibliography(view, (m) => fm.notify(m)));
-  const settingsBtn = barBtn(icon('sliders'), 'Settings', 'Document settings', () => toggleSettingsPanel(view, settingsBtn));
-  barBtn('<span class="ico tico">?</span>', 'Help', 'Markdown & shortcuts', () => showHelp(fm));
+  {
+    // Document apparatus behind one trigger: settings is the face,
+    // bibliography and help flank it.
+    const div = document.createElement('span');
+    div.className = 'tb-div';
+    toolsPill!.appendChild(div);
+    flyout(toolsPill!, icon('sliders'), 'Document — bibliography, settings, help', [
+      {
+        glyph: icon('book'),
+        label: 'Bib',
+        title: 'Edit bibliography',
+        run: () => editBibliography(view, (m) => fm.notify(m)),
+      },
+      {
+        glyph: icon('sliders'),
+        label: 'Settings',
+        title: 'Document settings',
+        run: (btn) => toggleSettingsPanel(view, btn),
+      },
+      {
+        glyph: '<span class="ico tico">?</span>',
+        label: 'Help',
+        title: 'Markdown & shortcuts',
+        run: () => showHelp(fm),
+      },
+    ]);
+  }
   {
     // Exports live at the rail's right end, behind one trigger.
     const div = document.createElement('span');
