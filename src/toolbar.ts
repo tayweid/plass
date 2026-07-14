@@ -316,12 +316,10 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     view.focus();
   });
   {
-    // Document apparatus behind one trigger: settings is the face,
-    // bibliography and help flank it.
-    const div = document.createElement('span');
-    div.className = 'tb-div';
-    toolsPill!.appendChild(div);
-    flyout(toolsPill!, icon('sliders'), 'Document — bibliography, settings, help', [
+    // Document apparatus splits into its own pill: settings is the face,
+    // bibliography and help flank it; export rides alongside.
+    const docPod = pod();
+    flyout(docPod, icon('sliders'), 'Document — bibliography, settings, help', [
       {
         glyph: icon('book'),
         label: 'Bib',
@@ -341,13 +339,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
         run: () => showHelp(fm),
       },
     ]);
-  }
-  {
-    // Exports live at the rail's right end, behind one trigger.
-    const div = document.createElement('span');
-    div.className = 'tb-div';
-    toolsPill!.appendChild(div);
-    flyout(toolsPill!, icon('download'), 'Export — PDF, .typ, .tex', [
+    flyout(docPod, icon('download'), 'Export — PDF, .typ, .tex', [
       { glyph: icon('filedown'), label: '.typ', title: 'Download a .typ copy', run: () => fm.exportCopy() },
       {
         glyph: icon('download'),

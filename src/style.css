@@ -109,10 +109,15 @@ body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  /* Pressed seam: the facing side keeps a flat contact patch and turns
-     away through small CIRCULAR corners; outer ends stay full stadium.
+  /* Pressed seam: facing sides keep a flat contact patch and turn away
+     through small CIRCULAR corners. Interior pills are flat-faced on
+     both sides; the run's last pill rounds back out to a stadium end.
      (Explicit 21px, not 999px — an overflowing radius makes CSS scale
      every corner down by one global factor.) */
+  border-radius: 12px;
+}
+
+#toolbar > .tb-pod:last-child {
   border-radius: 12px 21px 21px 12px;
 }
 
