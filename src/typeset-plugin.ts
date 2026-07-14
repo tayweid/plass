@@ -516,6 +516,10 @@ class TypesetView {
               }),
             );
           }
+          if (line.hyphen) {
+            const ns = noSpellDeco(b.node, base, line.breakPos);
+            if (ns) fresh.push(ns);
+          }
         }
       }
       // Spacers past the last chosen break (the page split the final line,
@@ -918,6 +922,10 @@ class TypesetView {
                 key: `${line.hyphen ? 'hy' : 'br'}:${at}`,
               }),
             );
+          }
+          if (line.hyphen) {
+            const ns = noSpellDeco(node, base, line.breakPos);
+            if (ns) decos.push(ns);
           }
         }
       }
@@ -1462,6 +1470,21 @@ class TypesetView {
       });
     }
   }
+}
+
+
+/** The two DOM halves of a hyphenated word read as separate words to the
+ *  browser spellchecker, which flags the tail ("ically"). Wrap the whole
+ *  word in spellcheck="false" — the split is presentation, not content. */
+function noSpellDeco(node: PMNode, base: number, breakPos: number): Decoration | null {
+  const text = node.textBetween(0, node.content.size, '\u0000', '\u0000');
+  const isWordChar = (ch: string | undefined) => ch !== undefined && /[\p{L}\p{N}\u2019'-]/u.test(ch);
+  let a = breakPos;
+  while (a > 0 && isWordChar(text[a - 1])) a--;
+  let b = breakPos;
+  while (b < text.length && isWordChar(text[b])) b++;
+  if (a >= b) return null;
+  return Decoration.inline(base + a, base + b, { spellcheck: 'false' }, { sig: 'nospell' });
 }
 
 function brWidget() {
