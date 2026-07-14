@@ -31,13 +31,11 @@ interface GridModel {
   style: string;
   /** Custom #table params (midrules excluded — they live in `hlines`). */
   params: string;
-  /** Row boundaries (1-based: above row n) carrying a midrule, with its
-   * weight ('light' 0.05em | 'heavy' 0.08em | 'none' = suppress a preset
-   * rule at this boundary). */
+  /** Explicit row-boundary rules (y: 0 = top edge … rows = bottom edge)
+   * with weight ('light' 0.05em | 'heavy' 0.08em | 'none' = suppress the
+   * style preset's rule there). Boundaries not in the map show the style
+   * preset's own rule, if any. */
   hlines: Map<number, 'light' | 'heavy' | 'none'>;
-  /** The header boundary's entry is the booktabs preset (not user-set):
-   * emit nothing for it unless the user changes it. */
-  implicitHeaderRule: boolean;
   caption: string;
   label: string;
   /** Per-column widths ('auto' | '1fr' | '2cm' | …). */
@@ -46,14 +44,15 @@ interface GridModel {
   fill: string;
   /** Table text size ('' = document size, else e.g. '0.85em'). */
   fontSize: string;
-  /** Column boundaries (1..cols-1) carrying a vertical rule. */
-  vlines: Set<number>;
+  /** Explicit column-boundary rules (x: 0 = left edge … cols = right edge),
+   * same semantics as `hlines`. */
+  vlines: Map<number, 'light' | 'heavy' | 'none'>;
   /** Cell inset preset ('' = Typst default, else a canonical length). */
   inset: string;
 }
 
 const HLINE_RE = /table\.hline\(\s*y\s*:\s*(\d+)(?:[^)]*?stroke\s*:\s*(none|[\d.]+em))?[^)]*\)\s*,?/g;
-const VLINE_RE = /table\.vline\(\s*x\s*:\s*(\d+)[^)]*\)\s*,?/g;
+const VLINE_RE = /table\.vline\(\s*x\s*:\s*(\d+)(?:[^)]*?stroke\s*:\s*(none|[\d.]+em))?[^)]*\)\s*,?/g;
 const COLUMNS_RE = /columns\s*:\s*\(([^)]*)\)\s*,?/;
 // Density presets: Typst's table default inset is 5pt.
 const INSETS: Record<string, string> = { compact: '3pt', roomy: '8pt' };
@@ -87,20 +86,19 @@ function readModel(table: PMNode): GridModel {
     rows.push(cells);
   });
   const hlines = new Map<number, 'light' | 'heavy' | 'none'>();
-  const vlines = new Set<number>();
+  const vlines = new Map<number, 'light' | 'heavy' | 'none'>();
+  const weight = (stroke: string | undefined): 'light' | 'heavy' | 'none' =>
+    stroke === 'none' ? 'none' : parseFloat(stroke ?? '0.05') >= 0.07 ? 'heavy' : 'light';
   let inset = '';
   const raw = (table.attrs.params as string) || '';
   let widths: string[] = [];
   const params = raw
     .replace(HLINE_RE, (_, y, stroke) => {
-      hlines.set(
-        +y,
-        stroke === 'none' ? 'none' : parseFloat(stroke ?? '0.05') >= 0.07 ? 'heavy' : 'light',
-      );
+      hlines.set(+y, weight(stroke));
       return '';
     })
-    .replace(VLINE_RE, (_, x) => {
-      vlines.add(+x);
+    .replace(VLINE_RE, (_, x, stroke) => {
+      vlines.set(+x, weight(stroke));
       return '';
     })
     .replace(COLUMNS_RE, (_, tuple: string) => {
@@ -130,18 +128,9 @@ function readModel(table: PMNode): GridModel {
     }
   }
   if (fill === 'none' && /(^|[\s,(])fill\s*:/.test(cleaned)) fill = 'custom';
-  // Booktabs draws a preset midrule under the header row: surface it in
-  // the model so boundary clicks can change or suppress it.
-  const style0 = (table.attrs.style as string) || 'booktabs';
-  const hasHeader0 = rows[0]?.some((c) => c.header) ?? false;
-  let implicitHeaderRule = false;
-  if (style0 === 'booktabs' && hasHeader0 && !hlines.has(1)) {
-    hlines.set(1, 'light');
-    implicitHeaderRule = true;
-  }
   return {
     rows,
-    style: style0,
+    style: (table.attrs.style as string) || 'booktabs',
     params: cleaned,
     hlines,
     caption: (table.attrs.caption as string) || '',
@@ -151,7 +140,6 @@ function readModel(table: PMNode): GridModel {
     fontSize: (table.attrs.fontSize as string) || '',
     vlines,
     inset,
-    implicitHeaderRule,
   };
 }
 
@@ -161,11 +149,13 @@ function composeParams(model: GridModel): string {
   if (FILLS[model.fill]) parts.push(FILLS[model.fill]);
   if (model.inset) parts.push(`inset: ${model.inset}`);
   if (model.params) parts.push(model.params);
+  const stroke = (w: 'light' | 'heavy' | 'none') => (w === 'none' ? 'none' : w === 'heavy' ? '0.08em' : '0.05em');
   for (const [y, w] of [...model.hlines.entries()].sort((a, b) => a[0] - b[0])) {
-    if (y === 1 && model.implicitHeaderRule && w === 'light') continue; // the preset itself
-    parts.push(`table.hline(y: ${y}, stroke: ${w === 'none' ? 'none' : w === 'heavy' ? '0.08em' : '0.05em'})`);
+    parts.push(`table.hline(y: ${y}, stroke: ${stroke(w)})`);
   }
-  for (const x of [...model.vlines].sort((a, b) => a - b)) parts.push(`table.vline(x: ${x}, stroke: 0.05em)`);
+  for (const [x, w] of [...model.vlines.entries()].sort((a, b) => a[0] - b[0])) {
+    parts.push(`table.vline(x: ${x}, stroke: ${stroke(w)})`);
+  }
   return parts.join(',\n');
 }
 
@@ -209,9 +199,8 @@ function cloneModel(m: GridModel): GridModel {
     widths: [...m.widths],
     fill: m.fill,
     fontSize: m.fontSize,
-    vlines: new Set(m.vlines),
+    vlines: new Map(m.vlines),
     inset: m.inset,
-    implicitHeaderRule: m.implicitHeaderRule,
   };
 }
 
@@ -307,7 +296,7 @@ export function openTableEditor(view: EditorView, pos: number) {
         <textarea class="table-card-typst-text" rows="7" spellcheck="false"></textarea>
       </details>
       <div class="bib-editor-foot">
-        <span class="bib-editor-hint">Click between rows for a rule (cycles light · heavy · none) · between column widths for a vertical rule · <kbd>⌘Z</kbd> undo · <kbd>⌘Enter</kbd> save · <kbd>Esc</kbd> cancel</span>
+        <span class="bib-editor-hint">Click any boundary — between rows or columns, or an outer edge — for a rule (cycles light · heavy · off) · <kbd>⌘Z</kbd> undo · <kbd>⌘Enter</kbd> save · <kbd>Esc</kbd> cancel</span>
         <span class="bib-editor-actions">
           <button type="button" class="bib-cancel">Cancel</button>
           <button type="button" class="bib-save">Save</button>
@@ -373,12 +362,60 @@ export function openTableEditor(view: EditorView, pos: number) {
 
   // ---------- grid ----------
   const WIDTH_CHOICES = ['auto', '1fr', '2fr', '3fr'];
+
+  // A boundary's effective rule = the explicit override, else the style
+  // preset's own rule ('heavy' booktabs top/bottom, 'light' booktabs header
+  // midrule, 'light' everywhere for grid). Clicking cycles the effective
+  // state; landing back on the preset value clears the override, so
+  // untouched tables keep emitting byte-identically.
+  type Rule = 'light' | 'heavy' | 'none';
+  const presetH = (y: number): Rule | undefined => {
+    if (model.style === 'grid') return 'light';
+    if (model.style === 'booktabs') {
+      if (y === 0 || y === model.rows.length) return 'heavy';
+      if (y === 1 && model.rows[0]?.some((c) => c.header)) return 'light';
+    }
+    return undefined;
+  };
+  const presetV = (): Rule | undefined => (model.style === 'grid' ? 'light' : undefined);
+  const effective = (map: Map<number, Rule>, i: number, preset: Rule | undefined): Rule | undefined =>
+    map.get(i) ?? preset;
+  const cycleRule = (map: Map<number, Rule>, i: number, preset: Rule | undefined) => {
+    const eff = effective(map, i, preset);
+    const next: Rule | undefined =
+      !eff || eff === 'none' ? 'light' : eff === 'light' ? 'heavy' : preset ? 'none' : undefined;
+    if (next === undefined || next === preset) map.delete(i);
+    else map.set(i, next);
+  };
+  const ruleTitle = (eff: Rule | undefined): string =>
+    !eff || eff === 'none' ? 'Add a rule here' : eff === 'light' ? 'Make this rule heavy' : 'Remove this rule';
+
   const renderGrid = (focus?: { r: number; c: number }) => {
     styleLabel.textContent = model.style + (model.params ? ' + opts' : '');
     const t = document.createElement('table');
     const totalCols = cols();
     while (model.widths.length < totalCols) model.widths.push('auto');
     model.widths.length = totalCols;
+
+    const hBoundaryTr = (y: number): HTMLTableRowElement => {
+      const btr = document.createElement('tr');
+      const eff = effective(model.hlines, y, presetH(y));
+      const w = eff === 'none' ? undefined : eff;
+      btr.className = 'tc-boundary' + (w ? ' tc-boundary-on' : '') + (w === 'heavy' ? ' tc-boundary-heavy' : '');
+      btr.title = ruleTitle(eff);
+      const btd = document.createElement('td');
+      btd.colSpan = totalCols;
+      btr.appendChild(btd);
+      btr.addEventListener('click', () => {
+        snapshot();
+        cycleRule(model.hlines, y, presetH(y));
+        renderGrid();
+        refreshPanel();
+        schedulePreview();
+      });
+      return btr;
+    };
+
     // Width chips: one select per column (auto / fractions / custom length).
     {
       const wtr = document.createElement('tr');
@@ -386,22 +423,6 @@ export function openTableEditor(view: EditorView, pos: number) {
       for (let c = 0; c < totalCols; c++) {
         const td = document.createElement('td');
         td.className = 'tc-width-cell';
-        if (c < totalCols - 1) {
-          const vt = document.createElement('button');
-          vt.type = 'button';
-          vt.className = 'tc-vtoggle' + (model.vlines.has(c + 1) ? ' tc-vtoggle-on' : '');
-          vt.title = model.vlines.has(c + 1) ? 'Remove column rule' : 'Add a vertical rule at this boundary';
-          vt.addEventListener('click', (e) => {
-            e.stopPropagation();
-            snapshot();
-            if (model.vlines.has(c + 1)) model.vlines.delete(c + 1);
-            else model.vlines.add(c + 1);
-            renderGrid({ r: lastFocus.r, c: lastFocus.c });
-            refreshPanel();
-            schedulePreview();
-          });
-          td.appendChild(vt);
-        }
         const sel2 = document.createElement('select');
         sel2.title = 'Column width';
         const current = model.widths[c];
@@ -440,32 +461,7 @@ export function openTableEditor(view: EditorView, pos: number) {
       t.appendChild(wtr);
     }
     model.rows.forEach((row, ri) => {
-      if (ri > 0) {
-        const btr = document.createElement('tr');
-        const w0 = model.hlines.get(ri);
-        const w = w0 === 'none' ? undefined : w0;
-        btr.className = 'tc-boundary' + (w ? ' tc-boundary-on' : '') + (w === 'heavy' ? ' tc-boundary-heavy' : '');
-        btr.title = !w ? 'Add midrule here' : w === 'light' ? 'Make midrule heavy' : 'Remove midrule';
-        const btd = document.createElement('td');
-        btd.colSpan = totalCols;
-        btr.appendChild(btd);
-        btr.addEventListener('click', () => {
-          snapshot();
-          // Cycle: off -> light -> heavy -> off. On the booktabs header
-          // boundary, "off" is an explicit suppression of the preset rule.
-          const cur = model.hlines.get(ri);
-          const presetBoundary = ri === 1 && model.implicitHeaderRule !== undefined && model.style === 'booktabs' && model.rows[0]?.some((c) => c.header);
-          if (!cur || cur === 'none') model.hlines.set(ri, 'light');
-          else if (cur === 'light') model.hlines.set(ri, 'heavy');
-          else if (presetBoundary) model.hlines.set(ri, 'none');
-          else model.hlines.delete(ri);
-          if (ri === 1) model.implicitHeaderRule = false;
-          renderGrid();
-          refreshPanel();
-          schedulePreview();
-        });
-        t.appendChild(btr);
-      }
+      t.appendChild(hBoundaryTr(ri));
       const tr = document.createElement('tr');
       row.forEach((cell, ci) => {
         const td = document.createElement(cell.header ? 'th' : 'td');
@@ -531,7 +527,40 @@ export function openTableEditor(view: EditorView, pos: number) {
       });
       t.appendChild(tr);
     });
+    t.appendChild(hBoundaryTr(model.rows.length));
     gridEl.replaceChildren(t);
+
+    // Vertical boundary strips (left edge · between columns · right edge):
+    // absolutely positioned over the table so col/rowspans don't matter.
+    {
+      const gridRect = gridEl.getBoundingClientRect();
+      const widthTds = t.querySelectorAll<HTMLTableCellElement>('.tc-widths td');
+      const wtr = t.querySelector('.tc-widths')!;
+      const top = wtr.getBoundingClientRect().bottom - gridRect.top;
+      const height = t.getBoundingClientRect().bottom - gridRect.top - top;
+      for (let x = 0; x <= totalCols; x++) {
+        const ref = widthTds[Math.min(x, totalCols - 1)];
+        if (!ref) break;
+        const box = ref.getBoundingClientRect();
+        const at = (x < totalCols ? box.left : box.right) - gridRect.left;
+        const strip = document.createElement('div');
+        const eff = effective(model.vlines, x, presetV());
+        const w = eff === 'none' ? undefined : eff;
+        strip.className = 'tc-vb' + (w ? ' tc-vb-on' : '') + (w === 'heavy' ? ' tc-vb-heavy' : '');
+        strip.title = ruleTitle(eff);
+        strip.style.left = `${at + gridEl.scrollLeft - 4.5}px`;
+        strip.style.top = `${top + gridEl.scrollTop}px`;
+        strip.style.height = `${height}px`;
+        strip.addEventListener('click', () => {
+          snapshot();
+          cycleRule(model.vlines, x, presetV());
+          renderGrid();
+          refreshPanel();
+          schedulePreview();
+        });
+        gridEl.appendChild(strip);
+      }
+    }
 
     if (focus) {
       const target = gridEl.querySelector<HTMLInputElement>(`input[data-r="${focus.r}"][data-c="${focus.c}"]`);
@@ -700,7 +729,7 @@ export function openTableEditor(view: EditorView, pos: number) {
       row.splice(at, 0, blank(row[Math.min(at, row.length - 1)]?.header ?? false));
     });
     model.widths.splice(Math.min(G, model.widths.length), 0, 'auto');
-    model.vlines = new Set([...model.vlines].map((x) => (x >= G ? x + 1 : x)));
+    model.vlines = new Map([...model.vlines].map(([x, w]) => [x >= G ? x + 1 : x, w]));
   };
   /** Delete grid column G (cells spanning it shrink). */
   const deleteGridCol = (G: number) => {
@@ -721,7 +750,9 @@ export function openTableEditor(view: EditorView, pos: number) {
       }
     }
     model.widths.splice(Math.min(G, model.widths.length - 1), 1);
-    model.vlines = new Set([...model.vlines].filter((x) => x <= cols()).map((x) => (x > G ? x - 1 : x)));
+    model.vlines = new Map(
+      [...model.vlines].map(([x, w]) => [x > G ? x - 1 : x, w] as const).filter(([x]) => x >= 0 && x <= cols()),
+    );
   };
   /** Insert a blank row after row R (rowspans crossing the seam widen). */
   const insertRowAfter = (R: number) => {
@@ -744,9 +775,10 @@ export function openTableEditor(view: EditorView, pos: number) {
       }
       newRow.push(blank(false));
     }
+    const bottom = model.rows.length; // bottom-edge overrides follow the edge
     model.rows.splice(R + 1, 0, newRow);
     model.hlines = new Map(
-      [...model.hlines.entries()].map(([y, w]) => [y > R + 1 ? y + 1 : y, w] as [number, 'light' | 'heavy']),
+      [...model.hlines.entries()].map(([y, w]) => [y > R + 1 || y === bottom ? y + 1 : y, w] as const),
     );
   };
   /** Delete row R (rowspans through it shrink; origins in it push their
@@ -790,8 +822,8 @@ export function openTableEditor(view: EditorView, pos: number) {
     }
     model.hlines = new Map(
       [...model.hlines.entries()]
-        .filter(([y]) => y <= model.rows.length - 1)
-        .map(([y, w]) => [y > R ? y - 1 : y, w] as [number, 'light' | 'heavy']),
+        .map(([y, w]) => [y > R ? y - 1 : y, w] as const)
+        .filter(([y]) => y >= 0 && y <= model.rows.length),
     );
   };
 

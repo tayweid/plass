@@ -825,11 +825,6 @@ export function parseTable(src: string): PMNode | null {
   let style = 'grid';
   if (strokeNone) {
     style = hlines ? 'booktabs' : 'plain';
-    // Booktabs: top + bottom rules, plus the header midrule — unless an
-    // explicit y:1 user rule replaced or suppressed it (only 2 positional
-    // rules then).
-    const headerRuleReplaced = userHlines.some((r) => /table\.hline\(\s*y\s*:\s*1[,)]/.test(r));
-    if (style === 'booktabs' && hlines !== (hasHeader && !headerRuleReplaced ? 3 : 2)) return null;
   } else if (hlines > 0) {
     return null;
   } else if (customParams.some((a) => /^stroke\s*:/.test(a))) {
@@ -876,6 +871,21 @@ export function parseTable(src: string): PMNode | null {
     else break;
   }
   if (!rows.length) return null;
+  // Booktabs fidelity: the bare positional rules must be exactly the
+  // preset's own — top, bottom, and the header midrule — minus any the
+  // user replaced with an explicit y: rule at that boundary.
+  if (style === 'booktabs') {
+    const replaced = new Set(
+      userHlines
+        .filter((r) => r.startsWith('table.hline('))
+        .map((r) => +(/y\s*:\s*(\d+)/.exec(r)?.[1] ?? -1)),
+    );
+    const expected =
+      (replaced.has(0) ? 0 : 1) +
+      (replaced.has(rows.length) ? 0 : 1) +
+      (hasHeader && !replaced.has(1) ? 1 : 0);
+    if (hlines !== expected) return null;
+  }
   try {
     return table.create({ style, params }, rows);
   } catch {

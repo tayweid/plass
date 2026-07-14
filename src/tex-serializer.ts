@@ -133,12 +133,19 @@ function tableToTex(node: PMNode, s: DocSettings): string {
     }
   });
 
-  // User midrules (light/heavy) from params.
+  // User rules from params ('none' = an explicitly suppressed preset rule).
   const params = (node.attrs.params as string) || '';
-  const hlines = new Map<number, string>();
-  for (const m of params.matchAll(/table\.hline\(\s*y\s*:\s*(\d+)(?:[^)]*?stroke\s*:\s*([\d.]+)em)?[^)]*\)/g)) {
-    hlines.set(+m[1], parseFloat(m[2] ?? '0.05') >= 0.07 ? '\\midrule[\\heavyrulewidth]' : '\\midrule');
+  const hlines = new Map<number, 'light' | 'heavy' | 'none'>();
+  const vlines = new Map<number, 'light' | 'heavy' | 'none'>();
+  const weight = (s: string | undefined): 'light' | 'heavy' | 'none' =>
+    s === 'none' ? 'none' : parseFloat(s ?? '0.05') >= 0.07 ? 'heavy' : 'light';
+  for (const m of params.matchAll(/table\.hline\(\s*y\s*:\s*(\d+)(?:[^)]*?stroke\s*:\s*(none|[\d.]+em))?[^)]*\)/g)) {
+    hlines.set(+m[1], weight(m[2]));
   }
+  for (const m of params.matchAll(/table\.vline\(\s*x\s*:\s*(\d+)(?:[^)]*?stroke\s*:\s*(none|[\d.]+em))?[^)]*\)/g)) {
+    vlines.set(+m[1], weight(m[2]));
+  }
+  const midrule = (w: 'light' | 'heavy'): string => (w === 'heavy' ? '\\midrule[\\heavyrulewidth]' : '\\midrule');
 
   const cellTex = (cell: Cell): string => {
     // Cells hold block content (paragraphs); flatten inline.
@@ -155,7 +162,8 @@ function tableToTex(node: PMNode, s: DocSettings): string {
 
   let body = '';
   rows.forEach((cells, r) => {
-    if (hlines.has(r)) body += hlines.get(r) + '\n';
+    const w = hlines.get(r);
+    if (r > 0 && w && w !== 'none') body += midrule(w) + '\n';
     const slots: string[] = [];
     let g = 0;
     let ci = 0;
@@ -171,12 +179,26 @@ function tableToTex(node: PMNode, s: DocSettings): string {
       g += cell.colspan;
     }
     body += slots.join(' & ') + ' \\\\\n';
-    if (r === 0 && cells.some((c) => c.header)) body += '\\midrule\n';
+    // The preset header midrule yields to an explicit y:1 rule (drawn above).
+    if (r === 0 && cells.some((c) => c.header) && !hlines.has(1)) body += '\\midrule\n';
   });
 
   const caption = (node.attrs.caption as string) || '';
   const label = (node.attrs.label as string) || '';
-  const tabular = `\\begin{tabular}{${colAlign.join('')}}\n\\toprule\n${body}\\bottomrule\n\\end{tabular}`;
+  // Outer edges honor explicit overrides ('none' drops the rule entirely).
+  const edge = (y: number, rule: string): string => {
+    const w = hlines.get(y);
+    if (!w) return rule + '\n';
+    return w === 'none' ? '' : midrule(w) + '\n';
+  };
+  const spec = colAlign.map((a, g) => (vlines.get(g) && vlines.get(g) !== 'none' ? '|' + a : a)).join('');
+  const rightEdge = vlines.get(nCols) && vlines.get(nCols) !== 'none' ? '|' : '';
+  const tabular =
+    `\\begin{tabular}{${spec}${rightEdge}}\n` +
+    edge(0, '\\toprule') +
+    body +
+    edge(rows.length, '\\bottomrule') +
+    `\\end{tabular}`;
   if (caption) {
     return (
       `\\begin{table}[htbp]\n\\centering\n\\caption{${escapeTex(caption)}}\n` +

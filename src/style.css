@@ -463,6 +463,8 @@ body {
   max-height: 300px;
   overflow: auto;
   margin-bottom: 10px;
+  position: relative; /* anchors the vertical boundary strips */
+  padding: 0 5px; /* room for the edge strips */
 }
 
 .table-card-grid table {
@@ -502,34 +504,36 @@ body {
   position: relative;
 }
 
-.tc-vtoggle {
+/* Vertical boundary strips: overlay divs down each column boundary,
+   the vertical twin of the .tc-boundary rows. */
+.tc-vb {
   position: absolute;
-  right: -5px;
-  top: -2px;
-  width: 10px;
-  height: 22px;
-  border: none;
-  background: transparent;
+  width: 9px;
   cursor: pointer;
   z-index: 2;
-  padding: 0;
 }
 
-.tc-vtoggle::after {
+.tc-vb::after {
   content: '';
   position: absolute;
-  left: 4.5px;
-  top: 2px;
-  bottom: 2px;
+  left: 4px;
+  top: 0;
+  bottom: 0;
   width: 1px;
   background: transparent;
 }
 
-.tc-vtoggle:hover::after {
+.tc-vb:hover::after {
   background: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.tc-vtoggle-on::after {
+.tc-vb-heavy::after {
+  width: 2.5px !important;
+  left: 3.25px;
+  background: rgba(30, 30, 40, 0.85) !important;
+}
+
+.tc-vb-on::after {
   background: var(--ink);
 }
 

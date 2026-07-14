@@ -412,14 +412,15 @@ function blockToTyp(node: PMNode, indent = ''): string {
         params.push(block.replace(/,?\s*$/, ','));
       }
       if (style === 'booktabs') {
-        rows.unshift('  table.hline(stroke: 0.08em),');
-        // The preset header midrule yields to an explicit y:1 rule (the
-        // card cycles it light/heavy/none via table.hline(y: 1, ...)).
-        if (hasHeader && !/table\.hline\(\s*y\s*:\s*1[,)]/.test(customAll)) {
+        // Each preset rule yields to an explicit table.hline at its own
+        // boundary (the card cycles them light/heavy/none via y: rules).
+        const hasY = (y: number) => new RegExp(`table\\.hline\\(\\s*y\\s*:\\s*${y}[,)]`).test(customAll);
+        if (!hasY(0)) rows.unshift('  table.hline(stroke: 0.08em),');
+        if (hasHeader && !hasY(1)) {
           const idx = rows.findIndex((r) => r.includes('table.header('));
           rows.splice(idx + 1, 0, '  table.hline(stroke: 0.05em),');
         }
-        rows.push('  table.hline(stroke: 0.08em),');
+        if (!hasY(node.childCount)) rows.push('  table.hline(stroke: 0.08em),');
       }
       for (const rule of userRules) params.push(`  ${rule},`);
       let tableCall = `table(\n${params.join('\n')}\n${rows.join('\n')}\n)`;
