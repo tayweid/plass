@@ -146,13 +146,25 @@ body {
   align-items: center;
   gap: 9px;
   height: 42px;
-  padding: 0 16px;
+  padding: 0 8px 0 16px;
   flex: none;
   background: color-mix(in srgb, #17161a 80%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
+}
+
+/* The lifecycle triggers ride quietly at the pill's end. */
+.doc-title .tb-btn {
+  height: 30px;
+  min-width: 30px;
+  padding: 0 5px;
+}
+
+.doc-title .tb-btn .ico {
+  width: 17px;
+  height: 17px;
 }
 
 .doc-title .tb-file {

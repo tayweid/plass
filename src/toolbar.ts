@@ -129,10 +129,60 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     toolsPill.appendChild(currentPod);
     return currentPod;
   };
+  // ---------- anchored popup menus (document-lifecycle actions) ----------
+  let openMenu: HTMLElement | null = null;
+  let openAnchor: HTMLElement | null = null;
+  const closeMenu = () => {
+    openMenu?.remove();
+    openMenu = null;
+    openAnchor = null;
+    document.removeEventListener('mousedown', onMenuDown, true);
+  };
+  const onMenuDown = (e: MouseEvent) => {
+    if (openMenu && !openMenu.contains(e.target as Node) && !openAnchor?.contains(e.target as Node)) {
+      closeMenu();
+    }
+  };
+  /** Toggle a popup below `anchor`; the trigger never moves — the menu
+   *  drops into the room band under the pills. */
+  const toggleMenu = (anchor: HTMLElement, build: (menu: HTMLElement) => void) => {
+    if (openMenu && openAnchor === anchor) {
+      closeMenu();
+      return;
+    }
+    closeMenu();
+    openMenu = document.createElement('div');
+    openMenu.className = 'file-menu';
+    openAnchor = anchor;
+    const rect = anchor.getBoundingClientRect();
+    openMenu.style.top = `${rect.bottom + 8 + window.scrollY}px`;
+    openMenu.style.left = `${Math.max(8, rect.left - 10) + window.scrollX}px`;
+    document.body.appendChild(openMenu);
+    document.addEventListener('mousedown', onMenuDown, true);
+    build(openMenu);
+  };
+  const menuItem = (menu: HTMLElement, label: string, run: () => void) => {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'file-menu-item';
+    el.innerHTML = `<span>${label.replace(/</g, '&lt;')}</span>`;
+    el.addEventListener('click', () => {
+      closeMenu();
+      run();
+    });
+    menu.appendChild(el);
+    return el;
+  };
+  const menuDivider = (menu: HTMLElement) => {
+    const div = document.createElement('div');
+    div.className = 'file-menu-divider';
+    menu.appendChild(div);
+  };
+
   {
-    // The document's name is a formal object, not a tool: it lives as a
-    // fixed slug over the room, centered above the page, with a small
-    // save-state dot. The rail below stays pure tools.
+    // The title pill: the document's identity plus its lifecycle — the
+    // name, the save dot, and two popup menus (file, export). Everything
+    // that acts INSIDE the text lives in the tools pill instead.
     const titleBar = document.createElement('div');
     titleBar.className = 'doc-title';
     const dot = document.createElement('span');
@@ -140,7 +190,52 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     dot.setAttribute('aria-hidden', 'true');
     titleBar.appendChild(fileLabel);
     titleBar.appendChild(dot);
-    // The slug is the toolbar's handle: the tool rail drops out of it.
+
+    const titleBtn = (glyph: string, title: string, onClick: (btn: HTMLElement) => void) => {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'tb-btn';
+      el.title = title;
+      el.innerHTML = glyph;
+      el.addEventListener('mousedown', (e) => e.preventDefault());
+      el.addEventListener('click', () => onClick(el));
+      titleBar.appendChild(el);
+      return el;
+    };
+    titleBtn(icon('open'), 'File — new, open, recent papers', (btn) =>
+      toggleMenu(btn, (menu) => {
+        menuItem(menu, 'New document', () => {
+          if (confirm('Replace the current document with an empty one?')) fm.newDoc();
+        });
+        menuItem(menu, 'Open…', () => void fm.open());
+        menuDivider(menu);
+        void fm.recents().then((entries) => {
+          if (!openMenu || openMenu !== menu) return;
+          if (!entries.length) {
+            const hint = document.createElement('div');
+            hint.className = 'file-menu-hint';
+            hint.style.padding = '6px 10px';
+            hint.textContent = 'No papers yet — they appear here once saved.';
+            menu.appendChild(hint);
+          }
+          for (const entry of entries.slice(0, 8)) {
+            menuItem(menu, entry.name, () => void fm.openRecent(entry));
+          }
+          menuDivider(menu);
+          menuItem(menu, 'Open project folder…', () => void fm.openFolder('open'));
+        });
+      }),
+    );
+    titleBtn(icon('download'), 'Export — PDF, .typ, .tex', (btn) =>
+      toggleMenu(btn, (menu) => {
+        menuItem(menu, 'Export PDF', () => {
+          const name = fm.name === 'Untitled' ? 'document' : fm.name;
+          void import('./pdf').then(({ exportPdf }) => exportPdf(fm.currentDoc(), name, (m) => fm.notify(m)));
+        });
+        menuItem(menu, 'Download .typ copy', () => fm.exportCopy());
+        menuItem(menu, 'Download .tex copy (vanilla LaTeX)', () => fm.exportTexCopy());
+      }),
+    );
     container.appendChild(titleBar);
   }
 
@@ -164,15 +259,8 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     view.focus();
   };
 
-  // ---------- file ----------
-  group();
-  barBtn(icon('new'), 'New', 'New document', () => {
-    if (confirm('Replace the current document with an empty one?')) fm.newDoc();
-  });
-  barBtn(icon('open'), 'Open', 'Open… (⌘O)', () => void fm.open());
-  const recentBtn = barBtn(icon('clock'), 'Recent', 'Your papers', () => toggleRecents());
-  barDivider();
   // ---------- insert ----------
+  group();
   barBtn('<span class="ico tico">T</span>', 'Title', 'Title block — title, authors, date, abstract', () => {
     const { state, dispatch } = view;
     const existing = state.doc.firstChild;
@@ -211,69 +299,6 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   barBtn(icon('book'), 'Bib', 'Edit bibliography', () => editBibliography(view, (m) => fm.notify(m)));
   const settingsBtn = barBtn(icon('sliders'), 'Settings', 'Document settings', () => toggleSettingsPanel(view, settingsBtn));
   barBtn('<span class="ico tico">?</span>', 'Help', 'Markdown & shortcuts', () => showHelp(fm));
-  barDivider();
-  // ---------- export ----------
-  barBtn(icon('download'), 'PDF', 'Export PDF via Typst', () => {
-    const name = fm.name === 'Untitled' ? 'document' : fm.name;
-    void import('./pdf').then(({ exportPdf }) => exportPdf(fm.currentDoc(), name, (m) => fm.notify(m)));
-  });
-  barBtn(icon('filedown'), '.typ', 'Download a .typ copy', () => fm.exportCopy());
-  barBtn(icon('filedown'), '.tex', 'Download a .tex copy (vanilla LaTeX for journals)', () => fm.exportTexCopy());
-
-  // ---------- recents dropdown ----------
-  let recentsMenu: HTMLElement | null = null;
-  const closeRecents = () => {
-    recentsMenu?.remove();
-    recentsMenu = null;
-    document.removeEventListener('mousedown', onDocDown, true);
-  };
-  const onDocDown = (e: MouseEvent) => {
-    if (recentsMenu && !recentsMenu.contains(e.target as Node) && !recentBtn.contains(e.target as Node)) {
-      closeRecents();
-    }
-  };
-  function toggleRecents() {
-    if (recentsMenu) {
-      closeRecents();
-      return;
-    }
-    recentsMenu = document.createElement('div');
-    recentsMenu.className = 'file-menu recents-menu';
-    const rect = recentBtn.getBoundingClientRect();
-    recentsMenu.style.top = `${rect.bottom + 8 + window.scrollY}px`;
-    recentsMenu.style.left = `${Math.max(8, rect.left - 40) + window.scrollX}px`;
-    document.body.appendChild(recentsMenu);
-    document.addEventListener('mousedown', onDocDown, true);
-    void fm.recents().then((entries) => {
-      if (!recentsMenu) return;
-      if (!entries.length) {
-        recentsMenu.innerHTML = '<div class="file-menu-hint" style="padding:6px 10px">No papers yet — they appear here once saved.</div>';
-      }
-      for (const entry of entries.slice(0, 8)) {
-        const el = document.createElement('button');
-        el.type = 'button';
-        el.className = 'file-menu-item';
-        el.innerHTML = `<span>${entry.name.replace(/</g, '&lt;')}</span>`;
-        el.addEventListener('click', () => {
-          closeRecents();
-          void fm.openRecent(entry);
-        });
-        recentsMenu.appendChild(el);
-      }
-      const div = document.createElement('div');
-      div.className = 'file-menu-divider';
-      recentsMenu.appendChild(div);
-      const openFolder = document.createElement('button');
-      openFolder.type = 'button';
-      openFolder.className = 'file-menu-item';
-      openFolder.innerHTML = '<span>Open project folder…</span>';
-      openFolder.addEventListener('click', () => {
-        closeRecents();
-        void fm.openFolder('open');
-      });
-      recentsMenu.appendChild(openFolder);
-    });
-  }
 
   return {
     update() {},
