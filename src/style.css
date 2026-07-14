@@ -113,7 +113,7 @@ body {
      away through small CIRCULAR corners; outer ends stay full stadium.
      (Explicit 21px, not 999px — an overflowing radius makes CSS scale
      every corner down by one global factor.) */
-  border-radius: 9px 21px 21px 9px;
+  border-radius: 12px 21px 21px 12px;
 }
 
 /* Sleep/wake tiers: soft at rest, everything wakes near the bar, the
@@ -156,7 +156,7 @@ body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 21px 9px 9px 21px;
+  border-radius: 21px 12px 12px 21px;
 }
 
 /* The lifecycle triggers ride quietly at the pill's end. */
