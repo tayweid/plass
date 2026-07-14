@@ -1745,6 +1745,17 @@ body {
   pointer-events: none;
 }
 
+/* Labeled but unnumbered: the label stays visible (it has no printed
+   number, so it reads as an editor annotation, not document ink). */
+.math-display.eqnum-unnumbered::after {
+  font: 11px var(--mono);
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
 /* Live equation references: the number comes from the same decoration
    mechanism and renumbers as equations move. */
 .eq-ref {

@@ -74,6 +74,17 @@ function build(doc: PMNode, numberEquations: boolean, numberSections: boolean): 
       if (label && !labels.has(label)) labels.set(label, numbered ? `(${eq})` : `@${label}`);
       if (numbered) {
         decos.push(Decoration.node(pos, pos + node.nodeSize, { 'data-eqnum': `(${eq})` }));
+      } else if (label) {
+        // Keep the label visible when the number is off — muted, since an
+        // unnumbered equation cannot be @-referenced in print (references
+        // to it degrade to literal text).
+        decos.push(
+          Decoration.node(pos, pos + node.nodeSize, {
+            'data-eqnum': `@${label}`,
+            class: 'eqnum-unnumbered',
+            title: `@${label} — unnumbered: references print as plain text`,
+          }),
+        );
       }
       return false;
     }
