@@ -427,7 +427,7 @@ body {
   margin-bottom: 10px;
 }
 
-.table-card-tools button {
+.table-card-tools > button {
   font: 12px var(--sans);
   color: var(--ink);
   background: transparent;
@@ -437,7 +437,7 @@ body {
   cursor: pointer;
 }
 
-.table-card-tools button:hover {
+.table-card-tools > button:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
@@ -541,6 +541,56 @@ body {
   background: var(--ink);
 }
 
+/* Partial-rule segments (cmidrule-style): overlay bars on a boundary,
+   created by dragging along it. */
+.tc-seg {
+  position: absolute;
+  z-index: 3;
+  cursor: pointer;
+}
+
+.tc-seg-h {
+  height: 3px;
+  border-radius: 2px;
+}
+
+.tc-seg-v {
+  width: 3px;
+  border-radius: 2px;
+}
+
+.tc-seg-light {
+  background: var(--ink);
+}
+
+.tc-seg-heavy {
+  background: rgba(30, 30, 40, 0.85);
+}
+
+.tc-seg-h.tc-seg-heavy {
+  height: 4.5px;
+}
+
+.tc-seg-v.tc-seg-heavy {
+  width: 4.5px;
+}
+
+/* A suppressed range of a preset rule: mask the line, keep a dashed
+   hint so it stays discoverable. */
+.tc-seg-none {
+  background: var(--chrome, #fcfcfb);
+  border-top: 1px dashed color-mix(in srgb, var(--ink-soft) 50%, transparent);
+}
+
+.tc-seg-live {
+  background: color-mix(in srgb, var(--accent) 60%, transparent);
+  pointer-events: none;
+}
+
+.tc-seg:hover {
+  outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
 .tc-widths select {
   font: 10px var(--mono);
   color: var(--ink-soft);
@@ -592,7 +642,7 @@ body {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
-.table-card-tools button:disabled {
+.table-card-tools > button:disabled {
   opacity: 0.35;
   cursor: default;
 }

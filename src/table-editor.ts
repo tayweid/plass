@@ -47,12 +47,24 @@ interface GridModel {
   /** Explicit column-boundary rules (x: 0 = left edge … cols = right edge),
    * same semantics as `hlines`. */
   vlines: Map<number, 'light' | 'heavy' | 'none'>;
+  /** Partial horizontal rules (cmidrule-style): boundary y = i, columns
+   * [a, b) — Typst's start/end. Emitted with start FIRST so the full-rule
+   * regexes (preset yield, parser fidelity) never match them. */
+  hspans: RuleSpan[];
+  /** Partial vertical rules: boundary x = i, rows [a, b). */
+  vspans: RuleSpan[];
   /** Cell inset preset ('' = Typst default, else a canonical length). */
   inset: string;
 }
 
-const HLINE_RE = /table\.hline\(\s*y\s*:\s*(\d+)(?:[^)]*?stroke\s*:\s*(none|[\d.]+em))?[^)]*\)\s*,?/g;
-const VLINE_RE = /table\.vline\(\s*x\s*:\s*(\d+)(?:[^)]*?stroke\s*:\s*(none|[\d.]+em))?[^)]*\)\s*,?/g;
+interface RuleSpan {
+  i: number;
+  a: number;
+  b: number;
+  w: 'light' | 'heavy' | 'none';
+}
+
+const RULE_RE = /table\.(hline|vline)\(([^)]*)\)\s*,?/g;
 const COLUMNS_RE = /columns\s*:\s*\(([^)]*)\)\s*,?/;
 // Density presets: Typst's table default inset is 5pt.
 const INSETS: Record<string, string> = { compact: '3pt', roomy: '8pt' };
@@ -85,20 +97,28 @@ function readModel(table: PMNode): GridModel {
     });
     rows.push(cells);
   });
+  const colCount0 = Math.max(...rows.map((r) => r.reduce((n, c) => n + c.colspan, 0)));
   const hlines = new Map<number, 'light' | 'heavy' | 'none'>();
   const vlines = new Map<number, 'light' | 'heavy' | 'none'>();
+  const hspans: RuleSpan[] = [];
+  const vspans: RuleSpan[] = [];
   const weight = (stroke: string | undefined): 'light' | 'heavy' | 'none' =>
     stroke === 'none' ? 'none' : parseFloat(stroke ?? '0.05') >= 0.07 ? 'heavy' : 'light';
   let inset = '';
   const raw = (table.attrs.params as string) || '';
   let widths: string[] = [];
   const params = raw
-    .replace(HLINE_RE, (_, y, stroke) => {
-      hlines.set(+y, weight(stroke));
-      return '';
-    })
-    .replace(VLINE_RE, (_, x, stroke) => {
-      vlines.set(+x, weight(stroke));
+    .replace(RULE_RE, (match, kind: string, args: string) => {
+      const h = kind === 'hline';
+      const at = /(?:^|[,\s])(?:y|x)\s*:\s*(\d+)/.exec(args)?.[1];
+      if (at === undefined) return match; // positionless preset rule — not ours
+      const stroke = /stroke\s*:\s*(none|[\d.]+em)/.exec(args)?.[1];
+      const start = +(/start\s*:\s*(\d+)/.exec(args)?.[1] ?? 0);
+      const endRaw = /end\s*:\s*(\d+)/.exec(args)?.[1];
+      const axisLen = h ? colCount0 : rows.length;
+      const end = endRaw === undefined ? axisLen : +endRaw;
+      if (start <= 0 && end >= axisLen) (h ? hlines : vlines).set(+at, weight(stroke));
+      else (h ? hspans : vspans).push({ i: +at, a: start, b: end, w: weight(stroke) });
       return '';
     })
     .replace(COLUMNS_RE, (_, tuple: string) => {
@@ -139,6 +159,8 @@ function readModel(table: PMNode): GridModel {
     fill,
     fontSize: (table.attrs.fontSize as string) || '',
     vlines,
+    hspans,
+    vspans,
     inset,
   };
 }
@@ -155,6 +177,15 @@ function composeParams(model: GridModel): string {
   }
   for (const [x, w] of [...model.vlines.entries()].sort((a, b) => a[0] - b[0])) {
     parts.push(`table.vline(x: ${x}, stroke: ${stroke(w)})`);
+  }
+  // Partial rules: start first, so the full-rule regexes elsewhere (preset
+  // yield in the serializer, booktabs fidelity in the parser) skip them.
+  const spanSort = (s: RuleSpan[]) => [...s].sort((p, q) => p.i - q.i || p.a - q.a);
+  for (const sp of spanSort(model.hspans)) {
+    parts.push(`table.hline(start: ${sp.a}, end: ${sp.b}, y: ${sp.i}, stroke: ${stroke(sp.w)})`);
+  }
+  for (const sp of spanSort(model.vspans)) {
+    parts.push(`table.vline(start: ${sp.a}, end: ${sp.b}, x: ${sp.i}, stroke: ${stroke(sp.w)})`);
   }
   return parts.join(',\n');
 }
@@ -200,6 +231,8 @@ function cloneModel(m: GridModel): GridModel {
     fill: m.fill,
     fontSize: m.fontSize,
     vlines: new Map(m.vlines),
+    hspans: m.hspans.map((sp) => ({ ...sp })),
+    vspans: m.vspans.map((sp) => ({ ...sp })),
     inset: m.inset,
   };
 }
@@ -240,7 +273,6 @@ export function openTableEditor(view: EditorView, pos: number) {
     labelInput.value = model.label;
     fillSelect.value = model.fill;
     sizeSelect.value = model.fontSize;
-    styleBtn.textContent = model.style;
     refreshPanel();
     schedulePreview();
   };
@@ -249,7 +281,7 @@ export function openTableEditor(view: EditorView, pos: number) {
   overlay.className = 'bib-editor-overlay table-card-overlay';
   overlay.innerHTML = `
     <div class="bib-editor table-card" role="dialog" aria-label="Edit table">
-      <div class="bib-editor-head"><span>Table</span><span class="table-card-style"></span></div>
+      <div class="bib-editor-head"><span>Table</span></div>
       <div class="table-card-tools">
         <button type="button" data-act="row+">+ Row</button>
         <button type="button" data-act="row-">− Row</button>
@@ -297,7 +329,7 @@ export function openTableEditor(view: EditorView, pos: number) {
         <textarea class="table-card-typst-text" rows="7" spellcheck="false"></textarea>
       </details>
       <div class="bib-editor-foot">
-        <span class="bib-editor-hint">Click any boundary — between rows or columns, or an outer edge — for a rule (cycles light · heavy · off) · <kbd>⌘Z</kbd> undo · <kbd>⌘Enter</kbd> save · <kbd>Esc</kbd> cancel</span>
+        <span class="bib-editor-hint">Click any boundary — between rows or columns, or an outer edge — for a rule (cycles light · heavy · off) · drag along one for a partial rule · <kbd>⌘Z</kbd> undo · <kbd>⌘Enter</kbd> save · <kbd>Esc</kbd> cancel</span>
         <span class="bib-editor-actions">
           <button type="button" class="bib-cancel">Cancel</button>
           <button type="button" class="bib-save">Save</button>
@@ -307,7 +339,6 @@ export function openTableEditor(view: EditorView, pos: number) {
   const panel = overlay.querySelector('.table-card') as HTMLElement;
   const gridEl = overlay.querySelector('.table-card-grid') as HTMLElement;
   const previewBody = overlay.querySelector('.table-card-preview-body') as HTMLElement;
-  const styleLabel = overlay.querySelector('.table-card-style') as HTMLElement;
   const typstText = overlay.querySelector('.table-card-typst-text') as HTMLTextAreaElement;
   const sizeSelect = overlay.querySelector('.table-card-size') as HTMLSelectElement;
   if (model.fontSize && ![...sizeSelect.options].some((o) => o.value === model.fontSize)) {
@@ -354,7 +385,7 @@ export function openTableEditor(view: EditorView, pos: number) {
   styleBtn.type = 'button';
   styleBtn.className = 'ts-select-btn';
   styleBtn.title = 'Table style';
-  styleBtn.textContent = model.style;
+  styleBtn.textContent = 'Style';
   styleWrap.appendChild(styleBtn);
   let styleMenu: HTMLElement | null = null;
   const onOutsideStyle = (e: MouseEvent) => {
@@ -381,7 +412,6 @@ export function openTableEditor(view: EditorView, pos: number) {
         closeStyleMenu();
         snapshot();
         model.style = v;
-        styleBtn.textContent = v;
         renderGrid({ r: lastFocus.r, c: lastFocus.c });
         refreshPanel();
         schedulePreview();
@@ -436,9 +466,21 @@ export function openTableEditor(view: EditorView, pos: number) {
   };
   const ruleTitle = (eff: Rule | undefined): string =>
     !eff || eff === 'none' ? 'Add a rule here' : eff === 'light' ? 'Make this rule heavy' : 'Remove this rule';
+  // Partial rules cycle the same way; a repeat drag (or a click on the
+  // segment) advances the same span.
+  const cycleSpan = (list: RuleSpan[], i: number, a: number, b: number, preset: Rule | undefined) => {
+    const idx = list.findIndex((sp) => sp.i === i && sp.a === a && sp.b === b);
+    const cur = idx >= 0 ? list[idx].w : undefined;
+    const next: Rule | undefined =
+      !cur ? 'light' : cur === 'light' ? 'heavy' : cur === 'heavy' && preset ? 'none' : undefined;
+    if (idx >= 0) list.splice(idx, 1);
+    if (next) list.push({ i, a, b, w: next });
+  };
+  // After a drag, the browser still fires click on the same element — the
+  // whole-boundary handlers must yield to the span the drag just made.
+  let dragConsumedClick = false;
 
   const renderGrid = (focus?: { r: number; c: number }) => {
-    styleLabel.textContent = model.style + (model.params ? ' + opts' : '');
     const t = document.createElement('table');
     const totalCols = cols();
     while (model.widths.length < totalCols) model.widths.push('auto');
@@ -449,11 +491,13 @@ export function openTableEditor(view: EditorView, pos: number) {
       const eff = effective(model.hlines, y, presetH(y));
       const w = eff === 'none' ? undefined : eff;
       btr.className = 'tc-boundary' + (w ? ' tc-boundary-on' : '') + (w === 'heavy' ? ' tc-boundary-heavy' : '');
-      btr.title = ruleTitle(eff);
+      btr.title = ruleTitle(eff) + ' · drag across columns for a partial rule';
+      btr.dataset.hy = String(y);
       const btd = document.createElement('td');
       btd.colSpan = totalCols;
       btr.appendChild(btd);
       btr.addEventListener('click', () => {
+        if (dragConsumedClick) return;
         snapshot();
         cycleRule(model.hlines, y, presetH(y));
         renderGrid();
@@ -510,6 +554,7 @@ export function openTableEditor(view: EditorView, pos: number) {
     model.rows.forEach((row, ri) => {
       t.appendChild(hBoundaryTr(ri));
       const tr = document.createElement('tr');
+      tr.dataset.row = String(ri);
       row.forEach((cell, ci) => {
         const td = document.createElement(cell.header ? 'th' : 'td');
         if (cell.colspan > 1) td.colSpan = cell.colspan;
@@ -577,41 +622,185 @@ export function openTableEditor(view: EditorView, pos: number) {
     t.appendChild(hBoundaryTr(model.rows.length));
     gridEl.replaceChildren(t);
 
-    // Vertical boundary strips (left edge · between columns · right edge):
-    // absolutely positioned over the table so col/rowspans don't matter.
+    // Overlays: vertical boundary strips (absolutely positioned so
+    // col/rowspans don't matter), partial-rule segments, and the drag
+    // machinery that creates spans.
     {
       const gridRect = gridEl.getBoundingClientRect();
-      const widthTds = t.querySelectorAll<HTMLTableCellElement>('.tc-widths td');
+      const sl = gridEl.scrollLeft;
+      const st = gridEl.scrollTop;
+      const widthTds = [...t.querySelectorAll<HTMLTableCellElement>('.tc-widths td')];
+      const rowTrs = [...t.querySelectorAll<HTMLTableRowElement>('tr[data-row]')];
       const wtr = t.querySelector('.tc-widths')!;
       const top = wtr.getBoundingClientRect().bottom - gridRect.top;
       const height = t.getBoundingClientRect().bottom - gridRect.top - top;
+      // Column c's [left, right] and boundary x's center, in gridEl coords.
+      const colBox = (c: number): { l: number; r: number } => {
+        const r = widthTds[c].getBoundingClientRect();
+        return { l: r.left - gridRect.left + sl, r: r.right - gridRect.left + sl };
+      };
+      const rowBox = (r: number): { t: number; b: number } => {
+        const rect = rowTrs[r].getBoundingClientRect();
+        return { t: rect.top - gridRect.top + st, b: rect.bottom - gridRect.top + st };
+      };
+      const boundaryAt = (x: number): number => {
+        if (x <= 0) return colBox(0).l - 4.5;
+        if (x >= totalCols) return colBox(totalCols - 1).r + 4.5;
+        return (colBox(x - 1).r + colBox(x).l) / 2;
+      };
+      const colAtX = (clientX: number): number => {
+        const gx = clientX - gridRect.left + sl;
+        let best = 0;
+        let bestD = Infinity;
+        for (let c = 0; c < totalCols; c++) {
+          const { l, r } = colBox(c);
+          const d = gx < l ? l - gx : gx > r ? gx - r : 0;
+          if (d < bestD) {
+            bestD = d;
+            best = c;
+          }
+        }
+        return best;
+      };
+      const rowAtY = (clientY: number): number => {
+        const gy = clientY - gridRect.top + st;
+        let best = 0;
+        let bestD = Infinity;
+        for (let r = 0; r < rowTrs.length; r++) {
+          const { t: rt, b } = rowBox(r);
+          const d = gy < rt ? rt - gy : gy > b ? gy - b : 0;
+          if (d < bestD) {
+            bestD = d;
+            best = r;
+          }
+        }
+        return best;
+      };
+      const applySpan = (list: RuleSpan[], map: Map<number, Rule>, i: number, a: number, b: number, preset: Rule | undefined, full: number) => {
+        snapshot();
+        if (a <= 0 && b >= full) cycleRule(map, i, preset);
+        else cycleSpan(list, i, a, b, preset);
+        renderGrid();
+        refreshPanel();
+        schedulePreview();
+      };
+      // Drag along a boundary: sweep the columns (or rows) the partial
+      // rule should cover. A click without movement keeps the whole-
+      // boundary cycle.
+      const startDrag = (
+        e: PointerEvent,
+        horizontal: boolean,
+        i: number,
+        lineOffset: number, // gridEl coord of the boundary line's cross-axis position
+      ) => {
+        if (e.button !== 0) return;
+        const from = horizontal ? colAtX(e.clientX) : rowAtY(e.clientY);
+        let live: HTMLElement | null = null;
+        let moved = false;
+        const update = (ev: PointerEvent) => {
+          const to = horizontal ? colAtX(ev.clientX) : rowAtY(ev.clientY);
+          const a = Math.min(from, to);
+          const b = Math.max(from, to);
+          if (!live) {
+            live = document.createElement('div');
+            live.className = 'tc-seg tc-seg-live ' + (horizontal ? 'tc-seg-h' : 'tc-seg-v');
+            gridEl.appendChild(live);
+          }
+          if (horizontal) {
+            live.style.left = `${colBox(a).l}px`;
+            live.style.width = `${colBox(b).r - colBox(a).l}px`;
+            live.style.top = `${lineOffset - 1.5}px`;
+          } else {
+            live.style.top = `${rowBox(a).t}px`;
+            live.style.height = `${rowBox(b).b - rowBox(a).t}px`;
+            live.style.left = `${lineOffset - 1.5}px`;
+          }
+          return { a, b };
+        };
+        const onMove = (ev: PointerEvent) => {
+          const to = horizontal ? colAtX(ev.clientX) : rowAtY(ev.clientY);
+          const dist = horizontal ? Math.abs(ev.clientX - e.clientX) : Math.abs(ev.clientY - e.clientY);
+          if (!moved && dist < 8 && to === from) return;
+          moved = true;
+          update(ev);
+        };
+        const onUp = (ev: PointerEvent) => {
+          document.removeEventListener('pointermove', onMove);
+          document.removeEventListener('pointerup', onUp);
+          live?.remove();
+          if (!moved) return; // plain click — let the click handler cycle
+          dragConsumedClick = true;
+          setTimeout(() => (dragConsumedClick = false), 0);
+          const { a, b } = update(ev);
+          if (horizontal) applySpan(model.hspans, model.hlines, i, a, b + 1, presetH(i), totalCols);
+          else applySpan(model.vspans, model.vlines, i, a, b + 1, presetV(), model.rows.length);
+        };
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
+      };
+
       for (let x = 0; x <= totalCols; x++) {
-        const left = x > 0 ? widthTds[x - 1]?.getBoundingClientRect().right : undefined;
-        const right = x < totalCols ? widthTds[x]?.getBoundingClientRect().left : undefined;
-        if (left === undefined && right === undefined) break;
-        // Center in the border-spacing gap (edges: mirror the half-gap).
-        const at =
-          (left !== undefined && right !== undefined
-            ? (left + right) / 2
-            : left !== undefined
-              ? left + 4.5
-              : right! - 4.5) - gridRect.left;
+        if (!widthTds.length) break;
+        const at = boundaryAt(x);
         const strip = document.createElement('div');
         const eff = effective(model.vlines, x, presetV());
         const w = eff === 'none' ? undefined : eff;
         strip.className = 'tc-vb' + (w ? ' tc-vb-on' : '') + (w === 'heavy' ? ' tc-vb-heavy' : '');
-        strip.title = ruleTitle(eff);
-        strip.style.left = `${at + gridEl.scrollLeft - 4.5}px`;
-        strip.style.top = `${top + gridEl.scrollTop}px`;
+        strip.title = ruleTitle(eff) + ' · drag across rows for a partial rule';
+        strip.style.left = `${at - 4.5}px`;
+        strip.style.top = `${top + st}px`;
         strip.style.height = `${height}px`;
         strip.addEventListener('click', () => {
+          if (dragConsumedClick) return;
           snapshot();
           cycleRule(model.vlines, x, presetV());
           renderGrid();
           refreshPanel();
           schedulePreview();
         });
+        strip.addEventListener('pointerdown', (e) => startDrag(e, false, x, at));
         gridEl.appendChild(strip);
+      }
+      // Horizontal boundary drags attach to the boundary rows themselves.
+      for (const btr of t.querySelectorAll<HTMLTableRowElement>('tr[data-hy]')) {
+        const y = +btr.dataset.hy!;
+        const br = btr.getBoundingClientRect();
+        const lineAt = br.top - gridRect.top + st + 3.5;
+        btr.addEventListener('pointerdown', (e) => startDrag(e, true, y, lineAt));
+      }
+      // Existing partial rules render as segments over their boundary.
+      const segClick = (seg: HTMLElement, list: RuleSpan[], sp: RuleSpan, preset: Rule | undefined) => {
+        seg.title = 'Partial rule — click to cycle (light · heavy · off)';
+        seg.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (dragConsumedClick) return;
+          snapshot();
+          cycleSpan(list, sp.i, sp.a, sp.b, preset);
+          renderGrid();
+          refreshPanel();
+          schedulePreview();
+        });
+      };
+      for (const sp of model.hspans) {
+        const btr = t.querySelector<HTMLTableRowElement>(`tr[data-hy="${sp.i}"]`);
+        if (!btr || sp.a >= totalCols || sp.b > totalCols) continue;
+        const seg = document.createElement('div');
+        seg.className = `tc-seg tc-seg-h tc-seg-${sp.w}`;
+        seg.style.left = `${colBox(sp.a).l}px`;
+        seg.style.width = `${colBox(sp.b - 1).r - colBox(sp.a).l}px`;
+        seg.style.top = `${btr.getBoundingClientRect().top - gridRect.top + st + 2}px`;
+        segClick(seg, model.hspans, sp, presetH(sp.i));
+        gridEl.appendChild(seg);
+      }
+      for (const sp of model.vspans) {
+        if (sp.a >= rowTrs.length || sp.b > rowTrs.length) continue;
+        const seg = document.createElement('div');
+        seg.className = `tc-seg tc-seg-v tc-seg-${sp.w}`;
+        seg.style.top = `${rowBox(sp.a).t}px`;
+        seg.style.height = `${rowBox(sp.b - 1).b - rowBox(sp.a).t}px`;
+        seg.style.left = `${boundaryAt(sp.i) - 1.5}px`;
+        segClick(seg, model.vspans, sp, presetV());
+        gridEl.appendChild(seg);
       }
     }
 
@@ -712,8 +901,6 @@ export function openTableEditor(view: EditorView, pos: number) {
       renderGrid();
       fillSelect.value = FILLS[model.fill] || model.fill === 'none' ? model.fill : 'custom';
       schedulePreview();
-      styleLabel.textContent = model.style + (model.params ? ' + opts' : '');
-      styleBtn.textContent = model.style;
     }, 500);
   });
   typstText.addEventListener('blur', () => refreshPanel());
@@ -784,6 +971,12 @@ export function openTableEditor(view: EditorView, pos: number) {
     });
     model.widths.splice(Math.min(G, model.widths.length), 0, 'auto');
     model.vlines = new Map([...model.vlines].map(([x, w]) => [x >= G ? x + 1 : x, w]));
+    model.vspans = model.vspans.map((sp) => ({ ...sp, i: sp.i >= G ? sp.i + 1 : sp.i }));
+    model.hspans = model.hspans.map((sp) => ({
+      ...sp,
+      a: sp.a >= G ? sp.a + 1 : sp.a,
+      b: sp.b > G ? sp.b + 1 : sp.b,
+    }));
   };
   /** Delete grid column G (cells spanning it shrink). */
   const deleteGridCol = (G: number) => {
@@ -807,6 +1000,12 @@ export function openTableEditor(view: EditorView, pos: number) {
     model.vlines = new Map(
       [...model.vlines].map(([x, w]) => [x > G ? x - 1 : x, w] as const).filter(([x]) => x >= 0 && x <= cols()),
     );
+    model.vspans = model.vspans
+      .map((sp) => ({ ...sp, i: sp.i > G ? sp.i - 1 : sp.i }))
+      .filter((sp) => sp.i >= 0 && sp.i <= cols());
+    model.hspans = model.hspans
+      .map((sp) => ({ ...sp, a: sp.a > G ? sp.a - 1 : sp.a, b: sp.b > G ? sp.b - 1 : sp.b }))
+      .filter((sp) => sp.a < sp.b);
   };
   /** Insert a blank row after row R (rowspans crossing the seam widen). */
   const insertRowAfter = (R: number) => {
@@ -834,6 +1033,12 @@ export function openTableEditor(view: EditorView, pos: number) {
     model.hlines = new Map(
       [...model.hlines.entries()].map(([y, w]) => [y > R + 1 || y === bottom ? y + 1 : y, w] as const),
     );
+    model.hspans = model.hspans.map((sp) => ({ ...sp, i: sp.i > R + 1 || sp.i === bottom ? sp.i + 1 : sp.i }));
+    model.vspans = model.vspans.map((sp) => ({
+      ...sp,
+      a: sp.a >= R + 1 ? sp.a + 1 : sp.a,
+      b: sp.b > R + 1 ? sp.b + 1 : sp.b,
+    }));
   };
   /** Delete row R (rowspans through it shrink; origins in it push their
    *  remainder down). */
@@ -879,6 +1084,12 @@ export function openTableEditor(view: EditorView, pos: number) {
         .map(([y, w]) => [y > R ? y - 1 : y, w] as const)
         .filter(([y]) => y >= 0 && y <= model.rows.length),
     );
+    model.hspans = model.hspans
+      .map((sp) => ({ ...sp, i: sp.i > R ? sp.i - 1 : sp.i }))
+      .filter((sp) => sp.i >= 0 && sp.i <= model.rows.length);
+    model.vspans = model.vspans
+      .map((sp) => ({ ...sp, a: sp.a > R ? sp.a - 1 : sp.a, b: sp.b > R ? sp.b - 1 : sp.b }))
+      .filter((sp) => sp.a < sp.b);
   };
 
   overlay.querySelectorAll<HTMLButtonElement>('.table-card-tools button').forEach((btn) => {

@@ -146,6 +146,25 @@ function tableToTex(node: PMNode, s: DocSettings): string {
     vlines.set(+m[1], weight(m[2]));
   }
   const midrule = (w: 'light' | 'heavy'): string => (w === 'heavy' ? '\\midrule[\\heavyrulewidth]' : '\\midrule');
+  // Partial rules (start/end ranges) map to booktabs \cmidrule; a 'none'
+  // range (suppressing part of a preset rule) has no LaTeX equivalent and
+  // is dropped. Partial vlines are likewise Typst-only.
+  const cmidrules = new Map<number, string[]>();
+  for (const m of params.matchAll(
+    /table\.hline\(\s*start\s*:\s*(\d+),\s*end\s*:\s*(\d+),\s*y\s*:\s*(\d+)(?:[^)]*?stroke\s*:\s*(none|[\d.]+em))?[^)]*\)/g,
+  )) {
+    const w = weight(m[4]);
+    if (w === 'none') continue;
+    const y = +m[3];
+    const frag = (w === 'heavy' ? '\\cmidrule[\\heavyrulewidth](lr)' : '\\cmidrule(lr)') + `{${+m[1] + 1}-${+m[2]}}`;
+    const list = cmidrules.get(y) ?? [];
+    list.push(frag);
+    cmidrules.set(y, list);
+  }
+  const cmidruleLine = (y: number): string => {
+    const list = cmidrules.get(y);
+    return list ? list.join('') + '\n' : '';
+  };
 
   const cellTex = (cell: Cell): string => {
     // Cells hold block content (paragraphs); flatten inline.
@@ -164,6 +183,7 @@ function tableToTex(node: PMNode, s: DocSettings): string {
   rows.forEach((cells, r) => {
     const w = hlines.get(r);
     if (r > 0 && w && w !== 'none') body += midrule(w) + '\n';
+    if (r > 0) body += cmidruleLine(r);
     const slots: string[] = [];
     let g = 0;
     let ci = 0;
@@ -196,7 +216,9 @@ function tableToTex(node: PMNode, s: DocSettings): string {
   const tabular =
     `\\begin{tabular}{${spec}${rightEdge}}\n` +
     edge(0, '\\toprule') +
+    cmidruleLine(0) +
     body +
+    cmidruleLine(rows.length) +
     edge(rows.length, '\\bottomrule') +
     `\\end{tabular}`;
   if (caption) {

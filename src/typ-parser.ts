@@ -876,9 +876,11 @@ export function parseTable(src: string): PMNode | null {
   // preset's own — top, bottom, and the header midrule — minus any the
   // user replaced with an explicit y: rule at that boundary.
   if (style === 'booktabs') {
+    // Only FULL-width rules replace a preset rule; partial rules (with a
+    // start/end range) coexist with it.
     const replaced = new Set(
       userHlines
-        .filter((r) => r.startsWith('table.hline('))
+        .filter((r) => r.startsWith('table.hline(') && !/[(,]\s*(?:start|end)\s*:/.test(r))
         .map((r) => +(/y\s*:\s*(\d+)/.exec(r)?.[1] ?? -1)),
     );
     const expected =
