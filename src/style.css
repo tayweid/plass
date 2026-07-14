@@ -83,15 +83,18 @@ body {
 #toolbar {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   position: fixed;
   top: 50%;
   /* Centered ON the paper's left edge: half the bar over the sheet, half
-     in the room. Clamped so it never leaves the viewport entirely. */
+     in the room. Clamped so it never leaves the viewport entirely.
+     The width is FIXED so the -50% translate is a constant: anything
+     that grows (the title pill on hover) overflows to the right without
+     moving the bar. */
   left: max(30px, calc(50vw - var(--page-w, 816px) / 2));
   transform: translate(-50%, -50%);
-  width: max-content;
+  width: 52px;
   max-height: calc(100vh - 20px);
   z-index: 10;
 }
@@ -121,10 +124,15 @@ body {
   color: var(--bar-ink);
 }
 
-/* Only the hovered group wakes. */
+/* Approaching the bar wakes everything softly; the group under the
+   cursor comes up to full ink. */
+#toolbar:hover .tb-btn {
+  opacity: 1;
+}
+
 .tb-group:hover .tb-btn,
 .tb-group:focus-within .tb-btn {
-  opacity: 1;
+  color: var(--bar-ink);
 }
 
 .tb-group {
@@ -134,40 +142,34 @@ body {
   gap: 2px;
 }
 
-/* The title pod sits at the bar's width; the name truncates at rest and
-   the full pill slides out to the right on hover (or while renaming). */
+/* The title pod IS the pill: natural (full-name) width, clipped to the
+   bar's width at rest by an animated max-width. Hovering or renaming
+   relaxes the clip and the whole pod — glass, ring and all — slides
+   open to the right; the bar itself never moves. */
 .tb-pod:has(.tb-file) {
-  width: 52px;
-  position: relative;
+  width: max-content;
+  max-width: 100%;
+  height: 52px;
+  justify-content: center;
+  overflow: hidden;
+  transition: max-width 0.28s ease;
+}
+
+.tb-pod:has(.tb-file):hover,
+.tb-pod:has(.tb-file):focus-within {
+  max-width: 50vw;
 }
 
 .tb-file {
-  font: 12.5px var(--sans);
+  font: 16px var(--sans);
   color: var(--bar-ink-soft);
-  max-width: 46px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: text;
-  padding: 3px 4px;
+  padding: 3px 12px;
   border-radius: 999px;
-}
-
-.tb-file:hover,
-.tb-file-editing {
-  position: absolute;
-  left: 2px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: max-content;
-  max-width: 50vw;
-  background: var(--bar-glass);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
-  border: 1px solid var(--bar-hairline);
-  padding: 8px 14px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
-  z-index: 5;
 }
 
 .tb-btn .ico,
@@ -257,17 +259,12 @@ body {
 }
 
 .tb-btn:hover {
-  color: var(--bar-ink);
-  background: var(--bar-press);
+  color: #000;
+  background: rgba(0, 0, 0, 0.1);
 }
 
 .tb-btn:active {
   transform: scale(0.92);
-}
-
-.tb-btn:hover {
-  background: color-mix(in srgb, var(--chrome-border) 55%, transparent);
-  color: var(--ink);
 }
 
 .tb-btn.active {
@@ -324,6 +321,12 @@ body {
   background: var(--bar-hairline);
   margin: 6px 0;
   flex: none;
+  transition: background 0.3s ease;
+}
+
+/* The dividers wake with the buttons. */
+#toolbar:hover .tb-div {
+  background: rgba(0, 0, 0, 0.26);
 }
 
 /* Floating table controls — appear beside the table while the caret is in it. */
