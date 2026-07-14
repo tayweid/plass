@@ -92,8 +92,9 @@ body {
   z-index: 10;
 }
 
-/* The tool rail is a drawer hanging from the slug: same dark glass,
-   hidden at rest, dropping out when the assembly is moused over. */
+/* The tool rail hangs from the slug, persistent but asleep: a dark
+   silhouette row in the room's band that wakes to full ink on
+   approach. Nothing appears or moves — only contrast changes. */
 .tb-pod {
   display: inline-flex;
   flex-direction: row;
@@ -104,19 +105,15 @@ body {
   background: color-mix(in srgb, var(--bg) 76%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 999px;
-  opacity: 0;
-  transform: translateY(-5px);
-  pointer-events: none;
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  opacity: 0.55;
+  transition: opacity 0.25s ease;
 }
 
 #toolbar:hover .tb-pod,
 #toolbar:focus-within .tb-pod {
   opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
 }
 
 /* Dark-glass ink tiers: soft at rest, the hovered group at full ink. */
@@ -822,7 +819,8 @@ body {
 #scroll {
   flex: 1;
   overflow: auto;
-  padding: 64px 16px 56px;
+  /* The top band clears the persistent slug + rail assembly. */
+  padding: 106px 16px 56px;
 }
 
 #scroll::-webkit-scrollbar {
