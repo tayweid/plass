@@ -275,7 +275,16 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
       pageStarts.push({
         pos: unit.pos,
         line: lineInUnit,
-        unit: unit.type === 'heading' ? `h${Math.min(3, unit.level ?? 1)}` : lineInUnit > 0 ? 'line' : unit.type,
+        // 'line' (a mid-paragraph split the paginator can apply) only for
+        // exact-matched paragraphs. A split inside an opaque block keeps
+        // its own type so the atomic-block guard below fails the result —
+        // never a fake 'line' unit pointing at a node with no line cache.
+        unit:
+          unit.type === 'heading'
+            ? `h${Math.min(3, unit.level ?? 1)}`
+            : lineInUnit > 0 && unit.kind === 'exact'
+              ? 'line'
+              : unit.type,
         level: unit.level,
       });
     }

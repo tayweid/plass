@@ -100,6 +100,11 @@ export function parityRules(s: DocSettings): string {
   const eqAbove = pSlackBelow + 0.9 + 0.5 - m.typDesc;
   const eqBelow = 0.5 + 0.9 + pSlackAbove - m.typAsc;
   out += `#show math.equation.where(block: true): set block(above: ${pt(eqAbove)}, below: ${pt(eqBelow)})\n`;
+  // Tables never split across pages: the editor lays them out as atomic
+  // blocks (as LaTeX tabulars are), so the compiled document must move a
+  // table that doesn't fit to the next page whole — otherwise the page
+  // oracle reports a break inside the table, which the editor can't apply.
+  out += `#show table: set block(breakable: false)\n`;
   return out;
 }
 

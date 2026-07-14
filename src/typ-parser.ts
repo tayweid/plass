@@ -88,7 +88,8 @@ export function typToDoc(src: string): TypImport {
       /^#set (list|enum)\(spacing:/.test(line) ||
       /^#show heading\.where\(level: \d+\): set (text|block|par)\(/.test(line) ||
       /^#show raw\.where\(block: false\): set text\(/.test(line) ||
-      /^#show math\.equation\.where\(block: true\): set block\(/.test(line)
+      /^#show math\.equation\.where\(block: true\): set block\(/.test(line) ||
+      /^#show table: set block\(breakable: false\)$/.test(line)
     ) {
       sawSet = true;
       i++;

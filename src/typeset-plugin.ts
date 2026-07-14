@@ -1118,8 +1118,22 @@ class TypesetView {
       const total = pageFnH + extraFnH;
       return page * (size.h + PAGE_GAP) + size.h - marginBottom - (total > 0 ? total + FN_SEP : 0);
     };
+    // The same page-top ink adjustment paginateForced applies: fallback
+    // pagination must land units at identical offsets, or an oracle miss
+    // visibly shifts the whole page rhythm by the adjustment.
+    const F = this.bodyPx();
+    const adjFor = (pos: number, kind: Spacer['kind']): number => {
+      if (kind === 'line') return pageTopAdjustEm(s, 'line') * F;
+      const n = view.state.doc.nodeAt(pos);
+      if (n?.type.name === 'paragraph') return pageTopAdjustEm(s, 'paragraph') * F;
+      if (n?.type.name === 'heading') {
+        const lv = Math.min(3, (n.attrs.level as number) || 1);
+        return pageTopAdjustEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;
+      }
+      return 0;
+    };
     const breakBefore = (pos: number, y: number, kind: Spacer['kind']) => {
-      const delta = (page + 1) * (size.h + PAGE_GAP) + marginTop - (y + shift);
+      const delta = (page + 1) * (size.h + PAGE_GAP) + marginTop + adjFor(pos, kind) - (y + shift);
       page++;
       pageFnH = 0;
       if (delta > 0) {
