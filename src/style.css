@@ -4,35 +4,35 @@
    the PDF use the same faces (same files feed the Typst compiler). */
 @font-face {
   font-family: 'New Computer Modern';
-  src: url('/fonts/NewCM10-Regular.woff2') format('woff2');
+  src: url('../fonts/NewCM10-Regular.woff2') format('woff2');
   font-weight: 400;
   font-style: normal;
 }
 
 @font-face {
   font-family: 'New Computer Modern';
-  src: url('/fonts/NewCM10-Italic.woff2') format('woff2');
+  src: url('../fonts/NewCM10-Italic.woff2') format('woff2');
   font-weight: 400;
   font-style: italic;
 }
 
 @font-face {
   font-family: 'New Computer Modern';
-  src: url('/fonts/NewCM10-Bold.woff2') format('woff2');
+  src: url('../fonts/NewCM10-Bold.woff2') format('woff2');
   font-weight: 700;
   font-style: normal;
 }
 
 @font-face {
   font-family: 'New Computer Modern';
-  src: url('/fonts/NewCM10-BoldItalic.woff2') format('woff2');
+  src: url('../fonts/NewCM10-BoldItalic.woff2') format('woff2');
   font-weight: 700;
   font-style: italic;
 }
 
 @font-face {
   font-family: 'DejaVu Sans Mono';
-  src: url('/fonts/DejaVuSansMono.ttf') format('truetype');
+  src: url('../fonts/DejaVuSansMono.ttf') format('truetype');
   font-weight: 400;
   font-style: normal;
 }

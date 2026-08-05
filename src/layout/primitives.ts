@@ -35,11 +35,12 @@ export interface FontSpec {
 /** The body + mono faces the editor typesets with (OTF originals — the
  * compiler shapes with these same bytes, NOT the woff2 conversions). */
 export const EDITOR_FONTS: FontSpec[] = [
-  { url: '/fonts/NewCM10-Regular.otf', key: 'regular' },
-  { url: '/fonts/NewCM10-Bold.otf', key: 'bold' },
-  { url: '/fonts/NewCM10-Italic.otf', key: 'italic' },
-  { url: '/fonts/NewCM10-BoldItalic.otf', key: 'bolditalic' },
-  { url: '/fonts/DejaVuSansMono.ttf', key: 'mono' },
+  // BASE_URL-relative so the app also works deployed under a subpath.
+  { url: `${import.meta.env.BASE_URL}fonts/NewCM10-Regular.otf`, key: 'regular' },
+  { url: `${import.meta.env.BASE_URL}fonts/NewCM10-Bold.otf`, key: 'bold' },
+  { url: `${import.meta.env.BASE_URL}fonts/NewCM10-Italic.otf`, key: 'italic' },
+  { url: `${import.meta.env.BASE_URL}fonts/NewCM10-BoldItalic.otf`, key: 'bolditalic' },
+  { url: `${import.meta.env.BASE_URL}fonts/DejaVuSansMono.ttf`, key: 'mono' },
 ];
 
 export interface ShapedGlyphRaw {
