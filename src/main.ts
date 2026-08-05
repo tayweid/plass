@@ -6,7 +6,7 @@ import { EditorView } from 'prosemirror-view';
 import { history } from 'prosemirror-history';
 import { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
-import { baseKeys, buildInputRules, buildKeymap } from './editing';
+import { baseKeys, buildInputRules, buildKeymap, collapseSpaces} from './editing';
 import { typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugin';
 import { MathView } from './math';
 import { demoDoc } from './demo-doc';
@@ -58,6 +58,7 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       citationsPlugin(),
       figuresPlugin(),
       footnoteGuard(),
+      collapseSpaces(),
       typesetPlugin({ onStats, onPages: renderPages }),
     ],
   });

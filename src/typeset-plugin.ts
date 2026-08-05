@@ -288,6 +288,8 @@ class TypesetView {
             b ? b.map((x) => (x.hyphen ? 'hy' : 'br') + x.at).join(',') : String(b);
           if (oentry?.status === 'ok' && port && fmt(oentry.breaks) !== fmt(port)) {
             out.push({ pos, text: node.textContent.slice(0, 40), oracle: fmt(oentry.breaks), port: fmt(port) });
+          } else if (oentry && oentry.status !== 'ok') {
+            out.push({ pos, text: node.textContent.slice(0, 40), status: oentry.status, reason: (oentry as { reason?: string }).reason?.slice(0, 200), port: fmt(port) });
           }
           return false;
         });

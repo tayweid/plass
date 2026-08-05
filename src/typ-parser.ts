@@ -931,7 +931,10 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
   let buf = '';
   const flush = () => {
     if (buf) {
-      out.push(schema.text(buf, marks));
+      // Typst collapses consecutive markup spaces to one; the document
+      // must hold what actually prints, or the breaker and the compiled
+      // truth lay out different text and fight forever.
+      out.push(schema.text(buf.replace(/ {2,}/g, ' '), marks));
       buf = '';
     }
   };
@@ -939,6 +942,12 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
   while (i < src.length) {
     const ch = src[i];
 
+    // Typst's ~ is a non-breaking space.
+    if (ch === '~') {
+      buf += '\u00a0';
+      i++;
+      continue;
+    }
     if (ch === '\\' && i + 1 < src.length) {
       buf += src[i + 1];
       i += 2;

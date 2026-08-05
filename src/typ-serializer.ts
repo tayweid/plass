@@ -148,7 +148,10 @@ function imageSrc(src: string): string {
 }
 
 export function escapeTyp(text: string): string {
-  return text.replace(/[\\#$*_`@<>[\]]/g, (c) => '\\' + c);
+  // A literal ~ must escape — Typst reads a bare ~ as a non-breaking
+  // space, silently gluing the words around it. A real U+00A0 in the text
+  // emits AS Typst's ~, so the printed glue matches the editor's.
+  return text.replace(/[\\#$*_`@<>[\]~]/g, (c) => '\\' + c).replace(/\u00a0/g, '~');
 }
 
 function inlineToTyp(node: PMNode): string {

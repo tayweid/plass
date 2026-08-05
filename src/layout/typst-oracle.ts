@@ -94,7 +94,9 @@ export function buildSpec(node: PMNode, resolveAtom: AtomResolver): ParagraphSpe
         const token = m[0];
         if (/\s/.test(token[0])) {
           pendingSpace = true;
-          inner += ' ';
+          // A run containing U+00A0 must emit as ~ or the probe would let
+          // Typst break where the document forbids it.
+          inner += token.includes('\u00a0') ? '~' : ' ';
           continue;
         }
         tokens.push({

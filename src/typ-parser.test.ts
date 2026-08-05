@@ -452,6 +452,20 @@ function firstDiff(a: string, b: string): string {
   check('leading-dash paragraph stays a paragraph', src.includes('\\- not a list'));
 }
 
+// --- 15. space semantics: Typst collapse, ~ as nbsp, literal tilde ---
+{
+  const doc = typToDoc('word  gap   here').doc;
+  check('markup space runs collapse', doc.textContent === 'word gap here', JSON.stringify(doc.textContent));
+  const doc2 = typToDoc('to~resolve ties').doc;
+  check('inline ~ imports as nbsp', doc2.textContent === 'to\u00a0resolve ties', JSON.stringify(doc2.textContent));
+  const out2 = docToTyp(doc2);
+  check('nbsp exports as ~', out2.includes('to~resolve'), out2.slice(0, 120));
+  const doc3 = typToDoc('approx \\~ tilde').doc;
+  check('escaped tilde stays literal', doc3.textContent === 'approx ~ tilde', JSON.stringify(doc3.textContent));
+  const out3 = docToTyp(doc3);
+  check('literal tilde re-escapes', out3.includes('approx \\~ tilde'), out3.slice(0, 120));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

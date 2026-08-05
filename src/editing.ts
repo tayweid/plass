@@ -11,12 +11,12 @@ import {
   wrappingInputRule,
 } from 'prosemirror-inputrules';
 import { keymap } from 'prosemirror-keymap';
-import { TextSelection } from 'prosemirror-state';
+import { Plugin, TextSelection } from 'prosemirror-state';
 import { baseKeymap, chainCommands, exitCode, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import { redo, undo } from 'prosemirror-history';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
 import type { MarkType } from 'prosemirror-model';
-import type { Command, Plugin } from 'prosemirror-state';
+import type { Command } from 'prosemirror-state';
 import { schema } from './schema';
 import { insertMath, mathDisplayRule, mathInlineRule } from './math';
 import { eqRefRule } from './equations';
@@ -251,3 +251,40 @@ export function buildKeymap(): Plugin {
 }
 
 export const baseKeys = keymap(baseKeymap);
+
+/**
+ * Typst collapses runs of ordinary spaces to a single space, so a document
+ * holding "a  b" PRINTS as "a b" — and the live breaker and the compiled
+ * oracle would forever disagree about the paragraph's text. Keep the
+ * document in printed form: after any edit, collapse space runs in plain
+ * text (code blocks and code-marked text keep their spaces — raw preserves
+ * them in Typst too). Non-breaking spaces are meaningful and untouched.
+ */
+export function collapseSpaces(): Plugin {
+  return new Plugin({
+    appendTransaction(trs, _old, state) {
+      if (!trs.some((tr) => tr.docChanged)) return null;
+      const cuts: Array<[number, number]> = [];
+      state.doc.descendants((node, pos) => {
+        if (node.type.name === 'code_block') return false;
+        if (!node.isTextblock) return true;
+        node.forEach((child, offset) => {
+          if (!child.isText || !child.text) return;
+          if (child.marks.some((m) => m.type.name === 'code')) return;
+          const text = child.text;
+          const re = / {2,}/g;
+          let m: RegExpExecArray | null;
+          while ((m = re.exec(text))) {
+            const base = pos + 1 + offset + m.index;
+            cuts.push([base + 1, base + m[0].length]);
+          }
+        });
+        return true;
+      });
+      if (!cuts.length) return null;
+      const tr = state.tr;
+      for (const [from, to] of cuts.reverse()) tr.delete(from, to);
+      return tr;
+    },
+  });
+}
