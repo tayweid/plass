@@ -39,6 +39,7 @@ import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-se
 import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
 import { eqKey } from './equations';
+import { getInk, inkKey } from './math-ink';
 
 /** Phase-3 flag (PORT.md): drive live typing with the ported Typst
  * breaker. Console: __usePort(false) to A/B against the legacy path;
@@ -232,6 +233,15 @@ class TypesetView {
   private pendingPageMarks: DecorationSet | null = null;
   private resizeObserver: ResizeObserver;
   private lastWidth = 0;
+  /** Which source produced the last pagination (diagnostics). */
+  private pagPath: 'forced' | 'hold' | 'fallback' = 'forced';
+  private pagLog: string[] = [];
+  private pagWhy = '';
+  /** Distinct page-oracle failures since the last success — brief failure
+   *  blips (mid-edit states the oracle can't represent) keep the held
+   *  marks; only a STREAK abandons them to fallback pagination. */
+  private pageFailStreak = 0;
+  private lastFailEntry: unknown = null;
   private destroyed = false;
 
   constructor(
@@ -295,6 +305,7 @@ class TypesetView {
         });
         return out;
       };
+      (w as unknown as { __pagLog: () => string[] }).__pagLog = () => this.pagLog;
       w.__breakSig = () => {
         const st = typesetKey.getState(this.view.state);
         if (!st) return '';
@@ -664,6 +675,8 @@ class TypesetView {
     // Pass 2: measure natural geometry, compute page breaks, re-dispatch with
     // spacers. Both dispatches share one task, so nothing paints in between.
     const { spacers, count } = this.paginate();
+    this.pagLog.push(this.pagPath + '[' + this.pagWhy + ']:' + spacers.map((sp) => `${sp.pos}@${Math.round(sp.height)}`).join(','));
+    if (this.pagLog.length > 40) this.pagLog.shift();
     if (spacers.length) {
       const lineSpacers = new Map<number, Spacer>();
       const blockSpacers: Spacer[] = [];
@@ -754,7 +767,25 @@ class TypesetView {
     const state = this.view.state;
     const labels = eqKey.getState(state)?.labels ?? new Map<string, string>();
     const order = citeOrder(state.doc);
-    const macros = parseMathMacros(getSettings(state).mathMacros);
+    const settings = getSettings(state);
+    const macros = parseMathMacros(settings.mathMacros);
+    // The compiled document renders a formula as concrete glyph text
+    // ("Π𝐴,𝐵,𝐶") that the oracle's line matcher must recognize. The math
+    // ink cache holds Typst's own SVG for each formula — its text layer IS
+    // that rendering. Absent ink (still compiling) falls back to the
+    // unknown-atom heuristic.
+    const inkText = (src: string): string | undefined => {
+      const ink = getInk(inkKey(src, false, settings));
+      if (!ink) return undefined;
+      const div = document.createElement('div');
+      div.innerHTML = ink.svg;
+      const text = [...div.querySelectorAll('.tsel')]
+        .map((t) => t.textContent ?? '')
+        .join('')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return text || undefined;
+    };
     const fnNums = new Map<PMNode, number>();
     let fn = 0;
     state.doc.descendants((n) => {
@@ -767,7 +798,10 @@ class TypesetView {
     return (child) => {
       switch (child.type.name) {
         case 'math_inline':
-          return { markup: '#mi(`' + expandMacrosWith(child.attrs.src as string, macros) + '`)' };
+          return {
+            markup: '#mi(`' + expandMacrosWith(child.attrs.src as string, macros) + '`)',
+            text: inkText(child.attrs.src as string),
+          };
         case 'citation': {
           const t = `[${order.get(child.attrs.key as string) ?? '?'}]`;
           return { markup: escapeTyp(t), text: t };
@@ -1084,6 +1118,7 @@ class TypesetView {
         if (entry?.status === 'ok' && entry.pageStarts) {
           const forced = this.paginateForced(entry.pageStarts, entry.pageCount ?? entry.pageStarts.length + 1);
           if (forced) {
+            this.pagPath = 'forced';
             // Persist the starts as mapped markers for the next edit burst.
             this.lastPageCount = entry.pageCount ?? entry.pageStarts.length + 1;
             this.pendingPageMarks = DecorationSet.create(
@@ -1102,8 +1137,18 @@ class TypesetView {
         // mapped through the edits — pages hold still instead of falling
         // back to a local guess that disagrees by a line. Only while
         // PENDING: a failed match must not hold stale geometry forever.
+        if (entry?.status === 'ok') {
+          this.pageFailStreak = 0;
+          this.lastFailEntry = null;
+        } else if (entry?.status === 'fail' && entry !== this.lastFailEntry) {
+          this.pageFailStreak++;
+          this.lastFailEntry = entry;
+        }
         const marks =
-          entry?.status === 'fail' ? [] : (typesetKey.getState(view.state)?.pageMarks.find() ?? []);
+          entry?.status === 'fail' && this.pageFailStreak > 3
+            ? []
+            : (typesetKey.getState(view.state)?.pageMarks.find() ?? []);
+        this.pagWhy = `entry=${entry?.status ?? 'pending'} marks=${marks.length}` + (entry?.status === 'fail' ? ` streak=${this.pageFailStreak}` : '');
         if (marks.length) {
           const stale = marks
             .map((m) => ({
@@ -1113,11 +1158,15 @@ class TypesetView {
             }))
             .sort((a, b) => a.pos - b.pos);
           const forced = this.paginateForced(stale, this.lastPageCount || stale.length + 1, true);
-          if (forced) return forced;
+          if (forced) {
+            this.pagPath = 'hold';
+            return forced;
+          }
         }
       }
     }
 
+    this.pagPath = 'fallback';
     // Origin: the stack top. view.dom (.ProseMirror) sits inside #editor's
     // page-margin padding, so anchor to its parent, whose top is the top of
     // the first painted page.
@@ -1421,6 +1470,7 @@ class TypesetView {
       } else if (delta < -2) {
         // Content has outgrown this break (edits added lines above it):
         // these starts are stale — let live pagination move the break NOW.
+        if (stale) this.pagWhy += ` bail@${pos}Δ${delta.toFixed(0)}`;
         return null;
       }
     }

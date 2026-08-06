@@ -265,6 +265,7 @@ export function collapseSpaces(): Plugin {
     appendTransaction(trs, _old, state) {
       if (!trs.some((tr) => tr.docChanged)) return null;
       const cuts: Array<[number, number]> = [];
+      const swaps: Array<[number, number, string]> = [];
       state.doc.descendants((node, pos) => {
         if (node.type.name === 'code_block') return false;
         if (!node.isTextblock) return true;
@@ -278,12 +279,29 @@ export function collapseSpaces(): Plugin {
             const base = pos + 1 + offset + m.index;
             cuts.push([base + 1, base + m[0].length]);
           }
+          // Typst dash shorthands print differently than they type: the
+          // document holds the printed glyphs (--- em, -- en — including
+          // the "–-" state mid-way through typing an em dash — and a
+          // whitespace-preceded hyphen before a digit is a minus sign).
+          const dashRe = /---|\u2013-|--|(?<=^|\s)-(?=\d)/g;
+          while ((m = dashRe.exec(text))) {
+            const base = pos + 1 + offset + m.index;
+            const glyph = m[0] === '--' ? '\u2013' : m[0] === '-' ? '\u2212' : '\u2014';
+            swaps.push([base, base + m[0].length, glyph]);
+          }
         });
         return true;
       });
-      if (!cuts.length) return null;
+      if (!cuts.length && !swaps.length) return null;
       const tr = state.tr;
-      for (const [from, to] of cuts.reverse()) tr.delete(from, to);
+      const edits = [
+        ...cuts.map(([from, to]) => ({ from, to, text: '' })),
+        ...swaps.map(([from, to, text]) => ({ from, to, text })),
+      ].sort((a, b) => b.from - a.from);
+      for (const e of edits) {
+        if (e.text) tr.replaceWith(e.from, e.to, state.schema.text(e.text));
+        else tr.delete(e.from, e.to);
+      }
       return tr;
     },
   });

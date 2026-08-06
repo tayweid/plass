@@ -948,6 +948,27 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
       i++;
       continue;
     }
+    // Typst dash shorthands (unescaped): --- em, -- en, and a hyphen
+    // before a digit after whitespace prints as a minus sign. The
+    // document holds the printed characters.
+    if (ch === '-') {
+      if (src.startsWith('---', i)) {
+        buf += '\u2014';
+        i += 3;
+        continue;
+      }
+      if (src.startsWith('--', i)) {
+        buf += '\u2013';
+        i += 2;
+        continue;
+      }
+      const prev = buf ? buf[buf.length - 1] : ' ';
+      if (/\d/.test(src[i + 1] ?? '') && /\s/.test(prev)) {
+        buf += '\u2212';
+        i++;
+        continue;
+      }
+    }
     if (ch === '\\' && i + 1 < src.length) {
       buf += src[i + 1];
       i += 2;

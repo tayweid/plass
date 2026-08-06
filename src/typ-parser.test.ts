@@ -466,6 +466,20 @@ function firstDiff(a: string, b: string): string {
   check('literal tilde re-escapes', out3.includes('approx \\~ tilde'), out3.slice(0, 120));
 }
 
+// --- 16. Typst dash shorthands: document holds the printed glyphs ---
+{
+  const t = (src: string) => typToDoc(src).doc.textContent;
+  check('em dash imports', t('a --- b') === 'a \u2014 b', JSON.stringify(t('a --- b')));
+  check('en dash imports', t('a--b') === 'a\u2013b', JSON.stringify(t('a--b')));
+  check('minus before digit imports', t('B = -1, C') === 'B = \u22121, C', JSON.stringify(t('B = -1, C')));
+  check('hyphen mid-word stays', t('x-1 and 3-4') === 'x-1 and 3-4', JSON.stringify(t('x-1 and 3-4')));
+  check('hyphen after paren stays', t('(-1)') === '(-1)', JSON.stringify(t('(-1)')));
+  const rt = docToTyp(typToDoc('B = -1 and a --- b').doc);
+  check('printed glyphs export literally', rt.includes('B = \u22121 and a \u2014 b'), rt.slice(0, 140));
+  const again = docToTyp(typToDoc(rt).doc);
+  check('dash round-trip idempotent', rt === again, firstDiff(rt, again));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);
