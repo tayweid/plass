@@ -48,7 +48,9 @@ export function buildInputRules(): Plugin {
   const rules = [
     ...smartQuotes,
     ellipsis,
-    emDash,
+    // No emDash rule: Typst's dash shorthands (-- en, --- em) are applied
+    // by collapseSpaces' normalizer — the stock rule maps -- to an em dash
+    // and makes typing --- impossible.
     // # / ## / ### headings
     textblockTypeInputRule(/^(#{1,3})\s$/, schema.nodes.heading, (m) => ({ level: m[1].length })),
     // > blockquote

@@ -1822,7 +1822,12 @@ body {
   display: inline-block;
   cursor: pointer;
   border-radius: 3px;
+  /* The hover/selection box breathes 1px past the ink, but the FLOW
+     advance must equal Typst's exact math width — negative margins give
+     the ink-width advance back (vertical parity of line boxes is
+     untouched; horizontal atom width feeds justification and breaks). */
   padding: 0 1px;
+  margin: 0 -1px;
 }
 
 /* The Typst ink svg is inline and sits on the text baseline, leaving

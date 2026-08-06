@@ -283,10 +283,7 @@ class TypesetView {
           if (!spec) return false;
           const okey = `${settingsSig}|${indentedTag(settings, state.doc, pos)}|w${measure.toFixed(1)}|${spec.key}`;
           const oentry = this.oracle.get(okey);
-          const atomWidth = (offset: number, child: PMNode) => {
-            const dom = this.view.nodeDOM(pos + 1 + offset);
-            return dom instanceof HTMLElement ? dom.getBoundingClientRect().width : child.nodeSize * 8;
-          };
+          const atomWidth = makeAtomWidth(this.view, settings, pos);
           const indented = settings.parIndent && consecutivePara(state.doc, pos);
           const port = portBreaks(node, measure, atomWidth, {
             sizePt: settings.sizePt,
@@ -435,11 +432,7 @@ class TypesetView {
       const cs = getComputedStyle(el);
       const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
       if (!(measure > 60)) continue;
-      const atomWidth = (offset: number, child: PMNode) => {
-        const dom = this.view.nodeDOM(b.pos + 1 + offset);
-        if (dom instanceof HTMLElement) return dom.getBoundingClientRect().width;
-        return child.nodeSize * 8;
-      };
+      const atomWidth = makeAtomWidth(this.view, settings, b.pos);
       // The ported Typst breaker: full-paragraph, globally optimal, and
       // identical to what the oracle will confirm. Plain KP is the
       // degraded-mode fallback (sidecar not loaded, unmapped content).
@@ -846,12 +839,7 @@ class TypesetView {
       extra: { firstLineIndent?: number; scale?: number },
       keyTag: string,
     ) => {
-      const atomWidth = (offset: number, child: PMNode) => {
-        const dom = this.view.nodeDOM(pos + 1 + offset);
-        if (dom instanceof HTMLElement) return dom.getBoundingClientRect().width;
-        // Fallback estimate if the atom has no DOM yet.
-        return child.nodeSize * 8;
-      };
+      const atomWidth = makeAtomWidth(this.view, settings, pos);
 
       // Ask the Typst oracle for this block's authoritative breaks.
       const spec = resolveAtom ? buildSpec(node, resolveAtom) : null;
@@ -1537,6 +1525,21 @@ function noSpellDeco(node: PMNode, base: number, breakPos: number): Decoration |
   while (b < text.length && isWordChar(text[b])) b++;
   if (a >= b) return null;
   return Decoration.inline(base + a, base + b, { spellcheck: 'false' }, { sig: 'nospell' });
+}
+
+/** Atom advance for layout: math uses the ink's exact Typst width (the
+ *  DOM rect includes the hover box's 1px padding); everything else
+ *  measures its DOM. */
+function makeAtomWidth(view: EditorView, settings: ReturnType<typeof getSettings>, pos: number) {
+  return (offset: number, child: PMNode): number => {
+    if (child.type.name === 'math_inline') {
+      const ink = getInk(inkKey(child.attrs.src as string, false, settings));
+      if (ink) return ink.widthPx;
+    }
+    const dom = view.nodeDOM(pos + 1 + offset);
+    if (dom instanceof HTMLElement) return dom.getBoundingClientRect().width;
+    return child.nodeSize * 8;
+  };
 }
 
 function brWidget() {
