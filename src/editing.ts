@@ -15,7 +15,7 @@ import { Plugin, TextSelection } from 'prosemirror-state';
 import { baseKeymap, chainCommands, exitCode, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import { redo, undo } from 'prosemirror-history';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
-import type { MarkType } from 'prosemirror-model';
+import type { Mark, MarkType } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
 import { schema } from './schema';
 import { insertMath, mathDisplayRule, mathInlineRule } from './math';
@@ -266,8 +266,7 @@ export function collapseSpaces(): Plugin {
   return new Plugin({
     appendTransaction(trs, _old, state) {
       if (!trs.some((tr) => tr.docChanged)) return null;
-      const cuts: Array<[number, number]> = [];
-      const swaps: Array<[number, number, string]> = [];
+      const swaps: Array<[number, number, string, readonly Mark[]]> = [];
       state.doc.descendants((node, pos) => {
         if (node.type.name === 'code_block') return false;
         if (!node.isTextblock) return true;
@@ -275,11 +274,17 @@ export function collapseSpaces(): Plugin {
           if (!child.isText || !child.text) return;
           if (child.marks.some((m) => m.type.name === 'code')) return;
           const text = child.text;
-          const re = / {2,}/g;
+          // Whitespace runs collapse to ONE plain space — including runs
+          // the browser polluted with non-breaking spaces (contenteditable
+          // substitutes U+00A0 when spaces are typed adjacently, and the
+          // editor honors nbsp as glue, welding words together). A run of
+          // PURE nbsp is intentional (~~) and stays.
+          const re = /[ \u00a0]{2,}/g;
           let m: RegExpExecArray | null;
           while ((m = re.exec(text))) {
+            if (!m[0].includes(' ')) continue;
             const base = pos + 1 + offset + m.index;
-            cuts.push([base + 1, base + m[0].length]);
+            swaps.push([base, base + m[0].length, ' ', child.marks]);
           }
           // Typst dash shorthands print differently than they type: the
           // document holds the printed glyphs (--- em, -- en — including
@@ -289,20 +294,17 @@ export function collapseSpaces(): Plugin {
           while ((m = dashRe.exec(text))) {
             const base = pos + 1 + offset + m.index;
             const glyph = m[0] === '--' ? '\u2013' : m[0] === '-' ? '\u2212' : '\u2014';
-            swaps.push([base, base + m[0].length, glyph]);
+            swaps.push([base, base + m[0].length, glyph, child.marks]);
           }
         });
         return true;
       });
-      if (!cuts.length && !swaps.length) return null;
+      if (!swaps.length) return null;
       const tr = state.tr;
-      const edits = [
-        ...cuts.map(([from, to]) => ({ from, to, text: '' })),
-        ...swaps.map(([from, to, text]) => ({ from, to, text })),
-      ].sort((a, b) => b.from - a.from);
-      for (const e of edits) {
-        if (e.text) tr.replaceWith(e.from, e.to, state.schema.text(e.text));
-        else tr.delete(e.from, e.to);
+      // Descending order keeps earlier positions valid; marks carry over so
+      // a normalized character inside bold/italic text stays styled.
+      for (const [from, to, text, marks] of swaps.sort((a, b) => b[0] - a[0])) {
+        tr.replaceWith(from, to, state.schema.text(text, marks));
       }
       return tr;
     },

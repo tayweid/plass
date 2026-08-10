@@ -480,6 +480,13 @@ function firstDiff(a: string, b: string): string {
   check('dash round-trip idempotent', rt === again, firstDiff(rt, again));
 }
 
+// --- 17. mixed nbsp+space runs collapse (browser artifacts); pure nbsp stays ---
+{
+  const t = (src: string) => typToDoc(src).doc.textContent;
+  check('mixed nbsp run collapses', t('a~ ~b') === 'a b', JSON.stringify(t('a~ ~b')));
+  check('pure nbsp run survives', t('a~~b') === 'a\u00a0\u00a0b', JSON.stringify(t('a~~b')));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

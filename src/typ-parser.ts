@@ -933,8 +933,10 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
     if (buf) {
       // Typst collapses consecutive markup spaces to one; the document
       // must hold what actually prints, or the breaker and the compiled
-      // truth lay out different text and fight forever.
-      out.push(schema.text(buf.replace(/ {2,}/g, ' '), marks));
+      // truth lay out different text and fight forever. Mixed nbsp+space
+      // runs (browser artifacts round-tripped as "~ ~") collapse too;
+      // pure nbsp runs are intentional glue.
+      out.push(schema.text(buf.replace(/[ \u00a0]{2,}/g, (run) => (run.includes(' ') ? ' ' : run)), marks));
       buf = '';
     }
   };
