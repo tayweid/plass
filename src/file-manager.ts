@@ -49,6 +49,10 @@ export class FileManager {
   dirty = false;
   readonly supportsFS = typeof window.showOpenFilePicker === 'function';
   private saveTimer = 0;
+  /** Last-session file awaiting a permission re-grant (browsers downgrade
+   *  stored handles to 'prompt' across reloads; re-requesting needs a
+   *  user gesture). The session doc on screen IS this file's latest state. */
+  private pendingRestore: { handle: FileSystemFileHandle; dir: FileSystemDirectoryHandle | null } | null = null;
 
   constructor(private hooks: FileHooks) {
     document.addEventListener('visibilitychange', () => {
@@ -264,6 +268,11 @@ export class FileManager {
   }
 
   async save() {
+    // A pending reconnect resolves here too — the click that asked to
+    // save is the gesture the permission prompt needs.
+    if (!this.handle && this.pendingRestore) {
+      if (await this.completeRestore()) return;
+    }
     if (this.handle) {
       try {
         await this.write(this.handle);
@@ -372,10 +381,63 @@ export class FileManager {
       const dir = 'handle' in stored ? stored.dir : null;
       const target = dir ?? handle;
       const perm = (await target.queryPermission?.({ mode: 'readwrite' })) ?? 'denied';
-      if (perm !== 'granted') return false;
-      await this.loadHandle(handle, dir);
-      return true;
+      if (perm === 'granted') {
+        await this.loadHandle(handle, dir);
+        return true;
+      }
+      if (perm !== 'prompt') return false;
+      // The handle survives but needs a fresh grant, and that requires a
+      // user gesture. Take on the file's identity NOW (the restored
+      // session doc is its content) and finish on the first interaction.
+      this.pendingRestore = { handle, dir };
+      this.name = handle.name.replace(/\.typ$/i, '');
+      this.dirty = true;
+      this.hooks.onState();
+      const attempt = () => {
+        document.removeEventListener('pointerdown', attempt, true);
+        document.removeEventListener('keydown', attempt, true);
+        void this.completeRestore();
+      };
+      document.addEventListener('pointerdown', attempt, true);
+      document.addEventListener('keydown', attempt, true);
+      this.hooks.message(`Click anywhere to reconnect to ${handle.name}`);
+      return false;
     } catch {
+      return false;
+    }
+  }
+
+  /** Finish reconnecting to the last session's file. Must run inside a
+   *  user gesture (permission prompt). */
+  async completeRestore(): Promise<boolean> {
+    const p = this.pendingRestore;
+    if (!p || this.handle) return this.handle !== null;
+    try {
+      const target = p.dir ?? p.handle;
+      const perm = (await target.requestPermission?.({ mode: 'readwrite' })) ?? 'denied';
+      if (perm !== 'granted') return false;
+      this.pendingRestore = null;
+      const file = await p.handle.getFile();
+      const diskText = await file.text();
+      this.handle = p.handle;
+      this.dir = p.dir;
+      this.name = file.name.replace(/\.typ$/i, '');
+      if (docToTyp(this.hooks.getDoc()) !== diskText) {
+        // The session doc is newer (the reload interrupted an autosave):
+        // bring the file up to date rather than clobbering the screen.
+        await this.write(p.handle);
+      }
+      this.dirty = false;
+      this.hooks.onState();
+      this.hooks.message(`Reconnected — ${this.dir ? `${this.dir.name}/` : ''}${file.name}`);
+      try {
+        await idbSet('last', p.dir ? { handle: p.handle, dir: p.dir } : p.handle);
+      } catch {
+        /* recents already know this file */
+      }
+      return true;
+    } catch (e) {
+      console.warn('Reconnect failed', e);
       return false;
     }
   }
