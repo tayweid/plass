@@ -393,7 +393,7 @@ function showHelp(fm: FileManager) {
     <div class="bib-editor help-panel" role="dialog" aria-label="Markdown and shortcuts">
       <div class="bib-editor-head"><span>Markdown &amp; shortcuts</span></div>
       <div class="help-grid">
-        <code># ## ###</code><span>headings (⌘⌥1–3)</span>
+        <code># ## ###</code><span>headings (⌘⌥1–3 · ⌘⌥0 back to text)</span>
         <code>**bold** *italic* \`code\`</code><span>inline styles (⌘B / ⌘I / ⌘\`)</span>
         <code>- item · 1. item</code><span>lists (Tab / ⇧Tab to nest)</span>
         <code>&gt; quote · \`\`\`</code><span>block quote · code block</span>
