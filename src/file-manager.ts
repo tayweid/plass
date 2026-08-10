@@ -186,8 +186,9 @@ export class FileManager {
         return 'loaded';
       }
     }
-    // The current document moves in.
-    const fileName = `${this.name === 'Untitled' ? 'paper' : this.name}.typ`;
+    // The current document moves in, keeping its shown name — an unsaved
+    // doc labeled Untitled becomes Untitled.typ, matching the tab.
+    const fileName = `${this.name}.typ`;
     if (intent === 'save') {
       let exists = false;
       try {
