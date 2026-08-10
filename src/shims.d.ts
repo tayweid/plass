@@ -54,3 +54,9 @@ interface FileSystemDirectoryHandle {
   values(): AsyncIterableIterator<FileSystemFileHandle | FileSystemDirectoryHandle>;
   resolve(handle: FileSystemHandle): Promise<string[] | null>;
 }
+
+declare module 'markdown-it-footnote' {
+  import type MarkdownIt from 'markdown-it';
+  const plugin: (md: MarkdownIt) => void;
+  export default plugin;
+}

@@ -39,7 +39,10 @@ export interface RecentEntry {
 
 const TYP_TYPE: FilePickerType[] = [
   { description: 'Typst document', accept: { 'text/plain': ['.typ'] } },
+  { description: 'Markdown document', accept: { 'text/markdown': ['.md'] } },
 ];
+
+const isMd = (name: string) => /\.md$/i.test(name);
 
 export class FileManager {
   handle: FileSystemFileHandle | null = null;
@@ -85,8 +88,21 @@ export class FileManager {
 
   private async write(handle: FileSystemFileHandle) {
     const w = await handle.createWritable();
-    await w.write(docToTyp(this.hooks.getDoc()));
+    await w.write(await this.serialize(handle.name));
     await w.close();
+  }
+
+  /** The on-disk text for the current doc in the handle's format. */
+  private async serialize(fileName: string): Promise<string> {
+    if (isMd(fileName)) {
+      const { docToMd } = await import('./md-serializer');
+      const warned = new Set<string>();
+      const text = docToMd(this.hooks.getDoc(), (m) => warned.add(m));
+      // Lossy-save notices, once per distinct message per save.
+      for (const m of warned) this.hooks.message(m);
+      return text;
+    }
+    return docToTyp(this.hooks.getDoc());
   }
 
   /** Start a fresh unsaved document (empty, or the given content e.g. the demo). */
@@ -116,10 +132,12 @@ export class FileManager {
   async loadHandle(handle: FileSystemFileHandle, dir: FileSystemDirectoryHandle | null = null) {
     const file = await handle.getFile();
     const text = await file.text();
-    const { doc, warnings } = typToDoc(text);
+    const { doc, warnings } = isMd(file.name)
+      ? (await import('./md-parser')).mdToDoc(text)
+      : typToDoc(text);
     this.handle = handle;
     this.dir = dir;
-    this.name = file.name.replace(/\.typ$/i, '');
+    this.name = file.name.replace(/\.(typ|md)$/i, '');
     this.dirty = false;
     this.hooks.setDoc(doc);
     this.hooks.onState();
@@ -173,7 +191,7 @@ export class FileManager {
     if (intent === 'open') {
       let best: { handle: FileSystemFileHandle; time: number } | null = null;
       for await (const entry of dir.values()) {
-        if (entry.kind === 'file' && /\.typ$/i.test(entry.name)) {
+        if (entry.kind === 'file' && /\.(typ|md)$/i.test(entry.name)) {
           const f = await (entry as FileSystemFileHandle).getFile();
           if (!best || f.lastModified > best.time) best = { handle: entry as FileSystemFileHandle, time: f.lastModified };
         }
@@ -391,7 +409,7 @@ export class FileManager {
       // user gesture. Take on the file's identity NOW (the restored
       // session doc is its content) and finish on the first interaction.
       this.pendingRestore = { handle, dir };
-      this.name = handle.name.replace(/\.typ$/i, '');
+      this.name = handle.name.replace(/\.(typ|md)$/i, '');
       this.dirty = true;
       this.hooks.onState();
       const attempt = () => {
@@ -422,8 +440,8 @@ export class FileManager {
       const diskText = await file.text();
       this.handle = p.handle;
       this.dir = p.dir;
-      this.name = file.name.replace(/\.typ$/i, '');
-      if (docToTyp(this.hooks.getDoc()) !== diskText) {
+      this.name = file.name.replace(/\.(typ|md)$/i, '');
+      if ((await this.serialize(file.name)) !== diskText) {
         // The session doc is newer (the reload interrupted an autosave):
         // bring the file up to date rather than clobbering the screen.
         await this.write(p.handle);
@@ -469,11 +487,13 @@ export class FileManager {
   private openViaInput() {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.typ,text/plain';
+    input.accept = '.typ,.md,text/plain,text/markdown';
     input.addEventListener('change', async () => {
       const file = input.files?.[0];
       if (!file) return;
-      const { doc, warnings } = typToDoc(await file.text());
+      const { doc, warnings } = isMd(file.name)
+        ? (await import('./md-parser')).mdToDoc(await file.text())
+        : typToDoc(await file.text());
       this.handle = null; // no write access in fallback mode
       this.name = file.name.replace(/\.typ$/i, '');
       this.dirty = false;
