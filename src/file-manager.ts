@@ -37,9 +37,15 @@ export interface RecentEntry {
   dir?: FileSystemDirectoryHandle;
 }
 
+// ONE picker type covering both formats: multiple entries become an
+// either/or filter dropdown in Chrome's dialog (defaulting to the first,
+// which greys the other format out); a single entry keeps .typ and .md
+// selectable together.
 const TYP_TYPE: FilePickerType[] = [
-  { description: 'Typst document', accept: { 'text/plain': ['.typ'] } },
-  { description: 'Markdown document', accept: { 'text/markdown': ['.md'] } },
+  {
+    description: 'Typeset documents (.typ, .md)',
+    accept: { 'text/plain': ['.typ'], 'text/markdown': ['.md'] },
+  },
 ];
 
 const isMd = (name: string) => /\.md$/i.test(name);
