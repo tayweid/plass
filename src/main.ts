@@ -256,8 +256,11 @@ toolbar.update(view.state);
 toolbar.setFile(fileManager.name, fileManager.dirty);
 applySettings(view.state);
 
-// Reconnect to the last open file if the browser still grants access.
-void fileManager.restoreLast();
+// Reconnect to the last open file if the browser still grants access —
+// primary tab only: the IDB handle is shared across tabs, and a "New"
+// window (or a reloaded secondary) must keep its own document instead of
+// having the last-opened file load over it.
+if (primaryTab) void fileManager.restoreLast();
 
 // App-level shortcuts (the browser's defaults would take over otherwise).
 window.addEventListener(
