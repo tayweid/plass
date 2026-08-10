@@ -1,7 +1,8 @@
-// Hover controls for headings: a small pill in the left page margin beside
-// the heading under the mouse — H1 · H2 · H3 · ¶ — one click changes the
-// level or demotes back to a paragraph. Presentation-only chrome: it reads
-// the document, dispatches one setBlockType transaction, and never touches
+// Hover controls for text blocks: a small pill in the left page margin
+// beside the heading OR top-level paragraph under the mouse — H1 · H2 ·
+// H3 · ¶ — one click sets the level, demotes to a paragraph, or promotes
+// a paragraph to a heading. Presentation-only chrome: it reads the
+// document, dispatches one setBlockType transaction, and never touches
 // the DOM the editor owns.
 
 import type { EditorView } from 'prosemirror-view';
@@ -34,10 +35,11 @@ export function installHeadingPill(view: EditorView) {
       if (pos < 0) return;
       const $pos = view.state.doc.resolve(pos);
       const node = $pos.parent;
-      if (node.type !== schema.nodes.heading) return;
+      const isHeading = node.type === schema.nodes.heading;
+      if (!isHeading && node.type !== schema.nodes.paragraph) return;
       const from = $pos.start();
       const tr = opt.level
-        ? view.state.tr.setBlockType(from, from, schema.nodes.heading, { ...node.attrs, level: opt.level })
+        ? view.state.tr.setBlockType(from, from, schema.nodes.heading, isHeading ? { ...node.attrs, level: opt.level } : { level: opt.level })
         : view.state.tr.setBlockType(from, from, schema.nodes.paragraph);
       view.dispatch(tr);
       hide();
@@ -60,10 +62,19 @@ export function installHeadingPill(view: EditorView) {
   const showFor = (el: HTMLElement) => {
     clearTimeout(hideTimer);
     if (target === el && !pill.hidden) return;
-    target = el;
     const pos = view.posAtDOM(el, 0);
-    const level = pos >= 0 ? (view.state.doc.resolve(pos).parent.attrs.level as number) : 0;
-    [...pill.children].forEach((b, i) => b.classList.toggle('heading-pill-on', i === level - 1));
+    if (pos < 0) return;
+    const $pos = view.state.doc.resolve(pos);
+    // Headings anywhere; paragraphs only at the top level — captions,
+    // footnote bodies, and table cells keep their margins clean.
+    const isHeading = $pos.parent.type === schema.nodes.heading;
+    if (!isHeading && !($pos.parent.type === schema.nodes.paragraph && $pos.depth === 1)) {
+      if (target) scheduleHide();
+      return;
+    }
+    target = el;
+    const level = isHeading ? ($pos.parent.attrs.level as number) : 0;
+    [...pill.children].forEach((b, i) => b.classList.toggle('heading-pill-on', i === (level ? level - 1 : 3)));
     pill.hidden = false;
     const r = el.getBoundingClientRect();
     const pw = pill.offsetWidth;
@@ -77,7 +88,7 @@ export function installHeadingPill(view: EditorView) {
   };
 
   view.dom.addEventListener('mouseover', (e) => {
-    const h = (e.target as HTMLElement).closest?.('h1, h2, h3');
+    const h = (e.target as HTMLElement).closest?.('h1, h2, h3, p');
     if (h instanceof HTMLElement && view.dom.contains(h)) showFor(h);
     else if (target) scheduleHide();
   });

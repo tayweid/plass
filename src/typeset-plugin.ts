@@ -1462,7 +1462,21 @@ class TypesetView {
         return null;
       }
     }
-    return { spacers, count: Math.max(pageCount, page + 1) };
+    const count = Math.max(pageCount, page + 1);
+    if (stale) {
+      // Held marks must still COVER the document: content past the last
+      // held start that overflows the final page needs a break no mark
+      // describes — holding would break the text but paint no new sheet.
+      // A small dip into the bottom margin is the designed tolerance.
+      const docBottom =
+        view.dom.getBoundingClientRect().bottom - stackTop - TypesetView.spacersAbove(existing, Infinity) + shift;
+      const lastBottom = count * (size.h + PAGE_GAP) - PAGE_GAP - s.marginBottom * 96;
+      if (docBottom > lastBottom + 2 * F * s.lineHeight) {
+        this.pagWhy += ` bail-overflow(${(docBottom - lastBottom).toFixed(0)}px)`;
+        return null;
+      }
+    }
+    return { spacers, count };
   }
 
   /**
