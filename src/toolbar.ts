@@ -230,9 +230,11 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       {
         glyph: icon('new'),
         label: 'New',
-        title: 'New document',
+        title: 'New document — opens in a new window',
         run: () => {
-          if (confirm('Replace the current document with an empty one?')) fm.newDoc();
+          const url = new URL(location.href);
+          url.searchParams.set('new', '1');
+          window.open(url.toString(), '_blank');
         },
       },
       { glyph: icon('open'), label: 'Open', title: 'Open… (⌘O)', run: () => void fm.open() },

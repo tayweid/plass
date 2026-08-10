@@ -21,8 +21,34 @@ import { applySettings, formatPageNumber, getSettings } from './settings';
 import { FileManager } from './file-manager';
 
 const STORAGE_KEY = 'typeset-doc-v1';
+const SESSION_KEY = 'typeset-doc-session';
+
+/** Whether this tab owns the shared localStorage session (the primary
+ *  tab). Windows opened via "New" (?new) keep their unsaved work in
+ *  per-tab sessionStorage instead, so parallel windows never clobber
+ *  each other's autosave. */
+let primaryTab = false;
 
 function loadDoc(): PMNode {
+  // A "New" window starts empty. window.open COPIES the opener's
+  // sessionStorage into the new tab, so the inherited session must be
+  // discarded; stripping ?new afterward lets reloads of this tab restore
+  // its own work through the session branch below.
+  if (new URLSearchParams(location.search).has('new')) {
+    sessionStorage.removeItem(SESSION_KEY);
+    const url = new URL(location.href);
+    url.searchParams.delete('new');
+    window.history.replaceState(null, '', url.toString());
+    return schema.nodes.doc.createAndFill()!;
+  }
+  // A reloaded tab restores its own session first, whichever kind it is.
+  try {
+    const own = sessionStorage.getItem(SESSION_KEY);
+    if (own) return PMNode.fromJSON(schema, JSON.parse(own));
+  } catch (e) {
+    console.warn('Could not restore tab session.', e);
+  }
+  primaryTab = true;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return PMNode.fromJSON(schema, JSON.parse(raw));
@@ -37,7 +63,9 @@ function scheduleSave(view: EditorView) {
   clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(view.state.doc.toJSON()));
+      const json = JSON.stringify(view.state.doc.toJSON());
+      sessionStorage.setItem(SESSION_KEY, json);
+      if (primaryTab) localStorage.setItem(STORAGE_KEY, json);
     } catch (e) {
       console.warn('Autosave failed.', e);
     }
