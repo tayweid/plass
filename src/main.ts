@@ -22,11 +22,15 @@ import { FileManager } from './file-manager';
 
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
+const SECONDARY_KEY = 'typeset-secondary-tab';
 
-/** Whether this tab owns the shared localStorage session (the primary
- *  tab). Windows opened via "New" (?new) keep their unsaved work in
- *  per-tab sessionStorage instead, so parallel windows never clobber
- *  each other's autosave. */
+/** Whether this tab owns the shared localStorage session and the
+ *  last-file reconnect (the primary tab). Windows opened via "New"
+ *  (?new) are marked secondary FOR THEIR LIFETIME — their unsaved work
+ *  lives in per-tab sessionStorage, so parallel windows never clobber
+ *  each other's autosave or steal the primary's file handle. The mark is
+ *  a per-tab fact, persisted in sessionStorage: a reloaded primary that
+ *  restores its own session must STAY primary. */
 let primaryTab = false;
 
 function loadDoc(): PMNode {
@@ -36,11 +40,13 @@ function loadDoc(): PMNode {
   // its own work through the session branch below.
   if (new URLSearchParams(location.search).has('new')) {
     sessionStorage.removeItem(SESSION_KEY);
+    sessionStorage.setItem(SECONDARY_KEY, '1');
     const url = new URL(location.href);
     url.searchParams.delete('new');
     window.history.replaceState(null, '', url.toString());
     return schema.nodes.doc.createAndFill()!;
   }
+  primaryTab = sessionStorage.getItem(SECONDARY_KEY) !== '1';
   // A reloaded tab restores its own session first, whichever kind it is.
   try {
     const own = sessionStorage.getItem(SESSION_KEY);
@@ -48,7 +54,6 @@ function loadDoc(): PMNode {
   } catch (e) {
     console.warn('Could not restore tab session.', e);
   }
-  primaryTab = true;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return PMNode.fromJSON(schema, JSON.parse(raw));
