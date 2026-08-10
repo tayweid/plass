@@ -68,8 +68,11 @@ export function buildInputRules(): Plugin {
     textblockTypeInputRule(/^```$/, schema.nodes.code_block),
     // marks
     markInputRule(/\*\*([^*]+)\*\*$/, schema.marks.strong),
-    markInputRule(/(^|[^*])\*([^*\s][^*]*)\*$/, schema.marks.em, 2),
-    markInputRule(/(^|[^_])_([^_\s][^_]*)_$/, schema.marks.em, 2),
+    // Emphasis openers must sit at a word boundary: an intra-word _ or *
+    // (A_C subscripts, a* optimal values) never opens italics — otherwise
+    // a later closing character italicizes everything since.
+    markInputRule(/(^|[^\w*])\*([^*\s][^*]*)\*$/, schema.marks.em, 2),
+    markInputRule(/(^|[^\w_])_([^_\s][^_]*)_$/, schema.marks.em, 2),
     markInputRule(/`([^`]+)`$/, schema.marks.code),
     // math
     mathInlineRule,
