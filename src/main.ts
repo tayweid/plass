@@ -19,6 +19,7 @@ import { BibliographyView, citationsPlugin } from './citations';
 import { refAutocomplete } from './ref-autocomplete';
 import { applySettings, formatPageNumber, getSettings } from './settings';
 import { FileManager } from './file-manager';
+import { installHeadingPill } from './heading-pill';
 
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
@@ -255,6 +256,8 @@ void import('./pdf').then(({ setAssetReader }) =>
 toolbar.update(view.state);
 toolbar.setFile(fileManager.name, fileManager.dirty);
 applySettings(view.state);
+
+installHeadingPill(view);
 
 // Reconnect to the last open file if the browser still grants access —
 // primary tab only: the IDB handle is shared across tabs, and a "New"
