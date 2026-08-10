@@ -4,6 +4,7 @@
 // only dropdown is Recents, which is inherently a dynamic list.
 
 import { TextSelection } from 'prosemirror-state';
+import { setBlockType } from 'prosemirror-commands';
 import type { Command, EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { schema } from './schema';
@@ -107,7 +108,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   });
 
   // Two capsules: the title, and one tools pill of pipe-separated groups.
-  let currentPod: HTMLElement;
+  let currentPod!: HTMLElement;
   let toolsPill: HTMLElement | null = null;
   const pod = () => {
     currentPod = document.createElement('div');
@@ -306,6 +307,68 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     dispatch(tr.scrollIntoView());
     view.focus();
   });
+  // Block-format cycler: the trigger shows the NEXT step in the caret
+  // block's H1 -> H2 -> H3 -> paragraph progression and clicking applies
+  // it; hovering fans out all four, aligned so the next step's option
+  // sits exactly over the trigger (the flyout re-centers as the
+  // progression advances).
+  const blockCycle = (() => {
+    const wrap = document.createElement('span');
+    wrap.className = 'tb-flyout-wrap';
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'tb-btn';
+    trigger.innerHTML = '<span class="ico tico">H1</span><span class="lbl">Format</span>';
+    const tico = trigger.querySelector('.tico') as HTMLElement;
+    trigger.addEventListener('mousedown', (e) => e.preventDefault());
+    wrap.appendChild(trigger);
+    const fly = document.createElement('span');
+    fly.className = 'tb-flyout tb-flyout-dyn';
+    const LEVELS: Array<{ label: string; title: string; level: number | null }> = [
+      { label: 'H1', title: 'Heading 1 (⌘⌥1)', level: 1 },
+      { label: 'H2', title: 'Heading 2 (⌘⌥2)', level: 2 },
+      { label: 'H3', title: 'Heading 3 (⌘⌥3)', level: 3 },
+      { label: '¶', title: 'Body text (⌘⌥0)', level: null },
+    ];
+    const apply = (level: number | null) => {
+      const cmd = level ? setBlockType(schema.nodes.heading, { level }) : setBlockType(schema.nodes.paragraph);
+      cmd(view.state, view.dispatch);
+      view.focus();
+    };
+    const items: HTMLButtonElement[] = [];
+    for (const it of LEVELS) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tb-btn';
+      b.title = it.title;
+      b.innerHTML = `<span class="ico tico">${it.label}</span>`;
+      b.addEventListener('mousedown', (e) => e.preventDefault());
+      b.addEventListener('click', () => apply(it.level));
+      fly.appendChild(b);
+      items.push(b);
+    }
+    wrap.appendChild(fly);
+    currentPod.appendChild(wrap);
+
+    const current = (state: EditorState): number | null => {
+      const { $from } = state.selection;
+      if ($from.depth < 1) return null;
+      const node = $from.node(1);
+      return node.type === schema.nodes.heading ? (node.attrs.level as number) : null;
+    };
+    const next = (cur: number | null): number | null => (cur === null ? 1 : cur === 3 ? null : cur + 1);
+    const refresh = (state: EditorState) => {
+      const cur = current(state);
+      const nx = next(cur);
+      tico.textContent = nx ? `H${nx}` : '¶';
+      trigger.title = nx ? `Make this block Heading ${nx}` : 'Back to body text';
+      items.forEach((b, i) => b.classList.toggle('tb-flyout-cur', i === (cur ? cur - 1 : 3)));
+      const b = items[nx ? nx - 1 : 3];
+      fly.style.left = `${wrap.offsetWidth / 2 - (b.offsetLeft + b.offsetWidth / 2)}px`;
+    };
+    trigger.addEventListener('click', () => apply(next(current(view.state))));
+    return { refresh };
+  })();
   barBtn(icon('image'), 'Figure', 'Insert figure (⌘⌥I) — or paste/drop an image', runCmd(insertFigureCmd));
   barBtn(icon('table'), 'Table', 'Insert table (⌘⌥T)', () => insertTableWithEditor(view));
   barBtn('<span class="ico tico">Σ</span>', 'Math', 'Inline math (⌘M) — or type $x^2$; ⌘⇧M for display', runCmd(insertMath(false)));
@@ -365,7 +428,9 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   }
 
   return {
-    update() {},
+    update(state) {
+      blockCycle.refresh(state);
+    },
     stats() {},
     setFile(name, dirty) {
       const unsaved = !fm.saved || dirty;
