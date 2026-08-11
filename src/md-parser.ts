@@ -2,7 +2,7 @@
 //
 // Built on markdown-it (the reference CommonMark+GFM tokenizer) rather than
 // a hand-rolled parser: arbitrary markdown from collaborators is edge-case
-// country. Everything Typeset-specific happens around the tokenizer:
+// country. Everything Plass-specific happens around the tokenizer:
 //
 //   - math is extracted BEFORE tokenization ($x$ and $$ blocks would be
 //     mangled by emphasis rules) and restored from sentinels afterward
@@ -63,14 +63,14 @@ export function mdToDoc(src: string): MdImport {
         if (key === 'title') title = value;
         else if (key === 'author' || key === 'authors') authors = value;
         else if (key === 'date') date = value;
-        else if (key === 'typeset') {
+        else if (key === 'plass' || key === 'typeset') {
           try {
             settings = normalizeSettings(JSON.parse(m[2].trim()) as Partial<DocSettings>);
           } catch {
-            warnings.push('frontmatter typeset: settings could not be parsed');
+            warnings.push('frontmatter plass: settings could not be parsed');
           }
         } else if (value) {
-          warnings.push(`frontmatter "${key}" has no Typeset equivalent — dropped`);
+          warnings.push(`frontmatter "${key}" has no Plass equivalent — dropped`);
         }
       }
       src = src.slice(end + 5);
@@ -272,7 +272,7 @@ export function mdToDoc(src: string): MdImport {
       switch (t.type) {
         case 'heading_open': {
           const level = Math.min(3, +t.tag.slice(1));
-          if (+t.tag.slice(1) > 3) warnings.push(`h${t.tag.slice(1)} demoted to h3 (Typeset has three levels)`);
+          if (+t.tag.slice(1) > 3) warnings.push(`h${t.tag.slice(1)} demoted to h3 (Plass has three levels)`);
           const inline = tokens[i + 1];
           nodes.push(heading.create({ level }, parseInline(inline?.children ?? [])));
           i += 3;

@@ -283,7 +283,7 @@ function blockToTex(node: PMNode, s: DocSettings): string {
     case 'code_block': {
       if ((node.attrs.params as string) === 'typst-raw') {
         const lines = node.textContent.split('\n').map((l) => '% ' + l);
-        return `% [Typeset] raw Typst block with no LaTeX equivalent:\n${lines.join('\n')}\n\n`;
+        return `% [Plass] raw Typst block with no LaTeX equivalent:\n${lines.join('\n')}\n\n`;
       }
       return `\\begin{verbatim}\n${node.textContent}\n\\end{verbatim}\n\n`;
     }
@@ -342,7 +342,7 @@ export function docToTex(doc: PMNode): string {
   });
   const bib = doc.attrs?.bib as { name: string; content: string } | null;
 
-  let out = '% Exported from Typeset (semantic export: content and structure,\n';
+  let out = '% Exported from Plass (semantic export: content and structure,\n';
   out += '% not layout — your journal template does the formatting).\n';
   if (bib?.content) {
     out += `\\begin{filecontents*}[overwrite]{refs.bib}\n${bib.content.trim()}\n\\end{filecontents*}\n\n`;
@@ -376,7 +376,7 @@ export function docToTex(doc: PMNode): string {
   if (dataUrlNote) {
     out =
       '% NOTE: this document contains pasted (embedded) images. Save the\n' +
-      '% paper as a project folder in Typeset so figures become real files,\n' +
+      '% paper as a project folder in Plass so figures become real files,\n' +
       '% then re-export; embedded-image.png below is a placeholder name.\n' + out;
   }
   return out;

@@ -43,7 +43,7 @@ export interface RecentEntry {
 // selectable together.
 const TYP_TYPE: FilePickerType[] = [
   {
-    description: 'Typeset documents (.typ, .md)',
+    description: 'Plass documents (.typ, .md)',
     accept: { 'text/plain': ['.typ'], 'text/markdown': ['.md'] },
   },
 ];

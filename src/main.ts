@@ -244,7 +244,7 @@ const fileManager = new FileManager({
   },
   onState() {
     toolbar?.setFile(fileManager.name, fileManager.dirty);
-    document.title = `${fileManager.name}${fileManager.dirty ? ' •' : ''} - Typeset`;
+    document.title = `${fileManager.name}${fileManager.dirty ? ' •' : ''} - Plass`;
   },
   message: showMessage,
   messageAction: showMessage,

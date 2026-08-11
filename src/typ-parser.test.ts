@@ -268,7 +268,7 @@ function firstDiff(a: string, b: string): string {
 // --- 12. polish bundle: page numbering, sections, macros, heading labels ---
 {
   const src = [
-    '// Exported from Typeset',
+    '// Exported from Plass',
     '#set page(paper: "us-letter", margin: 1.25in, numbering: "— 1 —", number-align: right)',
     '#set par(justify: true)',
     '#set text(size: 12.5pt, font: "New Computer Modern", hyphenate: true)',

@@ -1,4 +1,7 @@
-# Typeset
+# Plass
+
+> Named for Michael F. Plass, co-author of the Knuth–Plass line-breaking
+> algorithm that runs live under every paragraph here.
 
 **A true WYSIWYG editor with publication-quality typesetting.** You write in a
 clean, Typora-style surface; what you see is — at all times, live — a document

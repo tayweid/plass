@@ -1,11 +1,11 @@
 // PM doc -> Markdown (.md save path).
 //
 // The mirror of md-parser: standard CommonMark+GFM wherever the model maps
-// (which is most of it — the typing syntax IS markdown), and the Typeset
+// (which is most of it — the typing syntax IS markdown), and the Plass
 // escape hatches where it doesn't:
 //
 //   - document settings that differ from defaults ride in YAML frontmatter
-//     as a `typeset:` JSON object; title/author/date as standard keys
+//     as a `plass:` JSON object; title/author/date as standard keys
 //   - raw-Typst islands stay ```typst fences; the embedded bibliography
 //     becomes a ```bibtex fence at the end
 //   - display math keeps its label as `$$ {#eq:name}`, citations are
@@ -35,7 +35,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
     for (const key of Object.keys(DEFAULT_SETTINGS) as Array<keyof DocSettings>) {
       if (JSON.stringify(s[key]) !== JSON.stringify(DEFAULT_SETTINGS[key])) diff[key] = s[key];
     }
-    if (Object.keys(diff).length) fm.push(`typeset: ${JSON.stringify(diff)}`);
+    if (Object.keys(diff).length) fm.push(`plass: ${JSON.stringify(diff)}`);
     if (fm.length) out.push(`---\n${fm.join('\n')}\n---`);
   }
 

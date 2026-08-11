@@ -497,7 +497,7 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
   try {
     const s: DocSettings = normalizeSettings(doc.attrs?.settings as Partial<DocSettings> | null);
     docMacros = parseMathMacros(s.mathMacros);
-    let out = '// Exported from Typeset\n';
+    let out = '// Exported from Plass\n';
     const paperName = { letter: 'us-letter', a4: 'a4', legal: 'us-legal', b5: 'iso-b5' }[s.page] ?? 'us-letter';
     const uniform = s.marginTop === s.marginRight && s.marginTop === s.marginBottom && s.marginTop === s.marginLeft;
     const marginArg = uniform

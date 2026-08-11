@@ -82,7 +82,7 @@ function demoTable(): PMNode {
 
 export function demoDoc(): PMNode {
   return schema.nodes.doc.create({ bib: { name: 'references.bib', content: DEMO_BIB } }, [
-    h(1, 'Typeset'),
+    h(1, 'Plass'),
     p(
       { text: 'What you are reading is being typeset right now, as you edit it. ', marks: [] },
       'Every line break in this document was chosen by the ',
