@@ -13,7 +13,7 @@ function check(name: string, ok: boolean, detail = '') {
 const SRC = `---
 title: "Voting Notes"
 author: "Taylor J. Weidman"
-typeset: {"sizePt":12.5}
+keywords: "voting, econ"
 ---
 
 # Introduction
@@ -76,7 +76,7 @@ check('display math with label', (() => {
   });
   return ok;
 })());
-check('settings from frontmatter', (doc.attrs.settings as { sizePt: number }).sizePt === 12.5);
+check('unknown frontmatter reported', first.warnings.some((w) => /keywords/.test(w)), JSON.stringify(first.warnings));
 check('bib captured', /arrow1950/.test((doc.attrs.bib as { content: string })?.content ?? ''));
 check('inline pieces', (() => {
   let cite = false, ref = false, math = false, fn = false, link = false;

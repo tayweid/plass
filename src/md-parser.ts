@@ -10,9 +10,8 @@
 //   - ```typst fences become raw-Typst islands (the same never-destroy
 //     policy as the Typst importer), ```bibtex becomes the document's
 //     embedded bibliography
-//   - YAML frontmatter carries title/author/date and a `typeset:` JSON
-//     object with document settings — unknown keys are reported, not
-//     silently eaten
+//   - YAML frontmatter carries the standard title/author/date keys and
+//     nothing app-specific — unknown keys are reported, not silently eaten
 //
 // Anything markdown expresses that the model can't (strikethrough, inline
 // HTML) degrades to plain text with a warning.
@@ -21,7 +20,7 @@ import MarkdownIt from 'markdown-it';
 import footnotePlugin from 'markdown-it-footnote';
 import type { Node as PMNode, Mark } from 'prosemirror-model';
 import { schema } from './schema';
-import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings } from './settings';
+import { DEFAULT_SETTINGS, type DocSettings } from './settings';
 
 export interface MdImport {
   doc: PMNode;
@@ -48,7 +47,7 @@ export function mdToDoc(src: string): MdImport {
   src = src.replace(/\r\n?/g, '\n');
 
   // ---------- frontmatter ----------
-  let settings: DocSettings = { ...DEFAULT_SETTINGS };
+  const settings: DocSettings = { ...DEFAULT_SETTINGS };
   let title: string | null = null;
   let authors: string | null = null;
   let date: string | null = null;
@@ -63,13 +62,7 @@ export function mdToDoc(src: string): MdImport {
         if (key === 'title') title = value;
         else if (key === 'author' || key === 'authors') authors = value;
         else if (key === 'date') date = value;
-        else if (key === 'plass' || key === 'typeset') {
-          try {
-            settings = normalizeSettings(JSON.parse(m[2].trim()) as Partial<DocSettings>);
-          } catch {
-            warnings.push('frontmatter plass: settings could not be parsed');
-          }
-        } else if (value) {
+        else if (value) {
           warnings.push(`frontmatter "${key}" has no Plass equivalent — dropped`);
         }
       }

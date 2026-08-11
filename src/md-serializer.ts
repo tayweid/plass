@@ -4,8 +4,8 @@
 // (which is most of it — the typing syntax IS markdown), and the Plass
 // escape hatches where it doesn't:
 //
-//   - document settings that differ from defaults ride in YAML frontmatter
-//     as a `plass:` JSON object; title/author/date as standard keys
+//   - only the standard title/author/date keys ride in YAML frontmatter;
+//     document settings are .typ territory (saving warns when non-default)
 //   - raw-Typst islands stay ```typst fences; the embedded bibliography
 //     becomes a ```bibtex fence at the end
 //   - display math keeps its label as `$$ {#eq:name}`, citations are
@@ -30,12 +30,12 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
       if (n.type.name === 'doc_authors' && n.textContent) fm.push(`author: "${n.textContent.replace(/"/g, '\\"')}"`);
       if (n.type.name === 'doc_date' && n.textContent) fm.push(`date: "${n.textContent.replace(/"/g, '\\"')}"`);
     });
+    // Markdown stays pure markdown: no app-branded metadata. Settings
+    // live in .typ; saying so beats smuggling them into frontmatter.
     const s = doc.attrs.settings as DocSettings;
-    const diff: Record<string, unknown> = {};
-    for (const key of Object.keys(DEFAULT_SETTINGS) as Array<keyof DocSettings>) {
-      if (JSON.stringify(s[key]) !== JSON.stringify(DEFAULT_SETTINGS[key])) diff[key] = s[key];
+    if (JSON.stringify(s) !== JSON.stringify(DEFAULT_SETTINGS)) {
+      warn('document settings (page, font, numbering) are not stored in Markdown — save as .typ to keep them');
     }
-    if (Object.keys(diff).length) fm.push(`plass: ${JSON.stringify(diff)}`);
     if (fm.length) out.push(`---\n${fm.join('\n')}\n---`);
   }
 
