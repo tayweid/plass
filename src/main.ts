@@ -218,14 +218,6 @@ window.addEventListener('vite:preloadError', () => {
   location.reload();
 });
 
-// OS file-handler launches (installed PWA, Finder double-click): handles
-// arrive through the launch queue. App windows start on an empty sheet
-// (see loadDoc), so a launched file renders into blank space — nothing
-// else ever paints first.
-window.launchQueue?.setConsumer((params) => {
-  if (params.files.length) openLaunched(params.files);
-});
-
 const view = new EditorView(editorEl, {
   state: makeState(loadDoc(), onStats),
   nodeViews: {
@@ -313,6 +305,18 @@ function openLaunched(files: ReadonlyArray<FileSystemFileHandle>) {
     showMessage(`Could not open ${file.name} — try double-clicking it again`);
   });
 }
+
+// OS file-handler launches (installed PWA, Finder double-click): handles
+// arrive through the launch queue. Registered only now, near the end of
+// boot: Chrome delivers already-queued launch files SYNCHRONOUSLY inside
+// setConsumer — and reports (not propagates) consumer exceptions — so a
+// consumer registered before fileManager/view exist throws a swallowed
+// TDZ error and the launch is silently lost. Everything the handler
+// touches must already be live. App windows start on an empty sheet (see
+// loadDoc), so the launched file renders into blank space.
+window.launchQueue?.setConsumer((params) => {
+  if (params.files.length) openLaunched(params.files);
+});
 
 // Reconnect to the last open file if the browser still grants access —
 // primary tab only: the IDB handle is shared across tabs, and a "New"
