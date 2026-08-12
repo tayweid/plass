@@ -209,6 +209,15 @@ function onStats(s: TypesetStats) {
   updateStatus();
 }
 
+// Each deploy replaces the hashed chunk files, so a page cached across a
+// deploy can 404 its lazy imports (the .md parser is one). Reload once to
+// pick up the coherent new build instead of failing the import.
+window.addEventListener('vite:preloadError', () => {
+  if (sessionStorage.getItem('typeset-reloaded-for-update')) return;
+  sessionStorage.setItem('typeset-reloaded-for-update', '1');
+  location.reload();
+});
+
 // OS file-handler launches (installed PWA, Finder double-click): handles
 // arrive through the launch queue. App windows start on an empty sheet
 // (see loadDoc), so a launched file renders into blank space — nothing
@@ -298,6 +307,10 @@ function openLaunched(files: ReadonlyArray<FileSystemFileHandle>) {
         run: () => void fileManager.attachFolder().then((ok) => ok && refreshAssets()),
       });
     }
+  }).catch((e) => {
+    // Never fail a Finder launch into a silent blank window.
+    console.warn('Launched file failed to open', e);
+    showMessage(`Could not open ${file.name} — try double-clicking it again`);
   });
 }
 
