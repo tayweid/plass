@@ -92,6 +92,59 @@ a feature touches the oracle machinery.
 - Hyphenation language selection; justification toggle per document.
 - Heading font pairing (sans headings over serif body).
 
+## Citations
+
+1. **Library bib — external location, merge-on-cite.** A persistent
+   app-level "library" bibliography pointing at an external .bib
+   (Taylor's master: `~/Projects/Literature/literature.bib`, ~400
+   entries, keys = PDF filenames, `lastname_year` / `lastname_etal_year`
+   convention). The @-picker searches doc bib ∪ library; citing a
+   library-only key copies **that one entry** into the document's
+   embedded bib — documents stay self-contained and carry exactly their
+   cited subset. (Rejected alternative: importing the whole master into
+   each document — works today via File → Import bibliography, but
+   embeds a stale 400-entry snapshot per paper.) Storage: file handle
+   persisted in IndexedDB like recents (or ride the project-folder
+   machinery); re-read on change like referenced figures. Flourish once
+   the folder is attached: since keys match PDF filenames in the
+   Literature repo, the picker/references entries can deep-link to the
+   paper's PDF. ~A day; pairs naturally with item 2 (same corner of the
+   codebase).
+
+2. **Citation styles — minimal TS port, oracle-verified.** The
+   line-breaker pattern, not a CSL engine: hand-write per-style
+   formatters in TS and offer ONLY ported styles in a document-settings
+   dropdown. IEEE numeric is the existing first-use counter in
+   `citations.ts`; author-year is ~150–250 lines (BibTeX name parsing —
+   `von` parts, "Last, First" vs "First Last" —, et-al threshold,
+   multi-cite separators, a/b year-suffix disambiguation over the cited
+   set). Decided AGAINST porting hayagriva/CSL interpretation (it's a
+   style-XML interpreter — huge parity surface, a project not a feature)
+   and AGAINST citeproc-js (a *different* CSL interpreter; would
+   disagree with hayagriva in exactly the edge cases that matter).
+   - Wiring: `"ieee"` is currently hardcoded at `typ-serializer.ts:455`
+     and `citations.ts:148` (+ typ-parser test). Style becomes a
+     document setting, emitted as `style: "…"` on `#bibliography` and
+     parsed back on import (round-trip).
+   - Painting unchanged: decoration sets `data-cite-num`, CSS `::after`
+     paints it, `typeset-plugin.ts` (~:707) prices the painted text for
+     the line breaker — only the *source of the string* changes, from
+     the TS counter to the TS formatter.
+   - Verify: `compileInk`'s hidden-citation compile of the References
+     block doubles as the oracle — read the inline citation strings
+     back from the SVG text layer, diff against the TS formatter,
+     per-citation fallback to the oracle's text on mismatch + log
+     (the `__comparePort` discipline). Formatter bugs become invisible
+     corrections that also tell us where the port drifts.
+   - Taylor's house style (from the nbconvert/natbib template):
+     bracketed green-italic author-year — [Sussel (2013); Kaplan et
+     al. (2022)] — citecolor rgb(31,138,28). Export a `#show cite:`
+     rule in the settings header + one line of editor CSS (`.ts-cite`
+     currently paints `--accent`).
+   - 1–2 days full (mostly formatter + tests; oracle plumbing is nearly
+     free). Half-day minimal version: dropdown wired to PDF + References
+     block only, quick TS author-year for the inline marks.
+
 ## Standing backlog
 
 - Raw-Typst-island compiled previews (same pattern as tables/math/bib).
