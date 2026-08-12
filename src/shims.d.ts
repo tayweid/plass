@@ -50,6 +50,20 @@ interface Window {
   showDirectoryPicker?: (opts?: { mode?: 'read' | 'readwrite'; id?: string }) => Promise<FileSystemDirectoryHandle>;
 }
 
+// Launch Queue (PWA File Handling) — Chromium-only, not yet in lib.dom
+interface LaunchParams {
+  readonly files: ReadonlyArray<FileSystemFileHandle>;
+  readonly targetURL?: string;
+}
+
+interface LaunchQueue {
+  setConsumer(consumer: (params: LaunchParams) => void): void;
+}
+
+interface Window {
+  launchQueue?: LaunchQueue;
+}
+
 interface FileSystemDirectoryHandle {
   values(): AsyncIterableIterator<FileSystemFileHandle | FileSystemDirectoryHandle>;
   resolve(handle: FileSystemHandle): Promise<string[] | null>;
