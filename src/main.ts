@@ -33,6 +33,9 @@ const SECONDARY_KEY = 'typeset-secondary-tab';
  *  restores its own session must STAY primary. */
 let primaryTab = false;
 
+/** Installed-app window (Finder launch or Dock open) vs plain browser tab. */
+const standalone = window.matchMedia('(display-mode: standalone)').matches;
+
 function loadDoc(): PMNode {
   // A "New" window starts empty. window.open COPIES the opener's
   // sessionStorage into the new tab, so the inherited session must be
@@ -54,6 +57,12 @@ function loadDoc(): PMNode {
   } catch (e) {
     console.warn('Could not restore tab session.', e);
   }
+  // Beyond its own reload session, an app window starts on a fresh
+  // sheet: restoring another window's localStorage document here is what
+  // flashed the previous file for an instant before a Finder-launched
+  // file loaded over it, and a Dock open reads better empty than resuming
+  // whatever window autosaved last.
+  if (standalone) return schema.nodes.doc.createAndFill()!;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return PMNode.fromJSON(schema, JSON.parse(raw));
@@ -200,6 +209,14 @@ function onStats(s: TypesetStats) {
   updateStatus();
 }
 
+// OS file-handler launches (installed PWA, Finder double-click): handles
+// arrive through the launch queue. App windows start on an empty sheet
+// (see loadDoc), so a launched file renders into blank space — nothing
+// else ever paints first.
+window.launchQueue?.setConsumer((params) => {
+  if (params.files.length) openLaunched(params.files);
+});
+
 const view = new EditorView(editorEl, {
   state: makeState(loadDoc(), onStats),
   nodeViews: {
@@ -261,24 +278,13 @@ toolbar.update(view.state);
 toolbar.setFile(fileManager.name, fileManager.dirty);
 applySettings(view.state);
 
-// Reconnect to the last open file if the browser still grants access —
-// primary tab only: the IDB handle is shared across tabs, and a "New"
-// window (or a reloaded secondary) must keep its own document instead of
-// having the last-opened file load over it.
-if (primaryTab) void fileManager.restoreLast();
-
-// Installed-PWA file launches (Finder double-click / "Open With" on a
-// .typ or .md): the OS delivers handles through the launch queue as soon
-// as a consumer is registered. A launch wins over the session restore
-// above — loadHandle takes the file's identity, and a pending reconnect
-// stays cancelled because completeRestore guards on the live handle. The
-// launch hands over a bare file handle with no directory context, so
-// documents with on-disk figures get a one-click folder grant.
-window.launchQueue?.setConsumer((params) => {
-  const [file] = params.files;
-  if (!file) return;
+/** Open a file-handler launch: the file arrives as a bare handle with no
+ *  directory context, so documents with on-disk figures get a one-click
+ *  folder grant. */
+function openLaunched(files: ReadonlyArray<FileSystemFileHandle>) {
+  const [file] = files;
   void fileManager.loadHandle(file).then(() => {
-    if (params.files.length > 1) {
+    if (files.length > 1) {
       showMessage(`Opened ${file.name} — Plass opens one document at a time`);
     }
     let needsFolder = false;
@@ -293,7 +299,14 @@ window.launchQueue?.setConsumer((params) => {
       });
     }
   });
-});
+}
+
+// Reconnect to the last open file if the browser still grants access —
+// primary tab only: the IDB handle is shared across tabs, and a "New"
+// window (or a reloaded secondary) must keep its own document instead of
+// having the last-opened file load over it. App windows skip this too:
+// they open empty or with the launched file, never someone else's last.
+if (primaryTab && !standalone) void fileManager.restoreLast();
 
 // App-level shortcuts (the browser's defaults would take over otherwise).
 window.addEventListener(
