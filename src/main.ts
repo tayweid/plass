@@ -13,7 +13,7 @@ import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
 import { TablePreviewView } from './table-preview';
 import { equationsPlugin } from './equations';
-import { FigureView, figuresPlugin, migrateEmbeddedFigures, setFigureFileManager, startAssetWatch } from './figures';
+import { FigureView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { refAutocomplete } from './ref-autocomplete';
@@ -266,6 +266,34 @@ applySettings(view.state);
 // window (or a reloaded secondary) must keep its own document instead of
 // having the last-opened file load over it.
 if (primaryTab) void fileManager.restoreLast();
+
+// Installed-PWA file launches (Finder double-click / "Open With" on a
+// .typ or .md): the OS delivers handles through the launch queue as soon
+// as a consumer is registered. A launch wins over the session restore
+// above — loadHandle takes the file's identity, and a pending reconnect
+// stays cancelled because completeRestore guards on the live handle. The
+// launch hands over a bare file handle with no directory context, so
+// documents with on-disk figures get a one-click folder grant.
+window.launchQueue?.setConsumer((params) => {
+  const [file] = params.files;
+  if (!file) return;
+  void fileManager.loadHandle(file).then(() => {
+    if (params.files.length > 1) {
+      showMessage(`Opened ${file.name} — Plass opens one document at a time`);
+    }
+    let needsFolder = false;
+    view.state.doc.descendants((n) => {
+      if (n.type.name === 'figure' && isPathSrc(n.attrs.src as string)) needsFolder = true;
+      return !needsFolder;
+    });
+    if (needsFolder && !fileManager.inFolder) {
+      fileManager.notifyAction(`Figures live next to ${file.name} — grant folder access to load them`, {
+        label: 'Grant folder',
+        run: () => void fileManager.attachFolder().then((ok) => ok && refreshAssets()),
+      });
+    }
+  });
+});
 
 // App-level shortcuts (the browser's defaults would take over otherwise).
 window.addEventListener(

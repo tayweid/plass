@@ -241,6 +241,36 @@ export class FileManager {
     return 'kept';
   }
 
+  /** Attach the containing folder to the already-open file. File-handler
+   *  launches (Finder double-click) deliver a bare file handle with no
+   *  directory context, so relative asset paths can't resolve until the
+   *  user grants the folder. The file must sit at the folder's top level —
+   *  that is the project-root shape the rest of folder mode assumes. */
+  async attachFolder(): Promise<boolean> {
+    if (!this.handle || typeof window.showDirectoryPicker !== 'function') return false;
+    try {
+      const dir = await window.showDirectoryPicker!({ mode: 'readwrite' });
+      const segs = await dir.resolve(this.handle);
+      if (!segs || segs.length !== 1) {
+        this.hooks.message(`That folder doesn't contain ${this.handle.name} at its top level`);
+        return false;
+      }
+      this.dir = dir;
+      this.hooks.onState();
+      this.hooks.message(`Project folder attached — ${dir.name}/${this.handle.name}`);
+      try {
+        await addRecent(this.handle, this.handle.name, dir);
+        await idbSet('last', { handle: this.handle, dir });
+      } catch (e) {
+        console.warn('Could not persist file handle', e);
+      }
+      return true;
+    } catch (e) {
+      if ((e as DOMException)?.name !== 'AbortError') console.warn(e);
+      return false;
+    }
+  }
+
   private async walkTo(path: string): Promise<FileSystemFileHandle | null> {
     if (!this.dir) return null;
     const parts = path.split('/').filter(Boolean);

@@ -7,9 +7,15 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
 
 - `npm run dev -- --port 5199` — dev server (tests assume 5199)
 - `npm test` — node test suites (knuth-plass, typ-parser, md round-trip)
-- `npm run build -- --base=/plass/` — production build for the site;
-  deploy = copy `dist/` over `~/PROJECTS/tayweid.github.io/plass`, commit
-  there; Taylor pushes via GitHub Desktop (no CLI credentials in shell)
+- `npm run build -- --base=/plass/` — production build (CI runs this);
+  deploy = push `main`: `.github/workflows/deploy.yml` builds and
+  publishes to tayweid.github.io/plass via GitHub Pages. Taylor pushes
+  via GitHub Desktop (no CLI credentials in shell).
+- PWA: `public/manifest.webmanifest` registers Plass as a file handler
+  for .typ/.md (installed app = macOS default-app candidate; Finder
+  launches arrive via `launchQueue` in `main.ts`, folderless — the
+  toast offers `attachFolder`). Manifest edits need an app
+  uninstall/reinstall in Chrome to propagate to the OS.
 
 ## Architecture (oracle layout)
 
@@ -56,4 +62,4 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   diagnose, then fix. Verify fixes the same way.
 - Don't break the working editor mid-session: batch edits to files the
   dev server watches; his tab reloads on HMR.
-- After shipping: commit here, rebuild + stage the site repo; he pushes.
+- After shipping: commit here; he pushes (push to main auto-deploys).

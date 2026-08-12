@@ -15,7 +15,7 @@ export function setFigureFileManager(fm: FileManager) {
   fmRef = fm;
 }
 
-const isPathSrc = (src: string) => !!src && !/^(data:|https?:|blob:)/.test(src);
+export const isPathSrc = (src: string) => !!src && !/^(data:|https?:|blob:)/.test(src);
 
 /** path → object URL, keyed by mtime so rewrites refresh. */
 const assetCache = new Map<string, { mtime: number; url: string }>();
@@ -83,6 +83,14 @@ export async function migrateEmbeddedFigures(view: EditorView) {
  * regenerate-the-plot → alt-tab loop updates figures live. Checks on window
  * focus and every few seconds while a project folder is open.
  */
+let assetCheck: (() => void) | null = null;
+
+/** Re-check project assets now (e.g. right after a folder is attached)
+ *  instead of waiting out the watch interval. */
+export function refreshAssets() {
+  assetCheck?.();
+}
+
 export function startAssetWatch(view: EditorView) {
   const check = async () => {
     if (!fmRef?.inFolder) return;
@@ -105,6 +113,7 @@ export function startAssetWatch(view: EditorView) {
   };
   window.addEventListener('focus', () => void check());
   window.setInterval(() => void check(), 4000);
+  assetCheck = () => void check();
 }
 
 export class FigureView implements NodeView {
