@@ -1753,12 +1753,6 @@ body {
   white-space: pre;
 }
 
-@media (prefers-color-scheme: dark) {
-  .bib-editor-text {
-    background: #1d1c1a;
-  }
-}
-
 .bib-editor-text:focus {
   outline: none;
   border-color: var(--accent);
@@ -1970,12 +1964,6 @@ body {
   resize: vertical;
 }
 
-@media (prefers-color-scheme: dark) {
-  .math-editor-input {
-    background: #1d1c1a;
-  }
-}
-
 .math-editor-input:focus {
   outline: none;
   border-color: var(--accent);
@@ -1995,12 +1983,6 @@ body {
 .math-editor-label:focus {
   outline: none;
   border-color: var(--accent);
-}
-
-@media (prefers-color-scheme: dark) {
-  .math-editor-label {
-    background: #1d1c1a;
-  }
 }
 
 .math-editor-labelrow {
