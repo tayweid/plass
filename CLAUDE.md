@@ -33,6 +33,15 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
 - Vertical parity: editor block heights must match Typst's. CSS changes
   must not alter layout heights — paint-only shifts use `transform`;
   math atom advance = ink width exactly (see `makeAtomWidth`).
+- Tables split across pages Typst-natively. `table-split.ts` runs a paged
+  mini-compile of the table (same width, page content height, and a #v
+  offset standing in for content above it) — under identical constraints
+  Typst picks the same split rows, repeated `table.header`s and all. The
+  node view shows the compile's pages as CSS crops of one SVG; the page
+  oracle represents mid-table page starts (unit 'table'), and the forced
+  paginator fails the result if the fragment count disagrees. NOTE: the
+  .typst-page groups' rects are INK extents, not page areas — page
+  boundaries come from i × page-height (the SVG stacks pages gaplessly).
 
 ## Testing gotchas
 
