@@ -1513,7 +1513,15 @@ class TypesetView {
         const pageTopAbs = page * (size.h + PAGE_GAP) + marginTop;
         const offsetPt = Math.max(0, (yTop + shift - pageTopAbs) * 0.75);
         const contentHPx = size.h - marginTop - s.marginBottom * 96;
-        const layout = requestTableSplit(view, node, view.dom.clientWidth || 576, contentHPx * 0.75, offsetPt);
+        // The oracle's line indices are cumulative within the table unit:
+        // their diffs are the exact per-page line counts of the PDF, and
+        // the mini-compile must reproduce them (it nudges its offset until
+        // it does, so the split row IS the PDF's split row).
+        const targetLines: number[] = [];
+        for (let k = psi; k <= last; k++) {
+          targetLines.push(pageStarts[k].line - (k > psi ? pageStarts[k - 1].line : 0));
+        }
+        const layout = requestTableSplit(view, node, view.dom.clientWidth || 576, contentHPx * 0.75, offsetPt, targetLines);
         if (!layout || layout.pushed || layout.fragments.length - 1 !== breaks) return null;
         const gaps: number[] = [];
         let bottomAbs = yTop + shift + layout.fragments[0].heightPx;
