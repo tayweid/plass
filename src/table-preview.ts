@@ -3,42 +3,19 @@
 // the PDF — including #align(center, …)) and nothing else. Clicking opens
 // the table editing card (table-editor.ts), following the math-editor
 // pattern: the document shows the truth, editing happens in a focused UI.
+//
+// A table crossing a page boundary renders as stacked crops of the paged
+// mini-compile's pages (table-split.ts) with the page gap between — the
+// split row, repeated headers, and strokes are Typst's own. The paginator
+// assigns {layout, gaps}; the view only displays them.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { NodeSelection } from 'prosemirror-state';
 import type { EditorView, NodeView } from 'prosemirror-view';
 import { schema } from './schema';
-import { docToTyp } from './typ-serializer';
 import { scheduleTypeset } from './typeset-plugin';
 import { openTableEditor } from './table-editor';
-
-function fragmentSource(view: EditorView, node: PMNode, widthPx: number): string {
-  const doc = schema.nodes.doc.create({ settings: view.state.doc.attrs.settings, bib: null }, [node]);
-  let src = docToTyp(doc);
-  src = src.replace(
-    /#set page\((.*)\)/,
-    `#set page(width: ${(widthPx * 0.75).toFixed(2)}pt, height: auto, margin: 0pt)`,
-  );
-  // Captioned tables are figures: preset the counter so "Table N" matches
-  // this table's position in the document.
-  if ((node.attrs.caption as string) || (node.attrs.label as string)) {
-    let index = 0;
-    let seen = 0;
-    view.state.doc.descendants((n) => {
-      if (n.type.name === 'table') {
-        seen++;
-        if (n === node) index = seen;
-        return false;
-      }
-      return true;
-    });
-    src = src.replace(
-      '\n\n#figure(',
-      `\n\n#counter(figure.where(kind: table)).update(${Math.max(0, index - 1)})\n#figure(`,
-    );
-  }
-  return src;
-}
+import { fragmentSource, getSplit, onSplitsChanged, type TableSplitLayout } from './table-split';
 
 export class TablePreviewView implements NodeView {
   dom: HTMLElement;
@@ -46,6 +23,10 @@ export class TablePreviewView implements NodeView {
   private timer = 0;
   private lastSrc = '';
   private destroyed = false;
+  private unsubscribe: () => void;
+  /** What the preview element currently shows. */
+  private shown: { layout: TableSplitLayout | null; gapsKey: string } = { layout: null, gapsKey: '' };
+  private autoSvg: string | null = null;
 
   constructor(
     private node: PMNode,
@@ -69,6 +50,7 @@ export class TablePreviewView implements NodeView {
       openTableEditor(this.view, pos);
     });
 
+    this.unsubscribe = onSplitsChanged(() => this.render());
     this.sync();
   }
 
@@ -94,16 +76,58 @@ export class TablePreviewView implements NodeView {
       const svg = await compileSvg(src);
       if (this.destroyed || !svg) return;
       this.lastSrc = src;
-      this.previewEl.innerHTML = svg;
+      this.autoSvg = svg;
+      this.shown = { layout: null, gapsKey: '' };
+      this.render(true);
+      scheduleTypeset(this.view);
+    } catch (e) {
+      console.warn('table compile failed', e);
+    }
+  }
+
+  /** Paint the current state: split fragments when assigned, else the
+   *  continuous compile. Cheap when nothing changed. */
+  private render(force = false) {
+    if (this.destroyed || this.autoSvg === null) return;
+    const a = getSplit(this.node);
+    const gapsKey = a ? a.gapsPx.map((g) => Math.round(g)).join(',') : '';
+    if (!force && this.shown.layout === (a?.layout ?? null) && this.shown.gapsKey === gapsKey) return;
+    this.shown = { layout: a?.layout ?? null, gapsKey };
+
+    if (!a || a.layout.fragments.length <= 1) {
+      this.previewEl.innerHTML = this.autoSvg;
       const svgEl = this.previewEl.querySelector('svg');
       if (svgEl) {
         svgEl.style.width = `${(parseFloat(svgEl.getAttribute('width') ?? '0') * 4) / 3}px`;
         svgEl.style.height = 'auto';
       }
-      scheduleTypeset(this.view);
-    } catch (e) {
-      console.warn('table compile failed', e);
+      return;
     }
+
+    const frag = document.createDocumentFragment();
+    a.layout.fragments.forEach((f, i) => {
+      if (i > 0) {
+        const gap = document.createElement('div');
+        gap.className = 'ts-table-pagegap';
+        gap.style.height = `${a.gapsPx[i - 1] ?? 0}px`;
+        frag.appendChild(gap);
+      }
+      const winEl = document.createElement('div');
+      winEl.className = 'ts-table-frag';
+      winEl.style.cssText = `overflow:hidden;height:${f.heightPx}px;`;
+      const inner = document.createElement('div');
+      inner.style.marginTop = `${-f.cropTopPx}px`;
+      inner.innerHTML = a.layout.svg;
+      const svgEl = inner.querySelector('svg');
+      if (svgEl) {
+        svgEl.style.width = `${a.layout.svgWidthPx}px`;
+        svgEl.style.height = 'auto';
+        svgEl.style.display = 'block';
+      }
+      winEl.appendChild(inner);
+      frag.appendChild(winEl);
+    });
+    this.previewEl.replaceChildren(frag);
   }
 
   selectNode() {
@@ -124,6 +148,7 @@ export class TablePreviewView implements NodeView {
 
   destroy() {
     this.destroyed = true;
+    this.unsubscribe();
     clearTimeout(this.timer);
   }
 }

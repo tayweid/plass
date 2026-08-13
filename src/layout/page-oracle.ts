@@ -335,9 +335,11 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
     }
   }
 
-  // Mid-opaque page splits can't be represented (editor blocks are atomic).
+  // Mid-opaque page splits can't be represented (editor blocks are atomic)
+  // — except tables, whose node view renders Typst's own split fragments
+  // (typeset-plugin's forced paginator verifies the break count agrees).
   for (const ps of pageStarts) {
-    if (ps.line > 0 && ps.unit !== 'line') {
+    if (ps.line > 0 && ps.unit !== 'line' && ps.unit !== 'table') {
       return { status: 'fail', reason: `page splits inside atomic block @${ps.pos} (${ps.unit})` };
     }
   }

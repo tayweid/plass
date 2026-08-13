@@ -40,6 +40,7 @@ import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
 import { eqKey } from './equations';
 import { getInk, inkKey } from './math-ink';
+import { applySplit, clearSplit, getSplit, requestTableSplit, splitExtra, type TableSplitLayout } from './table-split';
 
 /** Phase-3 flag (PORT.md): drive live typing with the ported Typst
  * breaker. Console: __usePort(false) to A/B against the legacy path;
@@ -625,6 +626,20 @@ class TypesetView {
     return h;
   }
 
+  /** Applied table-split extras (internal page gaps + repeated headers) as
+   *  pseudo-spacer entries at each table's END — merged with the widget
+   *  spacers when converting measured DOM geometry back to natural, so a
+   *  split table reads as its continuous height to everything below it. */
+  private tableExtras(): Array<{ pos: number; height: number }> {
+    const out: Array<{ pos: number; height: number }> = [];
+    this.view.state.doc.forEach((node, offset) => {
+      if (node.type.name !== 'table') return;
+      const a = getSplit(node);
+      if (a) out.push({ pos: offset + node.nodeSize, height: splitExtra(a) });
+    });
+    return out;
+  }
+
   /** Font size in px (body em). */
   private bodyPx(): number {
     return parseFloat(getComputedStyle(this.view.dom).fontSize) || 16.67;
@@ -1161,10 +1176,12 @@ class TypesetView {
     const host = view.dom.parentElement ?? view.dom;
     const stackTop = host.getBoundingClientRect().top;
     // Measurements run with the current spacers still in the DOM: convert
-    // to NATURAL (continuous) geometry by subtracting the spacers above.
+    // to NATURAL (continuous) geometry by subtracting the spacers above —
+    // and the internal extras of any applied table splits.
     const existing = this.currentSpacers().sorted;
+    const measured = [...existing, ...this.tableExtras()].sort((a, b) => a.pos - b.pos);
     const stackY = (clientTop: number, pos: number) =>
-      clientTop - stackTop - TypesetView.spacersAbove(existing, pos);
+      clientTop - stackTop - TypesetView.spacersAbove(measured, pos);
 
     // Footnote bodies, in document order, consumed as units are placed.
     const fnList: Array<{ pos: number; height: number }> = [];
@@ -1326,6 +1343,62 @@ class TypesetView {
       }
     };
 
+    // Tables: Typst decides. A table crossing the page bottom is handed to
+    // the paged mini-compile (table-split.ts), which reproduces the real
+    // document's constraints — Typst answers with the same split rows,
+    // repeated headers, or a whole-block push it would use in the PDF. The
+    // node view renders the answer; page math advances per fragment.
+    const tableCase = (pos: number, node: PMNode) => {
+      const endPos = pos + node.nodeSize;
+      const r = rectOf(pos);
+      if (!r || r.height === 0) {
+        pageFnH += takeFnH(endPos);
+        return;
+      }
+      const assigned = getSplit(node);
+      const naturalH = assigned ? assigned.naturalPx : r.height;
+      const y = stackY(r.top, pos);
+      const ufH = takeFnH(endPos);
+      if (y + shift + naturalH <= bottomFor(ufH) + 0.5) {
+        if (assigned) clearSplit(node);
+        pageFnH += ufH;
+        return;
+      }
+      const pageTopAbs = page * (size.h + PAGE_GAP) + marginTop;
+      const offsetPt = Math.max(0, (y + shift - pageTopAbs) * 0.75);
+      const fresh = requestTableSplit(view, node, view.dom.clientWidth || 576, contentH * 0.75, offsetPt);
+      // While the compile is in flight, hold the current rendering steady
+      // (stale split, or the plain atomic push) — the answer triggers a
+      // repagination.
+      const layout: TableSplitLayout | null = fresh ?? assigned?.layout ?? null;
+      if (!layout) {
+        if (naturalH <= contentH) breakStart(pos, y);
+        pageFnH += ufH;
+        return;
+      }
+      if (layout.pushed) breakStart(pos, y);
+      if (layout.fragments.length <= 1) {
+        // Whole on one page (unbreakable figure, or it fits after the push).
+        clearSplit(node);
+        if (!layout.pushed && naturalH <= contentH) breakStart(pos, y);
+        pageFnH += ufH;
+        return;
+      }
+      const gaps: number[] = [];
+      let bottomAbs = y + shift + layout.fragments[0].heightPx;
+      for (let i = 1; i < layout.fragments.length; i++) {
+        page++;
+        pageFnH = 0;
+        const top = page * (size.h + PAGE_GAP) + marginTop;
+        gaps.push(top - bottomAbs);
+        bottomAbs = top + layout.fragments[i].heightPx;
+      }
+      applySplit(node, layout, gaps, naturalH);
+      const displayed = layout.fragments.reduce((s2, f) => s2 + f.heightPx, 0) + gaps.reduce((s2, g) => s2 + g, 0);
+      shift += displayed - naturalH;
+      pageFnH += ufH;
+    };
+
     // Lists and blockquotes break between children (whole child moves).
     const container = (pos: number, node: PMNode) => {
       const endPos = pos + node.nodeSize;
@@ -1374,6 +1447,9 @@ class TypesetView {
         case 'blockquote':
           container(offset, node);
           break;
+        case 'table':
+          tableCase(offset, node);
+          break;
         default:
           atomic(offset, node);
           break;
@@ -1405,13 +1481,54 @@ class TypesetView {
     const host = view.dom.parentElement ?? view.dom;
     const stackTop = host.getBoundingClientRect().top;
     const existing = this.currentSpacers().sorted;
+    const measured = [...existing, ...this.tableExtras()].sort((a, b) => a.pos - b.pos);
     const natural = (clientTop: number, pos: number) =>
-      clientTop - stackTop - TypesetView.spacersAbove(existing, pos);
+      clientTop - stackTop - TypesetView.spacersAbove(measured, pos);
 
     const spacers: Spacer[] = [];
     let shift = 0;
     let page = 0;
-    for (const ps of pageStarts) {
+    for (let psi = 0; psi < pageStarts.length; psi++) {
+      const ps = pageStarts[psi];
+      // Page breaks INSIDE a table: rendered by the table view as split
+      // fragments (no spacer widget). The paged mini-compile answers with
+      // Typst's own fragments; the split must agree with the oracle's
+      // break count or the whole result fails (graceful fallback).
+      if (ps.unit === 'table' && ps.line > 0) {
+        const node = view.state.doc.nodeAt(ps.pos);
+        const el = view.nodeDOM(ps.pos);
+        if (!node || node.type.name !== 'table' || !(el instanceof HTMLElement)) return null;
+        let last = psi;
+        while (
+          last + 1 < pageStarts.length &&
+          pageStarts[last + 1].pos === ps.pos &&
+          pageStarts[last + 1].unit === 'table'
+        ) {
+          last++;
+        }
+        const breaks = last - psi + 1;
+        const assigned = getSplit(node);
+        const naturalH = assigned ? assigned.naturalPx : el.getBoundingClientRect().height;
+        const yTop = natural(el.getBoundingClientRect().top, ps.pos);
+        const pageTopAbs = page * (size.h + PAGE_GAP) + marginTop;
+        const offsetPt = Math.max(0, (yTop + shift - pageTopAbs) * 0.75);
+        const contentHPx = size.h - marginTop - s.marginBottom * 96;
+        const layout = requestTableSplit(view, node, view.dom.clientWidth || 576, contentHPx * 0.75, offsetPt);
+        if (!layout || layout.pushed || layout.fragments.length - 1 !== breaks) return null;
+        const gaps: number[] = [];
+        let bottomAbs = yTop + shift + layout.fragments[0].heightPx;
+        for (let k = 1; k < layout.fragments.length; k++) {
+          page++;
+          const top = page * (size.h + PAGE_GAP) + marginTop;
+          gaps.push(top - bottomAbs);
+          bottomAbs = top + layout.fragments[k].heightPx;
+        }
+        applySplit(node, layout, gaps, naturalH);
+        const displayed = layout.fragments.reduce((s2, f) => s2 + f.heightPx, 0) + gaps.reduce((s2, g) => s2 + g, 0);
+        shift += displayed - naturalH;
+        psi = last;
+        continue;
+      }
       page++;
       let pos = ps.pos;
       let y: number;
