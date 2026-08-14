@@ -23,6 +23,10 @@ const FONT_FILES = [
   'LibertinusSerif-Italic.otf',
   'LibertinusSerif-Bold.otf',
   'LibertinusSerif-BoldItalic.otf',
+  'texgyrepagella-regular.otf',
+  'texgyrepagella-italic.otf',
+  'texgyrepagella-bold.otf',
+  'texgyrepagella-bolditalic.otf',
   'NewCMMath-Regular.otf',
   'DejaVuSansMono.ttf',
 ];
