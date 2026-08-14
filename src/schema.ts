@@ -196,10 +196,27 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
   // false) on export; the paginator treats them as atomic).
   .update('paragraph', {
     ...base.spec.nodes.get('paragraph')!,
-    attrs: { keep: { default: false } },
-    parseDOM: [{ tag: 'p', getAttrs: (el: HTMLElement | string) => ({ keep: typeof el !== 'string' && el.getAttribute('data-keep') === '1' }) }],
+    // keep: held together across page breaks. align: null = justified body
+    // text (the default); 'center'/'right' lay out via the browser (like
+    // table cells) — short display lines, not oracle-broken prose.
+    attrs: { keep: { default: false }, align: { default: null } },
+    parseDOM: [
+      {
+        tag: 'p',
+        getAttrs: (el: HTMLElement | string) =>
+          typeof el === 'string'
+            ? { keep: false, align: null }
+            : { keep: el.getAttribute('data-keep') === '1', align: el.getAttribute('data-align') || null },
+      },
+    ],
     toDOM(node) {
-      return node.attrs.keep ? ['p', { 'data-keep': '1', class: 'ts-keep' }, 0] : ['p', 0];
+      const attrs: Record<string, string> = {};
+      if (node.attrs.keep) {
+        attrs['data-keep'] = '1';
+        attrs.class = 'ts-keep';
+      }
+      if (node.attrs.align) attrs['data-align'] = node.attrs.align as string;
+      return ['p', attrs, 0];
     },
   })
   // Headings carry an optional label so they can be @-referenced; the

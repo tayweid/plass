@@ -147,7 +147,11 @@ function extractPages(svg: string, yTolPt: number, pageHPt: number): PagedLine[]
 function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
   const units: Unit[] = [];
   const push = (node: PMNode, pos: number, marker = false) => {
-    if (node.type.name === 'paragraph' && node.content.size) {
+    if (node.type.name === 'paragraph' && node.attrs.align) {
+      // Aligned paragraphs are browser-laid (no line cache): opaque, so a
+      // page can start AT them but a split inside one fails to fallback.
+      units.push({ kind: 'opaque', pos, type: 'paragraph' });
+    } else if (node.type.name === 'paragraph' && node.content.size) {
       const spec = buildSpec(node, resolveAtom);
       units.push(spec ? { kind: 'exact', pos, type: 'paragraph', spec, marker } : { kind: 'opaque', pos, type: 'paragraph' });
     } else if (node.type.name === 'heading') {

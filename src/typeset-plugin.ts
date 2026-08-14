@@ -863,6 +863,9 @@ class TypesetView {
       extra: { firstLineIndent?: number; scale?: number },
       keyTag: string,
     ) => {
+      // Aligned paragraphs keep browser layout (CSS text-align centers or
+      // right-sets each ragged line) — display lines, not justified prose.
+      if (node.type.name === 'paragraph' && node.attrs.align) return;
       const atomWidth = makeAtomWidth(this.view, settings, pos);
 
       // Ask the Typst oracle for this block's authoritative breaks.
