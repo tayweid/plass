@@ -10,11 +10,42 @@
 // would make them uneditable.
 
 import type { Node as PMNode } from 'prosemirror-model';
-import { TextSelection } from 'prosemirror-state';
+import { NodeSelection, Plugin, TextSelection } from 'prosemirror-state';
+import { Decoration, DecorationSet } from 'prosemirror-view';
 import type { EditorView, NodeView } from 'prosemirror-view';
 import { schema } from './schema';
 import { fragmentSource } from './table-split';
 import { scheduleTypeset } from './typeset-plugin';
+
+/** Which island holds the caret — the ONLY thing that decides source vs
+ *  render. Focus can't tell us: the caret moves between blocks without
+ *  ever leaving the editor's contenteditable root, so focus events never
+ *  fire. A selection-driven node decoration tracks it exactly, through
+ *  clicks, arrow keys, undo, and programmatic selection alike. */
+export function rawIslandPlugin(): Plugin {
+  const isRaw = (n: PMNode) => n.type === schema.nodes.code_block && n.attrs.params === 'typst-raw';
+  return new Plugin({
+    props: {
+      decorations(state) {
+        const sel = state.selection;
+        if (sel instanceof NodeSelection && isRaw(sel.node)) {
+          return DecorationSet.create(state.doc, [
+            Decoration.node(sel.from, sel.from + sel.node.nodeSize, { class: 'ts-raw-editing' }),
+          ]);
+        }
+        const { $from } = sel;
+        for (let d = $from.depth; d > 0; d--) {
+          if (isRaw($from.node(d))) {
+            return DecorationSet.create(state.doc, [
+              Decoration.node($from.before(d), $from.after(d), { class: 'ts-raw-editing' }),
+            ]);
+          }
+        }
+        return DecorationSet.empty;
+      },
+    },
+  });
+}
 
 export class CodeBlockView implements NodeView {
   dom: HTMLElement;
@@ -47,24 +78,15 @@ export class CodeBlockView implements NodeView {
     this.dom.appendChild(this.renderEl);
     this.dom.appendChild(this.pre);
 
-    // Click the render → caret into the source, source shown.
+    // Click the render → caret into the source. The plugin's decoration
+    // does the rest (and puts the render back when the caret leaves).
     this.renderEl.addEventListener('mousedown', (e) => {
       e.preventDefault();
       const pos = this.getPos();
       if (pos === undefined) return;
-      this.dom.classList.add('ts-raw-editing');
       const end = pos + this.node.nodeSize - 1;
       this.view.dispatch(this.view.state.tr.setSelection(TextSelection.create(this.view.state.doc, end)));
       this.view.focus();
-      scheduleTypeset(this.view);
-    });
-    // Leaving the block → back to the compiled render.
-    this.dom.addEventListener('focusout', (e) => {
-      if (this.destroyed) return;
-      const to = (e as FocusEvent).relatedTarget;
-      if (to instanceof Node && this.dom.contains(to)) return;
-      this.dom.classList.remove('ts-raw-editing');
-      this.sync();
     });
 
     this.sync();
