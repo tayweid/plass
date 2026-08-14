@@ -44,6 +44,10 @@ const ICONS: Record<string, string> = {
   sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   filedown: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 15 12 18 15 15"/><line x1="12" y1="11" x2="12" y2="18"/>',
+  alignleft: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="14" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/>',
+  aligncenter: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="6.5" y1="12" x2="17.5" y2="12"/><line x1="5" y1="18" x2="19" y2="18"/>',
+  alignright: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="6" y1="18" x2="21" y2="18"/>',
+  code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
 };
 
 function icon(name: string): string {
@@ -369,10 +373,53 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     trigger.addEventListener('click', () => apply(next(current(view.state))));
     return { refresh };
   })();
+  // Paragraph alignment: applies to every top-level paragraph the
+  // selection touches. Left = the justified default (align attr null).
+  const setAlign = (align: 'center' | 'right' | null) => {
+    const { state } = view;
+    const { from, to } = state.selection;
+    let tr = state.tr;
+    state.doc.nodesBetween(from, to, (node, pos) => {
+      if (node.type === schema.nodes.paragraph && state.doc.resolve(pos).depth === 0) {
+        if ((node.attrs.align ?? null) !== align) {
+          tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, align });
+        }
+        return false;
+      }
+      return true;
+    });
+    if (tr.steps.length) view.dispatch(tr);
+    view.focus();
+  };
+  flyout(currentPod, icon('aligncenter'), 'Align paragraph — left, center, right', [
+    { glyph: icon('alignleft'), label: 'Left', title: 'Align left (justified body text)', run: () => setAlign(null) },
+    { glyph: icon('aligncenter'), label: 'Center', title: 'Center text', run: () => setAlign('center') },
+    { glyph: icon('alignright'), label: 'Right', title: 'Align right', run: () => setAlign('right') },
+  ]);
   barBtn(icon('image'), 'Figure', 'Insert figure (⌘⌥I) — or paste/drop an image', runCmd(insertFigureCmd));
   barBtn(icon('table'), 'Table', 'Insert table (⌘⌥T)', () => insertTableWithEditor(view));
   barBtn('<span class="ico tico">Σ</span>', 'Math', 'Inline math (⌘M) — or type $x^2$; ⌘⇧M for display', runCmd(insertMath(false)));
   barBtn('<span class="ico tico">†</span>', 'Note', 'Footnote (⌘⌥F) — or type ^[', runCmd(insertFootnote));
+  flyout(currentPod, icon('code'), 'Code block — source code or raw Typst', [
+    {
+      glyph: icon('code'),
+      label: 'Code',
+      title: 'Code block — monospaced source listing',
+      run: () => {
+        setBlockType(schema.nodes.code_block, { params: '' })(view.state, view.dispatch);
+        view.focus();
+      },
+    },
+    {
+      glyph: '<span class="ico tico">#</span>',
+      label: 'Typst',
+      title: 'Raw Typst block — compiles into the document (rules, spacing, anything Typst)',
+      run: () => {
+        setBlockType(schema.nodes.code_block, { params: 'typst-raw' })(view.state, view.dispatch);
+        view.focus();
+      },
+    },
+  ]);
   barBtn(icon('pagebreak'), 'Break', 'Page break (⌘⏎)', () => {
     const { state, dispatch } = view;
     const { $from } = state.selection;

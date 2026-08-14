@@ -207,7 +207,13 @@ function blockToTyp(node: PMNode, indent = ''): string {
       if (!s.trim()) return indent + '~\n\n';
       // A leading =, - or + would re-parse as heading/list syntax.
       if (/^[=\-+]/.test(s)) s = '\\' + s;
-      if (node.attrs.keep) return indent + `#block(breakable: false)[${s}]\n\n`;
+      const body = node.attrs.keep ? `#block(breakable: false)[${s}]` : s;
+      // Aligned paragraphs (top level only): the MULTI-line #align form —
+      // the single-line form right after a title is the authors line.
+      if (node.attrs.align && !indent) {
+        return `#align(${node.attrs.align})[\n  ${body}\n]\n\n`;
+      }
+      if (node.attrs.keep) return indent + body + '\n\n';
       return indent + s + '\n\n';
     }
     case 'heading': {

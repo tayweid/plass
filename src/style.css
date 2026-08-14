@@ -1055,6 +1055,16 @@ body {
   text-align: justify;
 }
 
+/* Aligned paragraphs are browser-laid display lines (no oracle
+   decorations): CSS does the whole job. */
+.ProseMirror p[data-align='center'] {
+  text-align: center;
+}
+
+.ProseMirror p[data-align='right'] {
+  text-align: right;
+}
+
 /* Keep-together paragraphs (⌘⌥K): a whisper of an indicator on the left
    edge — visible enough to know the flag is set, quiet enough to ignore. */
 .ProseMirror p.ts-keep {
@@ -1146,6 +1156,30 @@ body {
   border-radius: 5px;
   white-space: pre-wrap;
   margin: 0 0 0.9em;
+}
+
+/* Raw-Typst islands: the compiled render IS the block; the source chip
+   shows while editing (click the render) or when the island paints
+   nothing (set rules, counters). Margins mirror paragraph rhythm. */
+.ts-raw {
+  margin: 0 0 0.9em;
+}
+
+.ts-raw .ts-raw-render {
+  display: none;
+  cursor: pointer;
+}
+
+.ts-raw.ts-raw-visual:not(.ts-raw-editing) .ts-raw-render {
+  display: block;
+}
+
+.ts-raw.ts-raw-visual:not(.ts-raw-editing) > pre {
+  display: none;
+}
+
+.ts-raw > pre {
+  margin: 0;
 }
 
 .ProseMirror pre code {

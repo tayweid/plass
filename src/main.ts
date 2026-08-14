@@ -16,6 +16,7 @@ import { equationsPlugin } from './equations';
 import { FigureView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
+import { CodeBlockView } from './raw-preview';
 import { refAutocomplete } from './ref-autocomplete';
 import { applySettings, formatPageNumber, getSettings } from './settings';
 import { FileManager } from './file-manager';
@@ -227,6 +228,7 @@ const view = new EditorView(editorEl, {
     footnote: (node) => new FootnoteView(node),
     bibliography: (node, v) => new BibliographyView(node, v),
     table: (node, v, getPos) => new TablePreviewView(node, v, getPos),
+    code_block: (node, v, getPos) => new CodeBlockView(node, v, getPos),
   },
   attributes: { spellcheck: 'true' },
   handleClick: (v, _pos, event) => footnoteMarkerClick(v, event),
