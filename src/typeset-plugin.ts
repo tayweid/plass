@@ -234,6 +234,7 @@ class TypesetView {
   private pendingPageMarks: DecorationSet | null = null;
   private resizeObserver: ResizeObserver;
   private lastWidth = 0;
+  private onFontsLoaded: (() => void) | null = null;
   /** Which source produced the last pagination (diagnostics). */
   private pagPath: 'forced' | 'hold' | 'fallback' = 'forced';
   private pagLog: string[] = [];
@@ -326,13 +327,20 @@ class TypesetView {
     this.resizeObserver.observe(view.dom);
     this.lastWidth = view.dom.clientWidth;
 
-    // Web fonts arriving change every metric: flush and re-run.
-    document.fonts?.ready.then(() => {
+    // Web fonts arriving change every metric: flush and re-run. The ready
+    // promise covers fonts in flight at construction; the loadingdone
+    // listener covers fonts that load LATER — css faces load lazily on
+    // first use, so opening a document set in a not-yet-used font starts
+    // a load cycle the one-shot promise never sees.
+    const fontsChanged = () => {
       if (this.destroyed) return;
       this.measurer.invalidate();
       this.cache = new WeakMap();
       this.schedule();
-    });
+    };
+    document.fonts?.ready.then(fontsChanged);
+    this.onFontsLoaded = fontsChanged;
+    document.fonts?.addEventListener('loadingdone', this.onFontsLoaded);
 
     this.schedule();
   }
@@ -565,6 +573,7 @@ class TypesetView {
   destroy() {
     this.destroyed = true;
     viewRegistry.delete(this.view);
+    if (this.onFontsLoaded) document.fonts?.removeEventListener('loadingdone', this.onFontsLoaded);
     this.resizeObserver.disconnect();
     clearTimeout(this.editTimer);
     if (this.raf) cancelAnimationFrame(this.raf);
