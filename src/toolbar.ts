@@ -14,6 +14,7 @@ import { pickAndInsertFigure } from './figures';
 import { insertTableWithEditor } from './table-editor';
 import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
+import { isPwaInstalled, onPwaInstallState, requestPwaInstall } from './pwa-install';
 import type { TypesetStats } from './typeset-plugin';
 import type { FileManager } from './file-manager';
 
@@ -44,6 +45,7 @@ const ICONS: Record<string, string> = {
   sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   filedown: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 15 12 18 15 15"/><line x1="12" y1="11" x2="12" y2="18"/>',
+  install: '<rect x="3" y="3" width="18" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/><polyline points="8.5 9.5 12 13 15.5 9.5"/><line x1="12" y1="6" x2="12" y2="13"/>',
   alignleft: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="14" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/>',
   aligncenter: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="6.5" y1="12" x2="17.5" y2="12"/><line x1="5" y1="18" x2="19" y2="18"/>',
   alignright: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="6" y1="18" x2="21" y2="18"/>',
@@ -474,6 +476,18 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
         run: () => fm.exportTexCopy(),
       },
     ]);
+    const installButton = barBtn(
+      icon('install'),
+      'Install',
+      'Install Plass as an app',
+      () => void requestPwaInstall((message) => fm.notify(message)),
+    );
+    installButton.classList.add('pwa-install');
+    installButton.setAttribute('aria-label', 'Install Plass');
+    installButton.hidden = isPwaInstalled();
+    onPwaInstallState((installed) => {
+      installButton.hidden = installed;
+    });
   }
 
   return {

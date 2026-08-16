@@ -2,6 +2,7 @@
   "name": "Plass",
   "short_name": "Plass",
   "description": "WYSIWYG editor with publication-quality typesetting",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
