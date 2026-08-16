@@ -28,9 +28,9 @@ jobs:
       - run: npm audit --audit-level=moderate
       - run: npm run verify:licenses
       - run: npm test
-      - run: npx --no-install playwright install --with-deps chromium
+      - run: npx --no-install playwright install --with-deps chromium firefox webkit
       - run: npm run test:browser
-      - run: npm run build -- --base=/plass/
+      - run: npm run build
       - run: npm run verify:production
       - if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4

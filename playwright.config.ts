@@ -7,6 +7,19 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:5199',
     headless: true,
   },
+  projects: [
+    { name: 'chromium', use: { browserName: 'chromium' } },
+    {
+      name: 'firefox-fallback',
+      testMatch: /fallback\.spec\.ts/,
+      use: { browserName: 'firefox' },
+    },
+    {
+      name: 'webkit-fallback',
+      testMatch: /fallback\.spec\.ts/,
+      use: { browserName: 'webkit' },
+    },
+  ],
   webServer: {
     command: 'npm run dev -- --host 127.0.0.1',
     url: 'http://127.0.0.1:5199',

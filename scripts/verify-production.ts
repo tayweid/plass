@@ -29,6 +29,14 @@ assert((tags[0].index ?? Infinity) < html.indexOf('<script'), 'CSP must precede 
 assert(!builtPolicy.includes('ws:'), 'production CSP must not permit WebSockets');
 assert(!builtPolicy.includes(" 'unsafe-eval'"), 'production CSP must not permit JavaScript eval');
 assert(/<meta\s+name="referrer"\s+content="no-referrer"\s*\/?>/i.test(html), 'no-referrer meta policy is missing');
+const assetReferences = [...html.matchAll(/<(?:script|link)\b[^>]*(?:src|href)="([^"]+)"/gi)]
+  .map((match) => match[1])
+  .filter((reference) => reference.includes('assets/'));
+assert(assetReferences.length > 0, 'built HTML does not reference its bundled assets');
+assert(
+  assetReferences.every((reference) => reference.startsWith('./assets/')),
+  'bundled assets must use host-independent relative paths',
+);
 
 const workerName = readdirSync(join(dist, 'assets')).find((name) => /^typst-compiler\.worker-.*\.js$/.test(name));
 assert(workerName, 'isolated Typst worker artifact is missing');

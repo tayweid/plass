@@ -1,0 +1,31 @@
+name: Feature request
+description: Propose a focused improvement to Plass
+title: "[Feature]: "
+labels: []
+body:
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked the roadmap and existing issues for this request.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What writing or typesetting problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful version of the feature.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Alternatives and context
+      description: Include relevant workflows, formats, or compatibility constraints.

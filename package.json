@@ -4,6 +4,19 @@
   "version": "0.1.0",
   "type": "module",
   "description": "A true WYSIWYG editor with publication-quality typesetting (oracle layout architecture)",
+  "license": "MIT",
+  "author": "Taylor J. Weidman",
+  "homepage": "https://plass.tayweid.io/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tayweid/plass.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tayweid/plass/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

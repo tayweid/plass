@@ -5,12 +5,12 @@ every applicable item is complete on the exact commit being published.
 
 ## One-time public-release gates
 
-- [ ] Choose an open-source license, add it as root `LICENSE`, and add the
+- [x] Choose an open-source license, add it as root `LICENSE`, and add the
   matching `license` field to `package.json`. Record the correct copyright
   holder; do not copy a name from Git history without confirmation. The
   selected license must be GPLv3-compatible to use NewCM10-Regular's
   Distribution Exception; otherwise remove or replace that bundled font.
-- [ ] Decide whether outside contributions require a Developer Certificate of
+- [x] Decide whether outside contributions require a Developer Certificate of
   Origin, a contributor license agreement, or ordinary inbound=outbound
   licensing, then update `CONTRIBUTING.md`.
 - [x] Enable GitHub private vulnerability reporting and document the monitored
@@ -43,7 +43,7 @@ every applicable item is complete on the exact commit being published.
    npm test
    npx --no-install playwright install chromium
    npm run test:browser
-   npm run build -- --base=/plass/
+   npm run build
    npm run verify:production
    ```
 
