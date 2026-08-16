@@ -60,13 +60,35 @@ Because approved remote images may come from any user-chosen HTTPS origin,
 remote loads, and application code is responsible for the explicit consent,
 CORS, redirect, host, type, and size checks.
 
-## Reporting and release practice
+## Supported versions
 
-Plass is pre-release and does not yet have a public security intake. Before a
-public launch, enable GitHub private vulnerability reporting and replace this
-paragraph with the monitored security contact, supported versions,
-acknowledgement target, remediation target, and coordinated-disclosure
-expectations. Do not report a suspected vulnerability in a public issue.
+Plass is currently pre-release. Security fixes are made on the latest version
+of the `main` branch and deployed to the public site. Older commits, forks,
+locally modified builds, and superseded releases are not supported. This
+section will be replaced with a version support table if Plass begins
+maintaining more than one release line.
+
+## Reporting a vulnerability
+
+Do not report a suspected vulnerability in a public issue, discussion, or pull
+request. Use GitHub's private **Report a vulnerability** form instead:
+
+<https://github.com/tayweid/plass/security/advisories/new>
+
+Include the affected feature, reproduction steps or a minimal proof of concept,
+the impact you expect, and any relevant browser or operating-system details.
+Please do not include real private documents, credentials, or data belonging to
+someone else.
+
+The maintainer aims to acknowledge a report within three business days and
+provide an initial assessment or status update within seven business days.
+Remediation and disclosure timing depend on severity and complexity. Please
+keep the report private while a fix is developed and released; the maintainer
+will coordinate public disclosure and credit with the reporter. These are
+response targets rather than a guarantee, and the project does not currently
+offer a bug bounty.
+
+## Release practice
 
 Release builds must pass unit tests, Playwright security/persistence tests,
 the license-notice check, `npm audit`, CodeQL, and the production artifact

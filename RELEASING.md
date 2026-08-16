@@ -13,9 +13,9 @@ every applicable item is complete on the exact commit being published.
 - [ ] Decide whether outside contributions require a Developer Certificate of
   Origin, a contributor license agreement, or ordinary inbound=outbound
   licensing, then update `CONTRIBUTING.md`.
-- [ ] Enable GitHub private vulnerability reporting and replace the placeholder
-  in `SECURITY.md` with a monitored contact, supported versions, acknowledgement
-  target, and disclosure expectations.
+- [x] Enable GitHub private vulnerability reporting and document the monitored
+  intake, supported versions, acknowledgement target, and disclosure
+  expectations in `SECURITY.md`.
 - [ ] Protect `main`: require the verification and CodeQL checks, require an
   approving review, dismiss stale approvals, and block force pushes/deletion.
 - [ ] Configure GitHub Pages for Actions deployment and verify the production
