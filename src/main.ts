@@ -298,7 +298,7 @@ toolbar = buildToolbar(toolbarEl, view, fileManager);
 setFigureFileManager(fileManager);
 startAssetWatch(view);
 void import('./pdf').then(({ setAssetReader }) =>
-  setAssetReader(async (path) => (await fileManager.readAsset(path))?.data ?? null),
+  setAssetReader(async (path, maxBytes) => (await fileManager.readAsset(path, maxBytes))?.data ?? null),
 );
 toolbar.update(view.state);
 toolbar.setFile(fileManager.name, fileManager.dirty);

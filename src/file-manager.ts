@@ -406,16 +406,22 @@ export class FileManager {
     return d.getFileHandle(parts[parts.length - 1]);
   }
 
-  /** Read a project-relative asset (image). Null when absent/no folder. */
-  async readAsset(path: string): Promise<{ data: Uint8Array; mtime: number; type: string } | null> {
+  /** Read a project-relative asset (image). Null when absent/no folder.
+   *  Callers that process untrusted document references can impose a byte
+   *  budget before the browser allocates the file's ArrayBuffer. */
+  async readAsset(path: string, maxBytes?: number): Promise<{ data: Uint8Array; mtime: number; type: string } | null> {
+    let f: File;
     try {
       const h = await this.walkTo(path);
       if (!h) return null;
-      const f = await h.getFile();
-      return { data: new Uint8Array(await f.arrayBuffer()), mtime: f.lastModified, type: f.type };
+      f = await h.getFile();
     } catch {
       return null;
     }
+    if (maxBytes !== undefined && f.size > maxBytes) {
+      throw new Error(`Project asset exceeds the ${Math.floor(maxBytes / 1024 / 1024)} MiB compilation limit`);
+    }
+    return { data: new Uint8Array(await f.arrayBuffer()), mtime: f.lastModified, type: f.type };
   }
 
   /** Write bytes to a project-relative path, creating directories. */
