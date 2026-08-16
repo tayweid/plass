@@ -62,8 +62,13 @@ CORS, redirect, host, type, and size checks.
 
 ## Reporting and release practice
 
-Before a public release, enable private vulnerability reporting on the source
-host and replace this paragraph with the project's supported contact and
-response expectations. Release builds should pass unit tests, Playwright
-security/persistence tests, `npm audit`, and the production artifact checks in
-CI. Deploy only over HTTPS.
+Plass is pre-release and does not yet have a public security intake. Before a
+public launch, enable GitHub private vulnerability reporting and replace this
+paragraph with the monitored security contact, supported versions,
+acknowledgement target, remediation target, and coordinated-disclosure
+expectations. Do not report a suspected vulnerability in a public issue.
+
+Release builds must pass unit tests, Playwright security/persistence tests,
+the license-notice check, `npm audit`, CodeQL, and the production artifact
+checks in CI. Deploy only over HTTPS. See [`RELEASING.md`](./RELEASING.md) for
+the complete gate.

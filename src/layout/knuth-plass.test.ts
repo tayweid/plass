@@ -1,5 +1,6 @@
 // Sanity tests for the Knuth-Plass oracle. Run: npm test
 import { breakLines, INF, type Item } from './knuth-plass.ts';
+import { syllabify } from './hyphenate.ts';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = '') {
@@ -13,6 +14,23 @@ function check(name: string, cond: boolean, detail = '') {
 
 const CHAR_W = 8;
 const SPACE_W = 4;
+
+// Keep the licensed pattern adapter covered: a malformed grouping still
+// typechecks but silently removes or invents every word-break opportunity.
+{
+  const ordinary = syllabify('hyphenation');
+  check(
+    'US-English patterns produce expected breaks',
+    ordinary.join('|') === 'hy|phen|ation',
+    ordinary.join('|'),
+  );
+  check('hyphenation parts tile the source word', ordinary.join('') === 'hyphenation');
+  check('licensed exception list is applied', syllabify('project').join('|') === 'project');
+  check(
+    'existing hyphens remain explicit break points',
+    syllabify('state-of-the-art').join('|') === 'state-|of-|the-|art',
+  );
+}
 
 function itemsFromWords(words: string[]): Item[] {
   const items: Item[] = [];

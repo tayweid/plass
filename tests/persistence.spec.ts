@@ -152,6 +152,53 @@ test('an immediate reload preserves the latest editor snapshot', async ({ page }
   await expect(page.locator('.ProseMirror[contenteditable="true"]')).toContainText('last instant edit');
 });
 
+test('a referenced image reloads after its project file changes', async ({ page }) => {
+  await page.goto('/?new=1');
+  const dirName = `plass-asset-watch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const assetPath = 'figures/live-preview.svg';
+  const svg = (color: string) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="${color}"/></svg>`;
+
+  await page.evaluate(async ({ name, path, svg }) => {
+    const app = window as typeof window & {
+      view: import('prosemirror-view').EditorView;
+      __fm: {
+        adoptFolder(dir: FileSystemDirectoryHandle, intent: 'save'): Promise<unknown>;
+        writeAsset(path: string, data: Blob): Promise<boolean>;
+      };
+    };
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(name, { create: true });
+    await app.__fm.adoptFolder(dir, 'save');
+    if (!await app.__fm.writeAsset(path, new Blob([svg], { type: 'image/svg+xml' }))) {
+      throw new Error('could not create watched image');
+    }
+    const { state } = app.view;
+    const figure = state.schema.nodes.figure.create({ src: path, name: 'live-preview.svg' });
+    app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, figure));
+  }, { name: dirName, path: assetPath, svg: svg('red') });
+
+  const image = page.locator('.ts-figure > img');
+  await expect(image).toHaveAttribute('src', /^blob:/);
+  const firstUrl = await image.getAttribute('src');
+
+  // File timestamps are the cache key. Leave a small gap so even a coarse
+  // filesystem clock records this as a different version.
+  await page.waitForTimeout(100);
+  await page.evaluate(async ({ path, svg }) => {
+    const fm = (window as typeof window & {
+      __fm: { writeAsset(path: string, data: Blob): Promise<boolean> };
+    }).__fm;
+    if (!await fm.writeAsset(path, new Blob([svg], { type: 'image/svg+xml' }))) {
+      throw new Error('could not update watched image');
+    }
+  }, { path: assetPath, svg: svg('blue') });
+
+  // The production watcher polls every four seconds in browsers where a
+  // native filesystem observer is unavailable.
+  await expect.poll(() => image.getAttribute('src'), { timeout: 7_000 }).not.toBe(firstUrl);
+});
+
 test('reconnecting a recovered session never guesses past a differing disk copy', async ({ page }) => {
   await page.goto('/');
   const dirName = `plass-reconnect-${Date.now()}-${Math.random().toString(36).slice(2)}`;

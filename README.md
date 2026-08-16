@@ -11,13 +11,21 @@ TeX and Typst use. The editing surface *is* the output surface.
 This is the MVP of the design in [`wysiwyg-typeset-editor-spec.md`](./wysiwyg-typeset-editor-spec.md)
 (background discussion in [`typeset-editor-conversation.md`](./typeset-editor-conversation.md)).
 
+> **Pre-release:** the security boundaries and release automation are being
+> hardened for a public launch. Plass does not yet have a project license or
+> public vulnerability-reporting address; resolve the gates in
+> [`RELEASING.md`](./RELEASING.md) before making the repository public.
+
 ## Run it
 
 ```sh
 npm install
 npm run dev      # → http://localhost:5173
-npm test         # Knuth-Plass oracle unit tests
+npm test         # unit, round-trip, and security-boundary tests
+npm run test:browser
 npm run build    # typecheck + production build (static site in dist/)
+npm run verify:licenses
+npm run verify:production
 ```
 
 ## Fidelity
@@ -103,7 +111,9 @@ is the next milestone. The first page's top offset also differs slightly
   atomically (never split across pages). Exports as Typst
   `#figure(image(...), caption: [...]) <label>`; image data (data: URLs) is
   exported verbatim so our own files round-trip losslessly — swap in a real
-  image path when compiling with Typst.
+  image path when compiling with Typst. Project-relative images are watched
+  by lightweight metadata polling every four seconds and on window focus, so
+  regenerating a plot on disk refreshes the editor without reopening it.
 - **Footnotes** (type `^[` Pandoc-style or `\footnote{` LaTeX-style — the
   matching `]`/`}` or Enter hops back out, with a bracket-balance check so
   literal "[1]" still types inside a note; also † in the toolbar or ⌘⌥F):
@@ -199,8 +209,10 @@ is the next milestone. The first page's top offset also differs slightly
   re-exported unchanged — open + save never destroys what we don't model.
 - **One-click PDF export (File → Export PDF)**: the document compiles with
   the real Typst engine, as WASM, in a watchdog-protected Web Worker — no CLI,
-  no install. The compiler (~28 MB) and OFL fonts in `public/fonts/` load
-  lazily. Math uses only the pinned mitex 0.2.5 archive: it is fetched from
+  no install. The compiler (~28 MB) and bundled fonts in `public/fonts/` load
+  lazily; those fonts retain the individual licenses documented in
+  [`public/fonts/README.md`](./public/fonts/README.md). Math uses only the
+  pinned mitex 0.2.5 archive: it is fetched from
   the Typst registry when first needed, size-bounded, and SHA-256 verified;
   imported documents cannot request arbitrary packages. Embedded images are
   decoded into the compiler's bounded virtual filesystem and the markup is
@@ -234,16 +246,15 @@ keystroke → ProseMirror transaction → DOM updates immediately (optimistic ec
         the browser rasterizes the oracle's decisions
 ```
 
-Design deviations from the spec, deliberate for the MVP:
+Current architecture notes:
 
-1. **The oracle is Knuth–Plass in TypeScript, not Typst-WASM.** The spec's
-   fallback path ("run Typst — or just Knuth-Plass in JS — as a layout
-   oracle"). No Rust toolchain needed, and measuring with the browser's own
-   metrics dissolves the measurement-agreement problem (§4.1) entirely. The
-   oracle sits behind a narrow interface (`layoutBlock`), so a Typst-WASM
-   frame-tree oracle can replace it without touching the editor.
-2. **No pagination yet** — continuous sheet, ragged-bottom. Page geometry is
-   the next big rock (spec §3.5 item 3).
+1. **The fast oracle is Knuth–Plass in TypeScript; Typst-WASM is the
+   authority.** Browser-measured JS layout provides the immediate frame, then
+   the isolated Typst compiler supplies final line breaks. Paragraphs the
+   matcher cannot align safely keep the JS result.
+2. **Pagination is editor-owned.** The live DOM paginator enforces page
+   geometry, footnote areas, and widow/orphan rules. Exact parity with Typst's
+   whole-document page breaking remains a separate milestone.
 3. **Math is LaTeX/KaTeX, not Typst syntax** — friendlier to most academics;
    the `.typ` export bridges via mitex.
 
@@ -262,22 +273,13 @@ Design deviations from the spec, deliberate for the MVP:
 - Blocks use bottom-margins only (top spacing via padding): collapsed margins
   would absorb part of an inserted page spacer's height.
 
-## Next (spec milestones)
+## Project and release documentation
 
-- **M2 polish**: settle-debounced break application while typing mid-line;
-  letter-spacing-based justification for tight lines; incremental pagination
-  (measure from the edited block forward — per-keystroke cost on a 13-page
-  document is ~6–8 ms, dominated by the global pagination measure).
-- **M3 surface**: float placement for figures (drift to page top/bottom);
-  image sidecar files on save (directory handle) so CLI compiles work
-  without swapping data URLs; raw-island compiled previews; Tier B
-  whole-document preview (the fragment machinery generalizes).
-- **Typst-WASM oracle** (M0 of the spec proper): swap `layoutBlock` for
-  typst.ts frame-tree output; gets float placement + page breaking "for
-  free". The compiler and renderer now ship in the app (PDF export +
-  compiled table previews prove the compile→SVG→display loop end to end),
-  so this is an experiment away rather than an integration away. The same
-  fragment-preview mechanism should extend to raw-Typst islands and a
-  whole-document Tier B preview next.
-- **v2**: executable Python cells via Pyodide (the computational-document
-  vision).
+- [`SECURITY.md`](./SECURITY.md) describes the trust boundaries and reporting
+  gate.
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md) contains the development and review
+  workflow.
+- [`RELEASING.md`](./RELEASING.md) is the public-release checklist.
+- [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md) explains software and
+  font license notices.
+- [`ROADMAP.md`](./ROADMAP.md) tracks product work beyond release hardening.

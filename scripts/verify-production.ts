@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { contentSecurityPolicy } from '../src/security-policy';
 import { TYPST_PACKAGE_POLICY } from '../src/typst-config';
@@ -8,6 +8,18 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 const dist = join(process.cwd(), 'dist');
+const requiredNotices = [
+  'THIRD_PARTY_NOTICES.txt',
+  'fonts/README.md',
+  'fonts/licenses/DejaVu-LICENSE.txt',
+  'fonts/licenses/Libertinus-OFL.txt',
+  'fonts/licenses/NewComputerModern-License.txt',
+  'fonts/licenses/STIXTwo-OFL.txt',
+  'fonts/licenses/TeX-Gyre-GUST-FONT-LICENSE.txt',
+];
+for (const path of requiredNotices) {
+  assert(statSync(join(dist, path)).size > 100, `${path} is missing or empty`);
+}
 const html = readFileSync(join(dist, 'index.html'), 'utf8');
 const tags = [...html.matchAll(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"\s*\/?>/gi)];
 assert(tags.length === 1, 'index.html must contain exactly one CSP meta element');
