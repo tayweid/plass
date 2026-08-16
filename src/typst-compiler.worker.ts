@@ -159,7 +159,10 @@ function pinnedFontProvider<T extends { preloadFonts(fonts: string[]): unknown }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), TYPST_FONT_LIMITS.fetchTimeoutMs);
       try {
-        const base = new URL(import.meta.env.BASE_URL + 'fonts/', scope.location.href);
+        // The built worker lives in assets/, while public fonts are copied to
+        // the deployment root. Resolving from the worker location keeps this
+        // valid at both a custom-domain root and any future project subpath.
+        const base = new URL('../fonts/', scope.location.href);
         if (base.origin !== scope.location.origin) throw new Error('Compiler font base must be same-origin');
         const fonts = await Promise.all(TYPST_FONT_FILES.map(async (file) => {
           const url = new URL(file, base);
