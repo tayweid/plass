@@ -27,6 +27,8 @@ export interface FileHooks {
   /** The current document just became a fresh project (folder adopted,
    *  document kept) — migrate embedded figures etc. */
   onProjectKept?: () => void;
+  /** Whether boot restored this tab's own crash/reload session. */
+  hasSessionDoc?: () => boolean;
 }
 
 export interface RecentEntry {
@@ -49,6 +51,7 @@ const TYP_TYPE: FilePickerType[] = [
 ];
 
 const isMd = (name: string) => /\.md$/i.test(name);
+type WriteResult = 'clean' | 'pending' | 'conflict' | 'stale' | 'noop';
 
 export class FileManager {
   handle: FileSystemFileHandle | null = null;
@@ -58,10 +61,22 @@ export class FileManager {
   dirty = false;
   readonly supportsFS = typeof window.showOpenFilePicker === 'function';
   private saveTimer = 0;
+  /** Exact contents last read from or successfully written to the active
+   * file. Every write compares against this baseline first. */
+  private diskBaseline: string | null = null;
+  private changeRevision = 0;
+  private writeQueue: Promise<void> = Promise.resolve();
+  private conflict = false;
   /** Last-session file awaiting a permission re-grant (browsers downgrade
    *  stored handles to 'prompt' across reloads; re-requesting needs a
-   *  user gesture). The session doc on screen IS this file's latest state. */
-  private pendingRestore: { handle: FileSystemFileHandle; dir: FileSystemDirectoryHandle | null } | null = null;
+   *  user gesture). Preserve a restored/edited screen copy on reconnect,
+   *  but never assume it should overwrite a differing disk copy. */
+  private pendingRestore: {
+    handle: FileSystemFileHandle;
+    dir: FileSystemDirectoryHandle | null;
+    keepSession: boolean;
+    startRevision: number;
+  } | null = null;
 
   constructor(private hooks: FileHooks) {
     document.addEventListener('visibilitychange', () => {
@@ -71,55 +86,146 @@ export class FileManager {
 
   /** Call on every document change: marks dirty, schedules a disk autosave. */
   noteChange() {
+    this.changeRevision++;
     if (!this.dirty) {
       this.dirty = true;
       this.hooks.onState();
     }
-    if (this.handle) {
+    if (this.handle && !this.conflict) {
       clearTimeout(this.saveTimer);
       this.saveTimer = window.setTimeout(() => void this.flush(), 1200);
     }
   }
 
   private async flush() {
-    if (!this.handle || !this.dirty) return;
+    if (!this.handle || !this.dirty || this.conflict) return;
     try {
-      await this.write(this.handle);
-      this.dirty = false;
-      this.hooks.onState();
+      await this.enqueueWrite(false);
     } catch (e) {
       console.warn('Autosave to file failed', e);
     }
   }
 
-  private async write(handle: FileSystemFileHandle) {
+  private async writeText(handle: FileSystemFileHandle, text: string) {
     const w = await handle.createWritable();
-    await w.write(await this.serialize(handle.name));
+    await w.write(text);
     await w.close();
   }
 
   /** The on-disk text for the current doc in the handle's format. */
-  private async serialize(fileName: string): Promise<string> {
+  private async serialize(fileName: string, doc: PMNode = this.hooks.getDoc()): Promise<string> {
     if (isMd(fileName)) {
       const { docToMd } = await import('./md-serializer');
       const warned = new Set<string>();
-      const text = docToMd(this.hooks.getDoc(), (m) => warned.add(m));
+      const text = docToMd(doc, (m) => warned.add(m));
       // Lossy-save notices, once per distinct message per save.
       for (const m of warned) this.hooks.message(m);
       return text;
     }
-    return docToTyp(this.hooks.getDoc());
+    return docToTyp(doc);
+  }
+
+  get hasConflict(): boolean {
+    return this.conflict;
+  }
+
+  private enqueueWrite(force: boolean): Promise<WriteResult> {
+    let result: WriteResult = 'noop';
+    const run = this.writeQueue.then(async () => {
+      result = await this.writeSnapshot(force);
+    });
+    this.writeQueue = run.catch(() => undefined);
+    return run.then(() => result);
+  }
+
+  private async writeSnapshot(force: boolean): Promise<WriteResult> {
+    const handle = this.handle;
+    if (!handle || (!this.dirty && !force)) return 'noop';
+    const revision = this.changeRevision;
+    const doc = this.hooks.getDoc();
+    const text = await this.serialize(handle.name, doc);
+    if (handle !== this.handle) return 'stale';
+
+    if (!force && this.diskBaseline !== null) {
+      const diskText = await (await handle.getFile()).text();
+      if (handle !== this.handle) return 'stale';
+      if (diskText !== this.diskBaseline && diskText !== text) {
+        this.conflict = true;
+        this.dirty = true;
+        this.hooks.onState();
+        this.reportConflict(handle.name);
+        return 'conflict';
+      }
+      // Another writer produced byte-identical content; adopt it as the new
+      // baseline without doing a redundant write.
+      if (diskText === text) {
+        this.diskBaseline = diskText;
+        this.conflict = false;
+        const pending = revision !== this.changeRevision;
+        this.dirty = pending;
+        this.hooks.onState();
+        if (pending) this.scheduleFollowupSave();
+        return pending ? 'pending' : 'clean';
+      }
+    }
+
+    await this.writeText(handle, text);
+    if (handle !== this.handle) return 'stale';
+    this.diskBaseline = text;
+    this.conflict = false;
+    const pending = revision !== this.changeRevision;
+    this.dirty = pending;
+    this.hooks.onState();
+    if (pending) this.scheduleFollowupSave();
+    return pending ? 'pending' : 'clean';
+  }
+
+  private scheduleFollowupSave() {
+    if (!this.handle || this.conflict) return;
+    clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => void this.flush(), 250);
+  }
+
+  private reportConflict(fileName: string) {
+    const text = `${fileName} changed outside Plass — autosave is paused and your editor copy is safe`;
+    const action = {
+      label: 'Overwrite disk',
+      run: () => void this.overwriteConflict(),
+    };
+    if (this.hooks.messageAction) this.hooks.messageAction(text, action);
+    else this.hooks.message(text);
+  }
+
+  private async overwriteConflict() {
+    const handle = this.handle;
+    if (!handle || !this.conflict) return;
+    try {
+      const result = await this.enqueueWrite(true);
+      if (this.handle === handle && result !== 'stale' && result !== 'conflict') {
+        this.hooks.message(`Overwrote ${handle.name} with the Plass version`);
+      }
+    } catch (e) {
+      console.warn('Conflict overwrite failed', e);
+      this.hooks.message('Could not overwrite the changed file');
+    }
   }
 
   /** Start a fresh unsaved document (empty, or the given content e.g. the demo). */
-  newDoc(doc?: PMNode, name = 'Untitled') {
+  newDoc(doc?: PMNode, name = 'Untitled'): boolean {
+    if (this.dirty && !confirm('Start a new document? Your current document has unsaved changes.')) return false;
+    clearTimeout(this.saveTimer);
     this.handle = null;
     this.dir = null;
+    this.pendingRestore = null;
+    this.diskBaseline = null;
+    this.conflict = false;
+    this.changeRevision = 0;
     this.name = name;
     this.dirty = false;
     this.hooks.setDoc(doc ?? this.hooks.emptyDoc());
     this.hooks.onState();
     void idbSet('last', null);
+    return true;
   }
 
   async open() {
@@ -135,14 +241,28 @@ export class FileManager {
     }
   }
 
-  async loadHandle(handle: FileSystemFileHandle, dir: FileSystemDirectoryHandle | null = null) {
+  async loadHandle(
+    handle: FileSystemFileHandle,
+    dir: FileSystemDirectoryHandle | null = null,
+    discardConfirmed = false,
+  ): Promise<boolean> {
+    if (
+      this.dirty &&
+      !discardConfirmed &&
+      !confirm(`Open ${handle.name}? Your current document has unsaved changes.`)
+    ) return false;
     const file = await handle.getFile();
     const text = await file.text();
     const { doc, warnings } = isMd(file.name)
       ? (await import('./md-parser')).mdToDoc(text)
       : typToDoc(text);
+    clearTimeout(this.saveTimer);
     this.handle = handle;
     this.dir = dir;
+    this.pendingRestore = null;
+    this.diskBaseline = text;
+    this.conflict = false;
+    this.changeRevision = 0;
     this.name = file.name.replace(/\.(typ|md)$/i, '');
     this.dirty = false;
     this.hooks.setDoc(doc);
@@ -159,6 +279,7 @@ export class FileManager {
     } catch (e) {
       console.warn('Could not persist file handle', e);
     }
+    return true;
   }
 
   // ---------- project folders ----------
@@ -206,13 +327,14 @@ export class FileManager {
         if (this.dirty && !confirm(`Open ${best.handle.name} from this folder? Your current document has unsaved changes.`)) {
           return null;
         }
-        await this.loadHandle(best.handle, dir);
+        await this.loadHandle(best.handle, dir, true);
         return 'loaded';
       }
     }
     // The current document moves in, keeping its shown name — an unsaved
     // doc labeled Untitled becomes Untitled.typ, matching the tab.
     const fileName = `${this.name}.typ`;
+    let overwriteConfirmed = false;
     if (intent === 'save') {
       let exists = false;
       try {
@@ -222,14 +344,18 @@ export class FileManager {
         /* not there — good */
       }
       if (exists && !confirm(`${fileName} already exists in this folder — overwrite it?`)) return null;
+      overwriteConfirmed = exists;
     }
     const handle = await dir.getFileHandle(fileName, { create: true });
+    const priorText = await (await handle.getFile()).text();
     this.handle = handle;
     this.dir = dir;
+    this.diskBaseline = priorText;
+    this.conflict = false;
+    this.changeRevision++;
     this.name = fileName.replace(/\.typ$/i, '');
-    await this.write(handle);
-    this.dirty = false;
-    this.hooks.onState();
+    this.dirty = true;
+    await this.enqueueWrite(overwriteConfirmed);
     this.hooks.message(`Saved — ${dir.name}/${fileName}`);
     try {
       await addRecent(handle, fileName, dir);
@@ -329,11 +455,12 @@ export class FileManager {
       if (await this.completeRestore()) return;
     }
     if (this.handle) {
+      const handle = this.handle;
       try {
-        await this.write(this.handle);
-        this.dirty = false;
-        this.hooks.onState();
-        this.hooks.message(`Saved ${this.name}.typ`);
+        const result = await this.enqueueWrite(false);
+        if (this.handle === handle && result !== 'conflict' && result !== 'stale') {
+          this.hooks.message(`Saved ${handle.name}`);
+        }
       } catch (e) {
         console.warn(e);
         this.hooks.message('Save failed');
@@ -423,6 +550,29 @@ export class FileManager {
     this.hooks.message(`Downloaded ${a.download}`);
   }
 
+  /** Reconnect this tab's own restored editor snapshot to its file without
+   * guessing which copy is newer. Equal content resumes normally; differing
+   * content enters the same explicit conflict flow as an external edit. */
+  private async attachRestoredSession(
+    handle: FileSystemFileHandle,
+    dir: FileSystemDirectoryHandle | null,
+    file: File,
+    diskText: string,
+  ): Promise<void> {
+    const localText = await this.serialize(file.name, this.hooks.getDoc());
+    clearTimeout(this.saveTimer);
+    this.handle = handle;
+    this.dir = dir;
+    this.pendingRestore = null;
+    this.diskBaseline = diskText;
+    this.name = file.name.replace(/\.(typ|md)$/i, '');
+    this.conflict = localText !== diskText;
+    this.dirty = this.conflict;
+    this.hooks.onState();
+    if (this.conflict) this.reportConflict(file.name);
+    else this.hooks.message(`Reconnected — ${dir ? `${dir.name}/` : ''}${file.name}`);
+  }
+
   /** Reconnect to the last open file if the browser still grants access. */
   async restoreLast(): Promise<boolean> {
     if (!this.supportsFS) return false;
@@ -437,16 +587,22 @@ export class FileManager {
       const target = dir ?? handle;
       const perm = (await target.queryPermission?.({ mode: 'readwrite' })) ?? 'denied';
       if (perm === 'granted') {
-        await this.loadHandle(handle, dir);
+        if (this.hooks.hasSessionDoc?.()) {
+          const file = await handle.getFile();
+          await this.attachRestoredSession(handle, dir, file, await file.text());
+        } else {
+          await this.loadHandle(handle, dir, true);
+        }
         return true;
       }
       if (perm !== 'prompt') return false;
       // The handle survives but needs a fresh grant, and that requires a
       // user gesture. Take on the file's identity NOW (the restored
       // session doc is its content) and finish on the first interaction.
-      this.pendingRestore = { handle, dir };
+      const keepSession = this.hooks.hasSessionDoc?.() ?? false;
+      this.pendingRestore = { handle, dir, keepSession, startRevision: this.changeRevision };
       this.name = handle.name.replace(/\.(typ|md)$/i, '');
-      this.dirty = true;
+      this.dirty = keepSession;
       this.hooks.onState();
       const attempt = () => {
         document.removeEventListener('pointerdown', attempt, true);
@@ -471,20 +627,15 @@ export class FileManager {
       const target = p.dir ?? p.handle;
       const perm = (await target.requestPermission?.({ mode: 'readwrite' })) ?? 'denied';
       if (perm !== 'granted') return false;
-      this.pendingRestore = null;
       const file = await p.handle.getFile();
       const diskText = await file.text();
-      this.handle = p.handle;
-      this.dir = p.dir;
-      this.name = file.name.replace(/\.(typ|md)$/i, '');
-      if ((await this.serialize(file.name)) !== diskText) {
-        // The session doc is newer (the reload interrupted an autosave):
-        // bring the file up to date rather than clobbering the screen.
-        await this.write(p.handle);
+      const keepSession = p.keepSession || this.changeRevision !== p.startRevision;
+      if (keepSession) {
+        await this.attachRestoredSession(p.handle, p.dir, file, diskText);
+      } else {
+        this.pendingRestore = null;
+        await this.loadHandle(p.handle, p.dir, true);
       }
-      this.dirty = false;
-      this.hooks.onState();
-      this.hooks.message(`Reconnected — ${this.dir ? `${this.dir.name}/` : ''}${file.name}`);
       try {
         await idbSet('last', p.dir ? { handle: p.handle, dir: p.dir } : p.handle);
       } catch {
@@ -527,11 +678,18 @@ export class FileManager {
     input.addEventListener('change', async () => {
       const file = input.files?.[0];
       if (!file) return;
+      if (this.dirty && !confirm(`Open ${file.name}? Your current document has unsaved changes.`)) return;
       const { doc, warnings } = isMd(file.name)
         ? (await import('./md-parser')).mdToDoc(await file.text())
         : typToDoc(await file.text());
+      clearTimeout(this.saveTimer);
       this.handle = null; // no write access in fallback mode
-      this.name = file.name.replace(/\.typ$/i, '');
+      this.dir = null;
+      this.pendingRestore = null;
+      this.diskBaseline = null;
+      this.conflict = false;
+      this.changeRevision = 0;
+      this.name = file.name.replace(/\.(typ|md)$/i, '');
       this.dirty = false;
       this.hooks.setDoc(doc);
       this.hooks.onState();

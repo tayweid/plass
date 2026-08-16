@@ -32,6 +32,7 @@ const SECONDARY_KEY = 'typeset-secondary-tab';
  *  a per-tab fact, persisted in sessionStorage: a reloaded primary that
  *  restores its own session must STAY primary. */
 let primaryTab = false;
+let restoredSessionDoc = false;
 
 /** Installed-app window (Finder launch or Dock open) vs plain browser tab. */
 const standalone = window.matchMedia('(display-mode: standalone)').matches;
@@ -53,7 +54,10 @@ function loadDoc(): PMNode {
   // A reloaded tab restores its own session first, whichever kind it is.
   try {
     const own = sessionStorage.getItem(SESSION_KEY);
-    if (own) return PMNode.fromJSON(schema, JSON.parse(own));
+    if (own) {
+      restoredSessionDoc = true;
+      return PMNode.fromJSON(schema, JSON.parse(own));
+    }
   } catch (e) {
     console.warn('Could not restore tab session.', e);
   }
@@ -73,17 +77,19 @@ function loadDoc(): PMNode {
 }
 
 let saveTimer = 0;
+function persistSession(view: EditorView) {
+  try {
+    const json = JSON.stringify(view.state.doc.toJSON());
+    sessionStorage.setItem(SESSION_KEY, json);
+    if (primaryTab) localStorage.setItem(STORAGE_KEY, json);
+  } catch (e) {
+    console.warn('Autosave failed.', e);
+  }
+}
+
 function scheduleSave(view: EditorView) {
   clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => {
-    try {
-      const json = JSON.stringify(view.state.doc.toJSON());
-      sessionStorage.setItem(SESSION_KEY, json);
-      if (primaryTab) localStorage.setItem(STORAGE_KEY, json);
-    } catch (e) {
-      console.warn('Autosave failed.', e);
-    }
-  }, 400);
+  saveTimer = window.setTimeout(() => persistSession(view), 400);
 }
 
 function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState {
@@ -250,6 +256,20 @@ const view = new EditorView(editorEl, {
   },
 });
 
+// Timers may never run once a tab is being discarded. Session storage is a
+// synchronous, local write, so take the latest editor snapshot at lifecycle
+// boundaries even while the slower real-file autosave finishes separately.
+window.addEventListener('pagehide', () => {
+  clearTimeout(saveTimer);
+  persistSession(view);
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    clearTimeout(saveTimer);
+    persistSession(view);
+  }
+});
+
 const fileManager = new FileManager({
   getDoc: () => view.state.doc,
   emptyDoc: () => schema.nodes.doc.create(null, [schema.nodes.paragraph.create()]),
@@ -268,6 +288,7 @@ const fileManager = new FileManager({
   message: showMessage,
   messageAction: showMessage,
   onProjectKept: () => void migrateEmbeddedFigures(view),
+  hasSessionDoc: () => restoredSessionDoc,
 });
 
 toolbar = buildToolbar(toolbarEl, view, fileManager);
@@ -285,7 +306,8 @@ applySettings(view.state);
  *  folder grant. */
 function openLaunched(files: ReadonlyArray<FileSystemFileHandle>) {
   const [file] = files;
-  void fileManager.loadHandle(file).then(() => {
+  void fileManager.loadHandle(file).then((opened) => {
+    if (!opened) return;
     if (files.length > 1) {
       showMessage(`Opened ${file.name} — Plass opens one document at a time`);
     }
@@ -361,6 +383,7 @@ function refreshMathNodes() {
 let messageTimer = 0;
 function showMessage(text: string, action?: { label: string; run: () => void }) {
   toastEl.textContent = text;
+  toastEl.classList.toggle('actionable', !!action);
   if (action) {
     const btn = document.createElement('button');
     btn.type = 'button';
