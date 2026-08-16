@@ -2,6 +2,7 @@ import { isPortableCitationKey, parseBibTeX } from './bibtex';
 import { schema } from './schema';
 import { docToTyp } from './typ-serializer';
 import { isRemoteSource, remoteImageStatus } from './remote-images';
+import { COMPILER_LIMITS, validateCompilerTask } from './typst-worker-protocol';
 
 let failed = 0;
 function check(name: string, ok: boolean) {
@@ -51,6 +52,28 @@ check(
   'credential-bearing image URL is rejected',
   remoteImageStatus('https://user:secret@images.example/paper.png')?.reason ===
     'Remote image URLs cannot contain credentials',
+);
+
+check(
+  'oversized Typst source is rejected before reaching a worker',
+  validateCompilerTask({ kind: 'svg', source: 'x'.repeat(COMPILER_LIMITS.sourceBytes + 1) }) ===
+    'Typst source exceeds the 4 MiB compilation limit',
+);
+check(
+  'compiler asset traversal is rejected',
+  validateCompilerTask({
+    kind: 'document-svg',
+    source: 'safe',
+    assets: [{ path: '/../private.png', data: new Uint8Array(1) }],
+  }) === 'Document contains an invalid compiler asset path',
+);
+check(
+  'oversized compiler asset is rejected',
+  validateCompilerTask({
+    kind: 'pdf',
+    source: 'safe',
+    assets: [{ path: '/large.png', data: new Uint8Array(COMPILER_LIMITS.assetBytes + 1) }],
+  }) === 'A compiler asset exceeds the 20 MiB limit',
 );
 
 if (failed) {

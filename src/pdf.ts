@@ -1,134 +1,26 @@
 // In-app PDF export: compile the document with Typst (WASM) in the browser.
 //
-// The compiler, fonts (~4 MB, bundled locally: STIX Two Text, Libertinus
-// Serif, New Computer Modern Math, DejaVu Sans Mono — all OFL), and the
-// mitex package (fetched once from the Typst package registry) load lazily
-// on first export and are cached for the session. Embedded images (data:
-// URLs) are decoded into the compiler's virtual filesystem and the markup is
-// rewritten to reference them, so figures compile properly.
+// Untrusted Typst evaluation runs in a dedicated worker with input/output
+// budgets and a main-thread watchdog. The compiler, bundled fonts, and mitex
+// package load lazily there and are cached until the worker is idle or must be
+// terminated. Embedded images are decoded into its virtual filesystem and
+// markup is rewritten to reference them, so figures compile properly.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { docToTyp } from './typ-serializer';
 import { loadRemoteImage, remoteImageStatus, sanitizeSvgImage } from './remote-images';
+import { FONT_FALLBACK } from './typst-config';
+import { runCompilerTask } from './typst-worker-client';
+import { COMPILER_DEADLINES, COMPILER_LIMITS, type CompilerAsset } from './typst-worker-protocol';
 
-const FONT_FILES = [
-  'NewCM10-Regular.otf',
-  'NewCM10-Italic.otf',
-  'NewCM10-Bold.otf',
-  'NewCM10-BoldItalic.otf',
-  'STIXTwoText-Regular.otf',
-  'STIXTwoText-Italic.otf',
-  'STIXTwoText-Bold.otf',
-  'STIXTwoText-BoldItalic.otf',
-  'LibertinusSerif-Regular.otf',
-  'LibertinusSerif-Italic.otf',
-  'LibertinusSerif-Bold.otf',
-  'LibertinusSerif-BoldItalic.otf',
-  'texgyrepagella-regular.otf',
-  'texgyrepagella-italic.otf',
-  'texgyrepagella-bold.otf',
-  'texgyrepagella-bolditalic.otf',
-  'NewCMMath-Regular.otf',
-  'DejaVuSansMono.ttf',
-];
-
-/** Fonts guaranteed to exist in the compiler; used as #set text fallback. */
-export const FONT_FALLBACK = ['New Computer Modern', 'STIX Two Text', 'Libertinus Serif'];
-
-interface TypstLike {
-  addSource(path: string, content: string): Promise<void>;
-  mapShadow(path: string, data: Uint8Array): Promise<void>;
-  resetShadow(): Promise<void> | void;
-  pdf(o: { mainFilePath: string }): Promise<Uint8Array | undefined>;
-  svg(o: { mainContent: string }): Promise<string>;
-  getCompiler(): Promise<{
-    runWithWorld<T>(
-      o: { mainFilePath: string },
-      cb: (world: {
-        compile(o?: object): Promise<unknown>;
-        query<T2>(o: { selector: string }): Promise<T2>;
-      }) => Promise<T>,
-    ): Promise<T>;
-  }>;
-  setRendererInitOptions?(o: unknown): void;
-}
-
-let typstPromise: Promise<TypstLike> | null = null;
-// The global $typst rejects repeated configuration; track what already ran so
-// a failed init attempt (e.g. registry fetch offline) stays retryable.
-let optionsSet = false;
-let snippetUsed = false;
-
-function loadTypst(onMsg: (m: string) => void): Promise<TypstLike> {
-  if (!typstPromise) {
-    typstPromise = (async () => {
-      onMsg('Loading Typst compiler…');
-      const [{ $typst, MemoryAccessModel }, { TypstSnippet }, wasm, rendererWasm] = await Promise.all([
-        import('@myriaddreamin/typst.ts'),
-        import('@myriaddreamin/typst.ts/dist/esm/contrib/snippet.mjs'),
-        import('@myriaddreamin/typst-ts-web-compiler/pkg/typst_ts_web_compiler_bg.wasm?url'),
-        import('@myriaddreamin/typst-ts-renderer/pkg/typst_ts_renderer_bg.wasm?url'),
-      ]);
-      // $typst is a shared global; another module instance (Vite HMR gives
-      // pdf.ts fresh ?t= URLs) may have configured it already. That state is
-      // exactly what we would set — tolerate "already initialized".
-      const tolerant = (fn: () => void) => {
-        try {
-          fn();
-        } catch (e) {
-          if (!/initialized|already prepare/i.test(String(e))) throw e;
-        }
-      };
-      if (!optionsSet) {
-        tolerant(() => $typst.setCompilerInitOptions({ getModule: () => wasm.default }));
-        tolerant(() => $typst.setRendererInitOptions({ getModule: () => rendererWasm.default }));
-        optionsSet = true;
-      }
-      if (!snippetUsed) {
-        const base = import.meta.env.BASE_URL + 'fonts/';
-        // Explicit access model + package registry (for mitex); bundled fonts.
-        const accessModel = new MemoryAccessModel();
-        const registry = await TypstSnippet.fetchPackageRegistry(accessModel);
-        tolerant(() =>
-          $typst.use(
-            TypstSnippet.withAccessModel(accessModel),
-            registry,
-            TypstSnippet.preloadFonts(FONT_FILES.map((f) => base + f)),
-          ),
-        );
-        snippetUsed = true;
-      }
-      return $typst as unknown as TypstLike;
-    })().catch((e) => {
-      typstPromise = null; // allow retry
-      throw e;
-    });
-  }
-  return typstPromise;
-}
-
-// The compiler shares one virtual filesystem — interleaved resetShadow/
-// addSource from concurrent callers (oracle queries, previews, exports)
-// would corrupt each other. Serialize all API use.
-let apiChain: Promise<unknown> = Promise.resolve();
-function serialized<T>(fn: () => Promise<T>): Promise<T> {
-  const run = apiChain.then(fn, fn);
-  apiChain = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
-}
-
-interface Asset {
-  path: string;
-  data: Uint8Array;
-}
+export { FONT_FALLBACK } from './typst-config';
+type Asset = CompilerAsset;
+class AssetLimitError extends Error {}
 
 /** Reads project-relative asset paths (set by the app's FileManager). */
-let assetReader: ((path: string) => Promise<Uint8Array | null>) | null = null;
+let assetReader: ((path: string, maxBytes: number) => Promise<Uint8Array | null>) | null = null;
 
-export function setAssetReader(fn: (path: string) => Promise<Uint8Array | null>) {
+export function setAssetReader(fn: (path: string, maxBytes: number) => Promise<Uint8Array | null>) {
   assetReader = fn;
 }
 
@@ -138,12 +30,29 @@ function dataUrlToBytes(src: string): { data: Uint8Array; ext: string } | null {
   const ext = m[1] === 'svg+xml' ? 'svg' : m[1] === 'jpeg' ? 'jpg' : m[1];
   const payload = m[3];
   if (/(?:^|;)base64(?:;|$)/i.test(m[2])) {
+    // Reject before atob allocates a second, decoded copy. A few trailing
+    // characters cover base64 padding; whitespace-heavy encodings may be
+    // rejected conservatively instead of consuming unbounded memory.
+    if (payload.length > Math.ceil(COMPILER_LIMITS.assetBytes / 3) * 4 + 4) {
+      throw new AssetLimitError('Embedded image exceeds the 20 MiB compilation limit');
+    }
     const bin = atob(payload);
+    if (bin.length > COMPILER_LIMITS.assetBytes) {
+      throw new AssetLimitError('Embedded image exceeds the 20 MiB compilation limit');
+    }
     const data = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
     return { data: ext === 'svg' ? sanitizeSvgImage(data) : data, ext };
   }
+  // A percent-encoded byte needs at most three source characters. Bound the
+  // decode allocation before validating the exact UTF-8 result below.
+  if (payload.length > COMPILER_LIMITS.assetBytes * 3) {
+    throw new AssetLimitError('Embedded image exceeds the 20 MiB compilation limit');
+  }
   const data = new TextEncoder().encode(decodeURIComponent(payload));
+  if (data.byteLength > COMPILER_LIMITS.assetBytes) {
+    throw new AssetLimitError('Embedded image exceeds the 20 MiB compilation limit');
+  }
   return { data: ext === 'svg' ? sanitizeSvgImage(data) : data, ext };
 }
 
@@ -182,37 +91,55 @@ async function prepareAssets(doc: PMNode): Promise<{
 }> {
   const map = new Map<string, string>();
   const assets: Asset[] = [];
+  let totalAssetBytes = 0;
   let missing = 0;
   let blockedRemote = 0;
-  const srcs: string[] = [];
+  const srcs = new Set<string>();
   doc.descendants((node) => {
     if ((node.type.name === 'figure' || node.type.name === 'image') && node.attrs.src) {
-      srcs.push(node.attrs.src as string);
+      srcs.add(node.attrs.src as string);
+      if (srcs.size > COMPILER_LIMITS.assetCount) {
+        throw new AssetLimitError(`Document has more than ${COMPILER_LIMITS.assetCount} image assets`);
+      }
     }
     return true;
   });
 
+  const addAsset = (path: string, data: Uint8Array) => {
+    if (assets.length >= COMPILER_LIMITS.assetCount) {
+      throw new AssetLimitError(`Document has more than ${COMPILER_LIMITS.assetCount} compiler assets`);
+    }
+    if (data.byteLength > COMPILER_LIMITS.assetBytes) {
+      throw new AssetLimitError('A compiler asset exceeds the 20 MiB limit');
+    }
+    totalAssetBytes += data.byteLength;
+    if (totalAssetBytes > COMPILER_LIMITS.totalAssetBytes) {
+      throw new AssetLimitError('Compiler assets exceed the 64 MiB document limit');
+    }
+    assets.push({ path, data });
+  };
+
   let n = 0;
   for (const src of srcs) {
-    if (map.has(src)) continue;
     let embedded: ReturnType<typeof dataUrlToBytes> = null;
     try {
       embedded = dataUrlToBytes(src);
-    } catch {
+    } catch (error) {
+      if (error instanceof AssetLimitError) throw error;
       // Malformed encodings and invalid SVGs become inert placeholders.
     }
     if (embedded) {
       n++;
       const path = `/assets/img-${n}.${embedded.ext}`;
       map.set(src, path);
-      assets.push({ path, data: embedded.data });
+      addAsset(path, embedded.data);
       continue;
     }
     if (/^data:/i.test(src)) {
       n++;
       const path = `/assets/img-${n}.png`;
       map.set(src, path);
-      assets.push({ path, data: await missingPlaceholder() });
+      addAsset(path, await missingPlaceholder());
       missing++;
       continue;
     }
@@ -222,7 +149,7 @@ async function prepareAssets(doc: PMNode): Promise<{
         n++;
         const path = `/assets/img-${n}.png`;
         map.set(src, path);
-        assets.push({ path, data: await missingPlaceholder() });
+        addAsset(path, await missingPlaceholder());
         blockedRemote++;
         continue;
       }
@@ -231,12 +158,13 @@ async function prepareAssets(doc: PMNode): Promise<{
         n++;
         const path = `/assets/img-${n}.${image.extension}`;
         map.set(src, path);
-        assets.push({ path, data: image.data });
-      } catch {
+        addAsset(path, image.data);
+      } catch (error) {
+        if (error instanceof AssetLimitError) throw error;
         n++;
         const path = `/assets/img-${n}.png`;
         map.set(src, path);
-        assets.push({ path, data: await missingPlaceholder() });
+        addAsset(path, await missingPlaceholder());
         missing++;
       }
       continue;
@@ -245,13 +173,13 @@ async function prepareAssets(doc: PMNode): Promise<{
     // emitted image("figures/x.png") resolves against /main.typ untouched —
     // the exported file stays CLI-compilable.
     if (!src.startsWith('/') && assetReader) {
-      const data = await assetReader(src);
+      const data = await assetReader(src, COMPILER_LIMITS.assetBytes);
       if (data) {
-        assets.push({ path: '/' + src, data });
+        addAsset('/' + src, data);
       } else {
         // File deleted/renamed on disk: compile with a placeholder at the
         // same path instead of failing the whole export.
-        assets.push({ path: '/' + src, data: await missingPlaceholder() });
+        addAsset('/' + src, await missingPlaceholder());
         missing++;
       }
     }
@@ -264,14 +192,12 @@ async function prepareAssets(doc: PMNode): Promise<{
  * previews of blocks whose styling the DOM cannot reproduce.
  */
 export function compileSvg(src: string, onMsg: (m: string) => void = () => {}): Promise<string | null> {
-  return serialized(async () => {
-    try {
-      const typst = await loadTypst(onMsg);
-      return await typst.svg({ mainContent: src });
-    } catch (e) {
-      console.warn('fragment compile failed', e);
-      return null;
-    }
+  return runCompilerTask<string>(
+    { kind: 'svg', source: src },
+    { timeoutMs: COMPILER_DEADLINES.previewMs, onMessage: onMsg },
+  ).catch((error) => {
+    console.warn('fragment compile failed', error);
+    return null;
   });
 }
 
@@ -281,29 +207,16 @@ export function typstQuery<T = unknown>(
   selector: string,
   onMsg: (m: string) => void = () => {},
 ): Promise<T[] | null> {
-  return serialized(async () => {
-    try {
-      const typst = await loadTypst(onMsg);
-      await typst.resetShadow();
-      await typst.addSource('/probe.typ', src);
-      const compiler = await typst.getCompiler();
-      // The driver's own query() forgets to compile the world first — do both.
-      return await compiler.runWithWorld({ mainFilePath: '/probe.typ' }, async (world) => {
-        const compiled = (await world.compile()) as
-          | { diagnostics?: Array<{ severity?: string }> }
-          | undefined;
-        const errors = compiled?.diagnostics?.filter((d) => d.severity === 'error') ?? [];
-        if (errors.length) {
-          console.warn('probe compile errors ' + JSON.stringify(errors).slice(0, 1500));
-          return null;
-        }
-        return world.query<T[]>({ selector });
-      });
-    } catch (e) {
-      console.warn('typst query failed', e);
+  return runCompilerTask<unknown[]>(
+    { kind: 'query', source: src, selector },
+    { timeoutMs: COMPILER_DEADLINES.previewMs, onMessage: onMsg },
+  ).then(
+    (value) => value as T[],
+    (error) => {
+      console.warn('typst query failed', error);
       return null;
-    }
-  });
+    },
+  );
 }
 
 /**
@@ -311,35 +224,31 @@ export function typstQuery<T = unknown>(
  * the page-break oracle's channel. Returns null on failure.
  */
 export function compileDocSvg(doc: PMNode, onMsg: (m: string) => void = () => {}): Promise<string | null> {
-  return serialized(async () => {
+  return (async () => {
     try {
-      const typst = await loadTypst(onMsg);
       const { map, assets } = await prepareAssets(doc);
-      const src = docToTyp(doc, { resolveImage: (s) => map.get(s) ?? s, fontFallback: FONT_FALLBACK });
-      await typst.resetShadow();
-      for (const a of assets) await typst.mapShadow(a.path, a.data);
-      await typst.addSource('/main.typ', src);
-      return await typst.svg({ mainFilePath: '/main.typ' } as unknown as { mainContent: string });
-    } catch (e) {
-      console.warn('doc svg compile failed', e);
+      const source = docToTyp(doc, { resolveImage: (s) => map.get(s) ?? s, fontFallback: FONT_FALLBACK });
+      return await runCompilerTask<string>(
+        { kind: 'document-svg', source, assets },
+        { timeoutMs: COMPILER_DEADLINES.documentMs, onMessage: onMsg },
+      );
+    } catch (error) {
+      console.warn('doc svg compile failed', error);
       return null;
     }
-  });
+  })();
 }
 
 /** Compile raw Typst source to PDF bytes (assets must already be mapped). */
-export function compileTyp(src: string, onMsg: (m: string) => void = () => {}): Promise<Uint8Array | undefined> {
-  return serialized(async () => {
-    const typst = await loadTypst(onMsg);
-    await typst.resetShadow();
-    await typst.addSource('/main.typ', src);
-    return typst.pdf({ mainFilePath: '/main.typ' });
-  });
+export function compileTyp(src: string, onMsg: (m: string) => void = () => {}): Promise<Uint8Array> {
+  return runCompilerTask<Uint8Array>(
+    { kind: 'pdf', source: src, assets: [] },
+    { timeoutMs: COMPILER_DEADLINES.exportMs, onMessage: onMsg },
+  );
 }
 
 export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string) => void): Promise<void> {
   try {
-    const typst = await loadTypst(onMsg);
     onMsg('Preparing document…');
     const { map, assets, missing, blockedRemote } = await prepareAssets(doc);
     const src = docToTyp(doc, {
@@ -349,13 +258,10 @@ export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string
 
     onMsg('Typesetting with Typst…');
     const t0 = performance.now();
-    const data = await serialized(async () => {
-      await typst.resetShadow();
-      for (const a of assets) await typst.mapShadow(a.path, a.data);
-      await typst.addSource('/main.typ', src);
-      return typst.pdf({ mainFilePath: '/main.typ' });
-    });
-    if (!data) throw new Error('the compiler returned no output (see console for diagnostics)');
+    const data = await runCompilerTask<Uint8Array>(
+      { kind: 'pdf', source: src, assets },
+      { timeoutMs: COMPILER_DEADLINES.exportMs, onMessage: onMsg },
+    );
 
     const blob = new Blob([data.buffer as ArrayBuffer], { type: 'application/pdf' });
     const a = document.createElement('a');

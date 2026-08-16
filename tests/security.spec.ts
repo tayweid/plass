@@ -98,6 +98,39 @@ test('compiled bibliography SVG cannot restore a dangerous URL', async ({ page }
   expect(active.some((attr) => /^on/i.test(attr))).toBe(false);
 });
 
+test('compiler watchdog stops a stuck job without freezing the UI and then recovers', async ({ page }) => {
+  await page.goto('/?new=1');
+  const result = await page.evaluate(async () => {
+    const { testCompilerWatchdog } = await import('/src/typst-worker-client.ts');
+    let uiTicks = 0;
+    const timer = window.setInterval(() => uiTicks++, 10);
+    const started = performance.now();
+    const error = await testCompilerWatchdog();
+    const watchdogMs = performance.now() - started;
+    window.clearInterval(timer);
+
+    // The timed-out worker is discarded. Both rendering paths must work on
+    // the freshly-created replacement, proving a poisoned compiler session
+    // cannot strand later previews or exports.
+    const { compileSvg, compileTyp } = await import('/src/pdf.ts');
+    const svg = await compileSvg('[worker recovered]');
+    const pdf = await compileTyp('[worker recovered]');
+    return {
+      code: error.code,
+      watchdogMs,
+      uiTicks,
+      hasSvg: svg?.includes('<svg') ?? false,
+      pdfHeader: pdf ? new TextDecoder().decode(pdf.slice(0, 5)) : '',
+    };
+  });
+
+  expect(result.code).toBe('timeout');
+  expect(result.watchdogMs).toBeLessThan(2_000);
+  expect(result.uiTicks).toBeGreaterThan(0);
+  expect(result.hasSvg).toBe(true);
+  expect(result.pdfHeader).toBe('%PDF-');
+});
+
 test('remote images make no request until the user grants their origin', async ({ page }) => {
   let requests = 0;
   await page.route('https://remote.test/pixel.png', async (route) => {
