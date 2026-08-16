@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible problem in Plass
+title: "[Bug]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Plass. Do not attach a private document or report a security vulnerability here.
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked existing issues for the same problem.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+        - label: I removed private or identifying content from any example.
+          required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Browser and operating system
+      placeholder: Firefox 141 on macOS 15.6
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Plass version
+      description: Use the public URL, release tag, or commit hash.
+      placeholder: https://plass.tayweid.io/ or v0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest sanitized example that demonstrates the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots or non-sensitive console messages are welcome.

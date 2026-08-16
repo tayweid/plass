@@ -7,9 +7,9 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
 
 - `npm run dev -- --port 5199` — dev server (tests assume 5199)
 - `npm test` — node test suites (knuth-plass, typ-parser, md round-trip)
-- `npm run build -- --base=/plass/` — production build (CI runs this);
+- `npm run build` — production build with host-independent relative paths (CI runs this);
   deploy = push `main`: `.github/workflows/deploy.yml` builds and
-  publishes to tayweid.github.io/plass via GitHub Pages. Taylor pushes
+  publishes to plass.tayweid.io via GitHub Pages. Taylor pushes
   via GitHub Desktop (no CLI credentials in shell).
 - PWA: `public/manifest.webmanifest` registers Plass as a file handler
   for .typ/.md (installed app = macOS default-app candidate; Finder

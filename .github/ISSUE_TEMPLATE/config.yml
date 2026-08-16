@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/tayweid/plass/security/advisories/new
+    about: Send a private report instead of opening a public issue.
+  - name: Support policy
+    url: https://github.com/tayweid/plass/blob/main/SUPPORT.md
+    about: Read the supported versions and help expectations.

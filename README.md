@@ -11,10 +11,11 @@ TeX and Typst use. The editing surface *is* the output surface.
 This is the MVP of the design in [`wysiwyg-typeset-editor-spec.md`](./wysiwyg-typeset-editor-spec.md)
 (background discussion in [`typeset-editor-conversation.md`](./typeset-editor-conversation.md)).
 
-> **Pre-release:** the security boundaries and release automation are being
-> hardened for a public launch. Plass does not yet have a project license or
-> public vulnerability-reporting address; resolve the gates in
-> [`RELEASING.md`](./RELEASING.md) before making the repository public.
+> **Public preview:** Try Plass at <https://plass.tayweid.io/>. Important work
+> should still be backed up while the first release completes its cross-browser
+> and independent review.
+
+![Plass editing a live typeset document](./docs/plass-editor.jpg)
 
 ## Run it
 
@@ -276,10 +277,19 @@ Current architecture notes:
 ## Project and release documentation
 
 - [`SECURITY.md`](./SECURITY.md) describes the trust boundaries and reporting
-  gate.
+  policy.
+- [`PRIVACY.md`](./PRIVACY.md) explains local storage and the few possible
+  network requests.
+- [`SUPPORT.md`](./SUPPORT.md) sets support scope and issue expectations.
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) contains the development and review
   workflow.
 - [`RELEASING.md`](./RELEASING.md) is the public-release checklist.
 - [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md) explains software and
   font license notices.
 - [`ROADMAP.md`](./ROADMAP.md) tracks product work beyond release hardening.
+
+## License
+
+Plass is available under the [`MIT License`](./LICENSE). Bundled dependencies
+and fonts retain the licenses recorded in
+[`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).

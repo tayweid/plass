@@ -19,7 +19,7 @@ Before submitting a change, run:
 npm run verify:licenses
 npm test
 npm run test:browser
-npm run build -- --base=/plass/
+npm run build
 npm run verify:production
 ```
 
@@ -49,6 +49,7 @@ form linked there.
 
 ## Licensing
 
-The project license has not yet been selected. Do not accept outside code
-contributions until a root `LICENSE` and an explicit contribution policy are
-in place; otherwise ownership and redistribution terms may be ambiguous.
+Plass is licensed under the [`MIT License`](./LICENSE). By submitting a
+contribution, you agree to license it under the same MIT terms and confirm that
+you have the right to do so. No separate contributor license agreement or
+Developer Certificate of Origin is required.

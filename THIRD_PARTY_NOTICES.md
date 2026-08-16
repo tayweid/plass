@@ -10,10 +10,9 @@ Plass distributes third-party JavaScript, WebAssembly, and font files.
 - [`public/fonts/README.md`](public/fonts/README.md) maps every bundled font
   family and version to its full license notice.
 
-These third-party terms do not determine the license for Plass's own source
-code. That must be selected separately in the repository's root `LICENSE`
-file before an open-source release. In particular, NewCM10-Regular's
-Distribution Exception requires the surrounding program to use a
-GPLv3-compatible license; replace that font if the selected project license is
-not compatible. This inventory is release-engineering documentation, not
-legal advice.
+Plass's own source is distributed under the root [`MIT License`](LICENSE).
+Third-party code and fonts retain the separate terms listed in their notices.
+In particular, NewCM10-Regular's Distribution Exception requires the
+surrounding program to use a GPLv3-compatible license; Plass relies on that
+exception with its MIT project license. This inventory is release-engineering
+documentation, not legal advice.
