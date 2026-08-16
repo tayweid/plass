@@ -27,6 +27,12 @@ backend.
 - File writes are revision-ordered and compare against the exact on-disk
   baseline. External conflicts stop autosave instead of overwriting either
   copy, and dirty navigation requires an explicit decision.
+- User-controlled files are size-checked from metadata before their contents
+  are allocated or parsed: documents are bounded to 32 MiB, bibliographies to
+  4 MiB, and local compiler images to 20 MiB. Imported settings and table
+  dimensions are normalized to finite ranges. Malformed embedded metadata is
+  kept as raw source rather than interpreted as application metadata or
+  silently discarded.
 
 ## Content Security Policy
 

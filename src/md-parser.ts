@@ -21,6 +21,7 @@ import footnotePlugin from 'markdown-it-footnote';
 import type { Node as PMNode, Mark } from 'prosemirror-model';
 import { schema } from './schema';
 import { DEFAULT_SETTINGS, type DocSettings } from './settings';
+import { INPUT_LIMITS, textSizeError } from './input-limits';
 
 export interface MdImport {
   doc: PMNode;
@@ -296,9 +297,15 @@ export function mdToDoc(src: string): MdImport {
           if (lang === 'typst') {
             nodes.push(code_block.create({ params: 'typst-raw' }, body ? [schema.text(body)] : []));
           } else if ((lang === 'bibtex' || lang === 'bib') && !bib) {
-            bib = { name: 'references.bib', content: body };
-            nodes.push(schema.nodes.bibliography.create());
-            sawBibNode = true;
+            const sizeError = textSizeError(body, INPUT_LIMITS.bibliographyBytes, 'Embedded bibliography');
+            if (sizeError) {
+              warnings.push(`${sizeError} — preserved as a code block`);
+              nodes.push(code_block.create({ params: t.info.trim() }, body ? [schema.text(body)] : []));
+            } else {
+              bib = { name: 'references.bib', content: body };
+              nodes.push(schema.nodes.bibliography.create());
+              sawBibNode = true;
+            }
           } else {
             nodes.push(code_block.create({ params: t.info.trim() }, body ? [schema.text(body)] : []));
           }

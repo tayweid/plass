@@ -36,6 +36,45 @@ test('document CSP blocks inline code, eval, and direct remote images', async ({
   expect(remoteRequests).toBe(0);
 });
 
+test('oversized documents are rejected before their contents are read', async ({ page }) => {
+  await page.goto('/?new=1');
+  const result = await page.evaluate(async () => {
+    const app = window as typeof window & {
+      view: import('prosemirror-view').EditorView;
+      __fm: {
+        loadHandle(handle: FileSystemFileHandle): Promise<boolean>;
+        handle: FileSystemFileHandle | null;
+      };
+    };
+    const before = app.view.state.doc.toJSON();
+    let reads = 0;
+    const handle = {
+      kind: 'file',
+      name: 'oversized.typ',
+      async getFile() {
+        return {
+          name: 'oversized.typ',
+          size: 33 * 1024 * 1024,
+          async text() {
+            reads++;
+            throw new Error('oversized file contents should never be read');
+          },
+        } as File;
+      },
+    } as FileSystemFileHandle;
+    const opened = await app.__fm.loadHandle(handle);
+    return {
+      opened,
+      reads,
+      unchanged: JSON.stringify(before) === JSON.stringify(app.view.state.doc.toJSON()),
+      attached: app.__fm.handle !== null,
+    };
+  });
+
+  expect(result).toEqual({ opened: false, reads: 0, unchanged: true, attached: false });
+  await expect(page.locator('#toast')).toContainText("oversized.typ is larger than Plass's 32 MiB limit");
+});
+
 test('Typst SVG boundary strips active content and preserves safe glyph references', async ({ page }) => {
   await page.goto('/?new=1');
   const result = await page.evaluate(async () => {
