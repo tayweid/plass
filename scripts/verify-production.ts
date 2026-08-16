@@ -41,6 +41,7 @@ assert(
 const workerName = readdirSync(join(dist, 'assets')).find((name) => /^typst-compiler\.worker-.*\.js$/.test(name));
 assert(workerName, 'isolated Typst worker artifact is missing');
 const worker = readFileSync(join(dist, 'assets', workerName), 'utf8');
+assert(worker.includes('../fonts/'), 'worker font base does not escape the assets directory');
 assert(worker.includes(TYPST_PACKAGE_POLICY.url), 'worker does not contain the exact pinned package URL');
 assert(worker.includes(TYPST_PACKAGE_POLICY.sha256), 'worker does not contain the pinned package digest');
 assert(worker.includes('Dynamic JavaScript construction is disabled'), 'worker fail-closed Function shim is missing');
