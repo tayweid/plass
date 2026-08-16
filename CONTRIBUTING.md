@@ -44,8 +44,8 @@ expects a completed `dist/` build.
 ## Reporting security issues
 
 Do not disclose a suspected vulnerability in a public issue. Follow
-[`SECURITY.md`](./SECURITY.md). The repository must not be publicly launched
-until its private reporting channel and response owner are configured.
+[`SECURITY.md`](./SECURITY.md) and use the private **Report a vulnerability**
+form linked there.
 
 ## Licensing
 
