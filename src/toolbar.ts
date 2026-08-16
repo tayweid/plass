@@ -166,7 +166,9 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'file-menu-item';
-    el.innerHTML = `<span>${label.replace(/</g, '&lt;')}</span>`;
+    const text = document.createElement('span');
+    text.textContent = label;
+    el.appendChild(text);
     el.addEventListener('click', () => {
       closeMenu();
       run();

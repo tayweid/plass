@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "tsx src/layout/knuth-plass.test.ts && tsx src/typ-parser.test.ts && tsx src/md-round.test.ts",
+    "test": "tsx src/layout/knuth-plass.test.ts && tsx src/typ-parser.test.ts && tsx src/md-round.test.ts && tsx src/security.test.ts",
+    "test:browser": "playwright test",
     "sidecar": "wasm-pack build sidecar --target web --release"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
     "@myriaddreamin/typst-ts-web-compiler": "^0.7.0",
     "@myriaddreamin/typst.ts": "^0.7.0",
     "@types/markdown-it": "^14.1.2",
+    "dompurify": "^3.4.13",
     "hyphenation.en-us": "^0.2.1",
     "hypher": "^0.2.5",
     "katex": "^0.16.11",

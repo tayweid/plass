@@ -15,6 +15,7 @@ import type { EditorView } from 'prosemirror-view';
 import { schema } from './schema';
 import { docToTyp } from './typ-serializer';
 import { parseTable } from './typ-parser';
+import { mountTypstSvg } from './safe-svg';
 
 interface CellModel {
   text: string;
@@ -837,8 +838,7 @@ export function openTableEditor(view: EditorView, pos: number) {
       const svg = await compileSvg(src);
       if (!svg || !cardOpen) return;
       lastSrc = src;
-      previewBody.innerHTML = svg;
-      const svgEl = previewBody.querySelector('svg');
+      const svgEl = mountTypstSvg(previewBody, svg);
       if (svgEl) {
         svgEl.style.width = `${(parseFloat(svgEl.getAttribute('width') ?? '0') * 4) / 3}px`;
         svgEl.style.height = 'auto';

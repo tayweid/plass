@@ -16,6 +16,7 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import { buildSpec, matchParagraph, type AtomResolver, type SvgLine, type ParagraphSpec } from './typst-oracle';
 import { formatPageNumber, pageSize, type DocSettings } from '../settings';
+import { parseTypstSvg } from '../safe-svg';
 
 export interface PageStart {
   /** Document position of the block that begins the page. */
@@ -116,8 +117,7 @@ export class PageOracle {
 /** Per-page tsel lines from the multi-page SVG. The svg renders at an
  *  arbitrary scale — per-page y tolerance is derived from the page height. */
 function extractPages(svg: string, yTolPt: number, pageHPt: number): PagedLine[] {
-  const div = document.createElement('div');
-  div.innerHTML = svg;
+  const div = parseTypstSvg(svg);
   div.style.cssText = 'position:absolute;visibility:hidden;left:-99999px;top:0;';
   const svgEl = div.querySelector('svg');
   if (!svgEl) return [];

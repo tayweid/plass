@@ -15,6 +15,7 @@ import { wrapAligned } from './math-src';
 import { getSettings, parseMathMacros } from './settings';
 import { forgetInk, getInk, inkKey, onInk, requestInk } from './math-ink';
 import { scheduleTypeset } from './typeset-plugin';
+import { mountTypstSvg } from './safe-svg';
 
 export { wrapAligned };
 
@@ -86,7 +87,7 @@ export class MathView implements NodeView {
     if (ink) {
       if (this.inkApplied === key) return;
       this.inkApplied = key;
-      this.dom.innerHTML = ink.svg;
+      mountTypstSvg(this.dom, ink.svg);
       this.dom.classList.add('math-ink');
       const svg = this.dom.querySelector('svg');
       if (svg) {

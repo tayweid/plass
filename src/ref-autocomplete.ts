@@ -11,7 +11,7 @@ import { Plugin, TextSelection, type EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { schema } from './schema';
 import { citeOrder, getBib } from './citations';
-import { bibAuthors } from './bibtex';
+import { bibAuthors, isPortableCitationKey } from './bibtex';
 import { getSettings } from './settings';
 
 interface LabelEntry {
@@ -90,6 +90,9 @@ function collectLabels(state: EditorState): LabelEntry[] {
   // Bibliography entries: cite by key, searchable by author/title too.
   const order = citeOrder(state.doc);
   for (const e of getBib(state)) {
+    // Preserve non-portable entries in the bibliography source, but do not
+    // offer keys that cannot be represented safely in @key/Typst syntax.
+    if (!isPortableCitationKey(e.key)) continue;
     const n = order.get(e.key);
     out.push({
       label: e.key,
@@ -189,10 +192,36 @@ export function refAutocomplete() {
       menu.replaceChildren();
       items = [];
 
-      const addItem = (label: string | null, kind: 'ref' | 'cite', html: string, cls = '', assignPos?: number) => {
+      const addItem = (
+        label: string | null,
+        kind: 'ref' | 'cite',
+        content: { num?: string; label?: string; preview?: string; empty?: string; hint?: string },
+        cls = '',
+        assignPos?: number,
+      ) => {
         const el = document.createElement('div');
         el.className = 'ref-menu-item ' + cls;
-        el.innerHTML = html;
+        if (content.empty !== undefined) {
+          el.append(document.createTextNode(content.empty));
+          if (content.hint) {
+            el.appendChild(document.createElement('br'));
+            const hint = document.createElement('span');
+            hint.className = 'ref-menu-hint';
+            hint.textContent = content.hint;
+            el.appendChild(hint);
+          }
+        } else {
+          const num = document.createElement('span');
+          num.className = 'ref-menu-num';
+          num.textContent = content.num ?? '';
+          const labelEl = document.createElement('span');
+          labelEl.className = 'ref-menu-label';
+          labelEl.textContent = content.label ?? '';
+          const preview = document.createElement('span');
+          preview.className = 'ref-menu-preview';
+          preview.textContent = content.preview ?? '';
+          el.append(num, labelEl, preview);
+        }
         if (label !== null) {
           el.addEventListener('mousedown', (e) => {
             e.preventDefault();
@@ -207,7 +236,10 @@ export function refAutocomplete() {
         addItem(
           null,
           'ref',
-          'Nothing to reference yet.<br><span class="ref-menu-hint">Label an equation or figure to reference it, or File → Import bibliography (.bib) to cite works.</span>',
+          {
+            empty: 'Nothing to reference yet.',
+            hint: 'Label an equation or figure to reference it, or File → Import bibliography (.bib) to cite works.',
+          },
           'ref-menu-empty',
         );
       } else {
@@ -215,7 +247,7 @@ export function refAutocomplete() {
           addItem(
             e.label,
             e.kind,
-            `<span class="ref-menu-num">${e.display}</span><span class="ref-menu-label">@${e.label}</span><span class="ref-menu-preview">${e.preview.replace(/</g, '&lt;')}</span>`,
+            { num: e.display, label: `@${e.label}`, preview: e.preview },
             '',
             e.assignPos,
           );
@@ -225,8 +257,8 @@ export function refAutocomplete() {
             found.query || null,
             'ref',
             found.query
-              ? `<span class="ref-menu-num">(?)</span><span class="ref-menu-label">@${found.query}</span><span class="ref-menu-preview">unresolved — resolves when labeled</span>`
-              : '',
+              ? { num: '(?)', label: `@${found.query}`, preview: 'unresolved — resolves when labeled' }
+              : {},
             'ref-menu-unresolved',
           );
         }
