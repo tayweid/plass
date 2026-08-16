@@ -6,6 +6,7 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import { DEFAULT_SETTINGS, normalizeSettings, parseMathMacros, type DocSettings } from './settings';
 import { wrapAligned } from './math-src';
+import { isPortableCitationKey } from './bibtex';
 
 export interface TypExportOptions {
   /** Rewrite image sources (e.g. data: URLs to VFS paths for compilation). */
@@ -176,7 +177,10 @@ function inlineToTyp(node: PMNode): string {
           ? `(#ref(<${child.attrs.label}>, supplement: none))`
           : `@${child.attrs.label}`;
     } else if (child.type.name === 'citation') {
-      out += `@${child.attrs.key}`;
+      const key = child.attrs.key as string;
+      // Invalid keys may exist in an old/local JSON snapshot. Keep their
+      // visible text without letting them become executable Typst syntax.
+      out += isPortableCitationKey(key) ? `@${key}` : escapeTyp(`@${key}`);
     } else if (child.type.name === 'footnote') {
       out += `#footnote[${inlineToTyp(child)}]`;
     } else if (child.type.name === 'hard_break') {

@@ -20,6 +20,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { escapeTyp, parityRules, textSetLine } from '../typ-serializer';
 import type { DocSettings } from '../settings';
 import type { ForcedBreak } from './paragraph';
+import { parseTypstSvg } from '../safe-svg';
 
 /** A word (or atom) with its offsets in the block's content. */
 interface Token {
@@ -308,8 +309,7 @@ export interface SvgLine {
  * line while their y stays put.
  */
 export function extractLines(svg: string, yTol: number): SvgLine[] {
-  const div = document.createElement('div');
-  div.innerHTML = svg;
+  const div = parseTypstSvg(svg);
   div.style.cssText = 'position:absolute;visibility:hidden;left:-99999px;top:0;';
   const svgEl = div.querySelector('svg');
   if (!svgEl) return [];

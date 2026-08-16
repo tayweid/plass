@@ -21,6 +21,7 @@ import type { EditorView } from 'prosemirror-view';
 import { schema } from './schema';
 import { docToTyp } from './typ-serializer';
 import { scheduleTypeset } from './typeset-plugin';
+import { mountTypstSvg } from './safe-svg';
 
 export const PX_PER_PT = 4 / 3;
 
@@ -107,8 +108,7 @@ function measurePages(
 ): { pages: Array<{ top: number; height: number; inkTop: number; inkBottom: number; lines: number }>; widthPx: number } | null {
   const div = document.createElement('div');
   div.style.cssText = 'position:absolute;visibility:hidden;left:-99999px;top:0;';
-  div.innerHTML = svgText;
-  const svgEl = div.querySelector('svg');
+  const svgEl = mountTypstSvg(div, svgText);
   if (!svgEl) return null;
   const widthPx = parseFloat(svgEl.getAttribute('width') ?? '0') * PX_PER_PT;
   svgEl.style.width = `${widthPx}px`;

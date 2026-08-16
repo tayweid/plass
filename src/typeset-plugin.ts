@@ -41,6 +41,7 @@ import { citeOrder } from './citations';
 import { eqKey } from './equations';
 import { getInk, inkKey } from './math-ink';
 import { applySplit, clearSplit, getSplit, requestTableSplit, splitExtra, type TableSplitLayout } from './table-split';
+import { parseTypstSvg } from './safe-svg';
 
 /** Phase-3 flag (PORT.md): drive live typing with the ported Typst
  * breaker. Console: __usePort(false) to A/B against the legacy path;
@@ -50,7 +51,7 @@ let portHits = 0;
 let legacyHits = 0;
 let adapterNulls = 0;
 let partitionMisses = 0;
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
   const w = window as unknown as {
     __usePort: (v: boolean) => void;
     __portStats: () => { port: number; legacy: number };
@@ -785,8 +786,7 @@ class TypesetView {
     const inkText = (src: string): string | undefined => {
       const ink = getInk(inkKey(src, false, settings));
       if (!ink) return undefined;
-      const div = document.createElement('div');
-      div.innerHTML = ink.svg;
+      const div = parseTypstSvg(ink.svg);
       const text = [...div.querySelectorAll('.tsel')]
         .map((t) => t.textContent ?? '')
         .join('')

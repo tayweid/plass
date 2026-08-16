@@ -393,16 +393,20 @@ updateStatus();
 
 view.focus();
 
-// Handy for debugging and scripted testing.
+// Handy for debugging and scripted testing. Never expose the editor or file
+// handles in the production bundle: imported content belongs to the document,
+// not to a global scripting API.
 declare global {
   interface Window {
     view: EditorView;
   }
 }
-window.view = view;
-// Test hooks: adopt a directory handle (e.g. OPFS) as the project folder,
-// and run the app-instance embedded-figure migration (dynamic imports in a
-// test page can hit a second module instance under vite HMR).
-(window as unknown as { __fm: FileManager }).__fm = fileManager;
-(window as unknown as { __migrateEmbedded: () => Promise<void> }).__migrateEmbedded = () =>
-  migrateEmbeddedFigures(view);
+if (import.meta.env.DEV) {
+  window.view = view;
+  // Test hooks: adopt a directory handle (e.g. OPFS) as the project folder,
+  // and run the app-instance embedded-figure migration (dynamic imports in a
+  // test page can hit a second module instance under vite HMR).
+  (window as unknown as { __fm: FileManager }).__fm = fileManager;
+  (window as unknown as { __migrateEmbedded: () => Promise<void> }).__migrateEmbedded = () =>
+    migrateEmbeddedFigures(view);
+}

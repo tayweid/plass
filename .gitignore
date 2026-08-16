@@ -3,3 +3,5 @@ dist/
 .DS_Store
 vendor/
 sidecar/target/
+test-results/
+playwright-report/

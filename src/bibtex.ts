@@ -8,6 +8,13 @@ export interface BibEntry {
   fields: Record<string, string>;
 }
 
+/** Citation keys safe in Plass UI, reference syntax, and Typst output. */
+export const PORTABLE_CITATION_KEY = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/;
+
+export function isPortableCitationKey(key: string): boolean {
+  return PORTABLE_CITATION_KEY.test(key);
+}
+
 const ACCENTS: Record<string, Record<string, string>> = {
   '"': { a: 'ä', o: 'ö', u: 'ü', e: 'ë', i: 'ï', A: 'Ä', O: 'Ö', U: 'Ü' },
   "'": { a: 'á', e: 'é', i: 'í', o: 'ó', u: 'ú', y: 'ý', c: 'ć', n: 'ń', E: 'É' },

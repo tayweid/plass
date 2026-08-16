@@ -18,7 +18,7 @@ const PT_PER_PX = 0.75;
 
 /** Last bail reason (DEV diagnostics — read via window.__portWhy). */
 export let lastBail = '';
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
   (window as unknown as { __portWhy: () => string }).__portWhy = () => lastBail;
 }
 

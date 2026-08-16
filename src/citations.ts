@@ -7,7 +7,8 @@ import { Plugin, PluginKey, type Command, type EditorState } from 'prosemirror-s
 import { Decoration, DecorationSet, type EditorView, type NodeView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
-import { parseBibTeX, bibAuthors, bibVenue, type BibEntry } from './bibtex';
+import { parseBibTeX, bibAuthors, bibVenue, isPortableCitationKey, type BibEntry } from './bibtex';
+import { mountTypstSvg } from './safe-svg';
 
 export interface DocBib {
   name: string;
@@ -44,7 +45,7 @@ export const citeKey = new PluginKey<DecorationSet>('citations');
 
 function build(state: EditorState): DecorationSet {
   const order = citeOrder(state.doc);
-  const known = new Set(getBib(state).map((e) => e.key));
+  const known = new Set(getBib(state).filter((e) => isPortableCitationKey(e.key)).map((e) => e.key));
   const decos: Decoration[] = [];
   state.doc.descendants((node, pos) => {
     if (node.type.name === 'citation') {
@@ -130,7 +131,10 @@ export class BibliographyView implements NodeView {
     const state = this.view.state;
     const bib = state.doc.attrs.bib as { content?: string } | null;
     const order = citeOrder(state.doc);
-    const keys = [...order.entries()].sort((a, b) => a[1] - b[1]).map(([k]) => k);
+    const keys = [...order.entries()]
+      .sort((a, b) => a[1] - b[1])
+      .map(([k]) => k)
+      .filter(isPortableCitationKey);
     if (!bib?.content || !keys.length) return;
     // Measure the column from the editor root — the node view's own box
     // may not be laid out yet when this first runs.
@@ -152,8 +156,7 @@ export class BibliographyView implements NodeView {
     this.inkKey = src;
     const holder = this.dom.querySelector('.bib-ink');
     if (!holder) return;
-    holder.innerHTML = svg;
-    const svgEl = holder.querySelector('svg');
+    const svgEl = mountTypstSvg(holder, svg);
     if (svgEl) {
       svgEl.style.width = `${(parseFloat(svgEl.getAttribute('width') ?? '0') * 4) / 3}px`;
       svgEl.style.height = 'auto';
@@ -170,29 +173,61 @@ export class BibliographyView implements NodeView {
     const byKey = new Map(entries.map((e) => [e.key, e]));
 
     const cited = [...order.entries()].sort((a, b) => a[1] - b[1]);
-    const head =
-      '<div class="bib-head"><span>References</span><button type="button" class="bib-edit-btn" contenteditable="false">Edit</button></div>';
-    let body: string;
+    const ink = document.createElement('div');
+    ink.className = 'bib-ink';
+    ink.contentEditable = 'false';
+    const fallback = document.createElement('div');
+    fallback.className = 'bib-dom';
+    const head = document.createElement('div');
+    head.className = 'bib-head';
+    const heading = document.createElement('span');
+    heading.textContent = 'References';
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'bib-edit-btn';
+    edit.contentEditable = 'false';
+    edit.textContent = 'Edit';
+    head.append(heading, edit);
+    fallback.appendChild(head);
     if (!cited.length) {
-      body = `<div class="bib-empty">${entries.length ? 'Cited works appear here — type @ to cite.' : 'No bibliography loaded — click Edit, or File → Import bibliography (.bib).'}</div>`;
+      const empty = document.createElement('div');
+      empty.className = 'bib-empty';
+      empty.textContent = entries.length
+        ? 'Cited works appear here — type @ to cite.'
+        : 'No bibliography loaded — click Edit, or File → Import bibliography (.bib).';
+      fallback.appendChild(empty);
     } else {
-      body = cited
-        .map(([key, n]) => {
-          const e = byKey.get(key);
-          if (!e) return `<div class="bib-item"><span class="bib-n">[${n}]</span><span>@${esc(key)} — not found in bibliography</span></div>`;
+      for (const [key, n] of cited) {
+        const item = document.createElement('div');
+        item.className = 'bib-item';
+        const number = document.createElement('span');
+        number.className = 'bib-n';
+        number.textContent = `[${n}]`;
+        const detail = document.createElement('span');
+        const e = byKey.get(key);
+        if (!e) {
+          detail.textContent = `@${key} — not found in bibliography`;
+        } else {
           const authors = bibAuthors(e);
           const title = e.fields.title ?? '';
           const venue = bibVenue(e);
           const year = e.fields.year ?? '';
           const tail = [venue, year].filter(Boolean).join(', ');
-          return `<div class="bib-item"><span class="bib-n">[${n}]</span><span>${esc(authors)}${authors ? '. ' : ''}<i>${esc(title)}</i>${title ? '. ' : ''}${esc(tail)}${tail ? '.' : ''}</span></div>`;
-        })
-        .join('');
+          if (authors) detail.append(document.createTextNode(`${authors}. `));
+          const titleEl = document.createElement('i');
+          titleEl.textContent = title;
+          detail.appendChild(titleEl);
+          if (title) detail.append(document.createTextNode('. '));
+          if (tail) detail.append(document.createTextNode(`${tail}.`));
+        }
+        item.append(number, detail);
+        fallback.appendChild(item);
+      }
     }
-    this.dom.innerHTML = '<div class="bib-ink" contenteditable="false"></div>' + '<div class="bib-dom">' + head + body + '</div>';
+    this.dom.replaceChildren(ink, fallback);
     this.dom.classList.remove('bib-has-ink');
     this.inkKey = '';
-    this.dom.querySelector('.bib-edit-btn')?.addEventListener('mousedown', (e) => {
+    edit.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
       editBibliography(this.view);
@@ -233,10 +268,6 @@ export class BibliographyView implements NodeView {
   ignoreMutation() {
     return true;
   }
-}
-
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
 }
 
 /** Insert a citation; ensure a bibliography block exists at the end. */

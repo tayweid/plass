@@ -16,6 +16,7 @@ import { schema } from './schema';
 import { scheduleTypeset } from './typeset-plugin';
 import { openTableEditor } from './table-editor';
 import { fragmentSource, getSplit, onSplitsChanged, type TableSplitLayout } from './table-split';
+import { mountTypstSvg } from './safe-svg';
 
 export class TablePreviewView implements NodeView {
   dom: HTMLElement;
@@ -95,8 +96,7 @@ export class TablePreviewView implements NodeView {
     this.shown = { layout: a?.layout ?? null, gapsKey };
 
     if (!a || a.layout.fragments.length <= 1) {
-      this.previewEl.innerHTML = this.autoSvg;
-      const svgEl = this.previewEl.querySelector('svg');
+      const svgEl = mountTypstSvg(this.previewEl, this.autoSvg);
       if (svgEl) {
         svgEl.style.width = `${(parseFloat(svgEl.getAttribute('width') ?? '0') * 4) / 3}px`;
         svgEl.style.height = 'auto';
@@ -117,7 +117,7 @@ export class TablePreviewView implements NodeView {
       winEl.style.cssText = `overflow:hidden;height:${f.heightPx}px;`;
       const inner = document.createElement('div');
       inner.style.marginTop = `${-f.cropTopPx}px`;
-      inner.innerHTML = a.layout.svg;
+      mountTypstSvg(inner, a.layout.svg);
       const svgEl = inner.querySelector('svg');
       if (svgEl) {
         svgEl.style.width = `${a.layout.svgWidthPx}px`;
