@@ -16,6 +16,7 @@ import type { EditorView, NodeView } from 'prosemirror-view';
 import { schema } from './schema';
 import { fragmentSource } from './table-split';
 import { scheduleTypeset } from './typeset-plugin';
+import { mountTypstSvg } from './safe-svg';
 
 /** Which island holds the caret — the ONLY thing that decides source vs
  *  render. Focus can't tell us: the caret moves between blocks without
@@ -144,8 +145,7 @@ export class CodeBlockView implements NodeView {
    *  much visible) or occupies height (#v spacers paint nothing). */
   private applySvg(svg: string | null): boolean {
     if (!svg || !this.renderEl) return false;
-    this.renderEl.innerHTML = svg;
-    const svgEl = this.renderEl.querySelector('svg');
+    const svgEl = mountTypstSvg(this.renderEl, svg);
     if (!svgEl) return false;
     const h = parseFloat(svgEl.getAttribute('height') ?? '0');
     const ink = !!svgEl.querySelector('path, use, image');

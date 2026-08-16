@@ -198,15 +198,15 @@ is the next milestone. The first page's top offset also differs slightly
   unknown directives) is preserved verbatim as a raw-Typst island and
   re-exported unchanged — open + save never destroys what we don't model.
 - **One-click PDF export (File → Export PDF)**: the document compiles with
-  the real Typst engine, as WASM, in the browser — no CLI, no install. The
-  compiler (~28 MB), bundled fonts (~4 MB: STIX Two Text, Libertinus Serif,
-  New Computer Modern Math, DejaVu Sans Mono — all OFL, in `public/fonts/`),
-  and the mitex package (fetched once from the Typst registry; needs network
-  on first export) load lazily and are cached — first export ~2 s, warm
-  exports ~0.1 s. Embedded images are decoded into the compiler's virtual
-  filesystem and the markup rewritten to reference them, so figures compile
-  properly. Equation refs export as `(#ref(<label>, supplement: none))` so
-  the PDF shows "(1)" exactly like the editor.
+  the real Typst engine, as WASM, in a watchdog-protected Web Worker — no CLI,
+  no install. The compiler (~28 MB) and OFL fonts in `public/fonts/` load
+  lazily. Math uses only the pinned mitex 0.2.5 archive: it is fetched from
+  the Typst registry when first needed, size-bounded, and SHA-256 verified;
+  imported documents cannot request arbitrary packages. Embedded images are
+  decoded into the compiler's bounded virtual filesystem and the markup is
+  rewritten to reference them, so figures compile properly. Equation refs
+  export as `(#ref(<label>, supplement: none))` so the PDF shows "(1)"
+  exactly like the editor.
 - **Export**: `.typ` (Typst markup; math wrapped with mitex so it compiles —
   `typst compile document.typ` also works from the CLI), plus Print/PDF of
   the typeset view itself.

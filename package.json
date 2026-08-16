@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "verify:production": "node --import tsx scripts/verify-production.ts",
     "preview": "vite preview",
     "test": "tsx src/layout/knuth-plass.test.ts && tsx src/typ-parser.test.ts && tsx src/md-round.test.ts && tsx src/security.test.ts",
     "test:browser": "playwright test",

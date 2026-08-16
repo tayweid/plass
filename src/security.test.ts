@@ -2,6 +2,8 @@ import { isPortableCitationKey, parseBibTeX } from './bibtex';
 import { schema } from './schema';
 import { docToTyp } from './typ-serializer';
 import { isRemoteSource, remoteImageStatus } from './remote-images';
+import { contentSecurityPolicy } from './security-policy';
+import { isAllowedTypstPackage, sourceNeedsPinnedTypstPackage, TYPST_PACKAGE_POLICY } from './typst-config';
 import { COMPILER_LIMITS, validateCompilerTask } from './typst-worker-protocol';
 
 let failed = 0;
@@ -74,6 +76,30 @@ check(
     source: 'safe',
     assets: [{ path: '/large.png', data: new Uint8Array(COMPILER_LIMITS.assetBytes + 1) }],
   }) === 'A compiler asset exceeds the 20 MiB limit',
+);
+
+const productionCsp = contentSecurityPolicy();
+check('production CSP defaults resources to same-origin', productionCsp.includes("default-src 'self'"));
+check('production CSP blocks inline script attributes', productionCsp.includes("script-src-attr 'none'"));
+check('production CSP allows WASM without allowing JavaScript eval',
+  productionCsp.includes("'wasm-unsafe-eval'") && !productionCsp.includes(" 'unsafe-eval'"));
+check('production CSP restricts workers to same-origin', productionCsp.includes("worker-src 'self'"));
+check('production CSP does not permit development WebSockets', !productionCsp.includes('ws:'));
+check('development CSP permits Vite HMR WebSockets', contentSecurityPolicy({ development: true }).includes('ws:'));
+check(
+  'response-header CSP includes clickjacking protection',
+  contentSecurityPolicy({ responseHeader: true }).includes("frame-ancestors 'none'"),
+);
+
+check('the generated mitex package is explicitly allowed', isAllowedTypstPackage(TYPST_PACKAGE_POLICY));
+check(
+  'arbitrary Typst Universe packages are denied',
+  !isAllowedTypstPackage({ namespace: 'preview', name: 'other', version: '1.0.0' }),
+);
+check(
+  'only source using the pinned package triggers its prefetch',
+  sourceNeedsPinnedTypstPackage('#import "@preview/mitex:0.2.5": mitex') &&
+    !sourceNeedsPinnedTypstPackage('#import "@preview/other:1.0.0": other'),
 );
 
 if (failed) {

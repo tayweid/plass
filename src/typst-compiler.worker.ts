@@ -4,7 +4,13 @@
 // watchdog and can terminate this entire global (including its WASM memory)
 // when a request exceeds its deadline.
 
-import { TYPST_FONT_FILES } from './typst-config';
+import {
+  isAllowedTypstPackage,
+  sourceNeedsPinnedTypstPackage,
+  TYPST_FONT_FILES,
+  TYPST_FONT_LIMITS,
+  TYPST_PACKAGE_POLICY,
+} from './typst-config';
 import {
   COMPILER_LIMITS,
   type CompilerAsset,
@@ -33,7 +39,156 @@ interface TypstLike {
 }
 
 const scope = self as unknown as DedicatedWorkerGlobalScope;
+
+// wasm-bindgen's js-sys global() compatibility path uses
+// Function("return this") even in browsers that have globalThis. Replace the
+// worker-global constructor before loading Typst: preserve only that inert
+// lookup and fail closed for every other attempt at dynamic JavaScript.
+const safeFunctionConstructor = function (...args: string[]) {
+  const body = args.at(-1)?.trim();
+  if (args.length === 1 && body === 'return this') return () => scope;
+  if (args.length === 1 && body === 'return 0') return () => 0;
+  if (args.length === 1 && body === 'return true') return () => true;
+  if (args.length === 2 && /^[A-Za-z_$][\w$]*$/.test(args[0]) && body === `return ${args[0]}`) {
+    return (value: unknown) => value;
+  }
+  if (args.length === 1 && body === "throw new Error('Dummy AccessModel, please initialize compiler with withAccessModel()')") {
+    return () => {
+      throw new Error('Typst compiler access model is not initialized');
+    };
+  }
+  if (args.length === 1 && body === "throw new Error('Dummy Registry, please initialize compiler with withPackageRegistry()')") {
+    return () => {
+      throw new Error('Typst compiler package registry is not initialized');
+    };
+  }
+  throw new EvalError('Dynamic JavaScript construction is disabled in the Typst worker');
+} as unknown as FunctionConstructor;
+Object.defineProperty(scope, 'Function', {
+  value: safeFunctionConstructor,
+  writable: false,
+  configurable: false,
+});
+
 let typstPromise: Promise<TypstLike> | null = null;
+let pinnedPackageBytes: Uint8Array | null = null;
+let pinnedPackagePromise: Promise<void> | null = null;
+
+async function readBoundedResponse(response: Response, maxBytes: number, label: string): Promise<Uint8Array> {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new Error(`${label} exceeds its byte limit`);
+  }
+  if (!response.body) {
+    const data = new Uint8Array(await response.arrayBuffer());
+    if (data.byteLength > maxBytes) throw new Error(`${label} exceeds its byte limit`);
+    return data;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error(`${label} exceeds its byte limit`);
+      chunks.push(value);
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  }
+  const data = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    data.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return data;
+}
+
+function hex(bytes: ArrayBuffer): string {
+  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** Fetch the one audited package asynchronously, with redirect, size, and
+ * integrity checks, before synchronous Typst package resolution begins. */
+function loadPinnedPackage(): Promise<void> {
+  if (!pinnedPackagePromise) {
+    pinnedPackagePromise = (async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TYPST_PACKAGE_POLICY.fetchTimeoutMs);
+      try {
+        const response = await fetch(TYPST_PACKAGE_POLICY.url, {
+          credentials: 'omit',
+          referrerPolicy: 'no-referrer',
+          redirect: 'error',
+          mode: 'cors',
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Pinned Typst package returned HTTP ${response.status}`);
+        const data = await readBoundedResponse(
+          response,
+          TYPST_PACKAGE_POLICY.maxBytes,
+          'Pinned Typst package',
+        );
+        const digest = hex(await crypto.subtle.digest('SHA-256', data.slice().buffer as ArrayBuffer));
+        if (digest !== TYPST_PACKAGE_POLICY.sha256) {
+          throw new Error('Pinned Typst package failed its integrity check');
+        }
+        pinnedPackageBytes = data;
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+  }
+  return pinnedPackagePromise;
+}
+
+interface FontBuildContext {
+  builder: { add_raw_font(data: Uint8Array): Promise<void> };
+}
+
+/** Avoid typst.ts's cross-platform font helper: it constructs JavaScript at
+ * runtime to support Node, which is incompatible with a no-eval worker CSP. */
+function pinnedFontProvider<T extends { preloadFonts(fonts: string[]): unknown }>(TypstSnippet: T): ReturnType<T['preloadFonts']> {
+  const loader = Object.assign(
+    async (_mark: unknown, { builder }: FontBuildContext) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TYPST_FONT_LIMITS.fetchTimeoutMs);
+      try {
+        const base = new URL(import.meta.env.BASE_URL + 'fonts/', scope.location.href);
+        if (base.origin !== scope.location.origin) throw new Error('Compiler font base must be same-origin');
+        const fonts = await Promise.all(TYPST_FONT_FILES.map(async (file) => {
+          const url = new URL(file, base);
+          if (url.origin !== scope.location.origin) throw new Error('Compiler font URL must be same-origin');
+          const response = await fetch(url, {
+            credentials: 'same-origin',
+            redirect: 'error',
+            signal: controller.signal,
+          });
+          if (!response.ok) throw new Error(`Compiler font returned HTTP ${response.status}`);
+          return readBoundedResponse(response, TYPST_FONT_LIMITS.fileBytes, 'Compiler font');
+        }));
+        const total = fonts.reduce((sum, font) => sum + font.byteLength, 0);
+        if (total > TYPST_FONT_LIMITS.totalBytes) throw new Error('Compiler fonts exceed their total byte limit');
+        for (const font of fonts) await builder.add_raw_font(font);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    // These markers prevent TypstCompilerDriver from adding its default
+    // network font loader and satisfy its required font-loader check.
+    { _preloadRemoteFontOptions: { assets: false }, _kind: 'fontLoader' },
+  );
+  return {
+    key: 'access-model',
+    forRoles: ['compiler'],
+    provides: [loader],
+  } as ReturnType<T['preloadFonts']>;
+}
 
 function loadTypst(): Promise<TypstLike> {
   if (!typstPromise) {
@@ -47,12 +202,14 @@ function loadTypst(): Promise<TypstLike> {
       $typst.setCompilerInitOptions({ getModule: () => wasm.default });
       $typst.setRendererInitOptions({ getModule: () => rendererWasm.default });
       const accessModel = new MemoryAccessModel();
-      const registry = await TypstSnippet.fetchPackageRegistry(accessModel);
-      const base = import.meta.env.BASE_URL + 'fonts/';
+      const registry = TypstSnippet.fetchPackageBy(accessModel, (spec, defaultUrl) => {
+        if (!isAllowedTypstPackage(spec) || defaultUrl !== TYPST_PACKAGE_POLICY.url) return undefined;
+        return pinnedPackageBytes ?? undefined;
+      });
       $typst.use(
         TypstSnippet.withAccessModel(accessModel),
         registry,
-        TypstSnippet.preloadFonts(TYPST_FONT_FILES.map((file) => base + file)),
+        pinnedFontProvider(TypstSnippet),
       );
       return $typst as unknown as TypstLike;
     })().catch((error) => {
@@ -88,6 +245,7 @@ async function runTask(task: CompilerTask): Promise<string | Uint8Array | unknow
     return null;
   }
 
+  if (sourceNeedsPinnedTypstPackage(task.source)) await loadPinnedPackage();
   const typst = await loadTypst();
   if (task.kind === 'svg') {
     await typst.resetShadow();

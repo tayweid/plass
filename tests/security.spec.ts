@@ -1,5 +1,41 @@
 import { expect, test } from 'playwright/test';
 
+test('document CSP blocks inline code, eval, and direct remote images', async ({ page }) => {
+  let remoteRequests = 0;
+  await page.route('https://csp-probe.test/direct.png', async (route) => {
+    remoteRequests++;
+    await route.abort();
+  });
+  await page.goto('/?new=1');
+  const result = await page.evaluate(async () => {
+    const policy = document.querySelector<HTMLMetaElement>('meta[http-equiv="Content-Security-Policy"]')?.content ?? '';
+    (globalThis as typeof globalThis & { cspInlineRan?: boolean }).cspInlineRan = false;
+    const script = document.createElement('script');
+    script.textContent = 'globalThis.cspInlineRan = true';
+    document.head.appendChild(script);
+
+    const { testJavaScriptEvalBlocked } = await import('/src/security-policy.ts');
+    const evalBlocked = testJavaScriptEvalBlocked();
+
+    const image = document.createElement('img');
+    image.src = 'https://csp-probe.test/direct.png';
+    document.body.appendChild(image);
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    return {
+      policy,
+      inlineRan: (globalThis as typeof globalThis & { cspInlineRan?: boolean }).cspInlineRan,
+      evalBlocked,
+    };
+  });
+
+  expect(result.policy).toContain("default-src 'self'");
+  expect(result.policy).toContain("worker-src 'self'");
+  expect(result.policy).toContain("script-src-attr 'none'");
+  expect(result.inlineRan).toBe(false);
+  expect(result.evalBlocked).toBe(true);
+  expect(remoteRequests).toBe(0);
+});
+
 test('Typst SVG boundary strips active content and preserves safe glyph references', async ({ page }) => {
   await page.goto('/?new=1');
   const result = await page.evaluate(async () => {
@@ -96,6 +132,59 @@ test('compiled bibliography SVG cannot restore a dangerous URL', async ({ page }
   );
   expect(active.some((attr) => /javascript:/i.test(attr))).toBe(false);
   expect(active.some((attr) => /^on/i.test(attr))).toBe(false);
+});
+
+test('raw Typst previews use the sanitized SVG boundary', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const app = window as typeof window & { view: import('prosemirror-view').EditorView };
+    const { state } = app.view;
+    const raw = state.schema.nodes.code_block.create(
+      { params: 'typst-raw' },
+      state.schema.text('#link("javascript:alert(1)")[danger]'),
+    );
+    app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, raw));
+  });
+
+  const render = page.locator('.ts-raw-render');
+  await expect(render.locator('svg')).toHaveCount(1, { timeout: 20_000 });
+  const active = await render.locator('*').evaluateAll((elements) =>
+    elements.flatMap((element) =>
+      element.getAttributeNames()
+        .filter((name) => name.startsWith('on') || /^(?:href|xlink:href)$/i.test(name))
+        .map((name) => `${name}=${element.getAttribute(name)}`),
+    ),
+  );
+  expect(active.some((attribute) => /javascript:/i.test(attribute))).toBe(false);
+  expect(active.some((attribute) => /^on/i.test(attribute))).toBe(false);
+});
+
+test('compiler package policy makes only one pinned integrity-checked request', async ({ page }) => {
+  const packageRequests: string[] = [];
+  await page.route('https://packages.typst.org/**', async (route) => {
+    packageRequests.push(route.request().url());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/gzip',
+      headers: { 'access-control-allow-origin': '*' },
+      body: Buffer.from('tampered package'),
+    });
+  });
+  await page.goto('/?new=1');
+
+  const unsupported = await page.evaluate(async () => {
+    const { compileSvg } = await import('/src/pdf.ts');
+    return compileSvg('#import "@preview/not-a-real-package:9.9.9": *\n[probe]');
+  });
+  expect(unsupported).toBeNull();
+  expect(packageRequests).toEqual([]);
+
+  const tampered = await page.evaluate(async () => {
+    const { compileSvg } = await import('/src/pdf.ts');
+    return compileSvg('#import "@preview/mitex:0.2.5": mitex\n#mitex(`x`)');
+  });
+  expect(tampered).toBeNull();
+  expect(packageRequests).toEqual(['https://packages.typst.org/preview/mitex-0.2.5.tar.gz']);
 });
 
 test('compiler watchdog stops a stuck job without freezing the UI and then recovers', async ({ page }) => {
