@@ -15,6 +15,12 @@ This is the MVP of the design in [`wysiwyg-typeset-editor-spec.md`](./wysiwyg-ty
 > should still be backed up while the first release completes its cross-browser
 > and independent review.
 
+Plass is installable directly from the browser with no local engine. In Chrome
+or Edge, use **Install Plass** in the toolbar; in Safari on macOS, choose
+**File → Add to Dock**. Supporting systems can also register the installed app
+for `.typ` and `.md` files. The same hosted frontend continues to receive new
+versions when it is opened online.
+
 ![Plass editing a live typeset document](./docs/plass-editor.jpg)
 
 ## Run it

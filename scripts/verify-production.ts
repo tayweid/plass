@@ -21,6 +21,11 @@ for (const path of requiredNotices) {
   assert(statSync(join(dist, path)).size > 100, `${path} is missing or empty`);
 }
 const html = readFileSync(join(dist, 'index.html'), 'utf8');
+const manifest = JSON.parse(readFileSync(join(dist, 'manifest.webmanifest'), 'utf8')) as Record<string, unknown>;
+assert(manifest.id === './', 'PWA manifest must have a stable relative app identity');
+assert(manifest.start_url === './', 'PWA start URL must remain host-independent');
+assert(manifest.scope === './', 'PWA scope must remain host-independent');
+assert(manifest.display === 'standalone', 'PWA must launch in standalone display mode');
 const tags = [...html.matchAll(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"\s*\/?>/gi)];
 assert(tags.length === 1, 'index.html must contain exactly one CSP meta element');
 const builtPolicy = tags[0][1].replaceAll('&#39;', "'").replaceAll('&amp;', '&');

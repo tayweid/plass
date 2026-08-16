@@ -158,6 +158,10 @@ body {
   transition: opacity 0.25s ease;
 }
 
+.tb-btn[hidden] {
+  display: none;
+}
+
 #toolbar:hover .tb-btn {
   opacity: 1;
 }
