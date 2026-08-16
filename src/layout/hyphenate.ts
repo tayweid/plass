@@ -1,8 +1,22 @@
 // Hyphenation via Liang's algorithm (the same patterns TeX uses), through hypher.
 import Hypher from 'hypher';
-import english from 'hyphenation.en-us';
+import englishPatterns from 'hyphenated-en-us';
 
-const h = new Hypher(english);
+// hyphenated-en-us publishes the TeX patterns as an array. Hypher's compact
+// input format groups and concatenates patterns by encoded string length.
+// Adapting the MIT-licensed source here keeps the existing, synchronous
+// layout engine while avoiding the abandoned hyphenation.en-us package,
+// which did not declare a license.
+const groupedPatterns: Record<string, string> = {};
+for (const pattern of englishPatterns.patterns) {
+  groupedPatterns[pattern.length] = (groupedPatterns[pattern.length] ?? '') + pattern;
+}
+const h = new Hypher({
+  patterns: groupedPatterns,
+  leftmin: 2,
+  rightmin: 3,
+  exceptions: englishPatterns.exceptions.map((word) => word.replaceAll('-', '\u2027')).join(', '),
+});
 const cache = new Map<string, string[]>();
 
 function hyphenateCore(word: string): string[] {

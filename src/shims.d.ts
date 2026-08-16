@@ -30,6 +30,7 @@ declare module 'hypher' {
     patterns: Record<string, string>;
     leftmin: number;
     rightmin: number;
+    exceptions?: string;
   }
   export default class Hypher {
     constructor(language: HypherLanguage);
@@ -37,11 +38,11 @@ declare module 'hypher' {
   }
 }
 
-declare module 'hyphenation.en-us' {
+declare module 'hyphenated-en-us' {
   const language: {
-    patterns: Record<string, string>;
-    leftmin: number;
-    rightmin: number;
+    id: string;
+    patterns: string[];
+    exceptions: string[];
   };
   export default language;
 }
