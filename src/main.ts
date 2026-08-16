@@ -13,7 +13,7 @@ import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
 import { TablePreviewView } from './table-preview';
 import { equationsPlugin } from './equations';
-import { FigureView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
+import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { refAutocomplete } from './ref-autocomplete';
@@ -223,6 +223,7 @@ const view = new EditorView(editorEl, {
   nodeViews: {
     math_inline: (node, v, getPos) => new MathView(node, v, getPos),
     math_display: (node, v, getPos) => new MathView(node, v, getPos),
+    image: (node, v, getPos) => new ImageView(node, v, getPos),
     figure: (node, v, getPos) => new FigureView(node, v, getPos),
     footnote: (node) => new FootnoteView(node),
     bibliography: (node, v) => new BibliographyView(node, v),

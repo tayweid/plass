@@ -4,6 +4,20 @@ import { addListNodes } from 'prosemirror-schema-list';
 import { tableNodes } from 'prosemirror-tables';
 import { DEFAULT_SETTINGS } from './settings';
 
+/** DOM serialization is used for clipboard copies as well as rendering.
+ * Keep path/remote/SVG sources in inert data attributes so creating a
+ * detached clipboard <img> cannot itself trigger document-controlled I/O. */
+function serializedImageAttrs(node: { attrs: { src?: unknown; alt?: unknown; title?: unknown } }) {
+  const src = String(node.attrs.src ?? '');
+  const attrs: Record<string, string> = {
+    'data-image-src': src,
+    alt: String(node.attrs.alt ?? ''),
+  };
+  if (node.attrs.title) attrs.title = String(node.attrs.title);
+  if (/^data:image\/(?:png|jpe?g|gif|webp);/i.test(src) || /^blob:/i.test(src)) attrs.src = src;
+  return attrs;
+}
+
 const mathInline: NodeSpec = {
   group: 'inline',
   inline: true,
@@ -108,7 +122,11 @@ const figure: NodeSpec = {
       tag: 'figure[data-figure]',
       contentElement: 'figcaption',
       getAttrs: (el) => ({
-        src: (el as HTMLElement).querySelector('img')?.getAttribute('src') ?? '',
+        src:
+          (el as HTMLElement).getAttribute('data-image-src') ??
+          (el as HTMLElement).querySelector('img')?.getAttribute('data-image-src') ??
+          (el as HTMLElement).querySelector('img')?.getAttribute('src') ??
+          '',
         label: (el as HTMLElement).getAttribute('data-label') ?? '',
         name: (el as HTMLElement).getAttribute('data-name') ?? '',
       }),
@@ -116,8 +134,14 @@ const figure: NodeSpec = {
   ],
   toDOM: (node) => [
     'figure',
-    { 'data-figure': '', 'data-label': node.attrs.label, 'data-name': node.attrs.name, class: 'ts-figure' },
-    ['img', { src: node.attrs.src, alt: '' }],
+    {
+      'data-figure': '',
+      'data-image-src': node.attrs.src,
+      'data-label': node.attrs.label,
+      'data-name': node.attrs.name,
+      class: 'ts-figure',
+    },
+    ['img', serializedImageAttrs({ attrs: { src: node.attrs.src, alt: '' } })],
     ['figcaption', 0],
   ],
 };
@@ -201,6 +225,23 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
     toDOM(node) {
       return node.attrs.keep ? ['p', { 'data-keep': '1', class: 'ts-keep' }, 0] : ['p', 0];
     },
+  })
+  .update('image', {
+    ...base.spec.nodes.get('image')!,
+    parseDOM: [
+      {
+        tag: 'img[src], img[data-image-src]',
+        getAttrs: (el: HTMLElement | string) => {
+          if (typeof el === 'string') return false;
+          return {
+            src: el.getAttribute('data-image-src') ?? el.getAttribute('src') ?? '',
+            alt: el.getAttribute('alt'),
+            title: el.getAttribute('title'),
+          };
+        },
+      },
+    ],
+    toDOM: (node) => ['img', serializedImageAttrs(node)],
   })
   // Headings carry an optional label so they can be @-referenced; the
   // "1.2"-style number is painted by the numbering plugin, never stored.

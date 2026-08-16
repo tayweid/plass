@@ -97,3 +97,111 @@ test('compiled bibliography SVG cannot restore a dangerous URL', async ({ page }
   expect(active.some((attr) => /javascript:/i.test(attr))).toBe(false);
   expect(active.some((attr) => /^on/i.test(attr))).toBe(false);
 });
+
+test('remote images make no request until the user grants their origin', async ({ page }) => {
+  let requests = 0;
+  await page.route('https://remote.test/pixel.png', async (route) => {
+    requests++;
+    await route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      headers: { 'access-control-allow-origin': '*' },
+      body: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    });
+  });
+
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const app = window as typeof window & { view: import('prosemirror-view').EditorView };
+    const { state } = app.view;
+    const src = 'https://remote.test/pixel.png';
+    const figure = state.schema.nodes.figure.create({ src }, state.schema.text('Remote figure'));
+    const inline = state.schema.nodes.image.create({ src, alt: 'Remote inline image' });
+    const paragraph = state.schema.nodes.paragraph.create(null, [state.schema.text('Inline: '), inline]);
+    app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, [figure, paragraph]));
+  });
+
+  const figure = page.locator('.ts-figure');
+  const inline = page.locator('.ts-inline-image');
+  await expect(figure.locator('.fig-path-chip.remote')).toBeVisible();
+  await expect(inline.locator('.inline-image-action')).toContainText('Load image from remote.test');
+  await page.waitForTimeout(1_000);
+
+  expect(requests).toBe(0);
+  await expect(figure.locator('img')).not.toHaveAttribute('src', /remote\.test/);
+  await expect(inline.locator('img')).not.toHaveAttribute('src', /remote\.test/);
+
+  await figure.locator('.fig-path-chip.remote').click();
+  await expect.poll(() => requests).toBe(1);
+  await expect(figure.locator('img')).toHaveAttribute('src', /^blob:/);
+  await expect(inline.locator('img')).toHaveAttribute('src', /^blob:/);
+  // Both node views and background export code share a one-fetch byte cache.
+  expect(requests).toBe(1);
+});
+
+test('embedded SVG images cannot smuggle an automatic remote subrequest', async ({ page }) => {
+  let requests = 0;
+  await page.route('https://tracker.test/pixel.png', async (route) => {
+    requests++;
+    await route.abort();
+  });
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const app = window as typeof window & { view: import('prosemirror-view').EditorView };
+    const { state } = app.view;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+      <image href="https://tracker.test/pixel.png" width="20" height="20"/>
+      <script>alert(1)</script>
+    </svg>`;
+    const src = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    const figure = state.schema.nodes.figure.create({ src }, state.schema.text('Embedded SVG'));
+    app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, figure));
+  });
+
+  await expect(page.locator('.ts-figure img')).toHaveAttribute('src', /^blob:/);
+  await page.waitForTimeout(500);
+  expect(requests).toBe(0);
+});
+
+test('a failed approved image is retried only by another user action', async ({ page }) => {
+  let requests = 0;
+  await page.route('https://flaky.test/pixel.png', async (route) => {
+    requests++;
+    if (requests === 1) {
+      await route.fulfill({ status: 503, body: 'unavailable' });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      headers: { 'access-control-allow-origin': '*' },
+      body: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    });
+  });
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const app = window as typeof window & { view: import('prosemirror-view').EditorView };
+    const { state } = app.view;
+    const figure = state.schema.nodes.figure.create(
+      { src: 'https://flaky.test/pixel.png' },
+      state.schema.text('Flaky figure'),
+    );
+    app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, figure));
+  });
+
+  await page.locator('.fig-path-chip.remote').click();
+  await expect(page.locator('.fig-path-chip.remote-error')).toContainText('retry from flaky.test');
+  await page.waitForTimeout(750);
+  expect(requests).toBe(1);
+
+  await page.locator('.fig-path-chip.remote-error').click();
+  await expect.poll(() => requests).toBe(2);
+  await expect(page.locator('.ts-figure img')).toHaveAttribute('src', /^blob:/);
+  await expect(page.locator('.fig-path-chip.remote-error')).toHaveCount(0);
+});
