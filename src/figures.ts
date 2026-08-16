@@ -6,6 +6,15 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
 import { scheduleTypeset, invalidatePageLayout } from './typeset-plugin';
 import type { FileManager } from './file-manager';
+import {
+  allowRemoteImageOrigin,
+  isRemoteSource,
+  loadRemoteImage,
+  onRemoteImagePermissionChange,
+  remoteImageStatus,
+  retryRemoteImage,
+  sanitizeSvgImage,
+} from './remote-images';
 
 // ---------- project assets (relative paths) ----------
 
@@ -15,10 +24,11 @@ export function setFigureFileManager(fm: FileManager) {
   fmRef = fm;
 }
 
-export const isPathSrc = (src: string) => !!src && !/^(data:|https?:|blob:)/.test(src);
+export const isPathSrc = (src: string) => !!src && !/^(data:|blob:)/i.test(src) && !isRemoteSource(src);
 
 /** path → object URL, keyed by mtime so rewrites refresh. */
 const assetCache = new Map<string, { mtime: number; url: string }>();
+const embeddedSvgCache = new Map<string, Promise<string | null>>();
 
 async function assetUrl(path: string): Promise<string | null> {
   if (!fmRef) return null;
@@ -27,7 +37,16 @@ async function assetUrl(path: string): Promise<string | null> {
   const cached = assetCache.get(path);
   if (cached && cached.mtime === file.mtime) return cached.url;
   if (cached) URL.revokeObjectURL(cached.url);
-  const url = URL.createObjectURL(new Blob([file.data.slice().buffer], { type: file.type || 'image/png' }));
+  const type = file.type || (/\.svg$/i.test(path) ? 'image/svg+xml' : 'image/png');
+  let data = file.data;
+  if (type === 'image/svg+xml' || /\.svg$/i.test(path)) {
+    try {
+      data = sanitizeSvgImage(file.data);
+    } catch {
+      return null;
+    }
+  }
+  const url = URL.createObjectURL(new Blob([data.slice().buffer], { type }));
   assetCache.set(path, { mtime: file.mtime, url });
   return url;
 }
@@ -35,17 +54,40 @@ async function assetUrl(path: string): Promise<string | null> {
 const ASSET_EVENT = 'typeset-assets-changed';
 
 function dataUrlBytes(src: string): { blob: Blob; ext: string } | null {
-  const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[a-z0-9-]+)*),(.*)$/is.exec(src);
+  const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[^,]*)*),(.*)$/is.exec(src);
   if (!m) return null;
   const ext = m[1] === 'svg+xml' ? 'svg' : m[1] === 'jpeg' ? 'jpg' : m[1];
   const mime = `image/${m[1]}`;
-  if (m[2].includes('base64')) {
+  if (/(?:^|;)base64(?:;|$)/i.test(m[2])) {
     const bin = atob(m[3]);
     const data = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
     return { blob: new Blob([data.buffer], { type: mime }), ext };
   }
   return { blob: new Blob([decodeURIComponent(m[3])], { type: mime }), ext };
+}
+
+/** Data-SVG images can themselves contain remote subresources. Sanitize them
+ * into a blob URL before display; ordinary raster data URLs remain direct. */
+function embeddedDisplayUrl(src: string): Promise<string | null> {
+  if (/^blob:/i.test(src)) return Promise.resolve(src);
+  if (!/^data:/i.test(src)) return Promise.resolve(src);
+  let decoded: ReturnType<typeof dataUrlBytes> = null;
+  try {
+    decoded = dataUrlBytes(src);
+  } catch {
+    return Promise.resolve(null);
+  }
+  if (!decoded) return Promise.resolve(null);
+  if (decoded.ext !== 'svg') return Promise.resolve(src);
+  const existing = embeddedSvgCache.get(src);
+  if (existing) return existing;
+  const pending = (async () => {
+    const clean = sanitizeSvgImage(new Uint8Array(await decoded.blob.arrayBuffer()));
+    return URL.createObjectURL(new Blob([clean.slice().buffer], { type: 'image/svg+xml' }));
+  })().catch(() => null);
+  embeddedSvgCache.set(src, pending);
+  return pending;
 }
 
 /** Write every embedded (data-URL) figure out to figures/ and swap the
@@ -61,7 +103,13 @@ export async function migrateEmbeddedFigures(view: EditorView) {
   const moves: Array<{ pos: number; path: string }> = [];
   let n = 0;
   for (const f of found) {
-    const decoded = dataUrlBytes(f.src);
+    let decoded: ReturnType<typeof dataUrlBytes> = null;
+    try {
+      decoded = dataUrlBytes(f.src);
+    } catch {
+      // Preserve malformed embedded content in the document; do not abort
+      // migration of the remaining valid figures.
+    }
     if (!decoded) continue;
     n++;
     const name = (view.state.doc.nodeAt(f.pos)?.attrs.name as string) || `embedded-${n}.${decoded.ext}`;
@@ -122,6 +170,8 @@ export class FigureView implements NodeView {
   private img: HTMLImageElement;
   private chip: HTMLButtonElement;
   private pathChip: HTMLButtonElement;
+  private sourceVersion = 0;
+  private unsubscribeRemote: () => void;
 
   constructor(
     private node: PMNode,
@@ -133,7 +183,6 @@ export class FigureView implements NodeView {
 
     this.img = document.createElement('img');
     this.img.alt = '';
-    this.setSrc(node.attrs.src as string);
     this.img.addEventListener('load', () => scheduleTypeset(this.view));
     window.addEventListener(ASSET_EVENT, this.onAssets);
     // Click the image to select the whole figure.
@@ -164,26 +213,71 @@ export class FigureView implements NodeView {
     this.pathChip.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      this.editPath();
+      this.activatePathChip();
     });
     this.updatePathChip();
 
     this.contentDOM = document.createElement('figcaption');
     this.dom.append(this.img, this.chip, this.pathChip, this.contentDOM);
+    this.unsubscribeRemote = onRemoteImagePermissionChange(this.onRemotePermission);
+    this.setSrc(node.attrs.src as string);
   }
 
   private updatePathChip() {
     const src = this.node.attrs.src as string;
-    if (isPathSrc(src)) {
+    const remote = remoteImageStatus(src);
+    this.pathChip.classList.remove('embedded', 'remote', 'remote-allowed', 'remote-invalid', 'remote-error');
+    if (remote) {
+      if (remote.reason) {
+        this.pathChip.textContent = `blocked: ${remote.host}`;
+        this.pathChip.title = remote.reason;
+        this.pathChip.classList.add('remote-invalid');
+      } else if (!remote.allowed) {
+        this.pathChip.textContent = `load from ${remote.host}`;
+        this.pathChip.title = `Blocked for privacy — click to allow ${remote.origin} for this session`;
+        this.pathChip.classList.add('remote');
+      } else {
+        this.pathChip.textContent = `remote: ${remote.host}`;
+        this.pathChip.title = `Remote images from ${remote.origin} are allowed for this session`;
+        this.pathChip.classList.add('remote-allowed');
+      }
+    } else if (isPathSrc(src)) {
       this.pathChip.textContent = src;
       this.pathChip.title = 'The image file this figure references — click to change';
-      this.pathChip.classList.remove('embedded');
     } else {
       this.pathChip.textContent = 'embedded';
       this.pathChip.classList.add('embedded');
       this.pathChip.title = fmRef?.inFolder
         ? 'Stored inside the document — click to reference a project file instead'
         : 'Stored inside the document — open a project folder (Project button) to use file paths';
+    }
+  }
+
+  private activatePathChip() {
+    const src = this.node.attrs.src as string;
+    const remote = remoteImageStatus(src);
+    if (!remote) {
+      this.editPath();
+      return;
+    }
+    if (remote.reason) {
+      fmRef?.notify(remote.reason);
+      return;
+    }
+    if (remote.allowed) {
+      if (this.dom.classList.contains('fig-missing')) {
+        retryRemoteImage(src);
+        this.setSrc(src);
+        invalidatePageLayout(this.view);
+        return;
+      }
+      fmRef?.notify(`Remote images from ${remote.origin} are allowed for this session`);
+      return;
+    }
+    const granted = allowRemoteImageOrigin(src);
+    if (granted.allowed) {
+      fmRef?.notify(`Loading remote images from ${granted.origin} for this session`);
+      invalidatePageLayout(this.view);
     }
   }
 
@@ -284,23 +378,89 @@ export class FigureView implements NodeView {
     if (isPathSrc(this.node.attrs.src as string)) this.setSrc(this.node.attrs.src as string);
   };
 
-  /** Data/remote srcs load directly; project paths resolve through the
-   *  folder handle to an object URL (missing file → placeholder). */
+  private onRemotePermission = (origin: string) => {
+    const remote = remoteImageStatus(this.node.attrs.src as string);
+    if (remote?.origin !== origin) return;
+    this.updatePathChip();
+    this.setSrc(this.node.attrs.src as string);
+  };
+
+  /** Embedded data loads directly; project and explicitly approved remote
+   *  sources resolve to object URLs. Unapproved remotes remain inert. */
   private setSrc(src: string) {
-    if (!isPathSrc(src)) {
-      this.img.src = src;
-      this.dom.classList.remove('fig-missing');
+    const version = ++this.sourceVersion;
+    this.dom.classList.remove('fig-missing', 'fig-remote-blocked', 'fig-remote-loading');
+    delete this.dom.dataset.placeholder;
+
+    const remote = remoteImageStatus(src);
+    if (remote) {
+      this.img.removeAttribute('src');
+      this.dom.classList.add('fig-missing', 'fig-remote-blocked');
+      if (remote.reason) {
+        this.dom.dataset.placeholder = remote.reason;
+        scheduleTypeset(this.view);
+        return;
+      }
+      if (!remote.allowed) {
+        this.dom.dataset.placeholder = `Remote image blocked — click “load from ${remote.host}” to allow it`;
+        scheduleTypeset(this.view);
+        return;
+      }
+      this.dom.classList.add('fig-remote-loading');
+      this.dom.dataset.placeholder = `Loading remote image from ${remote.host}…`;
+      void loadRemoteImage(src).then(
+        (asset) => {
+          if (version !== this.sourceVersion || this.node.attrs.src !== src) return;
+          this.dom.classList.remove('fig-missing', 'fig-remote-blocked', 'fig-remote-loading');
+          delete this.dom.dataset.placeholder;
+          this.img.src = asset.objectUrl;
+          this.updatePathChip();
+          invalidatePageLayout(this.view);
+        },
+        (error) => {
+          if (version !== this.sourceVersion || this.node.attrs.src !== src) return;
+          this.dom.classList.remove('fig-remote-loading');
+          this.dom.dataset.placeholder = `Remote image could not be loaded: ${error instanceof Error ? error.message : String(error)}`;
+          this.pathChip.textContent = `retry from ${remote.host}`;
+          this.pathChip.title = 'The previous remote image load failed — click to retry';
+          this.pathChip.classList.add('remote-error');
+          fmRef?.notify(this.dom.dataset.placeholder);
+          scheduleTypeset(this.view);
+        },
+      );
       return;
     }
+
+    if (!src) {
+      this.img.removeAttribute('src');
+      this.dom.classList.add('fig-missing');
+      this.dom.dataset.placeholder = 'missing image source';
+      scheduleTypeset(this.view);
+      return;
+    }
+    if (!isPathSrc(src)) {
+      void embeddedDisplayUrl(src).then((url) => {
+        if (version !== this.sourceVersion || this.node.attrs.src !== src) return;
+        if (url) this.img.src = url;
+        else {
+          this.dom.classList.add('fig-missing');
+          this.dom.dataset.placeholder = 'embedded SVG could not be sanitized';
+          scheduleTypeset(this.view);
+        }
+      });
+      return;
+    }
+    this.img.removeAttribute('src');
     void assetUrl(src).then((url) => {
-      if (this.node.attrs.src !== src) return;
+      if (version !== this.sourceVersion || this.node.attrs.src !== src) return;
       if (url) {
         this.dom.classList.remove('fig-missing');
+        delete this.dom.dataset.placeholder;
         if (this.img.src !== url) this.img.src = url;
       } else {
         this.dom.classList.add('fig-missing');
         this.img.removeAttribute('src');
-        this.dom.dataset.missingPath = src;
+        this.dom.dataset.placeholder = `missing: ${src}`;
         scheduleTypeset(this.view);
       }
     });
@@ -308,8 +468,9 @@ export class FigureView implements NodeView {
 
   update(node: PMNode): boolean {
     if (node.type !== this.node.type) return false;
-    if (node.attrs.src !== this.node.attrs.src) this.setSrc(node.attrs.src as string);
+    const sourceChanged = node.attrs.src !== this.node.attrs.src;
     this.node = node;
+    if (sourceChanged) this.setSrc(node.attrs.src as string);
     this.updateChip();
     this.updatePathChip();
     return true;
@@ -317,6 +478,7 @@ export class FigureView implements NodeView {
 
   destroy() {
     window.removeEventListener(ASSET_EVENT, this.onAssets);
+    this.unsubscribeRemote();
   }
 
   selectNode() {
@@ -337,6 +499,175 @@ export class FigureView implements NodeView {
 
   ignoreMutation(m: ViewMutationRecord) {
     return !this.contentDOM.contains(m.target);
+  }
+}
+
+/** Inline images use the same privacy and asset-resolution boundary as
+ * figures. A wrapper provides a visible consent/error control without ever
+ * assigning an unapproved URL to an <img> element. */
+export class ImageView implements NodeView {
+  dom: HTMLElement;
+  private img: HTMLImageElement;
+  private action: HTMLButtonElement;
+  private sourceVersion = 0;
+  private unsubscribeRemote: () => void;
+
+  constructor(
+    private node: PMNode,
+    private view: EditorView,
+    private getPos: () => number | undefined,
+  ) {
+    this.dom = document.createElement('span');
+    this.dom.className = 'ts-inline-image';
+    this.dom.contentEditable = 'false';
+
+    this.img = document.createElement('img');
+    this.img.addEventListener('load', () => scheduleTypeset(this.view));
+    this.img.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      const pos = this.getPos();
+      if (pos !== undefined) {
+        this.view.dispatch(this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos)));
+        this.view.focus();
+      }
+    });
+
+    this.action = document.createElement('button');
+    this.action.type = 'button';
+    this.action.className = 'inline-image-action';
+    this.action.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.activate();
+    });
+
+    this.dom.append(this.img, this.action);
+    window.addEventListener(ASSET_EVENT, this.onAssets);
+    this.unsubscribeRemote = onRemoteImagePermissionChange(this.onRemotePermission);
+    this.updateAttributes();
+    this.setSrc(node.attrs.src as string);
+  }
+
+  private updateAttributes() {
+    this.img.alt = (this.node.attrs.alt as string | null) ?? '';
+    this.img.title = (this.node.attrs.title as string | null) ?? '';
+  }
+
+  private showMessage(message: string, actionable = false) {
+    this.action.textContent = message;
+    this.action.disabled = !actionable;
+    this.dom.classList.add('inline-image-missing');
+    this.dom.classList.toggle('inline-image-remote', actionable);
+  }
+
+  private setSrc(src: string) {
+    const version = ++this.sourceVersion;
+    this.dom.classList.remove('inline-image-missing', 'inline-image-remote');
+    this.img.removeAttribute('src');
+
+    const remote = remoteImageStatus(src);
+    if (remote) {
+      if (remote.reason) {
+        this.showMessage(remote.reason);
+        return;
+      }
+      if (!remote.allowed) {
+        this.showMessage(`Load image from ${remote.host}`, true);
+        return;
+      }
+      this.showMessage(`Loading image from ${remote.host}…`);
+      void loadRemoteImage(src).then(
+        (asset) => {
+          if (version !== this.sourceVersion || this.node.attrs.src !== src) return;
+          this.dom.classList.remove('inline-image-missing', 'inline-image-remote');
+          this.img.src = asset.objectUrl;
+          invalidatePageLayout(this.view);
+        },
+        (error) => {
+          if (version !== this.sourceVersion || this.node.attrs.src !== src) return;
+          this.showMessage(`Retry remote image: ${error instanceof Error ? error.message : String(error)}`, true);
+          scheduleTypeset(this.view);
+        },
+      );
+      return;
+    }
+
+    if (!src) {
+      this.showMessage('missing image source');
+      return;
+    }
+    if (!isPathSrc(src)) {
+      void embeddedDisplayUrl(src).then((url) => {
+        if (version !== this.sourceVersion || this.node.attrs.src !== src) return;
+        if (url) this.img.src = url;
+        else {
+          this.showMessage('embedded SVG could not be sanitized');
+          scheduleTypeset(this.view);
+        }
+      });
+      return;
+    }
+    void assetUrl(src).then((url) => {
+      if (version !== this.sourceVersion || this.node.attrs.src !== src) return;
+      if (url) {
+        this.dom.classList.remove('inline-image-missing');
+        this.img.src = url;
+      } else {
+        this.showMessage(`missing: ${src}`);
+        scheduleTypeset(this.view);
+      }
+    });
+  }
+
+  private activate() {
+    const src = this.node.attrs.src as string;
+    const remote = remoteImageStatus(src);
+    if (!remote || remote.reason) {
+      if (remote?.reason) fmRef?.notify(remote.reason);
+      return;
+    }
+    if (remote.allowed) {
+      retryRemoteImage(src);
+      this.setSrc(src);
+      invalidatePageLayout(this.view);
+      return;
+    }
+    const granted = allowRemoteImageOrigin(src);
+    if (granted.allowed) {
+      fmRef?.notify(`Loading remote images from ${granted.origin} for this session`);
+      invalidatePageLayout(this.view);
+    }
+  }
+
+  private onAssets = () => {
+    if (isPathSrc(this.node.attrs.src as string)) this.setSrc(this.node.attrs.src as string);
+  };
+
+  private onRemotePermission = (origin: string) => {
+    const remote = remoteImageStatus(this.node.attrs.src as string);
+    if (remote?.origin === origin) this.setSrc(this.node.attrs.src as string);
+  };
+
+  update(node: PMNode): boolean {
+    if (node.type !== this.node.type) return false;
+    const sourceChanged = node.attrs.src !== this.node.attrs.src;
+    this.node = node;
+    this.updateAttributes();
+    if (sourceChanged) this.setSrc(node.attrs.src as string);
+    return true;
+  }
+
+  destroy() {
+    window.removeEventListener(ASSET_EVENT, this.onAssets);
+    this.unsubscribeRemote();
+  }
+
+  stopEvent(event: Event) {
+    return event.target === this.action;
+  }
+
+  ignoreMutation() {
+    return true;
   }
 }
 

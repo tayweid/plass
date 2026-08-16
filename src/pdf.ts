@@ -9,6 +9,7 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { docToTyp } from './typ-serializer';
+import { loadRemoteImage, remoteImageStatus, sanitizeSvgImage } from './remote-images';
 
 const FONT_FILES = [
   'NewCM10-Regular.otf',
@@ -128,20 +129,23 @@ export function setAssetReader(fn: (path: string) => Promise<Uint8Array | null>)
 }
 
 function dataUrlToBytes(src: string): { data: Uint8Array; ext: string } | null {
-  const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[a-z0-9-]+)*),(.*)$/is.exec(src);
+  const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[^,]*)*),(.*)$/is.exec(src);
   if (!m) return null;
   const ext = m[1] === 'svg+xml' ? 'svg' : m[1] === 'jpeg' ? 'jpg' : m[1];
   const payload = m[3];
-  if (m[2].includes('base64')) {
+  if (/(?:^|;)base64(?:;|$)/i.test(m[2])) {
     const bin = atob(payload);
     const data = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
-    return { data, ext };
+    return { data: ext === 'svg' ? sanitizeSvgImage(data) : data, ext };
   }
-  return { data: new TextEncoder().encode(decodeURIComponent(payload)), ext };
+  const data = new TextEncoder().encode(decodeURIComponent(payload));
+  return { data: ext === 'svg' ? sanitizeSvgImage(data) : data, ext };
 }
 
-/** Decode embedded/remote images into VFS assets; return a src → path map. */
+/** Decode embedded/approved-remote images into VFS assets; return a src →
+ * path map. Remote URLs never leave the browser until the editor's explicit
+ * per-origin load action has granted this shared session policy. */
 /** A gray dashed "missing image" PNG, generated once — registered in place
  * of unreadable assets so exports and oracle compiles never hard-fail. */
 let placeholderPng: Uint8Array | null = null;
@@ -166,10 +170,16 @@ async function missingPlaceholder(): Promise<Uint8Array> {
   return placeholderPng;
 }
 
-async function prepareAssets(doc: PMNode): Promise<{ map: Map<string, string>; assets: Asset[]; missing: number }> {
+async function prepareAssets(doc: PMNode): Promise<{
+  map: Map<string, string>;
+  assets: Asset[];
+  missing: number;
+  blockedRemote: number;
+}> {
   const map = new Map<string, string>();
   const assets: Asset[] = [];
   let missing = 0;
+  let blockedRemote = 0;
   const srcs: string[] = [];
   doc.descendants((node) => {
     if ((node.type.name === 'figure' || node.type.name === 'image') && node.attrs.src) {
@@ -181,7 +191,12 @@ async function prepareAssets(doc: PMNode): Promise<{ map: Map<string, string>; a
   let n = 0;
   for (const src of srcs) {
     if (map.has(src)) continue;
-    const embedded = dataUrlToBytes(src);
+    let embedded: ReturnType<typeof dataUrlToBytes> = null;
+    try {
+      embedded = dataUrlToBytes(src);
+    } catch {
+      // Malformed encodings and invalid SVGs become inert placeholders.
+    }
     if (embedded) {
       n++;
       const path = `/assets/img-${n}.${embedded.ext}`;
@@ -189,16 +204,30 @@ async function prepareAssets(doc: PMNode): Promise<{ map: Map<string, string>; a
       assets.push({ path, data: embedded.data });
       continue;
     }
-    if (/^https?:/.test(src)) {
-      try {
-        const resp = await fetch(src);
-        if (!resp.ok) throw new Error(String(resp.status));
-        const buf = new Uint8Array(await resp.arrayBuffer());
-        const ext = /\.(png|jpe?g|gif|svg)(\?|$)/i.exec(src)?.[1]?.toLowerCase() ?? 'png';
+    if (/^data:/i.test(src)) {
+      n++;
+      const path = `/assets/img-${n}.png`;
+      map.set(src, path);
+      assets.push({ path, data: await missingPlaceholder() });
+      missing++;
+      continue;
+    }
+    const remote = remoteImageStatus(src);
+    if (remote) {
+      if (!remote.allowed) {
         n++;
-        const path = `/assets/img-${n}.${ext === 'jpeg' ? 'jpg' : ext}`;
+        const path = `/assets/img-${n}.png`;
         map.set(src, path);
-        assets.push({ path, data: buf });
+        assets.push({ path, data: await missingPlaceholder() });
+        blockedRemote++;
+        continue;
+      }
+      try {
+        const image = await loadRemoteImage(src);
+        n++;
+        const path = `/assets/img-${n}.${image.extension}`;
+        map.set(src, path);
+        assets.push({ path, data: image.data });
       } catch {
         n++;
         const path = `/assets/img-${n}.png`;
@@ -223,7 +252,7 @@ async function prepareAssets(doc: PMNode): Promise<{ map: Map<string, string>; a
       }
     }
   }
-  return { map, assets, missing };
+  return { map, assets, missing, blockedRemote };
 }
 
 /**
@@ -308,7 +337,7 @@ export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string
   try {
     const typst = await loadTypst(onMsg);
     onMsg('Preparing document…');
-    const { map, assets, missing } = await prepareAssets(doc);
+    const { map, assets, missing, blockedRemote } = await prepareAssets(doc);
     const src = docToTyp(doc, {
       resolveImage: (s) => map.get(s) ?? s,
       fontFallback: FONT_FALLBACK,
@@ -332,7 +361,10 @@ export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string
     URL.revokeObjectURL(a.href);
     onMsg(
       `Exported ${a.download} in ${((performance.now() - t0) / 1000).toFixed(1)}s` +
-        (missing ? ` — ${missing} missing image(s) exported as placeholders` : ''),
+        (missing ? ` — ${missing} missing image(s) exported as placeholders` : '') +
+        (blockedRemote
+          ? ` — ${blockedRemote} remote image(s) blocked; use the image’s Load action before exporting to include them`
+          : ''),
     );
   } catch (e) {
     console.error('PDF export failed', e);

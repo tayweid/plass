@@ -1309,12 +1309,30 @@ body {
 
 .ts-figure:hover .fig-path-chip,
 .ts-figure.figure-selected .fig-path-chip,
-.ts-figure.fig-missing .fig-path-chip {
+.ts-figure.fig-missing .fig-path-chip,
+.fig-path-chip.remote,
+.fig-path-chip.remote-invalid,
+.fig-path-chip.remote-error {
   opacity: 1;
 }
 
 .fig-path-chip.embedded {
   font-style: italic;
+}
+
+.fig-path-chip.remote {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--chrome-border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--chrome));
+}
+
+.fig-path-chip.remote-invalid {
+  color: #9a3f36;
+}
+
+.fig-path-chip.remote-error {
+  color: #9a3f36;
+  border-color: color-mix(in srgb, #9a3f36 40%, var(--chrome-border));
 }
 
 .fig-path-input {
@@ -1347,7 +1365,7 @@ body {
 }
 
 .ts-figure.fig-missing::before {
-  content: 'missing: ' attr(data-missing-path);
+  content: attr(data-placeholder);
   display: block;
   padding: 1.2em;
   border: 1px dashed var(--chrome-border);
@@ -1355,6 +1373,50 @@ body {
   font: 12px var(--mono);
   color: var(--ink-soft);
   text-align: center;
+}
+
+.ts-inline-image {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: baseline;
+}
+
+.ts-inline-image img {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.inline-image-action {
+  display: none;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px dashed var(--chrome-border);
+  border-radius: 5px;
+  color: var(--ink-soft);
+  background: var(--chrome);
+  font: 11px var(--mono);
+}
+
+.ts-inline-image.inline-image-missing .inline-image-action {
+  display: inline-block;
+}
+
+.ts-inline-image.inline-image-missing img {
+  display: none;
+}
+
+.ts-inline-image.inline-image-remote .inline-image-action {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--chrome-border));
+  cursor: pointer;
+}
+
+@media print {
+  .fig-path-chip,
+  .inline-image-action {
+    display: none !important;
+  }
 }
 
 /* ---------- front matter ---------- */
