@@ -1,10 +1,13 @@
 import { isPortableCitationKey, parseBibTeX } from './bibtex';
 import { schema } from './schema';
-import { docToTyp } from './typ-serializer';
+import { docToTyp, textSetLine } from './typ-serializer';
 import { isRemoteSource, remoteImageStatus } from './remote-images';
 import { contentSecurityPolicy } from './security-policy';
 import { isAllowedTypstPackage, sourceNeedsPinnedTypstPackage, TYPST_PACKAGE_POLICY } from './typst-config';
 import { COMPILER_LIMITS, validateCompilerTask } from './typst-worker-protocol';
+import { INPUT_LIMITS, inputSizeError, textSizeError } from './input-limits';
+import { DEFAULT_SETTINGS, normalizeSettings } from './settings';
+import { parseTable, typToDoc } from './typ-parser';
 
 let failed = 0;
 function check(name: string, ok: boolean) {
@@ -76,6 +79,53 @@ check(
     source: 'safe',
     assets: [{ path: '/large.png', data: new Uint8Array(COMPILER_LIMITS.assetBytes + 1) }],
   }) === 'A compiler asset exceeds the 20 MiB limit',
+);
+
+check(
+  'document files are rejected from metadata before being read',
+  inputSizeError(INPUT_LIMITS.documentBytes + 1, INPUT_LIMITS.documentBytes, 'large.typ') ===
+    "large.typ is larger than Plass's 32 MiB limit",
+);
+check('UTF-8 byte limits count multibyte text', !!textSizeError('éé', 3, 'Text'));
+check(
+  'oversized bibliographies fail closed inside the parser',
+  parseBibTeX('@article{safe,title={Safe}}' + ' '.repeat(INPUT_LIMITS.bibliographyBytes)).length === 0,
+);
+
+const normalized = normalizeSettings({
+  font: 'bad\nfont',
+  sizePt: Infinity,
+  lineHeight: 100,
+  marginLeft: 99,
+  pageNumStart: 1_000_000_000,
+  mathMacros: 'x'.repeat(INPUT_LIMITS.mathMacrosBytes + 1),
+});
+check(
+  'hostile persisted settings fall back to bounded defaults',
+  normalized.font === DEFAULT_SETTINGS.font &&
+    normalized.sizePt === DEFAULT_SETTINGS.sizePt &&
+    normalized.lineHeight === DEFAULT_SETTINGS.lineHeight &&
+    normalized.marginLeft === DEFAULT_SETTINGS.marginLeft &&
+    normalized.pageNumStart === DEFAULT_SETTINGS.pageNumStart &&
+    normalized.mathMacros === DEFAULT_SETTINGS.mathMacros,
+);
+check(
+  'font names are escaped before entering generated Typst source',
+  textSetLine({ ...DEFAULT_SETTINGS, font: 'A"B' }).includes('font: "A\\"B"'),
+);
+check(
+  'absurd table dimensions stay raw instead of allocating huge arrays',
+  parseTable('#table(columns: 1000000000, [cell])') === null,
+);
+
+const malformedBibLine = '#bibliography(bytes("\\q"))';
+const malformedBib = typToDoc(`${malformedBibLine}\n\nBody`);
+check(
+  'malformed embedded bibliography source is preserved verbatim',
+  malformedBib.warnings.length > 0 &&
+    malformedBib.doc.firstChild?.type.name === 'code_block' &&
+    malformedBib.doc.firstChild.textContent === malformedBibLine &&
+    docToTyp(malformedBib.doc).includes(malformedBibLine),
 );
 
 const productionCsp = contentSecurityPolicy();

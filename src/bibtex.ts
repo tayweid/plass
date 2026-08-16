@@ -2,6 +2,8 @@
 // the editor. The PDF path never depends on this — Typst's own bibliography
 // engine consumes the raw .bib content.
 
+import { INPUT_LIMITS, textSizeError } from './input-limits';
+
 export interface BibEntry {
   key: string;
   type: string;
@@ -91,6 +93,10 @@ function parseFields(body: string): Record<string, string> {
 }
 
 export function parseBibTeX(src: string): BibEntry[] {
+  // All UI import paths report this limit before calling the parser. Keep a
+  // fail-closed guard here too because bibliography text can also arrive
+  // inside a hand-written document or restored browser state.
+  if (textSizeError(src, INPUT_LIMITS.bibliographyBytes, 'Bibliography')) return [];
   const entries: BibEntry[] = [];
   const re = /@(\w+)\s*\{\s*([^,\s{}]+)\s*,/g;
   let m: RegExpExecArray | null;

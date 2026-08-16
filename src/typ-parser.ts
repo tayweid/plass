@@ -12,8 +12,9 @@
 import type { Mark, Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
 import { unwrapAligned } from './math-src';
-import { DEFAULT_SETTINGS, type DocSettings } from './settings';
+import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings } from './settings';
 import { parseBibTeX } from './bibtex';
+import { INPUT_LIMITS, textSizeError } from './input-limits';
 
 export interface TypImport {
   doc: PMNode;
@@ -24,6 +25,7 @@ export interface TypImport {
 // disambiguate inline `@key` (citation vs equation/figure reference).
 let importBib: { name: string; content: string } | null = null;
 let importBibKeys = new Set<string>();
+let preserveImportBibLine = false;
 
 const BIB_LINE = /^#bibliography\(bytes\((".*")\)(?:,\s*title:\s*"[^"]*")?(?:,\s*style:\s*"[^"]*")?\)$/;
 
@@ -38,15 +40,24 @@ export function typToDoc(src: string): TypImport {
   // Prescan for an embedded bibliography so @key can disambiguate.
   importBib = null;
   importBibKeys = new Set();
+  preserveImportBibLine = false;
   for (const line of lines) {
     const m = BIB_LINE.exec(line.trim());
     if (m) {
       try {
-        const content = JSON.parse(m[1]) as string;
+        const content = JSON.parse(m[1]) as unknown;
+        if (typeof content !== 'string') throw new Error('embedded bibliography is not text');
+        const sizeError = textSizeError(content, INPUT_LIMITS.bibliographyBytes, 'Embedded bibliography');
+        if (sizeError) throw new Error(sizeError);
         importBib = { name: 'references.bib', content };
         importBibKeys = new Set(parseBibTeX(content).map((e) => e.key));
-      } catch {
-        warnings.push('could not decode embedded bibliography');
+      } catch (error) {
+        warnings.push(
+          error instanceof Error && error.message.includes("Plass's")
+            ? error.message
+            : 'could not decode embedded bibliography',
+        );
+        preserveImportBibLine = true;
       }
       break;
     }
@@ -59,9 +70,17 @@ export function typToDoc(src: string): TypImport {
     const macroM = /^\/\/ typeset:math-macros (.*)$/.exec(line);
     if (macroM) {
       try {
-        settings.mathMacros = JSON.parse(macroM[1]) as string;
-      } catch {
-        warnings.push('could not decode math macros directive');
+        const macros = JSON.parse(macroM[1]) as unknown;
+        if (typeof macros !== 'string') throw new Error('math macros directive is not text');
+        const sizeError = textSizeError(macros, INPUT_LIMITS.mathMacrosBytes, 'Math macros');
+        if (sizeError) throw new Error(sizeError);
+        settings.mathMacros = macros;
+      } catch (error) {
+        warnings.push(
+          error instanceof Error && error.message.includes("Plass's")
+            ? error.message
+            : 'could not decode math macros directive',
+        );
       }
       i++;
       continue;
@@ -187,7 +206,7 @@ export function typToDoc(src: string): TypImport {
     settings.pageNumFormat = restartFormat;
   }
   if (!blocks.length) blocks.push(schema.nodes.paragraph.create());
-  return { doc: schema.nodes.doc.create({ settings, bib: importBib }, blocks), warnings };
+  return { doc: schema.nodes.doc.create({ settings: normalizeSettings(settings), bib: importBib }, blocks), warnings };
 }
 
 /**
@@ -498,7 +517,11 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
 
     // embedded bibliography (content captured in the prescan)
     if (BIB_LINE.test(t)) {
-      out.push(schema.nodes.bibliography.create());
+      if (importBib && !preserveImportBibLine) {
+        out.push(schema.nodes.bibliography.create());
+      } else {
+        out.push(schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text(line)]));
+      }
       i++;
       continue;
     }
@@ -840,7 +863,18 @@ export function parseTable(src: string): PMNode | null {
     }
   }
 
-  if (!(columns > 0) || !cells.length) return null;
+  if (
+    !(columns > 0) ||
+    columns > INPUT_LIMITS.importedTableColumns ||
+    !cells.length ||
+    cells.length > INPUT_LIMITS.importedTableCells ||
+    cells.some((cell) =>
+      cell.colspan < 1 ||
+      cell.colspan > INPUT_LIMITS.importedTableSpan ||
+      cell.rowspan < 1 ||
+      cell.rowspan > INPUT_LIMITS.importedTableSpan
+    )
+  ) return null;
   const hasHeader = cells.some((c) => c.header);
 
   // Style detection with fidelity guards: nonstandard rule layouts can't be

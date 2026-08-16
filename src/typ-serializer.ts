@@ -137,8 +137,8 @@ function expandMacros(src: string): string {
 /** The #set text(...) header line (shared with the layout oracle's probes). */
 export function textSetLine(s: DocSettings, fontFallback?: string[]): string {
   const fonts = fontFallback?.length
-    ? `(${[s.font, ...fontFallback.filter((f) => f !== s.font)].map((f) => `"${f}"`).join(', ')})`
-    : `"${s.font}"`;
+    ? `(${[s.font, ...fontFallback.filter((f) => f !== s.font)].map((f) => JSON.stringify(f)).join(', ')})`
+    : JSON.stringify(s.font);
   return `#set text(size: ${s.sizePt}pt, font: ${fonts}, hyphenate: ${s.hyphenate})\n`;
 }
 
@@ -533,7 +533,7 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     out += `#set page(${pageArgs.join(', ')})\n`;
     out += parityRules(s);
     const fonts = [s.font, ...(opts.fontFallback ?? []).filter((f) => f !== s.font)];
-    const fontSpec = fonts.length > 1 ? `(${fonts.map((f) => `"${f}"`).join(', ')})` : `"${fonts[0]}"`;
+    const fontSpec = fonts.length > 1 ? `(${fonts.map((f) => JSON.stringify(f)).join(', ')})` : JSON.stringify(fonts[0]);
     out += `#set text(size: ${s.sizePt}pt, font: ${fontSpec}, hyphenate: ${s.hyphenate})\n`;
     emitNumberEquations = s.numberEquations;
     if (s.numberEquations) out += '#set math.equation(numbering: "(1)")\n';

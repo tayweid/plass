@@ -13,6 +13,7 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import { docToTyp } from './typ-serializer';
 import { typToDoc } from './typ-parser';
+import { INPUT_LIMITS, inputSizeError, readBoundedText } from './input-limits';
 
 export interface FileHooks {
   getDoc: () => PMNode;
@@ -112,6 +113,14 @@ export class FileManager {
     await w.close();
   }
 
+  private documentSizeError(file: File): string | null {
+    return inputSizeError(file.size, INPUT_LIMITS.documentBytes, file.name);
+  }
+
+  private readDocumentText(file: File): Promise<string> {
+    return readBoundedText(file, INPUT_LIMITS.documentBytes, file.name);
+  }
+
   /** The on-disk text for the current doc in the handle's format. */
   private async serialize(fileName: string, doc: PMNode = this.hooks.getDoc()): Promise<string> {
     if (isMd(fileName)) {
@@ -147,7 +156,16 @@ export class FileManager {
     if (handle !== this.handle) return 'stale';
 
     if (!force && this.diskBaseline !== null) {
-      const diskText = await (await handle.getFile()).text();
+      const diskFile = await handle.getFile();
+      const sizeError = this.documentSizeError(diskFile);
+      if (sizeError) {
+        this.conflict = true;
+        this.dirty = true;
+        this.hooks.onState();
+        this.reportConflict(handle.name, `${sizeError} — autosave is paused and your editor copy is safe`);
+        return 'conflict';
+      }
+      const diskText = await this.readDocumentText(diskFile);
       if (handle !== this.handle) return 'stale';
       if (diskText !== this.diskBaseline && diskText !== text) {
         this.conflict = true;
@@ -186,8 +204,8 @@ export class FileManager {
     this.saveTimer = window.setTimeout(() => void this.flush(), 250);
   }
 
-  private reportConflict(fileName: string) {
-    const text = `${fileName} changed outside Plass — autosave is paused and your editor copy is safe`;
+  private reportConflict(fileName: string, detail?: string) {
+    const text = detail ?? `${fileName} changed outside Plass — autosave is paused and your editor copy is safe`;
     const action = {
       label: 'Overwrite disk',
       run: () => void this.overwriteConflict(),
@@ -246,13 +264,18 @@ export class FileManager {
     dir: FileSystemDirectoryHandle | null = null,
     discardConfirmed = false,
   ): Promise<boolean> {
+    const file = await handle.getFile();
+    const sizeError = this.documentSizeError(file);
+    if (sizeError) {
+      this.hooks.message(sizeError);
+      return false;
+    }
     if (
       this.dirty &&
       !discardConfirmed &&
       !confirm(`Open ${handle.name}? Your current document has unsaved changes.`)
     ) return false;
-    const file = await handle.getFile();
-    const text = await file.text();
+    const text = await this.readDocumentText(file);
     const { doc, warnings } = isMd(file.name)
       ? (await import('./md-parser')).mdToDoc(text)
       : typToDoc(text);
@@ -327,8 +350,7 @@ export class FileManager {
         if (this.dirty && !confirm(`Open ${best.handle.name} from this folder? Your current document has unsaved changes.`)) {
           return null;
         }
-        await this.loadHandle(best.handle, dir, true);
-        return 'loaded';
+        return (await this.loadHandle(best.handle, dir, true)) ? 'loaded' : null;
       }
     }
     // The current document moves in, keeping its shown name — an unsaved
@@ -347,7 +369,9 @@ export class FileManager {
       overwriteConfirmed = exists;
     }
     const handle = await dir.getFileHandle(fileName, { create: true });
-    const priorText = await (await handle.getFile()).text();
+    const priorText = overwriteConfirmed
+      ? null
+      : await this.readDocumentText(await handle.getFile());
     this.handle = handle;
     this.dir = dir;
     this.diskBaseline = priorText;
@@ -404,6 +428,19 @@ export class FileManager {
     let d = this.dir;
     for (let i = 0; i < parts.length - 1; i++) d = await d.getDirectoryHandle(parts[i]);
     return d.getFileHandle(parts[parts.length - 1]);
+  }
+
+  /** Metadata-only project asset lookup. Watchers use this so polling never
+   * allocates the whole image merely to compare modification times. */
+  async statAsset(path: string): Promise<{ mtime: number; size: number; type: string } | null> {
+    try {
+      const h = await this.walkTo(path);
+      if (!h) return null;
+      const f = await h.getFile();
+      return { mtime: f.lastModified, size: f.size, type: f.type };
+    } catch {
+      return null;
+    }
   }
 
   /** Read a project-relative asset (image). Null when absent/no folder.
@@ -595,7 +632,12 @@ export class FileManager {
       if (perm === 'granted') {
         if (this.hooks.hasSessionDoc?.()) {
           const file = await handle.getFile();
-          await this.attachRestoredSession(handle, dir, file, await file.text());
+          const sizeError = this.documentSizeError(file);
+          if (sizeError) {
+            this.hooks.message(`${sizeError} — the restored editor copy was left untouched`);
+            return false;
+          }
+          await this.attachRestoredSession(handle, dir, file, await this.readDocumentText(file));
         } else {
           await this.loadHandle(handle, dir, true);
         }
@@ -634,7 +676,12 @@ export class FileManager {
       const perm = (await target.requestPermission?.({ mode: 'readwrite' })) ?? 'denied';
       if (perm !== 'granted') return false;
       const file = await p.handle.getFile();
-      const diskText = await file.text();
+      const sizeError = this.documentSizeError(file);
+      if (sizeError) {
+        this.hooks.message(`${sizeError} — the restored editor copy was left untouched`);
+        return false;
+      }
+      const diskText = await this.readDocumentText(file);
       const keepSession = p.keepSession || this.changeRevision !== p.startRevision;
       if (keepSession) {
         await this.attachRestoredSession(p.handle, p.dir, file, diskText);
@@ -684,10 +731,16 @@ export class FileManager {
     input.addEventListener('change', async () => {
       const file = input.files?.[0];
       if (!file) return;
+      const sizeError = this.documentSizeError(file);
+      if (sizeError) {
+        this.hooks.message(sizeError);
+        return;
+      }
       if (this.dirty && !confirm(`Open ${file.name}? Your current document has unsaved changes.`)) return;
+      const text = await this.readDocumentText(file);
       const { doc, warnings } = isMd(file.name)
-        ? (await import('./md-parser')).mdToDoc(await file.text())
-        : typToDoc(await file.text());
+        ? (await import('./md-parser')).mdToDoc(text)
+        : typToDoc(text);
       clearTimeout(this.saveTimer);
       this.handle = null; // no write access in fallback mode
       this.dir = null;

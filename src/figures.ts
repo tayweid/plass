@@ -15,6 +15,7 @@ import {
   retryRemoteImage,
   sanitizeSvgImage,
 } from './remote-images';
+import { COMPILER_LIMITS } from './typst-worker-protocol';
 
 // ---------- project assets (relative paths) ----------
 
@@ -32,10 +33,17 @@ const embeddedSvgCache = new Map<string, Promise<string | null>>();
 
 async function assetUrl(path: string): Promise<string | null> {
   if (!fmRef) return null;
-  const file = await fmRef.readAsset(path);
-  if (!file) return null;
+  const stat = await fmRef.statAsset(path);
+  if (!stat || stat.size > COMPILER_LIMITS.assetBytes) return null;
   const cached = assetCache.get(path);
-  if (cached && cached.mtime === file.mtime) return cached.url;
+  if (cached && cached.mtime === stat.mtime) return cached.url;
+  let file: Awaited<ReturnType<FileManager['readAsset']>>;
+  try {
+    file = await fmRef.readAsset(path, COMPILER_LIMITS.assetBytes);
+  } catch {
+    return null;
+  }
+  if (!file) return null;
   if (cached) URL.revokeObjectURL(cached.url);
   const type = file.type || (/\.svg$/i.test(path) ? 'image/svg+xml' : 'image/png');
   let data = file.data;
@@ -58,13 +66,21 @@ function dataUrlBytes(src: string): { blob: Blob; ext: string } | null {
   if (!m) return null;
   const ext = m[1] === 'svg+xml' ? 'svg' : m[1] === 'jpeg' ? 'jpg' : m[1];
   const mime = `image/${m[1]}`;
+  const payload = m[3];
   if (/(?:^|;)base64(?:;|$)/i.test(m[2])) {
-    const bin = atob(m[3]);
+    if (payload.length > Math.ceil(COMPILER_LIMITS.assetBytes / 3) * 4 + 4) {
+      throw new Error('Embedded image exceeds the 20 MiB limit');
+    }
+    const bin = atob(payload);
+    if (bin.length > COMPILER_LIMITS.assetBytes) throw new Error('Embedded image exceeds the 20 MiB limit');
     const data = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
     return { blob: new Blob([data.buffer], { type: mime }), ext };
   }
-  return { blob: new Blob([decodeURIComponent(m[3])], { type: mime }), ext };
+  if (payload.length > COMPILER_LIMITS.assetBytes * 3) throw new Error('Embedded image exceeds the 20 MiB limit');
+  const data = new TextEncoder().encode(decodeURIComponent(payload));
+  if (data.byteLength > COMPILER_LIMITS.assetBytes) throw new Error('Embedded image exceeds the 20 MiB limit');
+  return { blob: new Blob([data.buffer], { type: mime }), ext };
 }
 
 /** Data-SVG images can themselves contain remote subresources. Sanitize them
@@ -149,9 +165,16 @@ export function startAssetWatch(view: EditorView) {
     });
     let changed = false;
     for (const path of paths) {
-      const file = await fmRef.readAsset(path);
-      if (!file) continue;
+      const file = await fmRef.statAsset(path);
       const cached = assetCache.get(path);
+      if (!file || file.size > COMPILER_LIMITS.assetBytes) {
+        if (cached) {
+          URL.revokeObjectURL(cached.url);
+          assetCache.delete(path);
+          changed = true;
+        }
+        continue;
+      }
       if (!cached || cached.mtime !== file.mtime) changed = true;
     }
     if (changed) {
@@ -709,6 +732,10 @@ function projectImagePath(name: string) {
 }
 
 export function insertFigureFromFile(view: EditorView, file: File) {
+  if (file.size > COMPILER_LIMITS.assetBytes) {
+    fmRef?.notify(`${file.name} is larger than Plass's 20 MiB image limit`);
+    return;
+  }
   // Folder mode: the file on disk is the source of truth from the first
   // moment — write it into figures/ and reference it by relative path.
   if (fmRef?.inFolder) {
@@ -744,10 +771,15 @@ export function pickAndInsertFigure(view: EditorView) {
           types: [{ description: 'Images', accept: { 'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.svg'] } }],
         });
         const rel = await fmRef!.relativize(handle);
+        const file = await handle.getFile();
+        if (file.size > COMPILER_LIMITS.assetBytes) {
+          fmRef!.notify(`${file.name} is larger than Plass's 20 MiB image limit`);
+          return;
+        }
         if (rel) {
           insertFigureNode(view, rel, handle.name);
         } else {
-          insertFigureFromFile(view, await handle.getFile());
+          insertFigureFromFile(view, file);
         }
       } catch (e) {
         if ((e as DOMException)?.name !== 'AbortError') console.warn(e);

@@ -8,6 +8,7 @@ import { Decoration, DecorationSet, type EditorView, type NodeView } from 'prose
 import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
 import { parseBibTeX, bibAuthors, bibVenue, isPortableCitationKey, type BibEntry } from './bibtex';
+import { INPUT_LIMITS, InputLimitError, readBoundedText, textSizeError } from './input-limits';
 import { mountTypstSvg } from './safe-svg';
 
 export interface DocBib {
@@ -295,7 +296,15 @@ export function importBibliography(view: EditorView, message: (m: string) => voi
   input.addEventListener('change', async () => {
     const file = input.files?.[0];
     if (!file) return;
-    const content = (await file.text()).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+    let content: string;
+    try {
+      content = (await readBoundedText(file, INPUT_LIMITS.bibliographyBytes, file.name))
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+    } catch (error) {
+      console.warn('Could not import bibliography', error);
+      message(error instanceof InputLimitError ? error.message : `Could not read ${file.name}`);
+      return;
+    }
     const entries = parseBibTeX(content);
     if (!entries.length) {
       message(`No entries found in ${file.name}`);
@@ -357,7 +366,13 @@ export function editBibliography(view: EditorView, message: (m: string) => void 
     input.addEventListener('change', async () => {
       const file = input.files?.[0];
       if (!file) return;
-      text.value = await file.text();
+      try {
+        text.value = await readBoundedText(file, INPUT_LIMITS.bibliographyBytes, file.name);
+      } catch (error) {
+        console.warn('Could not import bibliography', error);
+        message(error instanceof InputLimitError ? error.message : `Could not read ${file.name}`);
+        return;
+      }
       updateCount();
       text.focus();
     });
@@ -365,6 +380,10 @@ export function editBibliography(view: EditorView, message: (m: string) => void 
   });
 
   const updateCount = () => {
+    if (textSizeError(text.value, INPUT_LIMITS.bibliographyBytes, 'Bibliography')) {
+      count.textContent = 'Over 4 MiB limit';
+      return;
+    }
     const n = parseBibTeX(text.value).length;
     count.textContent = `${n} entr${n === 1 ? 'y' : 'ies'}`;
   };
@@ -380,6 +399,11 @@ export function editBibliography(view: EditorView, message: (m: string) => void 
   const save = () => {
     // eslint-disable-next-line no-control-regex
     const content = text.value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim();
+    const sizeError = textSizeError(content, INPUT_LIMITS.bibliographyBytes, 'Bibliography');
+    if (sizeError) {
+      message(sizeError);
+      return;
+    }
     const entries = parseBibTeX(content);
     const value = content ? { name: bib?.name ?? 'references.bib', content } : null;
     view.dispatch(view.state.tr.setDocAttribute('bib', value));

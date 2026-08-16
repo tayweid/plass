@@ -6,6 +6,7 @@
 
 import type { EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
+import { INPUT_LIMITS, textSizeError } from './input-limits';
 
 export interface DocSettings {
   font: string;
@@ -121,10 +122,49 @@ export const PAGE_GAP = 28;
 
 /** Merge stored settings over defaults (migrating legacy fields). */
 export function normalizeSettings(raw: Partial<DocSettings> | null | undefined): DocSettings {
-  const merged = { ...DEFAULT_SETTINGS, ...(raw ?? {}) };
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const merged = { ...DEFAULT_SETTINGS };
+  const finite = (value: unknown, min: number, max: number): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
+  const oneOf = <T extends string>(value: unknown, values: readonly T[]): value is T =>
+    typeof value === 'string' && values.includes(value as T);
+
+  if (typeof source.font === 'string' && source.font.length <= 128 && !/[\u0000-\u001f\u007f]/.test(source.font)) {
+    merged.font = source.font;
+  }
+  if (finite(source.sizePt, 6, 72)) merged.sizePt = source.sizePt;
+  if (finite(source.lineHeight, 1, 3)) merged.lineHeight = source.lineHeight;
+  if (oneOf(source.page, ['letter', 'a4', 'legal', 'b5'])) merged.page = source.page;
+  if (typeof source.landscape === 'boolean') merged.landscape = source.landscape;
+  for (const field of ['marginTop', 'marginRight', 'marginBottom', 'marginLeft'] as const) {
+    if (finite(source[field], 0, 3)) merged[field] = source[field];
+  }
+  if (typeof source.hyphenate === 'boolean') merged.hyphenate = source.hyphenate;
+  if (typeof source.parIndent === 'boolean') merged.parIndent = source.parIndent;
+  if (typeof source.numberEquations === 'boolean') merged.numberEquations = source.numberEquations;
+  if (typeof source.numberSections === 'boolean') merged.numberSections = source.numberSections;
+  if (typeof source.pageNumShow === 'boolean') merged.pageNumShow = source.pageNumShow;
+  if (oneOf(source.pageNumFormat, ['1', '— 1 —', 'i', '1 / 1'])) merged.pageNumFormat = source.pageNumFormat;
+  if (oneOf(source.pageNumAlign, ['left', 'center', 'right'])) merged.pageNumAlign = source.pageNumAlign;
+  if (finite(source.pageNumStart, 1, 9_999) && Number.isInteger(source.pageNumStart)) {
+    merged.pageNumStart = source.pageNumStart;
+  }
+  if (typeof source.headerText === 'string' && source.headerText.length <= 1_024) {
+    merged.headerText = source.headerText;
+  }
+  if (oneOf(source.headerAlign, ['left', 'center', 'right'])) merged.headerAlign = source.headerAlign;
+  if (typeof source.headerFirstPage === 'boolean') merged.headerFirstPage = source.headerFirstPage;
+  if (
+    typeof source.mathMacros === 'string' &&
+    // File/editor ingress performs the exact UTF-8 check. Use a conservative
+    // code-unit bound here because getSettings runs throughout live layout.
+    source.mathMacros.length <= INPUT_LIMITS.mathMacrosBytes
+  ) {
+    merged.mathMacros = source.mathMacros;
+  }
   // Legacy uniform margin (pre per-side margins).
-  const legacy = (raw as { marginIn?: number } | null | undefined)?.marginIn;
-  if (legacy !== undefined && (raw as Partial<DocSettings>)?.marginTop === undefined) {
+  const legacy = (source as { marginIn?: unknown }).marginIn;
+  if (finite(legacy, 0, 3) && source.marginTop === undefined) {
     merged.marginTop = merged.marginRight = merged.marginBottom = merged.marginLeft = legacy;
   }
   return merged;
@@ -429,6 +469,10 @@ export function editMathMacros(view: EditorView) {
   const count = overlay.querySelector('.bib-editor-count') as HTMLElement;
   text.value = s.mathMacros;
   const updateCount = () => {
+    if (textSizeError(text.value, INPUT_LIMITS.mathMacrosBytes, 'Math macros')) {
+      count.textContent = 'Over 64 KiB limit';
+      return;
+    }
     const n = Object.keys(parseMathMacros(text.value)).length;
     count.textContent = `${n} macro${n === 1 ? '' : 's'}`;
   };
@@ -440,6 +484,10 @@ export function editMathMacros(view: EditorView) {
     view.focus();
   };
   const save = () => {
+    if (textSizeError(text.value, INPUT_LIMITS.mathMacrosBytes, 'Math macros')) {
+      updateCount();
+      return;
+    }
     const cur = getSettings(view.state);
     view.dispatch(view.state.tr.setDocAttribute('settings', { ...cur, mathMacros: text.value.trim() }));
     close();
