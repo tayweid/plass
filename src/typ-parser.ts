@@ -433,6 +433,29 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
+    // aligned paragraph — the MULTI-line #align form the serializer emits;
+    // the single-line #align(center)[…] right after a title is the authors
+    // line, and #align(center, …) calls are title/rule/table furniture.
+    {
+      const alignM = /^#align\((center|right)\)\[$/.exec(t);
+      if (alignM) {
+        const body: string[] = [];
+        i++;
+        while (i < n && lines[i].trim() !== ']') body.push(lines[i++].replace(/^  /, ''));
+        i++; // closing bracket
+        const inner = parseBlocks(body, warnings);
+        if (!inner.length) out.push(schema.nodes.paragraph.create({ align: alignM[1] }));
+        for (const b of inner) {
+          out.push(
+            b.type.name === 'paragraph'
+              ? schema.nodes.paragraph.create({ ...b.attrs, align: alignM[1] }, b.content)
+              : b,
+          );
+        }
+        continue;
+      }
+    }
+
     // heading (with optional trailing <label>)
     m = /^(={1,3})\s+(.*)$/.exec(t);
     if (m && t === line.trimEnd()) {

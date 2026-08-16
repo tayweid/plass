@@ -37,6 +37,36 @@
   font-style: normal;
 }
 
+/* TeX Gyre Pagella (URW Palladio, the free Palatino): bundled for BOTH the
+   editor and the wasm compiler, so screen and PDF use the same file. */
+@font-face {
+  font-family: 'TeX Gyre Pagella';
+  src: url('../fonts/texgyrepagella-regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'TeX Gyre Pagella';
+  src: url('../fonts/texgyrepagella-italic.otf') format('opentype');
+  font-weight: 400;
+  font-style: italic;
+}
+
+@font-face {
+  font-family: 'TeX Gyre Pagella';
+  src: url('../fonts/texgyrepagella-bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'TeX Gyre Pagella';
+  src: url('../fonts/texgyrepagella-bolditalic.otf') format('opentype');
+  font-weight: 700;
+  font-style: italic;
+}
+
 /* ---------- app chrome ---------- */
 
 :root {
@@ -1029,6 +1059,16 @@ body {
   text-align: justify;
 }
 
+/* Aligned paragraphs are browser-laid display lines (no oracle
+   decorations): CSS does the whole job. */
+.ProseMirror p[data-align='center'] {
+  text-align: center;
+}
+
+.ProseMirror p[data-align='right'] {
+  text-align: right;
+}
+
 /* Keep-together paragraphs (⌘⌥K): a whisper of an indicator on the left
    edge — visible enough to know the flag is set, quiet enough to ignore. */
 .ProseMirror p.ts-keep {
@@ -1120,6 +1160,30 @@ body {
   border-radius: 5px;
   white-space: pre-wrap;
   margin: 0 0 0.9em;
+}
+
+/* Raw-Typst islands: the compiled render IS the block; the source chip
+   shows while editing (click the render) or when the island paints
+   nothing (set rules, counters). Margins mirror paragraph rhythm. */
+.ts-raw {
+  margin: 0 0 0.9em;
+}
+
+.ts-raw .ts-raw-render {
+  display: none;
+  cursor: pointer;
+}
+
+.ts-raw.ts-raw-visual:not(.ts-raw-editing) .ts-raw-render {
+  display: block;
+}
+
+.ts-raw.ts-raw-visual:not(.ts-raw-editing) > pre {
+  display: none;
+}
+
+.ts-raw > pre {
+  margin: 0;
 }
 
 .ProseMirror pre code {

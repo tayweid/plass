@@ -59,7 +59,7 @@ export const DEFAULT_SETTINGS: DocSettings = {
   mathMacros: '',
 };
 
-export const FONTS = ['New Computer Modern', 'STIX Two Text', 'Charter', 'Palatino', 'Georgia', 'Times New Roman'];
+export const FONTS = ['New Computer Modern', 'STIX Two Text', 'TeX Gyre Pagella', 'Charter', 'Palatino', 'Georgia', 'Times New Roman'];
 
 /** Parse the macros text into a KaTeX macros object. */
 export function parseMathMacros(src: string): Record<string, string> {
