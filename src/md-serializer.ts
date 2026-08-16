@@ -128,6 +128,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
   const block = (node: PMNode, indent = ''): string => {
     switch (node.type.name) {
       case 'paragraph':
+        if (node.attrs.align) warn('text alignment is not stored in Markdown — save as .typ to keep it');
         return inline(node);
       case 'heading':
         return `${'#'.repeat(node.attrs.level as number)} ${inline(node)}`;
