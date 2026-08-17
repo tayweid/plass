@@ -9,8 +9,7 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
 - `npm test` — node test suites (knuth-plass, typ-parser, md round-trip)
 - `npm run build` — production build with host-independent relative paths (CI runs this);
   deploy = push `main`: `.github/workflows/deploy.yml` builds and
-  publishes to plass.tayweid.io via GitHub Pages. Taylor pushes
-  via GitHub Desktop (no CLI credentials in shell).
+  publishes to plass.tayweid.io via GitHub Pages.
 - PWA: `public/manifest.webmanifest` registers Plass as a file handler
   for .typ/.md (installed app = macOS default-app candidate; Finder
   launches arrive via `launchQueue` in `main.ts`, folderless — the
@@ -63,12 +62,11 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   are raw islands; ```bibtex is the embedded bibliography.
 - `.tex` export is semantic (journals reformat); `.pdf` via Typst.
 
-## Working style (Taylor)
+## Working style
 
-- Design discussion BEFORE implementation when he raises "a bigger
-  conversation" — don't run ahead.
-- When he reports a bug: reproduce it in a scripted browser first,
+- Discuss material architecture or product-scope changes before implementation.
+- When a bug is reported: reproduce it in a scripted browser first,
   diagnose, then fix. Verify fixes the same way.
-- Don't break the working editor mid-session: batch edits to files the
-  dev server watches; his tab reloads on HMR.
-- After shipping: commit here; he pushes (push to main auto-deploys).
+- Keep the editor usable between focused commits; development tabs reload on
+  watched-file changes.
+- A push to `main` deploys only after the complete verification workflow passes.

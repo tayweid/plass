@@ -12,6 +12,7 @@ import { loadRemoteImage, remoteImageStatus, sanitizeSvgImage } from './remote-i
 import { FONT_FALLBACK } from './typst-config';
 import { runCompilerTask } from './typst-worker-client';
 import { COMPILER_DEADLINES, COMPILER_LIMITS, type CompilerAsset } from './typst-worker-protocol';
+import { resetCompilerCircuit } from './compiler-circuit';
 
 export { FONT_FALLBACK } from './typst-config';
 type Asset = CompilerAsset;
@@ -248,6 +249,9 @@ export function compileTyp(src: string, onMsg: (m: string) => void = () => {}): 
 }
 
 export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string) => void): Promise<void> {
+  // Export is an explicit user action, so it may make one fresh attempt after
+  // a background timeout. Another timeout reopens the circuit immediately.
+  resetCompilerCircuit();
   try {
     onMsg('Preparing document…');
     const { map, assets, missing, blockedRemote } = await prepareAssets(doc);

@@ -1,6 +1,6 @@
 // Real files: open/save .typ documents on disk.
 //
-// Chromium: File System Access API — Open/Save/Save As with real handles,
+// Chromium: File System Access API — Open/Save with real handles,
 // silent autosave to the open file, recents persisted in IndexedDB (file
 // handles are structured-cloneable), and automatic reconnection to the last
 // file when the browser still grants permission.
@@ -556,7 +556,7 @@ export class FileManager {
       }
       this.name = name;
       this.hooks.onState();
-      this.hooks.message(`Name set to “${name}” — the file on disk keeps its old name (Save As to write a new one)`);
+      this.hooks.message(`Name set to “${name}” — the file on disk keeps its old name; use Export → .typ for a renamed copy`);
       return;
     }
     this.name = name;

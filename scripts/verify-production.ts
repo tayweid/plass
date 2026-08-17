@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { contentSecurityPolicy } from '../src/security-policy';
 import { TYPST_PACKAGE_POLICY } from '../src/typst-config';
@@ -9,7 +10,11 @@ function assert(condition: unknown, message: string): asserts condition {
 
 const dist = join(process.cwd(), 'dist');
 const requiredNotices = [
+  'LICENSE.txt',
   'THIRD_PARTY_NOTICES.txt',
+  'SIDECAR_THIRD_PARTY_NOTICES.txt',
+  'TYPST_WASM_THIRD_PARTY_NOTICES.txt',
+  'sources/option-ext-0.2.0.crate',
   'fonts/README.md',
   'fonts/licenses/DejaVu-LICENSE.txt',
   'fonts/licenses/Libertinus-OFL.txt',
@@ -20,6 +25,25 @@ const requiredNotices = [
 for (const path of requiredNotices) {
   assert(statSync(join(dist, path)).size > 100, `${path} is missing or empty`);
 }
+const projectLicense = readFileSync(join(process.cwd(), 'LICENSE'));
+assert(
+  projectLicense.equals(readFileSync(join(process.cwd(), 'public/LICENSE.txt'))),
+  'public/LICENSE.txt must be byte-identical to the project LICENSE',
+);
+assert(
+  projectLicense.equals(readFileSync(join(dist, 'LICENSE.txt'))),
+  'the built LICENSE.txt must be byte-identical to the project LICENSE',
+);
+const mplSource = readFileSync(join(process.cwd(), 'public/sources/option-ext-0.2.0.crate'));
+assert(
+  createHash('sha256').update(mplSource).digest('hex') ===
+    '04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d',
+  'the distributed option-ext source archive has an unexpected digest',
+);
+assert(
+  mplSource.equals(readFileSync(join(dist, 'sources/option-ext-0.2.0.crate'))),
+  'the built option-ext source archive differs from the verified public copy',
+);
 const html = readFileSync(join(dist, 'index.html'), 'utf8');
 const manifest = JSON.parse(readFileSync(join(dist, 'manifest.webmanifest'), 'utf8')) as Record<string, unknown>;
 assert(manifest.id === './', 'PWA manifest must have a stable relative app identity');
@@ -50,5 +74,14 @@ assert(worker.includes('../fonts/'), 'worker font base does not escape the asset
 assert(worker.includes(TYPST_PACKAGE_POLICY.url), 'worker does not contain the exact pinned package URL');
 assert(worker.includes(TYPST_PACKAGE_POLICY.sha256), 'worker does not contain the pinned package digest');
 assert(worker.includes('Dynamic JavaScript construction is disabled'), 'worker fail-closed Function shim is missing');
+
+const sidecarName = readdirSync(join(dist, 'assets')).find((name) => /^typeset_sidecar_bg-.*\.wasm$/.test(name));
+assert(sidecarName, 'line-breaking sidecar WASM artifact is missing');
+assert(
+  readFileSync(join(dist, 'assets', sidecarName)).equals(
+    readFileSync(join(process.cwd(), 'sidecar/pkg/typeset_sidecar_bg.wasm')),
+  ),
+  'built sidecar WASM differs from the provenance-checked source artifact',
+);
 
 console.log('production security artifact verified');

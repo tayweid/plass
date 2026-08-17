@@ -91,6 +91,37 @@ offer a bug bounty.
 ## Release practice
 
 Release builds must pass unit tests, Playwright security/persistence tests,
-the license-notice check, `npm audit`, CodeQL, and the production artifact
-checks in CI. Deploy only over HTTPS. See [`RELEASING.md`](./RELEASING.md) for
-the complete gate.
+the license-notice check, `npm audit`, the sidecar's pinned `cargo-audit`
+check, CodeQL, and the production artifact checks in CI. Deploy only over
+HTTPS. See
+[`RELEASING.md`](./RELEASING.md) for the complete gate.
+
+The Plass-owned sidecar lockfile currently reports zero vulnerabilities. It
+separately reports two unmaintained-package advisories: `rustybuzz` 0.20.1
+(RUSTSEC-2026-0206) and `ttf-parser` 0.25.1 (RUSTSEC-2026-0192). These are not
+vulnerability advisories. The exact versions are retained only to preserve
+parity with the Typst compiler's dependency graph and must be reviewed again
+on every compiler upgrade, then updated as soon as exact parity permits.
+
+The upstream precompiled Typst 0.7.0 compiler and renderer are a distinct
+release blocker. A binary RustSec scan recovers only part of their dependency
+metadata because they were not built with `cargo auditable`, but it still
+finds nine advisories in the compiler (RUSTSEC-2026-0204,
+RUSTSEC-2026-0195, RUSTSEC-2026-0194, RUSTSEC-2026-0001,
+RUSTSEC-2026-0235, RUSTSEC-2026-0068, RUSTSEC-2026-0067,
+RUSTSEC-2026-0103, and RUSTSEC-2026-0009); the renderer contains
+RUSTSEC-2026-0001 and RUSTSEC-2026-0235. The worker's strict source/asset
+limits, serialized queue with a timeout circuit breaker, hard termination
+deadlines, runtime network allowlist, WASM memory isolation, and sanitized
+outputs reduce likely impact. They do not make a known dependency finding
+disappear. In particular,
+`quick-xml` 0.38.4 is plausibly attacker-reachable through inline/raw Typst CSL
+style XML; the source cap, watchdog, and timeout circuit breaker bound but do
+not eliminate browser-tab denial of service.
+
+A formal public release therefore requires replacement binaries whose exact
+dependency graph passes review, or an explicit, independently reviewed risk
+decision covering each reachable advisory and its application-level
+mitigation. The public preview is not that decision. The compiler and renderer
+hashes and their conservative third-party license inventory are pinned by the
+notice verifier so a package change cannot silently inherit the old review.

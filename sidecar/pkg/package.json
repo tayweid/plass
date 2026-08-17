@@ -1,16 +1,24 @@
 {
   "name": "typeset-sidecar",
   "type": "module",
-  "description": "Data-exact primitives for the Typst line-break port: the same ICU segmentation, hypher hyphenation, and rustybuzz shaping (same crate versions, same ICU blob) that typst 951788cc uses.",
+  "description": "Data-exact primitives for the Typst line-break port, pinned to the reconstructed typst.ts 0.7.0 outer dependency graph and checked against shipped compiler version strings.",
   "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tayweid/plass"
+  },
   "files": [
     "typeset_sidecar_bg.wasm",
     "typeset_sidecar.js",
-    "typeset_sidecar.d.ts"
+    "typeset_sidecar.d.ts",
+    "LICENSE",
+    "PROVENANCE.json"
   ],
   "main": "typeset_sidecar.js",
   "types": "typeset_sidecar.d.ts",
   "sideEffects": [
     "./snippets/*"
-  ]
+  ],
+  "private": true
 }

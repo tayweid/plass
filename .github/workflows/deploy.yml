@@ -10,10 +10,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -24,22 +28,53 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - run: rustup toolchain install 1.97.0 --profile minimal --no-self-update
+      - run: rustup default 1.97.0
       - run: npm ci
       - run: npm audit --audit-level=moderate
+      - name: Install the pinned Rust auditor
+        run: cargo install cargo-audit --locked --version 0.22.2
+      - name: Audit the Plass-owned sidecar dependency graph
+        run: cargo audit --file sidecar/Cargo.lock
       - run: npm run verify:licenses
       - run: npm test
+      - name: Test the Plass-owned sidecar source
+        run: cargo test --locked --manifest-path sidecar/Cargo.toml
+      - run: npm run test:layout
       - run: npx --no-install playwright install --with-deps chromium firefox webkit
       - run: npm run test:browser
       - run: npm run build
       - run: npm run verify:production
-      - if: github.event_name != 'pull_request'
+      - if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
           path: dist
 
+  sidecar-reproducibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: rustup toolchain install 1.97.0 --profile minimal --target wasm32-unknown-unknown --no-self-update
+      - run: rustup default 1.97.0
+      - run: npm ci
+      - run: cargo install wasm-pack --locked --version 0.15.0
+      - run: npm run sidecar
+      - run: npm run verify:sidecar
+      - name: Require a byte-reproducible checked sidecar package
+        run: git diff --exit-code -- sidecar/pkg sidecar/Cargo.lock
+
   deploy:
-    if: github.event_name != 'pull_request'
-    needs: verify
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [verify, sidecar-reproducibility]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

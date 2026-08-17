@@ -16,35 +16,83 @@ import {
   sanitizeSvgImage,
 } from './remote-images';
 import { COMPILER_LIMITS } from './typst-worker-protocol';
+import { resetCompilerCircuit } from './compiler-circuit';
 
 // ---------- project assets (relative paths) ----------
 
 let fmRef: FileManager | null = null;
 
 export function setFigureFileManager(fm: FileManager) {
+  if (fmRef !== fm) enterAssetDirectory(fm.dir);
   fmRef = fm;
 }
 
 export const isPathSrc = (src: string) => !!src && !/^(data:|blob:)/i.test(src) && !isRemoteSource(src);
 
-/** path → object URL, keyed by mtime so rewrites refresh. */
-const assetCache = new Map<string, { mtime: number; url: string }>();
+interface AssetDirectoryScope {
+  dir: FileSystemDirectoryHandle;
+  generation: number;
+}
+
+/** Object URLs are valid only for the project directory that produced them.
+ * FileManager keeps one identity while its `dir` changes, so path + mtime is
+ * not enough: two projects may legitimately contain the same relative path
+ * and timestamp. */
+const assetCache = new Map<string, {
+  dir: FileSystemDirectoryHandle;
+  generation: number;
+  mtime: number;
+  size: number;
+  url: string;
+}>();
+let assetDirectory: FileSystemDirectoryHandle | null = null;
+let assetDirectoryGeneration = 0;
+
+function enterAssetDirectory(dir: FileSystemDirectoryHandle | null): AssetDirectoryScope | null {
+  if (assetDirectory !== dir) {
+    for (const cached of assetCache.values()) URL.revokeObjectURL(cached.url);
+    assetCache.clear();
+    assetDirectory = dir;
+    assetDirectoryGeneration++;
+  }
+  return dir ? { dir, generation: assetDirectoryGeneration } : null;
+}
+
+function assetScopeIsCurrent(manager: FileManager, scope: AssetDirectoryScope): boolean {
+  return (
+    fmRef === manager &&
+    manager.dir === scope.dir &&
+    assetDirectory === scope.dir &&
+    assetDirectoryGeneration === scope.generation
+  );
+}
+
 const embeddedSvgCache = new Map<string, Promise<string | null>>();
 
 async function assetUrl(path: string): Promise<string | null> {
-  if (!fmRef) return null;
-  const stat = await fmRef.statAsset(path);
+  const manager = fmRef;
+  if (!manager) return null;
+  const scope = enterAssetDirectory(manager.dir);
+  if (!scope) return null;
+  const stat = await manager.statAsset(path);
+  if (!assetScopeIsCurrent(manager, scope)) return null;
   if (!stat || stat.size > COMPILER_LIMITS.assetBytes) return null;
   const cached = assetCache.get(path);
-  if (cached && cached.mtime === stat.mtime) return cached.url;
+  if (
+    cached &&
+    cached.dir === scope.dir &&
+    cached.generation === scope.generation &&
+    cached.mtime === stat.mtime &&
+    cached.size === stat.size
+  ) return cached.url;
   let file: Awaited<ReturnType<FileManager['readAsset']>>;
   try {
-    file = await fmRef.readAsset(path, COMPILER_LIMITS.assetBytes);
+    file = await manager.readAsset(path, COMPILER_LIMITS.assetBytes);
   } catch {
     return null;
   }
+  if (!assetScopeIsCurrent(manager, scope)) return null;
   if (!file) return null;
-  if (cached) URL.revokeObjectURL(cached.url);
   const type = file.type || (/\.svg$/i.test(path) ? 'image/svg+xml' : 'image/png');
   let data = file.data;
   if (type === 'image/svg+xml' || /\.svg$/i.test(path)) {
@@ -54,8 +102,25 @@ async function assetUrl(path: string): Promise<string | null> {
       return null;
     }
   }
+  // Another view may have completed the same read while this one was in
+  // flight. Reuse its URL instead of revoking an image that it just mounted.
+  const installed = assetCache.get(path);
+  if (
+    installed &&
+    installed.dir === scope.dir &&
+    installed.generation === scope.generation &&
+    installed.mtime === file.mtime &&
+    installed.size === file.data.byteLength
+  ) return installed.url;
+  if (installed) URL.revokeObjectURL(installed.url);
   const url = URL.createObjectURL(new Blob([data.slice().buffer], { type }));
-  assetCache.set(path, { mtime: file.mtime, url });
+  assetCache.set(path, {
+    dir: scope.dir,
+    generation: scope.generation,
+    mtime: file.mtime,
+    size: file.data.byteLength,
+    url,
+  });
   return url;
 }
 
@@ -159,33 +224,79 @@ export function startAssetWatch(view: EditorView): () => void {
   let disposed = false;
   let checking = false;
   let checkAgain = false;
+  // Keep watcher metadata separate from the display cache. A malformed or
+  // not-yet-rendered image may never enter assetCache; treating every cache
+  // miss as new input would otherwise reopen a timed-out compiler every four
+  // seconds without any filesystem change.
+  const observedAssets = new Map<string, string>();
+  let observedDirectoryGeneration = -1;
 
   const checkOnce = async () => {
     const manager = fmRef;
-    if (disposed || !manager?.inFolder) return;
+    if (disposed || !manager) return;
+    const priorDirectoryGeneration = assetDirectoryGeneration;
+    const scope = enterAssetDirectory(manager.dir);
+    if (!scope) {
+      observedAssets.clear();
+      observedDirectoryGeneration = -1;
+      return;
+    }
+    // Only the call that actually observes a directory transition may treat
+    // it as new input. A later first watcher pass must not reopen a circuit
+    // after assetUrl already entered (and compiled) the same directory.
+    const detectedDirectoryChange = scope.generation !== priorDirectoryGeneration;
+    const directoryChanged = observedDirectoryGeneration !== scope.generation;
+    if (directoryChanged) {
+      observedAssets.clear();
+      observedDirectoryGeneration = scope.generation;
+    }
     const paths = new Set<string>();
     view.state.doc.descendants((n) => {
       if (n.type.name === 'figure' && isPathSrc(n.attrs.src as string)) paths.add(n.attrs.src as string);
       return true;
     });
     let changed = false;
+    let freshInput = false;
     for (const path of paths) {
       const file = await manager.statAsset(path);
       // The watcher may be torn down, or the active project may change,
       // while a File System Access request is in flight.
-      if (disposed || manager !== fmRef) return;
+      if (disposed || !assetScopeIsCurrent(manager, scope)) return;
       const cached = assetCache.get(path);
+      const fingerprint = file ? `${file.mtime}:${file.size}` : 'missing';
+      const observed = observedAssets.get(path);
+      if (observed !== undefined && observed !== fingerprint) {
+        changed = true;
+        freshInput = true;
+      }
+      observedAssets.set(path, fingerprint);
       if (!file || file.size > COMPILER_LIMITS.assetBytes) {
         if (cached) {
           URL.revokeObjectURL(cached.url);
           assetCache.delete(path);
           changed = true;
+          freshInput = true;
         }
         continue;
       }
-      if (!cached || cached.mtime !== file.mtime) changed = true;
+      if (
+        !cached ||
+        cached.dir !== scope.dir ||
+        cached.generation !== scope.generation ||
+        cached.mtime !== file.mtime ||
+        cached.size !== file.size
+      ) {
+        changed = true;
+        if (cached) freshInput = true;
+      }
     }
-    if (changed && !disposed && manager === fmRef) {
+    for (const path of observedAssets.keys()) if (!paths.has(path)) observedAssets.delete(path);
+    if ((changed || (directoryChanged && paths.size > 0)) && !disposed && assetScopeIsCurrent(manager, scope)) {
+      // Changed bytes at the same document path are fresh compiler input even
+      // though no ProseMirror transaction accompanies the filesystem event.
+      // Initial cache population is not: it must not become an automatic
+      // circuit reset loop for an unreadable asset.
+      if (freshInput || detectedDirectoryChange) resetCompilerCircuit();
       window.dispatchEvent(new CustomEvent(ASSET_EVENT));
       invalidatePageLayout(view);
     }

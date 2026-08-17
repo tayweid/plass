@@ -20,6 +20,7 @@ import { CodeBlockView, rawIslandPlugin } from './raw-preview';
 import { refAutocomplete } from './ref-autocomplete';
 import { applySettings, formatPageNumber, getSettings } from './settings';
 import { FileManager } from './file-manager';
+import { resetCompilerCircuit } from './compiler-circuit';
 
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
@@ -244,6 +245,10 @@ const view = new EditorView(editorEl, {
     const prevAttrs = view.state.doc.attrs;
     const prevMacros = getSettings(view.state).mathMacros;
     const newState = view.state.apply(tr);
+    // A real document change is the trusted boundary that lets background
+    // Typst previews resume after a timeout. Selection/decorations/layout
+    // transactions do not reset the circuit, so retry loops cannot reopen it.
+    if (tr.docChanged) resetCompilerCircuit();
     view.updateState(newState);
     toolbar?.update(newState);
     if (newState.doc.attrs !== prevAttrs) {
@@ -277,6 +282,7 @@ const fileManager = new FileManager({
   getDoc: () => view.state.doc,
   emptyDoc: () => schema.nodes.doc.create(null, [schema.nodes.paragraph.create()]),
   setDoc(doc) {
+    resetCompilerCircuit();
     view.updateState(makeState(doc, onStats));
     applySettings(view.state);
     toolbar?.update(view.state);

@@ -226,37 +226,238 @@ test('compiler package policy makes only one pinned integrity-checked request', 
   expect(packageRequests).toEqual(['https://packages.typst.org/preview/mitex-0.2.5.tar.gz']);
 });
 
-test('compiler watchdog stops a stuck job without freezing the UI and then recovers', async ({ page }) => {
+test('compiler timeout circuit blocks automatic retries until a document edit resets it', async ({ page }) => {
   await page.goto('/?new=1');
   const result = await page.evaluate(async () => {
-    const { testCompilerWatchdog } = await import('/src/typst-worker-client.ts');
+    const app = window as typeof window & { view: import('prosemirror-view').EditorView };
+    const { state } = app.view;
+    const raw = state.schema.nodes.code_block.create(
+      { params: 'typst-raw' },
+      state.schema.text('#rect(width: 20pt, height: 20pt)'),
+    );
+    app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, raw));
+
+    const { testCompilerLifecycleStats, testCompilerTimeoutCircuitBreaker } =
+      await import('/src/typst-worker-client.ts');
     let uiTicks = 0;
     const timer = window.setInterval(() => uiTicks++, 10);
     const started = performance.now();
-    const error = await testCompilerWatchdog();
+    const circuit = await testCompilerTimeoutCircuitBreaker();
     const watchdogMs = performance.now() - started;
     window.clearInterval(timer);
 
-    // The timed-out worker is discarded. Both rendering paths must work on
-    // the freshly-created replacement, proving a poisoned compiler session
-    // cannot strand later previews or exports.
-    const { compileSvg, compileTyp } = await import('/src/pdf.ts');
+    // compileSvg is the error-erasing wrapper used by raw previews and math
+    // ink. It must fail fast while the circuit is open, and the raw node's
+    // own delayed retry must do the same without creating or feeding a worker.
+    const { compileSvg, compileTyp, typstQuery } = await import('/src/pdf.ts');
+    const beforeRetry = testCompilerLifecycleStats();
+    const blockedSvg = await compileSvg('[automatic retry must stay blocked]');
+    const blockedQuery = await typstQuery('[automatic query must stay blocked]', 'metadata');
+    await new Promise((resolve) => window.setTimeout(resolve, 1_400));
+    const afterRetry = testCompilerLifecycleStats();
+
+    // A real editor transaction is the central reset boundary. The next
+    // background compile and PDF task should run on a fresh worker.
+    const edited = app.view.state;
+    app.view.dispatch(edited.tr.insert(
+      edited.doc.content.size,
+      edited.schema.nodes.paragraph.create(null, edited.schema.text('new user input')),
+    ));
+    const afterEdit = testCompilerLifecycleStats();
     const svg = await compileSvg('[worker recovered]');
     const pdf = await compileTyp('[worker recovered]');
     return {
-      code: error.code,
+      code: circuit.timedOut.code,
+      canceledCodes: circuit.canceled.map((error) => error.code),
+      canceledMessages: circuit.canceled.map((error) => error.message),
       watchdogMs,
       uiTicks,
+      blockedSvg,
+      blockedQuery,
+      stayedOpen: beforeRetry.circuitOpen && afterRetry.circuitOpen,
+      noRetryWorker: beforeRetry.workersCreated === afterRetry.workersCreated,
+      noRetryWork: beforeRetry.tasksPosted === afterRetry.tasksPosted,
+      automaticAttemptsBlocked: afterRetry.circuitRejects > beforeRetry.circuitRejects,
+      idleWhileOpen: !afterRetry.active && afterRetry.queued === 0,
+      resetByEdit: !afterEdit.circuitOpen,
       hasSvg: svg?.includes('<svg') ?? false,
       pdfHeader: pdf ? new TextDecoder().decode(pdf.slice(0, 5)) : '',
     };
   });
 
   expect(result.code).toBe('timeout');
+  expect(result.canceledCodes).toEqual(['timeout', 'timeout', 'timeout']);
+  expect(result.canceledMessages.every((message) => message.includes('earlier request timed out'))).toBe(true);
   expect(result.watchdogMs).toBeLessThan(2_000);
   expect(result.uiTicks).toBeGreaterThan(0);
+  expect(result.blockedSvg).toBeNull();
+  expect(result.blockedQuery).toBeNull();
+  expect(result.stayedOpen).toBe(true);
+  expect(result.noRetryWorker).toBe(true);
+  expect(result.noRetryWork).toBe(true);
+  expect(result.automaticAttemptsBlocked).toBe(true);
+  expect(result.idleWhileOpen).toBe(true);
+  expect(result.resetByEdit).toBe(true);
   expect(result.hasSvg).toBe(true);
   expect(result.pdfHeader).toBe('%PDF-');
+});
+
+test('an explicit PDF export resets an open compiler circuit', async ({ page }) => {
+  await page.goto('/?new=1');
+  const result = await page.evaluate(async () => {
+    const app = window as typeof window & { view: import('prosemirror-view').EditorView };
+    const { testCompilerLifecycleStats, testCompilerTimeoutCircuitBreaker } =
+      await import('/src/typst-worker-client.ts');
+    await testCompilerTimeoutCircuitBreaker();
+    const before = testCompilerLifecycleStats();
+
+    const messages: string[] = [];
+    const click = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = () => {};
+    try {
+      const { exportPdf } = await import('/src/pdf.ts');
+      await exportPdf(app.view.state.doc, 'circuit-export', (message) => messages.push(message));
+    } finally {
+      HTMLAnchorElement.prototype.click = click;
+    }
+    const after = testCompilerLifecycleStats();
+    return {
+      wasOpen: before.circuitOpen,
+      reset: !after.circuitOpen,
+      postedFreshWork: after.tasksPosted > before.tasksPosted,
+      exported: messages.some((message) => message.startsWith('Exported circuit-export.pdf')),
+    };
+  });
+
+  expect(result).toEqual({ wasOpen: true, reset: true, postedFreshWork: true, exported: true });
+});
+
+test('an old compiler timeout preserves work from a newer document epoch', async ({ page }) => {
+  await page.goto('/?new=1');
+  const result = await page.evaluate(async () => {
+    const app = window as typeof window & { view: import('prosemirror-view').EditorView };
+    const { CompilerWorkerError, runCompilerTask, testCompilerLifecycleStats } =
+      await import('/src/typst-worker-client.ts');
+    const before = testCompilerLifecycleStats();
+
+    // A starts immediately in the old epoch. The document edit advances the
+    // epoch while A is still occupying the worker, so B queues behind A with
+    // a newer stamp. A's timeout must terminate only A and then pump B.
+    const old = runCompilerTask(
+      { kind: 'test-busy', milliseconds: 5_000 },
+      { timeoutMs: 75 },
+    ).then(
+      () => null,
+      (error: unknown) => error instanceof CompilerWorkerError ? error.code : String(error),
+    );
+    const state = app.view.state;
+    app.view.dispatch(state.tr.insertText('fresh input', 1));
+    const afterEdit = testCompilerLifecycleStats();
+    const newer = runCompilerTask<string>(
+      { kind: 'svg', source: '#set page(width: 120pt, height: auto, margin: 0pt)\n[new epoch]' },
+      { timeoutMs: 20_000 },
+    );
+
+    const [oldCode, svg] = await Promise.all([old, newer]);
+    const after = testCompilerLifecycleStats();
+    return {
+      oldCode,
+      epochAdvanced: afterEdit.epoch === before.epoch + 1,
+      remainedOpen: after.circuitOpen,
+      newerRan: svg.includes('<svg'),
+      replacementWorker: after.workersCreated > before.workersCreated + 1,
+      replacementWorkPosted: after.tasksPosted > before.tasksPosted + 1,
+    };
+  });
+
+  expect(result).toEqual({
+    oldCode: 'timeout',
+    epochAdvanced: true,
+    remainedOpen: false,
+    newerRan: true,
+    replacementWorker: true,
+    replacementWorkPosted: true,
+  });
+});
+
+test('table-card open and local edits authorize fresh compiler epochs', async ({ page }) => {
+  await page.goto('/?new=1');
+  const result = await page.evaluate(async () => {
+    const app = window as typeof window & { view: import('prosemirror-view').EditorView };
+    const { schema } = await import('/src/schema.ts');
+    const cell = (text: string) => schema.nodes.table_cell.create(
+      null,
+      schema.nodes.paragraph.create(null, schema.text(text)),
+    );
+    const table = schema.nodes.table.create(
+      { style: 'booktabs' },
+      schema.nodes.table_row.create(null, [cell('A'), cell('B')]),
+    );
+    const state = app.view.state;
+    app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, table));
+
+    const { testCompilerLifecycleStats, testCompilerTimeoutCircuitBreaker } =
+      await import('/src/typst-worker-client.ts');
+    const { openTableEditor } = await import('/src/table-editor.ts');
+    const beforeOpen = testCompilerLifecycleStats();
+    openTableEditor(app.view, 0);
+    const afterOpen = testCompilerLifecycleStats();
+
+    // Let the document and card's legitimate initial previews settle before
+    // deterministically opening the circuit.
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    for (let i = 0; i < 100; i++) {
+      const stats = testCompilerLifecycleStats();
+      if (!stats.active && stats.queued === 0) break;
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    }
+    await testCompilerTimeoutCircuitBreaker();
+    const beforeInput = testCompilerLifecycleStats();
+    const caption = document.querySelector<HTMLInputElement>('.table-card-caption');
+    if (!caption) throw new Error('Table-card caption input was not mounted');
+    caption.value = 'Fresh local input';
+    caption.dispatchEvent(new Event('input', { bubbles: true }));
+    const afterInput = testCompilerLifecycleStats();
+    document.querySelector<HTMLButtonElement>('.table-card-overlay .bib-cancel')?.click();
+
+    return {
+      openAdvanced: afterOpen.epoch === beforeOpen.epoch + 1,
+      circuitWasOpen: beforeInput.circuitOpen,
+      inputAdvanced: afterInput.epoch === beforeInput.epoch + 1,
+      inputReset: !afterInput.circuitOpen,
+    };
+  });
+
+  expect(result).toEqual({
+    openAdvanced: true,
+    circuitWasOpen: true,
+    inputAdvanced: true,
+    inputReset: true,
+  });
+});
+
+test('compiler circuit breaker leaves the successful queue path byte-stable', async ({ page }) => {
+  await page.goto('/?new=1');
+  const result = await page.evaluate(async () => {
+    const { runCompilerTask } = await import('/src/typst-worker-client.ts');
+    const source = '#set page(width: 120pt, height: auto, margin: 0pt)\n[stable queue output]';
+    const compile = () => runCompilerTask<string>(
+      { kind: 'svg', source },
+      { timeoutMs: 20_000 },
+    );
+
+    // The second call is queued behind the first. A later third call proves
+    // that both the queued and idle-worker paths produce the same bytes.
+    const [first, queued] = await Promise.all([compile(), compile()]);
+    const fresh = await compile();
+    return {
+      isSvg: first.includes('<svg'),
+      queuedMatches: queued === first,
+      freshMatches: fresh === first,
+    };
+  });
+
+  expect(result).toEqual({ isSvg: true, queuedMatches: true, freshMatches: true });
 });
 
 test('remote images make no request until the user grants their origin', async ({ page }) => {

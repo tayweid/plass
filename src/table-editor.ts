@@ -16,6 +16,7 @@ import { schema } from './schema';
 import { docToTyp } from './typ-serializer';
 import { parseTable } from './typ-parser';
 import { mountTypstSvg } from './safe-svg';
+import { resetCompilerCircuit } from './compiler-circuit';
 
 interface CellModel {
   text: string;
@@ -246,6 +247,9 @@ export function openTableEditor(view: EditorView, pos: number) {
   if (cardOpen) return;
   const node = view.state.doc.nodeAt(pos);
   if (!node || node.type !== schema.nodes.table) return;
+  // Opening this explicit editor is a fresh user action even before its
+  // card-local model is saved back through a ProseMirror transaction.
+  resetCompilerCircuit();
   cardOpen = true;
 
   let model = readModel(node);
@@ -797,6 +801,9 @@ export function openTableEditor(view: EditorView, pos: number) {
   let previewGeneration = 0;
   let lastSrc = '';
   const schedulePreview = () => {
+    // Table-card edits live outside ProseMirror until Save, so their local
+    // preview boundary must authorize the new compiler generation itself.
+    resetCompilerCircuit();
     clearTimeout(previewTimer);
     const generation = ++previewGeneration;
     previewTimer = window.setTimeout(() => void compilePreview(generation), 300);
