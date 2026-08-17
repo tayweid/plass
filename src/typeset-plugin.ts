@@ -97,6 +97,12 @@ import {
   createPaginationSnapshot,
   type PaginationSnapshot as HeightSnapshot,
 } from './layout/pagination-snapshot';
+import {
+  planSuffixPagination,
+  type SuffixPageMarker,
+  type SuffixPageSpacer,
+  type SuffixPaginationSeed,
+} from './layout/pagination-suffix';
 import { layoutForcedBlock } from './layout/forced-layout';
 import {
   ForcedLayoutAuditor,
@@ -162,6 +168,57 @@ interface PaginationPassResult {
   tableEffects: TableEffect[];
 }
 
+interface PaginationFallbackSeed {
+  startPos: number;
+  page: number;
+  shift: number;
+  prefixSpacers: Spacer[];
+}
+
+interface PaginationFallbackResult extends PaginationPassResult {
+  visitedUnits: number;
+  anchors: Array<{ pos: number; page: number; kind: Spacer['kind'] }>;
+}
+
+interface FallbackBasisMarker {
+  childIndex: number;
+  page: number;
+  line: number;
+  unit: 'paragraph' | 'line';
+}
+
+interface SuffixPaginationStats {
+  attempts: number;
+  eligible: number;
+  compared: number;
+  matches: number;
+  mismatches: number;
+  fullUnits: number;
+  suffixUnits: number;
+  lastReason: string;
+  lastDifference: string | null;
+  lastStartPos: number | null;
+  lastAnchorPos: number | null;
+}
+
+const emptySuffixPaginationStats = (): SuffixPaginationStats => ({
+  attempts: 0,
+  eligible: 0,
+  compared: 0,
+  matches: 0,
+  mismatches: 0,
+  fullUnits: 0,
+  suffixUnits: 0,
+  lastReason: 'not-considered',
+  lastDifference: null,
+  lastStartPos: null,
+  lastAnchorPos: null,
+});
+
+type PaginationSuffixPlan =
+  | { kind: 'seed'; source: 'exact' | 'fallback-shadow'; seed: SuffixPaginationSeed }
+  | { kind: 'none'; reason: string };
+
 const viewRegistry = new WeakMap<EditorView, TypesetView>();
 
 /** Request a re-typeset without a document change (e.g. an image loaded). */
@@ -212,7 +269,7 @@ export function typesetPlugin(
               const revived = lost.map((d) => {
                 const spec = d.spec as { key: string; h: number; hy?: boolean };
                 const pos = Math.min(tr.mapping.map(d.from, -1), tr.doc.content.size);
-                return Decoration.widget(pos, () => pageGapWidget(spec.h, !!spec.hy), {
+                return Decoration.widget(pos, () => pageGapWidget(spec.h, !!spec.hy, spec.key), {
                   side: -1,
                   key: spec.key,
                   h: spec.h,
@@ -258,6 +315,17 @@ class TypesetView {
   private lineDecorationDispatches = 0;
   private pageMarkDispatches = 0;
   private paginationSnapshotStats = { captures: 0, spacerScans: 0, tableScans: 0, heightQueries: 0 };
+  private suffixPaginationStats = emptySuffixPaginationStats();
+  private exactPageBasisDoc: PMNode | null = null;
+  private exactPageBasisEpoch = -1;
+  private exactPageBasisWidth = 0;
+  private fallbackPageBasisDoc: PMNode | null = null;
+  private fallbackPageBasisEpoch = -1;
+  private fallbackPageBasisWidth = 0;
+  private fallbackPageBasisMarkers: FallbackBasisMarker[] = [];
+  private pageSpacerAuthority: 'exact' | 'held' | 'fallback' = 'fallback';
+  private paginationGeometryEpoch = 0;
+  private lastPaginationWidth = 0;
   private destroyed = false;
 
   constructor(
@@ -299,6 +367,7 @@ class TypesetView {
           tableScans: number;
           heightQueries: number;
         };
+        __suffixPaginationStats?: (reset?: boolean) => SuffixPaginationStats;
       };
       w.__oracle = this.oracles.paragraph;
       w.__pageOracle = this.oracles.page;
@@ -385,6 +454,11 @@ class TypesetView {
         }
         return stats;
       };
+      w.__suffixPaginationStats = (reset = false) => {
+        const stats = { ...this.suffixPaginationStats };
+        if (reset) this.suffixPaginationStats = emptySuffixPaginationStats();
+        return stats;
+      };
     }
     this.scheduler = new LayoutScheduler(view.dom, {
       runLive: () => this.liveRun(),
@@ -392,6 +466,10 @@ class TypesetView {
       // Web fonts arriving change every browser metric. The Typst oracles
       // remain valid because their bundled font inputs did not change.
       invalidateMetrics: () => {
+        this.paginationGeometryEpoch++;
+        this.pageSpacerAuthority = 'fallback';
+        this.clearExactPageBasis();
+        this.clearFallbackPageBasis();
         this.measurer.invalidate();
         this.cache.clear();
         clearTableSplitCache();
@@ -421,6 +499,10 @@ class TypesetView {
   update(view: EditorView, prevState: EditorState) {
     // Document settings (font, size, hyphenation, …) invalidate every metric.
     if (view.state.doc.attrs !== prevState.doc.attrs) {
+      this.paginationGeometryEpoch++;
+      this.pageSpacerAuthority = 'fallback';
+      this.clearExactPageBasis();
+      this.clearFallbackPageBasis();
       this.measurer.invalidate();
       this.cache.clear();
       this.oracles.clear();
@@ -724,6 +806,10 @@ class TypesetView {
 
   /** Drop cached page-break decisions (asset bytes changed under same sig). */
   invalidatePages() {
+    this.paginationGeometryEpoch++;
+    this.pageSpacerAuthority = 'fallback';
+    this.clearExactPageBasis();
+    this.clearFallbackPageBasis();
     this.oracles.clearPage();
     clearTableSplitCache();
   }
@@ -736,6 +822,16 @@ class TypesetView {
    *  decoration set (they carry their height in spec.h). */
   private currentSpacers(): CurrentSpacers {
     const set = typesetKey.getState(this.view.state)?.decos;
+    // CSS rounds a requested gap to hundredths and each browser then stores
+    // that length in its own layout units. Natural-coordinate recovery must
+    // subtract what the DOM actually painted, not the unrounded request in
+    // the decoration spec, or a full pagination pass drifts on every rerun.
+    const paintedHeights = new Map<string, number>();
+    for (const gap of this.view.dom.querySelectorAll<HTMLElement>('.ts-pagegap[data-ts-gap-key]')) {
+      const key = gap.dataset.tsGapKey;
+      const height = gap.getBoundingClientRect().height;
+      if (key && Number.isFinite(height) && height > 0) paintedHeights.set(key, height);
+    }
     const lineMap = new Map<number, Spacer>();
     const blocks: Spacer[] = [];
     const sorted: Array<{ pos: number; height: number }> = [];
@@ -748,7 +844,11 @@ class TypesetView {
       if (!(h > 0)) continue;
       if (spec.tsKind === 'block-page-gap') blocks.push({ pos: d.from, height: h, kind: 'block' });
       else lineMap.set(d.from, { pos: d.from, height: h, kind: 'line' });
-      sorted.push({ pos: d.from, height: h });
+      // lineMap/blocks retain the requested value so a held or suffix pass
+      // can recreate the same decoration. The geometry index alone consumes
+      // physical height because it is undoing physical DOM displacement.
+      const painted = spec.key ? paintedHeights.get(spec.key) : undefined;
+      sorted.push({ pos: d.from, height: painted ?? h });
     }
     sorted.sort((a, b) => a.pos - b.pos);
     return { lineMap, blocks, sorted };
@@ -773,6 +873,11 @@ class TypesetView {
    * reads this same immutable prefix index. */
   private capturePaginationSnapshot(): PaginationGeometrySnapshot {
     const host = this.view.dom.parentElement ?? this.view.dom;
+    const width = this.view.dom.clientWidth;
+    if (this.lastPaginationWidth && Math.abs(width - this.lastPaginationWidth) > 0.5) {
+      this.paginationGeometryEpoch++;
+    }
+    this.lastPaginationWidth = width;
     const settings = getSettings(this.view.state);
     const size = pageSize(settings);
     const marginTop = settings.marginTop * 96;
@@ -809,6 +914,172 @@ class TypesetView {
       if (effect.type === 'clear') clearSplit(effect.node);
       else applySplit(effect.node, effect.layout, effect.gaps, effect.naturalHeight);
     }
+  }
+
+  private suffixSpacers(snapshot: PaginationGeometrySnapshot): SuffixPageSpacer[] {
+    return [...snapshot.spacers.lineMap.values(), ...snapshot.spacers.blocks]
+      .map((spacer) => ({ ...spacer }))
+      .sort((a, b) => a.pos - b.pos);
+  }
+
+  private exactSuffixMarkers(): SuffixPageMarker[] {
+    const marks = typesetKey.getState(this.view.state)?.pageMarks.find() ?? [];
+    return marks
+      .map((mark) => {
+        const spec = mark.spec as {
+          psLine?: number;
+          psUnit?: string;
+          psPage?: number;
+          psEpoch?: number;
+        };
+        return {
+          pos: mark.from,
+          line: spec.psLine ?? Number.NaN,
+          unit: spec.psUnit ?? '',
+          page: spec.psEpoch === this.exactPageBasisEpoch ? (spec.psPage ?? Number.NaN) : Number.NaN,
+        };
+      })
+      .sort((a, b) => a.page - b.page);
+  }
+
+  private fallbackSuffixMarkers(doc: PMNode): SuffixPageMarker[] {
+    const positions: number[] = [];
+    doc.forEach((_node, pos) => positions.push(pos));
+    return this.fallbackPageBasisMarkers.map((marker) => ({
+      pos: positions[marker.childIndex] ?? Number.NaN,
+      line: marker.line,
+      unit: marker.unit,
+      page: marker.page,
+    }));
+  }
+
+  private planPaginationSuffix(snapshot: PaginationGeometrySnapshot): PaginationSuffixPlan {
+    if (!import.meta.env.DEV) return { kind: 'none', reason: 'shadow-disabled' };
+    const currentDoc = this.view.state.doc;
+    const spacers = this.suffixSpacers(snapshot);
+    let exactReason: string | null = null;
+
+    if (
+      this.exactPageBasisDoc &&
+      this.pageSpacerAuthority === 'exact' &&
+      Math.abs(this.exactPageBasisWidth - this.view.dom.clientWidth) <= 0.5
+    ) {
+      const decision = planSuffixPagination({
+        basisDoc: this.exactPageBasisDoc,
+        currentDoc,
+        markers: this.exactSuffixMarkers(),
+        spacers,
+        basisEpoch: this.exactPageBasisEpoch,
+        currentEpoch: this.paginationGeometryEpoch,
+      });
+      if (decision.kind === 'seed') return { kind: 'seed', source: 'exact', seed: decision.seed };
+      if (decision.kind === 'none') return { kind: 'none', reason: 'exact-unchanged' };
+      exactReason = `exact-${decision.reason}`;
+    }
+
+    // A previous local fallback is never promoted to production authority.
+    // In development it supplies large-corpus shadow checkpoints: the full
+    // result remains selected even when the suffix matches byte-for-byte.
+    if (
+      this.fallbackPageBasisDoc &&
+      Math.abs(this.fallbackPageBasisWidth - this.view.dom.clientWidth) <= 0.5
+    ) {
+      const decision = planSuffixPagination({
+        basisDoc: this.fallbackPageBasisDoc,
+        currentDoc,
+        markers: this.fallbackSuffixMarkers(currentDoc),
+        spacers,
+        basisEpoch: this.fallbackPageBasisEpoch,
+        currentEpoch: this.paginationGeometryEpoch,
+      });
+      if (decision.kind === 'seed') {
+        return { kind: 'seed', source: 'fallback-shadow', seed: decision.seed };
+      }
+      return {
+        kind: 'none',
+        reason: decision.kind === 'none' ? 'fallback-unchanged' : `fallback-${decision.reason}`,
+      };
+    }
+
+    return {
+      kind: 'none',
+      reason: exactReason ?? (this.exactPageBasisDoc ? 'exact-width-changed' : 'no-page-basis'),
+    };
+  }
+
+  private rememberFallbackBasis(result: PaginationFallbackResult): void {
+    const doc = this.view.state.doc;
+    const blocks: Array<{ node: PMNode; pos: number }> = [];
+    doc.forEach((node, pos) => blocks.push({ node, pos }));
+    const markers: FallbackBasisMarker[] = [];
+    for (const anchor of result.anchors) {
+      const childIndex = blocks.findIndex(
+        (block) => anchor.pos >= block.pos && anchor.pos < block.pos + block.node.nodeSize,
+      );
+      if (childIndex < 0 || blocks[childIndex].node.type.name !== 'paragraph') {
+        markers.length = 0;
+        break;
+      }
+      const block = blocks[childIndex];
+      if (anchor.kind === 'block') {
+        if (anchor.pos !== block.pos) {
+          markers.length = 0;
+          break;
+        }
+        markers.push({ childIndex, page: anchor.page, line: 0, unit: 'paragraph' });
+        continue;
+      }
+      const entry = this.cache.get(block.node);
+      const line = entry?.lines.findIndex((_item, index) => {
+        if (index === 0) return false;
+        return block.pos + 1 + entry.lines[index].from === anchor.pos;
+      }) ?? -1;
+      if (line < 1) {
+        markers.length = 0;
+        break;
+      }
+      markers.push({ childIndex, page: anchor.page, line, unit: 'line' });
+    }
+    this.fallbackPageBasisDoc = doc;
+    this.fallbackPageBasisEpoch = this.paginationGeometryEpoch;
+    this.fallbackPageBasisWidth = this.view.dom.clientWidth;
+    this.fallbackPageBasisMarkers = markers;
+  }
+
+  private clearExactPageBasis(): void {
+    this.exactPageBasisDoc = null;
+    this.exactPageBasisEpoch = -1;
+    this.exactPageBasisWidth = 0;
+  }
+
+  private clearFallbackPageBasis(): void {
+    this.fallbackPageBasisDoc = null;
+    this.fallbackPageBasisEpoch = -1;
+    this.fallbackPageBasisWidth = 0;
+    this.fallbackPageBasisMarkers = [];
+  }
+
+  private fallbackResultDifference(a: PaginationFallbackResult, b: PaginationFallbackResult): string | null {
+    if (a.count !== b.count) return `page-count ${a.count} != ${b.count}`;
+    if (a.spacers.length !== b.spacers.length) {
+      return `spacer-count ${a.spacers.length} != ${b.spacers.length}`;
+    }
+    if (a.tableEffects.length || b.tableEffects.length) {
+      return `table-effects ${a.tableEffects.length}/${b.tableEffects.length}`;
+    }
+    const differences = a.spacers.flatMap((spacer, index) => {
+      const other = b.spacers[index];
+      const equal = (
+        other &&
+        spacer.pos === other.pos &&
+        spacer.kind === other.kind &&
+        spacer.height.toFixed(2) === other.height.toFixed(2) &&
+        Math.abs(spacer.height - other.height) < 0.005
+      );
+      return equal ? [] : [`${index}:${spacer.kind}@${spacer.pos}:${spacer.height.toFixed(4)}!=` +
+        `${other?.kind}@${other?.pos}:${other?.height.toFixed(4)}`];
+    });
+    return differences.length ? differences.slice(0, 5).join('; ') : null;
   }
 
   /** Font size in px (body em). */
@@ -1285,12 +1556,19 @@ class TypesetView {
             this.pagWhy = 'entry=exact';
             // Persist the starts as mapped markers for the next edit burst.
             this.lastPageCount = entry.pageCount ?? entry.pageStarts.length + 1;
+            this.exactPageBasisDoc = view.state.doc;
+            this.exactPageBasisEpoch = this.paginationGeometryEpoch;
+            this.exactPageBasisWidth = view.dom.clientWidth;
+            this.pageSpacerAuthority = 'exact';
+            this.clearFallbackPageBasis();
             this.pendingPageMarks = DecorationSet.create(
               view.state.doc,
-              entry.pageStarts.map((ps) =>
+              entry.pageStarts.map((ps, index) =>
                 Decoration.widget(ps.pos, () => document.createElement('span'), {
                   psLine: ps.line,
                   psUnit: ps.unit,
+                  psPage: index + 1,
+                  psEpoch: this.paginationGeometryEpoch,
                 }),
               ),
             );
@@ -1324,6 +1602,7 @@ class TypesetView {
           );
           if (forced) {
             this.pagPath = 'held';
+            this.pageSpacerAuthority = 'held';
             this.applyTableEffects(forced.tableEffects);
             return { spacers: forced.spacers, count: forced.count };
           }
@@ -1332,297 +1611,356 @@ class TypesetView {
     }
 
     this.pagPath = 'fallback';
-    // Origin: the stack top. view.dom (.ProseMirror) sits inside #editor's
-    // page-margin padding, so anchor to its parent, whose top is the top of
-    // the first painted page.
-    // Measurements run with the current spacers still in the DOM: convert
-    // to NATURAL (continuous) geometry by subtracting the spacers above —
-    // and the internal extras of any applied table splits.
-    const stackY = (clientTop: number, pos: number) =>
-      clientTop - snapshot.stackTop - this.heightAbove(snapshot, pos);
+    const runFallback = (seed?: PaginationFallbackSeed): PaginationFallbackResult => {
+      // Origin: the stack top. view.dom (.ProseMirror) sits inside #editor's
+      // page-margin padding, so anchor to its parent, whose top is the top of
+      // the first painted page.
+      // Measurements run with the current spacers still in the DOM: convert
+      // to NATURAL (continuous) geometry by subtracting the spacers above —
+      // and the internal extras of any applied table splits.
+      const stackY = (clientTop: number, pos: number) =>
+        clientTop - snapshot.stackTop - this.heightAbove(snapshot, pos);
 
-    // Footnote bodies, in document order, consumed as units are placed.
-    const fnList: Array<{ pos: number; height: number }> = [];
-    view.state.doc.descendants((node, pos) => {
-      if (node.type.name !== 'footnote') return true;
-      const dom = view.nodeDOM(pos);
-      const body = dom instanceof HTMLElement ? dom.querySelector<HTMLElement>('.fn-body') : null;
-      fnList.push({ pos, height: body ? body.offsetHeight : 0 });
-      return false;
-    });
-    let fnIdx = 0;
-    const peekFnH = (endPos: number) => {
-      let h = 0;
-      for (let j = fnIdx; j < fnList.length && fnList[j].pos < endPos; j++) h += fnList[j].height + FN_GAP;
-      return h;
-    };
-    const takeFnH = (endPos: number) => {
-      let h = 0;
-      while (fnIdx < fnList.length && fnList[fnIdx].pos < endPos) {
-        h += fnList[fnIdx].height + FN_GAP;
-        fnIdx++;
+      // Footnote bodies, in document order, consumed as units are placed.
+      const fnList: Array<{ pos: number; height: number }> = [];
+      if (!seed) {
+        view.state.doc.descendants((node, pos) => {
+          if (node.type.name !== 'footnote') return true;
+          const dom = view.nodeDOM(pos);
+          const body = dom instanceof HTMLElement ? dom.querySelector<HTMLElement>('.fn-body') : null;
+          fnList.push({ pos, height: body ? body.offsetHeight : 0 });
+          return false;
+        });
       }
-      return h;
-    };
-
-    const spacers: Spacer[] = [];
-    const tableEffects: TableEffect[] = [];
-    let shift = 0;
-    let page = 0;
-    let pageFnH = 0;
-    const bottomFor = (extraFnH: number) => {
-      const total = pageFnH + extraFnH;
-      return page * (size.h + PAGE_GAP) + size.h - marginBottom - (total > 0 ? total + FN_SEP : 0);
-    };
-    // The same page-top ink adjustment paginateForced applies: fallback
-    // pagination must land units at identical offsets, or an oracle miss
-    // visibly shifts the whole page rhythm by the adjustment.
-    const F = snapshot.bodyPx;
-    const adjFor = (pos: number, kind: Spacer['kind']): number => {
-      if (kind === 'line') return pageTopAdjustEm(s, 'line') * F;
-      const n = view.state.doc.nodeAt(pos);
-      if (n?.type.name === 'paragraph') return pageTopAdjustEm(s, 'paragraph') * F;
-      if (n?.type.name === 'heading') {
-        const lv = Math.min(3, (n.attrs.level as number) || 1);
-        return pageTopAdjustEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;
-      }
-      return 0;
-    };
-    const breakBefore = (pos: number, y: number, kind: Spacer['kind']) => {
-      const delta = (page + 1) * (size.h + PAGE_GAP) + marginTop + adjFor(pos, kind) - (y + shift);
-      page++;
-      pageFnH = 0;
-      if (delta > 0) {
-        spacers.push({ pos, height: delta, kind });
-        shift += delta;
-      }
-    };
-
-    const rectOf = (pos: number): DOMRect | null => {
-      const el = view.nodeDOM(pos);
-      return el instanceof HTMLElement ? el.getBoundingClientRect() : null;
-    };
-
-    // Sticky anchor: a heading immediately above the current block — a break
-    // at the block's start must carry the heading along (Typst headings are
-    // sticky by default; the oracle already does this, the fallback must too).
-    let sticky: { pos: number; y: number } | null = null;
-    const breakStart = (pos: number, y: number) => {
-      const a = sticky ?? { pos, y };
-      breakBefore(a.pos, a.y, 'block');
-    };
-
-    const atomic = (pos: number, node: PMNode) => {
-      const endPos = pos + node.nodeSize;
-      const r = rectOf(pos);
-      if (!r || r.height === 0) {
-        pageFnH += takeFnH(endPos);
-        return;
-      }
-      const y = stackY(r.top, pos);
-      const ufH = takeFnH(endPos);
-      if (y + shift + r.height > bottomFor(ufH) + 0.5 && r.height <= contentH) {
-        breakStart(pos, y);
-      }
-      pageFnH += ufH;
-    };
-
-    const paragraph = (pos: number, node: PMNode) => {
-      const endPos = pos + node.nodeSize;
-      const r = rectOf(pos);
-      if (!r) {
-        pageFnH += takeFnH(endPos);
-        return;
-      }
-      const yTop = stackY(r.top, pos);
-      // Whole-paragraph fast path: fits together with its footnotes.
-      if (yTop + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
-        pageFnH += takeFnH(endPos);
-        return;
-      }
-      const entry = this.cache.get(node);
-      if (!entry || entry.lines.length < 2) return atomic(pos, node);
-
-      const el = view.nodeDOM(pos) as HTMLElement;
-      const lineH = parseFloat(getComputedStyle(el).lineHeight) || 24;
-      const base = pos + 1;
-      const lineTops = entry.lines.map((line) => {
-        const c = view.coordsAtPos(base + line.from);
-        // coordsAtPos returns the caret box; back off half-leading to
-        // approximate the line-box top.
-        return { pos: base + line.from, y: stackY(c.top, base + line.from) - Math.max(0, (lineH - (c.bottom - c.top)) / 2) };
-      });
-
-      const n = lineTops.length;
-      // Index of the first line on the current page (for orphan/widow rules
-      // across multi-page paragraphs).
-      let segStart = 0;
-      for (let k = 0; k < n; k++) {
-        const y = lineTops[k].y;
-        const h = k + 1 < n ? lineTops[k + 1].y - y : yTop + r.height - y;
-        const lineEnd = k + 1 < n ? base + entry.lines[k + 1].from : endPos;
-        const ufH = takeFnH(lineEnd);
-        if (y + shift + h <= bottomFor(ufH) + 0.5) {
-          pageFnH += ufH;
-          continue;
+      let fnIdx = 0;
+      const peekFnH = (endPos: number) => {
+        let h = 0;
+        for (let j = fnIdx; j < fnList.length && fnList[j].pos < endPos; j++) h += fnList[j].height + FN_GAP;
+        return h;
+      };
+      const takeFnH = (endPos: number) => {
+        let h = 0;
+        while (fnIdx < fnList.length && fnList[fnIdx].pos < endPos) {
+          h += fnList[fnIdx].height + FN_GAP;
+          fnIdx++;
         }
+        return h;
+      };
 
-        if (k === 0) {
-          // First line doesn't fit: the paragraph starts on the next page.
-          breakStart(pos, yTop);
-          pageFnH += ufH;
-          continue;
+      const spacers: Spacer[] = seed ? seed.prefixSpacers.map((spacer) => ({ ...spacer })) : [];
+      const tableEffects: TableEffect[] = [];
+      const anchors: Array<{ pos: number; page: number; kind: Spacer['kind'] }> = [];
+      let shift = seed?.shift ?? 0;
+      let page = seed?.page ?? 0;
+      let pageFnH = 0;
+      let visitedUnits = 0;
+      const bottomFor = (extraFnH: number) => {
+        const total = pageFnH + extraFnH;
+        return page * (size.h + PAGE_GAP) + size.h - marginBottom - (total > 0 ? total + FN_SEP : 0);
+      };
+      // The same page-top ink adjustment paginateForced applies: fallback
+      // pagination must land units at identical offsets, or an oracle miss
+      // visibly shifts the whole page rhythm by the adjustment.
+      const F = snapshot.bodyPx;
+      const adjFor = (pos: number, kind: Spacer['kind']): number => {
+        if (kind === 'line') return pageTopAdjustEm(s, 'line') * F;
+        const n = view.state.doc.nodeAt(pos);
+        if (n?.type.name === 'paragraph') return pageTopAdjustEm(s, 'paragraph') * F;
+        if (n?.type.name === 'heading') {
+          const lv = Math.min(3, (n.attrs.level as number) || 1);
+          return pageTopAdjustEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;
         }
-        // A line already at a page top that still overflows is taller than
-        // the page — let it overflow rather than breaking at its own start.
-        if (k === segStart) {
-          pageFnH += ufH;
-          continue;
+        return 0;
+      };
+      const breakBefore = (pos: number, y: number, kind: Spacer['kind']) => {
+        const delta = (page + 1) * (size.h + PAGE_GAP) + marginTop + adjFor(pos, kind) - (y + shift);
+        page++;
+        anchors.push({ pos, page, kind });
+        pageFnH = 0;
+        if (delta > 0) {
+          spacers.push({ pos, height: delta, kind });
+          shift += delta;
         }
+      };
 
-        let kb = k;
-        // Widow control: never strand the paragraph's last line alone at the
-        // top of a page — break one line earlier so two lines move together.
-        if (n - kb === 1 && kb - 1 > segStart) kb = k - 1;
-        // Orphan control: never leave fewer than two lines at the bottom of
-        // the page where the paragraph starts — move the whole paragraph
-        // instead (unless it is taller than a page and must split somewhere).
-        if (segStart === 0 && kb < 2) {
-          if (r.height <= contentH) {
+      const rectOf = (pos: number): DOMRect | null => {
+        const el = view.nodeDOM(pos);
+        return el instanceof HTMLElement ? el.getBoundingClientRect() : null;
+      };
+
+      // Sticky anchor: a heading immediately above the current block — a break
+      // at the block's start must carry the heading along (Typst headings are
+      // sticky by default; the oracle already does this, the fallback must too).
+      let sticky: { pos: number; y: number } | null = null;
+      const breakStart = (pos: number, y: number) => {
+        const a = sticky ?? { pos, y };
+        breakBefore(a.pos, a.y, 'block');
+      };
+
+      const atomic = (pos: number, node: PMNode) => {
+        const endPos = pos + node.nodeSize;
+        const r = rectOf(pos);
+        if (!r || r.height === 0) {
+          pageFnH += takeFnH(endPos);
+          return;
+        }
+        const y = stackY(r.top, pos);
+        const ufH = takeFnH(endPos);
+        if (y + shift + r.height > bottomFor(ufH) + 0.5 && r.height <= contentH) {
+          breakStart(pos, y);
+        }
+        pageFnH += ufH;
+      };
+
+      const paragraph = (pos: number, node: PMNode) => {
+        const endPos = pos + node.nodeSize;
+        const r = rectOf(pos);
+        if (!r) {
+          pageFnH += takeFnH(endPos);
+          return;
+        }
+        const yTop = stackY(r.top, pos);
+        // Whole-paragraph fast path: fits together with its footnotes.
+        if (yTop + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
+          pageFnH += takeFnH(endPos);
+          return;
+        }
+        const entry = this.cache.get(node);
+        if (!entry || entry.lines.length < 2) return atomic(pos, node);
+
+        const el = view.nodeDOM(pos) as HTMLElement;
+        const lineH = parseFloat(getComputedStyle(el).lineHeight) || 24;
+        const base = pos + 1;
+        const lineTops = entry.lines.map((line) => {
+          const c = view.coordsAtPos(base + line.from);
+          // coordsAtPos returns the caret box; back off half-leading to
+          // approximate the line-box top.
+          return { pos: base + line.from, y: stackY(c.top, base + line.from) - Math.max(0, (lineH - (c.bottom - c.top)) / 2) };
+        });
+
+        const n = lineTops.length;
+        // Index of the first line on the current page (for orphan/widow rules
+        // across multi-page paragraphs).
+        let segStart = 0;
+        for (let k = 0; k < n; k++) {
+          const y = lineTops[k].y;
+          const h = k + 1 < n ? lineTops[k + 1].y - y : yTop + r.height - y;
+          const lineEnd = k + 1 < n ? base + entry.lines[k + 1].from : endPos;
+          const ufH = takeFnH(lineEnd);
+          if (y + shift + h <= bottomFor(ufH) + 0.5) {
+            pageFnH += ufH;
+            continue;
+          }
+
+          if (k === 0) {
+            // First line doesn't fit: the paragraph starts on the next page.
             breakStart(pos, yTop);
             pageFnH += ufH;
             continue;
           }
-          kb = Math.max(kb, 1);
+          // A line already at a page top that still overflows is taller than
+          // the page — let it overflow rather than breaking at its own start.
+          if (k === segStart) {
+            pageFnH += ufH;
+            continue;
+          }
+
+          let kb = k;
+          // Widow control: never strand the paragraph's last line alone at the
+          // top of a page — break one line earlier so two lines move together.
+          if (n - kb === 1 && kb - 1 > segStart) kb = k - 1;
+          // Orphan control: never leave fewer than two lines at the bottom of
+          // the page where the paragraph starts — move the whole paragraph
+          // instead (unless it is taller than a page and must split somewhere).
+          if (segStart === 0 && kb < 2) {
+            if (r.height <= contentH) {
+              breakStart(pos, yTop);
+              pageFnH += ufH;
+              continue;
+            }
+            kb = Math.max(kb, 1);
+          }
+
+          breakBefore(lineTops[kb].pos, lineTops[kb].y, 'line');
+          segStart = kb;
+          pageFnH += ufH;
         }
+      };
 
-        breakBefore(lineTops[kb].pos, lineTops[kb].y, 'line');
-        segStart = kb;
-        pageFnH += ufH;
-      }
-    };
-
-    // Tables: Typst decides. A table crossing the page bottom is handed to
-    // the paged mini-compile (table-split.ts), which reproduces the real
-    // document's constraints — Typst answers with the same split rows,
-    // repeated headers, or a whole-block push it would use in the PDF. The
-    // node view renders the answer; page math advances per fragment.
-    const tableCase = (pos: number, node: PMNode) => {
-      const endPos = pos + node.nodeSize;
-      const r = rectOf(pos);
-      if (!r || r.height === 0) {
-        pageFnH += takeFnH(endPos);
-        return;
-      }
-      const assigned = getSplit(node);
-      const naturalH = assigned ? assigned.naturalPx : r.height;
-      const y = stackY(r.top, pos);
-      const ufH = takeFnH(endPos);
-      if (y + shift + naturalH <= bottomFor(ufH) + 0.5) {
-        if (assigned) tableEffects.push({ type: 'clear', node });
-        pageFnH += ufH;
-        return;
-      }
-      const pageTopAbs = page * (size.h + PAGE_GAP) + marginTop;
-      const offsetPt = Math.max(0, (y + shift - pageTopAbs) * 0.75);
-      const fresh = requestTableSplit(view, node, view.dom.clientWidth || 576, contentH * 0.75, offsetPt);
-      // While the compile is in flight, hold the current rendering steady
-      // (stale split, or the plain atomic push) — the answer triggers a
-      // repagination.
-      const layout: TableSplitLayout | null = fresh ?? assigned?.layout ?? null;
-      if (!layout) {
-        if (naturalH <= contentH) breakStart(pos, y);
-        pageFnH += ufH;
-        return;
-      }
-      if (layout.pushed) breakStart(pos, y);
-      if (layout.fragments.length <= 1) {
-        // Whole on one page (unbreakable figure, or it fits after the push).
-        tableEffects.push({ type: 'clear', node });
-        if (!layout.pushed && naturalH <= contentH) breakStart(pos, y);
-        pageFnH += ufH;
-        return;
-      }
-      const gaps: number[] = [];
-      let bottomAbs = y + shift + layout.fragments[0].heightPx;
-      for (let i = 1; i < layout.fragments.length; i++) {
-        page++;
-        pageFnH = 0;
-        const top = page * (size.h + PAGE_GAP) + marginTop;
-        gaps.push(top - bottomAbs);
-        bottomAbs = top + layout.fragments[i].heightPx;
-      }
-      tableEffects.push({ type: 'apply', node, layout, gaps, naturalHeight: naturalH });
-      const displayed = layout.fragments.reduce((s2, f) => s2 + f.heightPx, 0) + gaps.reduce((s2, g) => s2 + g, 0);
-      shift += displayed - naturalH;
-      pageFnH += ufH;
-    };
-
-    // Lists and blockquotes break between children (whole child moves).
-    const container = (pos: number, node: PMNode) => {
-      const endPos = pos + node.nodeSize;
-      const r = rectOf(pos);
-      if (!r) {
-        pageFnH += takeFnH(endPos);
-        return;
-      }
-      if (stackY(r.top, pos) + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
-        pageFnH += takeFnH(endPos);
-        return;
-      }
-      node.forEach((child, offset) => {
-        const childPos = pos + 1 + offset;
-        const childEnd = childPos + child.nodeSize;
-        const cr = rectOf(childPos);
-        if (!cr || cr.height === 0) {
-          pageFnH += takeFnH(childEnd);
+      // Tables: Typst decides. A table crossing the page bottom is handed to
+      // the paged mini-compile (table-split.ts), which reproduces the real
+      // document's constraints — Typst answers with the same split rows,
+      // repeated headers, or a whole-block push it would use in the PDF. The
+      // node view renders the answer; page math advances per fragment.
+      const tableCase = (pos: number, node: PMNode) => {
+        const endPos = pos + node.nodeSize;
+        const r = rectOf(pos);
+        if (!r || r.height === 0) {
+          pageFnH += takeFnH(endPos);
           return;
         }
-        const y = stackY(cr.top, childPos);
-        const ufH = takeFnH(childEnd);
-        if (y + shift + cr.height > bottomFor(ufH) + 0.5 && cr.height <= contentH) {
-          breakBefore(childPos, y, 'block');
+        const assigned = getSplit(node);
+        const naturalH = assigned ? assigned.naturalPx : r.height;
+        const y = stackY(r.top, pos);
+        const ufH = takeFnH(endPos);
+        if (y + shift + naturalH <= bottomFor(ufH) + 0.5) {
+          if (assigned) tableEffects.push({ type: 'clear', node });
+          pageFnH += ufH;
+          return;
         }
+        const pageTopAbs = page * (size.h + PAGE_GAP) + marginTop;
+        const offsetPt = Math.max(0, (y + shift - pageTopAbs) * 0.75);
+        const fresh = requestTableSplit(view, node, view.dom.clientWidth || 576, contentH * 0.75, offsetPt);
+        // While the compile is in flight, hold the current rendering steady
+        // (stale split, or the plain atomic push) — the answer triggers a
+        // repagination.
+        const layout: TableSplitLayout | null = fresh ?? assigned?.layout ?? null;
+        if (!layout) {
+          if (naturalH <= contentH) breakStart(pos, y);
+          pageFnH += ufH;
+          return;
+        }
+        if (layout.pushed) breakStart(pos, y);
+        if (layout.fragments.length <= 1) {
+          // Whole on one page (unbreakable figure, or it fits after the push).
+          tableEffects.push({ type: 'clear', node });
+          if (!layout.pushed && naturalH <= contentH) breakStart(pos, y);
+          pageFnH += ufH;
+          return;
+        }
+        const gaps: number[] = [];
+        let bottomAbs = y + shift + layout.fragments[0].heightPx;
+        for (let i = 1; i < layout.fragments.length; i++) {
+          page++;
+          pageFnH = 0;
+          const top = page * (size.h + PAGE_GAP) + marginTop;
+          gaps.push(top - bottomAbs);
+          bottomAbs = top + layout.fragments[i].heightPx;
+        }
+        tableEffects.push({ type: 'apply', node, layout, gaps, naturalHeight: naturalH });
+        const displayed = layout.fragments.reduce((s2, f) => s2 + f.heightPx, 0) + gaps.reduce((s2, g) => s2 + g, 0);
+        shift += displayed - naturalH;
         pageFnH += ufH;
+      };
+
+      // Lists and blockquotes break between children (whole child moves).
+      const container = (pos: number, node: PMNode) => {
+        const endPos = pos + node.nodeSize;
+        const r = rectOf(pos);
+        if (!r) {
+          pageFnH += takeFnH(endPos);
+          return;
+        }
+        if (stackY(r.top, pos) + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
+          pageFnH += takeFnH(endPos);
+          return;
+        }
+        node.forEach((child, offset) => {
+          const childPos = pos + 1 + offset;
+          const childEnd = childPos + child.nodeSize;
+          const cr = rectOf(childPos);
+          if (!cr || cr.height === 0) {
+            pageFnH += takeFnH(childEnd);
+            return;
+          }
+          const y = stackY(cr.top, childPos);
+          const ufH = takeFnH(childEnd);
+          if (y + shift + cr.height > bottomFor(ufH) + 0.5 && cr.height <= contentH) {
+            breakBefore(childPos, y, 'block');
+          }
+          pageFnH += ufH;
+        });
+        pageFnH += takeFnH(endPos);
+      };
+
+      view.state.doc.forEach((node, offset) => {
+        if (offset < (seed?.startPos ?? 0)) return;
+        visitedUnits++;
+        switch (node.type.name) {
+          case 'page_break':
+          case 'numbering_restart': {
+            const r = rectOf(offset);
+            if (r) breakBefore(offset + node.nodeSize, stackY(r.bottom, offset), 'block');
+            pageFnH += takeFnH(offset + node.nodeSize);
+            break;
+          }
+          case 'paragraph':
+            if (node.attrs.keep) atomic(offset, node);
+            else paragraph(offset, node);
+            break;
+          case 'bullet_list':
+          case 'ordered_list':
+          case 'blockquote':
+            container(offset, node);
+            break;
+          case 'table':
+            tableCase(offset, node);
+            break;
+          default:
+            atomic(offset, node);
+            break;
+        }
+        if (node.type.name === 'heading') {
+          const hr = rectOf(offset);
+          sticky = sticky ?? (hr ? { pos: offset, y: stackY(hr.top, offset) } : null);
+        } else {
+          sticky = null;
+        }
       });
-      pageFnH += takeFnH(endPos);
+
+      return { spacers, count: page + 1, tableEffects, visitedUnits, anchors };
     };
 
-    view.state.doc.forEach((node, offset) => {
-      switch (node.type.name) {
-        case 'page_break':
-        case 'numbering_restart': {
-          const r = rectOf(offset);
-          if (r) breakBefore(offset + node.nodeSize, stackY(r.bottom, offset), 'block');
-          pageFnH += takeFnH(offset + node.nodeSize);
-          break;
-        }
-        case 'paragraph':
-          if (node.attrs.keep) atomic(offset, node);
-          else paragraph(offset, node);
-          break;
-        case 'bullet_list':
-        case 'ordered_list':
-        case 'blockquote':
-          container(offset, node);
-          break;
-        case 'table':
-          tableCase(offset, node);
-          break;
-        default:
-          atomic(offset, node);
-          break;
-      }
-      if (node.type.name === 'heading') {
-        const hr = rectOf(offset);
-        sticky = sticky ?? (hr ? { pos: offset, y: stackY(hr.top, offset) } : null);
-      } else {
-        sticky = null;
-      }
-    });
+    this.suffixPaginationStats.attempts++;
+    const suffixPlan = this.planPaginationSuffix(snapshot);
+    if (suffixPlan.kind === 'seed') {
+      this.suffixPaginationStats.eligible++;
+      this.suffixPaginationStats.lastStartPos = suffixPlan.seed.dirtyPos;
+      this.suffixPaginationStats.lastAnchorPos = suffixPlan.seed.startPos;
+      const suffix = runFallback({
+        startPos: suffixPlan.seed.startPos,
+        page: suffixPlan.seed.page,
+        shift: suffixPlan.seed.shift,
+        prefixSpacers: suffixPlan.seed.prefixSpacers.map((spacer) => ({ ...spacer })),
+      });
+      this.suffixPaginationStats.suffixUnits += suffix.visitedUnits;
 
-    this.applyTableEffects(tableEffects);
-    return { spacers, count: page + 1 };
+      const full = runFallback();
+      this.suffixPaginationStats.compared++;
+      this.suffixPaginationStats.fullUnits += full.visitedUnits;
+      const difference = this.fallbackResultDifference(full, suffix);
+      const matches = difference === null;
+      this.suffixPaginationStats.lastDifference = difference;
+      if (matches) {
+        this.suffixPaginationStats.matches++;
+        this.suffixPaginationStats.lastReason = `matched-${suffixPlan.source}`;
+      } else {
+        this.suffixPaginationStats.mismatches++;
+        this.suffixPaginationStats.lastReason = `mismatch-${suffixPlan.source}`;
+      }
+      this.rememberFallbackBasis(full);
+      // Suffix replay remains a shadow until exact-source browser fixtures can
+      // exercise it in production mode. The full result is always installed;
+      // a mismatch can therefore affect telemetry, never page geometry.
+      this.pageSpacerAuthority = 'fallback';
+      this.clearExactPageBasis();
+      this.applyTableEffects(full.tableEffects);
+      return { spacers: full.spacers, count: full.count };
+    }
+
+    const fallback = runFallback();
+    this.suffixPaginationStats.fullUnits += fallback.visitedUnits;
+    if (!suffixPlan.reason.endsWith('-unchanged') || this.suffixPaginationStats.compared === 0) {
+      this.suffixPaginationStats.lastReason = suffixPlan.reason;
+      this.suffixPaginationStats.lastDifference = null;
+      this.suffixPaginationStats.lastStartPos = null;
+      this.suffixPaginationStats.lastAnchorPos = null;
+    }
+    this.rememberFallbackBasis(fallback);
+    this.pageSpacerAuthority = 'fallback';
+    this.clearExactPageBasis();
+    this.applyTableEffects(fallback.tableEffects);
+    return { spacers: fallback.spacers, count: fallback.count };
   }
 
   /** Apply Typst's page starts verbatim (with per-unit ink offsets). */
