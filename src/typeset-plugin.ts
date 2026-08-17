@@ -39,7 +39,7 @@ import { buildSpec, type TypstOracle, type AtomResolver, type SpecKind } from '.
 import { portBreaks } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
 import type { PageOracle } from './layout/page-oracle';
-import { getSettings, PAGE_GAP, pageSize, parseMathMacros } from './settings';
+import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
 import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
@@ -92,6 +92,11 @@ import {
 } from './layout/typeset-state';
 import { LayoutScheduler } from './layout/layout-scheduler';
 import { OracleCoordinator } from './layout/oracle-coordinator';
+import {
+  HeightIndex,
+  createPaginationSnapshot,
+  type PaginationSnapshot as HeightSnapshot,
+} from './layout/pagination-snapshot';
 import { layoutForcedBlock } from './layout/forced-layout';
 import {
   ForcedLayoutAuditor,
@@ -127,6 +132,35 @@ if (typeof window !== 'undefined' && import.meta.env.DEV) {
 /** Vertical gap between stacked footnote bodies / height of the separator zone (px). */
 const FN_GAP = 6;
 const FN_SEP = 30;
+
+type CurrentSpacers = {
+  lineMap: Map<number, Spacer>;
+  blocks: Spacer[];
+  sorted: Array<{ pos: number; height: number }>;
+};
+
+interface PaginationGeometrySnapshot {
+  settings: DocSettings;
+  size: { w: number; h: number };
+  marginTop: number;
+  marginBottom: number;
+  contentHeight: number;
+  stackTop: number;
+  bodyPx: number;
+  spacers: CurrentSpacers;
+  heights: HeightSnapshot;
+  spacerHeights: HeightIndex;
+}
+
+type TableEffect =
+  | { type: 'apply'; node: PMNode; layout: TableSplitLayout; gaps: number[]; naturalHeight: number }
+  | { type: 'clear'; node: PMNode };
+
+interface PaginationPassResult {
+  spacers: Spacer[];
+  count: number;
+  tableEffects: TableEffect[];
+}
 
 const viewRegistry = new WeakMap<EditorView, TypesetView>();
 
@@ -217,12 +251,13 @@ class TypesetView {
   private pendingPageMarks: DecorationSet | null = null;
   private stopTableSplitReady: (() => void) | null = null;
   /** Which source produced the last pagination (diagnostics). */
-  private pagPath: 'forced' | 'hold' | 'fallback' = 'forced';
+  private pagPath: 'exact' | 'held' | 'fallback' = 'exact';
   private pagLog: string[] = [];
   private pagWhy = '';
   private forcedAuditor: ForcedLayoutAuditor | null = null;
   private lineDecorationDispatches = 0;
   private pageMarkDispatches = 0;
+  private paginationSnapshotStats = { captures: 0, spacerScans: 0, tableScans: 0, heightQueries: 0 };
   private destroyed = false;
 
   constructor(
@@ -258,6 +293,12 @@ class TypesetView {
           stop: () => ForcedLayoutAuditReport;
         };
         __layoutDispatchStats?: (reset?: boolean) => { lines: number; pageMarks: number };
+        __paginationSnapshotStats?: (reset?: boolean) => {
+          captures: number;
+          spacerScans: number;
+          tableScans: number;
+          heightQueries: number;
+        };
       };
       w.__oracle = this.oracles.paragraph;
       w.__pageOracle = this.oracles.page;
@@ -334,6 +375,13 @@ class TypesetView {
         if (reset) {
           this.lineDecorationDispatches = 0;
           this.pageMarkDispatches = 0;
+        }
+        return stats;
+      };
+      w.__paginationSnapshotStats = (reset = false) => {
+        const stats = { ...this.paginationSnapshotStats };
+        if (reset) {
+          this.paginationSnapshotStats = { captures: 0, spacerScans: 0, tableScans: 0, heightQueries: 0 };
         }
         return stats;
       };
@@ -686,7 +734,7 @@ class TypesetView {
 
   /** The page spacers currently in the document, read back from the live
    *  decoration set (they carry their height in spec.h). */
-  private currentSpacers(): { lineMap: Map<number, Spacer>; blocks: Spacer[]; sorted: Array<{ pos: number; height: number }> } {
+  private currentSpacers(): CurrentSpacers {
     const set = typesetKey.getState(this.view.state)?.decos;
     const lineMap = new Map<number, Spacer>();
     const blocks: Spacer[] = [];
@@ -706,16 +754,6 @@ class TypesetView {
     return { lineMap, blocks, sorted };
   }
 
-  /** Cumulative existing-spacer height above a document position. */
-  private static spacersAbove(sorted: Array<{ pos: number; height: number }>, pos: number): number {
-    let h = 0;
-    for (const sp of sorted) {
-      if (sp.pos <= pos) h += sp.height;
-      else break;
-    }
-    return h;
-  }
-
   /** Applied table-split extras (internal page gaps + repeated headers) as
    *  pseudo-spacer entries at each table's END — merged with the widget
    *  spacers when converting measured DOM geometry back to natural, so a
@@ -728,6 +766,49 @@ class TypesetView {
       if (a) out.push({ pos: offset + node.nodeSize, height: splitExtra(a) });
     });
     return out;
+  }
+
+  /** Capture the complete height model once, after pass-one line decorations
+   * have been installed. Every exact/held/fallback candidate in this run
+   * reads this same immutable prefix index. */
+  private capturePaginationSnapshot(): PaginationGeometrySnapshot {
+    const host = this.view.dom.parentElement ?? this.view.dom;
+    const settings = getSettings(this.view.state);
+    const size = pageSize(settings);
+    const marginTop = settings.marginTop * 96;
+    const marginBottom = settings.marginBottom * 96;
+    const spacers = this.currentSpacers();
+    const tableExtras = this.tableExtras();
+    const heights = createPaginationSnapshot({ spacers: spacers.sorted, tableExtras });
+    this.paginationSnapshotStats.captures++;
+    this.paginationSnapshotStats.spacerScans++;
+    this.paginationSnapshotStats.tableScans++;
+    return {
+      settings,
+      size,
+      marginTop,
+      marginBottom,
+      contentHeight: size.h - marginTop - marginBottom,
+      stackTop: host.getBoundingClientRect().top,
+      bodyPx: this.bodyPx(),
+      spacers,
+      heights,
+      spacerHeights: new HeightIndex(heights.spacers),
+    };
+  }
+
+  private heightAbove(snapshot: PaginationGeometrySnapshot, pos: number, spacersOnly = false): number {
+    this.paginationSnapshotStats.heightQueries++;
+    return (spacersOnly ? snapshot.spacerHeights : snapshot.heights.heights).heightAbove(pos);
+  }
+
+  /** Table assignments are staged while candidates are evaluated. A failed
+   * exact or held attempt must not contaminate the fallback that follows. */
+  private applyTableEffects(effects: readonly TableEffect[]): void {
+    for (const effect of effects) {
+      if (effect.type === 'clear') clearSplit(effect.node);
+      else applySplit(effect.node, effect.layout, effect.gaps, effect.naturalHeight);
+    }
   }
 
   /** Font size in px (body em). */
@@ -774,8 +855,9 @@ class TypesetView {
 
     // Pass 2: measure natural geometry, compute page breaks, re-dispatch with
     // spacers. Both dispatches share one task, so nothing paints in between.
+    const snapshot = this.capturePaginationSnapshot();
     const paginationStart = performance.now();
-    const { spacers, count } = this.paginate();
+    const { spacers, count } = this.paginate(snapshot);
     const paginationMs = performance.now() - paginationStart;
     this.pagLog.push(this.pagPath + '[' + this.pagWhy + ']:' + spacers.map((sp) => `${sp.pos}@${Math.round(sp.height)}`).join(','));
     if (this.pagLog.length > 40) this.pagLog.shift();
@@ -1168,13 +1250,13 @@ class TypesetView {
    * bodies reserve space at the bottom of the page their marker lands on, so
    * a unit fits only if unit + its footnotes fit above the footnote area.
    */
-  private paginate(): { spacers: Spacer[]; count: number } {
+  private paginate(snapshot: PaginationGeometrySnapshot): { spacers: Spacer[]; count: number } {
     const view = this.view;
-    const s = getSettings(view.state);
-    const size = pageSize(s);
-    const marginTop = s.marginTop * 96;
-    const marginBottom = s.marginBottom * 96;
-    const contentH = size.h - marginTop - marginBottom;
+    const s = snapshot.settings;
+    const size = snapshot.size;
+    const marginTop = snapshot.marginTop;
+    const marginBottom = snapshot.marginBottom;
+    const contentH = snapshot.contentHeight;
     if (contentH < 120) return { spacers: [], count: 1 };
 
     // Page-break oracle: when Typst has told us where its pages break for
@@ -1193,9 +1275,14 @@ class TypesetView {
         const entry = this.oracles.page.get(sig);
         if (!entry) this.oracles.page.request(sig, view.state.doc, s, this.atomResolver());
         if (entry?.status === 'ok' && entry.pageStarts) {
-          const forced = this.paginateForced(entry.pageStarts, entry.pageCount ?? entry.pageStarts.length + 1);
+          const forced = this.paginateForced(
+            snapshot,
+            entry.pageStarts,
+            entry.pageCount ?? entry.pageStarts.length + 1,
+          );
           if (forced) {
-            this.pagPath = 'forced';
+            this.pagPath = 'exact';
+            this.pagWhy = 'entry=exact';
             // Persist the starts as mapped markers for the next edit burst.
             this.lastPageCount = entry.pageCount ?? entry.pageStarts.length + 1;
             this.pendingPageMarks = DecorationSet.create(
@@ -1207,7 +1294,8 @@ class TypesetView {
                 }),
               ),
             );
-            return forced;
+            this.applyTableEffects(forced.tableEffects);
+            return { spacers: forced.spacers, count: forced.count };
           }
         }
         // Oracle still compiling for this revision: reuse the LAST starts,
@@ -1228,10 +1316,16 @@ class TypesetView {
               unit: (m.spec as { psUnit: string }).psUnit,
             }))
             .sort((a, b) => a.pos - b.pos);
-          const forced = this.paginateForced(stale, this.lastPageCount || stale.length + 1, true);
+          const forced = this.paginateForced(
+            snapshot,
+            stale,
+            this.lastPageCount || stale.length + 1,
+            true,
+          );
           if (forced) {
-            this.pagPath = 'hold';
-            return forced;
+            this.pagPath = 'held';
+            this.applyTableEffects(forced.tableEffects);
+            return { spacers: forced.spacers, count: forced.count };
           }
         }
       }
@@ -1241,15 +1335,11 @@ class TypesetView {
     // Origin: the stack top. view.dom (.ProseMirror) sits inside #editor's
     // page-margin padding, so anchor to its parent, whose top is the top of
     // the first painted page.
-    const host = view.dom.parentElement ?? view.dom;
-    const stackTop = host.getBoundingClientRect().top;
     // Measurements run with the current spacers still in the DOM: convert
     // to NATURAL (continuous) geometry by subtracting the spacers above —
     // and the internal extras of any applied table splits.
-    const existing = this.currentSpacers().sorted;
-    const measured = [...existing, ...this.tableExtras()].sort((a, b) => a.pos - b.pos);
     const stackY = (clientTop: number, pos: number) =>
-      clientTop - stackTop - TypesetView.spacersAbove(measured, pos);
+      clientTop - snapshot.stackTop - this.heightAbove(snapshot, pos);
 
     // Footnote bodies, in document order, consumed as units are placed.
     const fnList: Array<{ pos: number; height: number }> = [];
@@ -1276,6 +1366,7 @@ class TypesetView {
     };
 
     const spacers: Spacer[] = [];
+    const tableEffects: TableEffect[] = [];
     let shift = 0;
     let page = 0;
     let pageFnH = 0;
@@ -1286,7 +1377,7 @@ class TypesetView {
     // The same page-top ink adjustment paginateForced applies: fallback
     // pagination must land units at identical offsets, or an oracle miss
     // visibly shifts the whole page rhythm by the adjustment.
-    const F = this.bodyPx();
+    const F = snapshot.bodyPx;
     const adjFor = (pos: number, kind: Spacer['kind']): number => {
       if (kind === 'line') return pageTopAdjustEm(s, 'line') * F;
       const n = view.state.doc.nodeAt(pos);
@@ -1428,7 +1519,7 @@ class TypesetView {
       const y = stackY(r.top, pos);
       const ufH = takeFnH(endPos);
       if (y + shift + naturalH <= bottomFor(ufH) + 0.5) {
-        if (assigned) clearSplit(node);
+        if (assigned) tableEffects.push({ type: 'clear', node });
         pageFnH += ufH;
         return;
       }
@@ -1447,7 +1538,7 @@ class TypesetView {
       if (layout.pushed) breakStart(pos, y);
       if (layout.fragments.length <= 1) {
         // Whole on one page (unbreakable figure, or it fits after the push).
-        clearSplit(node);
+        tableEffects.push({ type: 'clear', node });
         if (!layout.pushed && naturalH <= contentH) breakStart(pos, y);
         pageFnH += ufH;
         return;
@@ -1461,7 +1552,7 @@ class TypesetView {
         gaps.push(top - bottomAbs);
         bottomAbs = top + layout.fragments[i].heightPx;
       }
-      applySplit(node, layout, gaps, naturalH);
+      tableEffects.push({ type: 'apply', node, layout, gaps, naturalHeight: naturalH });
       const displayed = layout.fragments.reduce((s2, f) => s2 + f.heightPx, 0) + gaps.reduce((s2, g) => s2 + g, 0);
       shift += displayed - naturalH;
       pageFnH += ufH;
@@ -1530,30 +1621,30 @@ class TypesetView {
       }
     });
 
+    this.applyTableEffects(tableEffects);
     return { spacers, count: page + 1 };
   }
 
   /** Apply Typst's page starts verbatim (with per-unit ink offsets). */
   private paginateForced(
+    snapshot: PaginationGeometrySnapshot,
     pageStarts: Array<{ pos: number; line: number; unit: string }>,
     pageCount: number,
     /** Mapped-through-edits starts (not a fresh oracle answer): bail when
      * the hold would leave an implausibly large gap. */
     stale = false,
-  ): { spacers: Spacer[]; count: number } | null {
+  ): PaginationPassResult | null {
     const view = this.view;
-    const s = getSettings(view.state);
-    const size = pageSize(s);
-    const marginTop = s.marginTop * 96;
-    const F = this.bodyPx();
-    const host = view.dom.parentElement ?? view.dom;
-    const stackTop = host.getBoundingClientRect().top;
-    const existing = this.currentSpacers().sorted;
-    const measured = [...existing, ...this.tableExtras()].sort((a, b) => a.pos - b.pos);
+    const s = snapshot.settings;
+    const size = snapshot.size;
+    const marginTop = snapshot.marginTop;
+    const F = snapshot.bodyPx;
+    const existing = snapshot.spacers.sorted;
     const natural = (clientTop: number, pos: number) =>
-      clientTop - stackTop - TypesetView.spacersAbove(measured, pos);
+      clientTop - snapshot.stackTop - this.heightAbove(snapshot, pos);
 
     const spacers: Spacer[] = [];
+    const tableEffects: TableEffect[] = [];
     let shift = 0;
     let page = 0;
     for (let psi = 0; psi < pageStarts.length; psi++) {
@@ -1580,7 +1671,7 @@ class TypesetView {
         const yTop = natural(el.getBoundingClientRect().top, ps.pos);
         const pageTopAbs = page * (size.h + PAGE_GAP) + marginTop;
         const offsetPt = Math.max(0, (yTop + shift - pageTopAbs) * 0.75);
-        const contentHPx = size.h - marginTop - s.marginBottom * 96;
+        const contentHPx = snapshot.contentHeight;
         // The oracle's line indices are cumulative within the table unit:
         // their diffs are the exact per-page line counts of the PDF, and
         // the mini-compile must reproduce them (it nudges its offset until
@@ -1599,7 +1690,7 @@ class TypesetView {
           gaps.push(top - bottomAbs);
           bottomAbs = top + layout.fragments[k].heightPx;
         }
-        applySplit(node, layout, gaps, naturalH);
+        tableEffects.push({ type: 'apply', node, layout, gaps, naturalHeight: naturalH });
         const displayed = layout.fragments.reduce((s2, f) => s2 + f.heightPx, 0) + gaps.reduce((s2, g) => s2 + g, 0);
         shift += displayed - naturalH;
         psi = last;
@@ -1662,14 +1753,17 @@ class TypesetView {
       // describes — holding would break the text but paint no new sheet.
       // A small dip into the bottom margin is the designed tolerance.
       const docBottom =
-        view.dom.getBoundingClientRect().bottom - stackTop - TypesetView.spacersAbove(existing, Infinity) + shift;
-      const lastBottom = count * (size.h + PAGE_GAP) - PAGE_GAP - s.marginBottom * 96;
+        view.dom.getBoundingClientRect().bottom -
+        snapshot.stackTop -
+        this.heightAbove(snapshot, Infinity, true) +
+        shift;
+      const lastBottom = count * (size.h + PAGE_GAP) - PAGE_GAP - snapshot.marginBottom;
       if (docBottom > lastBottom + 2 * F * s.lineHeight) {
         this.pagWhy += ` bail-overflow(${(docBottom - lastBottom).toFixed(0)}px)`;
         return null;
       }
     }
-    return { spacers, count };
+    return { spacers, count, tableEffects };
   }
 
   /**

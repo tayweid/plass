@@ -7,6 +7,8 @@ import { TypstOracle } from './typst-oracle';
 export interface PageHoldDecision {
   /** Whether mapped page-start markers may be reused for this entry. */
   hold: boolean;
+  /** Preferred source before the caller validates exact starts/held marks. */
+  confidence: 'exact' | 'held' | 'fallback';
   /** Consecutive distinct failure entries since the last success. */
   failureStreak: number;
   status: 'ok' | 'fail' | 'pending';
@@ -14,14 +16,18 @@ export interface PageHoldDecision {
 
 /**
  * Confidence policy for mapped-through-edit page starts. A repeated read of
- * the same failed cache entry counts once; a successful entry heals the
- * streak. Pending/missing answers can always retain the last known starts.
+ * the same failed cache entry counts once; a successful publication heals
+ * the streak. Pending/missing answers can retain the last known starts; only
+ * the current fourth-or-later distinct failure requires fallback.
  */
 export class PageHoldConfidence {
   private streak = 0;
   private lastFailure: PageOracleEntry | null = null;
 
-  observe(entry: PageOracleEntry | undefined): PageHoldDecision {
+  /** Record a newly published result. This is separate from reads because a
+   * successful exact layout normally returns before the recovery path calls
+   * observe(), but it must still heal the failure streak. */
+  record(entry: PageOracleEntry): void {
     if (entry?.status === 'ok') {
       this.streak = 0;
       this.lastFailure = null;
@@ -29,11 +35,23 @@ export class PageHoldConfidence {
       this.streak++;
       this.lastFailure = entry;
     }
+  }
+
+  observe(entry: PageOracleEntry | undefined): PageHoldDecision {
+    if (entry) this.record(entry);
+    const confidence = entry?.status === 'ok'
+      ? 'exact'
+      : entry?.status === 'fail' && this.streak > 3
+        ? 'fallback'
+        : 'held';
 
     return {
-      // Preserve the existing cutoff exactly: the fourth distinct failed
-      // entry abandons held starts; pending/missing entries may still hold.
-      hold: !(entry?.status === 'fail' && this.streak > 3),
+      // An exact result is used by the caller before this recovery decision.
+      // If those starts were rejected, older mapped starts are not a safer
+      // substitute. Preserve the established cutoff: the current fourth+
+      // failure falls back, while a later pending state can hold again.
+      hold: confidence === 'held',
+      confidence,
       failureStreak: this.streak,
       status: entry?.status ?? 'pending',
     };
@@ -58,8 +76,11 @@ export class OracleCoordinator {
     this.paragraph = new TypstOracle(() => {
       if (!this.destroyed) options.onParagraphResults();
     }, options.fontFallback);
-    this.page = new PageOracle(() => {
-      if (!this.destroyed) options.onPageResults();
+    this.page = new PageOracle((entry) => {
+      if (!this.destroyed) {
+        this.pageConfidence.record(entry);
+        options.onPageResults();
+      }
     });
   }
 

@@ -88,6 +88,30 @@ export interface SplitAssignment {
 // ---------- compile cache ----------
 
 const cache = new Map<string, TableSplitLayout | 'pending' | 'failed'>();
+
+/** Small independently-testable registry for deduplicated async requests. */
+export class TableSplitPendingViews<View> {
+  private entries = new Map<string, Set<View>>();
+
+  add(key: string, view: View): void {
+    let views = this.entries.get(key);
+    if (!views) this.entries.set(key, (views = new Set()));
+    views.add(view);
+  }
+
+  take(key: string): Set<View> {
+    const views = this.entries.get(key) ?? new Set<View>();
+    this.entries.delete(key);
+    return views;
+  }
+
+  clear(): void {
+    this.entries.clear();
+  }
+}
+
+/** Every editor waiting on a shared pending key must be woken when it lands. */
+const pendingViews = new TableSplitPendingViews<EditorView>();
 const CACHE_MAX = 16;
 let cacheGeneration = 0;
 
@@ -111,6 +135,7 @@ function notifyTableSplitReady(view: EditorView) {
 export function clearTableSplitCache() {
   cacheGeneration++;
   cache.clear();
+  pendingViews.clear();
 }
 
 function cacheKey(src: string, contentHPt: number, offsetPt: number, targetLines: number[] | null): string {
@@ -181,6 +206,7 @@ async function compileSplit(
   generation: number,
 ): Promise<TableSplitLayout | null> {
   const { compileSvg } = await import('./pdf');
+  if (generation !== cacheGeneration) return null;
   const pageSpec = `#set page(width: ${(widthPx * 0.75).toFixed(2)}pt, height: ${contentHPt.toFixed(2)}pt, margin: 0pt)`;
   const base = fragmentSource(view, node, widthPx, pageSpec);
   // The #v stands in for the content above the table on its starting page.
@@ -192,6 +218,7 @@ async function compileSplit(
   // and Typst geometry must never flip the split row.
   let v = offsetPt;
   for (let attempt = 0; attempt < 4; attempt++) {
+    if (generation !== cacheGeneration) return null;
     const src = v > 0.05 ? base.replace('\n\n', `\n\n#v(${v.toFixed(2)}pt)\n`) : base;
     const svg = await compileSvg(src);
     if (generation !== cacheGeneration) return null;
@@ -248,10 +275,14 @@ export function requestTableSplit(
 ): TableSplitLayout | null {
   const key = cacheKey(fragmentSource(view, node, widthPx), contentHPt, offsetPt, targetLines);
   const hit = cache.get(key);
-  if (hit === 'pending') return null;
+  if (hit === 'pending') {
+    pendingViews.add(key, view);
+    return null;
+  }
   if (hit === 'failed') return null;
   if (hit) return hit;
   cache.set(key, 'pending');
+  pendingViews.add(key, view);
   const generation = cacheGeneration;
   if (cache.size > CACHE_MAX) {
     for (const k of cache.keys()) {
@@ -263,12 +294,14 @@ export function requestTableSplit(
     .then((layout) => {
       if (generation !== cacheGeneration || cache.get(key) !== 'pending') return;
       cache.set(key, layout ?? 'failed');
-      if (layout) notifyTableSplitReady(view);
+      const views = pendingViews.take(key);
+      if (layout) for (const waitingView of views) notifyTableSplitReady(waitingView);
     })
     .catch((e) => {
       if (generation !== cacheGeneration || cache.get(key) !== 'pending') return;
       console.warn('table split compile failed', e);
       cache.set(key, 'failed');
+      pendingViews.take(key);
     });
   return null;
 }
