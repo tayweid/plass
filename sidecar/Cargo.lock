@@ -424,9 +424,12 @@ dependencies = [
 
 [[package]]
 name = "typst-assets"
-version = "0.14.2"
+version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5613cb719a6222fe9b74027c3625d107767ec187bff26b8fc931cf58942c834f"
+checksum = "bcee505dac6702dd1c5e65aa2e94a6179d19ee09e2e5637d7313db91765dc4e0"
+dependencies = [
+ "bitflags",
+]
 
 [[package]]
 name = "unicode-bidi-mirroring"
