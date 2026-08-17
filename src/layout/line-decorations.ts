@@ -118,10 +118,11 @@ export function hyphenWidget() {
  * content it forms a block-in-inline split, which both forces the line break
  * and inserts exactly `height` px of vertical space (print CSS zeroes it).
  */
-export function pageGapWidget(height: number, hyphen: boolean) {
+export function pageGapWidget(height: number, hyphen: boolean, key?: string) {
   const gap = document.createElement('div');
   gap.className = 'ts-pagegap';
   gap.style.height = `${height.toFixed(2)}px`;
+  if (key) gap.dataset.tsGapKey = key;
   gap.setAttribute('aria-hidden', 'true');
   gap.contentEditable = 'false';
   if (!hyphen) return gap;
@@ -145,7 +146,7 @@ export function pageSpacerDecoration(
   hyphen: boolean,
   key = `pg:${pos}:${Math.round(height)}:${hyphen ? 'h' : ''}`,
 ): Decoration {
-  return Decoration.widget(pos, () => pageGapWidget(height, hyphen), {
+  return Decoration.widget(pos, () => pageGapWidget(height, hyphen, key), {
     side: -1,
     key,
     h: height,
@@ -156,9 +157,10 @@ export function pageSpacerDecoration(
 
 /** A spacer between whole blocks rather than at a paragraph line break. */
 export function blockSpacerDecoration(spacer: Spacer): Decoration {
-  return Decoration.widget(spacer.pos, () => pageGapWidget(spacer.height, false), {
+  const key = `pgb:${spacer.pos}:${Math.round(spacer.height)}`;
+  return Decoration.widget(spacer.pos, () => pageGapWidget(spacer.height, false, key), {
     side: -1,
-    key: `pgb:${spacer.pos}:${Math.round(spacer.height)}`,
+    key,
     h: spacer.height,
     tsKind: 'block-page-gap',
   });
