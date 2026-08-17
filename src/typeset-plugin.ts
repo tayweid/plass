@@ -52,7 +52,25 @@ import {
 } from './table-split';
 import { parseTypstSvg } from './safe-svg';
 import { recordLayoutPerf } from './layout/perf';
-import { COMMON_PORT_KEYS, cssFontStack, effectiveFont } from './font-registry';
+import { COMMON_PORT_KEYS, effectiveFont } from './font-registry';
+import {
+  appendLineDecorations,
+  blockSpacerDecoration,
+  decorationSignature,
+  pageGapWidget,
+  pageSpacerDecoration,
+  type Spacer,
+} from './layout/line-decorations';
+import {
+  BlockLayoutCache,
+  blockLayoutSettingsKey,
+  blockOracleKey,
+  consecutiveParagraph,
+  createPaintedPrefixMeasurements,
+  makeAtomWidth,
+  paragraphKeyTag,
+  type BlockLayoutCacheKey,
+} from './layout/block-layout';
 
 /** Phase-3 flag (PORT.md): drive live typing with the ported Typst
  * breaker. Console: __usePort(false) to A/B against the legacy path;
@@ -101,12 +119,6 @@ type Meta =
   | { type: 'decos'; decos: DecorationSet; pageMarks?: DecorationSet }
   | { type: 'pageMarks'; pageMarks: DecorationSet };
 
-interface Spacer {
-  pos: number;
-  height: number;
-  kind: 'line' | 'block';
-}
-
 export const typesetKey = new PluginKey<TypesetState>('typeset');
 
 /** Vertical gap between stacked footnote bodies / height of the separator zone (px). */
@@ -114,26 +126,6 @@ const FN_GAP = 6;
 const FN_SEP = 30;
 
 const viewRegistry = new WeakMap<EditorView, TypesetView>();
-
-/** keyTag for the compare hook, matching layoutInto's scheme. */
-function indentedTag(settings: { parIndent: boolean }, doc: PMNode, pos: number): string {
-  return settings.parIndent && consecutivePara(doc, pos) ? 'pi' : 'p';
-}
-
-/** Whether the paragraph at pos directly follows a sibling paragraph
- * (Typst's condition for the first-line indent in classic mode). */
-function consecutivePara(doc: PMNode, pos: number): boolean {
-  const $pos = doc.resolve(pos);
-  const idx = $pos.index();
-  return idx > 0 && $pos.parent.child(idx - 1).type.name === 'paragraph';
-}
-
-/** Canvas text width at an exact CSS font (for painted-prefix modeling). */
-const measureCtx = document.createElement('canvas').getContext('2d')!;
-function textWidth(text: string, font: string): number {
-  measureCtx.font = font;
-  return measureCtx.measureText(text).width;
-}
 
 /** Request a re-typeset without a document change (e.g. an image loaded). */
 export function scheduleTypeset(view: EditorView) {
@@ -204,24 +196,8 @@ export function typesetPlugin(
   });
 }
 
-interface CacheEntry {
-  measure: number;
-  lines: LineLayout[];
-  /** Which oracle state produced these lines ('none' = JS Knuth-Plass). */
-  oracle: 'none' | 'ok' | 'fail';
-  /** The oracle key the lines were computed against. Resolved atom TEXTS
-   *  live in it — an equation reference flipping between "(1)" and
-   *  "@label" changes the paragraph's layout without changing the node,
-   *  and the stale entry would keep the old justification forever. */
-  key: string | null;
-  /** Painted-prefix indent + em scale the lines were computed with (captions,
-   *  footnote bodies) — early runs can measure these before widgets paint. */
-  indent: number;
-  scale: number;
-}
-
 class TypesetView {
-  private cache = new WeakMap<PMNode, CacheEntry>();
+  private cache = new BlockLayoutCache();
   private docSig = new WeakMap<PMNode, string>();
   private measurer: Measurer;
   private oracle: TypstOracle;
@@ -286,7 +262,7 @@ class TypesetView {
         const settings = getSettings(state);
         const font = effectiveFont(settings.font);
         const resolveAtom = this.atomResolver();
-        const settingsSig = `${font.id}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}|${settings.parIndent}`;
+        const settingsSig = blockLayoutSettingsKey(settings);
         const out: unknown[] = [];
         state.doc.descendants((node, pos) => {
           if (!node.isTextblock || node.type.name !== 'paragraph') return true;
@@ -296,10 +272,15 @@ class TypesetView {
           const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
           const spec = buildSpec(node, resolveAtom);
           if (!spec) return false;
-          const okey = `${settingsSig}|${indentedTag(settings, state.doc, pos)}|w${measure.toFixed(1)}|${spec.key}`;
+          const okey = blockOracleKey(
+            settingsSig,
+            paragraphKeyTag(settings, state.doc, pos),
+            measure,
+            spec.key,
+          );
           const oentry = this.oracle.get(okey);
           const atomWidth = makeAtomWidth(this.view, settings, pos);
-          const indented = settings.parIndent && consecutivePara(state.doc, pos);
+          const indented = settings.parIndent && consecutiveParagraph(state.doc, pos);
           const port = portBreaks(node, measure, atomWidth, {
             fontKeys: font.portKeys,
             monoFontKey: COMMON_PORT_KEYS.mono,
@@ -350,7 +331,7 @@ class TypesetView {
     const fontsChanged = () => {
       if (this.destroyed) return;
       this.measurer.invalidate();
-      this.cache = new WeakMap();
+      this.cache.clear();
       clearTableSplitCache();
       this.schedule();
     };
@@ -365,7 +346,7 @@ class TypesetView {
     // Document settings (font, size, hyphenation, …) invalidate every metric.
     if (view.state.doc.attrs !== prevState.doc.attrs) {
       this.measurer.invalidate();
-      this.cache = new WeakMap();
+      this.cache.clear();
       this.oracle.clear();
       this.pageOracle.clear();
       clearTableSplitCache();
@@ -457,7 +438,7 @@ class TypesetView {
       // justification while live; paragraphs get instant KP.
       if (!b.para || b.node.content.size === 0) continue;
       const liveIndent =
-        settings.parIndent && consecutivePara(state.doc, b.pos) ? 1.5 * this.bodyPx() : undefined;
+        settings.parIndent && consecutiveParagraph(state.doc, b.pos) ? 1.5 * this.bodyPx() : undefined;
       const el = this.view.nodeDOM(b.pos);
       if (!(el instanceof HTMLElement)) continue;
       const cs = getComputedStyle(el);
@@ -518,64 +499,21 @@ class TypesetView {
         hy: !!(d.spec as { hy?: boolean }).hy,
       }));
       if (pgStale.length) decos = decos.remove(pgStale.slice());
-      const fnRanges: Array<[number, number]> = [];
-      b.node.forEach((child, offset) => {
-        if (child.type.name === 'footnote') fnRanges.push([offset, offset + child.nodeSize]);
+      appendLineDecorations(fresh, b.node, b.pos, lines, (line, at) => {
+        // A spacer whose text position falls on this line moves to the
+        // line's break: pages only break at line boundaries.
+        const spIdx = pgList.findIndex((sp) => sp.from > base + line.from - 1 && sp.from <= at + 2);
+        if (spIdx < 0) return undefined;
+        const sp = pgList[spIdx];
+        pgList = pgList.filter((_, i) => i !== spIdx);
+        return { pos: at, height: sp.h, kind: 'line' };
       });
-      for (const line of lines) {
-        if (Math.abs(line.spacing) > 0.01 && line.to > line.from) {
-          const style = `word-spacing:${line.spacing.toFixed(3)}px`;
-          let cur = line.from;
-          for (const [a2, b2] of fnRanges) {
-            if (b2 <= cur || a2 >= line.to) continue;
-            if (a2 > cur) fresh.push(Decoration.inline(base + cur, base + a2, { style }, { sig: style }));
-            cur = Math.max(cur, b2);
-          }
-          if (cur < line.to) fresh.push(Decoration.inline(base + cur, base + line.to, { style }, { sig: style }));
-        }
-        if (line.breakPos !== null) {
-          const at = base + line.breakPos;
-          // A spacer whose text position falls on this line moves to the
-          // line's break: pages only break at line boundaries.
-          const spIdx = pgList.findIndex((sp) => sp.from > base + line.from - 1 && sp.from <= at + 2);
-          if (spIdx >= 0) {
-            const sp = pgList[spIdx];
-            pgList = pgList.filter((_, i) => i !== spIdx);
-            fresh.push(
-              Decoration.widget(at, () => pageGapWidget(sp.h, line.hyphen), {
-                side: -1,
-                key: `pg:${at}:${Math.round(sp.h)}:${line.hyphen ? 'h' : ''}`,
-                h: sp.h,
-                hy: line.hyphen,
-              }),
-            );
-          } else {
-            fresh.push(
-              Decoration.widget(at, line.hyphen ? hyphenWidget : brWidget, {
-                side: -1,
-                key: `${line.hyphen ? 'hy' : 'br'}:${at}`,
-              }),
-            );
-          }
-          if (line.hyphen) {
-            const ns = noSpellDeco(b.node, base, line.breakPos);
-            if (ns) fresh.push(ns);
-          }
-        }
-      }
       // Spacers past the last chosen break (the page split the final line,
       // which has since re-wrapped): snap to the block boundary — pages
       // only break at line boundaries, and repagination corrects at settle.
       for (const sp of pgList) {
         const at = Math.min(sp.from, blockTo - 1) === sp.from && sp.from < blockTo ? blockTo - 1 : sp.from;
-        fresh.push(
-          Decoration.widget(at, () => pageGapWidget(sp.h, false), {
-            side: -1,
-            key: `pg:${at}:${Math.round(sp.h)}:`,
-            h: sp.h,
-            hy: false,
-          }),
-        );
+        fresh.push(pageSpacerDecoration(at, sp.h, false));
       }
     }
     const decorationStart = performance.now();
@@ -905,7 +843,7 @@ class TypesetView {
     const layoutOpts = { hyphenate: settings.hyphenate };
     const useOracle = font.exact;
     const resolveAtom = useOracle ? this.atomResolver() : null;
-    const settingsSig = `${font.id}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}|${settings.parIndent}`;
+    const settingsSig = blockLayoutSettingsKey(settings);
     let paragraphs = 0;
     let lineCount = 0;
     let figNo = 0;
@@ -927,7 +865,7 @@ class TypesetView {
 
       // Ask the Typst oracle for this block's authoritative breaks.
       const spec = resolveAtom ? buildSpec(node, resolveAtom) : null;
-      const okey = spec ? `${settingsSig}|${keyTag}|w${measure.toFixed(1)}|${spec.key}` : null;
+      const okey = spec ? blockOracleKey(settingsSig, keyTag, measure, spec.key) : null;
       const oentry = okey ? this.oracle.get(okey) : undefined;
       if (spec && okey && !oentry) {
         const indented = skind.kind === 'body' && !!extra.firstLineIndent;
@@ -937,15 +875,9 @@ class TypesetView {
 
       const indent = extra.firstLineIndent ?? 0;
       const scale = extra.scale ?? 1;
-      let entry = this.cache.get(node);
-      if (
-        !entry ||
-        Math.abs(entry.measure - measure) > 0.5 ||
-        entry.oracle !== ostatus ||
-        entry.key !== okey ||
-        Math.abs(entry.indent - indent) > 0.5 ||
-        Math.abs(entry.scale - scale) > 0.01
-      ) {
+      const cacheKey: BlockLayoutCacheKey = { measure, oracle: ostatus, key: okey, indent, scale };
+      let entry = this.cache.getMatching(node, cacheKey);
+      if (!entry) {
         let lines: LineLayout[] | null = null;
         if (oentry?.status === 'ok') {
           lines = layoutBlock(node, measure, this.measurer, atomWidth, {
@@ -983,62 +915,12 @@ class TypesetView {
           }
         }
         if (!lines) lines = layoutBlock(node, measure, this.measurer, atomWidth, { ...layoutOpts, ...extra })!;
-        entry = { measure, lines, oracle: ostatus, key: okey, indent, scale };
-        this.cache.set(node, entry);
+        entry = this.cache.set(node, { ...cacheKey, lines });
       }
 
       paragraphs++;
       lineCount += entry.lines.length;
-      emitLines(node, pos, entry.lines);
-    };
-
-    /** Emit line decorations (spacing + break widgets), skipping footnote
-     *  children — inline decos descend into nested editable content. */
-    const emitLines = (node: PMNode, pos: number, lines: LineLayout[]) => {
-      const base = pos + 1;
-      const fnRanges: Array<[number, number]> = [];
-      node.forEach((child, offset) => {
-        if (child.type.name === 'footnote') fnRanges.push([offset, offset + child.nodeSize]);
-      });
-      const emitSpacing = (from: number, to: number, style: string) => {
-        let cur = from;
-        for (const [a, bEnd] of fnRanges) {
-          if (bEnd <= cur || a >= to) continue;
-          if (a > cur) decos.push(Decoration.inline(base + cur, base + a, { style }, { sig: style }));
-          cur = Math.max(cur, bEnd);
-        }
-        if (cur < to) decos.push(Decoration.inline(base + cur, base + to, { style }, { sig: style }));
-      };
-      for (const line of lines) {
-        if (Math.abs(line.spacing) > 0.01) {
-          emitSpacing(line.from, line.to, `word-spacing:${line.spacing.toFixed(3)}px`);
-        }
-        if (line.breakPos !== null) {
-          const at = base + line.breakPos;
-          const spacer = lineSpacers.get(at);
-          if (spacer) {
-            decos.push(
-              Decoration.widget(at, () => pageGapWidget(spacer.height, line.hyphen), {
-                side: -1,
-                key: `pg:${at}:${Math.round(spacer.height)}:${line.hyphen ? 'h' : ''}`,
-                h: spacer.height,
-                hy: line.hyphen,
-              }),
-            );
-          } else {
-            decos.push(
-              Decoration.widget(at, line.hyphen ? hyphenWidget : brWidget, {
-                side: -1,
-                key: `${line.hyphen ? 'hy' : 'br'}:${at}`,
-              }),
-            );
-          }
-          if (line.hyphen) {
-            const ns = noSpellDeco(node, base, line.breakPos);
-            if (ns) decos.push(ns);
-          }
-        }
-      }
+      appendLineDecorations(decos, node, pos, entry.lines, (_line, at) => lineSpacers.get(at));
     };
 
     // Painted prefixes are DETERMINISTIC (the constants live in style.css:
@@ -1046,14 +928,7 @@ class TypesetView {
     // Never measure them from the DOM: a run can land mid-update, before a
     // widget paints, and cache a zero-indent layout that never heals.
     const bodyPx = this.bodyPx();
-    const fontStack = cssFontStack(settings.font);
-    const FN_SCALE = 0.85;
-    const fnIndent = (n: number) => {
-      const fnPx = FN_SCALE * bodyPx;
-      const numPx = 0.72 * fnPx;
-      return 0.9 * fnPx + textWidth(String(n), `${numPx}px ${fontStack}`) + 0.15 * numPx;
-    };
-    const capIndent = (n: number) => textWidth(`Figure ${n}:`, `${bodyPx}px ${fontStack}`) + 0.32 * bodyPx;
+    const prefixes = createPaintedPrefixMeasurements(settings.font, bodyPx);
 
     let fnNo = 0;
     const handleFootnotes = (node: PMNode, pos: number) => {
@@ -1072,7 +947,10 @@ class TypesetView {
           fnPos,
           bMeasure,
           { kind: 'footnote' },
-          { firstLineIndent: fnIndent(fnNo), scale: FN_SCALE },
+          {
+            firstLineIndent: prefixes.footnoteIndent(fnNo),
+            scale: prefixes.footnoteScale,
+          },
           'fn',
         );
       });
@@ -1094,7 +972,7 @@ class TypesetView {
           pos,
           capMeasure,
           { kind: 'caption', figNo },
-          { firstLineIndent: capIndent(figNo) },
+          { firstLineIndent: prefixes.captionIndent(figNo) },
           `cap${figNo}`,
         );
         handleFootnotes(node, pos);
@@ -1116,7 +994,7 @@ class TypesetView {
 
       // Classic mode: consecutive paragraphs carry a first-line indent
       // (Typst's first-line-indent default rule = CSS p + p).
-      const indented = settings.parIndent && consecutivePara(state.doc, pos);
+      const indented = settings.parIndent && consecutiveParagraph(state.doc, pos);
       layoutInto(
         node,
         pos,
@@ -1130,18 +1008,10 @@ class TypesetView {
     });
 
     for (const sp of blockSpacers) {
-      decos.push(
-        Decoration.widget(sp.pos, () => pageGapWidget(sp.height, false), {
-          side: -1,
-          key: `pgb:${sp.pos}:${Math.round(sp.height)}`,
-          h: sp.height,
-        }),
-      );
+      decos.push(blockSpacerDecoration(sp));
     }
 
-    const sig = decos
-      .map((d) => `${d.from}:${d.to}:${((d.spec as { key?: string } | null)?.key ?? (d.spec as { sig?: string } | null)?.sig ?? '')}`)
-      .join('|');
+    const sig = decorationSignature(decos);
     if (sig === this.lastDecoSig && !this.pendingPageMarks) {
       return { paragraphs, lines: lineCount };
     }
@@ -1720,74 +1590,4 @@ class TypesetView {
       });
     }
   }
-}
-
-
-/** The two DOM halves of a hyphenated word read as separate words to the
- *  browser spellchecker, which flags the tail ("ically"). Wrap the whole
- *  word in spellcheck="false" — the split is presentation, not content. */
-function noSpellDeco(node: PMNode, base: number, breakPos: number): Decoration | null {
-  const text = node.textBetween(0, node.content.size, '\u0000', '\u0000');
-  const isWordChar = (ch: string | undefined) => ch !== undefined && /[\p{L}\p{N}\u2019'-]/u.test(ch);
-  let a = breakPos;
-  while (a > 0 && isWordChar(text[a - 1])) a--;
-  let b = breakPos;
-  while (b < text.length && isWordChar(text[b])) b++;
-  if (a >= b) return null;
-  return Decoration.inline(base + a, base + b, { spellcheck: 'false' }, { sig: 'nospell' });
-}
-
-/** Atom advance for layout: math uses the ink's exact Typst width (the
- *  DOM rect includes the hover box's 1px padding); everything else
- *  measures its DOM. */
-function makeAtomWidth(view: EditorView, settings: ReturnType<typeof getSettings>, pos: number) {
-  return (offset: number, child: PMNode): number => {
-    if (child.type.name === 'math_inline') {
-      const ink = getInk(inkKey(child.attrs.src as string, false, settings));
-      if (ink) return ink.widthPx;
-    }
-    const dom = view.nodeDOM(pos + 1 + offset);
-    if (dom instanceof HTMLElement) return dom.getBoundingClientRect().width;
-    return child.nodeSize * 8;
-  };
-}
-
-function brWidget() {
-  const br = document.createElement('br');
-  br.className = 'ts-br';
-  br.setAttribute('aria-hidden', 'true');
-  return br;
-}
-
-function hyphenWidget() {
-  const s = document.createElement('span');
-  s.className = 'ts-hyphen';
-  s.setAttribute('aria-hidden', 'true');
-  s.contentEditable = 'false';
-  s.append('‐');
-  s.appendChild(document.createElement('br'));
-  return s;
-}
-
-/**
- * A page-break spacer. The div is block-level; inside a paragraph's inline
- * content it forms a block-in-inline split, which both forces the line break
- * and inserts exactly `height` px of vertical space (print CSS zeroes it).
- */
-function pageGapWidget(height: number, hyphen: boolean) {
-  const gap = document.createElement('div');
-  gap.className = 'ts-pagegap';
-  gap.style.height = `${height.toFixed(2)}px`;
-  gap.setAttribute('aria-hidden', 'true');
-  gap.contentEditable = 'false';
-  if (!hyphen) return gap;
-  const wrap = document.createElement('span');
-  wrap.style.display = 'contents';
-  wrap.setAttribute('aria-hidden', 'true');
-  wrap.contentEditable = 'false';
-  const hy = document.createElement('span');
-  hy.className = 'ts-hyphen';
-  hy.textContent = '‐';
-  wrap.append(hy, gap);
-  return wrap;
 }
