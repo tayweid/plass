@@ -3,8 +3,73 @@
 // undo, serialization, accessibility, and exported content remain clean.
 
 import type { Node as PMNode } from 'prosemirror-model';
-import { Decoration } from 'prosemirror-view';
+import { Decoration, type DecorationSet } from 'prosemirror-view';
 import type { LineLayout } from './paragraph';
+
+/** Semantic roles owned by the typesetting layer. These tags are deliberately
+ * independent of widget keys: callers can select layout decorations without
+ * inferring their meaning from a key prefix. */
+export type TypesetDecorationKind =
+  | 'word-spacing'
+  | 'line-break'
+  | 'hyphen-break'
+  | 'no-spell'
+  | 'line-page-gap'
+  | 'block-page-gap';
+
+export interface TypesetDecorationSpec {
+  tsKind: TypesetDecorationKind;
+  key?: string;
+  sig?: string;
+  h?: number;
+  hy?: boolean;
+}
+
+/** A current, mapped ProseMirror node range. Ownership is range-based rather
+ * than stored as an absolute position in a decoration spec: specs are not
+ * remapped when edits before a block move it. `to` is exclusive. */
+export interface BlockDecorationScope {
+  from: number;
+  to: number;
+  /** Nested editable blocks (currently footnote bodies) own their own line
+   * decorations and can be excluded from an outer block replacement. */
+  exclude?: readonly DecorationRange[];
+}
+
+export interface DecorationRange {
+  from: number;
+  to: number;
+}
+
+export interface BlockDecorationRebuild {
+  decos: DecorationSet;
+  changed: boolean;
+  digest: string;
+  removed: number;
+  added: number;
+}
+
+const BLOCK_DECORATION_KINDS = new Set<TypesetDecorationKind>([
+  'word-spacing',
+  'line-break',
+  'hyphen-break',
+  'no-spell',
+  'line-page-gap',
+]);
+
+function typesetKind(spec: unknown): TypesetDecorationKind | null {
+  if (!spec || typeof spec !== 'object') return null;
+  const kind = (spec as { tsKind?: unknown }).tsKind;
+  return typeof kind === 'string' &&
+    (BLOCK_DECORATION_KINDS.has(kind as TypesetDecorationKind) || kind === 'block-page-gap')
+    ? (kind as TypesetDecorationKind)
+    : null;
+}
+
+function isBlockDecorationSpec(spec: unknown): boolean {
+  const kind = typesetKind(spec);
+  return kind !== null && BLOCK_DECORATION_KINDS.has(kind);
+}
 
 export interface Spacer {
   pos: number;
@@ -23,7 +88,12 @@ export function noSpellDeco(node: PMNode, base: number, breakPos: number): Decor
   let b = breakPos;
   while (b < text.length && isWordChar(text[b])) b++;
   if (a >= b) return null;
-  return Decoration.inline(base + a, base + b, { spellcheck: 'false' }, { sig: 'nospell' });
+  return Decoration.inline(
+    base + a,
+    base + b,
+    { spellcheck: 'false' },
+    { sig: 'nospell', tsKind: 'no-spell' } satisfies TypesetDecorationSpec,
+  );
 }
 
 export function brWidget() {
@@ -80,6 +150,7 @@ export function pageSpacerDecoration(
     key,
     h: height,
     hy: hyphen,
+    tsKind: 'line-page-gap',
   });
 }
 
@@ -89,6 +160,7 @@ export function blockSpacerDecoration(spacer: Spacer): Decoration {
     side: -1,
     key: `pgb:${spacer.pos}:${Math.round(spacer.height)}`,
     h: spacer.height,
+    tsKind: 'block-page-gap',
   });
 }
 
@@ -124,10 +196,28 @@ export function appendLineDecorations(
     let cur = from;
     for (const [a, bEnd] of fnRanges) {
       if (bEnd <= cur || a >= to) continue;
-      if (a > cur) target.push(Decoration.inline(base + cur, base + a, { style }, { sig: style }));
+      if (a > cur) {
+        target.push(
+          Decoration.inline(
+            base + cur,
+            base + a,
+            { style },
+            { sig: style, tsKind: 'word-spacing' } satisfies TypesetDecorationSpec,
+          ),
+        );
+      }
       cur = Math.max(cur, bEnd);
     }
-    if (cur < to) target.push(Decoration.inline(base + cur, base + to, { style }, { sig: style }));
+    if (cur < to) {
+      target.push(
+        Decoration.inline(
+          base + cur,
+          base + to,
+          { style },
+          { sig: style, tsKind: 'word-spacing' } satisfies TypesetDecorationSpec,
+        ),
+      );
+    }
   };
 
   for (const line of lines) {
@@ -146,6 +236,7 @@ export function appendLineDecorations(
         Decoration.widget(at, line.hyphen ? hyphenWidget : brWidget, {
           side: -1,
           key: `${line.hyphen ? 'hy' : 'br'}:${at}`,
+          tsKind: line.hyphen ? 'hyphen-break' : 'line-break',
         }),
       );
     }
@@ -156,15 +247,160 @@ export function appendLineDecorations(
   }
 }
 
-/** Stable identity for a complete decoration list. DOM factories are
- * intentionally excluded; their key/sig specs contain the semantic state. */
-export function decorationSignature(decorations: readonly Decoration[]): string {
-  return decorations
-    .map(
-      (d) =>
-        `${d.from}:${d.to}:${
-          (d.spec as { key?: string } | null)?.key ?? (d.spec as { sig?: string } | null)?.sig ?? ''
-        }`,
-    )
+interface DecorationSemanticEntry {
+  from: number;
+  to: number;
+  kind: string;
+  identity: string;
+}
+
+function semanticEntry(decoration: Decoration, relativeTo: number): DecorationSemanticEntry {
+  const spec = decoration.spec as Partial<TypesetDecorationSpec> | null;
+  const kind = typesetKind(spec);
+  let identity: string;
+  switch (kind) {
+    case 'line-break':
+    case 'hyphen-break':
+      // Absolute positions embedded in widget keys become stale when mapped;
+      // current from/to plus the semantic kind are sufficient identity.
+      identity = '';
+      break;
+    case 'line-page-gap':
+      identity = `${spec?.h ?? ''}:${spec?.hy ? 'h' : ''}`;
+      break;
+    case 'block-page-gap':
+      identity = String(spec?.h ?? '');
+      break;
+    case 'word-spacing':
+    case 'no-spell':
+      identity = spec?.sig ?? '';
+      break;
+    default:
+      // Untagged decorations retain the historical compatibility behavior.
+      identity = spec?.key ?? spec?.sig ?? '';
+  }
+  return {
+    from: decoration.from - relativeTo,
+    to: decoration.to - relativeTo,
+    kind: kind ?? '',
+    identity,
+  };
+}
+
+function compareSemanticEntries(a: DecorationSemanticEntry, b: DecorationSemanticEntry): number {
+  return (
+    a.from - b.from ||
+    a.to - b.to ||
+    a.kind.localeCompare(b.kind) ||
+    a.identity.localeCompare(b.identity)
+  );
+}
+
+function canonicalEntries(entries: DecorationSemanticEntry[]): string {
+  return entries
+    .sort(compareSemanticEntries)
+    .map(({ from, to, kind, identity }) => `${from}:${to}:${kind}:${identity}`)
     .join('|');
+}
+
+/** Stable, order-independent identity for a decoration list. DOM factories
+ * are intentionally excluded. Tagged widgets use their current position and
+ * visible payload rather than absolute-position keys that mapping leaves
+ * untouched. `relativeTo` produces a block-relative digest without mutating
+ * or reordering the caller's array. */
+export function decorationSignature(decorations: readonly Decoration[], relativeTo = 0): string {
+  return canonicalEntries(decorations.map((decoration) => semanticEntry(decoration, relativeTo)));
+}
+
+/** Canonical semantic digest of a complete persistent DecorationSet. */
+export function decorationSetDigest(decos: DecorationSet): string {
+  return decorationSignature(decos.find());
+}
+
+function assertRange(range: DecorationRange, label: string): void {
+  if (!Number.isInteger(range.from) || !Number.isInteger(range.to) || range.from < 0 || range.to < range.from) {
+    throw new RangeError(`${label} must be a non-negative, ordered ProseMirror range`);
+  }
+}
+
+/** Whether a decoration belongs wholly to a half-open current block range.
+ * Widgets at `to` belong to the following block, avoiding shared-boundary
+ * removals. */
+function containedBy(decoration: Decoration, range: DecorationRange): boolean {
+  return decoration.from === decoration.to
+    ? decoration.from >= range.from && decoration.from < range.to
+    : decoration.from >= range.from && decoration.to <= range.to;
+}
+
+function inExcludedRange(decoration: Decoration, scope: BlockDecorationScope): boolean {
+  return scope.exclude?.some((range) => containedBy(decoration, range)) ?? false;
+}
+
+/** Return the current mapped line-layout decorations owned by a block. Page
+ * spacers between whole blocks are deliberately not block-owned. */
+export function decorationsOwnedByBlock(
+  decos: DecorationSet,
+  scope: BlockDecorationScope,
+): Decoration[] {
+  assertRange(scope, 'block decoration scope');
+  for (const range of scope.exclude ?? []) assertRange(range, 'excluded decoration range');
+  return decos
+    .find(scope.from, scope.to, isBlockDecorationSpec)
+    .filter((decoration) => containedBy(decoration, scope) && !inExcludedRange(decoration, scope));
+}
+
+function blockDecorationsSignature(decorations: readonly Decoration[], relativeTo: number): string {
+  return canonicalEntries(decorations.map((decoration) => semanticEntry(decoration, relativeTo)));
+}
+
+/** Block-relative semantic digest suitable for comparing freshly-built line
+ * decorations with their already-mapped counterparts. */
+export function blockDecorationDigest(decos: DecorationSet, scope: BlockDecorationScope): string {
+  return blockDecorationsSignature(decorationsOwnedByBlock(decos, scope), scope.from);
+}
+
+/** Remove every explicitly tagged decoration owned by the current block,
+ * leaving nested exclusions, other blocks, and block-level page gaps intact. */
+export function removeDecorationsOwnedByBlock(
+  decos: DecorationSet,
+  scope: BlockDecorationScope,
+): DecorationSet {
+  const owned = decorationsOwnedByBlock(decos, scope);
+  return owned.length ? decos.remove(owned.slice()) : decos;
+}
+
+/** Atomically replace one block's owned decorations. An equal semantic digest
+ * returns the original persistent set, allowing live/settled no-op dispatches
+ * to be skipped. Input arrays are never consumed by DecorationSet.add/remove. */
+export function rebuildDecorationsOwnedByBlock(
+  decos: DecorationSet,
+  doc: PMNode,
+  scope: BlockDecorationScope,
+  replacements: readonly Decoration[],
+): BlockDecorationRebuild {
+  assertRange(scope, 'block decoration scope');
+  for (const decoration of replacements) {
+    if (!isBlockDecorationSpec(decoration.spec)) {
+      throw new TypeError('replacement contains a decoration that is not block-owned');
+    }
+    if (!containedBy(decoration, scope) || inExcludedRange(decoration, scope)) {
+      throw new RangeError('replacement decoration lies outside its block ownership scope');
+    }
+  }
+
+  const existing = decorationsOwnedByBlock(decos, scope);
+  const digest = blockDecorationsSignature(replacements, scope.from);
+  if (blockDecorationsSignature(existing, scope.from) === digest) {
+    return { decos, changed: false, digest, removed: 0, added: 0 };
+  }
+
+  let rebuilt = existing.length ? decos.remove(existing.slice()) : decos;
+  if (replacements.length) rebuilt = rebuilt.add(doc, replacements.slice());
+  return {
+    decos: rebuilt,
+    changed: true,
+    digest,
+    removed: existing.length,
+    added: replacements.length,
+  };
 }
