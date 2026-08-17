@@ -20,7 +20,6 @@ import type { Node as PMNode } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import { schema } from './schema';
 import { docToTyp } from './typ-serializer';
-import { scheduleTypeset } from './typeset-plugin';
 import { mountTypstSvg } from './safe-svg';
 
 export const PX_PER_PT = 4 / 3;
@@ -90,6 +89,29 @@ export interface SplitAssignment {
 
 const cache = new Map<string, TableSplitLayout | 'pending' | 'failed'>();
 const CACHE_MAX = 16;
+let cacheGeneration = 0;
+
+type TableSplitReadyCallback = (view: EditorView) => void;
+const readyListeners = new Set<TableSplitReadyCallback>();
+
+/** Subscribe to successful background split compiles. The requesting view is
+ *  supplied so multi-editor hosts can refresh only the affected editor. */
+export function onTableSplitReady(callback: TableSplitReadyCallback): () => void {
+  readyListeners.add(callback);
+  return () => readyListeners.delete(callback);
+}
+
+function notifyTableSplitReady(view: EditorView) {
+  for (const callback of readyListeners) callback(view);
+}
+
+/** Drop compiled split answers and invalidate work already in flight. An old
+ *  compile cannot repopulate the cache after this boundary. Applied split
+ *  assignments stay visible until the paginator replaces or clears them. */
+export function clearTableSplitCache() {
+  cacheGeneration++;
+  cache.clear();
+}
 
 function cacheKey(src: string, contentHPt: number, offsetPt: number, targetLines: number[] | null): string {
   // Tiny offset jitter (sub-0.05pt measurement noise) must not force
@@ -156,6 +178,7 @@ async function compileSplit(
   contentHPt: number,
   offsetPt: number,
   targetLines: number[] | null,
+  generation: number,
 ): Promise<TableSplitLayout | null> {
   const { compileSvg } = await import('./pdf');
   const pageSpec = `#set page(width: ${(widthPx * 0.75).toFixed(2)}pt, height: ${contentHPt.toFixed(2)}pt, margin: 0pt)`;
@@ -171,6 +194,7 @@ async function compileSplit(
   for (let attempt = 0; attempt < 4; attempt++) {
     const src = v > 0.05 ? base.replace('\n\n', `\n\n#v(${v.toFixed(2)}pt)\n`) : base;
     const svg = await compileSvg(src);
+    if (generation !== cacheGeneration) return null;
     if (!svg) return null;
     const measured = measurePages(svg, contentHPt * PX_PER_PT);
     if (!measured || !measured.pages.length) return null;
@@ -228,18 +252,21 @@ export function requestTableSplit(
   if (hit === 'failed') return null;
   if (hit) return hit;
   cache.set(key, 'pending');
+  const generation = cacheGeneration;
   if (cache.size > CACHE_MAX) {
     for (const k of cache.keys()) {
       if (cache.size <= CACHE_MAX) break;
       if (cache.get(k) !== 'pending') cache.delete(k);
     }
   }
-  void compileSplit(view, node, widthPx, contentHPt, offsetPt, targetLines)
+  void compileSplit(view, node, widthPx, contentHPt, offsetPt, targetLines, generation)
     .then((layout) => {
+      if (generation !== cacheGeneration || cache.get(key) !== 'pending') return;
       cache.set(key, layout ?? 'failed');
-      if (layout) scheduleTypeset(view);
+      if (layout) notifyTableSplitReady(view);
     })
     .catch((e) => {
+      if (generation !== cacheGeneration || cache.get(key) !== 'pending') return;
       console.warn('table split compile failed', e);
       cache.set(key, 'failed');
     });

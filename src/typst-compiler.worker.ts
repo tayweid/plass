@@ -153,7 +153,7 @@ interface FontBuildContext {
 
 /** Avoid typst.ts's cross-platform font helper: it constructs JavaScript at
  * runtime to support Node, which is incompatible with a no-eval worker CSP. */
-function pinnedFontProvider<T extends { preloadFonts(fonts: string[]): unknown }>(TypstSnippet: T): ReturnType<T['preloadFonts']> {
+function pinnedFontProvider<T extends { preloadFonts(fonts: string[]): unknown }>(_TypstSnippet: T): ReturnType<T['preloadFonts']> {
   const loader = Object.assign(
     async (_mark: unknown, { builder }: FontBuildContext) => {
       const controller = new AbortController();

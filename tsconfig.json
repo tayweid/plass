@@ -9,6 +9,7 @@
       "DOM.Iterable"
     ],
     "strict": true,
+    "noUnusedParameters": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "esModuleInterop": true,

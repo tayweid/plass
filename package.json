@@ -19,7 +19,9 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run check:unused && npm run check:cycles && tsc --noEmit && vite build",
+    "check:cycles": "node --import tsx scripts/check-import-cycles.ts",
+    "check:unused": "node --import tsx scripts/check-unused.ts",
     "generate:notices": "node --import tsx scripts/generate-third-party-notices.ts",
     "verify:licenses": "node --import tsx scripts/generate-third-party-notices.ts --check",
     "verify:production": "node --import tsx scripts/verify-production.ts",

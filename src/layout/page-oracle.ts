@@ -57,6 +57,9 @@ export class PageOracle {
   private timer = 0;
   private inflight = false;
   private disposed = false;
+  /** Identifies the latest requested page layout. Page compiles cannot be
+   * cancelled once running, so older completions must not publish. */
+  private generation = 0;
 
   constructor(private onResults: () => void) {}
 
@@ -66,6 +69,7 @@ export class PageOracle {
 
   request(sig: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver) {
     if (this.disposed || this.results.has(sig) || this.pendingSig === sig) return;
+    this.generation++;
     this.pendingSig = sig;
     this.payload = { doc, settings, resolveAtom };
     clearTimeout(this.timer);
@@ -75,42 +79,59 @@ export class PageOracle {
   private payload: { doc: PMNode; settings: DocSettings; resolveAtom: AtomResolver } | null = null;
 
   clear() {
+    this.generation++;
+    clearTimeout(this.timer);
+    this.timer = 0;
     this.results.clear();
     this.pendingSig = null;
+    this.payload = null;
   }
 
   destroy() {
+    if (this.disposed) return;
     this.disposed = true;
+    this.generation++;
     clearTimeout(this.timer);
+    this.timer = 0;
+    this.pendingSig = null;
+    this.payload = null;
   }
 
   private async flush() {
     if (this.disposed || this.inflight || !this.pendingSig || !this.payload) return;
+    const generation = this.generation;
     const sig = this.pendingSig;
     const { doc, settings, resolveAtom } = this.payload;
     this.inflight = true;
     try {
       const { compileDocSvg } = await import('../pdf');
+      if (this.disposed || generation !== this.generation) return;
       const svg = await compileDocSvg(doc);
-      if (this.disposed) return;
+      if (this.disposed || generation !== this.generation) return;
       const entry = svg ? analyze(svg, doc, settings, resolveAtom) : ({ status: 'fail', reason: 'compile failed' } as PageOracleEntry);
       this.results.set(sig, entry);
       if (this.results.size > MAX_RESULTS) {
         this.results.delete(this.results.keys().next().value!);
       }
     } catch (e) {
+      if (this.disposed || generation !== this.generation) return;
       console.warn('page oracle failed', e);
       this.results.set(sig, { status: 'fail', reason: String(e).slice(0, 120) });
     } finally {
       this.inflight = false;
-      if (this.pendingSig === sig) this.pendingSig = null;
+      // A newer request may use the same signature after clear(). Only the
+      // generation that started this compile may consume its pending state.
+      if (generation === this.generation && this.pendingSig === sig) {
+        this.pendingSig = null;
+        this.payload = null;
+      }
       // A newer request may have arrived while compiling.
       if (!this.disposed && this.pendingSig) {
         clearTimeout(this.timer);
         this.timer = window.setTimeout(() => void this.flush(), 60);
       }
     }
-    if (!this.disposed) this.onResults();
+    if (!this.disposed && generation === this.generation) this.onResults();
   }
 }
 

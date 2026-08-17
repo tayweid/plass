@@ -43,3 +43,39 @@ test('exact live paragraph remains unchanged when the oracle settles', async ({ 
   expect(perf.settle?.totalMs).toBeGreaterThan(0);
   expect(perf.settle?.paragraphs).toBe(1);
 });
+
+test('shrinking to one page removes every held page spacer', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const paragraphs = Array.from({ length: 32 }, (_, i) =>
+      state.schema.nodes.paragraph.create(
+        null,
+        state.schema.text(
+          `Paragraph ${i + 1}. ` +
+            'Exact pagination must remain stable while a document is edited and then settle cleanly. '.repeat(5),
+        ),
+      ),
+    );
+    const doc = state.schema.nodes.doc.create(state.doc.attrs, paragraphs);
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
+  });
+
+  await expect.poll(() => page.locator('.page-box').count(), { timeout: 15_000 }).toBeGreaterThan(1);
+  await expect.poll(() => page.locator('.ts-pagegap').count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const paragraph = state.schema.nodes.paragraph.create(null, state.schema.text('A short final document.'));
+    const doc = state.schema.nodes.doc.create(state.doc.attrs, [paragraph]);
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
+  });
+
+  await expect.poll(() => page.locator('.page-box').count(), { timeout: 15_000 }).toBe(1);
+  await expect.poll(() => page.locator('.ts-pagegap').count(), { timeout: 15_000 }).toBe(0);
+  // Give obsolete long-document compiles time to finish: their completion
+  // must not restore the superseded page state.
+  await page.waitForTimeout(1_000);
+  expect(await page.locator('.page-box').count()).toBe(1);
+  expect(await page.locator('.ts-pagegap').count()).toBe(0);
+});
