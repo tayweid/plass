@@ -29,7 +29,12 @@ import { Plugin, type EditorState } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { Measurer } from './layout/measure';
-import { layoutBlock, type LineLayout } from './layout/paragraph';
+import {
+  layoutBlock,
+  type ForcedBreak,
+  type LayoutOptions,
+  type LineLayout,
+} from './layout/paragraph';
 import { buildSpec, type TypstOracle, type AtomResolver, type SpecKind } from './layout/typst-oracle';
 import { portBreaks } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
@@ -69,6 +74,7 @@ import {
   createPaintedPrefixMeasurements,
   makeAtomWidth,
   paragraphKeyTag,
+  type AtomWidth,
   type BlockLayoutCacheKey,
 } from './layout/block-layout';
 import {
@@ -80,6 +86,11 @@ import {
 } from './layout/typeset-state';
 import { LayoutScheduler } from './layout/layout-scheduler';
 import { OracleCoordinator } from './layout/oracle-coordinator';
+import { layoutForcedBlock } from './layout/forced-layout';
+import {
+  ForcedLayoutAuditor,
+  type ForcedLayoutAuditReport,
+} from './layout/forced-layout-audit';
 
 export { typesetKey };
 export type { PageInfo, TypesetMeta, TypesetState, TypesetStats };
@@ -92,15 +103,19 @@ let portHits = 0;
 let legacyHits = 0;
 let adapterNulls = 0;
 let partitionMisses = 0;
+let forcedFastHits = 0;
+let forcedFallbacks = 0;
 if (typeof window !== 'undefined' && import.meta.env.DEV) {
   const w = window as unknown as {
     __usePort: (v: boolean) => void;
     __portStats: () => { port: number; legacy: number };
+    __forcedPathStats: () => { fast: number; fallback: number };
   };
   w.__usePort = (v) => {
     USE_PORT = v;
   };
   w.__portStats = () => ({ port: portHits, legacy: legacyHits, adapterNulls, partitionMisses });
+  w.__forcedPathStats = () => ({ fast: forcedFastHits, fallback: forcedFallbacks });
 }
 
 /** Vertical gap between stacked footnote bodies / height of the separator zone (px). */
@@ -195,6 +210,7 @@ class TypesetView {
   private pagPath: 'forced' | 'hold' | 'fallback' = 'forced';
   private pagLog: string[] = [];
   private pagWhy = '';
+  private forcedAuditor: ForcedLayoutAuditor | null = null;
   private destroyed = false;
 
   constructor(
@@ -224,6 +240,11 @@ class TypesetView {
         __oracle?: TypstOracle;
         __pageOracle?: PageOracle;
         __breakSig?: () => string;
+        __forcedLayoutAudit?: {
+          start: () => void;
+          snapshot: () => ForcedLayoutAuditReport;
+          stop: () => ForcedLayoutAuditReport;
+        };
       };
       w.__oracle = this.oracles.paragraph;
       w.__pageOracle = this.oracles.page;
@@ -282,6 +303,16 @@ class TypesetView {
         });
         return keys.sort().join('|');
       };
+      this.forcedAuditor = new ForcedLayoutAuditor(view.dom);
+      w.__forcedLayoutAudit = {
+        start: () => {
+          this.forcedAuditor!.start();
+          this.cache.clear();
+          this.requestRun();
+        },
+        snapshot: () => this.forcedAuditor!.snapshot(),
+        stop: () => this.forcedAuditor!.stop(),
+      };
     }
     this.scheduler = new LayoutScheduler(view.dom, {
       runLive: () => this.liveRun(),
@@ -294,6 +325,25 @@ class TypesetView {
         clearTableSplitCache();
       },
     });
+  }
+
+  /** Translate already-authoritative break offsets into browser line ranges.
+   * The direct path performs no break search or syllabification; malformed or
+   * unsupported input falls back to the established translator. */
+  private layoutAuthoritative(
+    block: PMNode,
+    measure: number,
+    atomWidth: AtomWidth,
+    opts: Omit<LayoutOptions, 'forced'> & { forced: ForcedBreak[] },
+    auditId: string,
+  ): LineLayout[] | null {
+    const fast = layoutForcedBlock(block, measure, this.measurer, atomWidth, opts);
+    if (fast) forcedFastHits++;
+    else forcedFallbacks++;
+
+    this.forcedAuditor?.record(auditId, block, measure, atomWidth, opts);
+
+    return fast ?? layoutBlock(block, measure, this.measurer, atomWidth, opts);
   }
 
   update(view: EditorView, prevState: EditorState) {
@@ -403,11 +453,17 @@ class TypesetView {
             atomWidthPt: this.typstAtomWidthPt(),
           });
           if (forced) {
-            lines = layoutBlock(b.node, measure, this.measurer, atomWidth, {
-              hyphenate: settings.hyphenate,
-              firstLineIndent: liveIndent,
-              forced,
-            });
+            lines = this.layoutAuthoritative(
+              b.node,
+              measure,
+              atomWidth,
+              {
+                hyphenate: settings.hyphenate,
+                firstLineIndent: liveIndent,
+                forced,
+              },
+              `live@${b.pos}`,
+            );
             if (lines) portHits++;
             else partitionMisses++;
           } else {
@@ -793,12 +849,15 @@ class TypesetView {
       let entry = this.cache.getMatching(node, cacheKey);
       if (!entry) {
         let lines: LineLayout[] | null = null;
-        if (oentry?.status === 'ok') {
-          lines = layoutBlock(node, measure, this.measurer, atomWidth, {
-            ...layoutOpts,
-            ...extra,
-            forced: oentry.breaks,
-          });
+        const auditId = `${skind.kind}@${pos}`;
+        if (oentry?.status === 'ok' && oentry.breaks) {
+          lines = this.layoutAuthoritative(
+            node,
+            measure,
+            atomWidth,
+            { ...layoutOpts, ...extra, forced: oentry.breaks },
+            auditId,
+          );
         }
         // The ported Typst breaker stands in wherever the compiled oracle
         // has no answer (pending, failed to match, or its breaks don't
@@ -818,11 +877,13 @@ class TypesetView {
               atomWidthPt: this.typstAtomWidthPt(),
             });
             if (forced) {
-              lines = layoutBlock(node, measure, this.measurer, atomWidth, {
-                ...layoutOpts,
-                ...extra,
-                forced,
-              });
+              lines = this.layoutAuthoritative(
+                node,
+                measure,
+                atomWidth,
+                { ...layoutOpts, ...extra, forced },
+                auditId,
+              );
             }
           } catch (e) {
             if (import.meta.env.DEV) console.warn('port breaker (settle) failed', e);

@@ -94,6 +94,16 @@ export function blockSpacerDecoration(spacer: Spacer): Decoration {
 
 export type LineSpacerResolver = (line: LineLayout, pos: number) => Spacer | undefined;
 
+/** Stable CSS precision for computed word spacing. Equivalent prefix sums
+ * can differ by a few floating-point ulps depending on how intervals were
+ * grouped; normalize exact half-thousandths explicitly so that arithmetic
+ * grouping cannot change the painted value. */
+export function wordSpacingValue(spacing: number): string {
+  if (Math.abs(spacing) <= 0.01) return '';
+  const rounded = Math.sign(spacing) * Math.round((Math.abs(spacing) + 1e-9) * 1000) / 1000;
+  return rounded.toFixed(3);
+}
+
 /** Append justification, break, optional page-gap, and spellcheck
  * decorations for a block. Inline spacing skips nested footnote bodies,
  * whose editable content owns its own line decorations. */
@@ -121,8 +131,9 @@ export function appendLineDecorations(
   };
 
   for (const line of lines) {
-    if (Math.abs(line.spacing) > 0.01) {
-      emitSpacing(line.from, line.to, `word-spacing:${line.spacing.toFixed(3)}px`);
+    const spacing = wordSpacingValue(line.spacing);
+    if (spacing) {
+      emitSpacing(line.from, line.to, `word-spacing:${spacing}px`);
     }
     if (line.breakPos === null) continue;
 
