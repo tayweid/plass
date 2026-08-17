@@ -7,7 +7,7 @@
 import type { EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
-import { DEFAULT_FONT, HISTORICAL_FONT_CHOICES, cssFontStack } from './font-registry';
+import { DEFAULT_FONT, cssFontStack, effectiveFont, selectableFonts } from './font-registry';
 
 export interface DocSettings {
   font: string;
@@ -61,7 +61,8 @@ export const DEFAULT_SETTINGS: DocSettings = {
   mathMacros: '',
 };
 
-export const FONTS = [...HISTORICAL_FONT_CHOICES];
+/** Public choices are capabilities, not names that happen to exist locally. */
+export const FONTS = selectableFonts().map((font) => font.label);
 
 /** Parse the macros text into a KaTeX macros object. */
 export function parseMathMacros(src: string): Record<string, string> {
@@ -300,6 +301,14 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   };
 
   row('Font', select(FONTS.map((f) => [f, f]), s.font, (v) => patch({ font: v })));
+  const resolvedFont = effectiveFont(s.font);
+  if (resolvedFont.label !== s.font) {
+    const notice = document.createElement('div');
+    notice.className = 'settings-font-compat';
+    notice.setAttribute('role', 'status');
+    notice.textContent = `“${s.font}” is not certified for exact layout. This document is rendering and exporting as ${resolvedFont.label}; its stored preference is unchanged.`;
+    panel.appendChild(notice);
+  }
   row('Size', select([10, 11, 12, 12.5, 13, 14].map((n) => [n, `${n} pt`] as [number, string]), s.sizePt, (v) => patch({ sizePt: +v })));
   {
     const input = document.createElement('input');
