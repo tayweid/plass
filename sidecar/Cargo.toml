@@ -26,7 +26,7 @@ icu_provider_blob = "=1.5.0"
 icu_segmenter = { version = "=1.5.0", features = ["serde"] }
 rustybuzz = "=0.20.1"
 typst-assets = "=0.14.2"
-unicode-segmentation = "=1.12.0"
+unicode-segmentation = "=1.13.3"
 
 [profile.release]
 opt-level = "s"
