@@ -109,9 +109,10 @@ check(
     normalized.pageNumStart === DEFAULT_SETTINGS.pageNumStart &&
     normalized.mathMacros === DEFAULT_SETTINGS.mathMacros,
 );
+const hostileFontLine = textSetLine({ ...DEFAULT_SETTINGS, font: 'A"B' });
 check(
-  'font names are escaped before entering generated Typst source',
-  textSetLine({ ...DEFAULT_SETTINGS, font: 'A"B' }).includes('font: "A\\"B"'),
+  'untrusted font names never enter generated Typst source',
+  hostileFontLine.includes('font: "New Computer Modern"') && !hostileFontLine.includes('A\\"B'),
 );
 check(
   'absurd table dimensions stay raw instead of allocating huge arrays',

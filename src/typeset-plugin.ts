@@ -43,6 +43,7 @@ import { getInk, inkKey } from './math-ink';
 import { applySplit, clearSplit, getSplit, requestTableSplit, splitExtra, type TableSplitLayout } from './table-split';
 import { parseTypstSvg } from './safe-svg';
 import { recordLayoutPerf } from './layout/perf';
+import { COMMON_PORT_KEYS, cssFontStack, effectiveFont } from './font-registry';
 
 /** Phase-3 flag (PORT.md): drive live typing with the ported Typst
  * breaker. Console: __usePort(false) to A/B against the legacy path;
@@ -62,9 +63,6 @@ if (typeof window !== 'undefined' && import.meta.env.DEV) {
   };
   w.__portStats = () => ({ port: portHits, legacy: legacyHits, adapterNulls, partitionMisses });
 }
-
-/** Fonts with editor↔Typst parity; the oracle only runs for these. */
-const ORACLE_FONTS = new Set(['New Computer Modern', 'STIX Two Text', 'Libertinus Serif']);
 
 export interface TypesetStats {
   ms: number;
@@ -256,7 +254,12 @@ class TypesetView {
     this.measurer = new Measurer(view.dom);
     // The ported Typst line breaker (PORT.md): loads the sidecar WASM +
     // fonts in the background; until ready, liveRun uses the legacy path.
-    loadPrimitives().catch((e) => console.warn('sidecar primitives failed to load', e));
+    loadPrimitives().then(
+      () => {
+        if (!this.destroyed) this.schedule();
+      },
+      (e) => console.warn('sidecar primitives failed to load', e),
+    );
     this.oracle = new TypstOracle(() => {
       if (!this.destroyed) this.schedule();
     }, FONT_FALLBACK);
@@ -274,8 +277,9 @@ class TypesetView {
       (w as unknown as { __comparePort: () => unknown }).__comparePort = () => {
         const state = this.view.state;
         const settings = getSettings(state);
+        const font = effectiveFont(settings.font);
         const resolveAtom = this.atomResolver();
-        const settingsSig = `${settings.font}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}|${settings.parIndent}`;
+        const settingsSig = `${font.id}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}|${settings.parIndent}`;
         const out: unknown[] = [];
         state.doc.descendants((node, pos) => {
           if (!node.isTextblock || node.type.name !== 'paragraph') return true;
@@ -290,6 +294,8 @@ class TypesetView {
           const atomWidth = makeAtomWidth(this.view, settings, pos);
           const indented = settings.parIndent && consecutivePara(state.doc, pos);
           const port = portBreaks(node, measure, atomWidth, {
+            fontKeys: font.portKeys,
+            monoFontKey: COMMON_PORT_KEYS.mono,
             sizePt: settings.sizePt,
             hyphenate: settings.hyphenate,
             firstLineIndentPx: indented ? 1.5 * this.bodyPx() : undefined,
@@ -391,6 +397,7 @@ class TypesetView {
     const to = Math.min(Math.max(endDiff ? endDiff.b : start, from), state.doc.content.size);
 
     const settings = getSettings(state);
+    const font = effectiveFont(settings.font);
     const blocks: Array<{ node: PMNode; pos: number; para: boolean }> = [];
     state.doc.nodesBetween(from, to, (node, pos) => {
       if (node.type.name === 'table') return false;
@@ -456,6 +463,8 @@ class TypesetView {
       if (USE_PORT && primitives()) {
         try {
           const forced = portBreaks(b.node, measure, atomWidth, {
+            fontKeys: font.portKeys,
+            monoFontKey: COMMON_PORT_KEYS.mono,
             sizePt: settings.sizePt,
             hyphenate: settings.hyphenate,
             firstLineIndentPx: liveIndent,
@@ -773,13 +782,15 @@ class TypesetView {
     if (!prim) return () => null;
     const state = this.view.state;
     const s = getSettings(state);
+    const font = effectiveFont(s.font);
+    const regularKey = font.portKeys.regular;
     let order: Map<string, number> | null = null;
     let labels: Map<string, string> | null = null;
     let fnNums: WeakMap<PMNode, number> | null = null;
-    const upem = prim.upem('regular');
+    const upem = prim.upem(regularKey);
     const shapeW = (text: string, sizePt: number) => {
       let em = 0;
-      for (const g of prim.shape('regular', text)) em += g.xAdvance / upem;
+      for (const g of prim.shape(regularKey, text)) em += g.xAdvance / upem;
       return em * sizePt;
     };
     return (_offset, child) => {
@@ -805,7 +816,7 @@ class TypesetView {
             });
           }
           const n = fnNums.get(child) ?? 1;
-          const sup = prim.superscriptHeight('regular') || 0.6;
+          const sup = prim.superscriptHeight(regularKey) || 0.6;
           return shapeW(String(n), sup * s.sizePt);
         }
         default:
@@ -878,10 +889,11 @@ class TypesetView {
     const { state } = this.view;
     const decos: Decoration[] = [];
     const settings = getSettings(state);
+    const font = effectiveFont(settings.font);
     const layoutOpts = { hyphenate: settings.hyphenate };
-    const useOracle = ORACLE_FONTS.has(settings.font);
+    const useOracle = font.exact;
     const resolveAtom = useOracle ? this.atomResolver() : null;
-    const settingsSig = `${settings.font}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}|${settings.parIndent}`;
+    const settingsSig = `${font.id}|${settings.sizePt}|${settings.lineHeight}|${settings.hyphenate}|${settings.parIndent}`;
     let paragraphs = 0;
     let lineCount = 0;
     let figNo = 0;
@@ -936,6 +948,8 @@ class TypesetView {
         if (!lines && USE_PORT && primitives()) {
           try {
             const forced = portBreaks(node, measure, atomWidth, {
+              fontKeys: font.portKeys,
+              monoFontKey: COMMON_PORT_KEYS.mono,
               sizePt: settings.sizePt,
               hyphenate: settings.hyphenate,
               // Captions: the prefix is real text in Typst (proven exact by
@@ -1020,14 +1034,14 @@ class TypesetView {
     // Never measure them from the DOM: a run can land mid-update, before a
     // widget paints, and cache a zero-indent layout that never heals.
     const bodyPx = this.bodyPx();
-    const font = `"${settings.font}", Georgia, serif`;
+    const fontStack = cssFontStack(settings.font);
     const FN_SCALE = 0.85;
     const fnIndent = (n: number) => {
       const fnPx = FN_SCALE * bodyPx;
       const numPx = 0.72 * fnPx;
-      return 0.9 * fnPx + textWidth(String(n), `${numPx}px ${font}`) + 0.15 * numPx;
+      return 0.9 * fnPx + textWidth(String(n), `${numPx}px ${fontStack}`) + 0.15 * numPx;
     };
-    const capIndent = (n: number) => textWidth(`Figure ${n}:`, `${bodyPx}px ${font}`) + 0.32 * bodyPx;
+    const capIndent = (n: number) => textWidth(`Figure ${n}:`, `${bodyPx}px ${fontStack}`) + 0.32 * bodyPx;
 
     let fnNo = 0;
     const handleFootnotes = (node: PMNode, pos: number) => {
@@ -1150,7 +1164,7 @@ class TypesetView {
 
     // Page-break oracle: when Typst has told us where its pages break for
     // exactly this document, obey; otherwise paginate ourselves and ask.
-    if (ORACLE_FONTS.has(s.font)) {
+    if (effectiveFont(s.font).exact) {
       let sig = this.docSig.get(view.state.doc);
       if (!sig) {
         try {

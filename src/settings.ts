@@ -7,6 +7,7 @@
 import type { EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
+import { DEFAULT_FONT, HISTORICAL_FONT_CHOICES, cssFontStack } from './font-registry';
 
 export interface DocSettings {
   font: string;
@@ -37,7 +38,7 @@ export interface DocSettings {
 }
 
 export const DEFAULT_SETTINGS: DocSettings = {
-  font: 'New Computer Modern',
+  font: DEFAULT_FONT.label,
   sizePt: 12.5,
   lineHeight: 1.5,
   page: 'letter',
@@ -60,7 +61,7 @@ export const DEFAULT_SETTINGS: DocSettings = {
   mathMacros: '',
 };
 
-export const FONTS = ['New Computer Modern', 'STIX Two Text', 'TeX Gyre Pagella', 'Charter', 'Palatino', 'Georgia', 'Times New Roman'];
+export const FONTS = [...HISTORICAL_FONT_CHOICES];
 
 /** Parse the macros text into a KaTeX macros object. */
 export function parseMathMacros(src: string): Record<string, string> {
@@ -178,7 +179,7 @@ export function getSettings(state: EditorState): DocSettings {
 export function applySettings(state: EditorState) {
   const s = getSettings(state);
   const root = document.documentElement.style;
-  root.setProperty('--doc-font', `"${s.font}", Georgia, serif`);
+  root.setProperty('--doc-font', cssFontStack(s.font));
   root.setProperty('--doc-size', `${s.sizePt}pt`);
   root.setProperty('--doc-line', String(s.lineHeight));
   root.setProperty('--par-margin', s.parIndent ? '0em' : '0.9em');

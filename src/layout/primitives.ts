@@ -9,6 +9,7 @@
 // typing).
 
 import init, { Shaper, hyphenate, lb_classes, lb_constants, segment, word_bounds } from '../../sidecar/pkg/typeset_sidecar';
+import { COMMON_FONT_FILES, COMMON_PORT_KEYS, FONT_CATALOG, FONT_STYLES } from '../font-registry';
 
 /** LineBreak property constants, read from icu_properties itself. */
 export interface LbConstants {
@@ -28,7 +29,7 @@ export interface FontSpec {
   url: string;
   /** Face index within the file. */
   index?: number;
-  /** Selector key, e.g. 'regular' | 'bold' | 'italic' | 'bolditalic' | 'mono'. */
+  /** Namespaced selector key from the central font registry. */
   key: string;
 }
 
@@ -37,12 +38,16 @@ export interface FontSpec {
 const ASSET_BASE = import.meta.env?.BASE_URL ?? '/';
 
 export const EDITOR_FONTS: FontSpec[] = [
-  // BASE_URL-relative so the app also works deployed under a subpath.
-  { url: `${ASSET_BASE}fonts/NewCM10-Regular.otf`, key: 'regular' },
-  { url: `${ASSET_BASE}fonts/NewCM10-Bold.otf`, key: 'bold' },
-  { url: `${ASSET_BASE}fonts/NewCM10-Italic.otf`, key: 'italic' },
-  { url: `${ASSET_BASE}fonts/NewCM10-BoldItalic.otf`, key: 'bolditalic' },
-  { url: `${ASSET_BASE}fonts/DejaVuSansMono.ttf`, key: 'mono' },
+  // BASE_URL-relative so the app also works deployed under a subpath. Only
+  // exact families are registered; uncertified stored settings resolve to
+  // the default before reaching this layer.
+  ...FONT_CATALOG.filter((font) => font.exact).flatMap((font) =>
+    FONT_STYLES.map((style) => ({
+      url: `${ASSET_BASE}fonts/${font.compilerFiles[style]}`,
+      key: font.portKeys[style],
+    })),
+  ),
+  { url: `${ASSET_BASE}fonts/${COMMON_FONT_FILES.mono}`, key: COMMON_PORT_KEYS.mono },
 ];
 
 export interface ShapedGlyphRaw {
