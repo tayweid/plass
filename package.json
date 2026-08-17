@@ -25,6 +25,7 @@
     "verify:production": "node --import tsx scripts/verify-production.ts",
     "preview": "vite preview",
     "test": "tsx src/layout/knuth-plass.test.ts && tsx src/typ-parser.test.ts && tsx src/md-round.test.ts && tsx src/security.test.ts",
+    "test:layout": "tsx src/layout/port/port-smoke.test.ts",
     "test:browser": "playwright test",
     "sidecar": "wasm-pack build sidecar --target web --release"
   },

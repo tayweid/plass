@@ -42,6 +42,7 @@ import { eqKey } from './equations';
 import { getInk, inkKey } from './math-ink';
 import { applySplit, clearSplit, getSplit, requestTableSplit, splitExtra, type TableSplitLayout } from './table-split';
 import { parseTypstSvg } from './safe-svg';
+import { recordLayoutPerf } from './layout/perf';
 
 /** Phase-3 flag (PORT.md): drive live typing with the ported Typst
  * breaker. Console: __usePort(false) to A/B against the legacy path;
@@ -375,6 +376,7 @@ class TypesetView {
 
   private liveRun() {
     if (this.destroyed) return;
+    const perfStart = performance.now();
     const state = this.view.state;
     const prev = this.lastLiveDoc;
     this.lastLiveDoc = state.doc;
@@ -407,6 +409,9 @@ class TypesetView {
       }
     }
     if (!blocks.length) return;
+
+    const discoveredAt = performance.now();
+    let lineLayoutMs = 0;
 
     let decos = typesetKey.getState(state)?.decos ?? DecorationSet.empty;
     const fresh: Decoration[] = [];
@@ -447,6 +452,7 @@ class TypesetView {
       // identical to what the oracle will confirm. Plain KP is the
       // degraded-mode fallback (sidecar not loaded, unmapped content).
       let lines: LineLayout[] | null = null;
+      const lineStart = performance.now();
       if (USE_PORT && primitives()) {
         try {
           const forced = portBreaks(b.node, measure, atomWidth, {
@@ -478,6 +484,7 @@ class TypesetView {
         });
       }
       if (!lines) continue;
+      lineLayoutMs += performance.now() - lineStart;
       const base = b.pos + 1;
       // Page spacers glued to mapped text positions break lines MID-LINE
       // once the paragraph re-wraps around an edit above them. Strip them
@@ -553,10 +560,19 @@ class TypesetView {
         );
       }
     }
+    const decorationStart = performance.now();
     const set = fresh.length ? decos.add(state.doc, fresh) : decos;
     const tr = state.tr.setMeta(typesetKey, { type: 'decos', decos: set } satisfies Meta);
     tr.setMeta('addToHistory', false);
     this.view.dispatch(tr);
+    const perfEnd = performance.now();
+    recordLayoutPerf('live', {
+      totalMs: perfEnd - perfStart,
+      blockDiscoveryMs: discoveredAt - perfStart,
+      lineLayoutMs,
+      decorationMs: perfEnd - decorationStart,
+      changedBlocks: blocks.length,
+    });
   }
 
   /** Doc edits settle after a pause: during a typing burst the existing
@@ -688,18 +704,24 @@ class TypesetView {
     // suppresses the dispatch entirely (zero DOM writes, zero reflows).
     // Pagination then measures through the spacers by subtracting them.
     const held = this.currentSpacers();
+    const lineStart = performance.now();
     const stats = this.dispatchDecos(held.lineMap, held.blocks);
+    let lineLayoutMs = performance.now() - lineStart;
 
     // Pass 2: measure natural geometry, compute page breaks, re-dispatch with
     // spacers. Both dispatches share one task, so nothing paints in between.
+    const paginationStart = performance.now();
     const { spacers, count } = this.paginate();
+    const paginationMs = performance.now() - paginationStart;
     this.pagLog.push(this.pagPath + '[' + this.pagWhy + ']:' + spacers.map((sp) => `${sp.pos}@${Math.round(sp.height)}`).join(','));
     if (this.pagLog.length > 40) this.pagLog.shift();
     if (spacers.length) {
       const lineSpacers = new Map<number, Spacer>();
       const blockSpacers: Spacer[] = [];
       for (const sp of spacers) (sp.kind === 'line' ? lineSpacers.set(sp.pos, sp) : blockSpacers.push(sp));
+      const secondLineStart = performance.now();
       this.dispatchDecos(lineSpacers, blockSpacers);
+      lineLayoutMs += performance.now() - secondLineStart;
     }
 
     // Single-page runs skip the second dispatch — flush pending markers.
@@ -711,7 +733,9 @@ class TypesetView {
       this.view.dispatch(tr);
     }
 
+    const footnoteStart = performance.now();
     this.placeFootnotes(count);
+    const footnoteMs = performance.now() - footnoteStart;
 
     const s = getSettings(this.view.state);
     const size = pageSize(s);
@@ -724,7 +748,16 @@ class TypesetView {
       marginLeft: s.marginLeft * 96,
       marginRight: s.marginRight * 96,
     });
-    this.opts.onStats?.({ ms: performance.now() - t0, paragraphs: stats.paragraphs, lines: stats.lines });
+    const totalMs = performance.now() - t0;
+    recordLayoutPerf('settle', {
+      totalMs,
+      lineLayoutMs,
+      paginationMs,
+      footnoteMs,
+      paragraphs: stats.paragraphs,
+      lines: stats.lines,
+    });
+    this.opts.onStats?.({ ms: totalMs, paragraphs: stats.paragraphs, lines: stats.lines });
   }
 
   /**
