@@ -61,7 +61,13 @@ export class PageOracle {
    * cancelled once running, so older completions must not publish. */
   private generation = 0;
 
-  constructor(private onResults: () => void) {}
+  constructor(
+    private onResults: (entry: PageOracleEntry) => void,
+    private compileDocSvg: (doc: PMNode) => Promise<string | null> = async (doc) => {
+      const { compileDocSvg } = await import('../pdf');
+      return compileDocSvg(doc);
+    },
+  ) {}
 
   get(sig: string): PageOracleEntry | undefined {
     return this.results.get(sig);
@@ -103,20 +109,22 @@ export class PageOracle {
     const sig = this.pendingSig;
     const { doc, settings, resolveAtom } = this.payload;
     this.inflight = true;
+    let published: PageOracleEntry | undefined;
     try {
-      const { compileDocSvg } = await import('../pdf');
       if (this.disposed || generation !== this.generation) return;
-      const svg = await compileDocSvg(doc);
+      const svg = await this.compileDocSvg(doc);
       if (this.disposed || generation !== this.generation) return;
       const entry = svg ? analyze(svg, doc, settings, resolveAtom) : ({ status: 'fail', reason: 'compile failed' } as PageOracleEntry);
       this.results.set(sig, entry);
+      published = entry;
       if (this.results.size > MAX_RESULTS) {
         this.results.delete(this.results.keys().next().value!);
       }
     } catch (e) {
       if (this.disposed || generation !== this.generation) return;
       console.warn('page oracle failed', e);
-      this.results.set(sig, { status: 'fail', reason: String(e).slice(0, 120) });
+      published = { status: 'fail', reason: String(e).slice(0, 120) };
+      this.results.set(sig, published);
     } finally {
       this.inflight = false;
       // A newer request may use the same signature after clear(). Only the
@@ -131,7 +139,7 @@ export class PageOracle {
         this.timer = window.setTimeout(() => void this.flush(), 60);
       }
     }
-    if (!this.disposed && generation === this.generation) this.onResults();
+    if (!this.disposed && generation === this.generation && published) this.onResults(published);
   }
 }
 

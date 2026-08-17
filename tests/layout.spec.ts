@@ -9,6 +9,12 @@ declare global {
       settle: { totalMs: number; paragraphs?: number; lines?: number } | null;
     };
     __layoutDispatchStats: (reset?: boolean) => { lines: number; pageMarks: number };
+    __paginationSnapshotStats: (reset?: boolean) => {
+      captures: number;
+      spacerScans: number;
+      tableScans: number;
+      heightQueries: number;
+    };
   }
 }
 
@@ -143,6 +149,20 @@ test('shrinking to one page removes every held page spacer', async ({ page }) =>
 
   await expect.poll(() => page.locator('.page-box').count(), { timeout: 15_000 }).toBeGreaterThan(1);
   await expect.poll(() => page.locator('.ts-pagegap').count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+  await page.evaluate(() => window.__paginationSnapshotStats(true));
+  await page.evaluate(() => {
+    const { state } = window.view;
+    window.view.dispatch(state.tr.insertText('Precisely, ', 1));
+  });
+  await expect
+    .poll(() => page.evaluate(() => window.__paginationSnapshotStats().captures), { timeout: 15_000 })
+    .toBeGreaterThan(0);
+  await page.waitForTimeout(1_200);
+  const paginationStats = await page.evaluate(() => window.__paginationSnapshotStats());
+  expect(paginationStats.spacerScans).toBe(paginationStats.captures);
+  expect(paginationStats.tableScans).toBe(paginationStats.captures);
+  expect(paginationStats.heightQueries).toBeGreaterThan(0);
 
   await page.evaluate(() => {
     const { state } = window.view;

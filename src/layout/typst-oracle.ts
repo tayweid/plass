@@ -178,6 +178,10 @@ export class TypstOracle {
   constructor(
     private onResults: () => void,
     private fontFallback: string[],
+    private compileSvg: (source: string) => Promise<string | null> = async (source) => {
+      const { compileSvg } = await import('../pdf');
+      return compileSvg(source);
+    },
   ) {}
 
   get(key: string): OracleEntry | undefined {
@@ -264,9 +268,8 @@ export class TypstOracle {
           .join('\n\n');
       }
 
-      const { compileSvg } = await import('../pdf');
       if (this.disposed || generation !== this.generation) return;
-      const svg = await compileSvg(src);
+      const svg = await this.compileSvg(src);
       if (this.disposed || generation !== this.generation) return;
 
       // Geometry thresholds at the SVG's 1px-per-pt scale.
