@@ -5,6 +5,12 @@
 
 import CompilerWorker from './typst-compiler.worker?worker';
 import {
+  compilerCircuitEpoch,
+  isCompilerCircuitEpochBlocked,
+  isCompilerCircuitOpen,
+  openCompilerCircuit,
+} from './compiler-circuit';
+import {
   COMPILER_LIMITS,
   type CompilerRequest,
   type CompilerResponse,
@@ -14,7 +20,7 @@ import {
 
 export class CompilerWorkerError extends Error {
   constructor(
-    public readonly code: 'invalid' | 'compile' | 'output-limit' | 'timeout' | 'crash' | 'queue-limit',
+    public readonly code: 'invalid' | 'compile' | 'output-limit' | 'timeout' | 'crash' | 'queue-limit' | 'circuit-open',
     message: string,
   ) {
     super(message);
@@ -24,6 +30,7 @@ export class CompilerWorkerError extends Error {
 
 interface QueuedRequest<T> {
   id: number;
+  epoch: number;
   task: CompilerTask;
   timeoutMs: number;
   onMessage: (message: string) => void;
@@ -37,6 +44,9 @@ let nextId = 1;
 let timeoutId = 0;
 let idleTimer = 0;
 const queue: Array<QueuedRequest<unknown>> = [];
+let workersCreated = 0;
+let tasksPosted = 0;
+let circuitRejects = 0;
 
 function terminateIdleWorker() {
   if (current || queue.length) return;
@@ -51,11 +61,40 @@ function scheduleIdleTermination() {
 
 function rejectCurrent(code: 'timeout' | 'crash', message: string) {
   window.clearTimeout(timeoutId);
+  timeoutId = 0;
   worker?.terminate();
   worker = null;
   const request = current;
   current = null;
   request?.reject(new CompilerWorkerError(code, message));
+
+  // A timeout can be caused by hostile input with a super-linear parser or
+  // by a document that exhausts the compiler. Do not feed queued work from
+  // that same (or an older) input generation to replacement workers.
+  // Background retries from that generation stay blocked until a trusted
+  // action advances the shared circuit epoch.
+  if (code === 'timeout') {
+    const timedOutEpoch = request?.epoch;
+    if (timedOutEpoch !== undefined) {
+      openCompilerCircuit(timedOutEpoch);
+      const retained: Array<QueuedRequest<unknown>> = [];
+      for (const queued of queue.splice(0)) {
+        if (queued.epoch <= timedOutEpoch) {
+          queued.reject(new CompilerWorkerError(
+            'timeout',
+            'Typst compilation was canceled after an earlier request timed out; retry the action or edit the document',
+          ));
+        } else {
+          retained.push(queued);
+        }
+      }
+      queue.push(...retained);
+    }
+    // A genuine edit may have authorized newer work while the old request
+    // was still running. Its epoch is not poisoned by the old timeout.
+    if (queue.length) queueMicrotask(pump);
+    return;
+  }
   queueMicrotask(pump);
 }
 
@@ -91,6 +130,7 @@ function ensureWorker(onMessage: (message: string) => void): Worker {
     console.warn('Compiler status callback failed', error);
   }
   const instance = new CompilerWorker();
+  workersCreated++;
   instance.onmessage = (event: MessageEvent<CompilerResponse>) => handleResponse(instance, event.data);
   instance.onerror = (event) => {
     if (worker !== instance) return;
@@ -117,11 +157,15 @@ function pump() {
     return;
   }
   timeoutId = window.setTimeout(() => {
+    // A response could have won the event-loop race after this callback was
+    // queued. Never let an old deadline terminate the next request.
+    if (current !== request) return;
     rejectCurrent('timeout', `Typst compilation exceeded ${(request.timeoutMs / 1000).toFixed(0)} seconds and was stopped`);
   }, request.timeoutMs);
   const message: CompilerRequest = { id: request.id, task: request.task };
   try {
     instance.postMessage(message);
+    tasksPosted++;
   } catch {
     rejectCurrent('crash', 'Could not send work to the Typst compiler');
   }
@@ -136,12 +180,21 @@ export function runCompilerTask<T extends string | Uint8Array | unknown[] | null
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) {
     return Promise.reject(new CompilerWorkerError('invalid', 'Typst compiler deadline must be a positive duration'));
   }
+  const epoch = compilerCircuitEpoch();
+  if (isCompilerCircuitEpochBlocked(epoch)) {
+    circuitRejects++;
+    return Promise.reject(new CompilerWorkerError(
+      'circuit-open',
+      'Typst compilation is paused after a timeout; edit or reopen the document, or explicitly export again',
+    ));
+  }
   if (queue.length + (current ? 1 : 0) >= COMPILER_LIMITS.pendingRequests) {
     return Promise.reject(new CompilerWorkerError('queue-limit', 'Typst compiler queue is full; wait for current previews to finish'));
   }
   return new Promise<T>((resolve, reject) => {
     queue.push({
       id: nextId++,
+      epoch,
       task,
       timeoutMs: options.timeoutMs,
       onMessage: options.onMessage ?? (() => {}),
@@ -162,6 +215,60 @@ export async function testCompilerWatchdog(): Promise<CompilerWorkerError> {
     throw error;
   }
   throw new Error('Compiler watchdog did not stop the worker');
+}
+
+/** Deterministic browser regression hook for timeout queue containment. */
+export async function testCompilerTimeoutCircuitBreaker(): Promise<{
+  timedOut: CompilerWorkerError;
+  canceled: CompilerWorkerError[];
+}> {
+  if (!import.meta.env.DEV) throw new Error('Compiler circuit-breaker probe is development-only');
+
+  const capture = async (promise: Promise<unknown>): Promise<CompilerWorkerError> => {
+    try {
+      await promise;
+    } catch (error) {
+      if (error instanceof CompilerWorkerError) return error;
+      throw error;
+    }
+    throw new Error('Compiler circuit-breaker probe unexpectedly completed');
+  };
+
+  const timedOut = capture(runCompilerTask(
+    { kind: 'test-busy', milliseconds: 5_000 },
+    { timeoutMs: 75 },
+  ));
+  const canceled = Array.from({ length: 3 }, () => capture(runCompilerTask(
+    { kind: 'test-busy', milliseconds: 250 },
+    { timeoutMs: 2_000 },
+  )));
+
+  return {
+    timedOut: await timedOut,
+    canceled: await Promise.all(canceled),
+  };
+}
+
+/** Development-only lifecycle counters for containment regression tests. */
+export function testCompilerLifecycleStats(): {
+  circuitOpen: boolean;
+  epoch: number;
+  workersCreated: number;
+  tasksPosted: number;
+  circuitRejects: number;
+  active: boolean;
+  queued: number;
+} {
+  if (!import.meta.env.DEV) throw new Error('Compiler lifecycle stats are development-only');
+  return {
+    circuitOpen: isCompilerCircuitOpen(),
+    epoch: compilerCircuitEpoch(),
+    workersCreated,
+    tasksPosted,
+    circuitRejects,
+    active: current !== null,
+    queued: queue.length,
+  };
 }
 
 import.meta.hot?.dispose(() => {

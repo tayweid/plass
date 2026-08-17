@@ -1,11 +1,14 @@
 //! Data-exact primitives for the editor's Typst line-break port.
 //!
-//! Everything here mirrors `crates/typst-layout/src/inline/` at typst commit
-//! 951788cc614cd805d5d786e17bbf93796df73d10 — the same crate versions, the
-//! same ICU blob (from typst-assets), the same construction of the
-//! segmenters. The TypeScript port supplies the algorithm; this module
-//! supplies the three data sources that cannot be faithfully reimplemented:
-//! UAX #14 segmentation, hyphenation patterns, and OpenType shaping.
+//! Everything here mirrors `crates/typst-layout/src/inline/` at Typst source
+//! commit 951788cc614cd805d5d786e17bbf93796df73d10. Dependency versions follow
+//! the reconstructed typst.ts 0.7.0 outer graph and are checked against crate
+//! paths embedded in the distributed compiler; notably, that outer graph
+//! selects hypher 0.1.6 rather than the source checkout's nested-lock 0.1.5.
+//! The ICU blob and segmenter construction still come from that Typst source.
+//! The TypeScript port supplies the algorithm; this module supplies the three
+//! data sources that cannot be faithfully reimplemented: UAX #14
+//! segmentation, hyphenation patterns, and OpenType shaping.
 
 use std::sync::LazyLock;
 

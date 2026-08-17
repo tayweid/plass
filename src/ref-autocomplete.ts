@@ -238,7 +238,7 @@ export function refAutocomplete() {
           'ref',
           {
             empty: 'Nothing to reference yet.',
-            hint: 'Label an equation or figure to reference it, or File → Import bibliography (.bib) to cite works.',
+            hint: 'Label an equation or figure to reference it, or open Document → Bib to import works.',
           },
           'ref-menu-empty',
         );

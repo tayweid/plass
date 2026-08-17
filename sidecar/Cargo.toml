@@ -2,17 +2,23 @@
 name = "typeset-sidecar"
 version = "0.1.0"
 edition = "2021"
-description = "Data-exact primitives for the Typst line-break port: the same ICU segmentation, hypher hyphenation, and rustybuzz shaping (same crate versions, same ICU blob) that typst 951788cc uses."
+description = "Data-exact primitives for the Typst line-break port, pinned to the reconstructed typst.ts 0.7.0 outer dependency graph and checked against shipped compiler version strings."
+license = "MIT"
+repository = "https://github.com/tayweid/plass"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-# Versions pinned to typst's Cargo.lock at commit 951788cc614cd805d5d786e17
-# bbf93796df73d10 (the commit embedded in @myriaddreamin/typst-ts-web-compiler
-# 0.7.0). Do not bump these independently of the compiler WASM.
+# Versions pinned to the outer Cargo.lock at the npm-registry-reported typst.ts
+# 0.7.0 gitHead 61cd6bdf5c08f508ce63406f58a92b0971ee84b8. That graph
+# resolves Typst source 951788cc614cd805d5d786e17bbf93796df73d10 and selects
+# hypher 0.1.6; the shipped compiler's embedded path agrees. Typst's nested
+# source lock says 0.1.5, but it is not the outer resolution. The npm tarballs
+# omit gitHead, so this is the authenticated reconstructed graph rather than a
+# reproducible source-to-binary proof. Do not bump independently of the compiler.
 [dependencies]
 wasm-bindgen = "0.2"
-hypher = "=0.1.5"
+hypher = "=0.1.6"
 icu_properties = { version = "=1.5.1", features = ["serde"] }
 icu_provider = { version = "=1.5.0", features = ["sync"] }
 icu_provider_adapters = "=1.5.0"

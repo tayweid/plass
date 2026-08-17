@@ -199,6 +199,104 @@ test('a referenced image reloads after its project file changes', async ({ page 
   await expect.poll(() => image.getAttribute('src'), { timeout: 7_000 }).not.toBe(firstUrl);
 });
 
+test('project image cache never crosses directory boundaries', async ({ page }) => {
+  await page.goto('/?new=1');
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const assetPath = 'figures/shared.svg';
+  const svg = (color: string) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="${color}"/></svg>`;
+
+  const firstMtime = await page.evaluate(async ({ aName, bName, path, red, tan }) => {
+    const app = window as typeof window & {
+      view: import('prosemirror-view').EditorView;
+      __fm: {
+        adoptFolder(dir: FileSystemDirectoryHandle, intent: 'save'): Promise<unknown>;
+        statAsset(path: string): Promise<{ mtime: number; size: number; type: string } | null>;
+        writeAsset(path: string, data: Blob): Promise<boolean>;
+      };
+    };
+    const root = await navigator.storage.getDirectory();
+    const a = await root.getDirectoryHandle(aName, { create: true });
+    const b = await root.getDirectoryHandle(bName, { create: true });
+
+    // Prepare B before it becomes active so the watcher can never observe an
+    // intermediate missing file and accidentally invalidate A's old cache.
+    const bFigures = await b.getDirectoryHandle('figures', { create: true });
+    const bFile = await bFigures.getFileHandle('shared.svg', { create: true });
+    const bWriter = await bFile.createWritable();
+    await bWriter.write(new Blob([tan], { type: 'image/svg+xml' }));
+    await bWriter.close();
+
+    await app.__fm.adoptFolder(a, 'save');
+    if (!await app.__fm.writeAsset(path, new Blob([red], { type: 'image/svg+xml' }))) {
+      throw new Error('could not create the first project image');
+    }
+    const stat = await app.__fm.statAsset(path);
+    if (!stat) throw new Error('could not stat the first project image');
+    const { state } = app.view;
+    const figure = state.schema.nodes.figure.create({ src: path, name: 'shared.svg' });
+    app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, figure));
+
+    (window as typeof window & { __assetDirs: { a: FileSystemDirectoryHandle; b: FileSystemDirectoryHandle } }).__assetDirs = { a, b };
+    return stat.mtime;
+  }, {
+    aName: `plass-asset-scope-a-${suffix}`,
+    bName: `plass-asset-scope-b-${suffix}`,
+    path: assetPath,
+    red: svg('red'),
+    tan: svg('tan'),
+  });
+
+  const image = page.locator('.ts-figure > img');
+  await expect(image).toHaveAttribute('src', /^blob:/);
+  const firstUrl = await image.getAttribute('src');
+  expect(firstUrl).not.toBeNull();
+  const renderedPixel = () => image.evaluate(async (element) => {
+    const img = element as HTMLImageElement;
+    try {
+      await img.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext('2d');
+      if (!context) return [];
+      context.drawImage(img, 0, 0, 1, 1);
+      return [...context.getImageData(0, 0, 1, 1).data];
+    } catch {
+      return [];
+    }
+  });
+  await expect.poll(renderedPixel).toEqual([255, 0, 0, 255]);
+
+  await page.evaluate(async ({ path, mtime }) => {
+    const app = window as typeof window & {
+      __assetDirs: { b: FileSystemDirectoryHandle };
+      __fm: {
+        adoptFolder(dir: FileSystemDirectoryHandle, intent: 'save'): Promise<unknown>;
+        statAsset(path: string): Promise<{ mtime: number; size: number; type: string } | null>;
+      };
+    };
+    const originalStat = app.__fm.statAsset.bind(app.__fm);
+    app.__fm.statAsset = async (candidate: string) => {
+      const stat = await originalStat(candidate);
+      return stat && candidate === path ? { ...stat, mtime } : stat;
+    };
+    await app.__fm.adoptFolder(app.__assetDirs.b, 'save');
+    const { refreshAssets } = await import('/src/figures.ts');
+    refreshAssets();
+  }, { path: assetPath, mtime: firstMtime });
+
+  await expect.poll(() => image.getAttribute('src'), { timeout: 2_000 }).not.toBe(firstUrl);
+  await expect.poll(renderedPixel).toEqual([210, 180, 140, 255]);
+  expect(await page.evaluate(async (url) => {
+    return new Promise<boolean>((resolve) => {
+      const probe = new Image();
+      probe.onload = () => resolve(false);
+      probe.onerror = () => resolve(true);
+      probe.src = url!;
+    });
+  }, firstUrl)).toBe(true);
+});
+
 test('reconnecting a recovered session never guesses past a differing disk copy', async ({ page }) => {
   await page.goto('/');
   const dirName = `plass-reconnect-${Date.now()}-${Math.random().toString(36).slice(2)}`;

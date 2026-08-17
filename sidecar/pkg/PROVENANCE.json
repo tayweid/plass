@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "source": {
+    "cargoLockSha256": "d2b92f3592fc41dd322cc21260289f2b74e8907d080148ff1a0c9406b6d1d10b",
+    "cargoTomlSha256": "86cbf9e1b036281ee1676ceaadd2fbda277e19945b4f7e715d0081d02d62f6af",
+    "rustSourceSha256": "f798f106862d32bb0065bebd36abce0ef70e90792415f1368c46544147b56411"
+  },
+  "toolchain": {
+    "cargo": "cargo 1.97.0 (c980f4866 2026-06-30)",
+    "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+    "wasmPack": "wasm-pack 0.15.0"
+  },
+  "build": {
+    "command": "wasm-pack build sidecar --target web --release -- --locked",
+    "canonicalEnvironment": "clean GitHub Actions ubuntu-latest runner",
+    "rustflags": [
+      "--remap-path-prefix=<home>=/buildroot",
+      "--remap-path-prefix=<cargo-home>=/cargo",
+      "--remap-path-prefix=<workspace>=/src/plass"
+    ],
+    "sourceDateEpoch": 0,
+    "target": "wasm32-unknown-unknown"
+  },
+  "artifacts": {
+    ".gitignore": "43fc554495b3bcb1976a28b2a35263f6fc2379ae45d495ee6ebcdcc4c0d9fca5",
+    "LICENSE": "16c6de3826212a6c7c453b8955d816e99162f639d0ec53ae4025c135e7d1d0ff",
+    "package.json": "fdfbf7940f2c95b5416b56863d45ae357d34e2b6ac9b94ebe7b85192a330607e",
+    "typeset_sidecar.d.ts": "64f5dbf53f20231b919e146ded4be93ebf59bc4f6c1e322de13a9b70d573da53",
+    "typeset_sidecar.js": "7ea04a69abd292f1763dbe7c61be1385278fff2e350c2602ff87b52ea6c659f3",
+    "typeset_sidecar_bg.wasm": "3b858f50ca0d1ad60b00acaaf62560a35adaef65f3511321ee0a5fd4639789d7",
+    "typeset_sidecar_bg.wasm.d.ts": "e4bbbe60e7a318cc3df8d99c252b2ac9c7fbeab0334cde6cec035a64650d6bc3"
+  }
+}

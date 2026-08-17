@@ -195,7 +195,7 @@ export class BibliographyView implements NodeView {
       empty.className = 'bib-empty';
       empty.textContent = entries.length
         ? 'Cited works appear here — type @ to cite.'
-        : 'No bibliography loaded — click Edit, or File → Import bibliography (.bib).';
+        : 'No bibliography loaded — click Edit, then Import .bib…';
       fallback.appendChild(empty);
     } else {
       for (const [key, n] of cited) {
@@ -288,7 +288,7 @@ export function insertCitation(view: EditorView, key: string, from?: number, to?
   view.dispatch(tr.scrollIntoView());
 }
 
-/** File menu: read a .bib file into the document. */
+/** Read a .bib file into the document. */
 export function importBibliography(view: EditorView, message: (m: string) => void) {
   const input = document.createElement('input');
   input.type = 'file';

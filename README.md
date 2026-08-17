@@ -1,19 +1,25 @@
 # Plass
 
 > Named for Michael F. Plass, co-author of the Knuth–Plass line-breaking
-> algorithm that runs live under every paragraph here.
+> algorithm that inspired the editor. Plass now mirrors Typst's modern
+> paragraph breaker for its certified live path and retains classic
+> Knuth–Plass as a conservative fallback and reference.
 
 **A true WYSIWYG editor with publication-quality typesetting.** You write in a
-clean, Typora-style surface; what you see is — at all times, live — a document
-typeset by the Knuth–Plass algorithm, the same optimizing paragraph breaker
-TeX and Typst use. The editing surface *is* the output surface.
+clean, Typora-style surface while local layout and an in-browser Typst compiler
+coordinate the line and page decisions. The editing surface *is* the output
+surface: native browser text with publication layout imposed as
+presentation-only decorations.
 
-This is the MVP of the design in [`wysiwyg-typeset-editor-spec.md`](./wysiwyg-typeset-editor-spec.md)
-(background discussion in [`typeset-editor-conversation.md`](./typeset-editor-conversation.md)).
+Plass grew from the design in
+[`wysiwyg-typeset-editor-spec.md`](./wysiwyg-typeset-editor-spec.md). That file
+records the original direction; the fidelity contract and architecture below
+describe the current implementation.
 
 > **Public preview:** Try Plass at <https://plass.tayweid.io/>. Important work
-> should still be backed up while the first release completes its cross-browser
-> and independent review.
+> should still be backed up. The formal release gate remains open while the
+> pinned upstream Typst compiler/renderer WebAssembly findings documented in
+> [`SECURITY.md`](./SECURITY.md) are replaced or independently reviewed.
 
 Plass is installable directly from the browser with no local engine. In Chrome
 or Edge, use **Install Plass** in the toolbar; in Safari on macOS, choose
@@ -21,14 +27,13 @@ or Edge, use **Install Plass** in the toolbar; in Safari on macOS, choose
 for `.typ` and `.md` files. The same hosted frontend continues to receive new
 versions when it is opened online.
 
-![Plass editing a live typeset document](./docs/plass-editor.jpg)
-
 ## Run it
 
 ```sh
-npm install
-npm run dev      # → http://localhost:5173
+npm ci
+npm run dev      # → http://localhost:5199
 npm test         # unit, round-trip, and security-boundary tests
+npm run test:layout
 npm run test:browser
 npm run build    # typecheck + production build (static site in dist/)
 npm run verify:licenses
@@ -37,43 +42,41 @@ npm run verify:production
 
 ## Fidelity
 
-**Line breaks are Typst's own.** The editor no longer trusts its JS
-Knuth-Plass for the final answer: paragraphs are compiled in the background
-by the in-app Typst (WASM) — the byte-exact fragment the PDF pipeline sees —
-and the chosen breaks are read back from the compiled SVG's text-selection
-layer (line-by-line text, matched to character offsets; hyphenation points
-arrive textually). Those breaks are imposed on the DOM via the existing
-decoration machinery, replacing the JS oracle's choices. The JS pass renders
-instantly on each keystroke; the Typst pass converges ~100-200 ms later
-(10-30 ms compiles, warm). Content the matcher can't align (e.g. Typst
-breaking inside a raw span) falls back to the JS breaker per-paragraph.
-Measured on the demo document: identical line count and break positions in
-every paragraph, mean right-edge difference 0.76 px, no line above 3 px
-(ink-edge measurement noise). Inline code spans render in the same DejaVu
-Sans Mono at Typst's 0.8em ratio (same font file feeds the compiler), so
-their widths agree exactly.
+**The certified line-breaking path mirrors Typst.** On each edit, Plass first
+reuses already-compiled break offsets when they are available; otherwise it
+runs a TypeScript mirror of Typst's breaker against version-pinned ICU,
+hyphenation, shaping, and font primitives from a small Rust/WASM sidecar. A
+direct translator imposes those authoritative offsets on the DOM without
+running syllabification or break search a second time. The background Typst
+compile remains the verifier and authority, and an identical result is a
+no-op rather than a second visual correction.
 
-The editor and the Typst PDF also share one vertical geometry. The exported
-header carries measured parity rules — `#set par(leading:, spacing:)`,
-per-level heading `set text/block/par` rules, list/enum spacing, and
-display-equation block spacing — derived from the editor's CSS model and
-per-font metric constants (`FONT_PARITY` in `typ-serializer.ts`, calibrated
-against live renders; baseline agreement measured at ≤0.04px across
-paragraphs and headings for the bundled fonts). Known remaining deltas:
-justification distributes sub-pixel differently (the editor underfills each
-line by ≤0.5px to keep the browser from re-wrapping); figures/tables are raster-vs-vector comparisons; and page-break decisions
-(footnote areas, widow rules) are still the editor's own — page-level parity
-is the next milestone. The first page's top offset also differs slightly
-(Typst suppresses leading block spacing at page top).
+That exact contract is deliberately narrow: New Computer Modern is currently
+the only selectable body family, with all four faces registered across the
+browser, sidecar, and compiler. It covers the mapped body, caption, footnote,
+and inline constructs exercised by the differential suite. If the sidecar is
+unavailable or a paragraph cannot be represented safely, Plass fails over to
+the legacy JavaScript Knuth–Plass path; unsupported content therefore does not
+carry the exact-break guarantee. Historical font preferences remain stored,
+but the editor and export both resolve uncertified names to New Computer
+Modern instead of claiming machine-dependent fidelity.
+
+The editor and exported Typst document share page, type, and vertical-spacing
+settings. When a whole-document compile can be mapped safely, its page starts
+drive the live page spacers; mapped starts may be held briefly through an edit
+burst while a fresh answer is pending. Repeated failures, invalid geometry,
+or unsupported structures fall back to the complete local paginator, which
+handles footnote reservations and widow/orphan rules. This is a scoped,
+fail-closed agreement rather than a claim that every arbitrary Typst document
+or every browser raster detail is identical.
 
 ## What works today
 
 - **Oracle layout** (spec §1.3): the document lives in the DOM — native
   selection, cursor, IME, spell-check, screen readers — while a layout oracle
-  imposes TeX-quality decisions on it: optimal Knuth–Plass line breaks,
-  per-line justification via exact `word-spacing`, and hyphenation from
-  Liang's patterns (TeX's algorithm). Toggle **TeX layout** in the toolbar to
-  compare with the browser's greedy wrapping.
+  imposes Typst-selected break offsets, hyphens, and per-line justification.
+  The fast local port and the compiled Typst verifier share pinned shaping and
+  font inputs within the supported contract.
 - **Real pages**: content flows across painted page boxes (US Letter/A4 from
   document settings) with margins, inter-page gaps, and page numbers.
   Paragraphs split across page boundaries at oracle-chosen line breaks while
@@ -88,28 +91,36 @@ is the next milestone. The first page's top offset also differs slightly
   boundary (inside a paragraph, a block-in-inline spacer replaces the line's
   `<br>`, so it forces the break and adds precisely the gap height). Print
   CSS zeroes the spacers — line breaks survive, gaps vanish — and `@page`
-  takes over for the printed artifact.
-- **Fast**: full-document typeset + pagination in ~2–7 ms for a few pages;
-  per-keystroke relayout touches only the edited paragraph (unchanged
-  paragraphs are cached by node identity). Live timing in the status bar.
+  takes over for the printed artifact. Whole-document Typst page starts are
+  used when they compile and map safely; otherwise the full local paginator is
+  authoritative. A suffix-only paginator is currently development shadow
+  telemetry: it is compared with the full result, but never installed.
+- **Fast**: the edit path discovers and rebuilds only changed body, caption,
+  and footnote blocks, while unchanged block geometry stays cached. The direct
+  forced-break translator avoids the legacy path's repeated DOM measurement,
+  and pagination captures spacer/table geometry once per pass behind a
+  prefix-sum index. Browser tests enforce one line-decoration dispatch for a
+  normal edit and no redundant reinstall when the compiled verifier agrees.
+  Live diagnostic timings remain available in development, but wall-clock
+  values are not treated as portable performance promises.
 - **Editing**: ProseMirror core. Markdown-style input rules (`#` headings,
   `**bold**`, `*italic*`, `` `code` ``, `>` quotes, `-`/`1.` lists, ` ``` `
   code blocks), keyboard shortcuts, undo/redo, autosave to localStorage.
 - **Typora-style chrome**: a slim quiet bar — filename on the left, and on
-  the right a row of small monochrome icon buttons (File / Insert /
-  Document / Export groups) whose **text labels slide out on hover**;
-  formatting itself is markdown rules + shortcuts (cheat-sheet behind the ?
-  button). Rare actions live in a small ⋯ overflow (demo, Save As, recents,
-  import .bib, print). A faint corner HUD shows pages · words (hover for
-  oracle timing), messages appear as transient toasts, and table controls
-  float beside the table only while the caret is inside one. Insert
+  the right a row of small monochrome icon groups whose text labels appear on
+  hover. The title/File controls own document lifecycle and recents; the
+  tools, Document, and Export controls own inserts, bibliography/settings,
+  help, and downloads. Formatting itself is markdown rules + shortcuts
+  (cheat-sheet behind the ? button), and the demo lives there too. A faint
+  corner HUD shows pages · words (hover for oracle timing), while messages
+  appear as transient toasts. Insert
   shortcuts: ⌘⌥T table, ⌘⌥I figure, ⌘⌥F footnote, ⌘M/⌘⇧M math.
 - **Math**: type `$e^{i\pi}+1=0$` for inline math, `$$` on an empty line for
   display math. Formulas display **Typst's own ink** — each is compiled by
-  the in-app compiler (mitex + New Computer Modern Math) and shown as its
-  exact PDF rendering, baseline-aligned to the text (measured 0.0 px); KaTeX
-  renders instantly while you type and the compiled ink swaps in ~100 ms
-  later. Click-to-edit popover with live preview. The oracle justifies
+  the in-app compiler (mitex + New Computer Modern Math) and shown from that
+  compiled result, baseline-aligned to the text; KaTeX provides the immediate
+  editing preview and the compiled ink replaces it when ready. Click-to-edit
+  popover with live preview. The oracle justifies
   around inline math using the Typst-exact atom width.
 - **Figures**: insert from the toolbar, or paste/drop an image. Editable
   inline captions with a painted "Figure N:" prefix that renumbers live; a
@@ -131,19 +142,23 @@ is the next milestone. The first page's top offset also differs slightly
   breaks, so text never collides with the footnote area and a marker always
   shares a page with its note. Enter in a body returns to the marker;
   clicking a marker jumps to its body. Exports as Typst `#footnote[...]`
-  (the PDF gets true Typst footnotes); with the typeset toggle off or in
-  browser print, bodies degrade to inline notes.
+  (the PDF gets true Typst footnotes); in browser print, bodies degrade to
+  inline notes.
 - **Tables** (⊞ in the toolbar): header row, Tab/Shift-Tab cell navigation,
   and contextual controls that appear in the toolbar while inside a table —
   add/delete rows and columns, merge/split cells, toggle header,
   **per-column alignment (L/C/R — right-align for regression numbers)**, and
   a **Style cycle: booktabs (academic default: horizontal rules only) →
-  grid → plain**. Cell selection by shift-click/drag. Tables paginate
-  atomically and export as native Typst — booktabs becomes `stroke: none` +
-  `table.hline()` rules, alignment becomes the `align: (…)` tuple with
-  per-cell overrides, merges become `table.cell(colspan/rowspan)` — all
-  preserved through the round trip. (Cells keep browser layout — narrow
-  measures justify badly.) For full Typst control, the **Opts** button
+  grid → plain**. Cell selection by shift-click/drag. Breakable long tables
+  use a paged Typst mini-compile and appear as cropped page fragments,
+  including repeated `table.header` rows; content Typst keeps unbreakable is
+  pushed whole. While a split compile is pending or cannot be verified, the
+  existing split or atomic layout remains in place. Tables export as native
+  Typst — booktabs becomes `stroke: none` + `table.hline()` rules, alignment
+  becomes the `align: (…)` tuple with per-cell overrides, and merges become
+  `table.cell(colspan/rowspan)` — all preserved through the round trip. (Cells
+  keep browser layout — narrow measures justify badly.) For full Typst control,
+  the **Opts** button
   stores raw `#table` arguments on the table (stroke/fill functions,
   `inset`, fractional column widths, …), emitted verbatim into the export
   and PDF — presets are suppressed while custom args exist. The document
@@ -165,7 +180,7 @@ is the next milestone. The first page's top offset also differs slightly
   faithfully (custom-positioned rules, vlines) fall back to raw-Typst
   islands rather than being simplified.
 - **Citations & bibliography** (hover the References block → Edit, or
-  File → Edit/Import bibliography): the BibTeX is editable in-app (live entry
+  Document → Bib → Import .bib): the BibTeX is editable in-app (live entry
   count, ⌘Enter to save, Download .bib to get it back out; saves are
   undoable) or loadable from a `.bib`
   file into the document — the BibTeX lives in a document attribute, so it
@@ -187,8 +202,8 @@ is the next milestone. The first page's top offset also differs slightly
   clean. Exports as Typst `#set math.equation(numbering: "(1)")` +
   `<label>`/`@label`.
 - **Document settings** (⚙ in the toolbar): font (New Computer Modern — the
-  TeX face — is the default, shipped as webfonts rebuilt to TrueType so
-  browsers accept them; the same family feeds the PDF), size, line spacing,
+  TeX face — is the sole certified public choice, with the same family and
+  styles feeding live layout and PDF export), size, line spacing,
   paper (US Letter/A4), margins, hyphenation, equation numbering, **section
   numbering** ("1.2"-style painted on headings; headings then become
   `@sec:` targets in the picker, auto-labeled on first reference and
@@ -202,7 +217,7 @@ is the next milestone. The first page's top offset also differs slightly
   document attributes — undoable, autosaved, applied live (the oracle
   re-measures and re-typesets), and exported as Typst `#set` rules. This is
   the WYSIWYG face of a preamble.
-- **Real files** (File menu, ⌘O/⌘S/⇧⌘S): open and save `.typ` documents on
+- **Real files** (File controls, ⌘O/⌘S): open and save `.typ` documents on
   disk via the File System Access API, with silent autosave to the open file,
   a dirty indicator, recent files (IndexedDB-persisted handles), and
   automatic reconnection to the last file when the browser still grants
@@ -214,7 +229,7 @@ is the next milestone. The first page's top offset also differs slightly
   settings header, which applies live). Anything else (`#let`, `#show`,
   unknown directives) is preserved verbatim as a raw-Typst island and
   re-exported unchanged — open + save never destroys what we don't model.
-- **One-click PDF export (File → Export PDF)**: the document compiles with
+- **One-click PDF export (Export flyout → PDF)**: the document compiles with
   the real Typst engine, as WASM, in a watchdog-protected Web Worker — no CLI,
   no install. The compiler (~28 MB) and bundled fonts in `public/fonts/` load
   lazily; those fonts retain the individual licenses documented in
@@ -233,35 +248,41 @@ is the next milestone. The first page's top offset also differs slightly
 ## Architecture (how the needle gets threaded)
 
 ```
-keystroke → ProseMirror transaction → DOM updates immediately (optimistic echo)
-                     │
-                     ▼  (next animation frame, dirty paragraphs only)
-        paragraph → boxes/glue/penalties  (src/layout/paragraph.ts)
-                     │   widths measured in a hidden DOM probe with Range
-                     │   rects — the measuring engine IS the rendering
-                     │   engine, so shaping/kerning agree by construction
-                     ▼
-        Knuth–Plass line breaker          (src/layout/knuth-plass.ts)
-                     │   optimal breaks + per-line adjustment ratios
-                     ▼
-        decorations                       (src/typeset-plugin.ts)
-                     │   per-line word-spacing spans, <br> widgets at chosen
-                     │   breaks, hyphen widgets at hyphenation points —
-                     │   presentation-only, invisible to the document model,
-                     │   the clipboard, and assistive tech
-                     ▼
-        the browser rasterizes the oracle's decisions
+ProseMirror transaction → native DOM echo
+          │
+          └─ next microtask: discover changed body/caption/footnote blocks
+                         │
+                         ├─ cached compiled breaks, when available
+                         ├─ local Typst mirror + Rust/WASM primitives
+                         └─ legacy Knuth–Plass, only as fallback
+                                      │
+                                      ▼
+                         direct forced-break translation
+                         (src/layout/forced-layout.ts)
+                                      │
+                                      ▼
+                         block-relative line decorations
+                         (src/layout/line-decorations.ts)
+                                      │
+                                      ▼
+                         browser paints the selected layout
+
+250 ms quiet period → compiled Typst verification + complete pagination
+                         ├─ exact mapped page starts, when available
+                         ├─ temporarily held mapped starts
+                         └─ full local fallback from one geometry snapshot
 ```
 
 Current architecture notes:
 
-1. **The fast oracle is Knuth–Plass in TypeScript; Typst-WASM is the
-   authority.** Browser-measured JS layout provides the immediate frame, then
-   the isolated Typst compiler supplies final line breaks. Paragraphs the
-   matcher cannot align safely keep the JS result.
-2. **Pagination is editor-owned.** The live DOM paginator enforces page
-   geometry, footnote areas, and widow/orphan rules. Exact parity with Typst's
-   whole-document page breaking remains a separate milestone.
+1. **The fast certified path is a TypeScript mirror of Typst; Typst-WASM stays
+   the verifier and authority.** The legacy Knuth–Plass implementation remains
+   available for unsupported or degraded cases, not as the exactness claim.
+2. **Pagination has explicit exact, held, and fallback states.** Exact starts
+   come from the whole-document compiler; held starts stabilize a pending edit
+   burst; the full local paginator fails closed when exact mapping is not
+   available. The conservative suffix candidate runs only in development and
+   the full result is always installed.
 3. **Math is LaTeX/KaTeX, not Typst syntax** — friendlier to most academics;
    the `.typ` export bridges via mitex.
 
@@ -289,6 +310,10 @@ Current architecture notes:
 - [`SUPPORT.md`](./SUPPORT.md) sets support scope and issue expectations.
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) contains the development and review
   workflow.
+- [`PORT.md`](./PORT.md) records the Typst line-mirror rationale, certified
+  scope, and implementation status.
+- [`IMPROVEMENT_PLAN.md`](./IMPROVEMENT_PLAN.md) records the completed layout
+  hardening sessions and their regression gates.
 - [`RELEASING.md`](./RELEASING.md) is the public-release checklist.
 - [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md) explains software and
   font license notices.

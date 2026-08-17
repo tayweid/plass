@@ -142,7 +142,7 @@ export function demoDoc(): PMNode {
       ' prefix is painted by the numbering plugin.',
     ])),
     p(
-      'Insert figures with ⌘⌥I (or the ⋯ menu), or just paste or drop an image. Click a figure to select it, click the label chip to name it, and reference it in text the same way as equations: ',
+      'Insert figures with ⌘⌥I (or the Figure button), or just paste or drop an image. Click a figure to select it, click the label chip to name it, and reference it in text the same way as equations: ',
       { ref: 'fig:sd' },
       ' renumbers live, exactly like equation ',
       { ref: 'eq:gauss' },

@@ -17,3 +17,12 @@ updates:
       time: '09:15'
       timezone: America/New_York
     open-pull-requests-limit: 5
+
+  - package-ecosystem: cargo
+    directory: /sidecar
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:30'
+      timezone: America/New_York
+    open-pull-requests-limit: 5
