@@ -17,6 +17,7 @@ import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { CodeBlockView, rawIslandPlugin } from './raw-preview';
+import { TypstInlineView } from './inline-raw';
 import { refAutocomplete } from './ref-autocomplete';
 import { applySettings, formatPageNumber, getSettings } from './settings';
 import { FileManager } from './file-manager';
@@ -238,6 +239,7 @@ const view = new EditorView(editorEl, {
     bibliography: (node, v) => new BibliographyView(node, v),
     table: (node, v, getPos) => new TablePreviewView(node, v, getPos),
     code_block: (node, v, getPos) => new CodeBlockView(node, v, getPos),
+    typst_inline: (node, v, getPos) => new TypstInlineView(node, v, getPos),
   },
   attributes: { spellcheck: 'true' },
   handleClick: (v, _pos, event) => footnoteMarkerClick(v, event),

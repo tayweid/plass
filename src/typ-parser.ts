@@ -983,6 +983,41 @@ function findClose(src: string, from: number, ch: string): number {
   return -1;
 }
 
+/**
+ * Length of the Typst code expression starting at `start` (a '#'), or 0 if
+ * what follows isn't one. Covers `#name`, `#name(args)`, `#name[body]`, and
+ * chains of them, counting nested delimiters so inner parens/brackets come
+ * along. The identifier must start with a LETTER: "#3" in prose is text.
+ */
+function typstExprLength(src: string, start: number): number {
+  let i = start + 1;
+  if (!/[A-Za-z]/.test(src[i] ?? '')) return 0;
+  while (i < src.length && /[A-Za-z0-9_.-]/.test(src[i])) i++;
+  // A trailing '.' or '-' belongs to the sentence, not the identifier.
+  while (i > start + 1 && /[.-]/.test(src[i - 1])) i--;
+  for (;;) {
+    const open = src[i];
+    if (open !== '(' && open !== '[') break;
+    const close = open === '(' ? ')' : ']';
+    let depth = 0;
+    let j = i;
+    for (; j < src.length; j++) {
+      if (src[j] === '\\') {
+        j++;
+        continue;
+      }
+      if (src[j] === open) depth++;
+      else if (src[j] === close) {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+    if (depth !== 0) return 0; // unbalanced — not an expression we can trust
+    i = j + 1;
+  }
+  return i - start;
+}
+
 function scanInline(src: string, marks: Mark[], out: PMNode[]) {
   let i = 0;
   let buf = '';
@@ -1088,6 +1123,18 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
           i += 1 + label.length;
           continue;
         }
+      }
+    }
+    // Generic inline raw Typst — anything the specific handlers above
+    // didn't claim. Plain-text '#' is escaped on export, so an unescaped
+    // one here is genuinely code (in imported files too).
+    if (ch === '#') {
+      const len = typstExprLength(src, i);
+      if (len > 0) {
+        flush();
+        out.push(schema.nodes.typst_inline.create({ src: src.slice(i, i + len) }));
+        i += len;
+        continue;
       }
     }
     if (ch === '`') {

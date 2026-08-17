@@ -55,6 +55,7 @@ import {
   splitExtra,
   type TableSplitLayout,
 } from './table-split';
+import { isFlexibleAtom } from './inline-raw';
 import { parseTypstSvg } from './safe-svg';
 import { recordLayoutPerf } from './layout/perf';
 import { COMMON_PORT_KEYS, effectiveFont } from './font-registry';
@@ -706,6 +707,7 @@ class TypesetView {
               atomWidth,
               {
                 hyphenate: settings.hyphenate,
+                isFill: isFlexibleAtom,
                 ...extra,
                 forced,
               },
@@ -727,6 +729,7 @@ class TypesetView {
         legacyHits++;
         lines = layoutBlock(b.node, measure, this.measurer, atomWidth, {
           hyphenate: settings.hyphenate,
+          isFill: isFlexibleAtom,
           ...extra,
         });
       }
@@ -1272,6 +1275,18 @@ class TypesetView {
             markup: '#mi(`' + expandMacrosWith(child.attrs.src as string, macros) + '`)',
             text: inkText(child.attrs.src as string),
           };
+        // Raw Typst passes through verbatim — it IS Typst markup. Its
+        // printed text is unknown (usually none: rules, spacers), so the
+        // matcher treats it as an unknown atom.
+        //
+        // A FLEXIBLE atom is unrepresentable: it prints no text and eats
+        // the rest of the line, and the matcher reads that empty tail as a
+        // second line — which then "fills" to the full measure. Returning
+        // null drops the paragraph to the local breaker (which models fr
+        // exactly), the documented fallback for content the spec can't
+        // express. These lines are form blanks, not justified prose.
+        case 'typst_inline':
+          return isFlexibleAtom(child) ? null : { markup: child.attrs.src as string };
         case 'citation': {
           const t = `[${order.get(child.attrs.key as string) ?? '?'}]`;
           return { markup: escapeTyp(t), text: t };
@@ -1299,7 +1314,7 @@ class TypesetView {
     const decos: Decoration[] = [];
     const settings = getSettings(state);
     const font = effectiveFont(settings.font);
-    const layoutOpts = { hyphenate: settings.hyphenate };
+    const layoutOpts = { hyphenate: settings.hyphenate, isFill: isFlexibleAtom };
     const useOracle = font.exact;
     const resolveAtom = useOracle ? this.atomResolver() : null;
     const settingsSig = blockLayoutSettingsKey(settings);

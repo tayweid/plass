@@ -147,6 +147,25 @@ const figure: NodeSpec = {
 };
 
 // A footnote: an inline marker whose editable body is rendered at the bottom
+// Inline raw Typst: an escape hatch mid-sentence, the inline twin of the
+// raw-Typst island block. Renders as its compiled self; the source is the
+// document's truth and exports verbatim. `#h(1fr)` and other fr content is
+// FLEXIBLE — the paginator measures the line's slack and hands it over
+// (see inline-raw.ts), the one atom whose width layout decides.
+const typstInline: NodeSpec = {
+  group: 'inline',
+  inline: true,
+  atom: true,
+  attrs: { src: { default: '' } },
+  parseDOM: [
+    {
+      tag: 'span[data-typst]',
+      getAttrs: (el) => ({ src: (el as HTMLElement).getAttribute('data-typst') ?? '' }),
+    },
+  ],
+  toDOM: (node) => ['span', { 'data-typst': node.attrs.src, class: 'ts-inline-raw' }, node.attrs.src],
+};
+
 // of the page the marker lands on (positioned by the paginator). The
 // superscript number is painted by the numbering plugin, never stored.
 const footnote: NodeSpec = {
@@ -327,6 +346,7 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
     attrs: { params: { default: '' } },
   })
   .addToEnd('math_inline', mathInline)
+  .addToEnd('typst_inline', typstInline)
   .addToEnd('math_display', mathDisplay)
   .addToEnd('figure', figure)
   .addToEnd('footnote', footnote)

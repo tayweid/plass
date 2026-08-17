@@ -18,6 +18,10 @@ export type ForcedLayoutMeasurer = Pick<
 export interface ForcedLayoutOptions {
   /** Breaks selected by the port or compiled Typst oracle. */
   forced: readonly ForcedBreak[];
+  /** Inline atoms whose width the line decides (raw Typst using `fr`). This
+   *  path does not model them, so a block containing one declines to the
+   *  translator, which does. */
+  isFill?: (child: PMNode) => boolean;
   /** False means the legacy translator has no intra-word break items. */
   hyphenate?: boolean;
   /** Width consumed by a painted prefix on the first line. */
@@ -123,6 +127,15 @@ export function layoutForcedBlock(
   opts: ForcedLayoutOptions,
 ): LineLayout[] | null {
   const K = opts.scale ?? 1;
+  // Flexible atoms need the slack arithmetic this path skips: decline, and
+  // the established translator produces the line's fill widths.
+  if (opts.isFill) {
+    let flexible = false;
+    block.forEach((child) => {
+      if (!flexible && opts.isFill?.(child)) flexible = true;
+    });
+    if (flexible) return null;
+  }
   // layoutBlock returns before inspecting forced points when construction
   // produced no box. Preserve that edge case (empty/whitespace/hard-only
   // blocks), including its treatment of otherwise malformed forced input.

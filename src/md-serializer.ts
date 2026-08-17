@@ -66,6 +66,11 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
         case 'math_inline':
           md += `$${child.attrs.src as string}$`;
           break;
+        // Pandoc's raw-attribute syntax: standard markdown that other
+        // tools understand as "Typst-only", and round-trips here.
+        case 'typst_inline':
+          md += `\`${child.attrs.src as string}\`{=typst}`;
+          break;
         case 'citation':
           md += `[@${child.attrs.key as string}]`;
           break;
@@ -129,6 +134,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
       case 'paragraph':
         if (node.attrs.align) warn('text alignment is not stored in Markdown — save as .typ to keep it');
         return inline(node);
+      // (inline raw Typst rides inside inline(), as a pandoc raw attribute)
       case 'heading':
         return `${'#'.repeat(node.attrs.level as number)} ${inline(node)}`;
       case 'math_display': {

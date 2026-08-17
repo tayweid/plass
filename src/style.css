@@ -1136,6 +1136,28 @@ body {
   margin: 0 0 0.9em;
 }
 
+/* Inline raw Typst: the compiled fragment sits in the text line. Fixed
+   fragments size themselves; flexible (fr) ones get their width from the
+   paginator, which is why this must not shrink-wrap. */
+.ts-inline-raw {
+  cursor: pointer;
+}
+
+.ts-inline-raw svg {
+  vertical-align: baseline;
+}
+
+.ProseMirror .ts-inline-raw.ProseMirror-selectednode {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.inline-raw-editor .inline-raw-preview {
+  min-height: 1.6em;
+  overflow: hidden;
+}
+
 /* Raw-Typst islands: the compiled render IS the block; the source chip
    shows while editing (click the render) or when the island paints
    nothing (set rules, counters). Margins mirror paragraph rhythm. */

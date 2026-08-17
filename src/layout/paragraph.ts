@@ -19,6 +19,10 @@ const FIT_EPS = 0.5;
  *  orphan word. Scaled contexts (footnote bodies) accumulate extra sub-pixel
  *  error, so forced lines aim a bit further under the measure. */
 const FORCED_EPS = 1.5;
+/** A flexible (fr) atom absorbs the slack EXACTLY, leaving a line with no
+ *  give at all; the DOM's own text measurement differs from the canvas by a
+ *  fraction, which would wrap the line. Give the fill a couple of px back. */
+const FILL_SLACK = 2;
 
 type Kind = 'box' | 'space' | 'hyphen' | 'end' | 'nodebreak';
 
@@ -29,6 +33,8 @@ interface SItem {
   kind: Kind;
   /** Break after an existing '-': no hyphen glyph needs to be injected. */
   glyphless?: boolean;
+  /** A flexible (fr) inline atom: zero natural width, takes the slack. */
+  fill?: boolean;
 }
 
 export interface LineLayout {
@@ -41,6 +47,10 @@ export interface LineLayout {
   breakPos: number | null;
   /** Whether the forced break needs a hyphen glyph. */
   hyphen: boolean;
+  /** Offsets of flexible (fr) atoms on this line, and the width each takes:
+   *  they absorb the line's slack instead of the spaces (Typst's rule), so
+   *  such a line is never justified. */
+  fills?: { offsets: number[]; width: number };
 }
 
 export interface LayoutOptions {
@@ -56,6 +66,9 @@ export interface LayoutOptions {
   firstLineIndent?: number;
   /** Multiply text-measurement widths (content rendered at a smaller em). */
   scale?: number;
+  /** Inline atoms that flex to fill the line (raw Typst using `fr`). They
+   *  contribute zero natural width, as in Typst, and take the slack. */
+  isFill?: (child: PMNode) => boolean;
 }
 
 export interface ForcedBreak {
@@ -198,12 +211,16 @@ export function layoutBlock(
     } else if (child.type.name === 'hard_break') {
       pushEndOfSegment(offset, offset + child.nodeSize, 'nodebreak');
     } else {
-      // Inline atom (math, …): a single unbreakable box measured from its DOM.
+      // Inline atom (math, …): a single unbreakable box measured from its
+      // DOM. A flexible (fr) atom contributes nothing to the natural width
+      // — it absorbs whatever is left over once the line is chosen.
+      const fill = opts.isFill?.(child) ?? false;
       items.push({
-        kp: { type: 'box', width: atomWidth(offset, child) },
+        kp: { type: 'box', width: fill ? 0 : atomWidth(offset, child) },
         from: offset,
         to: offset + child.nodeSize,
         kind: 'box',
+        fill,
       });
     }
   });
@@ -235,8 +252,10 @@ export function layoutBlock(
 
     let natural = 0;
     let spaces = 0;
+    const fillOffsets: number[] = [];
     for (let j = line.start; j <= e; j++) {
       const s = items[j].kp;
+      if (items[j].fill) fillOffsets.push(items[j].from);
       if (s.type === 'box') natural += s.width;
       else if (s.type === 'glue') {
         natural += s.width;
@@ -266,12 +285,25 @@ export function layoutBlock(
       spacing = Math.max(-0.45 * baseSpace, (measure - eps - natural) / spaces);
     }
 
+    // Flexible atoms take the leftover space, so the spaces keep their
+    // natural width — a line with an fr on it is never justified. Underfill
+    // by a hair: an fr consumes the slack exactly, and the DOM measures the
+    // text around it a shade wider than the canvas does, which would tip
+    // the browser into re-wrapping the line we just laid out.
+    let fills: LineLayout['fills'];
+    if (fillOffsets.length) {
+      spacing = 0;
+      const slack = measure - eps - FILL_SLACK - natural;
+      fills = { offsets: fillOffsets, width: Math.max(0, slack / fillOffsets.length) };
+    }
+
     out.push({
       from: items[line.start].from,
       to: items[e].to,
       spacing,
       breakPos: brk.kind === 'space' ? brk.to : hyphenKind ? brk.from : null,
       hyphen: hyphenGlyph,
+      fills,
     });
   }
   return out;

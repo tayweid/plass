@@ -423,6 +423,12 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
         view.focus();
       },
     },
+    {
+      glyph: '<span class="ico tico">#·</span>',
+      label: 'Inline',
+      title: 'Inline raw Typst — mid-sentence: fill lines (#h(1fr)), blanks, symbols',
+      run: () => void import('./inline-raw').then(({ insertTypstInline }) => insertTypstInline(view)),
+    },
   ]);
   barBtn(icon('pagebreak'), 'Break', 'Page break (⌘⏎)', () => {
     const { state, dispatch } = view;

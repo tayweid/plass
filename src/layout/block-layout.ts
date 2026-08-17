@@ -7,6 +7,7 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import { cssFontStack, effectiveFont } from '../font-registry';
+import { isFlexibleAtom } from '../inline-raw';
 import { getInk, inkKey } from '../math-ink';
 import type { DocSettings } from '../settings';
 import type { ForcedBreak, LineLayout } from './paragraph';
@@ -175,6 +176,8 @@ export function makeAtomWidth(view: EditorView, settings: DocSettings, pos: numb
       const ink = getInk(inkKey(child.attrs.src as string, false, settings));
       if (ink) return ink.widthPx;
     }
+    // A flexible inline island has no natural width — layout gives it one.
+    if (isFlexibleAtom(child)) return 0;
     const dom = view.nodeDOM(pos + 1 + offset);
     if (dom instanceof HTMLElement) return dom.getBoundingClientRect().width;
     return child.nodeSize * 8;

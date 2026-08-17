@@ -196,14 +196,24 @@ export function mdToDoc(src: string): MdImport {
     const out: PMNode[] = [];
     let marks: Mark[] = [];
     let warnedStrike = false;
-    for (const t of children) {
+    for (let ti = 0; ti < children.length; ti++) {
+      const t = children[ti];
       switch (t.type) {
         case 'text':
           if (t.content) out.push(...textWithRefs(t.content, marks));
           break;
-        case 'code_inline':
+        case 'code_inline': {
+          // `#h(1fr)`{=typst} — pandoc's raw attribute — is inline raw
+          // Typst, the mirror of the ```typst fence for block islands.
+          const after = children[ti + 1];
+          if (after?.type === 'text' && after.content.startsWith('{=typst}')) {
+            out.push(schema.nodes.typst_inline.create({ src: t.content }));
+            after.content = after.content.slice('{=typst}'.length);
+            break;
+          }
           out.push(schema.text(t.content, [...marks, schema.marks.code.create()]));
           break;
+        }
         case 'strong_open':
           marks = [...marks, schema.marks.strong.create()];
           break;

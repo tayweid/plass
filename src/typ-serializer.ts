@@ -154,6 +154,9 @@ function inlineToTyp(node: PMNode): string {
       if (marks.has('strong')) t = `*${t}*`;
       if (marks.has('em')) t = `_${t}_`;
       out += t;
+    } else if (child.type.name === 'typst_inline') {
+      // Raw Typst: the source IS the export.
+      out += child.attrs.src;
     } else if (child.type.name === 'math_inline') {
       out += `#mi(\`${expandMacros(child.attrs.src)}\`)`;
     } else if (child.type.name === 'eq_ref') {
