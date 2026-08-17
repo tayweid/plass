@@ -5,7 +5,6 @@ import {
   InputRule,
   inputRules,
   smartQuotes,
-  emDash,
   ellipsis,
   textblockTypeInputRule,
   wrappingInputRule,
@@ -232,7 +231,7 @@ export function buildKeymap(): Plugin {
     'ArrowLeft': skipFootnote(-1),
     'ArrowUp': verticalCaret(-1),
     'ArrowDown': verticalCaret(1),
-    'Mod-Alt-t': (state, dispatch, view) => {
+    'Mod-Alt-t': (_state, dispatch, view) => {
       if (dispatch && view) {
         void import('./table-editor').then(({ insertTableWithEditor }) => insertTableWithEditor(view));
       }

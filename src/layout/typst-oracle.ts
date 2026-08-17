@@ -170,6 +170,10 @@ export class TypstOracle {
   inflight = false;
   disposed = false;
   private settings: DocSettings | null = null;
+  /** Invalidates completions that were already compiling when clear() or
+   * destroy() was called. The underlying compiler task cannot be cancelled,
+   * so publication has to be guarded when it returns. */
+  private generation = 0;
 
   constructor(
     private onResults: () => void,
@@ -189,18 +193,28 @@ export class TypstOracle {
   }
 
   clear() {
+    this.generation++;
+    clearTimeout(this.timer);
+    this.timer = 0;
     this.results.clear();
     this.queue.clear();
+    this.settings = null;
   }
 
   destroy() {
+    if (this.disposed) return;
     this.disposed = true;
+    this.generation++;
     clearTimeout(this.timer);
+    this.timer = 0;
+    this.queue.clear();
+    this.settings = null;
   }
 
   private async flush() {
     if (this.disposed || this.inflight || !this.queue.size || !this.settings) return;
     this.inflight = true;
+    const generation = this.generation;
     // One compile per measure: indented paragraphs (quotes, list items) have
     // narrower lines and must be broken at their own width. Footnote specs
     // compile separately — their lines render at the page bottom, after all
@@ -251,8 +265,9 @@ export class TypstOracle {
       }
 
       const { compileSvg } = await import('../pdf');
+      if (this.disposed || generation !== this.generation) return;
       const svg = await compileSvg(src);
-      if (this.disposed) return;
+      if (this.disposed || generation !== this.generation) return;
 
       // Geometry thresholds at the SVG's 1px-per-pt scale.
       const pitch = s.lineHeight * s.sizePt;
@@ -284,6 +299,7 @@ export class TypstOracle {
         for (let i = 0; i < keys.length / 2; i++) this.results.delete(keys[i]);
       }
     } catch (e) {
+      if (this.disposed || generation !== this.generation) return;
       console.warn('typst oracle batch failed', e);
       for (const [key] of batch) this.results.set(key, { status: 'fail', reason: String(e).slice(0, 120) });
     } finally {
@@ -293,7 +309,7 @@ export class TypstOracle {
         this.timer = window.setTimeout(() => void this.flush(), 20);
       }
     }
-    if (!this.disposed) this.onResults();
+    if (!this.disposed && generation === this.generation) this.onResults();
   }
 }
 

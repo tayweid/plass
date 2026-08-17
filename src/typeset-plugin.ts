@@ -40,7 +40,16 @@ import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
 import { eqKey } from './equations';
 import { getInk, inkKey } from './math-ink';
-import { applySplit, clearSplit, getSplit, requestTableSplit, splitExtra, type TableSplitLayout } from './table-split';
+import {
+  applySplit,
+  clearSplit,
+  clearTableSplitCache,
+  getSplit,
+  onTableSplitReady,
+  requestTableSplit,
+  splitExtra,
+  type TableSplitLayout,
+} from './table-split';
 import { parseTypstSvg } from './safe-svg';
 import { recordLayoutPerf } from './layout/perf';
 import { COMMON_PORT_KEYS, cssFontStack, effectiveFont } from './font-registry';
@@ -117,12 +126,6 @@ function consecutivePara(doc: PMNode, pos: number): boolean {
   const $pos = doc.resolve(pos);
   const idx = $pos.index();
   return idx > 0 && $pos.parent.child(idx - 1).type.name === 'paragraph';
-}
-
-/** Bounding rect of the node at a position, if it has a DOM element. */
-function rectOfNode(view: EditorView, pos: number): DOMRect | null {
-  const el = view.nodeDOM(pos);
-  return el instanceof HTMLElement ? el.getBoundingClientRect() : null;
 }
 
 /** Canvas text width at an exact CSS font (for painted-prefix modeling). */
@@ -235,6 +238,7 @@ class TypesetView {
   private resizeObserver: ResizeObserver;
   private lastWidth = 0;
   private onFontsLoaded: (() => void) | null = null;
+  private stopTableSplitReady: (() => void) | null = null;
   /** Which source produced the last pagination (diagnostics). */
   private pagPath: 'forced' | 'hold' | 'fallback' = 'forced';
   private pagLog: string[] = [];
@@ -265,6 +269,9 @@ class TypesetView {
     }, FONT_FALLBACK);
     this.pageOracle = new PageOracle(() => {
       if (!this.destroyed) this.schedule();
+    });
+    this.stopTableSplitReady = onTableSplitReady((readyView) => {
+      if (!this.destroyed && readyView === this.view) this.schedule();
     });
     if (import.meta.env.DEV) {
       const w = window as unknown as {
@@ -344,6 +351,7 @@ class TypesetView {
       if (this.destroyed) return;
       this.measurer.invalidate();
       this.cache = new WeakMap();
+      clearTableSplitCache();
       this.schedule();
     };
     document.fonts?.ready.then(fontsChanged);
@@ -360,6 +368,7 @@ class TypesetView {
       this.cache = new WeakMap();
       this.oracle.clear();
       this.pageOracle.clear();
+      clearTableSplitCache();
     }
     if (view.state.doc !== prevState.doc) {
       this.scheduleLive();
@@ -601,6 +610,8 @@ class TypesetView {
     viewRegistry.delete(this.view);
     if (this.onFontsLoaded) document.fonts?.removeEventListener('loadingdone', this.onFontsLoaded);
     this.resizeObserver.disconnect();
+    this.stopTableSplitReady?.();
+    this.stopTableSplitReady = null;
     clearTimeout(this.editTimer);
     if (this.raf) cancelAnimationFrame(this.raf);
     this.oracle.destroy();
@@ -611,6 +622,7 @@ class TypesetView {
   /** Drop cached page-break decisions (asset bytes changed under same sig). */
   invalidatePages() {
     this.pageOracle.clear();
+    clearTableSplitCache();
   }
 
   requestRun() {
@@ -724,7 +736,7 @@ class TypesetView {
     const paginationMs = performance.now() - paginationStart;
     this.pagLog.push(this.pagPath + '[' + this.pagWhy + ']:' + spacers.map((sp) => `${sp.pos}@${Math.round(sp.height)}`).join(','));
     if (this.pagLog.length > 40) this.pagLog.shift();
-    if (spacers.length) {
+    if (spacers.length || held.lineMap.size || held.blocks.length) {
       const lineSpacers = new Map<number, Spacer>();
       const blockSpacers: Spacer[] = [];
       for (const sp of spacers) (sp.kind === 'line' ? lineSpacers.set(sp.pos, sp) : blockSpacers.push(sp));

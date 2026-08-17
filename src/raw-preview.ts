@@ -56,6 +56,7 @@ export class CodeBlockView implements NodeView {
   private timer = 0;
   private lastSrc = '';
   private destroyed = false;
+  private generation = 0;
 
   constructor(
     private node: PMNode,
@@ -108,25 +109,30 @@ export class CodeBlockView implements NodeView {
 
   private sync() {
     clearTimeout(this.timer);
-    this.timer = window.setTimeout(() => void this.compile(), 60);
+    this.failCount = 0;
+    const generation = ++this.generation;
+    this.timer = window.setTimeout(() => void this.compile(generation), 60);
   }
 
   private failCount = 0;
 
-  private async compile() {
-    if (this.destroyed || !this.renderEl) return;
+  private async compile(generation: number) {
+    if (this.destroyed || generation !== this.generation || !this.renderEl) return;
     try {
       const width = this.view.dom.clientWidth || 576;
       const src = fragmentSource(this.view, this.node, width);
       if (src === this.lastSrc) return;
       const { compileSvg } = await import('./pdf');
+      if (this.destroyed || generation !== this.generation || !this.renderEl) return;
       const svg = await compileSvg(src);
-      if (this.destroyed || !this.renderEl) return;
+      if (this.destroyed || generation !== this.generation || !this.renderEl) return;
       if (!svg) {
         // Transient (compiler still warming) and permanent (bad Typst)
         // failures are indistinguishable here: retry a few times, then
         // rest as a source chip until the island is edited again.
-        if (++this.failCount < 4) this.timer = window.setTimeout(() => void this.compile(), 1200);
+        if (++this.failCount < 4) {
+          this.timer = window.setTimeout(() => void this.compile(generation), 1200);
+        }
         return;
       }
       this.failCount = 0;
@@ -175,6 +181,7 @@ export class CodeBlockView implements NodeView {
 
   destroy() {
     this.destroyed = true;
+    this.generation++;
     clearTimeout(this.timer);
   }
 }

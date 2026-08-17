@@ -155,9 +155,14 @@ export function refreshAssets() {
   assetCheck?.();
 }
 
-export function startAssetWatch(view: EditorView) {
-  const check = async () => {
-    if (!fmRef?.inFolder) return;
+export function startAssetWatch(view: EditorView): () => void {
+  let disposed = false;
+  let checking = false;
+  let checkAgain = false;
+
+  const checkOnce = async () => {
+    const manager = fmRef;
+    if (disposed || !manager?.inFolder) return;
     const paths = new Set<string>();
     view.state.doc.descendants((n) => {
       if (n.type.name === 'figure' && isPathSrc(n.attrs.src as string)) paths.add(n.attrs.src as string);
@@ -165,7 +170,10 @@ export function startAssetWatch(view: EditorView) {
     });
     let changed = false;
     for (const path of paths) {
-      const file = await fmRef.statAsset(path);
+      const file = await manager.statAsset(path);
+      // The watcher may be torn down, or the active project may change,
+      // while a File System Access request is in flight.
+      if (disposed || manager !== fmRef) return;
       const cached = assetCache.get(path);
       if (!file || file.size > COMPILER_LIMITS.assetBytes) {
         if (cached) {
@@ -177,14 +185,47 @@ export function startAssetWatch(view: EditorView) {
       }
       if (!cached || cached.mtime !== file.mtime) changed = true;
     }
-    if (changed) {
+    if (changed && !disposed && manager === fmRef) {
       window.dispatchEvent(new CustomEvent(ASSET_EVENT));
       invalidatePageLayout(view);
     }
   };
-  window.addEventListener('focus', () => void check());
-  window.setInterval(() => void check(), 4000);
-  assetCheck = () => void check();
+
+  // Focus, interval, and explicit refresh requests share one serialized
+  // runner. If a request arrives during a check, coalesce it into one more
+  // pass instead of overlapping file-system reads.
+  const check = async () => {
+    if (disposed) return;
+    if (checking) {
+      checkAgain = true;
+      return;
+    }
+    checking = true;
+    try {
+      do {
+        checkAgain = false;
+        await checkOnce();
+      } while (checkAgain && !disposed);
+    } finally {
+      checking = false;
+    }
+  };
+
+  const requestCheck = () => void check();
+  const onFocus = () => requestCheck();
+  window.addEventListener('focus', onFocus);
+  const interval = window.setInterval(requestCheck, 4000);
+  assetCheck = requestCheck;
+
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    checkAgain = false;
+    window.removeEventListener('focus', onFocus);
+    window.clearInterval(interval);
+    // A newer editor/watch may have replaced the global refresh hook.
+    if (assetCheck === requestCheck) assetCheck = null;
+  };
 }
 
 export class FigureView implements NodeView {

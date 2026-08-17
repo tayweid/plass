@@ -15,7 +15,6 @@
 // is reported through `warn` rather than silently dropped.
 
 import type { Node as PMNode, Mark } from 'prosemirror-model';
-import { schema } from './schema';
 import { DEFAULT_SETTINGS, type DocSettings } from './settings';
 
 export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): string {

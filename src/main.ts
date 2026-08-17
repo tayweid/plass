@@ -296,7 +296,11 @@ const fileManager = new FileManager({
 
 toolbar = buildToolbar(toolbarEl, view, fileManager);
 setFigureFileManager(fileManager);
-startAssetWatch(view);
+const stopAssetWatch = startAssetWatch(view);
+import.meta.hot?.dispose(() => {
+  stopAssetWatch();
+  view.destroy();
+});
 void import('./pdf').then(({ setAssetReader }) =>
   setAssetReader(async (path, maxBytes) => (await fileManager.readAsset(path, maxBytes))?.data ?? null),
 );

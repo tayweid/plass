@@ -67,8 +67,6 @@ interface RuleSpan {
 
 const RULE_RE = /table\.(hline|vline)\(([^)]*)\)\s*,?/g;
 const COLUMNS_RE = /columns\s*:\s*\(([^)]*)\)\s*,?/;
-// Density presets: Typst's table default inset is 5pt.
-const INSETS: Record<string, string> = { compact: '3pt', roomy: '8pt' };
 const INSET_RE = /(^|[\s,(])inset\s*:\s*(3pt|8pt)\s*,?/;
 
 // Canonical fill presets (recognized on read, emitted on write).
@@ -251,7 +249,6 @@ export function openTableEditor(view: EditorView, pos: number) {
   cardOpen = true;
 
   let model = readModel(node);
-  let focusCol = 0;
   let lastFocus = { r: 0, c: 0 };
   let anchor: { r: number; c: number } | null = null;
   let sel: { r0: number; c0: number; r1: number; c1: number } | null = null;
@@ -337,7 +334,6 @@ export function openTableEditor(view: EditorView, pos: number) {
         </span>
       </div>
     </div>`;
-  const panel = overlay.querySelector('.table-card') as HTMLElement;
   const gridEl = overlay.querySelector('.table-card-grid') as HTMLElement;
   const previewBody = overlay.querySelector('.table-card-preview-body') as HTMLElement;
   const typstText = overlay.querySelector('.table-card-typst-text') as HTMLTextAreaElement;
@@ -605,7 +601,6 @@ export function openTableEditor(view: EditorView, pos: number) {
           schedulePreview();
         });
         input.addEventListener('focus', () => {
-          focusCol = ci;
           lastFocus = { r: ri, c: ci };
         });
         input.addEventListener('mousedown', (e) => {
@@ -659,7 +654,6 @@ export function openTableEditor(view: EditorView, pos: number) {
       const rowTrs = [...t.querySelectorAll<HTMLTableRowElement>('tr[data-row]')];
       const wtr = t.querySelector('.tc-widths')!;
       const top = wtr.getBoundingClientRect().bottom - gridRect.top;
-      const height = t.getBoundingClientRect().bottom - gridRect.top - top;
       // Column c's [left, right] and boundary x's center, in gridEl coords.
       const colBox = (c: number): { l: number; r: number } => {
         const r = widthTds[c].getBoundingClientRect();
@@ -800,10 +794,12 @@ export function openTableEditor(view: EditorView, pos: number) {
 
   // ---------- live compiled preview ----------
   let previewTimer = 0;
+  let previewGeneration = 0;
   let lastSrc = '';
   const schedulePreview = () => {
     clearTimeout(previewTimer);
-    previewTimer = window.setTimeout(() => void compilePreview(), 300);
+    const generation = ++previewGeneration;
+    previewTimer = window.setTimeout(() => void compilePreview(generation), 300);
   };
   const emit = (): string => {
     const tempDoc = schema.nodes.doc.create(view.state.doc.attrs, [buildNode(model)]);
@@ -830,13 +826,14 @@ export function openTableEditor(view: EditorView, pos: number) {
     }
     return src;
   };
-  const compilePreview = async () => {
+  const compilePreview = async (generation: number) => {
     try {
       const src = emit();
       if (src === lastSrc) return;
       const { compileSvg } = await import('./pdf');
+      if (generation !== previewGeneration || !cardOpen) return;
       const svg = await compileSvg(src);
-      if (!svg || !cardOpen) return;
+      if (!svg || !cardOpen || generation !== previewGeneration) return;
       lastSrc = src;
       const svgEl = mountTypstSvg(previewBody, svg);
       if (svgEl) {
@@ -1184,6 +1181,7 @@ export function openTableEditor(view: EditorView, pos: number) {
   // ---------- lifecycle ----------
   const close = () => {
     cardOpen = false;
+    previewGeneration++;
     closeStyleMenu();
     clearTimeout(previewTimer);
     clearTimeout(panelTimer);
@@ -1238,7 +1236,7 @@ export function openTableEditor(view: EditorView, pos: number) {
   document.body.appendChild(overlay);
   renderGrid({ r: model.rows[0]?.[0]?.header && model.rows.length > 1 ? 1 : 0, c: 0 });
   refreshPanel();
-  void compilePreview();
+  void compilePreview(++previewGeneration);
 }
 
 /** Insert a fresh table and open its editor. */

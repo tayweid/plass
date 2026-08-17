@@ -24,6 +24,7 @@ export class TablePreviewView implements NodeView {
   private timer = 0;
   private lastSrc = '';
   private destroyed = false;
+  private generation = 0;
   private unsubscribe: () => void;
   /** What the preview element currently shows. */
   private shown: { layout: TableSplitLayout | null; gapsKey: string } = { layout: null, gapsKey: '' };
@@ -64,18 +65,20 @@ export class TablePreviewView implements NodeView {
 
   private sync() {
     clearTimeout(this.timer);
-    this.timer = window.setTimeout(() => void this.compile(), 30);
+    const generation = ++this.generation;
+    this.timer = window.setTimeout(() => void this.compile(generation), 30);
   }
 
-  private async compile() {
-    if (this.destroyed) return;
+  private async compile(generation: number) {
+    if (this.destroyed || generation !== this.generation) return;
     try {
       const width = this.view.dom.clientWidth || 576;
       const src = fragmentSource(this.view, this.node, width);
       if (src === this.lastSrc) return;
       const { compileSvg } = await import('./pdf');
+      if (this.destroyed || generation !== this.generation) return;
       const svg = await compileSvg(src);
-      if (this.destroyed || !svg) return;
+      if (this.destroyed || generation !== this.generation || !svg) return;
       this.lastSrc = src;
       this.autoSvg = svg;
       this.shown = { layout: null, gapsKey: '' };
@@ -148,6 +151,7 @@ export class TablePreviewView implements NodeView {
 
   destroy() {
     this.destroyed = true;
+    this.generation++;
     this.unsubscribe();
     clearTimeout(this.timer);
   }

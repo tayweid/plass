@@ -441,7 +441,7 @@ export function editBibliography(view: EditorView, message: (m: string) => void 
 
 /** Command form used by the @-input rule when a key matches the bib. */
 export function citeCommand(key: string): Command {
-  return (state, dispatch, view) => {
+  return (_state, dispatch, view) => {
     if (!view) return false;
     if (dispatch) insertCitation(view, key);
     return true;
