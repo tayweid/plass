@@ -70,7 +70,20 @@ jobs:
       - run: npm run sidecar
       - run: npm run verify:sidecar
       - name: Require a byte-reproducible checked sidecar package
-        run: git diff --exit-code -- sidecar/pkg sidecar/Cargo.lock
+        run: git diff --exit-code --stat -- sidecar/pkg sidecar/Cargo.lock
+      # The build is deterministic per platform but not across them, so the
+      # checked-in package has to be the one this runner produces. When it
+      # is not, publish the canonical rebuild so it can be reviewed and
+      # committed instead of leaving the diff unreachable in a log.
+      - name: Publish the canonical rebuild when it differs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: canonical-sidecar-pkg
+          path: |
+            sidecar/pkg
+            sidecar/Cargo.lock
+          retention-days: 7
 
   deploy:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
