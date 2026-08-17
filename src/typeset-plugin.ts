@@ -10,12 +10,12 @@
 // accessibility all see clean text. The DOM stays the editing surface —
 // native selection, IME, and spell-check keep working (spec §1.3).
 //
-// Scheduling (spec §3.6): edits render immediately with browser layout (the
-// optimistic echo — stale decorations are mapped forward, so the paragraph
-// keeps its last typeset shape); the oracle re-runs on the next animation
-// frame. Each run is two dispatches in one task (no intermediate paint):
-// first the line layout, then — after measuring the resulting natural
-// geometry — the page-break spacers.
+// Scheduling (spec §3.6): mapped decorations preserve the previous shape
+// during the edit transaction, then an exact port-selected layout replaces
+// only the affected blocks in the same task. The settled pass verifies those
+// decisions against the compiled oracle and only dispatches when semantics
+// differ. Pagination may add a second synchronous update in the same task,
+// after measuring the exact line layout, so no intermediate state paints.
 //
 // Pagination model: the document stays one continuous editable flow; page
 // boxes are painted behind it (see #pages in main.ts), and exact-height
@@ -61,10 +61,14 @@ import { COMMON_PORT_KEYS, effectiveFont } from './font-registry';
 import {
   appendLineDecorations,
   blockSpacerDecoration,
+  decorationSetDigest,
   decorationSignature,
+  decorationsOwnedByBlock,
   pageGapWidget,
   pageSpacerDecoration,
+  rebuildDecorationsOwnedByBlock,
   type Spacer,
+  type TypesetDecorationSpec,
 } from './layout/line-decorations';
 import {
   BlockLayoutCache,
@@ -72,9 +76,11 @@ import {
   blockOracleKey,
   consecutiveParagraph,
   createPaintedPrefixMeasurements,
+  forcedBreakSignature,
   makeAtomWidth,
   paragraphKeyTag,
   type AtomWidth,
+  type BlockLayoutAuthority,
   type BlockLayoutCacheKey,
 } from './layout/block-layout';
 import {
@@ -158,7 +164,10 @@ export function typesetPlugin(
           // start) silently drops the spacer, and the page below visibly
           // jumps until the settle run. Spacers are load-bearing geometry:
           // re-anchor any that mapping discarded.
-          const isSpacer = (spec: unknown) => !!(spec as { key?: string })?.key?.startsWith('pg');
+          const isSpacer = (spec: unknown) => {
+            const kind = (spec as Partial<TypesetDecorationSpec> | null)?.tsKind;
+            return kind === 'line-page-gap' || kind === 'block-page-gap';
+          };
           const had = val.decos.find(undefined, undefined, isSpacer);
           if (had.length) {
             const kept = new Set(
@@ -174,6 +183,7 @@ export function typesetPlugin(
                   key: spec.key,
                   h: spec.h,
                   hy: spec.hy,
+                  tsKind: spec.key.startsWith('pgb:') ? 'block-page-gap' : 'line-page-gap',
                 });
               });
               decos = decos.add(tr.doc, revived);
@@ -211,6 +221,8 @@ class TypesetView {
   private pagLog: string[] = [];
   private pagWhy = '';
   private forcedAuditor: ForcedLayoutAuditor | null = null;
+  private lineDecorationDispatches = 0;
+  private pageMarkDispatches = 0;
   private destroyed = false;
 
   constructor(
@@ -245,6 +257,7 @@ class TypesetView {
           snapshot: () => ForcedLayoutAuditReport;
           stop: () => ForcedLayoutAuditReport;
         };
+        __layoutDispatchStats?: (reset?: boolean) => { lines: number; pageMarks: number };
       };
       w.__oracle = this.oracles.paragraph;
       w.__pageOracle = this.oracles.page;
@@ -313,6 +326,17 @@ class TypesetView {
         snapshot: () => this.forcedAuditor!.snapshot(),
         stop: () => this.forcedAuditor!.stop(),
       };
+      w.__layoutDispatchStats = (reset = false) => {
+        const stats = {
+          lines: this.lineDecorationDispatches,
+          pageMarks: this.pageMarkDispatches,
+        };
+        if (reset) {
+          this.lineDecorationDispatches = 0;
+          this.pageMarkDispatches = 0;
+        }
+        return stats;
+      };
     }
     this.scheduler = new LayoutScheduler(view.dom, {
       runLive: () => this.liveRun(),
@@ -360,8 +384,9 @@ class TypesetView {
     }
   }
 
-  /** Re-typeset just the edited blocks with the JS Knuth-Plass breaker in
-   * the same paint as the keystroke. LayoutScheduler owns the microtask. */
+  /** Re-typeset just the edited blocks with authoritative compiled/ported
+   * breaks in the same paint as the keystroke. LayoutScheduler owns the
+   * microtask. */
   private liveRun() {
     if (this.destroyed) return;
     const perfStart = performance.now();
@@ -380,11 +405,21 @@ class TypesetView {
 
     const settings = getSettings(state);
     const font = effectiveFont(settings.font);
-    const blocks: Array<{ node: PMNode; pos: number; para: boolean }> = [];
+    const resolveAtom = font.exact ? this.atomResolver() : null;
+    const settingsSig = blockLayoutSettingsKey(settings);
+    type LiveBlockKind = 'body' | 'caption' | 'footnote';
+    const blocks: Array<{ node: PMNode; pos: number; kind: LiveBlockKind }> = [];
+    const addBlock = (node: PMNode, pos: number, kind: LiveBlockKind) => {
+      if (!blocks.some((block) => block.pos === pos && block.kind === kind)) blocks.push({ node, pos, kind });
+    };
     state.doc.nodesBetween(from, to, (node, pos) => {
       if (node.type.name === 'table') return false;
-      if (node.isTextblock) {
-        blocks.push({ node, pos, para: node.type.name === 'paragraph' });
+      if (node.type.name === 'paragraph') {
+        addBlock(node, pos, 'body');
+        return false;
+      }
+      if (node.type.name === 'figure') {
+        addBlock(node, pos, 'caption');
         return false;
       }
       return true;
@@ -393,7 +428,7 @@ class TypesetView {
     const $from = state.doc.resolve(from);
     for (let d = $from.depth; d > 0; d--) {
       if ($from.node(d).type.name === 'footnote') {
-        blocks.push({ node: $from.node(d), pos: $from.before(d), para: false });
+        addBlock($from.node(d), $from.before(d), 'footnote');
         break;
       }
     }
@@ -401,55 +436,137 @@ class TypesetView {
 
     const discoveredAt = performance.now();
     let lineLayoutMs = 0;
+    const figNums = new Map<PMNode, number>();
+    const fnNums = new Map<PMNode, number>();
+    if (blocks.some((block) => block.kind !== 'body')) {
+      let figNo = 0;
+      let fnNo = 0;
+      state.doc.descendants((node) => {
+        if (node.type.name === 'figure') figNums.set(node, ++figNo);
+        if (node.type.name === 'footnote') {
+          fnNums.set(node, ++fnNo);
+          return false;
+        }
+        return true;
+      });
+    }
+    const prefixes = blocks.some((block) => block.kind !== 'body')
+      ? createPaintedPrefixMeasurements(settings.font, this.bodyPx())
+      : null;
 
     let decos = typesetKey.getState(state)?.decos ?? DecorationSet.empty;
-    const fresh: Decoration[] = [];
+    let changed = false;
     for (const b of blocks) {
-      const blockTo = b.pos + 1 + b.node.content.size;
+      const blockTo = b.pos + b.node.nodeSize;
       // Footnote bodies are DOM-nested inside the paragraph: their break +
-      // justification decorations must survive the strip, or the footnote
-      // visibly re-wraps on every keystroke in its anchor paragraph.
-      const fnSpans: Array<[number, number]> = [];
-      if (b.para) {
+      // justification decorations must survive an outer-block replacement.
+      const fnSpans: Array<{ from: number; to: number }> = [];
+      if (b.kind !== 'footnote') {
         b.node.forEach((child, offset) => {
           if (child.type.name === 'footnote') {
-            fnSpans.push([b.pos + 1 + offset, b.pos + 1 + offset + child.nodeSize]);
+            fnSpans.push({
+              from: b.pos + 1 + offset,
+              to: b.pos + 1 + offset + child.nodeSize,
+            });
           }
         });
       }
-      const stale = decos
-        .find(b.pos, blockTo, (spec) => {
-          const key = (spec as { key?: string } | null)?.key;
-          return !key || /^(br|hy):/.test(key);
-        })
-        .filter((d) => !fnSpans.some(([a, z]) => d.from >= a && d.from < z));
-      // remove() nulls out entries of the array it's given — pass a copy,
-      // stale is read again below for the frozen prefix.
-      if (stale.length) decos = decos.remove(stale.slice());
-      // Non-paragraph blocks (captions, footnote bodies) fall back to CSS
-      // justification while live; paragraphs get instant KP.
-      if (!b.para || b.node.content.size === 0) continue;
-      const liveIndent =
-        settings.parIndent && consecutiveParagraph(state.doc, b.pos) ? 1.5 * this.bodyPx() : undefined;
+      const scope = { from: b.pos, to: blockTo, exclude: fnSpans };
+      if (b.node.content.size === 0 || (b.kind === 'body' && b.node.attrs.align)) {
+        const rebuilt = rebuildDecorationsOwnedByBlock(decos, state.doc, scope, []);
+        decos = rebuilt.decos;
+        changed ||= rebuilt.changed;
+        continue;
+      }
+      const number =
+        b.kind === 'caption'
+          ? (figNums.get(b.node) ?? 1)
+          : b.kind === 'footnote'
+            ? (fnNums.get(b.node) ?? 1)
+            : 0;
+      const extra: { firstLineIndent?: number; scale?: number } =
+        b.kind === 'caption'
+          ? { firstLineIndent: prefixes!.captionIndent(number) }
+          : b.kind === 'footnote'
+            ? { firstLineIndent: prefixes!.footnoteIndent(number), scale: prefixes!.footnoteScale }
+            : settings.parIndent && consecutiveParagraph(state.doc, b.pos)
+              ? { firstLineIndent: 1.5 * this.bodyPx() }
+              : {};
+      const skind: SpecKind =
+        b.kind === 'caption'
+          ? { kind: 'caption', figNo: number }
+          : b.kind === 'footnote'
+            ? { kind: 'footnote' }
+            : { kind: 'body' };
+      const keyTag =
+        b.kind === 'caption'
+          ? `cap${number}`
+          : b.kind === 'footnote'
+            ? `fn${number}`
+            : paragraphKeyTag(settings, state.doc, b.pos);
       const el = this.view.nodeDOM(b.pos);
       if (!(el instanceof HTMLElement)) continue;
-      const cs = getComputedStyle(el);
-      const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const target =
+        b.kind === 'caption'
+          ? el.querySelector('figcaption')
+          : b.kind === 'footnote'
+            ? el.querySelector('.fn-body')
+            : el;
+      if (!(target instanceof HTMLElement)) continue;
+      const cs = getComputedStyle(target);
+      const measure =
+        b.kind === 'body'
+          ? target.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+          : target.clientWidth;
       if (!(measure > 60)) continue;
       const atomWidth = makeAtomWidth(this.view, settings, b.pos);
+      const spec = resolveAtom ? buildSpec(b.node, resolveAtom) : null;
+      const okey = spec ? blockOracleKey(settingsSig, keyTag, measure, spec.key) : null;
+      const oentry = okey ? this.oracles.paragraph.get(okey) : undefined;
+      if (spec && okey && !oentry) {
+        this.oracles.paragraph.request(
+          okey,
+          spec,
+          measure,
+          settings,
+          skind,
+          b.kind === 'body' && !!extra.firstLineIndent,
+        );
+      }
       // The ported Typst breaker: full-paragraph, globally optimal, and
       // identical to what the oracle will confirm. Plain KP is the
       // degraded-mode fallback (sidecar not loaded, unmapped content).
       let lines: LineLayout[] | null = null;
+      let authority: BlockLayoutAuthority = 'fallback';
+      let breakSignature: string | null = null;
       const lineStart = performance.now();
-      if (USE_PORT && primitives()) {
+      if (oentry?.status === 'ok' && oentry.breaks) {
+        lines = this.layoutAuthoritative(
+          b.node,
+          measure,
+          atomWidth,
+          {
+            hyphenate: settings.hyphenate,
+            ...extra,
+            forced: oentry.breaks,
+          },
+          `live@${b.pos}`,
+        );
+        if (lines) {
+          authority = 'compiled';
+          breakSignature = forcedBreakSignature(oentry.breaks);
+        }
+      }
+      if (!lines && USE_PORT && primitives()) {
         try {
           const forced = portBreaks(b.node, measure, atomWidth, {
             fontKeys: font.portKeys,
             monoFontKey: COMMON_PORT_KEYS.mono,
             sizePt: settings.sizePt,
             hyphenate: settings.hyphenate,
-            firstLineIndentPx: liveIndent,
+            firstLineIndentPx: b.kind === 'caption' ? undefined : extra.firstLineIndent,
+            prefixText: b.kind === 'caption' ? `Figure ${number}: ` : undefined,
+            scale: extra.scale,
             atomWidthPt: this.typstAtomWidthPt(),
           });
           if (forced) {
@@ -459,13 +576,16 @@ class TypesetView {
               atomWidth,
               {
                 hyphenate: settings.hyphenate,
-                firstLineIndent: liveIndent,
+                ...extra,
                 forced,
               },
               `live@${b.pos}`,
             );
-            if (lines) portHits++;
-            else partitionMisses++;
+            if (lines) {
+              portHits++;
+              authority = 'port';
+              breakSignature = forcedBreakSignature(forced);
+            } else partitionMisses++;
           } else {
             adapterNulls++;
           }
@@ -477,26 +597,35 @@ class TypesetView {
         legacyHits++;
         lines = layoutBlock(b.node, measure, this.measurer, atomWidth, {
           hyphenate: settings.hyphenate,
-          firstLineIndent: liveIndent,
+          ...extra,
         });
       }
       if (!lines) continue;
+      this.cache.set(b.node, {
+        measure,
+        lines,
+        oracle: oentry?.status ?? 'none',
+        key: okey,
+        indent: extra.firstLineIndent ?? 0,
+        scale: extra.scale ?? 1,
+        authority,
+        breakSignature,
+      });
       lineLayoutMs += performance.now() - lineStart;
       const base = b.pos + 1;
       // Page spacers glued to mapped text positions break lines MID-LINE
       // once the paragraph re-wraps around an edit above them. Strip them
       // here and re-emit each at the nearest freshly-chosen break (same
       // height — geometry stays stale-but-stable until repagination).
-      const pgStale = decos.find(b.pos, blockTo, (spec) => {
-        const key = (spec as { key?: string } | null)?.key;
-        return !!key && key.startsWith('pg:');
-      });
+      const pgStale = decorationsOwnedByBlock(decos, scope).filter(
+        (deco) => (deco.spec as Partial<TypesetDecorationSpec>).tsKind === 'line-page-gap',
+      );
       let pgList = pgStale.map((d) => ({
         from: d.from,
         h: (d.spec as { h?: number }).h ?? 0,
         hy: !!(d.spec as { hy?: boolean }).hy,
       }));
-      if (pgStale.length) decos = decos.remove(pgStale.slice());
+      const fresh: Decoration[] = [];
       appendLineDecorations(fresh, b.node, b.pos, lines, (line, at) => {
         // A spacer whose text position falls on this line moves to the
         // line's break: pages only break at line boundaries.
@@ -510,15 +639,21 @@ class TypesetView {
       // which has since re-wrapped): snap to the block boundary — pages
       // only break at line boundaries, and repagination corrects at settle.
       for (const sp of pgList) {
-        const at = Math.min(sp.from, blockTo - 1) === sp.from && sp.from < blockTo ? blockTo - 1 : sp.from;
+        const at = Math.min(Math.max(sp.from, base), blockTo - 1);
         fresh.push(pageSpacerDecoration(at, sp.h, false));
       }
+      const rebuilt = rebuildDecorationsOwnedByBlock(decos, state.doc, scope, fresh);
+      decos = rebuilt.decos;
+      changed ||= rebuilt.changed;
     }
     const decorationStart = performance.now();
-    const set = fresh.length ? decos.add(state.doc, fresh) : decos;
-    const tr = state.tr.setMeta(typesetKey, { type: 'decos', decos: set } satisfies TypesetMeta);
-    tr.setMeta('addToHistory', false);
-    this.view.dispatch(tr);
+    this.lastDecoSig = decorationSetDigest(decos);
+    if (changed) {
+      const tr = state.tr.setMeta(typesetKey, { type: 'decos', decos } satisfies TypesetMeta);
+      tr.setMeta('addToHistory', false);
+      this.lineDecorationDispatches++;
+      this.view.dispatch(tr);
+    }
     const perfEnd = performance.now();
     recordLayoutPerf('live', {
       totalMs: perfEnd - perfStart,
@@ -557,13 +692,13 @@ class TypesetView {
     const blocks: Spacer[] = [];
     const sorted: Array<{ pos: number; height: number }> = [];
     for (const d of set?.find(undefined, undefined, (spec) => {
-      const k = (spec as { key?: string } | null)?.key;
-      return !!k && k.startsWith('pg');
+      const kind = (spec as Partial<TypesetDecorationSpec> | null)?.tsKind;
+      return kind === 'line-page-gap' || kind === 'block-page-gap';
     }) ?? []) {
-      const spec = d.spec as { key?: string; h?: number };
+      const spec = d.spec as Partial<TypesetDecorationSpec>;
       const h = spec.h ?? 0;
       if (!(h > 0)) continue;
-      if (spec.key?.startsWith('pgb:')) blocks.push({ pos: d.from, height: h, kind: 'block' });
+      if (spec.tsKind === 'block-page-gap') blocks.push({ pos: d.from, height: h, kind: 'block' });
       else lineMap.set(d.from, { pos: d.from, height: h, kind: 'line' });
       sorted.push({ pos: d.from, height: h });
     }
@@ -659,6 +794,7 @@ class TypesetView {
       this.pendingPageMarks = null;
       const tr = this.view.state.tr.setMeta(typesetKey, { type: 'pageMarks', pageMarks: set } satisfies TypesetMeta);
       tr.setMeta('addToHistory', false);
+      this.pageMarkDispatches++;
       this.view.dispatch(tr);
     }
 
@@ -846,9 +982,15 @@ class TypesetView {
       const indent = extra.firstLineIndent ?? 0;
       const scale = extra.scale ?? 1;
       const cacheKey: BlockLayoutCacheKey = { measure, oracle: ostatus, key: okey, indent, scale };
-      let entry = this.cache.getMatching(node, cacheKey);
+      const compiledBreaks = oentry?.status === 'ok' ? oentry.breaks : undefined;
+      let entry =
+        oentry?.status === 'ok' && !oentry.breaks
+          ? undefined
+          : this.cache.getReusable(node, cacheKey, compiledBreaks);
       if (!entry) {
         let lines: LineLayout[] | null = null;
+        let authority: BlockLayoutAuthority = 'fallback';
+        let breakSignature: string | null = null;
         const auditId = `${skind.kind}@${pos}`;
         if (oentry?.status === 'ok' && oentry.breaks) {
           lines = this.layoutAuthoritative(
@@ -858,6 +1000,10 @@ class TypesetView {
             { ...layoutOpts, ...extra, forced: oentry.breaks },
             auditId,
           );
+          if (lines) {
+            authority = 'compiled';
+            breakSignature = forcedBreakSignature(oentry.breaks);
+          }
         }
         // The ported Typst breaker stands in wherever the compiled oracle
         // has no answer (pending, failed to match, or its breaks don't
@@ -884,13 +1030,22 @@ class TypesetView {
                 { ...layoutOpts, ...extra, forced },
                 auditId,
               );
+              if (lines) {
+                authority = 'port';
+                breakSignature = forcedBreakSignature(forced);
+              }
             }
           } catch (e) {
             if (import.meta.env.DEV) console.warn('port breaker (settle) failed', e);
           }
         }
         if (!lines) lines = layoutBlock(node, measure, this.measurer, atomWidth, { ...layoutOpts, ...extra })!;
-        entry = this.cache.set(node, { ...cacheKey, lines });
+        entry = this.cache.set(node, {
+          ...cacheKey,
+          lines,
+          authority,
+          breakSignature,
+        });
       }
 
       paragraphs++;
@@ -926,7 +1081,7 @@ class TypesetView {
             firstLineIndent: prefixes.footnoteIndent(fnNo),
             scale: prefixes.footnoteScale,
           },
-          'fn',
+          `fn${fnNo}`,
         );
       });
     };
@@ -987,7 +1142,9 @@ class TypesetView {
     }
 
     const sig = decorationSignature(decos);
-    if (sig === this.lastDecoSig && !this.pendingPageMarks) {
+    // Page-start markers are state-only authority and are flushed separately
+    // at the end of run(); they must not reinstall identical line DOM.
+    if (sig === this.lastDecoSig) {
       return { paragraphs, lines: lineCount };
     }
     this.lastDecoSig = sig;
@@ -999,6 +1156,7 @@ class TypesetView {
     }
     const tr = state.tr.setMeta(typesetKey, meta);
     tr.setMeta('addToHistory', false);
+    this.lineDecorationDispatches++;
     this.view.dispatch(tr);
     return { paragraphs, lines: lineCount };
   }

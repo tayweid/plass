@@ -9,9 +9,10 @@ import type { EditorView } from 'prosemirror-view';
 import { cssFontStack, effectiveFont } from '../font-registry';
 import { getInk, inkKey } from '../math-ink';
 import type { DocSettings } from '../settings';
-import type { LineLayout } from './paragraph';
+import type { ForcedBreak, LineLayout } from './paragraph';
 
 export type BlockLayoutOracleState = 'none' | 'ok' | 'fail';
+export type BlockLayoutAuthority = 'compiled' | 'port' | 'fallback';
 
 /** Cached browser line layout for one persistent ProseMirror node. */
 export interface BlockLayoutEntry {
@@ -28,26 +29,76 @@ export interface BlockLayoutEntry {
   /** Painted prefix and content scale used by captions and footnote bodies. */
   indent: number;
   scale: number;
+  /**
+   * Source of the break decisions. Optional during the staged coordinator
+   * migration; entries without it are never reused against compiled breaks.
+   */
+  authority?: BlockLayoutAuthority;
+  /**
+   * Semantic signature of authoritative compiled/port breaks. `null` (or an
+   * absent value during migration) means the entry came from fallback layout.
+   */
+  breakSignature?: string | null;
 }
 
-/** The fields that decide whether an existing entry remains reusable. */
-export interface BlockLayoutCacheKey {
+/** Stable layout inputs, excluding the compiled oracle's transient status. */
+export interface BlockLayoutBaseCacheKey {
   measure: number;
-  oracle: BlockLayoutOracleState;
   key: string | null;
   indent: number;
   scale: number;
 }
 
-/** Preserve the coordinator's existing sub-pixel cache tolerances exactly. */
-export function blockLayoutEntryMatches(entry: BlockLayoutEntry, expected: BlockLayoutCacheKey): boolean {
+/** Legacy strict cache key retained while the coordinator is migrated. */
+export interface BlockLayoutCacheKey extends BlockLayoutBaseCacheKey {
+  oracle: BlockLayoutOracleState;
+}
+
+/**
+ * Stable, order-sensitive encoding of authoritative break semantics.
+ * Empty forced layouts intentionally have a real signature (`v1:`), distinct
+ * from `null`, which means no authoritative break list was used.
+ */
+export function forcedBreakSignature(breaks: readonly ForcedBreak[]): string {
+  return `v1:${breaks.map((item) => `${item.hyphen ? 'h' : 's'}${item.at}`).join(',')}`;
+}
+
+/** Match stable inputs while deliberately ignoring transient oracle status. */
+export function blockLayoutEntryBaseMatches(
+  entry: BlockLayoutEntry,
+  expected: BlockLayoutBaseCacheKey | BlockLayoutCacheKey,
+): boolean {
   return !(
     Math.abs(entry.measure - expected.measure) > 0.5 ||
-    entry.oracle !== expected.oracle ||
     entry.key !== expected.key ||
     Math.abs(entry.indent - expected.indent) > 0.5 ||
     Math.abs(entry.scale - expected.scale) > 0.01
   );
+}
+
+/** Preserve the coordinator's legacy strict status matching exactly. */
+export function blockLayoutEntryMatches(entry: BlockLayoutEntry, expected: BlockLayoutCacheKey): boolean {
+  return blockLayoutEntryBaseMatches(entry, expected) && entry.oracle === expected.oracle;
+}
+
+/**
+ * Decide whether an entry remains valid for the coordinator's current view.
+ *
+ * Pending/missing/failed compiled results do not change layout semantics, so
+ * stable inputs alone are sufficient. Once compiled breaks are available,
+ * only an authoritative port/compiled entry with the identical semantic
+ * break list can be retained. Legacy entries without the new metadata fail
+ * closed and are recomputed once.
+ */
+export function canReuseBlockLayoutEntry(
+  entry: BlockLayoutEntry,
+  expected: BlockLayoutBaseCacheKey | BlockLayoutCacheKey,
+  compiledBreaks?: readonly ForcedBreak[] | null,
+): boolean {
+  if (!blockLayoutEntryBaseMatches(entry, expected)) return false;
+  if (compiledBreaks == null) return true;
+  if (entry.authority !== 'port' && entry.authority !== 'compiled') return false;
+  return entry.breakSignature === forcedBreakSignature(compiledBreaks);
 }
 
 /** Weak node-identity cache; unchanged PM subtrees remain reusable after edits. */
@@ -61,6 +112,16 @@ export class BlockLayoutCache {
   getMatching(node: PMNode, expected: BlockLayoutCacheKey): BlockLayoutEntry | undefined {
     const entry = this.entries.get(node);
     return entry && blockLayoutEntryMatches(entry, expected) ? entry : undefined;
+  }
+
+  /** Status-independent lookup with semantic compiled-break validation. */
+  getReusable(
+    node: PMNode,
+    expected: BlockLayoutBaseCacheKey | BlockLayoutCacheKey,
+    compiledBreaks?: readonly ForcedBreak[] | null,
+  ): BlockLayoutEntry | undefined {
+    const entry = this.entries.get(node);
+    return entry && canReuseBlockLayoutEntry(entry, expected, compiledBreaks) ? entry : undefined;
   }
 
   set(node: PMNode, entry: BlockLayoutEntry): BlockLayoutEntry {

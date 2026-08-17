@@ -8,40 +8,120 @@ declare global {
       live: { totalMs: number; changedBlocks?: number } | null;
       settle: { totalMs: number; paragraphs?: number; lines?: number } | null;
     };
+    __layoutDispatchStats: (reset?: boolean) => { lines: number; pageMarks: number };
   }
 }
 
 test('exact live paragraph remains unchanged when the oracle settles', async ({ page }) => {
   await page.goto('/?new=1');
-  await page.evaluate(() => {
+  const text =
+    'The Knuth-Plass algorithm is based on the idea of cost. A line which has a very tight or ' +
+    'very loose fit has a higher cost than one that is just right. Ending a line with a hyphen ' +
+    'incurs extra cost and ending two successive lines with hyphens even more. There is no ' +
+    'hyphenation worth considering in this sentence.';
+  await page.evaluate((text) => {
     const { state } = window.view;
-    const text =
-      'The Knuth-Plass algorithm is based on the idea of cost. A line which has a very tight or ' +
-      'very loose fit has a higher cost than one that is just right. Ending a line with a hyphen ' +
-      'incurs extra cost and ending two successive lines with hyphens even more. There is no ' +
-      'hyphenation worth considering in this sentence.';
     const paragraph = state.schema.nodes.paragraph.create(null, state.schema.text(text));
     const doc = state.schema.nodes.doc.create(state.doc.attrs, [paragraph]);
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
-  });
+  }, text);
 
   const paragraph = page.locator('.ProseMirror > p').first();
   await expect(paragraph).toBeVisible();
-  await paragraph.click();
-  await page.keyboard.press('End');
-  await page.keyboard.type('x');
+  await expect.poll(() => page.evaluate(() => window.__breakSig().length)).toBeGreaterThan(0);
+  // Let the initial document's compiled verification and page pass drain so
+  // the counter below describes only the edit under test.
+  await page.waitForTimeout(1_200);
+  await page.evaluate(() => window.__layoutDispatchStats(true));
+  await page.evaluate(() => {
+    const { state } = window.view;
+    window.view.dispatch(state.tr.insertText('Swiftly, ', 1));
+  });
 
-  await expect.poll(() => page.evaluate(() => window.__layoutPerf().live?.changedBlocks ?? 0)).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
   const liveBreaks = await page.evaluate(() => window.__breakSig());
   expect(liveBreaks.length).toBeGreaterThan(0);
 
   await page.waitForTimeout(1200);
   expect(await page.evaluate(() => window.__breakSig())).toBe(liveBreaks);
+  expect(await page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
+  expect(await paragraph.textContent()).toBe('Swiftly, ' + text);
 
   const perf = await page.evaluate(() => window.__layoutPerf());
   expect(perf.live?.totalMs).toBeGreaterThan(0);
   expect(perf.settle?.totalMs).toBeGreaterThan(0);
   expect(perf.settle?.paragraphs).toBe(1);
+});
+
+test('caption and footnote edits share one exact live decoration update', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { schema, doc: current } = window.view.state;
+    const caption =
+      'A long figure caption exercises exact line selection while its editable text changes. '.repeat(6);
+    const note = schema.nodes.footnote.create(
+      null,
+      schema.text('A sufficiently long footnote body also wraps across several exact lines. '.repeat(5)),
+    );
+    const figure = schema.nodes.figure.create(
+      {
+        src: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        label: '',
+        name: '',
+      },
+      [schema.text(caption), note],
+    );
+    const doc = schema.nodes.doc.create(current.attrs, [figure]);
+    window.view.dispatch(window.view.state.tr.replaceWith(0, current.content.size, doc.content));
+  });
+
+  await expect(page.locator('figcaption')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__breakSig().length)).toBeGreaterThan(0);
+  await page.waitForTimeout(1_200);
+
+  await page.evaluate(() => window.__layoutDispatchStats(true));
+  await page.evaluate(() => {
+    const { state } = window.view;
+    window.view.dispatch(state.tr.insertText('Precisely, ', 1));
+  });
+  await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
+  const captionBreaks = await page.evaluate(() => window.__breakSig());
+  await page.waitForTimeout(1_200);
+  expect(await page.evaluate(() => window.__breakSig())).toBe(captionBreaks);
+  expect(await page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
+
+  await page.evaluate(() => window.__layoutDispatchStats(true));
+  await page.evaluate(() => {
+    const { state } = window.view;
+    let footnotePos = -1;
+    state.doc.descendants((node, pos) => {
+      if (node.type.name === 'footnote') {
+        footnotePos = pos;
+        return false;
+      }
+      return true;
+    });
+    if (footnotePos < 0) throw new Error('footnote fixture was not created');
+    window.view.dispatch(state.tr.insertText('Notably, ', footnotePos + 1));
+  });
+  await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
+  const footnoteBreaks = await page.evaluate(() => window.__breakSig());
+  await page.waitForTimeout(1_200);
+  expect(await page.evaluate(() => window.__breakSig())).toBe(footnoteBreaks);
+  expect(await page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
+  expect(
+    await page.evaluate(() => {
+      let text = '';
+      window.view.state.doc.descendants((node) => {
+        if (node.type.name === 'footnote') {
+          text = node.textContent;
+          return false;
+        }
+        return true;
+      });
+      return text;
+    }),
+  ).toMatch(/^Notably, /);
 });
 
 test('shrinking to one page removes every held page spacer', async ({ page }) => {
