@@ -37,36 +37,6 @@
   font-style: normal;
 }
 
-/* TeX Gyre Pagella (URW Palladio, the free Palatino): bundled for BOTH the
-   editor and the wasm compiler, so screen and PDF use the same file. */
-@font-face {
-  font-family: 'TeX Gyre Pagella';
-  src: url('../fonts/texgyrepagella-regular.otf') format('opentype');
-  font-weight: 400;
-  font-style: normal;
-}
-
-@font-face {
-  font-family: 'TeX Gyre Pagella';
-  src: url('../fonts/texgyrepagella-italic.otf') format('opentype');
-  font-weight: 400;
-  font-style: italic;
-}
-
-@font-face {
-  font-family: 'TeX Gyre Pagella';
-  src: url('../fonts/texgyrepagella-bold.otf') format('opentype');
-  font-weight: 700;
-  font-style: normal;
-}
-
-@font-face {
-  font-family: 'TeX Gyre Pagella';
-  src: url('../fonts/texgyrepagella-bolditalic.otf') format('opentype');
-  font-weight: 700;
-  font-style: italic;
-}
-
 /* ---------- app chrome ---------- */
 
 :root {
@@ -2370,6 +2340,15 @@ body {
   font: 10.5px var(--sans);
   color: var(--bar-ink-soft);
   margin-top: 2px;
+}
+
+.settings-font-compat {
+  font: 10.5px/1.35 var(--sans);
+  color: var(--bar-ink-soft);
+  padding: 7px 8px;
+  background: rgba(48, 92, 138, 0.07);
+  border: 1px solid rgba(48, 92, 138, 0.16);
+  border-radius: 8px;
 }
 
 .settings-margins {
