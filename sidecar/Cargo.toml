@@ -18,7 +18,7 @@ crate-type = ["cdylib", "rlib"]
 # reproducible source-to-binary proof. Do not bump independently of the compiler.
 [dependencies]
 wasm-bindgen = "0.2"
-hypher = "=0.1.6"
+hypher = "=0.1.7"
 icu_properties = { version = "=1.5.1", features = ["serde"] }
 icu_provider = { version = "=1.5.0", features = ["sync"] }
 icu_provider_adapters = "=1.5.0"
