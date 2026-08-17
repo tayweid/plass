@@ -10,7 +10,8 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import type { ForcedBreak } from '../paragraph';
-import { ByteText, utf8Len } from './bytes';
+import type { FontFaceKeys } from '../../font-registry';
+import { ByteText } from './bytes';
 import { defaultConfig, prepare, type InputSegment } from './prepare';
 import { linebreak } from './linebreak';
 
@@ -23,6 +24,11 @@ if (typeof window !== 'undefined' && import.meta.env.DEV) {
 }
 
 export interface PortBreakOptions {
+  /** Effective body faces. The stored font preference is resolved before
+   * this adapter so shaping and compiler output use the same family. */
+  fontKeys: FontFaceKeys;
+  /** Shared code face registered by the primitives bridge. */
+  monoFontKey: string;
   /** Document font size in pt. */
   sizePt: number;
   /** Editor hyphenation setting (undefined = Typst auto → justify). */
@@ -53,7 +59,7 @@ interface Piece {
   origIdx: Uint32Array | null;
 }
 
-function styleKeyFor(marks: Set<string>): string {
+function styleFor(marks: Set<string>): keyof FontFaceKeys | 'mono' {
   if (marks.has('code')) return 'mono';
   if (marks.has('strong') && marks.has('em')) return 'bolditalic';
   if (marks.has('strong')) return 'bold';
@@ -80,7 +86,7 @@ export function portBreaks(
   if (opts.prefixText) {
     // Unmapped text: breaks never legitimately land inside the prefix.
     pieces.push({
-      seg: { kind: 'text', text: opts.prefixText, styleKey: 'regular', fontSize: baseSize },
+      seg: { kind: 'text', text: opts.prefixText, styleKey: opts.fontKeys.regular, fontSize: baseSize },
       pmBase: -1,
       bt: null,
       origIdx: null,
@@ -91,8 +97,9 @@ export function portBreaks(
     if (bad) return;
     if (child.isText && child.text) {
       const marks = new Set(child.marks.map((m) => m.type.name));
-      const styleKey = styleKeyFor(marks);
-      const fontSize = styleKey === 'mono' ? 0.8 * baseSize : baseSize;
+      const style = styleFor(marks);
+      const styleKey = style === 'mono' ? opts.monoFontKey : opts.fontKeys[style];
+      const fontSize = style === 'mono' ? 0.8 * baseSize : baseSize;
       // Collapse space runs to one space: Typst markup collapses them, so
       // the export, the oracle, and the PDF all see a single space.
       const raw = child.text;
@@ -116,7 +123,7 @@ export function portBreaks(
     } else if (child.type.name === 'hard_break') {
       // The serializer emits ' \\\n' → Typst sees space, linebreak, space.
       pieces.push({
-        seg: { kind: 'text', text: ' \n ', styleKey: 'regular', fontSize: baseSize },
+        seg: { kind: 'text', text: ' \n ', styleKey: opts.fontKeys.regular, fontSize: baseSize },
         pmBase: offset,
         bt: null,
         origIdx: null,

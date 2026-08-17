@@ -4,9 +4,10 @@
 // mitex Typst package, which compiles LaTeX math inside Typst documents.
 
 import type { Node as PMNode } from 'prosemirror-model';
-import { DEFAULT_SETTINGS, normalizeSettings, parseMathMacros, type DocSettings } from './settings';
+import { normalizeSettings, parseMathMacros, type DocSettings } from './settings';
 import { wrapAligned } from './math-src';
 import { isPortableCitationKey } from './bibtex';
+import { effectiveFont, parityMetrics } from './font-registry';
 
 export interface TypExportOptions {
   /** Rewrite image sources (e.g. data: URLs to VFS paths for compilation). */
@@ -30,20 +31,6 @@ export interface TypExportOptions {
 //   cssA/cssD: Chrome's ascent/descent for the font (line-box placement)
 //   typAsc/typDesc: Typst's first/last-baseline offsets from block edges
 //   extent: Typst's baseline pitch at leading 0
-export interface ParityMetrics {
-  cssA: number;
-  cssD: number;
-  typAsc: number;
-  typDesc: number;
-  extent: number;
-}
-
-export const FONT_PARITY: Record<string, ParityMetrics> = {
-  'New Computer Modern': { cssA: 1.127, cssD: 0.29, typAsc: 0.6723, typDesc: 0.0123, extent: 0.6828 },
-  'STIX Two Text': { cssA: 0.762, cssD: 0.238, typAsc: 0.657, typDesc: -0.0001, extent: 0.657 },
-  'Libertinus Serif': { cssA: 0.9, cssD: 0.25, typAsc: 0.6547, typDesc: -0.0053, extent: 0.6582 },
-};
-
 /**
  * First-baseline offset difference (Typst − editor CSS) in body em for a
  * unit type standing at a page top: Typst suppresses leading block spacing
@@ -52,7 +39,7 @@ export const FONT_PARITY: Record<string, ParityMetrics> = {
  * page spacers by this amount so page-top ink coincides with the PDF.
  */
 export function pageTopAdjustEm(s: DocSettings, unit: 'paragraph' | 'line' | 'h1' | 'h2' | 'h3'): number {
-  const m = FONT_PARITY[s.font] ?? FONT_PARITY['New Computer Modern'];
+  const m = parityMetrics(s.font);
   const pSlackAbove = s.lineHeight / 2 + (m.cssA - m.cssD) / 2;
   if (unit === 'paragraph' || unit === 'line') return m.typAsc - pSlackAbove;
   const h = HEADINGS[unit === 'h1' ? 0 : unit === 'h2' ? 1 : 2];
@@ -72,7 +59,7 @@ const HEADINGS: Array<{ level: number; hs: number; padTop: number; marginBottom:
 
 /** The parity header: set/show rules reproducing editor spacing in Typst. */
 export function parityRules(s: DocSettings): string {
-  const m = FONT_PARITY[s.font] ?? FONT_PARITY['New Computer Modern'];
+  const m = parityMetrics(s.font);
   const lh = s.lineHeight;
   const pt = (em: number) => `${(em * s.sizePt).toFixed(3)}pt`;
   // Baseline → block-edge slack of a body paragraph line (em).
@@ -136,9 +123,10 @@ function expandMacros(src: string): string {
 
 /** The #set text(...) header line (shared with the layout oracle's probes). */
 export function textSetLine(s: DocSettings, fontFallback?: string[]): string {
+  const primary = effectiveFont(s.font).typstFamily;
   const fonts = fontFallback?.length
-    ? `(${[s.font, ...fontFallback.filter((f) => f !== s.font)].map((f) => JSON.stringify(f)).join(', ')})`
-    : JSON.stringify(s.font);
+    ? `(${[primary, ...fontFallback.filter((f) => f !== primary)].map((f) => JSON.stringify(f)).join(', ')})`
+    : JSON.stringify(primary);
   return `#set text(size: ${s.sizePt}pt, font: ${fonts}, hyphenate: ${s.hyphenate})\n`;
 }
 
@@ -532,9 +520,7 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     }
     out += `#set page(${pageArgs.join(', ')})\n`;
     out += parityRules(s);
-    const fonts = [s.font, ...(opts.fontFallback ?? []).filter((f) => f !== s.font)];
-    const fontSpec = fonts.length > 1 ? `(${fonts.map((f) => JSON.stringify(f)).join(', ')})` : JSON.stringify(fonts[0]);
-    out += `#set text(size: ${s.sizePt}pt, font: ${fontSpec}, hyphenate: ${s.hyphenate})\n`;
+    out += textSetLine(s, opts.fontFallback);
     emitNumberEquations = s.numberEquations;
     if (s.numberEquations) out += '#set math.equation(numbering: "(1)")\n';
     if (s.numberSections) out += '#set heading(numbering: "1.1")\n';

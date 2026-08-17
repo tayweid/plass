@@ -9,6 +9,7 @@ import { extractLines } from './layout/typst-oracle';
 import { loadPrimitives } from './layout/primitives';
 import { defaultConfig, prepare } from './layout/port/prepare';
 import { linebreak } from './layout/port/linebreak';
+import { COMMON_PORT_KEYS, DEFAULT_FONT, cssFontStack } from './font-registry';
 
 /** Escape plain prose for Typst markup. '-' is escaped so corpus hyphens
  * stay hyphen-minus (no smart-dash merging); straight quotes are escaped to
@@ -39,7 +40,9 @@ function portLines(c: DiffCase, measure: number, sizePt: number): string[] {
   const config = defaultConfig(sizePt);
   if (c.indentPt) config.firstLineIndent = c.indentPt;
   const segs = (c.segments ?? [{ kind: 'text', text: c.text } as CaseSeg]).map((s) =>
-    s.kind === 'text' ? ({ kind: 'text', text: s.text, styleKey: 'regular' } as const) : ({ kind: 'atom', width: s.width } as const),
+    s.kind === 'text'
+      ? ({ kind: 'text', text: s.text, styleKey: DEFAULT_FONT.portKeys.regular } as const)
+      : ({ kind: 'atom', width: s.width } as const),
   );
   const p = prepare(segs.slice(), config);
   const lines = linebreak(p, measure);
@@ -190,7 +193,11 @@ function pmPortLines(c: PMCase, measure: number, sizePt: number): string[] | nul
     block,
     measure / 0.75, // pt → px
     (offset) => atomWidths.get(offset) ?? NaN,
-    { sizePt },
+    {
+      fontKeys: DEFAULT_FONT.portKeys,
+      monoFontKey: COMMON_PORT_KEYS.mono,
+      sizePt,
+    },
   );
   if (!breaks) return null;
 
@@ -307,7 +314,7 @@ function ctxPortLines(c: CtxCase, measurePx: number): string[] {
   const s = DEFAULT_SETTINGS;
   // px-per-em at the app's rendering: sizePt · 4/3.
   const bodyPx = s.sizePt * (4 / 3);
-  const font = `"${s.font}", Georgia, serif`;
+  const font = cssFontStack(s.font);
   const FN_SCALE = 0.85;
   let indentPx = 0;
   let scale = 1;
@@ -325,7 +332,7 @@ function ctxPortLines(c: CtxCase, measurePx: number): string[] {
   const config = portConfig(s.sizePt * scale);
   if (indentPx) config.firstLineIndent = indentPx * 0.75;
   const p = portPrepare(
-    [{ kind: 'text', text: prefixText + c.text, styleKey: 'regular' }],
+    [{ kind: 'text', text: prefixText + c.text, styleKey: DEFAULT_FONT.portKeys.regular }],
     config,
   );
   const lines = linebreak(p, measurePx * 0.75);
