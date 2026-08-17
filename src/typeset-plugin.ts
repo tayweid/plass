@@ -25,15 +25,15 @@
 // replaces the <br> widget). Print needs no JS: print CSS zeroes the spacer
 // heights (line breaks survive, gaps vanish) and @page takes over.
 
-import { Plugin, PluginKey, type EditorState } from 'prosemirror-state';
+import { Plugin, type EditorState } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { Measurer } from './layout/measure';
 import { layoutBlock, type LineLayout } from './layout/paragraph';
-import { buildSpec, TypstOracle, type AtomResolver, type SpecKind } from './layout/typst-oracle';
+import { buildSpec, type TypstOracle, type AtomResolver, type SpecKind } from './layout/typst-oracle';
 import { portBreaks } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
-import { PageOracle } from './layout/page-oracle';
+import type { PageOracle } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros } from './settings';
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
 import { FONT_FALLBACK } from './pdf';
@@ -71,6 +71,18 @@ import {
   paragraphKeyTag,
   type BlockLayoutCacheKey,
 } from './layout/block-layout';
+import {
+  typesetKey,
+  type PageInfo,
+  type TypesetMeta,
+  type TypesetState,
+  type TypesetStats,
+} from './layout/typeset-state';
+import { LayoutScheduler } from './layout/layout-scheduler';
+import { OracleCoordinator } from './layout/oracle-coordinator';
+
+export { typesetKey };
+export type { PageInfo, TypesetMeta, TypesetState, TypesetStats };
 
 /** Phase-3 flag (PORT.md): drive live typing with the ported Typst
  * breaker. Console: __usePort(false) to A/B against the legacy path;
@@ -90,36 +102,6 @@ if (typeof window !== 'undefined' && import.meta.env.DEV) {
   };
   w.__portStats = () => ({ port: portHits, legacy: legacyHits, adapterNulls, partitionMisses });
 }
-
-export interface TypesetStats {
-  ms: number;
-  paragraphs: number;
-  lines: number;
-}
-
-export interface PageInfo {
-  count: number;
-  pageW: number;
-  pageH: number;
-  gap: number;
-  marginBottom: number;
-  marginLeft: number;
-  marginRight: number;
-}
-
-interface TypesetState {
-  decos: DecorationSet;
-  /** Zero-width markers at the last oracle page starts — PM maps them
-   *  through every edit, giving stale-but-stable pagination while the
-   *  page oracle recompiles. Never rendered. */
-  pageMarks: DecorationSet;
-}
-
-type Meta =
-  | { type: 'decos'; decos: DecorationSet; pageMarks?: DecorationSet }
-  | { type: 'pageMarks'; pageMarks: DecorationSet };
-
-export const typesetKey = new PluginKey<TypesetState>('typeset');
 
 /** Vertical gap between stacked footnote bodies / height of the separator zone (px). */
 const FN_GAP = 6;
@@ -149,7 +131,7 @@ export function typesetPlugin(
     state: {
       init: () => ({ decos: DecorationSet.empty, pageMarks: DecorationSet.empty }),
       apply(tr, val) {
-        const meta = tr.getMeta(typesetKey) as Meta | undefined;
+        const meta = tr.getMeta(typesetKey) as TypesetMeta | undefined;
         if (meta?.type === 'decos') {
           return { decos: meta.decos, pageMarks: meta.pageMarks ?? val.pageMarks.map(tr.mapping, tr.doc) };
         }
@@ -200,30 +182,19 @@ class TypesetView {
   private cache = new BlockLayoutCache();
   private docSig = new WeakMap<PMNode, string>();
   private measurer: Measurer;
-  private oracle: TypstOracle;
-  private pageOracle: PageOracle;
-  private raf = 0;
-  private liveRaf = 0;
+  private oracles: OracleCoordinator;
+  private scheduler!: LayoutScheduler;
   /** Signature of the last dispatched decoration set: identical layouts are
    *  never re-dispatched, so no-op runs cause zero paints. */
   private lastDecoSig = '';
   private lastLiveDoc: PMNode | null = null;
-  private editTimer = 0;
   private lastPageCount = 0;
   private pendingPageMarks: DecorationSet | null = null;
-  private resizeObserver: ResizeObserver;
-  private lastWidth = 0;
-  private onFontsLoaded: (() => void) | null = null;
   private stopTableSplitReady: (() => void) | null = null;
   /** Which source produced the last pagination (diagnostics). */
   private pagPath: 'forced' | 'hold' | 'fallback' = 'forced';
   private pagLog: string[] = [];
   private pagWhy = '';
-  /** Distinct page-oracle failures since the last success — brief failure
-   *  blips (mid-edit states the oracle can't represent) keep the held
-   *  marks; only a STREAK abandons them to fallback pagination. */
-  private pageFailStreak = 0;
-  private lastFailEntry: unknown = null;
   private destroyed = false;
 
   constructor(
@@ -236,18 +207,17 @@ class TypesetView {
     // fonts in the background; until ready, liveRun uses the legacy path.
     loadPrimitives().then(
       () => {
-        if (!this.destroyed) this.schedule();
+        if (!this.destroyed) this.requestRun();
       },
       (e) => console.warn('sidecar primitives failed to load', e),
     );
-    this.oracle = new TypstOracle(() => {
-      if (!this.destroyed) this.schedule();
-    }, FONT_FALLBACK);
-    this.pageOracle = new PageOracle(() => {
-      if (!this.destroyed) this.schedule();
+    this.oracles = new OracleCoordinator({
+      fontFallback: FONT_FALLBACK,
+      onParagraphResults: () => this.requestRun(),
+      onPageResults: () => this.requestRun(),
     });
     this.stopTableSplitReady = onTableSplitReady((readyView) => {
-      if (!this.destroyed && readyView === this.view) this.schedule();
+      if (!this.destroyed && readyView === this.view) this.requestRun();
     });
     if (import.meta.env.DEV) {
       const w = window as unknown as {
@@ -255,8 +225,8 @@ class TypesetView {
         __pageOracle?: PageOracle;
         __breakSig?: () => string;
       };
-      w.__oracle = this.oracle;
-      w.__pageOracle = this.pageOracle;
+      w.__oracle = this.oracles.paragraph;
+      w.__pageOracle = this.oracles.page;
       (w as unknown as { __comparePort: () => unknown }).__comparePort = () => {
         const state = this.view.state;
         const settings = getSettings(state);
@@ -278,7 +248,7 @@ class TypesetView {
             measure,
             spec.key,
           );
-          const oentry = this.oracle.get(okey);
+          const oentry = this.oracles.paragraph.get(okey);
           const atomWidth = makeAtomWidth(this.view, settings, pos);
           const indented = settings.parIndent && consecutiveParagraph(state.doc, pos);
           const port = portBreaks(node, measure, atomWidth, {
@@ -313,33 +283,17 @@ class TypesetView {
         return keys.sort().join('|');
       };
     }
-    this.resizeObserver = new ResizeObserver(() => {
-      const w = this.view.dom.clientWidth;
-      if (Math.abs(w - this.lastWidth) > 0.5) {
-        this.lastWidth = w;
-        this.schedule();
-      }
+    this.scheduler = new LayoutScheduler(view.dom, {
+      runLive: () => this.liveRun(),
+      runSettled: () => this.run(),
+      // Web fonts arriving change every browser metric. The Typst oracles
+      // remain valid because their bundled font inputs did not change.
+      invalidateMetrics: () => {
+        this.measurer.invalidate();
+        this.cache.clear();
+        clearTableSplitCache();
+      },
     });
-    this.resizeObserver.observe(view.dom);
-    this.lastWidth = view.dom.clientWidth;
-
-    // Web fonts arriving change every metric: flush and re-run. The ready
-    // promise covers fonts in flight at construction; the loadingdone
-    // listener covers fonts that load LATER — css faces load lazily on
-    // first use, so opening a document set in a not-yet-used font starts
-    // a load cycle the one-shot promise never sees.
-    const fontsChanged = () => {
-      if (this.destroyed) return;
-      this.measurer.invalidate();
-      this.cache.clear();
-      clearTableSplitCache();
-      this.schedule();
-    };
-    document.fonts?.ready.then(fontsChanged);
-    this.onFontsLoaded = fontsChanged;
-    document.fonts?.addEventListener('loadingdone', this.onFontsLoaded);
-
-    this.schedule();
   }
 
   update(view: EditorView, prevState: EditorState) {
@@ -347,29 +301,17 @@ class TypesetView {
     if (view.state.doc.attrs !== prevState.doc.attrs) {
       this.measurer.invalidate();
       this.cache.clear();
-      this.oracle.clear();
-      this.pageOracle.clear();
+      this.oracles.clear();
       clearTableSplitCache();
     }
     if (view.state.doc !== prevState.doc) {
-      this.scheduleLive();
-      this.scheduleAfterEdit();
+      this.scheduler.scheduleLive();
+      this.scheduler.scheduleAfterEdit();
     }
   }
 
-  /** Re-typeset just the edited blocks with the JS Knuth-Plass breaker IN
-   *  THE SAME PAINT as the keystroke (microtask: after ProseMirror's DOM
-   *  update, before the browser renders). The corruption once blamed on
-   *  this timing was the frozen-prefix bug, since identified and fixed. */
-  private scheduleLive() {
-    if (this.liveRaf) return;
-    this.liveRaf = 1;
-    queueMicrotask(() => {
-      this.liveRaf = 0;
-      this.liveRun();
-    });
-  }
-
+  /** Re-typeset just the edited blocks with the JS Knuth-Plass breaker in
+   * the same paint as the keystroke. LayoutScheduler owns the microtask. */
   private liveRun() {
     if (this.destroyed) return;
     const perfStart = performance.now();
@@ -518,7 +460,7 @@ class TypesetView {
     }
     const decorationStart = performance.now();
     const set = fresh.length ? decos.add(state.doc, fresh) : decos;
-    const tr = state.tr.setMeta(typesetKey, { type: 'decos', decos: set } satisfies Meta);
+    const tr = state.tr.setMeta(typesetKey, { type: 'decos', decos: set } satisfies TypesetMeta);
     tr.setMeta('addToHistory', false);
     this.view.dispatch(tr);
     const perfEnd = performance.now();
@@ -531,52 +473,24 @@ class TypesetView {
     });
   }
 
-  /** Doc edits settle after a pause: during a typing burst the existing
-   *  decorations (line breaks, page spacers) map through each keystroke —
-   *  stale but STABLE — instead of re-typesetting per key and ping-ponging
-   *  between the JS fallback and the oracle. */
-  private scheduleAfterEdit() {
-    clearTimeout(this.editTimer);
-    this.editTimer = window.setTimeout(() => {
-      this.editTimer = 0;
-      this.schedule();
-    }, 250);
-  }
-
   destroy() {
     this.destroyed = true;
     viewRegistry.delete(this.view);
-    if (this.onFontsLoaded) document.fonts?.removeEventListener('loadingdone', this.onFontsLoaded);
-    this.resizeObserver.disconnect();
+    this.scheduler.destroy();
     this.stopTableSplitReady?.();
     this.stopTableSplitReady = null;
-    clearTimeout(this.editTimer);
-    if (this.raf) cancelAnimationFrame(this.raf);
-    this.oracle.destroy();
-    this.pageOracle.destroy();
+    this.oracles.destroy();
     this.measurer.destroy();
   }
 
   /** Drop cached page-break decisions (asset bytes changed under same sig). */
   invalidatePages() {
-    this.pageOracle.clear();
+    this.oracles.clearPage();
     clearTableSplitCache();
   }
 
   requestRun() {
-    this.schedule();
-  }
-
-  private schedule() {
-    // Mid-burst triggers (oracle results, figure loads) coalesce into the
-    // settle run — running them immediately would re-typeset under the
-    // user's fingers.
-    if (this.editTimer) return;
-    if (this.raf) return;
-    this.raf = requestAnimationFrame(() => {
-      this.raf = 0;
-      this.run();
-    });
+    this.scheduler?.scheduleSettled();
   }
 
   /** The page spacers currently in the document, read back from the live
@@ -687,7 +601,7 @@ class TypesetView {
     if (this.pendingPageMarks) {
       const set = this.pendingPageMarks;
       this.pendingPageMarks = null;
-      const tr = this.view.state.tr.setMeta(typesetKey, { type: 'pageMarks', pageMarks: set } satisfies Meta);
+      const tr = this.view.state.tr.setMeta(typesetKey, { type: 'pageMarks', pageMarks: set } satisfies TypesetMeta);
       tr.setMeta('addToHistory', false);
       this.view.dispatch(tr);
     }
@@ -866,10 +780,10 @@ class TypesetView {
       // Ask the Typst oracle for this block's authoritative breaks.
       const spec = resolveAtom ? buildSpec(node, resolveAtom) : null;
       const okey = spec ? blockOracleKey(settingsSig, keyTag, measure, spec.key) : null;
-      const oentry = okey ? this.oracle.get(okey) : undefined;
+      const oentry = okey ? this.oracles.paragraph.get(okey) : undefined;
       if (spec && okey && !oentry) {
         const indented = skind.kind === 'body' && !!extra.firstLineIndent;
-        this.oracle.request(okey, spec, measure, settings, skind, indented);
+        this.oracles.paragraph.request(okey, spec, measure, settings, skind, indented);
       }
       const ostatus = oentry?.status ?? 'none';
 
@@ -1017,7 +931,7 @@ class TypesetView {
     }
     this.lastDecoSig = sig;
     const set = DecorationSet.create(state.doc, decos);
-    const meta: Meta = { type: 'decos', decos: set };
+    const meta: TypesetMeta = { type: 'decos', decos: set };
     if (this.pendingPageMarks) {
       meta.pageMarks = this.pendingPageMarks;
       this.pendingPageMarks = null;
@@ -1057,8 +971,8 @@ class TypesetView {
         }
       }
       if (sig) {
-        const entry = this.pageOracle.get(sig);
-        if (!entry) this.pageOracle.request(sig, view.state.doc, s, this.atomResolver());
+        const entry = this.oracles.page.get(sig);
+        if (!entry) this.oracles.page.request(sig, view.state.doc, s, this.atomResolver());
         if (entry?.status === 'ok' && entry.pageStarts) {
           const forced = this.paginateForced(entry.pageStarts, entry.pageCount ?? entry.pageStarts.length + 1);
           if (forced) {
@@ -1081,18 +995,12 @@ class TypesetView {
         // mapped through the edits — pages hold still instead of falling
         // back to a local guess that disagrees by a line. Only while
         // PENDING: a failed match must not hold stale geometry forever.
-        if (entry?.status === 'ok') {
-          this.pageFailStreak = 0;
-          this.lastFailEntry = null;
-        } else if (entry?.status === 'fail' && entry !== this.lastFailEntry) {
-          this.pageFailStreak++;
-          this.lastFailEntry = entry;
-        }
-        const marks =
-          entry?.status === 'fail' && this.pageFailStreak > 3
-            ? []
-            : (typesetKey.getState(view.state)?.pageMarks.find() ?? []);
-        this.pagWhy = `entry=${entry?.status ?? 'pending'} marks=${marks.length}` + (entry?.status === 'fail' ? ` streak=${this.pageFailStreak}` : '');
+        const confidence = this.oracles.observePageEntry(entry);
+        const marks = confidence.hold
+          ? (typesetKey.getState(view.state)?.pageMarks.find() ?? [])
+          : [];
+        this.pagWhy = `entry=${confidence.status} marks=${marks.length}` +
+          (entry?.status === 'fail' ? ` streak=${confidence.failureStreak}` : '');
         if (marks.length) {
           const stale = marks
             .map((m) => ({
