@@ -16,7 +16,7 @@ import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
 import { isPwaInstalled, onPwaInstallState, requestPwaInstall } from './pwa-install';
 import type { TypesetStats } from './typeset-plugin';
-import type { FileManager } from './file-manager';
+import { DEFAULT_DOC_NAME, type FileManager } from './file-manager';
 
 export interface Toolbar {
   update: (state: EditorState) => void;
@@ -59,7 +59,7 @@ function icon(name: string): string {
 export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileManager): Toolbar {
   const fileLabel = document.createElement('span');
   fileLabel.className = 'tb-file';
-  fileLabel.textContent = 'Untitled';
+  fileLabel.textContent = DEFAULT_DOC_NAME;
   fileLabel.title = 'Click to rename';
   fileLabel.addEventListener('click', () => {
     // An unsaved paper's title is the save affordance: one click, one
@@ -471,7 +471,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
         label: 'PDF',
         title: 'Export PDF via Typst',
         run: () => {
-          const name = fm.name === 'Untitled' ? 'document' : fm.name;
+          const name = fm.name === DEFAULT_DOC_NAME ? 'document' : fm.name;
           void import('./pdf').then(({ exportPdf }) => exportPdf(fm.currentDoc(), name, (m) => fm.notify(m)));
         },
       },

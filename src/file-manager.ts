@@ -52,13 +52,18 @@ const TYP_TYPE: FilePickerType[] = [
 ];
 
 const isMd = (name: string) => /\.md$/i.test(name);
+
+/** The name a document carries before it has one of its own. Names here are
+ *  stored without an extension; the tab adds it, so a fresh tab reads
+ *  Plass.typ and says which app it is rather than that the file is nameless. */
+export const DEFAULT_DOC_NAME = 'Plass';
 type WriteResult = 'clean' | 'pending' | 'conflict' | 'stale' | 'noop';
 
 export class FileManager {
   handle: FileSystemFileHandle | null = null;
   /** Project folder: relative asset paths resolve inside it. */
   dir: FileSystemDirectoryHandle | null = null;
-  name = 'Untitled';
+  name = DEFAULT_DOC_NAME;
   dirty = false;
   readonly supportsFS = typeof window.showOpenFilePicker === 'function';
   private saveTimer = 0;
@@ -229,7 +234,7 @@ export class FileManager {
   }
 
   /** Start a fresh unsaved document (empty, or the given content e.g. the demo). */
-  newDoc(doc?: PMNode, name = 'Untitled'): boolean {
+  newDoc(doc?: PMNode, name = DEFAULT_DOC_NAME): boolean {
     if (this.dirty && !confirm('Start a new document? Your current document has unsaved changes.')) return false;
     clearTimeout(this.saveTimer);
     this.handle = null;
@@ -354,7 +359,7 @@ export class FileManager {
       }
     }
     // The current document moves in, keeping its shown name — an unsaved
-    // doc labeled Untitled becomes Untitled.typ, matching the tab.
+    // doc still called Plass becomes Plass.typ, matching the tab.
     const fileName = `${this.name}.typ`;
     let overwriteConfirmed = false;
     if (intent === 'save') {
@@ -575,7 +580,7 @@ export class FileManager {
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `${this.name === 'Untitled' ? 'document' : this.name}.tex`;
+      a.download = `${this.name === DEFAULT_DOC_NAME ? 'document' : this.name}.tex`;
       a.click();
       URL.revokeObjectURL(a.href);
       this.hooks.message(`Downloaded ${a.download} — vanilla LaTeX for journal submission`);
@@ -587,7 +592,7 @@ export class FileManager {
     const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${this.name === 'Untitled' ? 'document' : this.name}.typ`;
+    a.download = `${this.name === DEFAULT_DOC_NAME ? 'document' : this.name}.typ`;
     a.click();
     URL.revokeObjectURL(a.href);
     this.hooks.message(`Downloaded ${a.download}`);

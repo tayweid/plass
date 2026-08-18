@@ -51,7 +51,7 @@ test('autosave pauses instead of overwriting an externally changed file', async 
       try {
         const root = await navigator.storage.getDirectory();
         const dir = await root.getDirectoryHandle(name);
-        const handle = await dir.getFileHandle('Untitled.typ');
+        const handle = await dir.getFileHandle('Plass.typ');
         return await (await handle.getFile()).text();
       } catch {
         return '';
@@ -331,7 +331,16 @@ test('reconnecting a recovered session never guesses past a differing disk copy'
   const disk = await page.evaluate(async (name) => {
     const root = await navigator.storage.getDirectory();
     const dir = await root.getDirectoryHandle(name);
-    return (await (await dir.getFileHandle('Untitled.typ')).getFile()).text();
+    return (await (await dir.getFileHandle('Plass.typ')).getFile()).text();
   }, dirName);
   expect(disk).toBe('EXTERNAL RECONNECT VERSION');
+});
+
+test('a fresh document names the tab after the app', async ({ page }) => {
+  // The tab is how you find Plass among a dozen others, so an untouched
+  // document should say which app it is rather than that it has no name.
+  // Matches Knuth, whose tab reads Knuth.py for the same reason.
+  await page.goto('/');
+  await expect(page).toHaveTitle('Plass.typ');
+  await expect(page.locator('.tb-file')).toHaveText('Plass');
 });
