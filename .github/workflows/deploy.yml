@@ -32,8 +32,21 @@ jobs:
       - run: rustup default 1.97.0
       - run: npm ci
       - run: npm audit --audit-level=moderate
+      # The auditor is version-pinned, so building it from source on every run
+      # spends about three minutes producing the same binary. Key the cache on
+      # that version and confirm what comes back still reports it; a miss
+      # falls through to the locked build below.
+      - name: Cache the pinned Rust auditor
+        id: cargo-audit
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-0.22.2-${{ runner.os }}-${{ runner.arch }}
       - name: Install the pinned Rust auditor
+        if: steps.cargo-audit.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --locked --version 0.22.2
+      - name: Confirm the auditor is the pinned version
+        run: cargo audit --version | grep -q '0\.22\.2'
       - name: Audit the Plass-owned sidecar dependency graph
         run: cargo audit --file sidecar/Cargo.lock
       - run: npm run verify:licenses
@@ -41,7 +54,28 @@ jobs:
       - name: Test the Plass-owned sidecar source
         run: cargo test --locked --manifest-path sidecar/Cargo.toml
       - run: npm run test:layout
-      - run: npx --no-install playwright install --with-deps chromium firefox webkit
+      - name: Resolve the installed Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache the Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      - name: Install the Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 10
+        run: npx --no-install playwright install --with-deps chromium firefox webkit
+      # A cache hit restores the browsers but not the system libraries they
+      # link against: the runner is a fresh VM every run, so the apt step has
+      # to happen either way. Both forms carry a timeout because that install
+      # depends on distribution mirrors, which have stalled for tens of
+      # minutes; failing at ten is better than holding the deploy at thirty.
+      - name: Install the Playwright system libraries
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        timeout-minutes: 10
+        run: npx --no-install playwright install-deps chromium firefox webkit
       - run: npm run test:browser
       - run: npm run build
       - run: npm run verify:production
@@ -77,7 +111,17 @@ jobs:
       - run: rustup toolchain install 1.97.0 --profile minimal --target wasm32-unknown-unknown --no-self-update
       - run: rustup default 1.97.0
       - run: npm ci
-      - run: cargo install wasm-pack --locked --version 0.15.0
+      # Same pinned-tool rebuild as the auditor above; the sidecar build
+      # wrapper rejects any version other than the one keyed here.
+      - name: Cache the pinned wasm-pack
+        id: wasm-pack
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: wasm-pack-0.15.0-${{ runner.os }}-${{ runner.arch }}
+      - name: Install the pinned wasm-pack
+        if: steps.wasm-pack.outputs.cache-hit != 'true'
+        run: cargo install wasm-pack --locked --version 0.15.0
       - run: npm run sidecar
       - run: npm run verify:sidecar
       - name: Compare the checked sidecar package with this runner's rebuild
