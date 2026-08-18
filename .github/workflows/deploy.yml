@@ -50,17 +50,20 @@ jobs:
         with:
           path: dist
 
-  # Advisory, not a gate. The sidecar build is deterministic on a given
-  # platform but not across them, so the checked-in package only matches a
-  # rebuild on the machine that produced it — today, not this runner. Until
-  # the checked-in bytes are this runner's own (download the artifact below
-  # and commit it), a mismatch reports without failing the run or holding
-  # the deploy: a personal editor should keep shipping while a
+  # Advisory, not a gate. The sidecar build is byte-deterministic for a given
+  # host — same bytes from any checkout path on the same machine — but not
+  # across hosts: Cargo derives each crate's metadata hash from the full
+  # rustc version string, host triple included, so a macOS rebuild and this
+  # runner's rebuild differ in their TypeId constants and symbol ordering
+  # even at identical sources and pinned tool versions. The checked-in
+  # package therefore has to be this runner's own; a local rebuild will
+  # always look like a mismatch. When one shows up, this job warns and
+  # publishes the canonical rebuild to commit rather than failing the run or
+  # holding the deploy: a personal editor should keep shipping while a
   # supply-chain nicety is still being settled.
   sidecar-reproducibility:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    continue-on-error: true
     permissions:
       contents: read
     steps:
@@ -77,14 +80,29 @@ jobs:
       - run: cargo install wasm-pack --locked --version 0.15.0
       - run: npm run sidecar
       - run: npm run verify:sidecar
-      - name: Require a byte-reproducible checked sidecar package
-        run: git diff --exit-code --stat -- sidecar/pkg sidecar/Cargo.lock
-      # The build is deterministic per platform but not across them, so the
-      # checked-in package has to be the one this runner produces. When it
+      - name: Compare the checked sidecar package with this runner's rebuild
+        id: reproducibility
+        run: |
+          if git diff --quiet -- sidecar/pkg sidecar/Cargo.lock; then
+            echo "The checked-in sidecar package is this runner's rebuild, byte for byte." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "The checked-in sidecar package is not this runner's rebuild:"
+            echo
+            echo '```'
+            git diff --stat -- sidecar/pkg sidecar/Cargo.lock
+            echo '```'
+            echo
+            echo 'Download the canonical-sidecar-pkg artifact from this run and commit it.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo 'differs=true' >> "$GITHUB_OUTPUT"
+          echo "::warning::The checked-in sidecar package is not this runner's rebuild. Download the canonical-sidecar-pkg artifact from this run and commit it."
+      # The checked-in package has to be the one this runner produces. When it
       # is not, publish the canonical rebuild so it can be reviewed and
       # committed instead of leaving the diff unreachable in a log.
       - name: Publish the canonical rebuild when it differs
-        if: failure()
+        if: steps.reproducibility.outputs.differs == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: canonical-sidecar-pkg

@@ -16,9 +16,10 @@ every applicable item is complete on the exact commit being published.
 - [x] Enable GitHub private vulnerability reporting and document the monitored
   intake, supported versions, acknowledgement target, and disclosure
   expectations in `SECURITY.md`.
-- [ ] Protect `main`: require the `verify`, `sidecar-reproducibility`, and
-  CodeQL checks, require an approving review, dismiss stale approvals, and
-  block force pushes/deletion.
+- [ ] Protect `main`: require the `verify` and CodeQL checks, require an
+  approving review, dismiss stale approvals, and block force pushes/deletion.
+  `sidecar-reproducibility` is advisory — it warns instead of failing — so it
+  is read in the run summary, not required as a branch-protection check.
 - [ ] Configure GitHub Pages for Actions deployment and verify the production
   URL uses HTTPS. If moving to a host with response headers, apply
   `RECOMMENDED_RESPONSE_HEADERS` from `src/security-policy.ts`.
@@ -83,7 +84,9 @@ every applicable item is complete on the exact commit being published.
    Typst dependency parity and must be reconsidered whenever the compiler is
    upgraded.
    Also confirm the workflow's sidecar reproducibility job rebuilt
-   `sidecar/pkg` byte-for-byte with Rust 1.97.0 and wasm-pack 0.15.0.
+   `sidecar/pkg` byte-for-byte with Rust 1.97.0 and wasm-pack 0.15.0. The job
+   warns instead of failing, so read its summary: a release must not ship a
+   tracked package that job did not reproduce.
 7. Resolve or formally review every precompiled-WASM finding recorded in
    `SECURITY.md`; a package-version bump is not sufficient without checking
    the installed binary and its pinned provenance.

@@ -46,15 +46,27 @@ After changing sidecar source or dependencies, rebuild with the pinned tool:
 cargo install wasm-pack --locked --version 0.15.0
 npm run sidecar
 npm run verify:sidecar
-git diff --exit-code -- sidecar/pkg sidecar/Cargo.lock
+git diff --stat -- sidecar/pkg sidecar/Cargo.lock
 ```
 
 The build wrapper rejects any other Rust/Cargo/wasm-pack version, remaps host
 paths out of the binary, records source and artifact hashes in
-`sidecar/pkg/PROVENANCE.json`, and marks the generated package private. CI
-repeats the build on Linux and requires a byte-identical tracked package. Never
+`sidecar/pkg/PROVENANCE.json`, and marks the generated package private. Never
 update `sidecar/Cargo.lock` or its notices without rebuilding the WASM that the
 browser actually imports.
+
+The tracked package is the Linux CI rebuild, and only a Linux rebuild
+reproduces it. The build is byte-deterministic for a given host — the same
+bytes from any checkout path on the same machine — but Cargo derives each
+crate's metadata hash from the full rustc version string, host triple
+included, so a macOS rebuild differs from CI's in its `TypeId` constants and
+symbol ordering even at identical sources and pinned tool versions. Rebuild
+locally to test the change, then push and take the bytes CI produces: the
+**Verify and deploy** workflow's `sidecar-reproducibility` job publishes its
+rebuild as the `canonical-sidecar-pkg` artifact whenever the tracked package
+differs. Commit `pkg/typeset_sidecar_bg.wasm` and `pkg/PROVENANCE.json` from
+that artifact — not the local build — and confirm the job's next run reports a
+byte-for-byte match.
 
 The Plass-owned sidecar audit currently reports no vulnerabilities. Its two
 informational unmaintained-package advisories are documented in `SECURITY.md`
@@ -77,7 +89,8 @@ inspects `dist/` rather than source files.
 
 The GitHub **Verify and deploy** workflow pins Node and Rust, then runs the npm
 and sidecar Rust audits, sidecar source tests, license, unit, layout, browser,
-build, production-artifact, and byte-reproducible sidecar gates. CodeQL runs separately on
+build, and production-artifact gates, plus an advisory sidecar-reproducibility
+check that warns rather than blocks. CodeQL runs separately on
 pushes, pull requests from this repository, a weekly schedule, and manual
 dispatches. Run the same gates locally; a remote green check is not a
 substitute for verifying the exact release worktree.

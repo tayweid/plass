@@ -27,7 +27,7 @@
     "package.json": "fdfbf7940f2c95b5416b56863d45ae357d34e2b6ac9b94ebe7b85192a330607e",
     "typeset_sidecar.d.ts": "64f5dbf53f20231b919e146ded4be93ebf59bc4f6c1e322de13a9b70d573da53",
     "typeset_sidecar.js": "7ea04a69abd292f1763dbe7c61be1385278fff2e350c2602ff87b52ea6c659f3",
-    "typeset_sidecar_bg.wasm": "3b858f50ca0d1ad60b00acaaf62560a35adaef65f3511321ee0a5fd4639789d7",
+    "typeset_sidecar_bg.wasm": "8be3dd182b4e653d596b8468bd0054caaa47d7b9d277bd0ded01ec065614aa2e",
     "typeset_sidecar_bg.wasm.d.ts": "e4bbbe60e7a318cc3df8d99c252b2ac9c7fbeab0334cde6cec035a64650d6bc3"
   }
 }
