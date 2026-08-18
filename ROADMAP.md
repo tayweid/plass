@@ -166,4 +166,14 @@ a feature touches the oracle machinery.
   identical reinstall when the compiler settles. Mapped page geometry is held
   while a replacement is pending; there is no frozen-prefix, caret-ownership,
   or timed healing policy.
+- **Offline launch for the installed PWA.** There is no service worker, so
+  the installed app is a standalone window that fetches plass.tayweid.io on
+  every launch and cannot open without a network — an odd gap for an editor
+  whose documents already live in IndexedDB and whose privacy claim is that
+  nothing leaves the machine. Precaching the shell is complicated by the
+  28 MB Typst compiler WASM (plus the renderer and sidecar), so the useful
+  version is probably a shell-plus-sidecar cache that opens documents and
+  types immediately, with compiled-oracle features degrading until the
+  compiler is available. Pages serves everything `max-age=600`, so a worker
+  also decides how an update reaches an already-open app.
 - Dogfooding: write a real problem set / lecture note; harvest frictions.
