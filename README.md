@@ -11,10 +11,20 @@ coordinate the line and page decisions. The editing surface *is* the output
 surface: native browser text with publication layout imposed as
 presentation-only decorations.
 
-Plass grew from the design in
-[`wysiwyg-typeset-editor-spec.md`](./wysiwyg-typeset-editor-spec.md). That file
-records the original direction; the fidelity contract and architecture below
-describe the current implementation.
+**Why this exists.** Document tools split into two families. Markup-and-compile
+tools (LaTeX, Typst, Overleaf) typeset beautifully but make you write in source
+and glance at a preview — you are always looking at a representation of the
+document, never the document. WYSIWYG editors (Typora, Word, Docs) let you work
+in the document itself but top out at browser-grade layout: greedy line
+breaking, no real pagination. Plass threads the needle by keeping the document
+in the DOM — native selection, IME, accessibility — and demoting the
+typesetting engine to a *layout oracle* whose decisions are imposed as
+presentation-only decorations. The browser becomes a rasterizer following
+instructions rather than a layout engine making its own, worse ones. The
+original design argument is preserved in
+[`docs/archive/wysiwyg-typeset-editor-spec.md`](./docs/archive/wysiwyg-typeset-editor-spec.md);
+the fidelity contract and architecture below describe the current
+implementation.
 
 > **Public preview:** Try Plass at <https://plass.tayweid.io/>. Important work
 > should still be backed up. The formal release gate remains open while the
@@ -32,13 +42,11 @@ versions when it is opened online.
 ```sh
 npm ci
 npm run dev      # → http://localhost:5199
-npm test         # unit, round-trip, and security-boundary tests
-npm run test:layout
-npm run test:browser
-npm run build    # typecheck + production build (static site in dist/)
-npm run verify:licenses
-npm run verify:production
 ```
+
+Before pushing, run the verification sequence in
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) — that file is the one home for the
+command list, so copies of it elsewhere can't drift.
 
 ## Fidelity
 
@@ -312,8 +320,8 @@ Current architecture notes:
   workflow.
 - [`PORT.md`](./PORT.md) records the Typst line-mirror rationale, certified
   scope, and implementation status.
-- [`IMPROVEMENT_PLAN.md`](./IMPROVEMENT_PLAN.md) records the completed layout
-  hardening sessions and their regression gates.
+- [`docs/archive/`](./docs/archive/) holds frozen history: the pre-Plass design
+  spec and the completed layout-hardening session log.
 - [`RELEASING.md`](./RELEASING.md) is the public-release checklist.
 - [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md) explains software and
   font license notices.
