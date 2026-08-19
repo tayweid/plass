@@ -401,3 +401,45 @@ test('Escape backs out of naming without saving', async ({ page }) => {
   expect(await page.evaluate(() => (window as any).__fm.name)).toBe('Plass');
   await expect(chip).toHaveText('Plass');
 });
+
+test('renaming a Markdown document keeps it Markdown', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!(window as any).__fm);
+
+  const out = await page.evaluate(async () => {
+    const app = window as typeof window & {
+      view: import('prosemirror-view').EditorView;
+      __fm: {
+        loadHandle(handle: FileSystemFileHandle, dir: FileSystemDirectoryHandle): Promise<boolean>;
+        rename(name: string): Promise<void>;
+        handle: FileSystemFileHandle;
+      };
+    };
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(`rn-${Math.random().toString(36).slice(2)}`, { create: true });
+    const handle = await dir.getFileHandle('Block_Outline.md', { create: true });
+    const writable = await handle.createWritable();
+    await writable.write('# Microeconomics Outline\n\nPart A / Coordination\n');
+    await writable.close();
+
+    await app.__fm.loadHandle(handle, dir);
+    await app.__fm.rename('Block_Outline_2');
+
+    // An edit after the rename must still be written as Markdown: renaming a
+    // .md file to .typ left its Markdown bytes behind a Typst extension, and
+    // reopening turned every heading into a raw island.
+    const { state } = app.view;
+    app.view.dispatch(state.tr.insertText('Extra. ', 1));
+    await new Promise((resolve) => setTimeout(resolve, 1_700));
+
+    const names: string[] = [];
+    for await (const key of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) names.push(key);
+    return { names, name: app.__fm.handle.name, bytes: await (await app.__fm.handle.getFile()).text() };
+  });
+
+  expect(out.name).toBe('Block_Outline_2.md');
+  expect(out.names).toEqual(['Block_Outline_2.md']);
+  expect(out.bytes).toContain('Extra.');
+  expect(out.bytes).toMatch(/^# .*Microeconomics Outline/m); // a Markdown heading
+  expect(out.bytes).not.toContain('#set page'); // not a Typst preamble
+});

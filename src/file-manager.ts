@@ -61,6 +61,14 @@ type WriteResult = 'clean' | 'pending' | 'conflict' | 'stale' | 'noop';
 
 export class FileManager {
   handle: FileSystemFileHandle | null = null;
+  /** The format the open document is written in — its file's extension.
+   *  A document's format IS its file's, so nothing Plass does on the user's
+   *  behalf may change one without rewriting the other: a Markdown file
+   *  renamed to .typ is read back as Typst, and its headings return as raw
+   *  islands. Tracked rather than derived from the handle, because fallback
+   *  mode has a document and a name but no handle to read it off. */
+  private format: '.md' | '.typ' = '.typ';
+
   /** Project folder: relative asset paths resolve inside it. */
   dir: FileSystemDirectoryHandle | null = null;
   name = DEFAULT_DOC_NAME;
@@ -244,6 +252,7 @@ export class FileManager {
     this.conflict = false;
     this.changeRevision = 0;
     this.name = name;
+    this.format = '.typ';
     this.dirty = false;
     this.hooks.setDoc(doc ?? this.hooks.emptyDoc());
     this.hooks.onState();
@@ -292,6 +301,7 @@ export class FileManager {
     this.conflict = false;
     this.changeRevision = 0;
     this.name = file.name.replace(/\.(typ|md)$/i, '');
+    this.format = isMd(file.name) ? '.md' : '.typ';
     this.dirty = false;
     this.hooks.setDoc(doc);
     this.hooks.onState();
@@ -383,6 +393,7 @@ export class FileManager {
     this.conflict = false;
     this.changeRevision++;
     this.name = fileName.replace(/\.typ$/i, '');
+    this.format = '.typ';
     this.dirty = true;
     await this.enqueueWrite(overwriteConfirmed);
     this.hooks.message(`Saved — ${dir.name}/${fileName}`);
@@ -518,7 +529,7 @@ export class FileManager {
     // First save: the paper gets a home. One question — where should it
     // live? — and the folder IS the project from then on.
     if (typeof window.showDirectoryPicker !== 'function') {
-      this.exportCopy();
+      await this.downloadCopy(this.format);
       return;
     }
     await this.openFolder('save');
@@ -537,18 +548,22 @@ export class FileManager {
 
   /** Rename the document; renames the on-disk file too when supported. */
   async rename(raw: string) {
-    const name = raw.replace(/\.typ$/i, '').replace(/[\\/:*?"<>|]/g, '-').trim();
+    // Renaming is a name change, never a format change — the file keeps the
+    // extension it already has, and a typed one is stripped rather than
+    // stacked ("Notes.md" must not become "Notes.md.typ").
+    const ext = this.format;
+    const name = raw.replace(/\.(typ|md)$/i, '').replace(/[\\/:*?"<>|]/g, '-').trim();
     if (!name || name === this.name) return;
     if (this.handle) {
       const move = (this.handle as { move?: (n: string) => Promise<void> }).move;
       if (typeof move === 'function') {
         try {
-          await move.call(this.handle, `${name}.typ`);
+          await move.call(this.handle, `${name}${ext}`);
           this.name = name;
           this.hooks.onState();
-          this.hooks.message(`Renamed to ${name}.typ`);
+          this.hooks.message(`Renamed to ${name}${ext}`);
           try {
-            await addRecent(this.handle, `${name}.typ`);
+            await addRecent(this.handle, `${name}${ext}`);
             await idbSet('last', this.handle);
           } catch {
             /* non-fatal */
@@ -561,7 +576,7 @@ export class FileManager {
       }
       this.name = name;
       this.hooks.onState();
-      this.hooks.message(`Name set to “${name}” — the file on disk keeps its old name; use Export → .typ for a renamed copy`);
+      this.hooks.message(`Name set to “${name}” — the file on disk keeps its old name; use Export for a renamed copy`);
       return;
     }
     this.name = name;
@@ -587,15 +602,23 @@ export class FileManager {
     });
   }
 
-  exportCopy() {
-    const text = docToTyp(this.hooks.getDoc());
+  /** Download the document in one format. The explicit ".typ" export always
+   *  says .typ; a save with no filesystem APIs to save through must say the
+   *  document's OWN format, or the fallback path quietly converts the file. */
+  private async downloadCopy(ext: '.md' | '.typ') {
+    const fileName = `${this.name}${ext}`;
+    const text = await this.serialize(fileName);
     const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${this.name}.typ`;
+    a.download = fileName;
     a.click();
     URL.revokeObjectURL(a.href);
     this.hooks.message(`Downloaded ${a.download}`);
+  }
+
+  exportCopy() {
+    void this.downloadCopy('.typ');
   }
 
   /** Reconnect this tab's own restored editor snapshot to its file without
@@ -614,6 +637,7 @@ export class FileManager {
     this.pendingRestore = null;
     this.diskBaseline = diskText;
     this.name = file.name.replace(/\.(typ|md)$/i, '');
+    this.format = isMd(file.name) ? '.md' : '.typ';
     this.conflict = localText !== diskText;
     this.dirty = this.conflict;
     this.hooks.onState();
@@ -655,6 +679,7 @@ export class FileManager {
       const keepSession = this.hooks.hasSessionDoc?.() ?? false;
       this.pendingRestore = { handle, dir, keepSession, startRevision: this.changeRevision };
       this.name = handle.name.replace(/\.(typ|md)$/i, '');
+      this.format = isMd(handle.name) ? '.md' : '.typ';
       this.dirty = keepSession;
       this.hooks.onState();
       const attempt = () => {
@@ -754,6 +779,7 @@ export class FileManager {
       this.conflict = false;
       this.changeRevision = 0;
       this.name = file.name.replace(/\.(typ|md)$/i, '');
+      this.format = isMd(file.name) ? '.md' : '.typ';
       this.dirty = false;
       this.hooks.setDoc(doc);
       this.hooks.onState();
