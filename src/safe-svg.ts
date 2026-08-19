@@ -5,7 +5,13 @@
 
 import DOMPurify from 'dompurify';
 
-const ACTIVE_ELEMENTS = new Set(['script', 'foreignobject', 'iframe', 'object', 'embed']);
+const ACTIVE_ELEMENTS = new Set(['script', 'iframe', 'object', 'embed']);
+// foreignObject hosts arbitrary HTML and is banned from RENDERED output. The
+// detached-extraction path must keep it: Typst's text-selection layer (the
+// .tsel spans every oracle reads) is HTML inside <foreignObject>. There its
+// content is sanitized with the HTML profile and the second pass below, so
+// what survives is inert text spans.
+const RENDERED_FORBIDDEN = new Set([...ACTIVE_ELEMENTS, 'foreignobject']);
 const LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const SAFE_DATA_IMAGE = /^data:image\/(?:png|jpe?g|gif|webp);base64,/i;
 
@@ -38,20 +44,27 @@ function safeReference(el: Element, value: string): boolean {
  * rules and intentionally distrusts even event attributes emitted by the
  * renderer itself.
  */
-export function sanitizedTypstSvg(svg: string): DocumentFragment {
+export function sanitizedTypstSvg(svg: string, textLayer = false): DocumentFragment {
+  const forbidden = textLayer ? ACTIVE_ELEMENTS : RENDERED_FORBIDDEN;
   const fragment = DOMPurify.sanitize(svg, {
-    USE_PROFILES: { svg: true, svgFilters: true },
+    USE_PROFILES: { svg: true, svgFilters: true, ...(textLayer ? { html: true } : {}) },
     RETURN_DOM_FRAGMENT: true,
-    FORBID_TAGS: [...ACTIVE_ELEMENTS],
+    FORBID_TAGS: [...forbidden],
     // Typst outlines glyphs once and paints them with <use href="#…">.
     // DOMPurify excludes <use> by default because it can load externally;
     // our second pass permits fragment-only references and strips the rest.
-    ADD_TAGS: ['use'],
+    // The text layer is <h5:div class="tsel"> (+ nested h5:span) inside
+    // foreignObject; the HTML parser keeps the prefix as a literal tag name,
+    // so the names are allowlisted verbatim. foreignObject must also be
+    // declared an HTML integration point or DOMPurify's namespace check
+    // force-removes its HTML children regardless of the tag allowlist.
+    ADD_TAGS: textLayer ? ['use', 'foreignobject', 'h5:div', 'h5:span'] : ['use'],
     ADD_ATTR: ['href', 'xlink:href', 'target', 'rel', 'referrerpolicy'],
+    ...(textLayer ? { HTML_INTEGRATION_POINTS: { 'annotation-xml': true, foreignobject: true } } : {}),
   }) as DocumentFragment;
 
   for (const el of [...fragment.querySelectorAll('*')]) {
-    if (ACTIVE_ELEMENTS.has(el.localName)) {
+    if (forbidden.has(el.localName)) {
       el.remove();
       continue;
     }
@@ -82,9 +95,10 @@ export function mountTypstSvg(target: Element, svg: string): SVGSVGElement | nul
   return target.querySelector('svg');
 }
 
-/** Create a detached container for layout/text extraction. */
+/** Create a detached container for layout/text extraction. Keeps the
+ * (sanitized) foreignObject text layer — every oracle reads .tsel spans. */
 export function parseTypstSvg(svg: string): HTMLDivElement {
   const div = document.createElement('div');
-  mountTypstSvg(div, svg);
+  div.replaceChildren(sanitizedTypstSvg(svg, true));
   return div;
 }

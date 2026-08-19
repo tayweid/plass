@@ -25,6 +25,7 @@ declare global {
   interface Window {
     view: import('prosemirror-view').EditorView;
     __pagLog: () => string[];
+    __pageOracle: unknown;
     __suffixPaginationStats: (reset?: boolean) => SuffixPaginationStats;
   }
 }
@@ -67,6 +68,22 @@ async function latestPagination(page: Page) {
 test('a late edit in a 40–50-page document recomputes only a stable suffix', async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto('/?new=1');
+
+  // The suffix planner and comparator are FALLBACK-engine machinery: when the
+  // page oracle answers, a late edit paginates on the exact/held path and the
+  // shadow comparison never runs. Pin the oracle to fail so every pass runs
+  // the fallback engine deterministically.
+  await page.evaluate(() => {
+    const oracle = window.__pageOracle as unknown as {
+      clear: () => void;
+      request: (sig: string) => void;
+      results: Map<string, { status: string; reason: string }>;
+    };
+    oracle.clear();
+    oracle.request = (sig: string) => {
+      oracle.results.set(sig, { status: 'fail', reason: 'test: page oracle disabled' });
+    };
+  });
 
   const initialLogLength = await page.evaluate(() => window.__pagLog().length);
   await page.evaluate(

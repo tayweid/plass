@@ -119,6 +119,35 @@ test('Typst SVG boundary strips active content and preserves safe glyph referenc
   expect(result.compromised).toBe(false);
 });
 
+test('extraction path keeps the tsel text layer but stays inert', async ({ page }) => {
+  await page.goto('/?new=1');
+  const result = await page.evaluate(async () => {
+    const { parseTypstSvg } = await import('/src/safe-svg.ts');
+    // Shape mirrors typst.ts output: h5:-prefixed HTML inside foreignObject.
+    const div = parseTypstSvg(
+      `<svg xmlns="http://www.w3.org/2000/svg" xmlns:h5="http://www.w3.org/1999/xhtml">
+        <g class="typst-page">
+          <foreignObject width="10" height="10"><h5:div class="tsel" style="font-size: 62px">Line one text</h5:div></foreignObject>
+          <foreignObject width="10" height="10"><h5:div class="tsel" onclick="globalThis.compromised = true"><script>globalThis.compromised = true</script><iframe src="https://evil.invalid"></iframe>Line two text</h5:div></foreignObject>
+        </g>
+      </svg>`,
+    );
+    return {
+      tselTexts: [...div.querySelectorAll('.tsel')].map((el) => el.textContent),
+      active: div.querySelectorAll('script, iframe, object, embed').length,
+      eventAttrs: [...div.querySelectorAll('*')].flatMap((el) =>
+        el.getAttributeNames().filter((name) => /^on/i.test(name)),
+      ),
+      compromised: Boolean((globalThis as typeof globalThis & { compromised?: boolean }).compromised),
+    };
+  });
+
+  expect(result.tselTexts).toEqual(['Line one text', 'Line two text']);
+  expect(result.active).toBe(0);
+  expect(result.eventAttrs).toEqual([]);
+  expect(result.compromised).toBe(false);
+});
+
 test('hostile bibliography values never become autocomplete markup', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {

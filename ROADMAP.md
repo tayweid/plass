@@ -118,6 +118,18 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
   also decides how an update reaches an already-open app.
 - Custom paper dimensions; inside/outside (two-sided) margins; footnote
   per-page vs continuous numbering and separator options.
+- **Compiled line-break verification skips hard-break and dash paragraphs.**
+  The compiled oracle's forced breaks fail to partition blocks containing
+  `hard_break` nodes or en/em dashes (`layoutAuthoritative` returns null) and
+  the port stands in — correct output, but those paragraphs never get
+  compiled verification. Surfaced when the sanitizer regression was fixed
+  (the text layer was stripped 2026-08-16 → 2026-08-19, blinding every
+  oracle); likely an offset mapping issue in `typst-oracle.ts` matching.
+- **Fallback paginator moves list items whole.** `container()` in
+  `typeset-plugin.ts` breaks lists between children only; while the page
+  oracle is pending (or failed) a long bullet crossing a page boundary
+  leaves a gap, and a bullet taller than one page gets no break at all.
+  Teach it the same line-boundary splitting `paragraph()` does.
 
 ## Not on this roadmap
 
