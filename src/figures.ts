@@ -29,6 +29,19 @@ export function setFigureFileManager(fm: FileManager) {
 
 export const isPathSrc = (src: string) => !!src && !/^(data:|blob:)/i.test(src) && !isRemoteSource(src);
 
+/** A project path that walks above the folder holding the document. The
+ * browser cannot read one — a granted directory handle has no parent — and
+ * Typst's own root rule rejects it too, so the answer is never "load it
+ * anyway" but "say why". Kept next to isPathSrc: same question, one file. */
+const escapesProjectRoot = (src: string) => src.split('/').includes('..');
+
+/** What to show in place of an image that would not load. */
+function missingImageReason(src: string): string {
+  return escapesProjectRoot(src)
+    ? `outside the project folder: ${src} — keep images beside the document, or open the parent folder as the project`
+    : `missing: ${src}`;
+}
+
 interface AssetDirectoryScope {
   dir: FileSystemDirectoryHandle;
   generation: number;
@@ -635,7 +648,7 @@ export class FigureView implements NodeView {
       } else {
         this.dom.classList.add('fig-missing');
         this.img.removeAttribute('src');
-        this.dom.dataset.placeholder = `missing: ${src}`;
+        this.dom.dataset.placeholder = missingImageReason(src);
         scheduleTypeset(this.view);
       }
     });
@@ -788,7 +801,7 @@ export class ImageView implements NodeView {
         this.dom.classList.remove('inline-image-missing');
         this.img.src = url;
       } else {
-        this.showMessage(`missing: ${src}`);
+        this.showMessage(missingImageReason(src));
         scheduleTypeset(this.view);
       }
     });

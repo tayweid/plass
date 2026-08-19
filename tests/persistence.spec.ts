@@ -356,3 +356,48 @@ test('an untouched document downloads under the app name', async ({ page }) => {
   });
   expect((await download).suggestedFilename()).toBe('Plass.typ');
 });
+
+test('a new document can be named on its first save', async ({ page }) => {
+  // The picker cannot open headless; record the name the save would have used.
+  await page.addInitScript(() => {
+    (window as any).__pickedWith = null;
+    (window as any).showDirectoryPicker = async () => {
+      (window as any).__pickedWith = (window as any).__fm?.name ?? null;
+      throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
+    };
+  });
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!(window as any).__fm);
+
+  const chip = page.locator('.tb-file');
+  await expect(chip).toHaveText('Plass');
+  await chip.click();
+  await page.keyboard.type('MiniExam');
+  await page.keyboard.press('Enter');
+
+  await expect.poll(() => page.evaluate(() => (window as any).__pickedWith)).toBe('MiniExam');
+  expect(await page.evaluate(() => (window as any).__fm.name)).toBe('MiniExam');
+  await expect(chip).toHaveText('MiniExam');
+});
+
+test('Escape backs out of naming without saving', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).__pickedWith = null;
+    (window as any).showDirectoryPicker = async () => {
+      (window as any).__pickedWith = (window as any).__fm?.name ?? null;
+      throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
+    };
+  });
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!(window as any).__fm);
+
+  const chip = page.locator('.tb-file');
+  await chip.click();
+  await page.keyboard.type('Discarded');
+  await page.keyboard.press('Escape');
+
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => (window as any).__pickedWith)).toBeNull();
+  expect(await page.evaluate(() => (window as any).__fm.name)).toBe('Plass');
+  await expect(chip).toHaveText('Plass');
+});

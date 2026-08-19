@@ -11,7 +11,12 @@ import { docToTyp } from './typ-serializer';
 import { loadRemoteImage, remoteImageStatus, sanitizeSvgImage } from './remote-images';
 import { FONT_FALLBACK } from './typst-config';
 import { runCompilerTask } from './typst-worker-client';
-import { COMPILER_DEADLINES, COMPILER_LIMITS, type CompilerAsset } from './typst-worker-protocol';
+import {
+  COMPILER_DEADLINES,
+  COMPILER_LIMITS,
+  isValidAssetPath,
+  type CompilerAsset,
+} from './typst-worker-protocol';
 import { resetCompilerCircuit } from './compiler-circuit';
 
 export { FONT_FALLBACK } from './typst-config';
@@ -174,13 +179,25 @@ async function prepareAssets(doc: PMNode): Promise<{
     // emitted image("figures/x.png") resolves against /main.typ untouched —
     // the exported file stays CLI-compilable.
     if (!src.startsWith('/') && assetReader) {
-      const data = await assetReader(src, COMPILER_LIMITS.assetBytes);
+      // A reference that walks above the project folder ("../logo.png") has no
+      // VFS location — Typst's own root rule forbids one just as the browser
+      // forbids reading it — so it gets a flat placeholder path. Registering it
+      // literally would produce "/../logo.png" and fail the whole compile, page
+      // oracle included, over one unreachable image.
+      const placeable = isValidAssetPath('/' + src);
+      const data = placeable ? await assetReader(src, COMPILER_LIMITS.assetBytes) : null;
       if (data) {
         addAsset('/' + src, data);
-      } else {
+      } else if (placeable) {
         // File deleted/renamed on disk: compile with a placeholder at the
         // same path instead of failing the whole export.
         addAsset('/' + src, await missingPlaceholder());
+        missing++;
+      } else {
+        n++;
+        const path = `/assets/img-${n}.png`;
+        map.set(src, path);
+        addAsset(path, await missingPlaceholder());
         missing++;
       }
     }

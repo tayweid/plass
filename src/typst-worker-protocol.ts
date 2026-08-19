@@ -10,7 +10,13 @@ export const COMPILER_LIMITS = {
   queryOutputBytes: 2 * 1024 * 1024,
   selectorCharacters: 256,
   assetPathCharacters: 1024,
-  pendingRequests: 24,
+  // Queue depth is a buffer, not a quota: a table-heavy document legitimately
+  // asks for hundreds of fragment previews at once, and a dropped request is a
+  // permanently blank table. What actually costs memory is the bytes those
+  // requests hold, so that is what the ceiling measures; the count only stops
+  // a runaway producer from growing the array without bound.
+  pendingRequests: 512,
+  pendingRequestBytes: 64 * 1024 * 1024,
 } as const;
 
 export const COMPILER_DEADLINES = {
@@ -49,7 +55,9 @@ function utf8Size(value: string, limit: number): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
-function validAssetPath(path: string): boolean {
+/** The VFS path rule. Exported so asset preparation can divert a document
+ * reference the compiler would reject, instead of failing the whole compile. */
+export function isValidAssetPath(path: string): boolean {
   return (
     path.startsWith('/') &&
     path.length <= COMPILER_LIMITS.assetPathCharacters &&
@@ -77,7 +85,7 @@ export function validateCompilerTask(task: CompilerTask): string | null {
   }
   let total = 0;
   for (const asset of task.assets) {
-    if (!validAssetPath(asset.path)) return 'Document contains an invalid compiler asset path';
+    if (!isValidAssetPath(asset.path)) return 'Document contains an invalid compiler asset path';
     if (!(asset.data instanceof Uint8Array)) return 'Document contains an invalid compiler asset';
     if (asset.data.byteLength > COMPILER_LIMITS.assetBytes) {
       return 'A compiler asset exceeds the 20 MiB limit';
@@ -92,4 +100,16 @@ export function validateCompilerTask(task: CompilerTask): string | null {
 
 export function utf8OutputSize(value: string): number {
   return utf8Size(value, Number.MAX_SAFE_INTEGER);
+}
+
+/** Bytes a queued task holds alive while it waits for the single worker.
+ * The queue's ceiling is expressed in these, not in request count, because
+ * memory is the resource the buffer actually spends. */
+export function compilerTaskBytes(task: CompilerTask): number {
+  if (task.kind === 'test-busy') return 0;
+  let bytes = task.source.length;
+  if (task.kind === 'document-svg' || task.kind === 'pdf') {
+    for (const asset of task.assets) bytes += asset.data.byteLength;
+  }
+  return bytes;
 }

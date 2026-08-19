@@ -62,16 +62,18 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   fileLabel.textContent = DEFAULT_DOC_NAME;
   fileLabel.title = 'Click to rename';
   fileLabel.addEventListener('click', () => {
-    // An unsaved paper's title is the save affordance: one click, one
-    // question — where should it live?
-    if (!fm.saved) {
-      void fm.save();
-      return;
-    }
     // Rename IN PLACE: the pill text itself becomes editable — no element
     // swap, no native input chrome, nothing moves. A caret appears, the
     // name is selected, and Enter/blur commit (Escape cancels).
+    //
+    // An unsaved paper names itself the same way and then goes on to the one
+    // question a first save asks — where should it live? The name has to be
+    // settable here: a folder picker has no filename field to type it into,
+    // so otherwise the paper is born as Plass.typ and can only be renamed
+    // afterwards. Escape backs out of the save entirely; ⌘S still saves
+    // straight away for anyone who does not care what it is called.
     if (fileLabel.isContentEditable) return;
+    const firstSave = !fm.saved;
     fileLabel.textContent = fm.name;
     try {
       fileLabel.contentEditable = 'plaintext-only';
@@ -95,9 +97,12 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       fileLabel.contentEditable = 'false';
       fileLabel.classList.remove('tb-file-editing');
       const name = (fileLabel.textContent ?? '').trim();
-      if (commit && name && name !== fm.name) void fm.rename(name);
-      else fileLabel.textContent = fm.name;
+      const renamed = commit && !!name && name !== fm.name;
+      if (!renamed) fileLabel.textContent = fm.name;
       view.focus();
+      // The save has to see the new name, so it waits for the rename.
+      const named = renamed ? fm.rename(name) : Promise.resolve();
+      if (commit && firstSave) void named.then(() => fm.save());
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Enter') {
@@ -509,8 +514,8 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       bar?.classList.toggle('doc-saved', !unsaved);
       bar?.classList.toggle('doc-unsaved', unsaved);
       if (!fm.saved) {
-        fileLabel.textContent = name;
-        fileLabel.title = 'Click to save — you pick the folder your paper lives in';
+        if (!fileLabel.isContentEditable) fileLabel.textContent = name;
+        fileLabel.title = 'Click to name and save — you pick the folder your paper lives in';
         return;
       }
       fileLabel.textContent = name;

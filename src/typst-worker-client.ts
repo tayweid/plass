@@ -12,6 +12,7 @@ import {
 } from './compiler-circuit';
 import {
   COMPILER_LIMITS,
+  compilerTaskBytes,
   type CompilerRequest,
   type CompilerResponse,
   type CompilerTask,
@@ -32,6 +33,7 @@ interface QueuedRequest<T> {
   id: number;
   epoch: number;
   task: CompilerTask;
+  bytes: number;
   timeoutMs: number;
   onMessage: (message: string) => void;
   resolve: (value: T) => void;
@@ -44,9 +46,16 @@ let nextId = 1;
 let timeoutId = 0;
 let idleTimer = 0;
 const queue: Array<QueuedRequest<unknown>> = [];
+let queuedBytes = 0;
 let workersCreated = 0;
 let tasksPosted = 0;
 let circuitRejects = 0;
+
+/** Empty the queue, restoring its byte budget, and hand back the entries. */
+function drainQueue(): Array<QueuedRequest<unknown>> {
+  queuedBytes = 0;
+  return queue.splice(0);
+}
 
 function terminateIdleWorker() {
   if (current || queue.length) return;
@@ -78,7 +87,7 @@ function rejectCurrent(code: 'timeout' | 'crash', message: string) {
     if (timedOutEpoch !== undefined) {
       openCompilerCircuit(timedOutEpoch);
       const retained: Array<QueuedRequest<unknown>> = [];
-      for (const queued of queue.splice(0)) {
+      for (const queued of drainQueue()) {
         if (queued.epoch <= timedOutEpoch) {
           queued.reject(new CompilerWorkerError(
             'timeout',
@@ -86,6 +95,7 @@ function rejectCurrent(code: 'timeout' | 'crash', message: string) {
           ));
         } else {
           retained.push(queued);
+          queuedBytes += queued.bytes;
         }
       }
       queue.push(...retained);
@@ -148,6 +158,7 @@ function pump() {
   if (current || !queue.length) return;
   window.clearTimeout(idleTimer);
   const request = queue.shift()!;
+  queuedBytes -= request.bytes;
   current = request;
   let instance: Worker;
   try {
@@ -188,14 +199,20 @@ export function runCompilerTask<T extends string | Uint8Array | unknown[] | null
       'Typst compilation is paused after a timeout; edit or reopen the document, or explicitly export again',
     ));
   }
-  if (queue.length + (current ? 1 : 0) >= COMPILER_LIMITS.pendingRequests) {
+  const bytes = compilerTaskBytes(task);
+  if (
+    queue.length + (current ? 1 : 0) >= COMPILER_LIMITS.pendingRequests ||
+    queuedBytes + bytes > COMPILER_LIMITS.pendingRequestBytes
+  ) {
     return Promise.reject(new CompilerWorkerError('queue-limit', 'Typst compiler queue is full; wait for current previews to finish'));
   }
   return new Promise<T>((resolve, reject) => {
+    queuedBytes += bytes;
     queue.push({
       id: nextId++,
       epoch,
       task,
+      bytes,
       timeoutMs: options.timeoutMs,
       onMessage: options.onMessage ?? (() => {}),
       resolve: resolve as (value: unknown) => void,
@@ -267,7 +284,7 @@ import.meta.hot?.dispose(() => {
   worker = null;
   current?.reject(new CompilerWorkerError('crash', 'Compiler worker reloaded'));
   current = null;
-  for (const request of queue.splice(0)) {
+  for (const request of drainQueue()) {
     request.reject(new CompilerWorkerError('crash', 'Compiler worker reloaded'));
   }
 });
