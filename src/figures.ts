@@ -127,7 +127,7 @@ async function assetUrl(path: string): Promise<string | null> {
 const ASSET_EVENT = 'typeset-assets-changed';
 
 function dataUrlBytes(src: string): { blob: Blob; ext: string } | null {
-  const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[^,]*)*),(.*)$/is.exec(src);
+  const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[^;,]*)*),(.*)$/is.exec(src);
   if (!m) return null;
   const ext = m[1] === 'svg+xml' ? 'svg' : m[1] === 'jpeg' ? 'jpg' : m[1];
   const mime = `image/${m[1]}`;

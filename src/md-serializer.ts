@@ -25,9 +25,9 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
   {
     const fm: string[] = [];
     doc.forEach((n) => {
-      if (n.type.name === 'doc_title' && n.textContent) fm.push(`title: "${n.textContent.replace(/"/g, '\\"')}"`);
-      if (n.type.name === 'doc_authors' && n.textContent) fm.push(`author: "${n.textContent.replace(/"/g, '\\"')}"`);
-      if (n.type.name === 'doc_date' && n.textContent) fm.push(`date: "${n.textContent.replace(/"/g, '\\"')}"`);
+      if (n.type.name === 'doc_title' && n.textContent) fm.push(`title: "${n.textContent.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
+      if (n.type.name === 'doc_authors' && n.textContent) fm.push(`author: "${n.textContent.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
+      if (n.type.name === 'doc_date' && n.textContent) fm.push(`date: "${n.textContent.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
     });
     // Markdown stays pure markdown: no app-branded metadata. Settings
     // live in .typ; saying so beats smuggling them into frontmatter.

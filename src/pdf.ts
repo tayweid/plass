@@ -26,7 +26,7 @@ export function setAssetReader(fn: (path: string, maxBytes: number) => Promise<U
 }
 
 function dataUrlToBytes(src: string): { data: Uint8Array; ext: string } | null {
-  const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[^,]*)*),(.*)$/is.exec(src);
+  const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[^;,]*)*),(.*)$/is.exec(src);
   if (!m) return null;
   const ext = m[1] === 'svg+xml' ? 'svg' : m[1] === 'jpeg' ? 'jpg' : m[1];
   const payload = m[3];
@@ -240,7 +240,8 @@ export function compileDocSvg(doc: PMNode, onMsg: (m: string) => void = () => {}
   })();
 }
 
-/** Compile raw Typst source to PDF bytes (assets must already be mapped). */
+/** Compile raw Typst source to PDF bytes (assets must already be mapped).
+ * Reached only via dynamic import() from tests/security.spec.ts — not dead code. */
 export function compileTyp(src: string, onMsg: (m: string) => void = () => {}): Promise<Uint8Array> {
   return runCompilerTask<Uint8Array>(
     { kind: 'pdf', source: src, assets: [] },

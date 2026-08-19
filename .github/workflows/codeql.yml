@@ -31,6 +31,11 @@ jobs:
         with:
           languages: javascript-typescript
           queries: security-extended
+          # sidecar/pkg is wasm-bindgen output; its committed bytes are CI's
+          # build and its alerts are triaged against the generator, not here.
+          config: |
+            paths-ignore:
+              - sidecar/pkg
       - uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           category: /language:javascript-typescript

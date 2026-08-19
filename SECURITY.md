@@ -125,3 +125,33 @@ decision covering each reachable advisory and its application-level
 mitigation. The public preview is not that decision. The compiler and renderer
 hashes and their conservative third-party license inventory are pinned by the
 notice verifier so a package change cannot silently inherit the old review.
+
+## Static analysis triage
+
+CodeQL (security-extended) runs on every push, PR, and weekly. Alert triage as
+of 2026-08-18 — fixed:
+
+- Polynomial-time regex on the image data-URL parser (`src/pdf.ts`,
+  `src/figures.ts`): the parameter-list group could backtrack
+  catastrophically on a crafted `data:` URL in an opened document; the inner
+  class now excludes `;` so the match is unambiguous.
+- Markdown frontmatter escaping (`src/md-serializer.ts`): backslashes are now
+  escaped before quotes, so a title/author/date containing `\` or ending in a
+  backslash cannot corrupt the YAML quoted string.
+
+Dismissed as false positives, with reasons:
+
+- `src/typst-compiler.worker.ts` missing-origin-check: the handler is a
+  dedicated same-origin Worker's `onmessage`; only the script holding the
+  Worker reference can post to it, so there is no cross-origin sender to
+  verify.
+- `src/tex-serializer.ts` incomplete escaping: `escapeTex` escapes backslash
+  first into a `\u0000` sentinel and rewrites it last, exactly to avoid the
+  double-escape bug the query looks for.
+- `src/md-serializer.ts` table-cell pipe escaping: the input is the
+  already-escaped output of `esc()` (backslash handled upstream), so the
+  isolated `\|` replace is complete in context.
+- `sidecar/pkg/typeset_sidecar.js` file-data-in-request: stock wasm-bindgen
+  loader fetching the same-origin `.wasm` binary, not data egress. The
+  generated package is excluded from analysis in `codeql.yml`; its alerts are
+  triaged against the generator, not the output.
