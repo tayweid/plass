@@ -471,8 +471,9 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
         label: 'PDF',
         title: 'Export PDF via Typst',
         run: () => {
-          const name = fm.name === DEFAULT_DOC_NAME ? 'document' : fm.name;
-          void import('./pdf').then(({ exportPdf }) => exportPdf(fm.currentDoc(), name, (m) => fm.notify(m)));
+          void import('./pdf').then(({ exportPdf }) =>
+            exportPdf(fm.currentDoc(), fm.name, (m) => fm.notify(m)),
+          );
         },
       },
       {

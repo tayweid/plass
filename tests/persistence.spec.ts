@@ -344,3 +344,15 @@ test('a fresh document names the tab after the app', async ({ page }) => {
   await expect(page).toHaveTitle('Plass.typ');
   await expect(page.locator('.tb-file')).toHaveText('Plass');
 });
+
+test('an untouched document downloads under the app name', async ({ page }) => {
+  // It used to export as document.typ, from when the default name was a
+  // placeholder. Plass is a name, so the file carries it like any other.
+  await page.goto('/');
+  const download = page.waitForEvent('download');
+  await page.evaluate(() => {
+    const fm = (window as typeof window & { __fm: { exportCopy(): void } }).__fm;
+    fm.exportCopy();
+  });
+  expect((await download).suggestedFilename()).toBe('Plass.typ');
+});

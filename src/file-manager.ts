@@ -580,7 +580,7 @@ export class FileManager {
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `${this.name === DEFAULT_DOC_NAME ? 'document' : this.name}.tex`;
+      a.download = `${this.name}.tex`;
       a.click();
       URL.revokeObjectURL(a.href);
       this.hooks.message(`Downloaded ${a.download} — vanilla LaTeX for journal submission`);
@@ -592,7 +592,7 @@ export class FileManager {
     const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${this.name === DEFAULT_DOC_NAME ? 'document' : this.name}.typ`;
+    a.download = `${this.name}.typ`;
     a.click();
     URL.revokeObjectURL(a.href);
     this.hooks.message(`Downloaded ${a.download}`);
