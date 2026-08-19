@@ -443,3 +443,67 @@ test('renaming a Markdown document keeps it Markdown', async ({ page }) => {
   expect(out.bytes).toMatch(/^# .*Microeconomics Outline/m); // a Markdown heading
   expect(out.bytes).not.toContain('#set page'); // not a Typst preamble
 });
+
+test('a second window refuses a file the first already has open', async ({ context }) => {
+  const dirName = `win-${Math.random().toString(36).slice(2)}`;
+  const seed = async (page: import('playwright/test').Page) => {
+    await page.goto('/?new=1');
+    await page.waitForFunction(() => !!(window as any).__fm);
+  };
+
+  const a = await context.newPage();
+  await seed(a);
+  const openedA = await a.evaluate(async (dirName) => {
+    const fm = (window as any).__fm;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(dirName, { create: true });
+    const h = await dir.getFileHandle('Shared.typ', { create: true });
+    const w = await h.createWritable();
+    await w.write('= Shared\n');
+    await w.close();
+    return await fm.loadHandle(h, dir);
+  }, dirName);
+  expect(openedA).toBe(true);
+
+  const b = await context.newPage();
+  await seed(b);
+  const openedB = await b.evaluate(async (dirName) => {
+    const fm = (window as any).__fm;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(dirName);
+    const h = await dir.getFileHandle('Shared.typ');
+    return await fm.loadHandle(h, dir);
+  }, dirName);
+
+  expect(openedB).toBe(false);
+  await expect(b.locator('#toast')).toContainText('already open in another Plass window');
+  expect(await b.evaluate(() => (window as any).__fm.handle)).toBeNull();
+  // The escape hatch still works.
+  await b.locator('#toast .toast-action').click();
+  await expect.poll(() => b.evaluate(() => (window as any).__fm.handle?.name ?? null)).toBe('Shared.typ');
+});
+
+test('a file renamed outside Plass stops autosave and says so', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!(window as any).__fm);
+  await page.evaluate(async () => {
+    const fm = (window as any).__fm;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(`mv-${Math.random().toString(36).slice(2)}`, { create: true });
+    const h = await dir.getFileHandle('Outline.typ', { create: true });
+    const w = await h.createWritable();
+    await w.write('= Outline\n');
+    await w.close();
+    await fm.loadHandle(h, dir);
+    // Renamed in Finder: the handle no longer resolves to a file.
+    await (await dir.getFileHandle('Outline.typ')).move('Outline_2.typ');
+  });
+
+  await page.evaluate(() => {
+    const { state } = window.view;
+    window.view.dispatch(state.tr.insertText('Edited. ', 1));
+  });
+
+  await expect(page.locator('#toast')).toContainText('has moved or been renamed', { timeout: 10_000 });
+  expect(await page.evaluate(() => (window as any).__fm.dirty)).toBe(true);
+});

@@ -12,6 +12,7 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { docToTyp } from './typ-serializer';
+import { holdOpenFile, openInAnotherWindow } from './open-files';
 import { typToDoc } from './typ-parser';
 import { INPUT_LIMITS, inputSizeError, readBoundedText } from './input-limits';
 
@@ -60,7 +61,23 @@ export const DEFAULT_DOC_NAME = 'Plass';
 type WriteResult = 'clean' | 'pending' | 'conflict' | 'stale' | 'noop';
 
 export class FileManager {
-  handle: FileSystemFileHandle | null = null;
+  private openHandle: FileSystemFileHandle | null = null;
+
+  /** The open file. Assigning it announces this window's claim on it, so no
+   *  assignment site can forget to (see open-files.ts), and clears a stale
+   *  "file has vanished" state along with the handle that vanished. */
+  get handle(): FileSystemFileHandle | null {
+    return this.openHandle;
+  }
+
+  set handle(handle: FileSystemFileHandle | null) {
+    this.openHandle = handle;
+    this.missing = false;
+    holdOpenFile(handle);
+  }
+
+  /** The file this document was being written to is no longer there. */
+  private missing = false;
   /** The format the open document is written in — its file's extension.
    *  A document's format IS its file's, so nothing Plass does on the user's
    *  behalf may change one without rewriting the other: a Markdown file
@@ -105,19 +122,47 @@ export class FileManager {
       this.dirty = true;
       this.hooks.onState();
     }
-    if (this.handle && !this.conflict) {
+    if (this.handle && !this.conflict && !this.missing) {
       clearTimeout(this.saveTimer);
       this.saveTimer = window.setTimeout(() => void this.flush(), 1200);
     }
   }
 
   private async flush() {
-    if (!this.handle || !this.dirty || this.conflict) return;
+    if (!this.handle || !this.dirty || this.conflict || this.missing) return;
     try {
       await this.enqueueWrite(false);
     } catch (e) {
-      console.warn('Autosave to file failed', e);
+      if (!this.noteMissingFile(e)) console.warn('Autosave to file failed', e);
     }
+  }
+
+  /** Whether a failure means the file is gone from where the handle pointed —
+   *  renamed, moved, or deleted outside Plass. Such a handle can never be
+   *  written again, so autosave has to stop AND say so: silence here means
+   *  every later keystroke fails to reach the disk while the document still
+   *  looks like it is saving. */
+  private noteMissingFile(error: unknown): boolean {
+    if ((error as DOMException | null)?.name !== 'NotFoundError') return false;
+    if (this.missing) return true;
+    this.missing = true;
+    this.dirty = true;
+    this.hooks.onState();
+    const name = this.handle?.name ?? `${this.name}${this.format}`;
+    const text = `${name} has moved or been renamed — Plass can no longer save to it, and your editor copy is safe`;
+    const action = { label: 'Save to a folder…', run: () => void this.saveElsewhere() };
+    if (this.hooks.messageAction) this.hooks.messageAction(text, action);
+    else this.hooks.message(text);
+    return true;
+  }
+
+  /** Re-home a document whose file vanished: let go of the dead handle and
+   *  run the ordinary first-save flow, which asks where it should live. */
+  private async saveElsewhere() {
+    this.handle = null;
+    this.diskBaseline = null;
+    this.hooks.onState();
+    await this.save();
   }
 
   private async writeText(handle: FileSystemFileHandle, text: string) {
@@ -236,6 +281,7 @@ export class FileManager {
         this.hooks.message(`Overwrote ${handle.name} with the Plass version`);
       }
     } catch (e) {
+      if (this.noteMissingFile(e)) return;
       console.warn('Conflict overwrite failed', e);
       this.hooks.message('Could not overwrite the changed file');
     }
@@ -277,12 +323,26 @@ export class FileManager {
     handle: FileSystemFileHandle,
     dir: FileSystemDirectoryHandle | null = null,
     discardConfirmed = false,
+    stealConfirmed = false,
   ): Promise<boolean> {
     const file = await handle.getFile();
     const sizeError = this.documentSizeError(file);
     if (sizeError) {
       this.hooks.message(sizeError);
       return false;
+    }
+    // One window per file: a second window would autosave against its own
+    // baseline and quietly overwrite the first. Say where the file already
+    // is, and leave a way through in case that window is gone or wedged.
+    if (!stealConfirmed) {
+      const elsewhere = await openInAnotherWindow(handle);
+      if (elsewhere) {
+        this.hooks.messageAction?.(
+          `${elsewhere} is already open in another Plass window`,
+          { label: 'Open here anyway', run: () => void this.loadHandle(handle, dir, discardConfirmed, true) },
+        );
+        return false;
+      }
     }
     if (
       this.dirty &&
@@ -370,7 +430,7 @@ export class FileManager {
     }
     // The current document moves in, keeping its shown name — an unsaved
     // doc still called Plass becomes Plass.typ, matching the tab.
-    const fileName = `${this.name}.typ`;
+    const fileName = `${this.name}${this.format}`;
     let overwriteConfirmed = false;
     if (intent === 'save') {
       let exists = false;
@@ -392,8 +452,7 @@ export class FileManager {
     this.diskBaseline = priorText;
     this.conflict = false;
     this.changeRevision++;
-    this.name = fileName.replace(/\.typ$/i, '');
-    this.format = '.typ';
+    this.name = fileName.replace(/\.(typ|md)$/i, '');
     this.dirty = true;
     await this.enqueueWrite(overwriteConfirmed);
     this.hooks.message(`Saved — ${dir.name}/${fileName}`);
@@ -521,6 +580,7 @@ export class FileManager {
           this.hooks.message(`Saved ${handle.name}`);
         }
       } catch (e) {
+        if (this.noteMissingFile(e)) return;
         console.warn(e);
         this.hooks.message('Save failed');
       }
