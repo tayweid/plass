@@ -42,7 +42,9 @@ export function contentSecurityPolicy(options: SecurityPolicyOptions = {}): stri
   return directives.map(([name, values]) => `${name}${values.length ? ` ${values.join(' ')}` : ''}`).join('; ');
 }
 
-/** Apply these at the CDN/origin when moving to a header-capable host. */
+/** Apply these at the CDN/origin when moving to a header-capable host.
+ * @public Referenced from RELEASING.md and SECURITY.md for self-hosters;
+ * intentionally exported despite having no in-app callers. */
 export const RECOMMENDED_RESPONSE_HEADERS = {
   'Content-Security-Policy': contentSecurityPolicy({ responseHeader: true }),
   'Referrer-Policy': 'no-referrer',
@@ -56,7 +58,8 @@ export const RECOMMENDED_RESPONSE_HEADERS = {
 
 /** Browser regression hook. This module is not part of the production app
  * bundle; calling Function from a served module avoids automation-runtime
- * exemptions that can apply to code injected directly by Playwright. */
+ * exemptions that can apply to code injected directly by Playwright.
+ * Reached only via dynamic import() from tests/security.spec.ts — not dead code. */
 export function testJavaScriptEvalBlocked(): boolean {
   try {
     Function('return 1')();

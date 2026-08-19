@@ -19,9 +19,10 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "npm run verify:sidecar && npm run check:unused && npm run check:cycles && tsc --noEmit && vite build",
+    "build": "npm run verify:sidecar && npm run check:unused && npm run check:exports && npm run check:cycles && tsc --noEmit && vite build",
     "check:cycles": "node --import tsx scripts/check-import-cycles.ts",
     "check:unused": "node --import tsx scripts/check-unused.ts",
+    "check:exports": "knip --include exports,types",
     "generate:notices": "node --import tsx scripts/generate-third-party-notices.ts && node --import tsx scripts/generate-sidecar-notices.ts && node --import tsx scripts/generate-typst-wasm-notices.ts",
     "generate:typst-wasm-notices": "node --import tsx scripts/generate-typst-wasm-notices.ts --generate",
     "verify:licenses": "node --import tsx scripts/generate-third-party-notices.ts --check && node --import tsx scripts/generate-sidecar-notices.ts --check && node --import tsx scripts/generate-typst-wasm-notices.ts --check",
@@ -58,6 +59,7 @@
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^26.1.1",
+    "knip": "^6.32.2",
     "playwright": "^1.61.1",
     "tsx": "^4.23.0",
     "typescript": "^5.6.2",

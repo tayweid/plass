@@ -3,7 +3,7 @@
 // list. The BibTeX source lives in a document attribute — autosaved,
 // undoable, and embedded in the .typ export so files stay self-contained.
 
-import { Plugin, PluginKey, type Command, type EditorState } from 'prosemirror-state';
+import { Plugin, PluginKey, type EditorState } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView, type NodeView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
@@ -271,52 +271,6 @@ export class BibliographyView implements NodeView {
   }
 }
 
-/** Insert a citation; ensure a bibliography block exists at the end. */
-export function insertCitation(view: EditorView, key: string, from?: number, to?: number) {
-  const { state } = view;
-  const node = schema.nodes.citation.create({ key });
-  let tr =
-    from !== undefined && to !== undefined
-      ? state.tr.replaceWith(from, to, node)
-      : state.tr.replaceSelectionWith(node);
-  let hasBib = false;
-  tr.doc.descendants((n) => {
-    if (n.type.name === 'bibliography') hasBib = true;
-    return !hasBib;
-  });
-  if (!hasBib) tr = tr.insert(tr.doc.content.size, schema.nodes.bibliography.create());
-  view.dispatch(tr.scrollIntoView());
-}
-
-/** Read a .bib file into the document. */
-export function importBibliography(view: EditorView, message: (m: string) => void) {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = '.bib,text/plain';
-  input.addEventListener('change', async () => {
-    const file = input.files?.[0];
-    if (!file) return;
-    let content: string;
-    try {
-      content = (await readBoundedText(file, INPUT_LIMITS.bibliographyBytes, file.name))
-        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
-    } catch (error) {
-      console.warn('Could not import bibliography', error);
-      message(error instanceof InputLimitError ? error.message : `Could not read ${file.name}`);
-      return;
-    }
-    const entries = parseBibTeX(content);
-    if (!entries.length) {
-      message(`No entries found in ${file.name}`);
-      return;
-    }
-    view.dispatch(view.state.tr.setDocAttribute('bib', { name: file.name, content }));
-    message(`Imported ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} from ${file.name} — type @ to cite`);
-    view.focus();
-  });
-  input.click();
-}
-
 const BIB_TEMPLATE = `% BibTeX — one entry per work, e.g.:
 @article{smith21,
   author  = {Smith, Jane and Doe, John},
@@ -437,13 +391,4 @@ export function editBibliography(view: EditorView, message: (m: string) => void 
   document.body.appendChild(overlay);
   // Defer: menu handlers re-focus the editor after running their action.
   setTimeout(() => text.focus(), 0);
-}
-
-/** Command form used by the @-input rule when a key matches the bib. */
-export function citeCommand(key: string): Command {
-  return (_state, dispatch, view) => {
-    if (!view) return false;
-    if (dispatch) insertCitation(view, key);
-    return true;
-  };
 }

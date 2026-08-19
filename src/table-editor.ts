@@ -17,8 +17,9 @@ import { docToTyp } from './typ-serializer';
 import { parseTable } from './typ-parser';
 import { mountTypstSvg } from './safe-svg';
 import { resetCompilerCircuit } from './compiler-circuit';
+import { presetH, presetV, effective, cycleRule, ruleTitle, cellsOf, encodeCells } from './table-rules';
 
-interface CellModel {
+export interface CellModel {
   text: string;
   align: string | null;
   colspan: number;
@@ -59,12 +60,14 @@ interface GridModel {
   inset: string;
 }
 
-interface RuleSpan {
+export interface RuleSpan {
   i: number;
   a: number;
   b: number;
   w: 'light' | 'heavy' | 'none';
 }
+
+export type Rule = 'light' | 'heavy' | 'none';
 
 const RULE_RE = /table\.(hline|vline)\(([^)]*)\)\s*,?/g;
 const COLUMNS_RE = /columns\s*:\s*\(([^)]*)\)\s*,?/;
@@ -441,79 +444,8 @@ export function openTableEditor(view: EditorView, pos: number) {
   // ---------- grid ----------
   const WIDTH_CHOICES = ['auto', '1fr', '2fr', '3fr'];
 
-  // A boundary's effective rule = the explicit override, else the style
-  // preset's own rule ('heavy' booktabs top/bottom, 'light' booktabs header
-  // midrule, 'light' everywhere for grid). Clicking cycles the effective
-  // state; landing back on the preset value clears the override, so
-  // untouched tables keep emitting byte-identically.
-  type Rule = 'light' | 'heavy' | 'none';
-  const presetH = (y: number): Rule | undefined => {
-    if (model.style === 'grid') return 'light';
-    if (model.style === 'booktabs') {
-      if (y === 0 || y === model.rows.length) return 'heavy';
-      if (y === 1 && model.rows[0]?.some((c) => c.header)) return 'light';
-    }
-    return undefined;
-  };
-  const presetV = (): Rule | undefined => (model.style === 'grid' ? 'light' : undefined);
-  const effective = (map: Map<number, Rule>, i: number, preset: Rule | undefined): Rule | undefined =>
-    map.get(i) ?? preset;
-  const cycleRule = (map: Map<number, Rule>, i: number, preset: Rule | undefined) => {
-    const eff = effective(map, i, preset);
-    const next: Rule | undefined =
-      !eff || eff === 'none' ? 'light' : eff === 'light' ? 'heavy' : preset ? 'none' : undefined;
-    if (next === undefined || next === preset) map.delete(i);
-    else map.set(i, next);
-  };
-  const ruleTitle = (eff: Rule | undefined): string =>
-    !eff || eff === 'none' ? 'Add a rule here' : eff === 'light' ? 'Make this rule heavy' : 'Remove this rule';
-  // Per-cell editing decodes a boundary into one visual weight per grid
-  // cell (undefined = no line), applies the click, and re-encodes the
-  // minimal representation: nothing when it matches the style preset, a
-  // full-boundary rule when uniform, spans over the runs that differ
-  // otherwise. The canonical re-encode keeps hand-drawn cell patterns and
-  // whole-line rules from accumulating overlapping spans.
-  const cellsOf = (
-    i: number,
-    preset: Rule | undefined,
-    map: Map<number, Rule>,
-    spans: RuleSpan[],
-    n: number,
-  ): Array<Rule | undefined> => {
-    const baseRaw = map.get(i) ?? preset;
-    const base = baseRaw === 'none' ? undefined : baseRaw;
-    const arr = new Array<Rule | undefined>(n).fill(base);
-    for (const sp of spans) {
-      if (sp.i !== i) continue;
-      for (let c = sp.a; c < Math.min(sp.b, n); c++) arr[c] = sp.w === 'none' ? undefined : sp.w;
-    }
-    return arr;
-  };
-  const encodeCells = (
-    i: number,
-    preset: Rule | undefined,
-    map: Map<number, Rule>,
-    spans: RuleSpan[],
-    arr: Array<Rule | undefined>,
-  ) => {
-    for (let k = spans.length - 1; k >= 0; k--) if (spans[k].i === i) spans.splice(k, 1);
-    map.delete(i);
-    if (arr.every((v) => v === arr[0])) {
-      const v = arr[0];
-      if (v === preset) return; // exactly the preset — nothing to say
-      if (v) map.set(i, v);
-      else if (preset) map.set(i, 'none'); // suppress the preset everywhere
-      return;
-    }
-    let c = 0;
-    while (c < arr.length) {
-      const v = arr[c];
-      let d = c;
-      while (d < arr.length && arr[d] === v) d++;
-      if (v !== preset && (v || preset)) spans.push({ i, a: c, b: d, w: v ?? 'none' });
-      c = d;
-    }
-  };
+  // Rule boundary encode/decode helpers (presetH, presetV, effective,
+  // cycleRule, ruleTitle, cellsOf, encodeCells) live in ./table-rules.
 
   const renderGrid = (focus?: { r: number; c: number }) => {
     const t = document.createElement('table');
@@ -715,7 +647,7 @@ export function openTableEditor(view: EditorView, pos: number) {
       // both sides.
       for (const btr of t.querySelectorAll<HTMLTableRowElement>('tr[data-hy]')) {
         const y = +btr.dataset.hy!;
-        const preset = presetH(y);
+        const preset = presetH(model.style, model.rows, y);
         const rowTop = btr.getBoundingClientRect().top - gridRect.top + st;
         const arr = cellsOf(y, preset, model.hlines, model.hspans, totalCols);
         arr.forEach((w, c) => {
@@ -744,7 +676,7 @@ export function openTableEditor(view: EditorView, pos: number) {
         whole.addEventListener('click', () => {
           snapshot();
           for (let k = model.hspans.length - 1; k >= 0; k--) if (model.hspans[k].i === y) model.hspans.splice(k, 1);
-          cycleRule(model.hlines, y, presetH(y));
+          cycleRule(model.hlines, y, presetH(model.style, model.rows, y));
           commit();
         });
         gridEl.appendChild(whole);
@@ -754,7 +686,7 @@ export function openTableEditor(view: EditorView, pos: number) {
       // and below the table.
       for (let x = 0; x <= totalCols; x++) {
         if (!widthTds.length || !rowTrs.length) break;
-        const preset = presetV();
+        const preset = presetV(model.style);
         const at = boundaryAt(x);
         const arr = cellsOf(x, preset, model.vlines, model.vspans, rowTrs.length);
         arr.forEach((w, r) => {
@@ -783,7 +715,7 @@ export function openTableEditor(view: EditorView, pos: number) {
         whole.addEventListener('click', () => {
           snapshot();
           for (let k = model.vspans.length - 1; k >= 0; k--) if (model.vspans[k].i === x) model.vspans.splice(k, 1);
-          cycleRule(model.vlines, x, presetV());
+          cycleRule(model.vlines, x, presetV(model.style));
           commit();
         });
         gridEl.appendChild(whole);

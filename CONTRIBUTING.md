@@ -83,9 +83,9 @@ npx --no-install playwright install chromium firefox webkit
 ```
 
 Playwright starts its own Vite server on port 5199. `npm run build` includes
-the unused-code check, static import-cycle check, TypeScript check, and Vite
-production build. Production verification must run after that build because it
-inspects `dist/` rather than source files.
+the unused-code check, the knip unused-export check, the static import-cycle
+check, TypeScript check, and Vite production build. Production verification
+must run after that build because it inspects `dist/` rather than source files.
 
 The GitHub **Verify and deploy** workflow pins Node and Rust, then runs the npm
 and sidecar Rust audits, sidecar source tests, license, unit, layout, browser,

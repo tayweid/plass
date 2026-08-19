@@ -205,18 +205,6 @@ export function runCompilerTask<T extends string | Uint8Array | unknown[] | null
   });
 }
 
-/** Deterministic browser regression hook; production builds reject the task. */
-export async function testCompilerWatchdog(): Promise<CompilerWorkerError> {
-  if (!import.meta.env.DEV) throw new Error('Compiler watchdog probe is development-only');
-  try {
-    await runCompilerTask({ kind: 'test-busy', milliseconds: 5_000 }, { timeoutMs: 75 });
-  } catch (error) {
-    if (error instanceof CompilerWorkerError) return error;
-    throw error;
-  }
-  throw new Error('Compiler watchdog did not stop the worker');
-}
-
 /** Deterministic browser regression hook for timeout queue containment. */
 export async function testCompilerTimeoutCircuitBreaker(): Promise<{
   timedOut: CompilerWorkerError;
@@ -249,7 +237,8 @@ export async function testCompilerTimeoutCircuitBreaker(): Promise<{
   };
 }
 
-/** Development-only lifecycle counters for containment regression tests. */
+/** Development-only lifecycle counters for containment regression tests.
+ * Reached only via dynamic import() from tests/security.spec.ts — not dead code. */
 export function testCompilerLifecycleStats(): {
   circuitOpen: boolean;
   epoch: number;

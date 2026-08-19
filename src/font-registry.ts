@@ -167,18 +167,6 @@ export const FONT_CATALOG: readonly FontDefinition[] = [
   TEX_GYRE_PAGELLA,
 ];
 
-/** Previously offered machine-local names, retained only for compatibility. */
-export const LEGACY_FONT_NAMES = ['Charter', 'Palatino', 'Georgia', 'Times New Roman'] as const;
-
-/** The selector list used by older Plass builds. Kept here so migration and
- * compatibility UI do not grow another independent capability table. */
-export const HISTORICAL_FONT_CHOICES = [
-  DEFAULT_FONT.label,
-  STIX_TWO_TEXT.label,
-  TEX_GYRE_PAGELLA.label,
-  ...LEGACY_FONT_NAMES,
-] as const;
-
 export const COMMON_FONT_FILES = {
   math: 'NewCMMath-Regular.otf',
   mono: 'DejaVuSansMono.ttf',
