@@ -1712,7 +1712,9 @@ class TypesetView {
         breakBefore(a.pos, a.y, 'block');
       };
 
-      const atomic = (pos: number, node: PMNode) => {
+      /** `owner` is the enclosing list item, when this block is the first
+       *  thing inside one: moving the block whole must move the bullet too. */
+      const atomic = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
         const endPos = pos + node.nodeSize;
         const r = rectOf(pos);
         if (!r || r.height === 0) {
@@ -1722,12 +1724,12 @@ class TypesetView {
         const y = stackY(r.top, pos);
         const ufH = takeFnH(endPos);
         if (y + shift + r.height > bottomFor(ufH) + 0.5 && r.height <= contentH) {
-          breakStart(pos, y);
+          breakStart(owner?.pos ?? pos, owner?.y ?? y);
         }
         pageFnH += ufH;
       };
 
-      const paragraph = (pos: number, node: PMNode) => {
+      const paragraph = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
         const endPos = pos + node.nodeSize;
         const r = rectOf(pos);
         if (!r) {
@@ -1741,7 +1743,7 @@ class TypesetView {
           return;
         }
         const entry = this.cache.get(node);
-        if (!entry || entry.lines.length < 2) return atomic(pos, node);
+        if (!entry || entry.lines.length < 2) return atomic(pos, node, owner);
 
         const el = view.nodeDOM(pos) as HTMLElement;
         const lineH = parseFloat(getComputedStyle(el).lineHeight) || 24;
@@ -1769,7 +1771,7 @@ class TypesetView {
 
           if (k === 0) {
             // First line doesn't fit: the paragraph starts on the next page.
-            breakStart(pos, yTop);
+            breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
             pageFnH += ufH;
             continue;
           }
@@ -1789,7 +1791,7 @@ class TypesetView {
           // instead (unless it is taller than a page and must split somewhere).
           if (segStart === 0 && kb < 2) {
             if (r.height <= contentH) {
-              breakStart(pos, yTop);
+              breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
               pageFnH += ufH;
               continue;
             }
@@ -1870,6 +1872,9 @@ class TypesetView {
           pageFnH += takeFnH(endPos);
           return;
         }
+        // Breaks found below are inside the container, so a heading sitting
+        // above it is no longer the thing being pushed onto the next page.
+        sticky = null;
         node.forEach((child, offset) => {
           const childPos = pos + 1 + offset;
           const childEnd = childPos + child.nodeSize;
@@ -1879,13 +1884,52 @@ class TypesetView {
             return;
           }
           const y = stackY(cr.top, childPos);
-          const ufH = takeFnH(childEnd);
-          if (y + shift + cr.height > bottomFor(ufH) + 0.5 && cr.height <= contentH) {
-            breakBefore(childPos, y, 'block');
+          if (y + shift + cr.height <= bottomFor(peekFnH(childEnd)) + 0.5) {
+            pageFnH += takeFnH(childEnd);
+            return;
           }
-          pageFnH += ufH;
+          // The child overflows. A list item is NOT an atom: Typst breaks the
+          // prose inside it across pages like any other text, so break inside
+          // it too. Moving the whole item leaves the page short by the item's
+          // entire height — and an item taller than a page used to get no
+          // break at all, running straight off the bottom.
+          //
+          // Only the item's FIRST block carries the item as its owner: a break
+          // there must take the bullet with it, while a break before a later
+          // block genuinely belongs inside the item.
+          if (child.type.name === 'list_item') {
+            let owner: { pos: number; y: number } | undefined = { pos: childPos, y };
+            child.forEach((grand, grandOffset) => {
+              splitBlock(childPos + 1 + grandOffset, grand, owner);
+              owner = undefined;
+            });
+          } else {
+            splitBlock(childPos, child);
+          }
+          pageFnH += takeFnH(childEnd);
         });
         pageFnH += takeFnH(endPos);
+      };
+
+      /** Page-break one block wherever it sits — top level or nested in a
+       *  list item or quote. Mirrors the document-level dispatch below. */
+      const splitBlock = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
+        switch (node.type.name) {
+          case 'paragraph':
+            if (node.attrs.keep) atomic(pos, node, owner);
+            else paragraph(pos, node, owner);
+            break;
+          case 'bullet_list':
+          case 'ordered_list':
+          case 'blockquote':
+            container(pos, node);
+            break;
+          case 'table':
+            tableCase(pos, node);
+            break;
+          default:
+            atomic(pos, node, owner);
+        }
       };
 
       view.state.doc.forEach((node, offset) => {
