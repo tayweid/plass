@@ -730,7 +730,17 @@ export class FileManager {
 
   /** Reconnect to the file this window itself had open before a reload. */
   async restoreTabFile(): Promise<boolean> {
-    return this.tabKey ? this.restoreFrom(this.tabKey) : false;
+    return this.tabKey ? this.restoreFrom(this.tabKey, true) : false;
+  }
+
+  /** Take a file's NAME without its contents or its write access. A window
+   *  that cannot reopen its file still knows WHICH document it was showing,
+   *  and reverting the title to an untitled sheet throws that away for no
+   *  reason — losing access is not losing identity. */
+  private adoptFileIdentity(handle: FileSystemFileHandle) {
+    this.name = handle.name.replace(/\.(typ|md)$/i, '');
+    this.format = isMd(handle.name) ? '.md' : '.typ';
+    this.hooks.onState();
   }
 
   /** Reconnect to the last open file if the browser still grants access. */
@@ -738,15 +748,18 @@ export class FileManager {
     return this.restoreFrom('last');
   }
 
-  private async restoreFrom(key: string): Promise<boolean> {
+  private async restoreFrom(key: string, ownWindowFile = false): Promise<boolean> {
     if (!this.supportsFS) return false;
+    // Kept outside the try so a failure part-way through can still say which
+    // document this window was showing.
+    let handle: FileSystemFileHandle | null = null;
     try {
       const stored = (await idbGet(key)) as
         | FileSystemFileHandle
         | { handle: FileSystemFileHandle; dir: FileSystemDirectoryHandle }
         | null;
       if (!stored) return false;
-      const handle = 'handle' in stored ? stored.handle : stored;
+      handle = 'handle' in stored ? stored.handle : stored;
       const dir = 'handle' in stored ? stored.dir : null;
       const target = dir ?? handle;
       // A handle whose browser has no permissions API (or that needs none,
@@ -767,14 +780,19 @@ export class FileManager {
         }
         return true;
       }
-      if (perm !== 'prompt') return false;
+      if (perm !== 'prompt') {
+        // Access is gone for good, but the name is readable without it, and
+        // this window's own file is not in question. Keep the title.
+        console.warn(`Reconnect to ${handle.name} refused (permission ${perm})`);
+        if (ownWindowFile) this.adoptFileIdentity(handle);
+        return false;
+      }
       // The handle survives but needs a fresh grant, and that requires a
       // user gesture. Take on the file's identity NOW (the restored
       // session doc is its content) and finish on the first interaction.
       const keepSession = this.hooks.hasSessionDoc?.() ?? false;
       this.pendingRestore = { handle, dir, keepSession, startRevision: this.changeRevision };
-      this.name = handle.name.replace(/\.(typ|md)$/i, '');
-      this.format = isMd(handle.name) ? '.md' : '.typ';
+      this.adoptFileIdentity(handle);
       this.dirty = keepSession;
       this.hooks.onState();
       const attempt = () => {
@@ -786,7 +804,11 @@ export class FileManager {
       document.addEventListener('keydown', attempt, true);
       this.hooks.message(`Click anywhere to reconnect to ${handle.name}`);
       return false;
-    } catch {
+    } catch (e) {
+      // Never fail silently here: an unexplained return is how a refreshed
+      // window ends up calling itself untitled.
+      console.warn('Could not reconnect to the stored file', e);
+      if (ownWindowFile && handle) this.adoptFileIdentity(handle);
       return false;
     }
   }

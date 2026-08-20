@@ -565,3 +565,34 @@ test('the folder grant opens where the document already lives', async ({ page })
   // Chrome opens the dialog in the folder holding this file, not a default.
   expect(await page.evaluate(() => (window as any).__pickedStartIn)).toBe('Launched.typ');
 });
+
+for (const verdict of ['prompt', 'denied'] as const) {
+  test(`a reloaded window keeps its file's name when permission is ${verdict}`, async ({ page }) => {
+    await page.goto('/?new=1');
+    await page.waitForFunction(() => !!(window as any).__fm);
+    await page.evaluate(async () => {
+      const fm = (window as any).__fm;
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle(`pm-${Math.random().toString(36).slice(2)}`, { create: true });
+      const h = await dir.getFileHandle('Block_Outline.typ', { create: true });
+      const w = await h.createWritable();
+      await w.write('= Outline\n');
+      await w.close();
+      await fm.loadHandle(h, dir);
+    });
+    await page.waitForTimeout(500);
+
+    // On reload the browser has not carried the write grant over — which is
+    // what a file-handler launch gives you, and what used to make a refresh
+    // silently rename the document to an untitled sheet.
+    await page.addInitScript((verdict) => {
+      const proto = (self as any).FileSystemHandle?.prototype;
+      if (proto) proto.queryPermission = async () => verdict;
+    }, verdict);
+    await page.reload();
+    await page.waitForFunction(() => !!(window as any).__fm);
+
+    await expect.poll(() => page.evaluate(() => (window as any).__fm.name)).toBe('Block_Outline');
+    await expect(page.locator('.tb-file')).toHaveText('Block_Outline');
+  });
+}
