@@ -14,7 +14,7 @@ import { Plugin, TextSelection } from 'prosemirror-state';
 import { baseKeymap, chainCommands, exitCode, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import { redo, undo } from 'prosemirror-history';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
-import type { Mark, MarkType } from 'prosemirror-model';
+import { Slice, type Mark, type MarkType } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
 import { schema } from './schema';
 import { insertMath, mathDisplayRule, mathInlineRule } from './math';
@@ -264,6 +264,38 @@ export const baseKeys = keymap(baseKeymap);
  * text (code blocks and code-marked text keep their spaces — raw preserves
  * them in Typst too). Non-breaking spaces are meaningful and untouched.
  */
+/** Copying TEXT out of a bullet copies the text, not the bullet.
+ *
+ *  ProseMirror slices a selection at its own depth, so highlighting the words
+ *  in a list item yields ul > li > p rather than the words: paste that onto an
+ *  empty line and the line becomes a bullet. But a selection that begins and
+ *  ends inside ONE textblock carries no structure the user chose — they
+ *  dragged across words, not across blocks — so the words alone are what was
+ *  copied. Selections that really do span blocks keep every level they cross,
+ *  which is what makes copying two bullets still paste as two bullets.
+ */
+export function copyTextWithoutItsBlock(): Plugin {
+  return new Plugin({
+    props: {
+      transformCopied(slice) {
+        // Equal open depths on both sides is what "inside one block" looks
+        // like; anything else spans a boundary and keeps its structure.
+        if (slice.openStart < 1 || slice.openStart !== slice.openEnd) return slice;
+        let content = slice.content;
+        for (let depth = 0; depth < slice.openStart; depth++) {
+          if (content.childCount !== 1) return slice;
+          content = content.child(0).content;
+        }
+        // Only unwrap if what is left really is inline — the same shape can
+        // bottom out at a list item (select-all in a one-item list), and that
+        // is a structural copy however it was made.
+        if (content.childCount && !content.child(0).isInline) return slice;
+        return new Slice(content, 0, 0);
+      },
+    },
+  });
+}
+
 export function collapseSpaces(): Plugin {
   return new Plugin({
     appendTransaction(trs, _old, state) {
