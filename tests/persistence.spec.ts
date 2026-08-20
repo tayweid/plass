@@ -507,3 +507,61 @@ test('a file renamed outside Plass stops autosave and says so', async ({ page })
   await expect(page.locator('#toast')).toContainText('has moved or been renamed', { timeout: 10_000 });
   expect(await page.evaluate(() => (window as any).__fm.dirty)).toBe(true);
 });
+
+test('a reloaded window comes back to its own file, not an untitled sheet', async ({ page }) => {
+  // A "New" window is secondary, so it never restored the origin-wide "last"
+  // record — the same position an app window is in after a Finder launch.
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!(window as any).__fm);
+
+  const dirName = `rl-${Math.random().toString(36).slice(2)}`;
+  await page.evaluate(async (dirName) => {
+    const fm = (window as any).__fm;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(dirName, { create: true });
+    const h = await dir.getFileHandle('Block_Outline.typ', { create: true });
+    const w = await h.createWritable();
+    await w.write('= Microeconomics Outline\n\nPart A.\n');
+    await w.close();
+    await fm.loadHandle(h, dir);
+  }, dirName);
+
+  expect(await page.evaluate(() => (window as any).__fm.name)).toBe('Block_Outline');
+  await expect(page.locator('.tb-file')).toHaveText('Block_Outline');
+
+  await page.reload();
+  await page.waitForFunction(() => !!(window as any).__fm);
+
+  await expect.poll(() => page.evaluate(() => (window as any).__fm.name)).toBe('Block_Outline');
+  await expect(page.locator('.tb-file')).toHaveText('Block_Outline');
+  expect(await page.evaluate(() => (window as any).__fm.handle?.name ?? null)).toBe('Block_Outline.typ');
+  expect(await page.evaluate(() => (window as any).__fm.dir?.name ?? null)).toBe(dirName);
+});
+
+test('the folder grant opens where the document already lives', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).__pickedStartIn = 'unset';
+    (window as any).showDirectoryPicker = async (opts: any) => {
+      (window as any).__pickedStartIn = opts?.startIn?.name ?? null;
+      throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
+    };
+  });
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!(window as any).__fm);
+
+  await page.evaluate(async () => {
+    const fm = (window as any).__fm;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(`si-${Math.random().toString(36).slice(2)}`, { create: true });
+    const h = await dir.getFileHandle('Launched.typ', { create: true });
+    const w = await h.createWritable();
+    await w.write('= Launched\n');
+    await w.close();
+    // A Finder launch delivers a bare handle with no folder.
+    await fm.loadHandle(h, null);
+    await fm.attachFolder();
+  });
+
+  // Chrome opens the dialog in the folder holding this file, not a default.
+  expect(await page.evaluate(() => (window as any).__pickedStartIn)).toBe('Launched.typ');
+});

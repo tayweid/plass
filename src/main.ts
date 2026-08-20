@@ -26,6 +26,20 @@ import { resetCompilerCircuit } from './compiler-circuit';
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
 const SECONDARY_KEY = 'typeset-secondary-tab';
+const TAB_ID_KEY = 'typeset-tab-id';
+
+/** Where THIS window's open file is recorded. A window that reloads must
+ *  come back to its own document — the origin-wide 'last' record answers a
+ *  different question ("what did any window touch last"), and answering the
+ *  reload with it is what flashed another window's file into an app window. */
+function tabFileKey(): string {
+  let id = sessionStorage.getItem(TAB_ID_KEY);
+  if (!id) {
+    id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    sessionStorage.setItem(TAB_ID_KEY, id);
+  }
+  return `tab:${id}`;
+}
 
 /** Whether this tab owns the shared localStorage session and the
  *  last-file reconnect (the primary tab). Windows opened via "New"
@@ -47,6 +61,9 @@ function loadDoc(): PMNode {
   // its own work through the session branch below.
   if (new URLSearchParams(location.search).has('new')) {
     sessionStorage.removeItem(SESSION_KEY);
+    // window.open copies sessionStorage, so the inherited tab id would make
+    // this window adopt the opener's file. It gets its own on first use.
+    sessionStorage.removeItem(TAB_ID_KEY);
     sessionStorage.setItem(SECONDARY_KEY, '1');
     const url = new URL(location.href);
     url.searchParams.delete('new');
@@ -354,16 +371,30 @@ function openLaunched(files: ReadonlyArray<FileSystemFileHandle>) {
 // TDZ error and the launch is silently lost. Everything the handler
 // touches must already be live. App windows start on an empty sheet (see
 // loadDoc), so the launched file renders into blank space.
+let launching = false;
 window.launchQueue?.setConsumer((params) => {
-  if (params.files.length) openLaunched(params.files);
+  if (params.files.length) {
+    // Chrome delivers queued launch files synchronously here, so this is set
+    // before the reconnect below decides anything: a window reused for a new
+    // Finder launch must show THAT file, not race its previous one back in.
+    launching = true;
+    openLaunched(params.files);
+  }
 });
 
-// Reconnect to the last open file if the browser still grants access —
-// primary tab only: the IDB handle is shared across tabs, and a "New"
-// window (or a reloaded secondary) must keep its own document instead of
-// having the last-opened file load over it. App windows skip this too:
-// they open empty or with the launched file, never someone else's last.
-if (primaryTab && !standalone) void fileManager.restoreLast();
+// A reloaded window reconnects to the file IT had open — every kind of
+// window, app windows included: refreshing a document must not rename it
+// back to an untitled sheet. Only when this window never had one does the
+// origin-wide "last" record apply, and then only for a primary browser
+// tab: a "New" window (or a reloaded secondary) must keep its own
+// document, and an app window opens empty or with its launched file,
+// never someone else's last.
+fileManager.tabKey = tabFileKey();
+if (!launching) {
+  void fileManager.restoreTabFile().then((reconnected) => {
+    if (!reconnected && primaryTab && !standalone) void fileManager.restoreLast();
+  });
+}
 
 // App-level shortcuts (the browser's defaults would take over otherwise).
 window.addEventListener(

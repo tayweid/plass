@@ -13,6 +13,8 @@ interface Window {
   showOpenFilePicker?: (opts?: {
     types?: FilePickerType[];
     multiple?: boolean;
+    // A handle here opens the dialog where that file or folder lives.
+    startIn?: FileSystemHandle;
   }) => Promise<FileSystemFileHandle[]>;
   showSaveFilePicker?: (opts?: {
     suggestedName?: string;
@@ -48,7 +50,12 @@ declare module 'hyphenated-en-us' {
 }
 
 interface Window {
-  showDirectoryPicker?: (opts?: { mode?: 'read' | 'readwrite'; id?: string }) => Promise<FileSystemDirectoryHandle>;
+  showDirectoryPicker?: (opts?: {
+    mode?: 'read' | 'readwrite';
+    id?: string;
+    // A file handle here opens the dialog in that file's own folder.
+    startIn?: FileSystemHandle;
+  }) => Promise<FileSystemDirectoryHandle>;
 }
 
 // Launch Queue (PWA File Handling) — Chromium-only, not yet in lib.dom

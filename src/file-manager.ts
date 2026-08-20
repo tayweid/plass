@@ -74,7 +74,14 @@ export class FileManager {
     this.openHandle = handle;
     this.missing = false;
     holdOpenFile(handle);
+    // Every site assigns dir on the line after handle, so recording waits
+    // one microtask and captures the pair.
+    queueMicrotask(() => this.rememberTabFile());
   }
+
+  /** Where this WINDOW's open file is recorded, so a reload reconnects to
+   *  its own document. Set by the app; null in tests and leaves no trace. */
+  tabKey: string | null = null;
 
   /** The file this document was being written to is no longer there. */
   private missing = false;
@@ -312,7 +319,7 @@ export class FileManager {
       return;
     }
     try {
-      const [handle] = await window.showOpenFilePicker!({ types: TYP_TYPE });
+      const [handle] = await window.showOpenFilePicker!({ types: TYP_TYPE, startIn: this.dir ?? this.handle ?? undefined });
       await this.loadHandle(handle);
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') console.warn(e);
@@ -399,7 +406,13 @@ export class FileManager {
       return null;
     }
     try {
-      const dir = await window.showDirectoryPicker!({ mode: 'readwrite' });
+      // Start where the document already is. A Finder-launched file has a
+      // handle but no folder, and its own folder is the answer the user
+      // means — not whatever the browser last defaulted to.
+      const dir = await window.showDirectoryPicker!({
+        mode: 'readwrite',
+        startIn: this.dir ?? this.handle ?? undefined,
+      });
       return await this.adoptFolder(dir, intent);
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') console.warn(e);
@@ -474,7 +487,7 @@ export class FileManager {
   async attachFolder(): Promise<boolean> {
     if (!this.handle || typeof window.showDirectoryPicker !== 'function') return false;
     try {
-      const dir = await window.showDirectoryPicker!({ mode: 'readwrite' });
+      const dir = await window.showDirectoryPicker!({ mode: 'readwrite', startIn: this.handle });
       const segs = await dir.resolve(this.handle);
       if (!segs || segs.length !== 1) {
         this.hooks.message(`That folder doesn't contain ${this.handle.name} at its top level`);
@@ -705,11 +718,30 @@ export class FileManager {
     else this.hooks.message(`Reconnected — ${dir ? `${dir.name}/` : ''}${file.name}`);
   }
 
+  /** Remember which file THIS window has open. The origin-wide 'last'
+   *  record cannot answer "what was I editing?" — it answers "what did any
+   *  window touch most recently", which is exactly what used to flash
+   *  another window's document into an app window at launch. */
+  private rememberTabFile(): void {
+    if (!this.tabKey) return;
+    const record = this.handle ? { handle: this.handle, dir: this.dir } : null;
+    void idbSet(this.tabKey, record).catch((e) => console.warn('Could not record this window\u2019s file', e));
+  }
+
+  /** Reconnect to the file this window itself had open before a reload. */
+  async restoreTabFile(): Promise<boolean> {
+    return this.tabKey ? this.restoreFrom(this.tabKey) : false;
+  }
+
   /** Reconnect to the last open file if the browser still grants access. */
   async restoreLast(): Promise<boolean> {
+    return this.restoreFrom('last');
+  }
+
+  private async restoreFrom(key: string): Promise<boolean> {
     if (!this.supportsFS) return false;
     try {
-      const stored = (await idbGet('last')) as
+      const stored = (await idbGet(key)) as
         | FileSystemFileHandle
         | { handle: FileSystemFileHandle; dir: FileSystemDirectoryHandle }
         | null;
@@ -717,7 +749,10 @@ export class FileManager {
       const handle = 'handle' in stored ? stored.handle : stored;
       const dir = 'handle' in stored ? stored.dir : null;
       const target = dir ?? handle;
-      const perm = (await target.queryPermission?.({ mode: 'readwrite' })) ?? 'denied';
+      // A handle whose browser has no permissions API (or that needs none,
+      // like an origin-private one) is not a denial: try it and let the read
+      // below fail if it truly cannot be opened.
+      const perm = (await target.queryPermission?.({ mode: 'readwrite' })) ?? 'granted';
       if (perm === 'granted') {
         if (this.hooks.hasSessionDoc?.()) {
           const file = await handle.getFile();
