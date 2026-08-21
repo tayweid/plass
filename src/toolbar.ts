@@ -4,7 +4,7 @@
 // only dropdown is Recents, which is inherently a dynamic list.
 
 import { TextSelection } from 'prosemirror-state';
-import { setBlockType } from 'prosemirror-commands';
+import { setBlockType, toggleMark } from 'prosemirror-commands';
 import type { Command, EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { schema } from './schema';
@@ -382,6 +382,30 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     trigger.addEventListener('click', () => apply(next(current(view.state))));
     return { refresh };
   })();
+  // Inline text styles. The keyboard (⌘B, ⌘I, ⌘⇧X) and the input rules
+  // (**bold**, *italic*, ~~strike~~) stay the primary path; the flyout is
+  // for discoverability — strikethrough especially has no visible surface
+  // otherwise.
+  flyout(currentPod, '<span class="ico tico"><b>B</b></span>', 'Text style — bold, italic, strikethrough', [
+    {
+      glyph: '<span class="ico tico"><b>B</b></span>',
+      label: 'Bold',
+      title: 'Bold (⌘B) — or type **text**',
+      run: runCmd(toggleMark(schema.marks.strong)),
+    },
+    {
+      glyph: '<span class="ico tico"><i>I</i></span>',
+      label: 'Italic',
+      title: 'Italic (⌘I) — or type *text*',
+      run: runCmd(toggleMark(schema.marks.em)),
+    },
+    {
+      glyph: '<span class="ico tico"><s>S</s></span>',
+      label: 'Strike',
+      title: 'Strikethrough (⌘⇧X) — or type ~~text~~',
+      run: runCmd(toggleMark(schema.marks.strike)),
+    },
+  ]);
   // Paragraph alignment: applies to every top-level paragraph the
   // selection touches. Left = the justified default (align attr null).
   const setAlign = (align: 'center' | 'right' | null) => {
