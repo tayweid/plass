@@ -13,8 +13,8 @@
 //   - YAML frontmatter carries the standard title/author/date keys and
 //     nothing app-specific — unknown keys are reported, not silently eaten
 //
-// Anything markdown expresses that the model can't (strikethrough, inline
-// HTML) degrades to plain text with a warning.
+// Anything markdown expresses that the model can't (inline HTML) degrades
+// to plain text with a warning.
 
 import MarkdownIt from 'markdown-it';
 import footnotePlugin from 'markdown-it-footnote';
@@ -195,7 +195,6 @@ export function mdToDoc(src: string): MdImport {
   function parseInline(children: MdToken[]): PMNode[] {
     const out: PMNode[] = [];
     let marks: Mark[] = [];
-    let warnedStrike = false;
     for (let ti = 0; ti < children.length; ti++) {
       const t = children[ti];
       switch (t.type) {
@@ -223,9 +222,13 @@ export function mdToDoc(src: string): MdImport {
         case 'link_open':
           marks = [...marks, schema.marks.link.create({ href: t.attrGet('href') ?? '', title: t.attrGet('title') })];
           break;
+        case 's_open':
+          marks = [...marks, schema.marks.strike.create()];
+          break;
         case 'strong_close':
         case 'em_close':
         case 'link_close':
+        case 's_close':
           marks = marks.slice(0, -1);
           break;
         case 'softbreak':
@@ -244,13 +247,6 @@ export function mdToDoc(src: string): MdImport {
           out.push(schema.nodes.footnote.create(null, body));
           break;
         }
-        case 's_open':
-        case 's_close':
-          if (!warnedStrike) {
-            warnings.push('strikethrough is not supported — kept as plain text');
-            warnedStrike = true;
-          }
-          break;
         case 'html_inline':
           if (t.content.trim()) {
             warnings.push('inline HTML kept as plain text');

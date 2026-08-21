@@ -41,6 +41,8 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
   const esc = (text: string): string =>
     text
       .replace(/([\\`*[\]$])/g, '\\$1')
+      // A literal ~~ run would read back as strikethrough.
+      .replace(/~(?=~)/g, '\\~')
       .replace(/(^|\s)_/g, '$1\\_')
       .replace(/_(?=\s|$)/g, '\\_');
 
@@ -56,6 +58,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
           t = esc(child.text);
           if (has('strong')) t = `**${t}**`;
           if (has('em')) t = `*${t}*`;
+          if (has('strike')) t = `~~${t}~~`;
         }
         const link = marks.find((m: Mark) => m.type.name === 'link');
         if (link) t = `[${t}](${link.attrs.href as string})`;

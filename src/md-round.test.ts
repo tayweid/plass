@@ -18,7 +18,7 @@ keywords: "voting, econ"
 
 # Introduction
 
-This is **bold**, *italic*, and \`code\`, with math $a_C^2$ inline and a
+This is **bold**, *italic*, ~~struck~~, and \`code\`, with math $a_C^2$ inline and a
 [link](https://example.org) plus a citation [@arrow1950] and a reference
 @eq:main. A footnote[^1] too.
 
@@ -89,6 +89,23 @@ check('inline pieces', (() => {
     return true;
   });
   return cite && ref && math && fn && link;
+})());
+check('strikethrough becomes a mark', (() => {
+  let ok = false;
+  doc.descendants((n) => {
+    if (n.isText && n.text === 'struck' && n.marks.some((m) => m.type.name === 'strike')) ok = true;
+    return true;
+  });
+  return ok;
+})());
+check('literal ~~ in plain text stays literal', (() => {
+  const { doc: d } = mdToDoc(docToMd(mdToDoc('tildes \\~~ here').doc));
+  let ok = false;
+  d.descendants((n) => {
+    if (n.isText && n.text?.includes('~~') && !n.marks.some((m) => m.type.name === 'strike')) ok = true;
+    return true;
+  });
+  return ok;
 })());
 check('table shape', (() => {
   let ok = false;

@@ -1090,6 +1090,16 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
         continue;
       }
     }
+    if (src.startsWith('#strike[', i)) {
+      const open = i + '#strike'.length;
+      const end = matchBracket(src, open);
+      if (end > 0) {
+        flush();
+        scanInline(src.slice(open + 1, end), [...marks, schema.marks.strike.create()], out);
+        i = end + 1;
+        continue;
+      }
+    }
     if (src.startsWith('#mi(`', i)) {
       const end = src.indexOf('`)', i + 5);
       if (end >= 0) {

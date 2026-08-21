@@ -73,6 +73,7 @@ export function buildInputRules(): Plugin {
     markInputRule(/(^|[^\w*])\*([^*\s][^*]*)\*$/, schema.marks.em, 2),
     markInputRule(/(^|[^\w_])_([^_\s][^_]*)_$/, schema.marks.em, 2),
     markInputRule(/`([^`]+)`$/, schema.marks.code),
+    markInputRule(/~~([^~\s][^~]*)~~$/, schema.marks.strike),
     // math
     mathInlineRule,
     mathDisplayRule,
@@ -193,6 +194,7 @@ export function buildKeymap(): Plugin {
     'Mod-y': redo,
     'Mod-b': toggleMark(schema.marks.strong),
     'Mod-i': toggleMark(schema.marks.em),
+    'Mod-Shift-x': toggleMark(schema.marks.strike),
     'Mod-`': toggleMark(schema.marks.code),
     'Mod-m': insertMath(false),
     'Shift-Mod-m': insertMath(true),

@@ -153,6 +153,7 @@ function inlineToTyp(node: PMNode): string {
       let t = escapeTyp(child.text);
       if (marks.has('strong')) t = `*${t}*`;
       if (marks.has('em')) t = `_${t}_`;
+      if (marks.has('strike')) t = `#strike[${t}]`;
       out += t;
     } else if (child.type.name === 'typst_inline') {
       // Raw Typst: the source IS the export.

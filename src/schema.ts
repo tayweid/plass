@@ -360,4 +360,19 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
   .addToEnd('doc_date', docDate)
   .addToEnd('abstract', abstract);
 
-export const schema = new Schema({ nodes, marks: base.spec.marks });
+// Strikethrough is not in schema-basic; Typst has it natively (#strike),
+// so it round-trips through both formats. Paint-only — line-through never
+// changes glyph metrics, so the measurer treats it as plain text.
+const marks = base.spec.marks.addToEnd('strike', {
+  parseDOM: [
+    { tag: 's' },
+    { tag: 'del' },
+    { tag: 'strike' },
+    { style: 'text-decoration=line-through' },
+  ],
+  toDOM() {
+    return ['s', 0] as const;
+  },
+});
+
+export const schema = new Schema({ nodes, marks });

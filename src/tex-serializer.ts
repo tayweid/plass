@@ -48,6 +48,7 @@ function inlineToTex(node: PMNode): string {
       if (marks.has('code')) t = `\\texttt{${t}}`;
       if (marks.has('strong')) t = `\\textbf{${t}}`;
       if (marks.has('em')) t = `\\emph{${t}}`;
+      if (marks.has('strike')) t = `\\sout{${t}}`;
       out += t;
     } else if (child.type.name === 'math_inline') {
       out += `$${child.attrs.src}$`;
@@ -320,6 +321,7 @@ export function docToTex(doc: PMNode): string {
   let abstract: PMNode | null = null;
   let hasRestart = false;
   let usesMultirow = false;
+  let usesStrike = false;
   doc.forEach((n) => {
     if (n.type.name === 'doc_title') title = inlineToTex(n);
     else if (n.type.name === 'doc_authors') authors = inlineToTex(n);
@@ -331,6 +333,7 @@ export function docToTex(doc: PMNode): string {
     if ((n.type.name === 'table_cell' || n.type.name === 'table_header') && ((n.attrs.rowspan as number) ?? 1) > 1) {
       usesMultirow = true;
     }
+    if (n.isText && n.marks.some((m) => m.type.name === 'strike')) usesStrike = true;
     return true;
   });
   unnumberedEq = new Set();
@@ -351,6 +354,8 @@ export function docToTex(doc: PMNode): string {
   out += '\\usepackage[utf8]{inputenc}\n\\usepackage[T1]{fontenc}\n';
   out += '\\usepackage{amsmath,amssymb}\n\\usepackage{graphicx}\n\\usepackage{booktabs}\n';
   if (usesMultirow) out += '\\usepackage{multirow}\n';
+  // normalem: ulem must not hijack \emph into underlining.
+  if (usesStrike) out += '\\usepackage[normalem]{ulem}\n';
   if (!s.parIndent) out += '\\usepackage{parskip}\n';
   out += `\\usepackage[${paper},top=${s.marginTop}in,right=${s.marginRight}in,bottom=${s.marginBottom}in,left=${s.marginLeft}in]{geometry}\n`;
   for (const [name, expansion] of Object.entries(macros)) {

@@ -139,6 +139,27 @@ function firstDiff(a: string, b: string): string {
   check('figure export is idempotent', out === again, firstDiff(out, again));
 }
 
+// --- strikethrough round-trips and imports ---
+{
+  const src = 'Keep this, #strike[drop *this* part], continue.\n';
+  const { doc, warnings } = typToDoc(src);
+  let struck = '';
+  let nested = false;
+  doc.descendants((n) => {
+    if (n.isText && n.marks.some((m) => m.type.name === 'strike')) {
+      struck += n.text;
+      if (n.marks.some((m) => m.type.name === 'strong')) nested = true;
+    }
+    return true;
+  });
+  check('strike imports as a mark, not a raw island', struck === 'drop this part', JSON.stringify({ struck, warnings }));
+  check('strike nests with strong', nested);
+  const out = docToTyp(doc);
+  check('strike re-exports as #strike', out.includes('#strike['), out);
+  const again = docToTyp(typToDoc(out).doc);
+  check('strike export is idempotent', out === again, firstDiff(out, again));
+}
+
 // --- 7. footnotes round-trip and import ---
 {
   const src = 'A claim#footnote[See *Smith 2020*, ch. 3 — and $x^2$ holds.] with a note.\n';

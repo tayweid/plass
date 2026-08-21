@@ -179,3 +179,34 @@ test('shrinking to one page removes every held page spacer', async ({ page }) =>
   expect(await page.locator('.page-box').count()).toBe(1);
   expect(await page.locator('.ts-pagegap').count()).toBe(0);
 });
+
+test('strikethrough keeps live and compiled breaks in agreement', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const { schema } = state;
+    const strike = schema.marks.strike.create();
+    const paragraph = schema.nodes.paragraph.create(null, [
+      schema.text('An editor suggested cutting this: '),
+      schema.text(
+        'the whole argument of section two can be dropped without any loss of continuity',
+        [strike],
+      ),
+      schema.text(
+        ', though the replacement paragraph still needs to carry the transition into the results.',
+      ),
+    ]);
+    const doc = schema.nodes.doc.create(state.doc.attrs, [paragraph]);
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
+  });
+  const paragraph = page.locator('.ProseMirror > p').first();
+  await expect(paragraph).toBeVisible();
+  await expect(paragraph.locator('s').first()).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__breakSig().length)).toBeGreaterThan(0);
+  const liveBreaks = await page.evaluate(() => window.__breakSig());
+  // The compiled oracle re-derives breaks from the exported Typst, which now
+  // wraps the run in #strike[...]; unchanged breaks after settle mean the
+  // decoration altered no metrics (line-through is paint-only).
+  await page.waitForTimeout(1_200);
+  expect(await page.evaluate(() => window.__breakSig())).toBe(liveBreaks);
+});

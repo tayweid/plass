@@ -112,6 +112,7 @@ export function buildSpec(node: PMNode, resolveAtom: AtomResolver): ParagraphSpe
       let t = inner;
       if (marks.has('strong')) t = `*${t}*`;
       if (marks.has('em')) t = `_${t}_`;
+      if (marks.has('strike')) t = `#strike[${t}]`;
       src += t;
       key += `[${[...marks].sort().join(',')}]${child.text}`;
     } else if (child.type.name === 'hard_break') {
