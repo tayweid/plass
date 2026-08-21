@@ -203,10 +203,22 @@ test('strikethrough keeps live and compiled breaks in agreement', async ({ page 
   await expect(paragraph).toBeVisible();
   await expect(paragraph.locator('s').first()).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__breakSig().length)).toBeGreaterThan(0);
+  // Drain the load-time settle first: on a cold machine the first signature
+  // is measured against fallback fonts and legitimately changes when the
+  // real faces land, which is not the disagreement this test is about.
+  await page.waitForTimeout(1_200);
+  await page.evaluate(() => window.__layoutDispatchStats(true));
+  await page.evaluate(() => {
+    const { state } = window.view;
+    window.view.dispatch(state.tr.insertText('Reviewer two: ', 1));
+  });
+  await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
   const liveBreaks = await page.evaluate(() => window.__breakSig());
-  // The compiled oracle re-derives breaks from the exported Typst, which now
-  // wraps the run in #strike[...]; unchanged breaks after settle mean the
-  // decoration altered no metrics (line-through is paint-only).
+  // The compiled oracle re-derives breaks from the exported Typst, which
+  // wraps the struck run in #strike[...]; the single live dispatch surviving
+  // the settle uncorrected means the decoration altered no metrics
+  // (line-through is paint-only).
   await page.waitForTimeout(1_200);
   expect(await page.evaluate(() => window.__breakSig())).toBe(liveBreaks);
+  expect(await page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
 });
