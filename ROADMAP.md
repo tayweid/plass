@@ -97,6 +97,18 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
 ## Standing backlog
 
 - Raw-Typst-island compiled previews (same pattern as tables/math/bib).
+- **Source view toggle** — a toolbar button switching between the WYSIWYG
+  view and the document's plain-text source (its on-disk format: .typ or
+  .md, which `file-manager`'s text method already produces). Both directions
+  exist: `docToTyp` is computed per edit as the oracle signature, and the
+  return trip is the file-open parser (unknown Typst survives as raw
+  islands, so an editable source view doubles as the escape hatch for Typst
+  the editor has no UI for). New work: the toggle + a mono `<textarea>`
+  (no CodeMirror in v1), one `replaceWith` on return (a single undo step),
+  a toggle-and-back identity test. Punt cursor/scroll mapping and live
+  two-view sync. Known cost to accept: the serializer re-normalizes
+  hand-formatting of untouched regions after a source-side edit.
+  Editable version ~1 day; read-only half that.
 - **Incremental pagination activation for 50+ page documents.** The suffix
   planner and full-versus-suffix comparator exist, and the 40–50-page browser
   fixture requires a late-edit candidate to visit less than 25% of the full
