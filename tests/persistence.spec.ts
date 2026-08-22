@@ -596,3 +596,44 @@ for (const verdict of ['prompt', 'denied'] as const) {
     await expect(page.locator('.tb-file')).toHaveText('Block_Outline');
   });
 }
+
+test('a clean document hot-reloads an external change to its file', async ({ page }) => {
+  await page.goto('/?new=1');
+  const dirName = `plass-hot-reload-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  await page.evaluate(async (name) => {
+    const app = window as typeof window & {
+      view: import('prosemirror-view').EditorView;
+      __fm: {
+        adoptFolder(dir: FileSystemDirectoryHandle, intent: 'save'): Promise<unknown>;
+        handle: FileSystemFileHandle | null;
+      };
+    };
+    const { state } = app.view;
+    const paragraph = state.schema.nodes.paragraph.create(null, state.schema.text('baseline editor content'));
+    app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, paragraph));
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(name, { create: true });
+    await app.__fm.adoptFolder(dir, 'save');
+
+    // Another writer replaces the file while the editor copy is clean.
+    const external = await app.__fm.handle!.createWritable();
+    await external.write('hot reloaded from disk');
+    await external.close();
+  }, dirName);
+
+  await expect(page.locator('#toast')).toContainText('changed on disk — reloaded', { timeout: 10_000 });
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const app = window as typeof window & {
+        view: import('prosemirror-view').EditorView;
+        __fm: { dirty: boolean; hasConflict: boolean };
+      };
+      return {
+        text: app.view.state.doc.textContent,
+        dirty: app.__fm.dirty,
+        conflict: app.__fm.hasConflict,
+      };
+    }),
+  ).toEqual({ text: 'hot reloaded from disk', dirty: false, conflict: false });
+});

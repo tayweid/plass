@@ -102,6 +102,9 @@ export class FileManager {
   /** Exact contents last read from or successfully written to the active
    * file. Every write compares against this baseline first. */
   private diskBaseline: string | null = null;
+  /** lastModified of the disk version we've seen or written — the disk
+   *  watcher's cheap first check before reading any text. */
+  private diskMtime = 0;
   private changeRevision = 0;
   private writeQueue: Promise<void> = Promise.resolve();
   private conflict = false;
@@ -119,7 +122,47 @@ export class FileManager {
   constructor(private hooks: FileHooks) {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') void this.flush();
+      // Coming back from the outside editor is exactly when a disk change
+      // is most likely — don't make the return wait for a poll tick.
+      else void this.pollDisk();
     });
+    window.setInterval(() => void this.pollDisk(), 1500);
+  }
+
+  /** External edits, hot-reloaded. The File System Access API has no
+   *  stable change events, so the open handle is polled: lastModified is
+   *  a cheap metadata read, and text is only read (bounded) when it
+   *  moves. A change under a CLEAN document reloads it in place; a dirty
+   *  or conflicted document is left to the write path, which already
+   *  detects the divergence against diskBaseline and runs the explicit
+   *  conflict flow. */
+  private async pollDisk() {
+    if (!this.handle || this.dirty || this.conflict || this.missing) return;
+    const handle = this.handle;
+    let file: File;
+    try {
+      file = await handle.getFile();
+    } catch {
+      return; // moved, deleted, or permission lapsed — the write path says so
+    }
+    if (file.lastModified === this.diskMtime) return;
+    this.diskMtime = file.lastModified;
+    if (this.documentSizeError(file)) return; // the write path reports oversize
+    const text = await this.readDocumentText(file);
+    // The document may have started changing under these awaits; a reload
+    // now would eat keystrokes — the conflict flow owns that case.
+    if (handle !== this.handle || this.dirty) return;
+    if (text === this.diskBaseline) return; // our own write, or a bare touch
+    const { doc, warnings } = isMd(file.name)
+      ? (await import('./md-parser')).mdToDoc(text)
+      : typToDoc(text);
+    if (handle !== this.handle || this.dirty) return;
+    this.diskBaseline = text;
+    this.hooks.setDoc(doc);
+    this.hooks.onState();
+    this.hooks.message(
+      `${file.name} changed on disk — reloaded${warnings.length ? ` (${warnings.length} raw block(s))` : ''}`,
+    );
   }
 
   /** Call on every document change: marks dirty, schedules a disk autosave. */
@@ -254,6 +297,9 @@ export class FileManager {
 
     await this.writeText(handle, text);
     if (handle !== this.handle) return 'stale';
+    // Our own write is not an external change: move the watcher's
+    // baseline past it so the next poll doesn't re-read the file.
+    this.diskMtime = (await handle.getFile()).lastModified;
     this.diskBaseline = text;
     this.conflict = false;
     const pending = revision !== this.changeRevision;
