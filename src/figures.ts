@@ -17,6 +17,7 @@ import {
 } from './remote-images';
 import { COMPILER_LIMITS } from './typst-worker-protocol';
 import { resetCompilerCircuit } from './compiler-circuit';
+import { documentTypstEmbedImagePaths } from './typst-embed-assets';
 
 // ---------- project assets (relative paths) ----------
 
@@ -138,6 +139,16 @@ async function assetUrl(path: string): Promise<string | null> {
 }
 
 const ASSET_EVENT = 'typeset-assets-changed';
+
+/** A permission grant or explicit retry changes compiler input without a
+ * ProseMirror transaction. Advance every asset-dependent authority together:
+ * reopen the compiler for the new user-authorized input, invalidate the
+ * shared whole-document publication, and schedule replacement page chrome. */
+function publishRemoteImageAssetChange(view: EditorView): void {
+  resetCompilerCircuit();
+  window.dispatchEvent(new CustomEvent(ASSET_EVENT));
+  invalidatePageLayout(view);
+}
 
 function dataUrlBytes(src: string): { blob: Blob; ext: string } | null {
   const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[^;,]*)*),(.*)$/is.exec(src);
@@ -268,6 +279,9 @@ export function startAssetWatch(view: EditorView): () => void {
       if (n.type.name === 'figure' && isPathSrc(n.attrs.src as string)) paths.add(n.attrs.src as string);
       return true;
     });
+    for (const path of documentTypstEmbedImagePaths(view.state.doc)) {
+      if (isPathSrc(path)) paths.add(path);
+    }
     let changed = false;
     let freshInput = false;
     for (const path of paths) {
@@ -456,7 +470,7 @@ export class FigureView implements NodeView {
       if (this.dom.classList.contains('fig-missing')) {
         retryRemoteImage(src);
         this.setSrc(src);
-        invalidatePageLayout(this.view);
+        publishRemoteImageAssetChange(this.view);
         return;
       }
       fmRef?.notify(`Remote images from ${remote.origin} are allowed for this session`);
@@ -465,7 +479,7 @@ export class FigureView implements NodeView {
     const granted = allowRemoteImageOrigin(src);
     if (granted.allowed) {
       fmRef?.notify(`Loading remote images from ${granted.origin} for this session`);
-      invalidatePageLayout(this.view);
+      publishRemoteImageAssetChange(this.view);
     }
   }
 
@@ -817,13 +831,13 @@ export class ImageView implements NodeView {
     if (remote.allowed) {
       retryRemoteImage(src);
       this.setSrc(src);
-      invalidatePageLayout(this.view);
+      publishRemoteImageAssetChange(this.view);
       return;
     }
     const granted = allowRemoteImageOrigin(src);
     if (granted.allowed) {
       fmRef?.notify(`Loading remote images from ${granted.origin} for this session`);
-      invalidatePageLayout(this.view);
+      publishRemoteImageAssetChange(this.view);
     }
   }
 

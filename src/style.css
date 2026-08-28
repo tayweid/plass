@@ -415,44 +415,169 @@ body {
   flex: none;
 }
 
-/* Floating table controls — appear beside the table while the caret is in it. */
-.table-pill {
+/* Native table controls. Cells remain the actual ProseMirror content; this
+   compact chrome only dispatches structural commands against that document. */
+.native-table-toolbar {
   position: fixed;
-  z-index: 90;
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  background: color-mix(in srgb, var(--chrome) 92%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  z-index: 180;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  overflow: hidden;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--chrome) 94%, transparent);
+  backdrop-filter: blur(14px) saturate(1.25);
+  -webkit-backdrop-filter: blur(14px) saturate(1.25);
   border: 1px solid var(--chrome-border);
-  border-radius: 8px;
-  padding: 3px 4px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.1);
+  border-radius: 11px;
+  padding: 4px;
+  box-shadow: 0 10px 34px rgba(20, 18, 14, 0.16), 0 2px 7px rgba(20, 18, 14, 0.08);
 }
 
-.table-pill[hidden] {
+.native-table-toolbar[hidden] {
   display: none;
 }
 
-.table-pill button {
-  font: 11.5px/1 var(--sans);
+.native-table-toolbar-main {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  max-width: calc(100vw - 34px);
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.native-table-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 3px;
+  border-right: 1px solid color-mix(in srgb, var(--chrome-border) 72%, transparent);
+}
+
+.native-table-toolbar-group:first-child {
+  padding-left: 0;
+}
+
+.native-table-toolbar-group:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+
+.native-table-toolbar button,
+.native-table-toolbar select {
+  min-height: 27px;
+  font: 600 10.5px/1 var(--sans);
   color: var(--ink);
   background: transparent;
-  border: none;
-  border-radius: 5px;
-  padding: 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 7px;
   cursor: pointer;
   white-space: nowrap;
 }
 
-.table-pill button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+.native-table-toolbar select {
+  max-width: 86px;
+  padding-right: 3px;
+  font-weight: 500;
 }
 
-.table-pill button:disabled {
-  opacity: 0.35;
+.native-table-toolbar .native-table-size {
+  width: 58px;
+}
+
+.native-table-toolbar button:hover:not(:disabled),
+.native-table-toolbar select:hover,
+.native-table-toolbar button.is-active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+}
+
+.native-table-toolbar button:focus-visible,
+.native-table-toolbar select:focus-visible,
+.native-table-toolbar input:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 56%, transparent);
+  outline-offset: -1px;
+}
+
+.native-table-toolbar button:disabled {
+  opacity: 0.28;
   cursor: default;
+}
+
+.native-table-toolbar .native-table-align {
+  min-width: 25px;
+  padding-inline: 6px;
+  font-family: var(--serif);
+}
+
+.native-table-toolbar button.is-danger:hover:not(:disabled) {
+  color: #a4322f;
+  background: rgba(164, 50, 47, 0.1);
+}
+
+.native-table-toolbar-details {
+  display: none;
+  grid-template-columns: minmax(180px, 1fr) minmax(110px, 0.55fr) auto;
+  align-items: end;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 7px 5px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--chrome-border) 72%, transparent);
+}
+
+.native-table-toolbar.show-details .native-table-toolbar-details {
+  display: grid;
+}
+
+.native-table-toolbar-details label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  font: 600 9px/1 var(--sans);
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.native-table-toolbar-details input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font: 12px/1.2 var(--sans);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--paper) 72%, transparent);
+  border: 1px solid var(--chrome-border);
+  border-radius: 6px;
+  padding: 6px 7px;
+}
+
+.native-table-advanced {
+  max-width: 145px;
+  align-self: center;
+  font: 9.5px/1.25 var(--sans);
+  color: var(--muted);
+}
+
+.native-table-advanced[hidden] {
+  display: none;
+}
+
+.native-table-notice {
+  position: fixed;
+  z-index: 240;
+  left: 50%;
+  bottom: 28px;
+  max-width: min(560px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  padding: 9px 13px;
+  font: 11.5px/1.35 var(--sans);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--chrome) 96%, transparent);
+  border: 1px solid var(--chrome-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(20, 18, 14, 0.18);
 }
 
 /* corner HUD + transient toast */
@@ -469,10 +594,18 @@ body {
   opacity: 0.55;
   transition: opacity 0.35s;
   user-select: none;
+  cursor: pointer;
 }
 
-#hud:hover {
+#hud:hover,
+#hud:focus-visible {
   opacity: 1;
+}
+
+#hud:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 4px;
+  border-radius: 3px;
 }
 
 #toast {
@@ -502,334 +635,6 @@ body {
 
 #toast.show.actionable {
   pointer-events: auto;
-}
-
-/* ---------- tables: compiled block + editing card ---------- */
-
-.ts-table-block {
-  margin: 0 0 0.9em;
-  cursor: pointer;
-  border-radius: 3px;
-}
-
-.ts-table-block:hover {
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
-}
-
-.ts-table-block.ts-table-selected {
-  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  outline-offset: 2px;
-}
-
-.ts-table-render {
-  overflow-x: auto;
-}
-
-.ts-table-loading {
-  font: 12px var(--sans);
-  color: var(--ink-soft);
-}
-
-.table-card {
-  width: min(760px, calc(100vw - 48px));
-}
-
-.table-card-style {
-  font: 11px var(--mono);
-  color: var(--ink-soft);
-}
-
-.table-card-tools {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-
-.table-card-tools > button {
-  font: 12px var(--sans);
-  color: var(--ink);
-  background: transparent;
-  border: 1px solid var(--chrome-border);
-  border-radius: 5px;
-  padding: 4px 8px;
-  cursor: pointer;
-}
-
-.table-card-tools > button:hover {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-.table-card-size,
-.table-card-fill {
-  font: 12px var(--sans);
-  color: var(--ink);
-  background: transparent;
-  border: 1px solid var(--chrome-border);
-  border-radius: 5px;
-  padding: 4px 6px;
-  cursor: pointer;
-}
-
-.table-card-sep {
-  width: 1px;
-  height: 16px;
-  background: var(--chrome-border);
-  margin: 0 5px;
-}
-
-.table-card-grid {
-  max-height: 300px;
-  overflow: auto;
-  margin-bottom: 10px;
-  position: relative; /* anchors the boundary segments and handles */
-  padding: 14px 20px 16px; /* room for the whole-line handles */
-}
-
-.table-card-grid table {
-  /* Separate borders with a horizontal gap: the gap is the click target
-     for the vertical boundary strips (the columns' twin of the 7px
-     boundary rows). */
-  border-collapse: separate;
-  border-spacing: 9px 0;
-  width: 100%;
-}
-
-.table-card-grid td,
-.table-card-grid th {
-  border: 1px solid var(--chrome-border);
-  padding: 0;
-}
-
-.table-card-grid input {
-  width: 100%;
-  min-width: 70px;
-  border: none;
-  background: transparent;
-  color: var(--ink);
-  font: 13px var(--sans);
-  padding: 6px 8px;
-  outline: none;
-}
-
-.table-card-grid th input {
-  font-weight: 600;
-}
-
-.table-card-grid input:focus {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-.tc-widths td {
-  border: none !important;
-  padding: 0 0 4px !important;
-  text-align: center;
-  position: relative;
-}
-
-/* Boundary segments: one click target per cell edge, overlaid on the
-   boundary rows and column gaps. Adjacent segments meet at the gap
-   midpoints, so a uniform rule reads as one continuous line. */
-.tc-hseg {
-  position: absolute;
-  height: 7px;
-  z-index: 2;
-  cursor: pointer;
-}
-
-.tc-hseg::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 3px;
-  height: 1px;
-  background: transparent;
-}
-
-.tc-vseg {
-  position: absolute;
-  width: 9px;
-  z-index: 2;
-  cursor: pointer;
-}
-
-.tc-vseg::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 4px;
-  width: 1px;
-  background: transparent;
-}
-
-.tc-hseg:hover::after,
-.tc-vseg:hover::after {
-  background: color-mix(in srgb, var(--accent) 55%, transparent);
-}
-
-.tc-seg-on::after {
-  background: var(--ink);
-}
-
-.tc-hseg.tc-seg-heavy::after {
-  height: 2.5px;
-  background: rgba(30, 30, 40, 0.85);
-}
-
-.tc-vseg.tc-seg-heavy::after {
-  width: 2.5px;
-  left: 3.25px;
-  background: rgba(30, 30, 40, 0.85);
-}
-
-/* Whole-line handles: little rule-shaped pills — horizontal to the left
-   of each row boundary, vertical above each column boundary — so the
-   shape reads as "this whole line". */
-.tc-handle-h,
-.tc-handle-v {
-  position: absolute;
-  padding: 0;
-  border: 1px solid var(--ink-soft);
-  border-radius: 999px;
-  background: transparent;
-  cursor: pointer;
-  z-index: 2;
-}
-
-.tc-handle-h {
-  width: 14px;
-  height: 4px;
-}
-
-.tc-handle-v {
-  width: 4px;
-  height: 14px;
-}
-
-.tc-handle-h:hover,
-.tc-handle-v:hover {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.tc-handle-on {
-  background: var(--ink-soft);
-}
-
-.tc-handle-on:hover {
-  background: color-mix(in srgb, var(--accent) 70%, var(--ink-soft));
-}
-
-.tc-widths select {
-  font: 10px var(--mono);
-  color: var(--ink-soft);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  padding: 1px 2px;
-  cursor: pointer;
-  max-width: 100%;
-}
-
-.tc-widths select:hover {
-  border-color: var(--chrome-border);
-  color: var(--ink);
-}
-
-.tc-boundary td {
-  height: 7px;
-  padding: 0;
-  border: none !important;
-}
-
-.tc-sel {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-.table-card-tools > button:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.table-card-typst {
-  margin-bottom: 10px;
-}
-
-.table-card-typst summary {
-  font: 11px var(--sans);
-  color: var(--ink-soft);
-  cursor: pointer;
-  user-select: none;
-  margin-bottom: 6px;
-}
-
-.table-card-typst-hint {
-  opacity: 0.75;
-}
-
-.table-card-typst-text {
-  width: 100%;
-  font: 12px var(--mono);
-  color: var(--ink);
-  background: var(--sheet);
-  border: 1px solid var(--chrome-border);
-  border-radius: 6px;
-  padding: 8px 10px;
-  resize: vertical;
-}
-
-.table-card-typst-text.tc-typst-bad {
-  border-color: #b3452f;
-  outline: 1px solid #b3452f;
-}
-
-.table-card-meta {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.table-card-caption {
-  flex: 1;
-}
-
-.table-card-label {
-  width: 150px;
-  font-family: var(--mono) !important;
-}
-
-.table-card-meta input {
-  font: 12.5px var(--sans);
-  color: var(--ink);
-  background: var(--sheet);
-  border: 1px solid var(--chrome-border);
-  border-radius: 5px;
-  padding: 5px 8px;
-}
-
-.table-card-preview {
-  border: 1px solid var(--chrome-border);
-  border-radius: 6px;
-  padding: 8px 10px 12px;
-  margin-bottom: 10px;
-  background: var(--sheet);
-  max-height: 240px;
-  overflow: auto;
-}
-
-.table-card-preview-label {
-  font: 10px var(--sans);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--ink-soft);
-  margin-bottom: 6px;
-}
-
-.table-card-preview-body {
-  text-align: center;
 }
 
 /* ---------- file menu ---------- */
@@ -961,12 +766,44 @@ body {
 
 /* ---------- the page stack ---------- */
 
-/* One continuous editable flow (#editor) over painted page boxes (#pages).
-   Exact-height .ts-pagegap spacers push content past each page boundary. */
+/* One continuous editable flow (#editor) over oracle-backed page boxes.
+   Exact-height .ts-pagegap spacers exist only for fresh or safely-held Typst
+   page starts. When that authority is unavailable, the stack becomes one
+   explicit continuous sheet with no folios or finite-page claim. */
 #stack {
   position: relative;
   width: var(--page-w, 8.5in);
   margin: 0 auto;
+}
+
+#stack[data-page-mode='continuous'] {
+  min-height: calc(100vh - 92px);
+  background: var(--sheet);
+  border-radius: 4px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 18px 50px rgba(0, 0, 0, 0.4);
+}
+
+#stack[data-page-mode='continuous'] #editor {
+  min-height: calc(100vh - 92px);
+  padding-bottom: var(--page-margin-bottom, 1.25in);
+}
+
+/* Without exact page geometry, footnote bodies stay visible and editable in
+   native flow. Proof/PDF remains the authority for their page-bottom form. */
+#stack[data-page-mode='continuous'] .fn-body {
+  position: static !important;
+  top: auto !important;
+  visibility: visible !important;
+  display: block;
+  margin: 0.3em 0 0.3em 1.5em;
+  padding-left: 0.6em;
+  border-left: 2px solid #ccc;
+}
+
+#stack[data-page-mode='continuous'] .fn-body::before {
+  display: none;
 }
 
 #pages {
@@ -1136,15 +973,45 @@ body {
   margin: 0 0 0.9em;
 }
 
-/* Inline raw Typst: the compiled fragment sits in the text line. Fixed
-   fragments size themselves; flexible (fr) ones get their width from the
-   paginator, which is why this must not shrink-wrap. */
+/* Inline Typst atoms use an exact crop from the shared whole-document SVG.
+   The outer span owns only Typst's layout rectangle; paint may overhang it
+   absolutely (hairlines/glyph overhangs) without changing line geometry. */
 .ts-inline-raw {
   cursor: pointer;
 }
 
 .ts-inline-raw svg {
-  vertical-align: baseline;
+  display: block;
+  max-width: none;
+}
+
+.ts-inline-raw[data-preview-state='pending'],
+.ts-inline-raw[data-preview-state='unsupported'],
+.ts-inline-raw[data-preview-state='error'] {
+  display: inline-block;
+  max-width: min(32ch, 65vw);
+  overflow: hidden;
+  padding: 0.06em 0.3em;
+  border: 1px solid color-mix(in srgb, var(--ink) 15%, transparent);
+  border-radius: 4px;
+  color: color-mix(in srgb, var(--ink) 78%, var(--muted));
+  background: color-mix(in srgb, var(--paper) 91%, var(--ink) 9%);
+  font: 0.75em/1.35 var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: 0.08em;
+}
+
+.ts-inline-raw[data-preview-state='unsupported']::after,
+.ts-inline-raw[data-preview-state='error']::after {
+  content: ' · Exact in Proof';
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 0.82em;
+}
+
+.ts-inline-raw[data-preview-state='error'] {
+  border-color: color-mix(in srgb, #a13d37 35%, transparent);
 }
 
 .ProseMirror .ts-inline-raw.ProseMirror-selectednode {
@@ -1156,30 +1023,8 @@ body {
 .inline-raw-editor .inline-raw-preview {
   min-height: 1.6em;
   overflow: hidden;
-}
-
-/* Raw-Typst islands: the compiled render IS the block; the source chip
-   shows while editing (click the render) or when the island paints
-   nothing (set rules, counters). Margins mirror paragraph rhythm. */
-.ts-raw {
-  margin: 0 0 0.9em;
-}
-
-.ts-raw .ts-raw-render {
-  display: none;
-  cursor: pointer;
-}
-
-.ts-raw.ts-raw-visual:not(.ts-raw-editing) .ts-raw-render {
-  display: block;
-}
-
-.ts-raw.ts-raw-visual:not(.ts-raw-editing) > pre {
-  display: none;
-}
-
-.ts-raw > pre {
-  margin: 0;
+  color: var(--muted);
+  font: 500 0.78em/1.4 var(--sans);
 }
 
 .ProseMirror pre code {
@@ -1598,130 +1443,68 @@ body {
   }
 }
 
-/* ---------- tables ---------- */
-
-/* Custom-styled tables show a Typst-compiled preview; the DOM table is the
-   editing mode, revealed while the caret is inside (data-editing). */
-.ts-table-wrap {
-  margin: 0 0 0.9em;
-}
-
-.ts-table-wrap table {
-  margin: 0 auto;
-}
-
-.ts-table-wrap.has-preview:not([data-editing]) > table {
-  display: none;
-}
-
-.ts-table-wrap:not(.has-preview) > .ts-table-preview {
-  display: none;
-}
-
-/* While editing, keep the compiled result visible below the editable table —
-   live feedback for style/opts changes instead of styling blind. */
-.ts-table-wrap.has-preview[data-editing] > .ts-table-preview {
-  margin-top: 10px;
-  padding-top: 14px;
-  border-top: 1px dashed #c9c5bc;
-  cursor: default;
-}
-
-.ts-table-wrap.has-preview[data-editing] > .ts-table-preview::before {
-  content: 'Typst result — updates as you edit';
-  position: absolute;
-  top: 2px;
-  left: 0;
-  font: 10px var(--sans);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-}
-
-.ts-table-wrap.has-preview[data-editing] > .ts-table-preview:hover {
-  outline: none;
-}
-
-.ts-table-preview {
-  cursor: pointer;
-  border-radius: 3px;
-  position: relative;
-}
-
-.ts-table-preview:hover {
-  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  outline-offset: 3px;
-}
-
-/* Per-cell hit regions over the compiled SVG: click to edit in place. */
-.ts-cell-hit {
-  position: absolute;
-  cursor: text;
-  border-radius: 3px;
-}
-
-.ts-cell-hit:hover {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-}
-
-/* Floating single-cell editor anchored to the compiled cell position. */
-.ts-cell-editor {
-  position: absolute;
-  z-index: 150;
-  font: inherit;
-  font-family: var(--doc-font, var(--serif));
-  font-size: 0.95em;
-  color: #1a1a1a;
-  background: #fff;
-  border: 1.5px solid var(--accent);
-  border-radius: 4px;
-  padding: 2px 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
-}
-
-.ts-cell-editor:focus {
-  outline: none;
-}
+/* ---------- native structured tables ---------- */
 
 .ProseMirror table {
   border-collapse: collapse;
-  margin: 0 0 0.9em;
-  width: 100%;
+  /* Typst's auto columns produce an intrinsic table centered by the
+     serializer's #align(center, ...). Keep the editable surface on that same
+     box model; max-width lets long technical cells wrap at the page edge. */
+  margin: 0.25em auto 0.8em;
+  width: auto;
+  max-width: 100%;
   table-layout: auto;
-  font-size: 0.95em;
+  font-size: 1em;
+  line-height: inherit;
+}
+
+.ProseMirror table[data-font-size='0.9em'] { font-size: 0.9em; }
+.ProseMirror table[data-font-size='0.85em'] { font-size: 0.85em; }
+.ProseMirror table[data-font-size='0.8em'] { font-size: 0.8em; }
+.ProseMirror table[data-font-size='0.75em'] { font-size: 0.75em; }
+
+.ProseMirror th[style*='text-align: decimal'],
+.ProseMirror td[style*='text-align: decimal'] {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
 }
 
 .ProseMirror th,
 .ProseMirror td {
-  padding: 0.3em 0.65em;
+  min-width: 0;
+  /* Typst table.inset defaults to 5pt. Inline inset must be explicit; the
+     inherited CSS line box already supplies almost exactly the two 5pt
+     vertical shoulders around a NewCM glyph. Adding block padding as well
+     would double-count them and made a three-row table over twice as tall as
+     Typst. Empty cells have no glyph box, so the rule below restores their
+     literal 5pt block inset. */
+  padding: 0 5pt;
   vertical-align: top;
   position: relative;
+  transition: background-color 90ms ease, box-shadow 90ms ease;
 }
 
 .ProseMirror th {
-  font-weight: 600;
+  /* table.header controls repetition, not typography; authors can still use
+     a strong mark when a visually bold header is intended. */
+  font-weight: inherit;
   text-align: left;
 }
 
-/* grid preset: full borders, shaded header */
+/* grid preset: Typst's default one-point black cell strokes. */
 .ProseMirror table.ts-table-grid th,
 .ProseMirror table.ts-table-grid td {
-  border: 1px solid #c9c5bc;
-}
-
-.ProseMirror table.ts-table-grid th {
-  background: rgba(0, 0, 0, 0.04);
+  border: 1pt solid var(--ink);
 }
 
 /* booktabs preset: horizontal rules only — the academic look */
 .ProseMirror table.ts-table-booktabs {
-  border-top: 1.6px solid #2a2a2a;
-  border-bottom: 1.6px solid #2a2a2a;
+  border-top: 0.08em solid var(--ink);
+  border-bottom: 0.08em solid var(--ink);
 }
 
 .ProseMirror table.ts-table-booktabs tr:first-child th {
-  border-bottom: 0.9px solid #2a2a2a;
+  border-bottom: 0.05em solid var(--ink);
 }
 
 /* plain preset: no rules at all */
@@ -1731,6 +1514,26 @@ body {
   margin: 0;
 }
 
+.ProseMirror th:has(> p:only-child > br.ProseMirror-trailingBreak:only-child),
+.ProseMirror td:has(> p:only-child > br.ProseMirror-trailingBreak:only-child) {
+  padding-block: 5pt;
+}
+
+.ProseMirror th > p:only-child:has(> br.ProseMirror-trailingBreak:only-child),
+.ProseMirror td > p:only-child:has(> br.ProseMirror-trailingBreak:only-child) {
+  line-height: 0;
+}
+
+.ProseMirror th p + p,
+.ProseMirror td p + p {
+  margin-top: 0.45em;
+}
+
+.ProseMirror th:hover,
+.ProseMirror td:hover {
+  background-color: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
 /* prosemirror-tables cell-selection highlight */
 .ProseMirror .selectedCell::after {
   content: '';
@@ -1738,6 +1541,17 @@ body {
   inset: 0;
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   pointer-events: none;
+}
+
+.ProseMirror .selectedCell {
+  caret-color: var(--accent);
+}
+
+.native-table-caption {
+  margin: -0.35em 0 1em;
+  text-align: center;
+  font: inherit;
+  color: inherit;
 }
 
 /* ---------- citations & bibliography ---------- */
@@ -1763,17 +1577,16 @@ body {
   font-size: 1em;
 }
 
-/* Compiled (exact) rendering replaces the DOM list once it arrives. The
-   fragment compiles at its own page top, which suppresses the title's
-   block-above spacing — restore it here (calibrated against the PDF). */
+/* The exact whole-document crop replaces the immediate native list only
+   after the shared publication is current. Its height already includes the
+   export's real block spacing; no fragment-specific correction is needed. */
 .ts-bibliography .bib-ink {
   display: none;
 }
 
-.ts-bibliography.bib-has-ink .bib-ink {
-  /* padding, not margin — a margin collapses through the block edge.
-     (+0.75em: the fragment page-top suppresses the title's block-above.) */
-  padding-top: 0.75em;
+.ts-bibliography.bib-has-ink {
+  height: var(--bib-exact-height);
+  margin: 0;
 }
 
 .ts-bibliography.bib-has-ink .bib-ink {
@@ -1782,6 +1595,21 @@ body {
 
 .ts-bibliography.bib-has-ink .bib-dom {
   display: none;
+}
+
+.bib-preview-status {
+  margin-top: 0.45em;
+  color: var(--muted);
+  font: 10px/1.35 var(--sans);
+}
+
+.ts-bibliography.bib-has-ink .bib-preview-status:empty {
+  display: none;
+}
+
+.ts-bibliography.bib-proof .bib-preview-status,
+.ts-bibliography[data-preview-state='error'] .bib-preview-status {
+  color: color-mix(in srgb, var(--accent) 72%, var(--muted));
 }
 
 .bib-edit-float {
@@ -1961,15 +1789,18 @@ body {
   margin: 0 -1px;
 }
 
+.math-inline.math-ink {
+  position: relative;
+  padding: 0;
+  margin: 0;
+  line-height: 0;
+}
+
 /* The Typst ink svg is inline and sits on the text baseline, leaving
    descender slack below — visually ~3px high in its box. Pure paint
    shift (transform): zero layout change, vertical parity untouched. */
 .math-display > svg {
   transform: translateY(0.18em);
-}
-
-.ts-table-render svg {
-  transform: translateY(3px);
 }
 
 .math-display {
@@ -1980,6 +1811,24 @@ body {
   padding: 0.5em 0;
   margin: 0 0 0.9em;
   border-radius: 5px;
+}
+
+/* Exact math already carries the export's block spacing, alignment, and
+   equation number inside its shared-document crop. The fragment-era CSS
+   repairs must not add a second geometry model. */
+.math-display.math-ink {
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  overflow: visible;
+}
+
+.math-display.math-ink > svg {
+  transform: none;
+}
+
+.math-display.math-ink[data-eqnum]::after {
+  display: none;
 }
 
 /* Equation numbers are painted by the equations plugin as a decoration
@@ -2430,7 +2279,8 @@ body {
   #toolbar,
   #hud,
   #toast,
-  .table-pill,
+  .native-table-toolbar,
+  .native-table-notice,
   #pages {
     display: none;
   }

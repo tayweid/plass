@@ -6,8 +6,32 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import { normalizeSettings, parseMathMacros, type DocSettings } from './settings';
 import { wrapAligned } from './math-src';
-import { isPortableCitationKey } from './bibtex';
+import { displayMathToTypst, inlineMathToTypst } from './math-typst';
+import { isPortableCitationKey, parseBibTeX } from './bibtex';
 import { effectiveFont, parityMetrics } from './font-registry';
+import { isLegacyTypstRawBlock } from './schema';
+import {
+  TYPST_EMBED_REGION_KIND,
+  TYPST_EMBED_REGION_LABEL,
+  TYPST_EMBED_REGION_MARKER,
+  TYPST_EMBED_REGION_STATE,
+} from './typst-embed-regions';
+import {
+  TYPST_LAYOUT_REGION_KIND,
+  TYPST_LAYOUT_REGION_LABEL,
+  TYPST_LAYOUT_REGION_MARKER,
+  TYPST_LAYOUT_REGION_STATE,
+  type TypstLayoutRegionKind,
+} from './typst-layout-regions';
+import { classifyTypstInline, typstInlineLink } from './typst-inline-regions';
+import {
+  TYPST_PREVIEW_REGION_KIND,
+  TYPST_PREVIEW_REGION_LABEL,
+  TYPST_PREVIEW_REGION_MARKER,
+  TYPST_PREVIEW_REGION_STATE,
+  typstPreviewInlineMathLink,
+  type TypstPreviewRegionKind,
+} from './typst-preview-regions';
 
 export interface TypExportOptions {
   /** Rewrite image sources (e.g. data: URLs to VFS paths for compilation). */
@@ -19,6 +43,20 @@ export interface TypExportOptions {
    * compiled SVGs expose per-cell hit geometry for in-place editing.
    */
   cellLinks?: boolean;
+  /** Compilation-only: add zero-flow state markers whose positions let the
+   * UI crop each embed from the exact whole-document SVG. Proof and PDF use
+   * this same prepared source, so the preview never gains a private context. */
+  embedRegions?: boolean;
+  /** Compilation-only: bracket editable figure captions and footnote bodies
+   * with zero-flow physical-position markers. Their line decisions are then
+   * read from the same whole-document SVG as pagination and embed previews. */
+  layoutRegions?: boolean;
+  /** Editor-publication-only: place a transparent exact-layout rectangle
+   * around each conservatively atomic inline Typst expression. */
+  inlineRegions?: boolean;
+  /** Editor-publication-only: expose inline-math baselines and bounded
+   * display-math/bibliography intervals in the shared document SVG. */
+  previewRegions?: boolean;
 }
 
 // ---------- editor↔Typst vertical parity ----------
@@ -88,16 +126,21 @@ export function parityRules(s: DocSettings): string {
   const eqAbove = pSlackBelow + 0.9 + 0.5 - m.typDesc;
   const eqBelow = 0.5 + 0.9 + pSlackAbove - m.typAsc;
   out += `#show math.equation.where(block: true): set block(above: ${pt(eqAbove)}, below: ${pt(eqBelow)})\n`;
-  // Tables break across pages Typst-natively (repeated table.header rows
-  // and all): the editor mirrors the split via the paged mini-compile in
-  // table-split.ts, and the page oracle represents mid-table page starts.
+  // Tables break across pages Typst-natively (including repeated headers).
+  // Exact proof displays that output directly; the editable native table
+  // remains one continuous structured surface rather than an SVG substitute.
   return out;
 }
 
 let exportOpts: TypExportOptions = {};
 let eqLabels = new Set<string>();
 let docBib: { name: string; content: string } | null = null;
+let docBibKeys = new Set<string>();
 let docMacros: Record<string, string> = {};
+let nextEmbedRegion = 0;
+let nextLayoutRegion = 0;
+let nextInlineRegion = 0;
+let nextPreviewRegion = 0;
 
 /** Expand math macros so exported LaTeX compiles anywhere. */
 export function expandMacrosWith(src: string, macros: Record<string, string>): string {
@@ -137,8 +180,22 @@ function imageSrc(src: string): string {
 export function escapeTyp(text: string): string {
   // A literal ~ must escape — Typst reads a bare ~ as a non-breaking
   // space, silently gluing the words around it. A real U+00A0 in the text
-  // emits AS Typst's ~, so the printed glue matches the editor's.
-  return text.replace(/[\\#$*_`@<>[\]~]/g, (c) => '\\' + c).replace(/\u00a0/g, '~');
+  // emits AS Typst's ~, so the printed glue matches the editor's. Escape both
+  // slashes in `//` after the general pass: in markup that token opens a line
+  // comment and can silently remove prose or the closing bracket of a caption.
+  return text
+    .replace(/[\\#$*_`@<>[\]~]/g, (c) => '\\' + c)
+    .replace(/\/\//g, '\\/\\/')
+    .replace(/\u00a0/g, '~');
+}
+
+function referenceLabel(label: unknown, context: string): string {
+  const value = String(label ?? '');
+  if (!value) return '';
+  if (!isPortableCitationKey(value)) {
+    throw new Error(`Cannot export ${context}: reference label ${JSON.stringify(value)} is not portable Typst syntax`);
+  }
+  return ` <${value}>`;
 }
 
 function inlineToTyp(node: PMNode): string {
@@ -147,7 +204,12 @@ function inlineToTyp(node: PMNode): string {
     if (child.isText && child.text) {
       const marks = new Set(child.marks.map((m) => m.type.name));
       if (marks.has('code')) {
-        out += '`' + child.text + '`';
+        // Typst inline raw has no variable-length fence syntax. A literal
+        // backtick would close `...`; the raw function's JSON string form is
+        // unambiguous and remains inline for arbitrary backtick runs.
+        out += child.text.includes('`')
+          ? `#raw(${JSON.stringify(child.text)}, block: false)`
+          : '`' + child.text + '`';
         return;
       }
       let t = escapeTyp(child.text);
@@ -156,25 +218,57 @@ function inlineToTyp(node: PMNode): string {
       if (marks.has('strike')) t = `#strike[${t}]`;
       out += t;
     } else if (child.type.name === 'typst_inline') {
-      // Raw Typst: the source IS the export.
-      out += child.attrs.src;
+      // Raw Typst source remains byte-for-byte document truth. Only the
+      // editor's shared SVG publication boxes conservative atoms so their
+      // exact layout rectangle can be recovered from Typst's link overlay.
+      const source = child.attrs.src as string;
+      const index = nextInlineRegion++;
+      const previewIndex = exportOpts.previewRegions ? nextPreviewRegion++ : null;
+      // A pure horizontal space has no paint, so Typst omits a direct link
+      // hit rectangle. A zero-height outer box makes only that invisible
+      // advance observable; visual atoms stay unboxed so their own baseline
+      // remains authoritative.
+      const linkedSource = /^\s*#h\s*\(/.test(source)
+        ? `#box[${source}]`
+        : source;
+      out += exportOpts.inlineRegions && classifyTypstInline(source).kind === 'fixed'
+        ? `#link(${JSON.stringify(typstInlineLink(index))})[${linkedSource}]` +
+          (previewIndex === null
+            ? ''
+            : previewRegionMarker(previewIndex, 'typst-inline', 'baseline'))
+        : source;
     } else if (child.type.name === 'math_inline') {
-      out += `#mi(\`${expandMacros(child.attrs.src)}\`)`;
+      const body = inlineMathToTypst(expandMacros(child.attrs.src));
+      const index = exportOpts.previewRegions ? nextPreviewRegion++ : null;
+      out += index === null
+        ? body
+        : `#link(${JSON.stringify(typstPreviewInlineMathLink(index))})[#box[${body}]]` +
+          previewRegionMarker(index, 'math-inline', 'baseline');
     } else if (child.type.name === 'eq_ref') {
       // Equation refs render as "(1)" to match the editor (Typst's default
       // would be "Equation 1"); figure refs keep "Figure 1".
-      out += unnumberedEqLabels.has(child.attrs.label as string)
+      const label = String(child.attrs.label ?? '');
+      out += !isPortableCitationKey(label)
+        ? escapeTyp(`@${label}`)
+        : unnumberedEqLabels.has(label)
         ? escapeTyp(`@${child.attrs.label}`)
-        : eqLabels.has(child.attrs.label)
-          ? `(#ref(<${child.attrs.label}>, supplement: none))`
-          : `@${child.attrs.label}`;
+        : eqLabels.has(label)
+          ? `(#ref(<${label}>, supplement: none))`
+          : `@${label}`;
     } else if (child.type.name === 'citation') {
       const key = child.attrs.key as string;
       // Invalid keys may exist in an old/local JSON snapshot. Keep their
       // visible text without letting them become executable Typst syntax.
       out += isPortableCitationKey(key) ? `@${key}` : escapeTyp(`@${key}`);
     } else if (child.type.name === 'footnote') {
-      out += `#footnote[${inlineToTyp(child)}]`;
+      // Allocate before descending so the marker index follows the same PM
+      // preorder as PageOracle's target enumeration, including a footnote in
+      // a figure caption.
+      const index = exportOpts.layoutRegions && child.content.size ? nextLayoutRegion++ : null;
+      const body = inlineToTyp(child);
+      out += index === null
+        ? `#footnote[${body}]`
+        : `#footnote[${layoutRegionMarker(index, 'footnote', 'start')}${body}${layoutRegionMarker(index, 'footnote', 'end')}]`;
     } else if (child.type.name === 'hard_break') {
       out += ' \\\n';
     } else if (child.type.name === 'image') {
@@ -184,12 +278,125 @@ function inlineToTyp(node: PMNode): string {
   return out;
 }
 
+const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code']);
+const TABLE_CELL_INLINE = new Set([
+  'text',
+  'hard_break',
+  'math_inline',
+  'eq_ref',
+  'citation',
+]);
+
+/**
+ * Serialize the table-cell subset that the importer can reconstruct without
+ * guessing. The schema permits arbitrary blocks, but silently discarding
+ * those blocks is worse than failing the export while the PM document stays
+ * untouched. Native structured editing can broaden this contract later.
+ */
+function tableCellContentToTyp(cell: PMNode, row: number, column: number): string {
+  const where = `table cell ${row + 1}:${column + 1}`;
+  const paragraphs: string[] = [];
+  cell.forEach((block) => {
+    if (block.type.name !== 'paragraph') {
+      throw new Error(`Cannot export ${where}: unsupported ${block.type.name} block; content was not discarded`);
+    }
+    if (block.attrs.keep || block.attrs.align) {
+      throw new Error(`Cannot export ${where}: paragraph layout attributes are not supported inside table cells`);
+    }
+    block.descendants((child) => {
+      if (!TABLE_CELL_INLINE.has(child.type.name)) {
+        throw new Error(`Cannot export ${where}: unsupported inline ${child.type.name}; content was not discarded`);
+      }
+      const markNames = child.marks.map((mark) => mark.type.name);
+      const unsupported = markNames.find((name) => !TABLE_CELL_MARKS.has(name));
+      if (unsupported) {
+        throw new Error(`Cannot export ${where}: unsupported ${unsupported} mark; content was not discarded`);
+      }
+      if (!child.isText && markNames.length) {
+        throw new Error(`Cannot export ${where}: marks on ${child.type.name} are not supported`);
+      }
+      if (markNames.includes('code') && markNames.length > 1) {
+        throw new Error(`Cannot export ${where}: code combined with another mark is not supported`);
+      }
+      const inlineSource = child.isText ? (child.text ?? '') : child.type.name === 'math_inline' ? (child.attrs.src as string) : '';
+      if (/[\r\n]/.test(inlineSource)) {
+        throw new Error(`Cannot export ${where}: multiline inline content is not supported`);
+      }
+      if (child.type.name === 'citation') {
+        const key = child.attrs.key as string;
+        if (!isPortableCitationKey(key) || !docBibKeys.has(key)) {
+          throw new Error(`Cannot export ${where}: citation ${JSON.stringify(key)} has no portable bibliography entry`);
+        }
+      }
+      if (child.type.name === 'eq_ref' && unnumberedEqLabels.has(child.attrs.label as string)) {
+        throw new Error(`Cannot export ${where}: a reference to an unnumbered equation is not lossless`);
+      }
+      return true;
+    });
+    let body = inlineToTyp(block);
+    // In a content block these prefixes otherwise acquire block semantics.
+    body = body.replace(/(^|\n)([=+\-])/g, '$1\\$2');
+    if (/\n[ \t]*\n/.test(body)) {
+      throw new Error(`Cannot export ${where}: an inline source contains a blank line`);
+    }
+    paragraphs.push(body);
+  });
+  if (paragraphs.length === 1 && !paragraphs[0]) return '';
+  return paragraphs
+    .map((body) => body || '// typeset:empty-table-paragraph\n~')
+    .join('\n\n');
+}
+
+function tableCellBrackets(content: string): string {
+  if (!content.includes('\n')) return `[${content}]`;
+  return `[\n${content.split('\n').map((line) => `    ${line}`).join('\n')}\n  ]`;
+}
+
 function blocksToTyp(parent: PMNode, indent: string): string {
   let out = '';
   parent.forEach((node) => {
     out += blockToTyp(node, indent);
   });
   return out;
+}
+
+/** Emit executable source unchanged, with an inert line-count boundary that
+ * lets the importer reconstruct arbitrary blank lines and marker-like text.
+ * Every source line receives the surrounding block indentation; the parser's
+ * existing list/quote unindent removes exactly that prefix on round-trip. */
+function embedRegionMarker(index: number, edge: 'start' | 'end', indent: string): string {
+  return `${indent}#${TYPST_EMBED_REGION_MARKER}(${index}, ${JSON.stringify(edge)})\n`;
+}
+
+function layoutRegionMarker(
+  index: number,
+  kind: TypstLayoutRegionKind,
+  edge: 'start' | 'end',
+): string {
+  return `#${TYPST_LAYOUT_REGION_MARKER}(${index}, ${JSON.stringify(kind)}, ${JSON.stringify(edge)})`;
+}
+
+function previewRegionMarker(
+  index: number,
+  kind: TypstPreviewRegionKind,
+  edge: 'baseline' | 'start' | 'end',
+): string {
+  return `#${TYPST_PREVIEW_REGION_MARKER}(${index}, ${JSON.stringify(kind)}, ${JSON.stringify(edge)})`;
+}
+
+function typstEmbedToTyp(source: string, indent: string, trackRegion = false): string {
+  const lines = source.split('\n');
+  const body = lines.map((line) => indent + line).join('\n');
+  if (!trackRegion) {
+    return `${indent}// typeset:typst-embed-lines ${lines.length}\n${body}\n\n`;
+  }
+  const index = nextEmbedRegion++;
+  return (
+    embedRegionMarker(index, 'start', indent) +
+    `${indent}// typeset:typst-embed-lines ${lines.length}\n${body}\n` +
+    embedRegionMarker(index, 'end', indent) +
+    '\n'
+  );
 }
 
 function blockToTyp(node: PMNode, indent = ''): string {
@@ -213,7 +420,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
       return indent + s + '\n\n';
     }
     case 'heading': {
-      const label = node.attrs.label ? ` <${node.attrs.label}>` : '';
+      const label = referenceLabel(node.attrs.label, 'heading');
       return indent + '='.repeat(node.attrs.level) + ' ' + inlineToTyp(node) + label + '\n\n';
     }
     case 'doc_title':
@@ -235,17 +442,35 @@ function blockToTyp(node: PMNode, indent = ''): string {
     case 'blockquote':
       return indent + '#quote(block: true)[\n' + blocksToTyp(node, indent + '  ') + indent + ']\n\n';
     case 'code_block':
-      // Raw-Typst escape-hatch islands (from import) pass through verbatim.
-      if (node.attrs.params === 'typst-raw') return indent + node.textContent + '\n\n';
-      return indent + '```' + (node.attrs.params ?? '') + '\n' + node.textContent + '\n```\n\n';
+      // Persisted pre-split documents still serialize losslessly even before
+      // the compatibility plugin has had a chance to migrate their exact old
+      // marker. Ordinary code is emitted through an unlabelled raw function:
+      // language-labelled Typst fences apply syntax colours that the native
+      // editable surface does not paint. A lossless inert comment retains the
+      // language/params for re-import without changing printed pixels.
+      if (isLegacyTypstRawBlock(node)) return typstEmbedToTyp(node.textContent, indent);
+      return (
+        `${indent}// typeset:code-block-params ${JSON.stringify(node.attrs.params ?? '')}\n` +
+        `${indent}#raw(${JSON.stringify(node.textContent)}, block: true)\n\n`
+      );
+    case 'typst_embed':
+      return typstEmbedToTyp(node.textContent, indent, exportOpts.embedRegions);
     case 'math_display': {
+      const previewIndex = exportOpts.previewRegions ? nextPreviewRegion++ : null;
       const numberedAttr = node.attrs.numbered as boolean | null;
       const effNumbered = numberedAttr ?? emitNumberEquations;
       // A label on an unnumbered equation would make every reference to it
       // a compile error (Typst: cannot ref an unnumbered equation) — drop
       // it; the references degrade to literal placeholders.
-      const label = node.attrs.label && effNumbered ? ` <${node.attrs.label}>` : '';
-      const body = '#mitex(`\n' + expandMacros(wrapAligned(node.attrs.src as string)) + '\n`)' + label;
+      const label = node.attrs.label && effNumbered
+        ? referenceLabel(node.attrs.label, 'numbered equation')
+        : '';
+      const equation = displayMathToTypst(expandMacros(wrapAligned(node.attrs.src as string))) + label;
+      const body = previewIndex === null
+        ? equation
+        : previewRegionMarker(previewIndex, 'math-display', 'start') + '\n' +
+          equation + '\n' +
+          previewRegionMarker(previewIndex, 'math-display', 'end');
       const numbered = node.attrs.numbered as boolean | null;
       // Per-equation override as bare set/restore rules: a wrapping content
       // block (#[...]) changes Typst's block spacing (~0.5em) and shifted
@@ -262,8 +487,18 @@ function blockToTyp(node: PMNode, indent = ''): string {
     case 'figure': {
       // src is emitted verbatim (even data: URLs) so our own files round-trip
       // losslessly; swap in a real image path for Typst compilation.
-      const label = node.attrs.label ? ` <${node.attrs.label}>` : '';
-      return indent + `#figure(image("${imageSrc(node.attrs.src)}"), caption: [${inlineToTyp(node)}])${label}\n\n`;
+      const label = referenceLabel(node.attrs.label, 'figure');
+      // Like footnotes, allocate the outer caption before serializing its
+      // inline children so nested footnote targets retain deterministic PM
+      // preorder indices.
+      const index = exportOpts.layoutRegions && node.content.size ? nextLayoutRegion++ : null;
+      const caption = inlineToTyp(node);
+      const body = index === null
+        ? caption
+        : layoutRegionMarker(index, 'figure-caption', 'start') +
+          caption +
+          layoutRegionMarker(index, 'figure-caption', 'end');
+      return indent + `#figure(image("${imageSrc(node.attrs.src)}"), caption: [${body}])${label}\n\n`;
     }
     case 'bullet_list':
     case 'ordered_list': {
@@ -316,14 +551,11 @@ function blockToTyp(node: PMNode, indent = ''): string {
         let col = 0;
         row.forEach((cell, _cellOffset, cellIndex) => {
           if (cell.type.name !== 'table_header') allHeader = false;
-          const parts: string[] = [];
-          cell.forEach((block) => {
-            if (block.isTextblock) parts.push(inlineToTyp(block));
-          });
-          let content = parts.join(' ').trim();
+          let content = tableCellContentToTyp(cell, rowIndex, cellIndex);
           if (exportOpts.cellLinks) {
             content = `#link("cell://${rowIndex}-${cellIndex}")[${content || '#h(1em)'}]`;
           }
+          const body = tableCellBrackets(content);
           const colspan = (cell.attrs.colspan as number) ?? 1;
           const rowspan = (cell.attrs.rowspan as number) ?? 1;
           const align = cell.attrs.align as string | null;
@@ -344,7 +576,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
               const args = [`colspan: 2`];
               if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
               args.push(`align: ${isHeader ? 'center' : 'right'}`);
-              cells.push(`table.cell(${args.join(', ')})[${content}]`);
+              cells.push(`table.cell(${args.join(', ')})${body}`);
             }
             col += colspan;
             return;
@@ -355,7 +587,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
           if (emitSpan > 1) args.push(`colspan: ${emitSpan}`);
           if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
           if (align && align !== colAligns[col]) args.push(`align: ${align}`);
-          cells.push(args.length ? `table.cell(${args.join(', ')})[${content}]` : `[${content}]`);
+          cells.push(args.length ? `table.cell(${args.join(', ')})${body}` : body);
           col += colspan;
         });
         if (allHeader) hasHeader = true;
@@ -443,16 +675,25 @@ function blockToTyp(node: PMNode, indent = ''): string {
         // A captioned table is a figure: numbered "Table N", referenceable.
         const cap = caption ? `,\n  caption: [${escapeTyp(caption)}]` : '';
         const kind = fontSize ? ',\n  kind: table' : '';
-        const lab = tLabel ? ` <${tLabel}>` : '';
+        const lab = referenceLabel(tLabel, 'table');
         return indent + directive + `#figure(\n${tableCall.split('\n').map((l) => '  ' + l).join('\n')}${cap}${kind},\n)${lab}\n\n`;
       }
       return indent + directive + `#align(center, ${tableCall})\n\n`;
     }
     case 'bibliography': {
+      // Allocate from document structure even when the bibliography is empty;
+      // later preview-node indices must remain identical to PM preorder.
+      const previewIndex = exportOpts.previewRegions ? nextPreviewRegion++ : null;
       // Embedded inline so the .typ stays self-contained (bytes() source).
       const bib = docBib;
       if (!bib?.content) return '';
-      return indent + `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "ieee")\n\n`;
+      const body = `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "ieee")`;
+      if (previewIndex === null) return indent + body + '\n\n';
+      return (
+        indent + previewRegionMarker(previewIndex, 'bibliography', 'start') + '\n' +
+        indent + body + '\n' +
+        indent + previewRegionMarker(previewIndex, 'bibliography', 'end') + '\n\n'
+      );
     }
     case 'page_break':
       return indent + '#pagebreak()\n\n';
@@ -484,7 +725,12 @@ let unnumberedEqLabels = new Set<string>();
 
 export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
   exportOpts = opts;
+  nextEmbedRegion = 0;
+  nextLayoutRegion = 0;
+  nextInlineRegion = 0;
+  nextPreviewRegion = 0;
   docBib = (doc.attrs?.bib as { name: string; content: string } | null) ?? null;
+  docBibKeys = new Set(docBib ? parseBibTeX(docBib.content).map((entry) => entry.key) : []);
   eqLabels = new Set();
   unnumberedEqLabels = new Set();
   doc.descendants((n) => {
@@ -531,6 +777,36 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     if (s.pageNumStart !== 1) out += `#counter(page).update(${s.pageNumStart})\n`;
     if (s.mathMacros.trim()) out += `// typeset:math-macros ${JSON.stringify(s.mathMacros)}\n`;
     if (containsMath(doc)) out += '#import "@preview/mitex:0.2.5": mi, mitex\n';
+    if (opts.embedRegions) {
+      out += (
+        `#let ${TYPST_EMBED_REGION_MARKER}(index, edge) = context { ` +
+        `let pos = here().position(); state(${JSON.stringify(TYPST_EMBED_REGION_STATE)}, ()).update(` +
+        `values => values + ((index: index, edge: edge, pos: pos),)) }\n` +
+        `#context [#metadata((kind: ${JSON.stringify(TYPST_EMBED_REGION_KIND)}, ` +
+        `regions: state(${JSON.stringify(TYPST_EMBED_REGION_STATE)}, ()).final())) ` +
+        `<${TYPST_EMBED_REGION_LABEL}>]\n`
+      );
+    }
+    if (opts.layoutRegions) {
+      out += (
+        `#let ${TYPST_LAYOUT_REGION_MARKER}(index, kind, edge) = context { ` +
+        `let pos = here().position(); state(${JSON.stringify(TYPST_LAYOUT_REGION_STATE)}, ()).update(` +
+        `values => values + ((index: index, kind: kind, edge: edge, pos: pos),)) }\n` +
+        `#context [#metadata((kind: ${JSON.stringify(TYPST_LAYOUT_REGION_KIND)}, ` +
+        `regions: state(${JSON.stringify(TYPST_LAYOUT_REGION_STATE)}, ()).final())) ` +
+        `<${TYPST_LAYOUT_REGION_LABEL}>]\n`
+      );
+    }
+    if (opts.previewRegions) {
+      out += (
+        `#let ${TYPST_PREVIEW_REGION_MARKER}(index, kind, edge) = context { ` +
+        `let pos = here().position(); state(${JSON.stringify(TYPST_PREVIEW_REGION_STATE)}, ()).update(` +
+        `values => values + ((index: index, kind: kind, edge: edge, pos: pos),)) }\n` +
+        `#context [#metadata((kind: ${JSON.stringify(TYPST_PREVIEW_REGION_KIND)}, ` +
+        `regions: state(${JSON.stringify(TYPST_PREVIEW_REGION_STATE)}, ()).final())) ` +
+        `<${TYPST_PREVIEW_REGION_LABEL}>]\n`
+      );
+    }
     out += '\n';
     out += blocksToTyp(doc, '');
     return out.trimEnd() + '\n';

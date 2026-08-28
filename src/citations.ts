@@ -9,7 +9,15 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
 import { parseBibTeX, bibAuthors, bibVenue, isPortableCitationKey, type BibEntry } from './bibtex';
 import { INPUT_LIMITS, InputLimitError, readBoundedText, textSizeError } from './input-limits';
-import { mountTypstSvg } from './safe-svg';
+import { transactionTouchesNodeTypes } from './transaction-impact';
+import {
+  documentPreviewManagerFor,
+  type ManagedDocumentPreviewView,
+  type PreparedDocumentPublication,
+  type TypstEmbedPreviewManager,
+} from './raw-preview';
+import type { TypstDocumentSvgPublication } from './typst-document-publication';
+import { getSettings } from './settings';
 
 export interface DocBib {
   name: string;
@@ -43,6 +51,7 @@ export function citeOrder(doc: PMNode): Map<string, number> {
 }
 
 export const citeKey = new PluginKey<DecorationSet>('citations');
+const CITATION_NODES = new Set(['citation', 'bibliography']);
 
 function build(state: EditorState): DecorationSet {
   const order = citeOrder(state.doc);
@@ -78,7 +87,12 @@ export function citationsPlugin() {
     key: citeKey,
     state: {
       init: (_, state) => build(state),
-      apply: (tr, val, _old, newState) => (tr.docChanged ? build(newState) : val),
+      apply: (tr, val, _old, newState) => {
+        if (!tr.docChanged) return val;
+        return transactionTouchesNodeTypes(tr, CITATION_NODES)
+          ? build(newState)
+          : val.map(tr.mapping, tr.doc);
+      },
     },
     props: {
       decorations: (state) => citeKey.getState(state),
@@ -100,71 +114,53 @@ export function citationsPlugin() {
   });
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const PT_TO_PX = 4 / 3;
+
+function bibliographyCrop(
+  publication: PreparedDocumentPublication,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', `${x} ${y} ${width} ${height}`);
+  svg.setAttribute('width', String(width));
+  svg.setAttribute('height', String(height));
+  const image = document.createElementNS(SVG_NS, 'image');
+  image.setAttribute('href', publication.objectUrl);
+  image.setAttribute('x', String(publication.viewBox[0]));
+  image.setAttribute('y', String(publication.viewBox[1]));
+  image.setAttribute('width', String(publication.viewBox[2]));
+  image.setAttribute('height', String(publication.viewBox[3]));
+  image.setAttribute('preserveAspectRatio', 'none');
+  image.setAttribute('data-exact-document-publication', '');
+  svg.appendChild(image);
+  return svg;
+}
+
 /** Renders the cited entries, in citation order, from the document bib. */
-export class BibliographyView implements NodeView {
+export class BibliographyView implements NodeView, ManagedDocumentPreviewView {
   dom: HTMLElement;
-  private inkKey = '';
-  private inkTimer = 0;
   private destroyed = false;
+  private readonly manager: TypstEmbedPreviewManager;
+  private renderedResult: TypstDocumentSvgPublication | null = null;
+  private regionKey = '';
+  private fallbackBib: DocBib | null = null;
+  private fallbackOrder = '';
 
   constructor(
     _node: PMNode,
     private view: EditorView,
+    private getPos: () => number | undefined,
   ) {
     this.dom = document.createElement('div');
     this.dom.className = 'ts-bibliography';
     this.dom.setAttribute('data-bibliography', '');
     this.render();
-  }
-
-  /**
-   * Exact PDF rendering: compile the export's own #bibliography through the
-   * in-app Typst (hidden citations establish first-use numbering) and show
-   * that SVG. The DOM list below is the instant fallback while compiling.
-   */
-  private scheduleInk() {
-    clearTimeout(this.inkTimer);
-    this.inkTimer = window.setTimeout(() => void this.compileInk(), 300);
-  }
-
-  private async compileInk() {
-    if (this.destroyed) return;
-    const state = this.view.state;
-    const bib = state.doc.attrs.bib as { content?: string } | null;
-    const order = citeOrder(state.doc);
-    const keys = [...order.entries()]
-      .sort((a, b) => a[1] - b[1])
-      .map(([k]) => k)
-      .filter(isPortableCitationKey);
-    if (!bib?.content || !keys.length) return;
-    // Measure the column from the editor root — the node view's own box
-    // may not be laid out yet when this first runs.
-    const widthPx = this.view.dom.clientWidth || 576;
-    const { getSettings } = await import('./settings');
-    const { parityRules, textSetLine } = await import('./typ-serializer');
-    const { compileSvg, FONT_FALLBACK } = await import('./pdf');
-    const s = getSettings(state);
-    const src =
-      `#set page(width: ${(widthPx * 0.75).toFixed(2)}pt, height: auto, margin: 0pt)\n` +
-      parityRules(s) +
-      textSetLine(s, FONT_FALLBACK) +
-      '\n' +
-      `#place(hide[${keys.map((k) => '@' + k).join(' ')}])\n` +
-      `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "ieee")\n`;
-    if (src === this.inkKey) return;
-    const svg = await compileSvg(src);
-    if (this.destroyed || !svg) return;
-    this.inkKey = src;
-    const holder = this.dom.querySelector('.bib-ink');
-    if (!holder) return;
-    const svgEl = mountTypstSvg(holder, svg);
-    if (svgEl) {
-      svgEl.style.width = `${(parseFloat(svgEl.getAttribute('width') ?? '0') * 4) / 3}px`;
-      svgEl.style.height = 'auto';
-    }
-    this.dom.classList.add('bib-has-ink');
-    const { scheduleTypeset } = await import('./typeset-plugin');
-    scheduleTypeset(this.view);
+    this.manager = documentPreviewManagerFor(view);
+    this.manager.register(this);
   }
 
   private render() {
@@ -174,11 +170,16 @@ export class BibliographyView implements NodeView {
     const byKey = new Map(entries.map((e) => [e.key, e]));
 
     const cited = [...order.entries()].sort((a, b) => a[1] - b[1]);
+    this.fallbackBib = state.doc.attrs.bib as DocBib | null;
+    this.fallbackOrder = cited.map(([key, number]) => `${number}:${key}`).join('|');
     const ink = document.createElement('div');
     ink.className = 'bib-ink';
     ink.contentEditable = 'false';
     const fallback = document.createElement('div');
     fallback.className = 'bib-dom';
+    const status = document.createElement('div');
+    status.className = 'bib-preview-status';
+    status.setAttribute('role', 'status');
     const head = document.createElement('div');
     head.className = 'bib-head';
     const heading = document.createElement('span');
@@ -225,9 +226,12 @@ export class BibliographyView implements NodeView {
         fallback.appendChild(item);
       }
     }
-    this.dom.replaceChildren(ink, fallback);
-    this.dom.classList.remove('bib-has-ink');
-    this.inkKey = '';
+    this.dom.replaceChildren(ink, fallback, status);
+    this.dom.classList.remove('bib-has-ink', 'bib-proof');
+    this.dom.style.removeProperty('--bib-exact-height');
+    this.renderedResult = null;
+    this.regionKey = '';
+    this.dom.dataset.previewState = this.needsDocumentPreview() ? 'pending' : 'empty';
     edit.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -244,18 +248,108 @@ export class BibliographyView implements NodeView {
       editBibliography(this.view);
     });
     this.dom.appendChild(editHover);
-    this.scheduleInk();
   }
 
   update(node: PMNode): boolean {
     if (node.type !== schema.nodes.bibliography) return false;
     this.render();
+    this.manager.invalidate(this.view.state.doc);
     return true;
   }
 
+  needsDocumentPreview(): boolean {
+    const bib = this.view.state.doc.attrs.bib as DocBib | null;
+    return !!bib?.content && citeOrder(this.view.state.doc).size > 0;
+  }
+
+  retainedDocumentPreview(): TypstDocumentSvgPublication | null {
+    return this.renderedResult;
+  }
+
+  pending(): void {
+    if (!this.needsDocumentPreview()) return;
+    const bib = this.view.state.doc.attrs.bib as DocBib | null;
+    const order = [...citeOrder(this.view.state.doc).entries()]
+      .map(([key, number]) => `${number}:${key}`).join('|');
+    if (bib !== this.fallbackBib || order !== this.fallbackOrder) this.render();
+    this.dom.dataset.previewState = 'pending';
+    const status = this.dom.querySelector<HTMLElement>('.bib-preview-status');
+    if (status) status.textContent = this.renderedResult
+      ? 'Updating exact references; showing the last good publication.'
+      : 'Updating exact references…';
+  }
+
+  applyDocumentPreview(result: TypstDocumentSvgPublication, doc: PMNode): boolean {
+    if (this.destroyed || !this.needsDocumentPreview()) return false;
+    const pos = this.getPos();
+    const publication = this.manager.publicationFor(result);
+    const index = pos === undefined ? null : this.manager.regionIndexAt(doc, pos, 'preview');
+    const meta = index === null ? null : publication?.previewRegions.get(index);
+    if (!meta || meta.kind !== 'bibliography' || !publication) {
+      this.compileError('The exact document did not expose bibliography geometry.');
+      return false;
+    }
+    const key = [index, meta.start.page, meta.start.x, meta.start.y,
+      meta.end.page, meta.end.x, meta.end.y].join(':');
+    if (result === this.renderedResult && key === this.regionKey) return false;
+    const previousHeight = this.dom.getBoundingClientRect().height;
+    const status = this.dom.querySelector<HTMLElement>('.bib-preview-status');
+    if (meta.start.page !== meta.end.page) {
+      this.dom.classList.remove('bib-has-ink');
+      this.dom.classList.add('bib-proof');
+      this.dom.dataset.previewState = 'proof';
+      if (status) status.textContent =
+        `References span ${meta.end.page - meta.start.page + 1} Typst pages — open Proof for exact output.`;
+      this.renderedResult = result;
+      this.regionKey = key;
+      return true;
+    }
+    const pageTop = publication.pageY[meta.start.page - 1];
+    if (pageTop === undefined) {
+      this.compileError('The bibliography page could not be located.');
+      return false;
+    }
+    const start = pageTop + meta.start.y;
+    const end = pageTop + meta.end.y;
+    const height = end - start;
+    const settings = getSettings(this.view.state);
+    const cropX = meta.start.x;
+    const right = publication.viewBox[0] + publication.viewBox[2] - settings.marginRight * 72;
+    const width = right - cropX;
+    if (!(height > 0.05) || !(width > 0.05)) {
+      this.compileError('The bibliography region was empty or reversed.');
+      return false;
+    }
+    const svg = bibliographyCrop(publication, cropX, start, width, height);
+    svg.style.display = 'block';
+    svg.style.width = `${width * PT_TO_PX}px`;
+    svg.style.height = `${height * PT_TO_PX}px`;
+    const holder = this.dom.querySelector<HTMLElement>('.bib-ink');
+    if (!holder) return false;
+    holder.replaceChildren(svg);
+    this.dom.classList.add('bib-has-ink');
+    this.dom.classList.remove('bib-proof');
+    this.dom.style.setProperty('--bib-exact-height', `${height * PT_TO_PX}px`);
+    this.dom.dataset.previewState = 'ready';
+    if (status) status.textContent = '';
+    this.renderedResult = result;
+    this.regionKey = key;
+    return Math.abs(previousHeight - height * PT_TO_PX) > 0.5;
+  }
+
+  compileError(message: string): void {
+    if (this.destroyed || !this.needsDocumentPreview()) return;
+    this.dom.dataset.previewState = 'error';
+    const status = this.dom.querySelector<HTMLElement>('.bib-preview-status');
+    if (status) status.textContent = this.renderedResult
+      ? `Exact update failed; showing the last good references. ${message}`
+      : `${message} References remain exact in Proof/PDF.`;
+  }
+
   destroy() {
+    if (this.destroyed) return;
     this.destroyed = true;
-    clearTimeout(this.inkTimer);
+    this.manager.unregister(this);
   }
 
   selectNode() {

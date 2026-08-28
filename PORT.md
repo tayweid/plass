@@ -1,11 +1,19 @@
-# The Port: a scoped Typst line-breaking mirror in the editor
+# The Port: an opt-in Typst line-breaking differential harness
 
-Goal: within Plass's certified font and content contract, the real-time
+> Historical implementation record. The port and Rust/WASM sidecar remain for
+> explicit differential and font-certification tests, but the production
+> editor no longer imports, loads, or ships them. Settled body breaks now come
+> only from a full-document compiled `LayoutSnapshot`; pending, failed, and
+> unmatched blocks use native browser wrapping.
+
+Historical goal: within Plass's certified font and content contract, the local
 breaker should produce the same ordered break offsets and hyphen kinds as the
 pinned Typst compiler. That is a narrower and testable promise than "all Typst
-documents, always": constructs the adapter cannot represent and environments
-where the shaping sidecar is unavailable deliberately fall back to the legacy
-breaker. The compiled Typst oracle remains the verifier and authority.
+documents, always." In the current product, constructs the full-document
+mapper cannot represent and revisions whose compiled snapshot is unavailable
+deliberately remain native and continuous. `PageOracle` is the sole product
+line-and-page authority; the legacy breakers and paragraph-fragment oracle
+exist only inside explicit research tests.
 
 Reference source: [Typst at commit
 `951788cc614cd805d5d786e17bbf93796df73d10`](https://github.com/typst/typst/tree/951788cc614cd805d5d786e17bbf93796df73d10),
@@ -16,31 +24,44 @@ tree.
 
 ## Current status
 
-- **Implemented:** the Rust/WASM primitives sidecar, the TypeScript mirror in
-  `src/layout/port/`, the ProseMirror adapter, and the direct forced-break
-  translator. The port is enabled by default for New Computer Modern body
-  paragraphs, figure captions, and footnote bodies that the adapter can map.
+- **Test-only:** the Rust/WASM primitives sidecar, TypeScript mirror in
+  `src/layout/port/`, and ProseMirror adapter remain available to the differ
+  and certification suites. They are not a production layout authority.
 - **Certified scope:** New Computer Modern is the only exact/selectable body
   family. Its regular, italic, bold, and bold-italic faces, plus the shared
   DejaVu Sans Mono face, are registered explicitly across the browser,
   compiler, and sidecar. Other bundled or historical names resolve to New
   Computer Modern for live layout and export while their stored preference is
   preserved.
-- **Live behavior:** a changed block uses cached compiled breaks when present,
-  otherwise the local port, otherwise legacy Knuth–Plass. Authoritative
-  offsets go through `layoutForcedBlock`, which skips a second break search;
-  its conservative legacy translator remains the fail-closed fallback.
-  Block-relative decoration updates make a matching settled oracle result a
-  no-op.
+- **Product behavior:** touched blocks immediately return to native DOM. After
+  the quiet period, compiled snapshot offsets go through `layoutForcedBlock`,
+  whose conservative translator fallback translates the same offsets without
+  selecting alternatives. No local break search publishes settled lines.
+- **One live publication:** `PageOracle`, math, bibliography, executable Typst
+  embeds, and supported fixed inline Typst atoms acquire one brokered
+  whole-document SVG for a ProseMirror document plus asset epoch. Caption and
+  footnote lines and every exact paint crop are selected from compiler-reported
+  physical regions in that publication, not from feature-specific fragment
+  compiles. Exact lines/pages wait at a readiness barrier until every live
+  geometry consumer has applied the same immutable result. The worker compiles
+  one vector artifact, queries its live world, and renders that same vector;
+  the UI builds one position index and applies it to all consumers in linear
+  time.
+- **Executable boundaries are explicit:** ordinary code is inert and visually
+  plain in both editor and Proof. A self-contained in-flow `typst_embed` may be
+  cropped live, while environment-mutating, page-breaking, or out-of-flow
+  source remains exact in Proof/PDF and switches the mixed native surface to a
+  labelled continuous state.
 - **Proof status:** the differ harness and browser audits cover the supported
   contexts, while port smoke and face-registration checks run under
   `npm run test:layout`. This is not a universal certification of arbitrary
   Typst markup, scripts, languages, fonts, or fallback shaping.
 - **Pagination is separate:** whole-document Typst page starts are used when
   they compile and map safely, then may be held while a replacement is
-  pending. The complete local paginator remains the fallback. The suffix-only
-  planner is a development shadow comparison: whenever it runs, the full
-  fallback result is installed, and production does not invoke the planner.
+  pending and validation succeeds. Any failure, invalidation, or unsafe map
+  clears the page starts and presents continuous native editing with no page
+  count or folios. Production imports no local page planner. The suffix module
+  remains a pure research fixture only.
 
 ## Finding: Typst is not TeX, and we implemented TeX
 
@@ -163,8 +184,8 @@ system and World; the surgery to decouple is larger than the port and
 leaves us with a Rust fork to maintain. The sidecar-primitives + TS
 mirror keeps version-pinned shaping data and the algorithm
 readable/debuggable in our codebase. If the differ (phase 4) exposes a
-disagreement we cannot pin down in the TS mirror, this remains the
-fallback.
+disagreement we cannot pin down in the TS mirror, this remains a possible
+research direction rather than a production fallback.
 
 ## Implementation phases and status
 
@@ -204,26 +225,24 @@ fallback.
   slice behavior. Unsupported structures return `null` instead of inventing
   an approximately equivalent Typst input.
 
-### 3. Live wiring — implemented, with a fail-closed fallback
+### 3. Product wiring — port retired
 
-- The port is on by default after the primitives load. Cached compiled breaks
-  take precedence; the port supplies an immediate full-block answer when no
-  compiled entry is ready; classic Knuth–Plass handles degraded or unmapped
-  cases.
-- Both compiled and port break lists go through `layoutForcedBlock`. If its
-  validation rejects an input, the established forced-layout translator is
-  retained rather than weakening the selected break signature.
+- The editor does not load the primitives or run the port. Touched blocks use
+  native browser wrapping until a compiled `LayoutSnapshot` is current.
+- Compiled break lists go through `layoutForcedBlock`. If its fast validation
+  rejects an input, the established forced-layout translator translates the
+  same list; it does not select alternative breaks.
 - Downstream line, hyphen, spacing, and page-gap decorations remain
-  presentation-only and use the same ProseMirror contract whichever source
-  selected the breaks.
+  presentation-only.
 
 ### 4. Differential proof — active and intentionally scoped
 
 - `differ.html` / `src/differ.ts` can compare plain, ProseMirror-level, and
-  caption/footnote cases against the in-app compiler. The layout test command
-  covers port smoke behavior and every selectable sidecar face; browser tests
-  cover face loading, forced-translation equivalence, and settled no-op
-  behavior.
+  historical caption/footnote fragment cases against the in-app compiler.
+  These are test fixtures, not the live contextual-line path. The layout test
+  command covers port smoke behavior and every selectable sidecar face;
+  browser tests cover face loading, forced-translation equivalence, settled
+  no-op behavior, and full-document caption/footnote region matching.
 - The original broader corpora and knife-edge measure sweeps remain the
   standard for widening the exact contract. A divergence is a bug or a reason
   to narrow support, not a tolerance to hide.
@@ -233,30 +252,37 @@ fallback.
 
 ### 5. Writing path — implemented
 
-- `LayoutScheduler` coalesces changed-block work into the next microtask and
-  schedules a complete verification pass after a 250 ms quiet period.
-- The old caret-ownership, frozen-prefix, and healing-window policy is gone.
-  Live layout evaluates the complete changed block, then rebuilds only that
-  block's owned decorations.
-- Semantic break signatures let the compiled verifier reuse a matching port
-  layout. Browser regressions require one line-decoration dispatch for an
-  ordinary body, caption, or footnote edit and no identical settle reinstall.
+- `LayoutScheduler` schedules only the compiled settle after a 250 ms quiet
+  period; there is no pre-paint layout microtask.
+- The transaction itself strips touched line decorations before paint.
+- Semantic break signatures let unchanged compiled entries be reused without
+  reinstalling identical decorations.
 - Conservative forced-layout tolerances and the legacy translator remain as
   browser-rendering guards; they are not alternate break-selection policies.
 
-### 6. Page breaking — partial, separate from the line port
+### 6. Page breaking — implemented, separate from the line port
 
-- The whole-document Typst oracle provides exact page starts when compilation
-  and DOM mapping succeed. Mapped starts can be held while a fresh result is
-  pending; confidence failure or invalid geometry returns to the full local
-  paginator for footnotes, widow/orphan rules, and block placement.
+- `PageOracle` maps line ranges and page starts from the one brokered
+  whole-document Typst publication into an immutable `LayoutSnapshot`.
+  Mapped starts can be held while a fresh result is pending, but only when
+  their exact provenance and stale geometry both validate. A failed result
+  latches that basis off until a new exact success.
+- Exact mode also waits until math, bibliography, executable embeds, and fixed
+  inline Typst crops have consumed that same publication. A cross-page block
+  crop is explicitly Proof-only; if its internal page boundary cannot map to
+  native editable structure, pagination becomes continuous instead of
+  overlaying multiple pages or invoking a second paginator.
+- The compiler produces the SVG and all region metadata from one vector
+  artifact. Publication consumers share one document-position index, so adding
+  node views is linear rather than multiplying document traversals.
 - Each pass captures one immutable geometry snapshot and uses prefix sums for
-  height queries. Long-table splits come from paged Typst mini-compiles and
-  can be checked against whole-document oracle boundaries.
-- A conservative suffix planner accepts only simple top-level paragraph edits
-  at proven page anchors. It currently runs in development as a full-versus-
-  suffix shadow and records comparison telemetry. The full result is always
-  installed; no production optimization claim is made yet.
+  translation. Native tables do not have a hidden fragment assignment; a
+  compiled page start inside one is declined and the editor becomes continuous.
+  Continuous mode removes spacers, painted sheets, page numbers, and
+  page-bottom positioning; footnote bodies remain visible inline.
+- The conservative suffix planner and local height-planning experiments are
+  retained as isolated research modules/tests. They are not imported by the
+  production editor and may not publish layout.
 
 ## Remaining certification work
 
@@ -268,7 +294,7 @@ fallback.
   compiler identity is demonstrated for all required faces.
 - Keep mapping more inline constructs only when their emitted Typst inputs can
   be represented without approximation.
-- Do not promote suffix pagination until a production-mode exact-source
-  browser fixture proves mapped marker and painted-spacer provenance with zero
-  corrections. A direct port of Typst's `flow/` logic would be a separate
-  project, not an implied property of the line-breaking mirror.
+- Treat any future page-planning experiment as research until it can replace,
+  rather than coexist with, the full-document Typst authority. A direct port
+  of Typst's `flow/` logic would be a separate project, not an implied
+  property of the line-breaking mirror.

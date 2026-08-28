@@ -1,10 +1,9 @@
 /**
- * Scheduling and browser-lifecycle policy for live and settled layout.
+ * Scheduling and browser-lifecycle policy for settled layout.
  *
  * This class deliberately knows nothing about ProseMirror or line breaking.
  * It only preserves the timing contract used by the typeset view:
  *
- * - changed-block layout is coalesced into the next microtask;
  * - full layout waits 250 ms after the latest edit;
  * - unrelated full-layout requests are suppressed during that edit window;
  * - full layout otherwise coalesces into one animation frame;
@@ -15,7 +14,6 @@ export const EDIT_SETTLE_DELAY_MS = 250;
 export const RESIZE_THRESHOLD_PX = 0.5;
 
 export interface LayoutSchedulerCallbacks {
-  runLive: () => void;
   runSettled: () => void;
   /** Drop font/measurement-dependent caches before the following settle. */
   invalidateMetrics: () => void;
@@ -29,7 +27,6 @@ export interface LayoutSchedulerFonts {
 
 /** Injectable browser boundary. Tests use a deterministic in-memory clock. */
 export interface LayoutSchedulerEnvironment {
-  queueMicrotask(callback: () => void): void;
   setTimeout(callback: () => void, delayMs: number): number;
   clearTimeout(handle: number): void;
   requestAnimationFrame(callback: FrameRequestCallback): number;
@@ -44,7 +41,6 @@ function browserEnvironment(): LayoutSchedulerEnvironment {
   }
   const fontSet = typeof document !== 'undefined' ? document.fonts : undefined;
   return {
-    queueMicrotask: (callback) => globalThis.queueMicrotask(callback),
     setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),
     clearTimeout: (handle) => window.clearTimeout(handle),
     requestAnimationFrame: (callback) => window.requestAnimationFrame(callback),
@@ -68,7 +64,6 @@ function browserEnvironment(): LayoutSchedulerEnvironment {
 
 export class LayoutScheduler {
   private readonly environment: LayoutSchedulerEnvironment;
-  private liveQueued = false;
   private editTimer: number | null = null;
   private settledFrame: number | null = null;
   private lastWidth: number;
@@ -98,19 +93,17 @@ export class LayoutScheduler {
     this.scheduleSettled();
   }
 
-  /** Coalesce exact changed-block layout into the next microtask. */
-  scheduleLive(): void {
-    if (this.destroyed || this.liveQueued) return;
-    this.liveQueued = true;
-    this.environment.queueMicrotask(() => {
-      this.liveQueued = false;
-      if (!this.destroyed) this.callbacks.runLive();
-    });
-  }
-
   /** Restart the quiet-period timer following a document edit. */
   scheduleAfterEdit(): void {
     if (this.destroyed) return;
+    // A compiler/asset completion may already have queued a full-layout
+    // frame. Once a document edit arrives that revision is stale and must not
+    // be allowed to run during active typing; re-arm it after the quiet
+    // period along with every other settled request.
+    if (this.settledFrame !== null) {
+      this.environment.cancelAnimationFrame(this.settledFrame);
+      this.settledFrame = null;
+    }
     if (this.editTimer !== null) this.environment.clearTimeout(this.editTimer);
     this.editTimer = this.environment.setTimeout(() => {
       this.editTimer = null;

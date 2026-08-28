@@ -4,10 +4,9 @@
 // serializer produced, plus a pragmatic subset of hand-written Typst
 // (headings, paragraphs with */_/` markup, lists, quotes, fenced code,
 // mitex math, images, labels and @references). Anything else — #let, #show,
-// unknown directives — is preserved verbatim as a raw-Typst island
-// (a code_block with params 'typst-raw'), which the serializer re-emits
-// unchanged, so opening and saving a file never destroys what we don't
-// understand.
+// unknown directives — is preserved verbatim as a dedicated typst_embed,
+// which the serializer re-emits unchanged. Ordinary fenced code remains a
+// code_block even when its language is `typst`.
 
 import type { Mark, Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
@@ -28,6 +27,11 @@ let importBibKeys = new Set<string>();
 let preserveImportBibLine = false;
 
 const BIB_LINE = /^#bibliography\(bytes\((".*")\)(?:,\s*title:\s*"[^"]*")?(?:,\s*style:\s*"[^"]*")?\)$/;
+const TYPST_EMBED_LINES = /^\/\/ typeset:typst-embed-lines ([1-9]\d*)$/;
+
+function typstEmbed(source: string): PMNode {
+  return schema.nodes.typst_embed.create(null, source ? [schema.text(source)] : []);
+}
 
 export function typToDoc(src: string): TypImport {
   const warnings: string[] = [];
@@ -86,7 +90,7 @@ export function typToDoc(src: string): TypImport {
       continue;
     }
     // Body directives (attached to specific blocks) end the header.
-    if (/^\/\/ typeset:decimal-columns /.test(line)) break;
+    if (/^\/\/ typeset:(?:decimal-columns|typst-embed-lines|code-block-params) /.test(line)) break;
     if (!line || line.startsWith('//')) {
       i++;
       continue;
@@ -287,7 +291,10 @@ function fuseDecimalColumns(table: PMNode, logicalDecimals: number[]): PMNode {
 }
 
 function unescapeTypText(t: string): string {
-  return t.replace(/\\([\\#$*_`@<>\[\]])/g, '$1');
+  // Keep this in lockstep with typ-serializer.escapeTyp. These content
+  // fields are parsed outside scanInline(), so literal tildes and comment
+  // openers need their own inverse here as well.
+  return t.replace(/\\([\\#$*_`@<>\[\]~\/])/g, '$1');
 }
 
 /** Body numbering format captured from a numbering-restart marker. */
@@ -302,10 +309,41 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
   while (i < n) {
     const line = lines[i];
     const t = line.trim();
+    const embedM = TYPST_EMBED_LINES.exec(t);
+    if (embedM) {
+      const count = Number(embedM[1]);
+      if (Number.isSafeInteger(count) && count > 0 && count <= n - i - 1) {
+        // The explicit line count makes arbitrary blank lines and marker-like
+        // source lossless without wrapping or changing executable semantics.
+        out.push(typstEmbed(lines.slice(i + 1, i + 1 + count).join('\n')));
+        i += count + 1;
+      } else {
+        warnings.push('ignored malformed Typst embed boundary');
+        i++;
+      }
+      continue;
+    }
     const dm = /^\/\/ typeset:decimal-columns ([\d,]+)$/.exec(t);
     if (dm) {
       pendingDecimals = dm[1].split(',').map(Number);
       i++;
+      continue;
+    }
+    const codeParams = /^\/\/ typeset:code-block-params (.+)$/.exec(t);
+    if (codeParams) {
+      const code = parseGeneratedCodeBlock(lines[i + 1]?.trim() ?? '');
+      try {
+        const params = JSON.parse(codeParams[1]) as unknown;
+        if (typeof params !== 'string' || code === null) throw new Error('invalid generated code block');
+        out.push(schema.nodes.code_block.create(
+          { params },
+          code ? [schema.text(code)] : [],
+        ));
+        i += 2;
+      } catch {
+        warnings.push('ignored malformed code-block boundary');
+        i++;
+      }
       continue;
     }
     if (!t || t.startsWith('//')) {
@@ -338,6 +376,14 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     // #set math.equation(...) line, the mitex block, then the restore line.
     {
       const nm = /^#set math\.equation\(numbering: (none|"\(1\)")\)$/.exec(t);
+      const safe = nm ? parseRawDisplayMathLine(lines[i + 1]?.trim() ?? '') : null;
+      if (nm && safe) {
+        const numbered = nm[1] !== 'none';
+        i += 2;
+        if (/^#set math\.equation\(numbering: /.test(lines[i]?.trim() ?? '')) i++;
+        out.push(schema.nodes.math_display.create({ ...safe, numbered }));
+        continue;
+      }
       if (nm && lines[i + 1]?.trim() === '#mitex(`') {
         const numbered = nm[1] !== 'none';
         const body: string[] = [];
@@ -362,6 +408,14 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     // followed by the mitex block and a closing ] (legacy form).
     {
       const nm = /^#\[#set math\.equation\(numbering: (none|"\(1\)")\)$/.exec(t);
+      const safe = nm ? parseRawDisplayMathLine(lines[i + 1]?.trim() ?? '') : null;
+      if (nm && safe) {
+        const numbered = nm[1] !== 'none';
+        i += 2;
+        if (lines[i]?.trim() === ']') i++;
+        out.push(schema.nodes.math_display.create({ ...safe, numbered }));
+        continue;
+      }
       if (nm && lines[i + 1]?.trim() === '#mitex(`') {
         const numbered = nm[1] !== 'none';
         const body: string[] = [];
@@ -382,7 +436,18 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       }
     }
 
-    // display math: #mitex(` … `) <label>
+    // Safe display math emitted by current Plass versions. JSON string syntax
+    // is shared by Typst, so arbitrary LaTeX (including backticks and text that
+    // resembles a closing call) remains data inside raw(...).
+    const safeDisplay = parseRawDisplayMathLine(t);
+    if (safeDisplay) {
+      out.push(schema.nodes.math_display.create(safeDisplay));
+      i++;
+      continue;
+    }
+
+    // Legacy display math: #mitex(` … `) <label>. Keep importing this form so
+    // existing .typ documents remain readable after the safe emitter migration.
     if (t === '#mitex(`') {
       const body: string[] = [];
       let label = '';
@@ -520,7 +585,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       if (importBib && !preserveImportBibLine) {
         out.push(schema.nodes.bibliography.create());
       } else {
-        out.push(schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text(line)]));
+        out.push(typstEmbed(line));
       }
       i++;
       continue;
@@ -529,15 +594,11 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     // table: #align(center, [text(size…, )]table(…)) or bare #table(…)
     const centered = t.startsWith('#align(center, table(') || t.startsWith('#align(center, text(size:');
     if (centered || t.startsWith('#table(')) {
-      const body: string[] = [line];
-      let depth = countParens(line);
+      let whole = line;
+      const callOpen = whole.indexOf('(');
       i++;
-      while (i < n && depth > 0) {
-        body.push(lines[i]);
-        depth += countParens(lines[i]);
-        i++;
-      }
-      let src = body.join('\n');
+      while (i < n && matchParen(whole, callOpen) < 0) whole += `\n${lines[i++]}`;
+      let src = whole;
       let tableSize = '';
       if (centered) {
         src = src.trim();
@@ -556,7 +617,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
         pendingDecimals = null;
       } else {
         warnings.push('kept as raw Typst: #table(…) (unrecognized form)');
-        out.push(schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text(body.join('\n'))]));
+        out.push(typstEmbed(whole));
       }
       continue;
     }
@@ -592,31 +653,16 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
 
     // captioned table: #figure(\n  table(…),\n  caption: […],\n) <label>
     if (/^#figure\(\s*$/.test(t) || /^#figure\(\s*table\(/.test(t)) {
-      const body: string[] = [line];
-      let depth = countParens(line);
+      let whole = line;
+      const figureOpen = whole.indexOf('(');
       i++;
-      while (i < n && depth > 0) {
-        body.push(lines[i]);
-        depth += countParens(lines[i]);
-        i++;
-      }
-      const whole = body.join('\n');
+      while (i < n && matchParen(whole, figureOpen) < 0) whole += `\n${lines[i++]}`;
       const figSize = /text\(size:\s*([\d.]+em),\s*table\(/.exec(whole)?.[1] ?? '';
       const tStart = whole.indexOf('table(', whole.indexOf('(') + 1);
       if (tStart >= 0) {
-        // Balanced span of the table(...) call.
-        let d = 0;
-        let tEnd = -1;
-        for (let k = tStart + 'table('.length - 1; k < whole.length; k++) {
-          if (whole[k] === '(') d++;
-          else if (whole[k] === ')') {
-            d--;
-            if (d === 0) {
-              tEnd = k;
-              break;
-            }
-          }
-        }
+        // Balanced span of the table(...) call, ignoring visible parens in
+        // cell content blocks.
+        const tEnd = matchParen(whole, tStart + 'table'.length);
         if (tEnd > 0) {
           const capM = /caption:\s*\[/.exec(whole.slice(tEnd));
           let caption = '';
@@ -643,7 +689,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
         }
       }
       warnings.push('kept as raw Typst: #figure(table…) (unrecognized form)');
-      out.push(schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text(whole)]));
+      out.push(typstEmbed(whole));
       continue;
     }
 
@@ -670,12 +716,13 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
-    // unknown directive / scripting: preserve verbatim as a raw island
+    // Unknown executable directive/scripting: preserve verbatim as a Typst
+    // embed. This is intentionally distinct from a fenced `typst` code sample.
     if (t.startsWith('#')) {
       const body: string[] = [];
       while (i < n && lines[i].trim() !== '') body.push(lines[i++]);
       warnings.push(`kept as raw Typst: ${body[0].trim().slice(0, 48)}`);
-      out.push(schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text(body.join('\n'))]));
+      out.push(typstEmbed(body.join('\n')));
       continue;
     }
 
@@ -715,20 +762,6 @@ export function parseInline(text: string): PMNode[] {
   return out;
 }
 
-/** Net change in paren depth over a line (ignoring escaped parens). */
-function countParens(line: string): number {
-  let d = 0;
-  for (let j = 0; j < line.length; j++) {
-    if (line[j] === '\\') {
-      j++;
-      continue;
-    }
-    if (line[j] === '(') d++;
-    else if (line[j] === ')') d--;
-  }
-  return d;
-}
-
 interface ParsedCell {
   content: string;
   colspan: number;
@@ -737,10 +770,123 @@ interface ParsedCell {
   align: string | null;
 }
 
+export interface TableSourceParts {
+  /** Non-cell positional/named arguments, without their trailing commas. */
+  args: string[];
+  /** Cell and table.header arguments, without their trailing commas. */
+  rows: string[];
+}
+
+/** Skip a quoted Typst string or raw string, returning its closing index. */
+function quotedEnd(src: string, open: number): number {
+  const quote = src[open];
+  for (let i = open + 1; i < src.length; i++) {
+    if (src[i] === '\\') {
+      i++;
+      continue;
+    }
+    if (src[i] === quote) return i;
+  }
+  return src.length - 1;
+}
+
+interface ParsedRawMathCall {
+  src: string;
+  /** First source offset after the two closing call parentheses. */
+  end: number;
+}
+
+/** Parse only the inert shape emitted by math-typst.ts. Malformed calls are
+ * left to the generic Typst-preservation path rather than partially decoded. */
+function parseRawMathCall(
+  source: string,
+  start: number,
+  fn: 'mi' | 'mitex',
+  block: boolean,
+): ParsedRawMathCall | null {
+  const prefix = `#${fn}(raw(`;
+  if (!source.startsWith(prefix, start)) return null;
+  const quote = start + prefix.length;
+  if (source[quote] !== '"') return null;
+  const quoteEnd = quotedEnd(source, quote);
+  if (quoteEnd <= quote || source[quoteEnd] !== '"') return null;
+  const suffix = new RegExp(`^,\\s*block:\\s*${block ? 'true' : 'false'}\\)\\)`).exec(
+    source.slice(quoteEnd + 1),
+  );
+  if (!suffix) return null;
+  try {
+    const decoded = JSON.parse(source.slice(quote, quoteEnd + 1)) as unknown;
+    return typeof decoded === 'string'
+      ? { src: decoded, end: quoteEnd + 1 + suffix[0].length }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseRawDisplayMathLine(source: string): { src: string; label: string } | null {
+  const call = parseRawMathCall(source, 0, 'mitex', true);
+  if (!call) return null;
+  const tail = /^\s*(?:<([^>]+)>)?\s*$/.exec(source.slice(call.end));
+  return tail ? { src: unwrapAligned(call.src), label: tail[1] ?? '' } : null;
+}
+
+/** Parse only Plass's inert, unlabelled block-raw serialization. */
+function parseGeneratedCodeBlock(source: string): string | null {
+  const prefix = '#raw(';
+  if (!source.startsWith(prefix) || source[prefix.length] !== '"') return null;
+  const quote = prefix.length;
+  const end = quotedEnd(source, quote);
+  if (end <= quote || source[end] !== '"' || !/^,\s*block:\s*true\)\s*$/.test(source.slice(end + 1))) {
+    return null;
+  }
+  try {
+    const decoded = JSON.parse(source.slice(quote, end + 1)) as unknown;
+    return typeof decoded === 'string' ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Matching `)` for a Typst call. Content blocks are opaque to parens. */
+function matchParen(src: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (c === '\\') {
+      i++;
+      continue;
+    }
+    if (c === '"' || c === '`') {
+      i = quotedEnd(src, i);
+      continue;
+    }
+    if (c === '/' && src[i + 1] === '/') {
+      const nl = src.indexOf('\n', i + 2);
+      if (nl < 0) return -1;
+      i = nl;
+      continue;
+    }
+    if (c === '[') {
+      const end = matchBracket(src, i);
+      if (end < 0) return -1;
+      i = end;
+      continue;
+    }
+    if (c === '(') depth++;
+    else if (c === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 /** Split a Typst argument list at depth-0 commas. */
 function splitTopArgs(inner: string): string[] {
   const args: string[] = [];
-  let depth = 0;
+  let parens = 0;
+  let braces = 0;
   let start = 0;
   for (let i = 0; i < inner.length; i++) {
     const c = inner[i];
@@ -748,9 +894,27 @@ function splitTopArgs(inner: string): string[] {
       i++;
       continue;
     }
-    if (c === '(' || c === '[' || c === '{') depth++;
-    else if (c === ')' || c === ']' || c === '}') depth--;
-    else if (c === ',' && depth === 0) {
+    if (c === '"' || c === '`') {
+      i = quotedEnd(inner, i);
+      continue;
+    }
+    if (c === '/' && inner[i + 1] === '/') {
+      const nl = inner.indexOf('\n', i + 2);
+      if (nl < 0) break;
+      i = nl;
+      continue;
+    }
+    if (c === '[') {
+      const end = matchBracket(inner, i);
+      if (end < 0) return [];
+      i = end;
+      continue;
+    }
+    if (c === '(') parens++;
+    else if (c === ')') parens--;
+    else if (c === '{') braces++;
+    else if (c === '}') braces--;
+    else if (c === ',' && parens === 0 && braces === 0) {
       args.push(inner.slice(start, i));
       start = i + 1;
     }
@@ -768,7 +932,7 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
   }
   if (arg.startsWith('table.cell(')) {
     const argsStart = 'table.cell('.length;
-    const argsEnd = arg.indexOf(')', argsStart);
+    const argsEnd = matchParen(arg, argsStart - 1);
     const bracket = arg.indexOf('[', argsEnd);
     if (argsEnd < 0 || bracket < 0) return null;
     const end = matchBracket(arg, bracket);
@@ -785,27 +949,69 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
   return null;
 }
 
+const CELL_ARG_RE = /^(?:\[|table\.cell\(|table\.header\()/;
+
+/**
+ * Extract the balanced table call from a complete generated document.
+ * This deliberately does not look for a `\n))` suffix: captioned tables
+ * are wrapped in figure(...), and cell text may itself contain parens.
+ */
+export function extractTableSourceParts(src: string): TableSourceParts | null {
+  let at = 0;
+  let call = -1;
+  while ((at = src.indexOf('table(', at)) >= 0) {
+    const prev = src[at - 1] ?? '';
+    if (!/[\w.]/.test(prev)) {
+      call = at;
+      break;
+    }
+    at += 'table('.length;
+  }
+  if (call < 0) return null;
+  const open = call + 'table'.length;
+  const close = matchParen(src, open);
+  if (close < 0) return null;
+  const top = splitTopArgs(src.slice(open + 1, close));
+  if (!top.length) return null;
+  return {
+    args: top.filter((arg) => !CELL_ARG_RE.test(arg)),
+    rows: top.filter((arg) => CELL_ARG_RE.test(arg)),
+  };
+}
+
+/**
+ * Table cells are intentionally a narrower, lossless subset of the schema:
+ * one or more paragraphs with inline content. A hand-written block construct
+ * is rejected so the caller can preserve the whole table as raw Typst.
+ */
+function parseTableCellContent(content: string): PMNode[] | null {
+  const trimmed = content.trim();
+  if (!trimmed) return [schema.nodes.paragraph.create()];
+  const chunks = trimmed.split(/\n[ \t]*\n/);
+  const paragraphs: PMNode[] = [];
+  for (const chunk of chunks) {
+    const lines = chunk.split('\n');
+    const first = lines[0]?.trim() ?? '';
+    if (/^(?:```|={1,3}\s|[-+]\s|#(?:pagebreak|line|quote|align|block)\b)/.test(first)) return null;
+    if (first === '// typeset:empty-table-paragraph' && lines.slice(1).every((line) => !line.trim() || line.trim() === '~')) {
+      paragraphs.push(schema.nodes.paragraph.create());
+      continue;
+    }
+    paragraphs.push(schema.nodes.paragraph.create(null, parseParagraph(lines)));
+  }
+  return paragraphs.length ? paragraphs : [schema.nodes.paragraph.create()];
+}
+
 /**
  * Parse our emitted #table form into a table node; null if unrecognized
- * (the caller preserves the source verbatim as a raw island). Named
+ * (the caller preserves the source verbatim as a Typst embed). Named
  * arguments we don't model are kept on the table (full-control escape
  * hatch) and re-emitted verbatim.
  */
 export function parseTable(src: string): PMNode | null {
   const open = src.indexOf('(');
   if (open < 0) return null;
-  let d = 0;
-  let close = -1;
-  for (let j = open; j < src.length; j++) {
-    if (src[j] === '(') d++;
-    else if (src[j] === ')') {
-      d--;
-      if (d === 0) {
-        close = j;
-        break;
-      }
-    }
-  }
+  const close = matchParen(src, open);
   if (close < 0) return null;
 
   const args = splitTopArgs(src.slice(open + 1, close));
@@ -859,7 +1065,7 @@ export function parseTable(src: string): PMNode | null {
     } else if (/^[a-zA-Z_][\w.-]*\s*:/.test(arg)) {
       customParams.push(arg); // unknown named arg → full-control passthrough
     } else {
-      return null; // unknown positional construct (vline, …) → raw island
+      return null; // unknown positional construct (vline, …) → Typst embed
     }
   }
 
@@ -900,7 +1106,7 @@ export function parseTable(src: string): PMNode | null {
   }
 
   // Chunk the flat cell list into rows, honoring col/rowspans.
-  const { table, table_row, table_cell, table_header, paragraph } = schema.nodes;
+  const { table, table_row, table_cell, table_header } = schema.nodes;
   const rows: PMNode[] = [];
   const pending = new Array<number>(columns).fill(0); // rows still occupied by rowspans
   let idx = 0;
@@ -916,19 +1122,33 @@ export function parseTable(src: string): PMNode | null {
       const c = cells[idx++];
       if (!c) break;
       const type = c.header ? table_header : table_cell;
-      const para = paragraph.create(null, parseInline(c.content.trim()));
+      const content = parseTableCellContent(c.content);
+      if (!content) return null;
       rowCells.push(
-        type.create({ colspan: c.colspan, rowspan: c.rowspan, align: c.align ?? colAligns[col] }, [para]),
+        type.create({ colspan: c.colspan, rowspan: c.rowspan, align: c.align ?? colAligns[col] }, content),
       );
       for (let k = col; k < Math.min(columns, col + c.colspan); k++) {
         if (c.rowspan > 1) pending[k] += c.rowspan - 1;
       }
       col += c.colspan;
     }
-    if (rowCells.length) rows.push(table_row.create(null, rowCells));
-    else break;
+    if (rowCells.length) {
+      rows.push(table_row.create(null, rowCells));
+    } else {
+      // Every logical column in this row is occupied by a rowspan from an
+      // earlier row. ProseMirror can represent that topology only with an
+      // empty row, but our serializer intentionally has no private row
+      // delimiter to reproduce it. Keep the complete source as a Typst embed
+      // instead of returning a partial table and silently dropping the
+      // remaining positional cells.
+      return null;
+    }
   }
-  if (!rows.length) return null;
+  // Consuming every positional cell is necessary but not sufficient: a
+  // rowspan that extends below the final reconstructed row also needs an
+  // empty structural row that this subset cannot round-trip. Fail closed for
+  // both shapes so the caller preserves the original table verbatim.
+  if (!rows.length || idx !== cells.length || pending.some((remaining) => remaining > 0)) return null;
   // Booktabs fidelity: the bare positional rules must be exactly the
   // preset's own — top, bottom, and the header midrule — minus any the
   // user replaced with an explicit y: rule at that boundary.
@@ -953,13 +1173,23 @@ export function parseTable(src: string): PMNode | null {
   }
 }
 
-/** Index of the `]` matching the `[` at `open`, honoring escapes and nesting. */
+/** Index of the `]` matching the `[` at `open`, honoring Typst literals. */
 function matchBracket(src: string, open: number): number {
   let depth = 0;
   for (let j = open; j < src.length; j++) {
     const c = src[j];
     if (c === '\\') {
       j++;
+      continue;
+    }
+    if (c === '"' || c === '`') {
+      j = quotedEnd(src, j);
+      continue;
+    }
+    if (c === '/' && src[j + 1] === '/') {
+      const nl = src.indexOf('\n', j + 2);
+      if (nl < 0) return -1;
+      j = nl;
       continue;
     }
     if (c === '[') depth++;
@@ -1100,6 +1330,15 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
         continue;
       }
     }
+    const safeMath = parseRawMathCall(src, i, 'mi', false);
+    if (safeMath) {
+      flush();
+      out.push(schema.nodes.math_inline.create({ src: safeMath.src }));
+      i = safeMath.end;
+      continue;
+    }
+    // Legacy inline syntax remains supported for existing hand-written and
+    // Plass-exported documents.
     if (src.startsWith('#mi(`', i)) {
       const end = src.indexOf('`)', i + 5);
       if (end >= 0) {
@@ -1116,6 +1355,29 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
         out.push(schema.nodes.image.create({ src: src.slice(i + 8, end) }));
         i = end + 2;
         continue;
+      }
+    }
+    // Serializer fallback for code-marked text that itself contains a
+    // backtick. Typst has no longer inline raw fence, so export uses the safe
+    // string form `#raw("...", block: false)` and we recognize that exact
+    // non-executable shape for a lossless round trip.
+    if (src.startsWith('#raw("', i)) {
+      const quote = i + '#raw('.length;
+      const end = quotedEnd(src, quote);
+      const suffix = /^,\s*block:\s*false\)/.exec(src.slice(end + 1));
+      if (end > quote && suffix) {
+        try {
+          const value = JSON.parse(src.slice(quote, end + 1));
+          if (typeof value === 'string') {
+            flush();
+            out.push(schema.text(value, [...marks, schema.marks.code.create()]));
+            i = end + 1 + suffix[0].length;
+            continue;
+          }
+        } catch {
+          // Leave malformed or non-string raw calls to the generic Typst
+          // expression path below; never guess at executable source.
+        }
       }
     }
     if (ch === '@') {

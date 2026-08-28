@@ -124,7 +124,7 @@ const malformedBib = typToDoc(`${malformedBibLine}\n\nBody`);
 check(
   'malformed embedded bibliography source is preserved verbatim',
   malformedBib.warnings.length > 0 &&
-    malformedBib.doc.firstChild?.type.name === 'code_block' &&
+    malformedBib.doc.firstChild?.type.name === 'typst_embed' &&
     malformedBib.doc.firstChild.textContent === malformedBibLine &&
     docToTyp(malformedBib.doc).includes(malformedBibLine),
 );

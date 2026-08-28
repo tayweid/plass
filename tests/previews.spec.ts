@@ -1,10 +1,9 @@
 import { expect, test } from 'playwright/test';
 
-// The compiled previews are a shared, serialized resource: every table, raw
-// island, and oracle batch queues behind one Typst worker. These two cases are
-// the ways a real document used to lose previews outright.
+// Raw islands and oracle batches share compiler resources. Structured tables
+// no longer do: their semantic DOM is the immediate editing/rendering surface.
 
-test('every table in a table-heavy document renders', async ({ page }) => {
+test('a table-heavy document renders immediately as native editable tables', async ({ page }) => {
   const warnings: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'warning' || m.type() === 'error') warnings.push(m.text());
@@ -12,9 +11,8 @@ test('every table in a table-heavy document renders', async ({ page }) => {
   await page.goto('/?new=1');
   await page.waitForFunction(() => !!window.view);
 
-  // Comfortably past the old queue ceiling, which dropped the tail of the
-  // document on the floor: the requests were rejected, never retried, and the
-  // last tables stayed at "table…" forever.
+  // Comfortably past the old preview-queue ceiling. Native tables should not
+  // enqueue, show loading placeholders, or wait for Typst before appearing.
   const N = 30;
   await page.evaluate((N) => {
     const { state } = window.view;
@@ -33,10 +31,9 @@ test('every table in a table-heavy document renders', async ({ page }) => {
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, s.nodes.doc.create(state.doc.attrs, blocks).content));
   }, N);
 
-  await expect.poll(() => page.locator('.ts-table-block').count(), { timeout: 60_000 }).toBe(N);
-  // A table that splits across a page renders several fragment SVGs, so the
-  // question is whether any table is still waiting — not how many SVGs exist.
-  await expect.poll(() => page.locator('.ts-table-loading').count(), { timeout: 120_000, intervals: [500] }).toBe(0);
+  await expect(page.locator('.ProseMirror table')).toHaveCount(N);
+  await expect(page.locator('.ProseMirror table').last()).toContainText(`r${N - 1}`);
+  await expect(page.locator('.ts-table-block, .ts-table-loading')).toHaveCount(0);
   expect(warnings.filter((w) => /queue is full/.test(w))).toEqual([]);
 });
 

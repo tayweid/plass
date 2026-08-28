@@ -2,8 +2,8 @@
 //
 // Following spec §3.7: math nodes are atomic in the document; clicking one
 // opens a small editor with a live KaTeX preview. Source syntax is LaTeX;
-// the document surface shows Typst's own ink (math-ink.ts) with KaTeX as
-// the instant echo, and the .typ exporter wraps sources with mitex.
+// the document surface crops Typst's own ink from the one shared exact
+// document publication, with KaTeX only as the instant echo while it settles.
 
 import katex from 'katex';
 import type { Node as PMNode } from 'prosemirror-model';
@@ -13,9 +13,14 @@ import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
 import { wrapAligned } from './math-src';
 import { getSettings, parseMathMacros } from './settings';
-import { forgetInk, getInk, inkKey, onInk, requestInk } from './math-ink';
-import { scheduleTypeset } from './typeset-plugin';
-import { mountTypstSvg } from './safe-svg';
+import {
+  documentPreviewManagerFor,
+  type ManagedDocumentPreviewView,
+  type PreparedDocumentPublication,
+  type PreparedInlineRegion,
+  type TypstEmbedPreviewManager,
+} from './raw-preview';
+import type { TypstDocumentSvgPublication } from './typst-document-publication';
 
 export { wrapAligned };
 
@@ -33,12 +38,40 @@ function renderInto(el: HTMLElement, src: string, displayMode: boolean, macros: 
   }
 }
 
-export class MathView implements NodeView {
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const PT_TO_PX = 4 / 3;
+
+function publicationCrop(
+  publication: PreparedDocumentPublication,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', `${x} ${y} ${width} ${height}`);
+  svg.setAttribute('width', String(width));
+  svg.setAttribute('height', String(height));
+  const image = document.createElementNS(SVG_NS, 'image');
+  image.setAttribute('href', publication.objectUrl);
+  image.setAttribute('x', String(publication.viewBox[0]));
+  image.setAttribute('y', String(publication.viewBox[1]));
+  image.setAttribute('width', String(publication.viewBox[2]));
+  image.setAttribute('height', String(publication.viewBox[3]));
+  image.setAttribute('preserveAspectRatio', 'none');
+  image.setAttribute('data-exact-document-publication', '');
+  svg.appendChild(image);
+  return svg;
+}
+
+export class MathView implements NodeView, ManagedDocumentPreviewView {
   dom: HTMLElement;
-  private lastMacros: string;
-  private display: boolean;
-  private inkApplied = '';
-  private stopInk: () => void;
+  private readonly display: boolean;
+  private readonly manager: TypstEmbedPreviewManager;
+  private renderedResult: TypstDocumentSvgPublication | null = null;
+  private regionKey = '';
+  private appliedSettingsKey = '';
+  private destroyed = false;
 
   constructor(
     private node: PMNode,
@@ -50,9 +83,8 @@ export class MathView implements NodeView {
     this.dom = document.createElement(display ? 'div' : 'span');
     this.dom.className = display ? 'math-display' : 'math-inline';
     this.dom.setAttribute('data-math', node.attrs.src);
-    this.lastMacros = getSettings(view.state).mathMacros;
-    this.render();
-    this.stopInk = onInk(() => this.render());
+    this.manager = documentPreviewManagerFor(view);
+    this.renderEcho();
     this.dom.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -67,64 +99,199 @@ export class MathView implements NodeView {
         if (pos !== undefined && !mathEditorOpen) openMathEditor(this.view, pos);
       });
     }
+    this.manager.register(this);
   }
 
-  /**
-   * Render the formula: Typst ink (the PDF's exact drawing) when compiled,
-   * KaTeX instantly until then. Ink arrival re-runs the typesetter so line
-   * justification picks up the exact atom width.
-   */
-  private render() {
+  private settingsKey(): string {
+    const settings = getSettings(this.view.state);
+    return JSON.stringify([
+      settings.font,
+      settings.sizePt,
+      settings.mathMacros,
+      settings.numberEquations,
+    ]);
+  }
+
+  /** KaTeX is intentionally immediate and disposable. It never becomes a
+   * settled width/page authority; exact mode waits for the shared crop. */
+  private renderEcho() {
     const src = this.node.attrs.src as string;
     const settings = getSettings(this.view.state);
+    this.dom.classList.remove('math-ink', 'math-proof');
+    this.dom.style.removeProperty('width');
+    this.dom.style.removeProperty('height');
+    this.dom.style.removeProperty('vertical-align');
+    this.dom.style.removeProperty('--eqnum-center');
     if (!src.trim()) {
-      this.inkApplied = '';
       renderInto(this.dom, src, this.display);
+      this.dom.dataset.previewState = 'empty';
       return;
     }
-    const key = inkKey(src, this.display, settings);
-    const ink = getInk(key);
-    if (ink) {
-      if (this.inkApplied === key) return;
-      this.inkApplied = key;
-      mountTypstSvg(this.dom, ink.svg);
-      this.dom.classList.add('math-ink');
-      const svg = this.dom.querySelector('svg');
-      if (svg) {
-        svg.style.width = `${ink.widthPx.toFixed(2)}px`;
-        svg.style.height = `${ink.heightPx.toFixed(2)}px`;
-        if (!this.display) svg.style.verticalAlign = `${(-ink.descentPx).toFixed(2)}px`;
-        else {
-          // Center the painted equation number on the ink (as Typst does).
-          const cs = getComputedStyle(this.dom);
-          const center = parseFloat(cs.paddingTop) + ink.heightPx / 2;
-          this.dom.style.setProperty('--eqnum-center', `${center.toFixed(1)}px`);
-        }
-      }
-      scheduleTypeset(this.view);
-      return;
-    }
-    if (this.inkApplied) {
-      this.inkApplied = '';
-      this.dom.classList.remove('math-ink');
-    }
-    renderInto(this.dom, src, this.display, parseMathMacros(this.lastMacros));
-    requestInk(key, src, this.display, settings);
+    renderInto(this.dom, src, this.display, parseMathMacros(settings.mathMacros));
+    this.dom.dataset.previewState = 'pending';
+    this.dom.title = 'Updating from the exact whole-document Typst publication.';
   }
 
   update(node: PMNode): boolean {
     if (node.type !== this.node.type) return false;
-    const macros = getSettings(this.view.state).mathMacros;
-    if (node.attrs.src !== this.node.attrs.src || macros !== this.lastMacros) {
-      this.lastMacros = macros;
-      this.node = node;
-      this.dom.setAttribute('data-math', node.attrs.src);
-      forgetInk(inkKey(node.attrs.src as string, this.display, getSettings(this.view.state)));
-      this.render();
+    const changed = node.attrs.src !== this.node.attrs.src;
+    this.node = node;
+    this.dom.setAttribute('data-math', node.attrs.src);
+    if (changed) {
+      this.renderedResult = null;
+      this.regionKey = '';
+      this.appliedSettingsKey = '';
+      this.renderEcho();
+      this.manager.invalidate(this.view.state.doc);
+    }
+    return true;
+  }
+
+  needsDocumentPreview(): boolean {
+    return !!(this.node.attrs.src as string).trim();
+  }
+
+  retainedDocumentPreview(): TypstDocumentSvgPublication | null {
+    return this.renderedResult;
+  }
+
+  pending(): void {
+    if (!this.needsDocumentPreview()) return;
+    if (this.appliedSettingsKey && this.appliedSettingsKey !== this.settingsKey()) {
+      this.renderedResult = null;
+      this.regionKey = '';
+      this.renderEcho();
+    }
+    this.dom.dataset.previewState = 'pending';
+  }
+
+  private regionIndex(doc: PMNode): number | null {
+    const pos = this.getPos();
+    return pos === undefined ? null : this.manager.regionIndexAt(doc, pos, 'preview');
+  }
+
+  private applyInline(
+    result: TypstDocumentSvgPublication,
+    publication: PreparedDocumentPublication,
+    index: number,
+  ): boolean {
+    const meta = publication.previewRegions.get(index);
+    const region: PreparedInlineRegion | undefined = publication.mathInlineRegions.get(index);
+    if (!meta || meta.kind !== 'math-inline' || !region) return false;
+    const pageTop = publication.pageY[meta.baseline.page - 1];
+    if (pageTop === undefined) return false;
+    const baseline = pageTop + meta.baseline.y;
+    const descent = Math.max(0, region.y + region.height - baseline);
+    const key = [index, region.x, region.y, region.width, region.height,
+      region.cropX, region.cropY, region.cropWidth, region.cropHeight, baseline].join(':');
+    if (result === this.renderedResult && key === this.regionKey) return false;
+    const previousWidth = this.dom.getBoundingClientRect().width;
+    const previousHeight = this.dom.getBoundingClientRect().height;
+    const crop = publicationCrop(
+      publication,
+      region.cropX,
+      region.cropY,
+      region.cropWidth,
+      region.cropHeight,
+    );
+    crop.style.position = 'absolute';
+    crop.style.pointerEvents = 'none';
+    // The host may expose the padded paint crop beyond the atom's advance,
+    // but this nested viewport must clip the embedded whole-document image.
+    // `visible` here repaints every page once per inline formula.
+    crop.style.overflow = 'hidden';
+    crop.style.left = `${(region.cropX - region.x) * PT_TO_PX}px`;
+    crop.style.top = `${(region.cropY - region.y) * PT_TO_PX}px`;
+    crop.style.width = `${region.cropWidth * PT_TO_PX}px`;
+    crop.style.height = `${region.cropHeight * PT_TO_PX}px`;
+    this.dom.replaceChildren(crop);
+    this.dom.classList.add('math-ink');
+    this.dom.classList.remove('math-proof');
+    this.dom.style.width = `${region.width * PT_TO_PX}px`;
+    this.dom.style.height = `${region.height * PT_TO_PX}px`;
+    this.dom.style.verticalAlign = `${(-descent * PT_TO_PX).toFixed(3)}px`;
+    this.dom.dataset.previewState = 'ready';
+    this.dom.title = 'Exact math from the current whole-document Typst publication.';
+    this.renderedResult = result;
+    this.regionKey = key;
+    this.appliedSettingsKey = this.settingsKey();
+    return Math.abs(previousWidth - region.width * PT_TO_PX) > 0.5 ||
+      Math.abs(previousHeight - region.height * PT_TO_PX) > 0.5;
+  }
+
+  private applyDisplay(
+    result: TypstDocumentSvgPublication,
+    publication: PreparedDocumentPublication,
+    index: number,
+  ): boolean {
+    const meta = publication.previewRegions.get(index);
+    if (!meta || meta.kind !== 'math-display') return false;
+    const startPageTop = publication.pageY[meta.start.page - 1];
+    const endPageTop = publication.pageY[meta.end.page - 1];
+    if (startPageTop === undefined || endPageTop === undefined) return false;
+    const key = [index, meta.start.page, meta.start.x, meta.start.y,
+      meta.end.page, meta.end.x, meta.end.y].join(':');
+    if (result === this.renderedResult && key === this.regionKey) return false;
+    const previousHeight = this.dom.getBoundingClientRect().height;
+    if (meta.start.page !== meta.end.page) {
+      this.renderEcho();
+      this.dom.classList.add('math-proof');
+      this.dom.dataset.previewState = 'proof';
+      this.dom.title = 'This equation spans Typst pages; open Proof for exact output.';
+      this.renderedResult = result;
+      this.regionKey = key;
+      this.appliedSettingsKey = this.settingsKey();
       return true;
     }
-    this.node = node;
-    return true;
+    const start = startPageTop + meta.start.y;
+    const end = endPageTop + meta.end.y;
+    const height = end - start;
+    if (!(height > 0.05)) return false;
+    const settings = getSettings(this.view.state);
+    const cropX = meta.start.x;
+    const right = publication.viewBox[0] + publication.viewBox[2] - settings.marginRight * 72;
+    const width = right - cropX;
+    if (!(width > 0.05)) return false;
+    const crop = publicationCrop(publication, cropX, start, width, height);
+    crop.style.display = 'block';
+    crop.style.width = `${width * PT_TO_PX}px`;
+    crop.style.height = `${height * PT_TO_PX}px`;
+    this.dom.replaceChildren(crop);
+    this.dom.classList.add('math-ink');
+    this.dom.classList.remove('math-proof');
+    this.dom.style.height = `${height * PT_TO_PX}px`;
+    this.dom.dataset.previewState = 'ready';
+    this.dom.title = 'Exact equation from the current whole-document Typst publication.';
+    this.renderedResult = result;
+    this.regionKey = key;
+    this.appliedSettingsKey = this.settingsKey();
+    return Math.abs(previousHeight - height * PT_TO_PX) > 0.5;
+  }
+
+  applyDocumentPreview(result: TypstDocumentSvgPublication, doc: PMNode): boolean {
+    if (this.destroyed || !this.needsDocumentPreview()) return false;
+    const index = this.regionIndex(doc);
+    const publication = this.manager.publicationFor(result);
+    if (index === null || !publication) {
+      this.compileError('The exact document did not expose math preview geometry.');
+      return false;
+    }
+    const applied = this.display
+      ? this.applyDisplay(result, publication, index)
+      : this.applyInline(result, publication, index);
+    if (!applied && this.renderedResult !== result) {
+      this.compileError('The exact document did not expose complete math preview geometry.');
+    }
+    return applied;
+  }
+
+  compileError(message: string): void {
+    if (this.destroyed || !this.needsDocumentPreview()) return;
+    if (!this.renderedResult) this.renderEcho();
+    this.dom.dataset.previewState = 'error';
+    this.dom.title = this.renderedResult
+      ? `Exact update failed; showing the last good math. ${message}`
+      : `${message} Source remains exact in Proof/PDF.`;
   }
 
   selectNode() {
@@ -136,7 +303,9 @@ export class MathView implements NodeView {
   }
 
   destroy() {
-    this.stopInk();
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.manager.unregister(this);
   }
 
   ignoreMutation() {

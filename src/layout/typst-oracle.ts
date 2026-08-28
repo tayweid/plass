@@ -1,24 +1,24 @@
-// The Typst line-break oracle (spec M0): the editor's structural answer to
-// "why aren't the editor and the PDF pixel-identical?" — because two
-// independent Knuth-Plass implementations may choose different optima. This
-// module removes the second decider: paragraphs are compiled by the real
-// Typst (WASM, in-app) and its exact break decisions are imposed on the DOM.
+// Shared paragraph serialization and SVG-line matching primitives, plus the
+// historical paragraph-fragment TypstOracle used by focused tests/research.
 //
-// Extraction channel: the compiled SVG's invisible text-selection layer
-// (.tsel spans) — one per rendered text run, carrying the line's actual
-// text. The compiled document is byte-identical to what the PDF pipeline
-// sees (no probes, no instrumentation), so the breaks are guaranteed
-// faithful; an earlier probe-injection design perturbed knife-edge breaks
-// through sub-pixel item-boundary effects. Line texts are matched back to
-// character offsets word by word; hyphenation points arrive textually
-// (the line ends with a word prefix).
+// Production builds ParagraphSpecs here, then PageOracle matches them against
+// the text-selection runs and contextual caption/footnote regions from one
+// brokered whole-document publication. PageOracle alone may publish settled
+// line/page decisions; a pending or unmatched block remains browser-native.
 //
-// The JS Knuth-Plass remains the instant first pass and the fallback for
-// content the matcher can't align.
+// The TypstOracle class below deliberately compiles synthetic fragments and
+// is therefore not an export-fidelity or product-layout path. It remains useful
+// for differential fixtures and for testing the word-by-word matcher, including
+// textual hyphenation points at the ends of selection-layer lines.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { escapeTyp, parityRules, textSetLine } from '../typ-serializer';
 import type { DocSettings } from '../settings';
+import {
+  cancelCoordinatedCompilerTask,
+  releaseCoordinatedCompilerKey,
+  type CoordinatedCompileRequest,
+} from '../compiler/coordinated-compiler';
 import type { ForcedBreak } from './paragraph';
 import { parseTypstSvg } from '../safe-svg';
 
@@ -55,8 +55,8 @@ export interface AtomResolver {
 
 /**
  * Build the Typst markup + token table for one paragraph. Returns null when
- * the paragraph contains content we can't represent — the caller keeps using
- * the JS oracle for it.
+ * the paragraph contains content we can't represent — the caller keeps the
+ * native editable DOM for it.
  */
 export function buildSpec(node: PMNode, resolveAtom: AtomResolver): ParagraphSpec | null {
   let src = '';
@@ -127,12 +127,23 @@ export function buildSpec(node: PMNode, resolveAtom: AtomResolver): ParagraphSpe
       }
       if (child.type.name === 'math_inline') hasMath = true;
       src += resolved.markup;
+      const spaceBefore = take();
       tokens.push({
         kind: 'atom',
         start: offset,
         end: offset + child.nodeSize,
-        text: resolved.text,
-        spaceBefore: take(),
+        // Formula selection text is a drawing detail, not source text. A
+        // tall inline formula is emitted as several SVG runs (base,
+        // superscript, subscript) whose glyph count and order have no
+        // correspondence to ProseMirror's one-offset atom. Always match
+        // inline math opaquely between its surrounding source anchors; paint
+        // geometry arrives separately from the shared document publication.
+        text: child.type.name === 'math_inline' ? undefined : resolved.text,
+        // Typst's footnote call consumes preceding source whitespace and
+        // paints its superscript against the previous glyph. Model that
+        // visible boundary, otherwise `word.1` cannot match a PM source that
+        // happens to contain a space before the footnote atom.
+        spaceBefore: child.type.name === 'footnote' ? false : spaceBefore,
       });
       key += `⟦${resolved.markup}⟧`;
     }
@@ -161,9 +172,12 @@ interface Queued {
 }
 
 const MAX_RESULTS = 800;
+let nextParagraphOracleId = 1;
 /** Hyphen-like characters Typst may append to a hyphenated line. */
 const HYPHENS = /[-‐‑\u00ad]+$/;
 
+/** Test/research-only synthetic-fragment compiler. Product code uses the pure
+ * helpers above through PageOracle's shared whole-document publication. */
 export class TypstOracle {
   results = new Map<string, OracleEntry>();
   queue = new Map<string, Queued>();
@@ -172,16 +186,26 @@ export class TypstOracle {
   disposed = false;
   private settings: DocSettings | null = null;
   /** Invalidates completions that were already compiling when clear() or
-   * destroy() was called. The underlying compiler task cannot be cancelled,
-   * so publication has to be guarded when it returns. */
+   * destroy() was called. Abort stops pre-admission imports and coordinator
+   * cancellation terminates admitted obsolete worker work; generation remains
+   * the final publication guard for executors that ignore cancellation. */
   private generation = 0;
+  private compileRevision = 0;
+  private compileAbort: AbortController | null = null;
+  private readonly compileKey = `layout:paragraphs:${nextParagraphOracleId++}`;
 
   constructor(
     private onResults: () => void,
     private fontFallback: string[],
-    private compileSvg: (source: string) => Promise<string | null> = async (source) => {
-      const { compileSvg } = await import('../pdf');
-      return compileSvg(source);
+    private compileSvg: (
+      source: string,
+      coordinated?: CoordinatedCompileRequest,
+      signal?: AbortSignal,
+    ) => Promise<string | null> = async (source, coordinated, signal) => {
+      if (signal?.aborted) return null;
+      const { compileSvg } = await import('../research/typst-tools');
+      if (signal?.aborted) return null;
+      return compileSvg(source, () => {}, coordinated);
     },
   ) {}
 
@@ -199,9 +223,26 @@ export class TypstOracle {
 
   clear() {
     this.generation++;
+    this.compileAbort?.abort('canceled');
+    this.compileAbort = null;
+    cancelCoordinatedCompilerTask(this.compileKey);
     clearTimeout(this.timer);
     this.timer = 0;
     this.results.clear();
+    this.queue.clear();
+    this.settings = null;
+  }
+
+  /** Supersede work for an edited document without discarding reusable
+   * completed entries. An in-flight worker task may still return, but the
+   * generation guard prevents its SVG from being parsed on the main thread. */
+  cancelPending() {
+    this.generation++;
+    this.compileAbort?.abort('canceled');
+    this.compileAbort = null;
+    cancelCoordinatedCompilerTask(this.compileKey);
+    clearTimeout(this.timer);
+    this.timer = 0;
     this.queue.clear();
     this.settings = null;
   }
@@ -210,6 +251,9 @@ export class TypstOracle {
     if (this.disposed) return;
     this.disposed = true;
     this.generation++;
+    this.compileAbort?.abort('canceled');
+    this.compileAbort = null;
+    releaseCoordinatedCompilerKey(this.compileKey);
     clearTimeout(this.timer);
     this.timer = 0;
     this.queue.clear();
@@ -220,6 +264,8 @@ export class TypstOracle {
     if (this.disposed || this.inflight || !this.queue.size || !this.settings) return;
     this.inflight = true;
     const generation = this.generation;
+    const compileAbort = new AbortController();
+    this.compileAbort = compileAbort;
     // One compile per measure: indented paragraphs (quotes, list items) have
     // narrower lines and must be broken at their own width. Footnote specs
     // compile separately — their lines render at the page bottom, after all
@@ -270,13 +316,17 @@ export class TypstOracle {
       }
 
       if (this.disposed || generation !== this.generation) return;
-      const svg = await this.compileSvg(src);
+      const svg = await this.compileSvg(src, {
+        key: this.compileKey,
+        revision: ++this.compileRevision,
+        priority: 'layout',
+      }, compileAbort.signal);
       if (this.disposed || generation !== this.generation) return;
 
       // Geometry thresholds at the SVG's 1px-per-pt scale.
       const pitch = s.lineHeight * s.sizePt;
       const paraGap = (s.lineHeight + 0.45) * s.sizePt; // between pitch and paragraph pitch
-      const lines = svg ? extractLines(svg, pitch / 2) : null;
+      const lines = svg ? extractLines(svg, selectionRunTolerance(pitch)) : null;
       let cursor = isFn ? 1 : 0; // footnotes: skip the anchor-markers line
       for (const [key, q] of batch) {
         if (!lines) {
@@ -308,6 +358,7 @@ export class TypstOracle {
       for (const [key] of batch) this.results.set(key, { status: 'fail', reason: String(e).slice(0, 120) });
     } finally {
       this.inflight = false;
+      if (this.compileAbort === compileAbort) this.compileAbort = null;
       if (!this.disposed && this.queue.size) {
         clearTimeout(this.timer);
         this.timer = window.setTimeout(() => void this.flush(), 20);
@@ -320,6 +371,44 @@ export class TypstOracle {
 export interface SvgLine {
   text: string;
   y: number;
+}
+
+export interface SvgTextRun {
+  text: string;
+  /** Top and bottom in one rendered coordinate space. */
+  top: number;
+  bottom: number;
+}
+
+/**
+ * A selection layer has one run per shaped fragment, not one run per prose
+ * line. Inline math therefore contributes vertically offset superscript and
+ * subscript runs. Group intersecting painted bands, with a half-pitch
+ * tolerance for rounding and short script offsets. Real wrapped lines still
+ * advance a full pitch, while every glyph run inside one atomic formula
+ * stays on its surrounding source line. Keeping the fallback at half pitch
+ * also prevents the smaller lines in footnote text from collapsing.
+ */
+export function selectionRunTolerance(linePitch: number): number {
+  return linePitch / 2;
+}
+
+export function groupSelectionRuns(runs: readonly SvgTextRun[], yTolerance: number): SvgLine[] {
+  const grouped: Array<SvgLine & { top: number; bottom: number }> = [];
+  for (const run of runs) {
+    const last = grouped[grouped.length - 1];
+    const overlapsBand = !!last && Math.min(last.bottom, run.bottom) > Math.max(last.top, run.top);
+    if (last && (overlapsBand || Math.abs(run.top - last.y) < yTolerance)) {
+      last.text += run.text;
+      // Keep the first run's top as the line coordinate used by paragraph
+      // gap detection, but widen the painted band for the rest of this line.
+      last.top = Math.min(last.top, run.top);
+      last.bottom = Math.max(last.bottom, run.bottom);
+    } else {
+      grouped.push({ text: run.text, y: run.top, top: run.top, bottom: run.bottom });
+    }
+  }
+  return grouped.map(({ text, y }) => ({ text, y }));
 }
 
 /**
@@ -337,14 +426,15 @@ export function extractLines(svg: string, yTol: number): SvgLine[] {
   svgEl.style.height = 'auto';
   document.body.appendChild(div);
   const top = svgEl.getBoundingClientRect().top;
-  const lines: SvgLine[] = [];
-  for (const el of div.querySelectorAll('.tsel')) {
-    const y = el.getBoundingClientRect().top - top;
-    const text = el.textContent ?? '';
-    const L = lines[lines.length - 1];
-    if (L && Math.abs(y - L.y) < yTol) L.text += text;
-    else lines.push({ text, y });
-  }
+  const runs = [...div.querySelectorAll('.tsel')].map((el): SvgTextRun => {
+    const rect = el.getBoundingClientRect();
+    return {
+      text: el.textContent ?? '',
+      top: rect.top - top,
+      bottom: rect.bottom - top,
+    };
+  });
+  const lines = groupSelectionRuns(runs, yTol);
   div.remove();
   return lines;
 }

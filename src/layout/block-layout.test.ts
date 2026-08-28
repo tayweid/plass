@@ -67,10 +67,10 @@ const compiledBreaks: ForcedBreak[] = [
   { at: 12, hyphen: false },
   { at: 27, hyphen: true },
 ];
-const matchingPortEntry: BlockLayoutEntry = {
+const matchingCompiledEntry: BlockLayoutEntry = {
   ...entry,
   oracle: 'none',
-  authority: 'port',
+  authority: 'compiled',
   breakSignature: forcedBreakSignature(compiledBreaks),
 };
 
@@ -86,45 +86,45 @@ check(
       ]),
 );
 check(
-  'matching compiled breaks reuse a live port layout across status change',
-  canReuseBlockLayoutEntry(matchingPortEntry, { ...key, oracle: 'ok' }, compiledBreaks),
+  'matching compiled breaks reuse an authoritative layout across status change',
+  canReuseBlockLayoutEntry(matchingCompiledEntry, { ...key, oracle: 'ok' }, compiledBreaks),
 );
 check(
-  'different compiled breaks supersede a live port layout',
-  !canReuseBlockLayoutEntry(matchingPortEntry, { ...key, oracle: 'ok' }, [
+  'different compiled breaks supersede a previous authoritative layout',
+  !canReuseBlockLayoutEntry(matchingCompiledEntry, { ...key, oracle: 'ok' }, [
     { at: 12, hyphen: false },
     { at: 28, hyphen: true },
   ]),
 );
 check(
   'missing, pending, or failed compiled results do not invalidate stable layout',
-  canReuseBlockLayoutEntry(matchingPortEntry, { ...key, oracle: 'none' }) &&
-    canReuseBlockLayoutEntry(matchingPortEntry, { ...key, oracle: 'fail' }, null),
+  canReuseBlockLayoutEntry(matchingCompiledEntry, { ...key, oracle: 'none' }) &&
+    canReuseBlockLayoutEntry(matchingCompiledEntry, { ...key, oracle: 'fail' }, null),
 );
 check(
-  'compiled comparison fails closed for legacy and fallback entries',
+  'compiled comparison fails closed for legacy non-authoritative entries',
   !canReuseBlockLayoutEntry(entry, { ...key, oracle: 'ok' }, compiledBreaks) &&
     !canReuseBlockLayoutEntry(
-      { ...matchingPortEntry, authority: 'fallback' },
+      { ...matchingCompiledEntry, authority: undefined },
       { ...key, oracle: 'ok' },
       compiledBreaks,
     ),
 );
 check(
   'semantic reuse still rejects stable input drift',
-  !canReuseBlockLayoutEntry(matchingPortEntry, { ...key, measure: 500.5001 }, compiledBreaks) &&
-    !canReuseBlockLayoutEntry(matchingPortEntry, { ...key, indent: 24.5001 }, compiledBreaks) &&
-    !canReuseBlockLayoutEntry(matchingPortEntry, { ...key, scale: 0.8601 }, compiledBreaks),
+  !canReuseBlockLayoutEntry(matchingCompiledEntry, { ...key, measure: 500.5001 }, compiledBreaks) &&
+    !canReuseBlockLayoutEntry(matchingCompiledEntry, { ...key, indent: 24.5001 }, compiledBreaks) &&
+    !canReuseBlockLayoutEntry(matchingCompiledEntry, { ...key, scale: 0.8601 }, compiledBreaks),
 );
 
 const node = {} as PMNode;
 const cache = new BlockLayoutCache();
 cache.set(node, entry);
 check('cache returns a matching persistent node', cache.getMatching(node, key) === entry);
-cache.set(node, matchingPortEntry);
+cache.set(node, matchingCompiledEntry);
 check(
   'cache wrapper exposes semantic reusable lookup',
-  cache.getReusable(node, { ...key, oracle: 'ok' }, compiledBreaks) === matchingPortEntry &&
+  cache.getReusable(node, { ...key, oracle: 'ok' }, compiledBreaks) === matchingCompiledEntry &&
     cache.getReusable(node, { ...key, oracle: 'ok' }, [{ at: 13, hyphen: false }]) === undefined,
 );
 cache.clear();

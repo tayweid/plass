@@ -1,35 +1,52 @@
-// The page-break oracle: Typst decides where pages break; the editor obeys.
+// The sole product line-and-page oracle: Typst decides; the editor obeys.
 //
-// The full document (the byte-exact export, embedded assets and all)
-// compiles in the background; the multi-page SVG's text-selection layer
-// gives each page's lines. Matching those lines against the document's
-// blocks — exact token matching for paragraphs and headings (the same
-// machinery as the line-break oracle), anchored resync across opaque blocks
-// (equations, figures, tables, raw), footnote-area lines filtered against
-// the known footnote texts — yields the block (and line, for split
-// paragraphs) that starts every page. The editor's paginator then places
-// its page spacers exactly there instead of running its own fit rules.
+// The per-editor publication broker compiles one prepared whole document for
+// each immutable ProseMirror document plus asset epoch. The multi-page SVG's
+// text-selection layer gives physical lines, while compile-only contextual
+// regions delimit figure captions and footnote bodies. Exact token matching
+// maps those lines back to blocks; anchored resynchronization crosses opaque
+// equations, figures, native tables, and executable Typst embeds. The result
+// is one immutable LayoutSnapshot of body/context breaks and page starts.
+// Forced-line translation and page spacers project that answer into the native
+// editable DOM without running browser fit rules or a second page planner.
 //
-// Any mismatch fails the whole result and the editor keeps its own
-// pagination for that document state (graceful, self-healing on edit).
+// A mismatch withholds the page-start map while retaining every line-exact
+// block matched before it. The editor stays continuous/native for pagination
+// in that revision and self-heals on the next successful document snapshot.
 
 import type { Node as PMNode } from 'prosemirror-model';
-import { buildSpec, matchParagraph, type AtomResolver, type SvgLine, type ParagraphSpec } from './typst-oracle';
+import {
+  buildSpec,
+  matchParagraph,
+  selectionRunTolerance,
+  type AtomResolver,
+  type SvgLine,
+  type ParagraphSpec,
+} from './typst-oracle';
 import { formatPageNumber, pageSize, type DocSettings } from '../settings';
 import { parseTypstSvg } from '../safe-svg';
+import {
+  cancelCoordinatedCompilerTask,
+  releaseCoordinatedCompilerKey,
+  type CoordinatedCompileRequest,
+} from '../compiler/coordinated-compiler';
+import {
+  createLayoutSnapshot,
+  type LayoutSnapshot,
+  type SnapshotBlockBreaks,
+  type SnapshotPageStart,
+} from './layout-snapshot';
+import type { TypstDocumentSvgPublication } from '../typst-document-publication';
+import type { TypstLayoutRegion, TypstLayoutRegionKind } from '../typst-layout-regions';
+import type { ForcedBreak } from './paragraph';
 
-export interface PageStart {
-  /** Document position of the block that begins the page. */
-  pos: number;
-  /** Line index within the block for mid-paragraph splits (0 = block start). */
-  line: number;
-  /** Block type — the paginator applies a type-specific ink offset. */
-  unit: string;
-  level?: number;
-}
+export type PageStart = SnapshotPageStart;
 
 export interface PageOracleEntry {
   status: 'ok' | 'fail';
+  /** Immutable line + page decisions from this one full-document compile. */
+  snapshot?: LayoutSnapshot;
+  /** Compatibility aliases while pagination consumers migrate to snapshot. */
   pageStarts?: PageStart[];
   pageCount?: number;
   reason?: string;
@@ -46,10 +63,26 @@ interface Unit {
 }
 
 interface PagedLine extends SvgLine {
+  /** Stable extraction identity used to remove exact footnote-area lines. */
+  id: number;
   page: number;
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
 }
 
+interface ContextTarget {
+  index: number;
+  kind: TypstLayoutRegionKind;
+  pos: number;
+  spec: ParagraphSpec | null;
+}
+
+export type PageOracleCompileResult = string | TypstDocumentSvgPublication;
+
 const MAX_RESULTS = 8;
+let nextPageOracleId = 1;
 
 export class PageOracle {
   private results = new Map<string, PageOracleEntry>();
@@ -57,15 +90,23 @@ export class PageOracle {
   private timer = 0;
   private inflight = false;
   private disposed = false;
-  /** Identifies the latest requested page layout. Page compiles cannot be
-   * cancelled once running, so older completions must not publish. */
+  /** Identifies the latest requested page layout. Abort stops asynchronous
+   * asset preparation before admission and the coordinator terminates an
+   * admitted obsolete worker task; generation remains the publication guard. */
   private generation = 0;
+  private compileRevision = 0;
+  private compileAbort: AbortController | null = null;
+  private readonly compileKey = `layout:pages:${nextPageOracleId++}`;
 
   constructor(
     private onResults: (entry: PageOracleEntry) => void,
-    private compileDocSvg: (doc: PMNode) => Promise<string | null> = async (doc) => {
-      const { compileDocSvg } = await import('../pdf');
-      return compileDocSvg(doc);
+    private compileDocument: (
+      doc: PMNode,
+      coordinated?: CoordinatedCompileRequest,
+      signal?: AbortSignal,
+    ) => Promise<PageOracleCompileResult | null> = async (doc, coordinated, signal) => {
+      const { compileDocSvgWithEmbedRegions } = await import('../pdf');
+      return compileDocSvgWithEmbedRegions(doc, () => {}, coordinated, signal);
     },
   ) {}
 
@@ -76,19 +117,41 @@ export class PageOracle {
   request(sig: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver) {
     if (this.disposed || this.results.has(sig) || this.pendingSig === sig) return;
     this.generation++;
+    this.compileAbort?.abort('newer-request');
+    cancelCoordinatedCompilerTask(this.compileKey);
     this.pendingSig = sig;
     this.payload = { doc, settings, resolveAtom };
     clearTimeout(this.timer);
-    this.timer = window.setTimeout(() => void this.flush(), 350);
+    // TypesetView has already waited for the edit quiet period. A second
+    // long debounce only delays exactness and lets local fallback work race
+    // the compiler; coalesce a same-frame burst, then compile the revision.
+    this.timer = window.setTimeout(() => void this.flush(), 40);
   }
 
   private payload: { doc: PMNode; settings: DocSettings; resolveAtom: AtomResolver } | null = null;
 
   clear() {
     this.generation++;
+    this.compileAbort?.abort('canceled');
+    this.compileAbort = null;
+    cancelCoordinatedCompilerTask(this.compileKey);
     clearTimeout(this.timer);
     this.timer = 0;
     this.results.clear();
+    this.pendingSig = null;
+    this.payload = null;
+  }
+
+  /** Supersede a pending or in-flight document compile while retaining exact
+   * cached entries for undo/revisit. The post-await generation check occurs
+   * before costly SVG parsing and DOM measurement. */
+  cancelPending() {
+    this.generation++;
+    this.compileAbort?.abort('canceled');
+    this.compileAbort = null;
+    cancelCoordinatedCompilerTask(this.compileKey);
+    clearTimeout(this.timer);
+    this.timer = 0;
     this.pendingSig = null;
     this.payload = null;
   }
@@ -97,6 +160,9 @@ export class PageOracle {
     if (this.disposed) return;
     this.disposed = true;
     this.generation++;
+    this.compileAbort?.abort('canceled');
+    this.compileAbort = null;
+    releaseCoordinatedCompilerKey(this.compileKey);
     clearTimeout(this.timer);
     this.timer = 0;
     this.pendingSig = null;
@@ -109,12 +175,24 @@ export class PageOracle {
     const sig = this.pendingSig;
     const { doc, settings, resolveAtom } = this.payload;
     this.inflight = true;
+    const compileAbort = new AbortController();
+    this.compileAbort = compileAbort;
     let published: PageOracleEntry | undefined;
     try {
       if (this.disposed || generation !== this.generation) return;
-      const svg = await this.compileDocSvg(doc);
+      const compileRevision = ++this.compileRevision;
+      const compiled = await this.compileDocument(doc, {
+        key: this.compileKey,
+        revision: compileRevision,
+        priority: 'layout',
+      }, compileAbort.signal);
       if (this.disposed || generation !== this.generation) return;
-      const entry = svg ? analyze(svg, doc, settings, resolveAtom) : ({ status: 'fail', reason: 'compile failed' } as PageOracleEntry);
+      const publication = typeof compiled === 'string'
+        ? { svg: compiled, regions: [] }
+        : compiled;
+      const entry = publication
+        ? analyze(publication, doc, settings, resolveAtom, sig, compileRevision)
+        : ({ status: 'fail', reason: 'compile failed' } as PageOracleEntry);
       this.results.set(sig, entry);
       published = entry;
       if (this.results.size > MAX_RESULTS) {
@@ -127,6 +205,7 @@ export class PageOracle {
       this.results.set(sig, published);
     } finally {
       this.inflight = false;
+      if (this.compileAbort === compileAbort) this.compileAbort = null;
       // A newer request may use the same signature after clear(). Only the
       // generation that started this compile may consume its pending state.
       if (generation === this.generation && this.pendingSig === sig) {
@@ -145,7 +224,7 @@ export class PageOracle {
 
 /** Per-page tsel lines from the multi-page SVG. The svg renders at an
  *  arbitrary scale — per-page y tolerance is derived from the page height. */
-function extractPages(svg: string, yTolPt: number, pageHPt: number): PagedLine[] {
+function extractPages(svg: string, yTolPt: number): PagedLine[] {
   const div = parseTypstSvg(svg);
   div.style.cssText = 'position:absolute;visibility:hidden;left:-99999px;top:0;';
   const svgEl = div.querySelector('svg');
@@ -154,17 +233,73 @@ function extractPages(svg: string, yTolPt: number, pageHPt: number): PagedLine[]
   svgEl.style.height = 'auto';
   document.body.appendChild(div);
   const out: PagedLine[] = [];
+  let nextLineId = 0;
   const pages = [...div.querySelectorAll('.typst-page')];
   pages.forEach((pageEl, page) => {
-    const rect = pageEl.getBoundingClientRect();
-    const yTol = (yTolPt * rect.height) / pageHPt;
-    for (const el of pageEl.querySelectorAll('.tsel')) {
-      const y = el.getBoundingClientRect().top - rect.top;
-      const text = el.textContent ?? '';
-      const last = out[out.length - 1];
-      if (last && last.page === page && Math.abs(y - last.y) < yTol) last.text += text;
-      else out.push({ text, y, page });
+    // An SVG <g>'s client rect is the bounding box of its painted children,
+    // not the physical page. Using it as the page origin silently shifts
+    // every coordinate by the topmost ink (and changes that shift from page
+    // to page). Transform screen-space foreignObject rectangles back through
+    // the page group's actual CTM instead; the resulting user units are the
+    // same physical Typst points returned by `here().position()`.
+    const matrix = (pageEl as SVGGElement).getScreenCTM();
+    if (!matrix) return;
+    let inverse: DOMMatrix;
+    try {
+      inverse = matrix.inverse();
+    } catch {
+      return;
     }
+    const localBounds = (rect: DOMRect) => {
+      const points = [
+        new DOMPoint(rect.left, rect.top).matrixTransform(inverse),
+        new DOMPoint(rect.right, rect.top).matrixTransform(inverse),
+        new DOMPoint(rect.left, rect.bottom).matrixTransform(inverse),
+        new DOMPoint(rect.right, rect.bottom).matrixTransform(inverse),
+      ];
+      return {
+        top: Math.min(...points.map((point) => point.y)),
+        bottom: Math.max(...points.map((point) => point.y)),
+        left: Math.min(...points.map((point) => point.x)),
+        right: Math.max(...points.map((point) => point.x)),
+      };
+    };
+    const runs = [...pageEl.querySelectorAll('.tsel')].map((el) => {
+      const runRect = localBounds(el.getBoundingClientRect());
+      return {
+        text: el.textContent ?? '',
+        top: runRect.top,
+        bottom: runRect.bottom,
+        left: runRect.left,
+        right: runRect.right,
+      };
+    });
+    // Preserve Typst's run order while grouping scripts/formula fragments
+    // into their surrounding line, then order the completed lines physically
+    // for page and footnote traversal.
+    const grouped: Array<Omit<PagedLine, 'id' | 'page'>> = [];
+    for (const run of runs) {
+      const last = grouped[grouped.length - 1];
+      const overlapsBand = !!last && Math.min(last.bottom, run.bottom) > Math.max(last.top, run.top);
+      if (last && (overlapsBand || Math.abs(run.top - last.y) < yTolPt)) {
+        last.text += run.text;
+        last.top = Math.min(last.top, run.top);
+        last.bottom = Math.max(last.bottom, run.bottom);
+        last.left = Math.min(last.left, run.left);
+        last.right = Math.max(last.right, run.right);
+      } else {
+        grouped.push({
+          text: run.text,
+          y: run.top,
+          top: run.top,
+          bottom: run.bottom,
+          left: run.left,
+          right: run.right,
+        });
+      }
+    }
+    grouped.sort((left, right) => left.top - right.top || left.left - right.left);
+    out.push(...grouped.map((line) => ({ ...line, id: nextLineId++, page })));
   });
   // Record the page count on the array for the caller.
   (out as PagedLine[] & { pageCount?: number }).pageCount = pages.length;
@@ -215,6 +350,244 @@ function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
   return units;
 }
 
+/** Context targets use the same preorder in which docToTyp allocates its
+ * zero-flow markers: a figure caption before its inline descendants, and
+ * every non-empty footnote when encountered. */
+export function buildContextTargets(doc: PMNode, resolveAtom: AtomResolver): ContextTarget[] {
+  const targets: ContextTarget[] = [];
+  let index = 0;
+  doc.descendants((node, pos) => {
+    const kind: TypstLayoutRegionKind | null =
+      node.type.name === 'figure' && node.content.size
+        ? 'figure-caption'
+        : node.type.name === 'footnote' && node.content.size
+          ? 'footnote'
+          : null;
+    if (kind) targets.push({ index: index++, kind, pos, spec: buildSpec(node, resolveAtom) });
+    return true;
+  });
+  return targets;
+}
+
+const CONTEXT_HYPHENS = /[-‐‑\u00ad]+$/;
+
+interface ContextLineState {
+  token: number;
+  pendingSuffix: string | null;
+  breaks: ForcedBreak[];
+}
+
+interface ContextLineResult {
+  state: ContextLineState;
+  more: boolean;
+}
+
+/** Consume exactly one rendered line while retaining enough matcher state to
+ * skip page-leading body text before a split footnote continuation. */
+function consumeContextLine(
+  spec: ParagraphSpec,
+  input: string,
+  initial: ContextLineState,
+): ContextLineResult | null {
+  const tokens = spec.tokens;
+  let ti = initial.token;
+  let pendingSuffix = initial.pendingSuffix;
+  const breaks = initial.breaks.slice();
+  let text = input.replace(/\s+/g, ' ').trim();
+  const lineStartTi = ti;
+  let brokeWithHyphen = false;
+
+  while (text.length) {
+    if (pendingSuffix) {
+      if (!text.startsWith(pendingSuffix)) return null;
+      text = text.slice(pendingSuffix.length).trimStart();
+      pendingSuffix = null;
+      continue;
+    }
+    if (ti >= tokens.length) return null;
+    const token = tokens[ti];
+    if (token.kind === 'hard') {
+      ti++;
+      continue;
+    }
+    if (token.text === undefined) {
+      let nextIndex = ti + 1;
+      while (
+        nextIndex < tokens.length &&
+        tokens[nextIndex].kind === 'atom' &&
+        tokens[nextIndex].text === undefined
+      ) nextIndex++;
+      const next = nextIndex < tokens.length && tokens[nextIndex].kind !== 'hard'
+        ? tokens[nextIndex]
+        : null;
+      if (!next || next.text === undefined) {
+        text = '';
+        ti = next ? ti + 1 : tokens.length;
+        continue;
+      }
+      const needle = (next.spaceBefore ? ' ' : '') + next.text;
+      const found = (text + ' ').indexOf(needle);
+      if (found < 0) {
+        text = '';
+        ti++;
+        continue;
+      }
+      text = text.slice(found).trimStart();
+      ti++;
+      continue;
+    }
+
+    const word = token.text;
+    if (text.startsWith(word)) {
+      const after = text.slice(word.length);
+      const glueNext = ti + 1 < tokens.length && !tokens[ti + 1].spaceBefore;
+      if (after === '' || after.startsWith(' ') || glueNext) {
+        text = after.trimStart() === after && after !== '' && !after.startsWith(' ')
+          ? after
+          : after.trimStart();
+        ti++;
+        continue;
+      }
+    }
+    if (token.kind === 'word') {
+      const bare = text.replace(CONTEXT_HYPHENS, '');
+      if (
+        text.length <= word.length + 1 &&
+        bare.length > 0 &&
+        bare.length < word.length &&
+        word.startsWith(bare)
+      ) {
+        const dash = word[bare.length] === '-' ? 1 : 0;
+        breaks.push({ at: token.start + bare.length + dash, hyphen: true });
+        pendingSuffix = word.slice(bare.length + dash);
+        ti++;
+        text = '';
+        brokeWithHyphen = true;
+        continue;
+      }
+    }
+    return null;
+  }
+
+  const more = ti < tokens.length || pendingSuffix !== null;
+  if (more && !brokeWithHyphen) {
+    if (ti === lineStartTi) return null;
+    const previous = tokens[ti - 1];
+    if (previous.kind !== 'hard') breaks.push({ at: previous.end, hyphen: false });
+  }
+  return { state: { token: ti, pendingSuffix, breaks }, more };
+}
+
+function prefixVariants(text: string): string[] {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const variants = [normalized];
+  // Typst emits a footnote entry number and its first body run as adjacent
+  // selection-layer fragments (`1Body`), even though they are visually
+  // separated by the hanging indent. The marker is not PM content.
+  const withoutFootnoteNumber = normalized.replace(/^\d+[.)]?\s*/, '');
+  if (withoutFootnoteNumber !== normalized) variants.push(withoutFootnoteNumber);
+  // Prefixes are normally short ("Figure 12: ", "12 "). Trying bounded
+  // suffixes avoids language/supplement assumptions and remains safe because
+  // the complete PM token stream and end marker must still match.
+  const limit = Math.min(normalized.length, 160);
+  for (let offset = 1; offset < limit; offset++) {
+    const previous = normalized[offset - 1];
+    if (/\s|[:.)\]—–-]/.test(previous)) variants.push(normalized.slice(offset).trimStart());
+  }
+  return [...new Set(variants)];
+}
+
+function distanceToBand(line: PagedLine, y: number): number {
+  if (y < line.top) return line.top - y;
+  if (y > line.bottom) return y - line.bottom;
+  return 0;
+}
+
+function nearestLine(lines: readonly PagedLine[], page: number, y: number, tolerance: number): number {
+  let best = -1;
+  let distance = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].page !== page) continue;
+    const next = distanceToBand(lines[i], y);
+    if (next < distance) {
+      best = i;
+      distance = next;
+    }
+  }
+  return distance <= tolerance ? best : -1;
+}
+
+interface ContextMatch {
+  breaks: ForcedBreak[];
+  lineIds: number[];
+}
+
+/** Match one physical marker range independently of document reading order.
+ * A split footnote may continue at the bottom of later pages; body/header
+ * lines before that page's first matching continuation are the only lines
+ * permitted to be skipped. */
+export function matchContextRegion(
+  spec: ParagraphSpec,
+  allLines: readonly PagedLine[],
+  region: TypstLayoutRegion,
+  pitch: number,
+): ContextMatch | null {
+  const startPage = region.start.page - 1;
+  const endPage = region.end.page - 1;
+  if (startPage < 0 || endPage < startPage) return null;
+  const tolerance = Math.max(pitch * 1.25, 8);
+  const start = nearestLine(allLines, startPage, region.start.y, tolerance);
+  const end = nearestLine(allLines, endPage, region.end.y, tolerance);
+  if (start < 0 || end < 0) return null;
+
+  const candidates = allLines.filter((line, index) => {
+    if (line.page < startPage || line.page > endPage) return false;
+    if (line.page === startPage && index < start) return false;
+    if (line.page === endPage && index > end) return false;
+    return true;
+  });
+  if (!candidates.length) return null;
+
+  let state: ContextLineState = { token: 0, pendingSuffix: null, breaks: [] };
+  const used: PagedLine[] = [];
+  let page = -1;
+  let matchedOnPage = false;
+  for (const line of candidates) {
+    if (line.page !== page) {
+      page = line.page;
+      matchedOnPage = false;
+    }
+    const mayStripPrefix = used.length === 0 || (region.kind === 'footnote' && !matchedOnPage);
+    const variants = mayStripPrefix ? prefixVariants(line.text) : [line.text];
+    let consumed: ContextLineResult | null = null;
+    for (const variant of variants) {
+      consumed = consumeContextLine(spec, variant, state);
+      if (consumed) break;
+    }
+    if (!consumed) {
+      // Only a page-leading search for a split footnote is skippable. Once
+      // its continuation starts, unrelated text would make the mapping
+      // ambiguous and this block falls back to native wrapping.
+      if (region.kind === 'footnote' && !matchedOnPage && line.page > startPage) continue;
+      return null;
+    }
+    state = consumed.state;
+    used.push(line);
+    matchedOnPage = true;
+    if (!consumed.more) break;
+  }
+  if (!used.length || state.token < spec.tokens.length || state.pendingSuffix) return null;
+  const first = used[0];
+  const last = used[used.length - 1];
+  if (
+    first.page !== startPage ||
+    last.page !== endPage ||
+    distanceToBand(first, region.start.y) > tolerance ||
+    distanceToBand(last, region.end.y) > tolerance
+  ) return null;
+  return { breaks: state.breaks, lineIds: used.map((line) => line.id) };
+}
+
 const MARKER = /^[•‣–\-*]?\s*|^\d+[.)]\s*/;
 
 /** First words of every footnote body, in document order. */
@@ -262,10 +635,18 @@ function stripFootnoteLines(lines: PagedLine[], heads: string[]): PagedLine[] {
   return lines.filter((_, i) => !drop.has(i));
 }
 
-function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver): PageOracleEntry {
+function analyze(
+  publication: TypstDocumentSvgPublication,
+  doc: PMNode,
+  settings: DocSettings,
+  resolveAtom: AtomResolver,
+  documentKey: string,
+  revision: number,
+): PageOracleEntry {
   const pitch = settings.lineHeight * settings.sizePt;
-  const pageHPt = pageSize(settings).h * 0.75;
-  const raw = extractPages(svg, pitch / 2, pageHPt);
+  const page = pageSize(settings);
+  const pageHPt = page.h * 0.75;
+  const raw = extractPages(publication.svg, selectionRunTolerance(pitch));
   const pageCount = (raw as PagedLine[] & { pageCount?: number }).pageCount ?? 1;
   if (!raw.length) return { status: 'fail', reason: 'no text layer' };
 
@@ -288,18 +669,77 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
   const folioPatterns = hasRestart
     ? [folioRe(settings.pageNumFormat), folioRe('i')]
     : [folioRe(settings.pageNumFormat)];
-  const isFolio = (l: PagedLine) =>
-    hasRestart
+  const footerTop = pageHPt - settings.marginBottom * 72;
+  const isFolio = (l: PagedLine) => {
+    // A numeric caption or footnote body is content, not a folio. Typst's
+    // page number sits outside the body margin, so require both the emitted
+    // value and the physical footer band.
+    if (l.top < footerTop) return false;
+    return hasRestart
       ? folioPatterns.some((re) => re.test(l.text.trim()))
       : l.text.trim() === formatPageNumber(settings, l.page + 1, pageCount);
+  };
   const all = settings.pageNumShow ? raw.filter((l) => !isFolio(l)) : raw;
 
   const units = buildUnits(doc, resolveAtom);
-  const lines = stripFootnoteLines(all, footnoteHeads(doc));
-
   const pageStarts: PageStart[] = [];
+  const blockBreaks: SnapshotBlockBreaks[] = [];
+  const targets = buildContextTargets(doc, resolveAtom);
+  const footnoteLineIds = new Set<number>();
+  let contextPageFailure: string | null = null;
+
+  if (publication.layoutRegions) {
+    const regions = new Map(publication.layoutRegions.map((region) => [region.index, region]));
+    for (const target of targets) {
+      const region = regions.get(target.index);
+      const match = target.spec && region && region.kind === target.kind
+        ? matchContextRegion(target.spec, all, region, pitch)
+        : null;
+      if (!match || !target.spec) {
+        // Captions do not participate in body reading order, so their own
+        // native fallback is isolated. An unidentified footnote area can
+        // contaminate page mapping and therefore withholds pageStarts.
+        if (target.kind === 'footnote' && !contextPageFailure) {
+          contextPageFailure = `footnote context @${target.pos} did not match its compiled region`;
+        }
+        continue;
+      }
+      blockBreaks.push({
+        pos: target.pos,
+        type: target.kind,
+        contentKey: target.spec.key,
+        breaks: match.breaks,
+      });
+      if (target.kind === 'footnote') {
+        for (const id of match.lineIds) footnoteLineIds.add(id);
+      }
+    }
+  }
+
+  // Older/injected publications have no region field. Preserve their
+  // existing body-page behavior for focused lifecycle tests; the product
+  // worker always emits layoutRegions and therefore never uses text-head
+  // guessing as contextual line authority.
+  const lines = publication.layoutRegions === undefined
+    ? stripFootnoteLines(all, footnoteHeads(doc))
+    : all.filter((line) => !footnoteLineIds.has(line.id));
+
   let cursor = 0;
   let lastPage = 0;
+
+  const result = (reason?: string): PageOracleEntry => {
+    const exactPages = reason ? null : pageStarts;
+    const snapshot = createLayoutSnapshot({
+      revision,
+      documentKey,
+      pageCount,
+      pageStarts: exactPages,
+      blocks: [...blockBreaks].sort((left, right) => left.pos - right.pos),
+    });
+    return reason
+      ? { status: 'fail', reason, pageCount, snapshot }
+      : { status: 'ok', pageStarts, pageCount, snapshot };
+  };
 
   const notePage = (line: number, unit: Unit, lineInUnit: number) => {
     const page = lines[line].page;
@@ -345,8 +785,14 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
       }));
       const res = matchParagraph(unit.spec, slice, 0);
       if (res.status !== 'ok') {
-        return { status: 'fail', reason: `unit@${unit.pos} (${unit.type}): ${res.entry.reason}` };
+        return result(`unit@${unit.pos} (${unit.type}): ${res.entry.reason}`);
       }
+      blockBreaks.push({
+        pos: unit.pos,
+        type: unit.type,
+        contentKey: unit.spec.key,
+        breaks: res.entry.breaks ?? [],
+      });
       for (let k = 0; k < res.next; k++) notePage(cursor + k, unit, k);
       cursor += res.next;
     } else {
@@ -368,14 +814,27 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
     }
   }
 
-  // Mid-opaque page splits can't be represented (editor blocks are atomic)
-  // — except tables, whose node view renders Typst's own split fragments
-  // (typeset-plugin's forced paginator verifies the break count agrees).
+  // Mid-opaque page splits cannot be represented in the editable projection:
+  // native tables deliberately remain one continuous structured surface.
+  // Preserve the exact block-line snapshot but publish pageStarts: null; the
+  // explicit proof remains the exact view of Typst's cross-page table.
   for (const ps of pageStarts) {
-    if (ps.line > 0 && ps.unit !== 'line' && ps.unit !== 'table') {
-      return { status: 'fail', reason: `page splits inside atomic block @${ps.pos} (${ps.unit})` };
+    if (ps.line > 0 && ps.unit !== 'line') {
+      return result(`page splits inside atomic block @${ps.pos} (${ps.unit})`);
     }
   }
 
-  return { status: 'ok', pageStarts, pageCount };
+  if (contextPageFailure) return result(contextPageFailure);
+
+  // A page containing only opaque visual output (for example a trailing
+  // Typst embed that draws a rect after #pagebreak()) has no .tsel line from
+  // which notePage() can infer its start. Never publish an incomplete map as
+  // exact: doing so would leave the editable projection on the prior page
+  // while Proof/PDF correctly contains another one.
+  const expectedPageStarts = Math.max(0, pageCount - 1);
+  if (pageStarts.length !== expectedPageStarts) {
+    return result(`mapped ${pageStarts.length} of ${expectedPageStarts} page boundaries`);
+  }
+
+  return result();
 }

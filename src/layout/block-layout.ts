@@ -8,12 +8,11 @@ import type { Node as PMNode } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import { cssFontStack, effectiveFont } from '../font-registry';
 import { isFlexibleAtom } from '../inline-raw';
-import { getInk, inkKey } from '../math-ink';
 import type { DocSettings } from '../settings';
 import type { ForcedBreak, LineLayout } from './paragraph';
 
 export type BlockLayoutOracleState = 'none' | 'ok' | 'fail';
-export type BlockLayoutAuthority = 'compiled' | 'port' | 'fallback';
+export type BlockLayoutAuthority = 'compiled';
 
 /** Cached browser line layout for one persistent ProseMirror node. */
 export interface BlockLayoutEntry {
@@ -31,13 +30,13 @@ export interface BlockLayoutEntry {
   indent: number;
   scale: number;
   /**
-   * Source of the break decisions. Optional during the staged coordinator
-   * migration; entries without it are never reused against compiled breaks.
+   * Source of the break decisions. Entries without compiled authority are
+   * never reused against an exact snapshot.
    */
   authority?: BlockLayoutAuthority;
   /**
-   * Semantic signature of authoritative compiled/port breaks. `null` (or an
-   * absent value during migration) means the entry came from fallback layout.
+   * Semantic signature of authoritative compiled breaks. `null` (or an
+   * absent value) means the entry came from fallback/native layout.
    */
   breakSignature?: string | null;
 }
@@ -87,9 +86,8 @@ export function blockLayoutEntryMatches(entry: BlockLayoutEntry, expected: Block
  *
  * Pending/missing/failed compiled results do not change layout semantics, so
  * stable inputs alone are sufficient. Once compiled breaks are available,
- * only an authoritative port/compiled entry with the identical semantic
- * break list can be retained. Legacy entries without the new metadata fail
- * closed and are recomputed once.
+ * only an authoritative compiled entry with the identical semantic break
+ * list can be retained. Legacy entries without metadata fail closed.
  */
 export function canReuseBlockLayoutEntry(
   entry: BlockLayoutEntry,
@@ -98,7 +96,7 @@ export function canReuseBlockLayoutEntry(
 ): boolean {
   if (!blockLayoutEntryBaseMatches(entry, expected)) return false;
   if (compiledBreaks == null) return true;
-  if (entry.authority !== 'port' && entry.authority !== 'compiled') return false;
+  if (entry.authority !== 'compiled') return false;
   return entry.breakSignature === forcedBreakSignature(compiledBreaks);
 }
 
@@ -158,24 +156,15 @@ export function consecutiveParagraph(doc: PMNode, pos: number): boolean {
   return index > 0 && $pos.parent.child(index - 1).type.name === 'paragraph';
 }
 
-/** Body-paragraph context tag used by the compiled-oracle cache. */
-export function paragraphKeyTag(settings: Pick<DocSettings, 'parIndent'>, doc: PMNode, pos: number): 'p' | 'pi' {
-  return settings.parIndent && consecutiveParagraph(doc, pos) ? 'pi' : 'p';
-}
-
 export type AtomWidth = (offset: number, child: PMNode) => number;
 
 /**
- * Atom advance for browser line layout. Math uses cached Typst ink because
- * its DOM rect includes hover-box padding; other atoms use their rendered DOM
- * width. The node-size fallback is intentionally unchanged.
+ * Atom advance for forced browser lines. Every exact atom—including math—is
+ * already a crop from the current shared publication before exact layout is
+ * admitted, so the live DOM rectangle is the one geometry source.
  */
-export function makeAtomWidth(view: EditorView, settings: DocSettings, pos: number): AtomWidth {
+export function makeAtomWidth(view: EditorView, pos: number): AtomWidth {
   return (offset, child) => {
-    if (child.type.name === 'math_inline') {
-      const ink = getInk(inkKey(child.attrs.src as string, false, settings));
-      if (ink) return ink.widthPx;
-    }
     // A flexible inline island has no natural width — layout gives it one.
     if (isFlexibleAtom(child)) return 0;
     const dom = view.nodeDOM(pos + 1 + offset);

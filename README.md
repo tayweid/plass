@@ -1,15 +1,15 @@
 # Plass
 
 > Named for Michael F. Plass, co-author of the Knuth–Plass line-breaking
-> algorithm that inspired the editor. Plass now mirrors Typst's modern
-> paragraph breaker for its certified live path and retains classic
-> Knuth–Plass as a conservative fallback and reference.
+> algorithm that inspired the editor. The production editor now takes settled
+> line decisions directly from its in-browser Typst compiler; the earlier
+> local breakers remain test and research references only.
 
-**A true WYSIWYG editor with publication-quality typesetting.** You write in a
-clean, Typora-style surface while local layout and an in-browser Typst compiler
-coordinate the line and page decisions. The editing surface *is* the output
-surface: native browser text with publication layout imposed as
-presentation-only decorations.
+**A WYSIWYG Typst editor with publication-quality typesetting.** You write in a
+clean, Typora-style native surface; after input settles, one in-browser Typst
+compile supplies the authoritative line and page decisions. The explicit
+**Proof** view displays Typst's direct SVG at physical page scale from the same
+prepared source, fonts, and assets used by PDF export.
 
 **Why this exists.** Document tools split into two families. Markup-and-compile
 tools (LaTeX, Typst, Overleaf) typeset beautifully but make you write in source
@@ -50,67 +50,86 @@ command list, so copies of it elsewhere can't drift.
 
 ## Fidelity
 
-**The certified line-breaking path mirrors Typst.** On each edit, Plass first
-reuses already-compiled break offsets when they are available; otherwise it
-runs a TypeScript mirror of Typst's breaker against version-pinned ICU,
-hyphenation, shaping, and font primitives from a small Rust/WASM sidecar. A
-direct translator imposes those authoritative offsets on the DOM without
-running syllabification or break search a second time. The background Typst
-compile remains the verifier and authority, and an identical result is a
-no-op rather than a second visual correction.
+**Typst is the single settled line-breaking authority.** A document edit first
+removes forced line presentation from every touched block, letting the browser
+paint native editable DOM without waiting for compilation. After the quiet
+period, one full-document Typst compile publishes an immutable layout snapshot
+containing both mapped body-line breaks and page starts. The browser translator
+only installs offsets from that snapshot; while it is pending, failed, or
+unable to map a block safely, that block remains native instead of invoking a
+second breaker. Figure captions and footnote bodies are matched inside that
+same publication using compiler-reported physical regions; they never launch
+synthetic paragraph-fragment compiles.
+
+**The live result is one atomic visual publication.** `PageOracle` may finish
+mapping the SVG before its exact crops have decoded, but mapped lines and pages
+are not admitted until every geometry-carrying live view—math, references,
+executable embeds, and supported inline Typst—has applied that same immutable
+publication. While the barrier is pending, the editor keeps native wrapping
+and its immediate semantic/KaTeX/source fallback (or a proven last-good crop)
+instead of mixing fresh Typst breaks with stale atom dimensions.
+The worker creates that publication by compiling one vector artifact, querying
+its still-live compiler world, and rendering that same artifact to SVG; queries
+and paint therefore cannot observe two different compiler snapshots.
 
 That exact contract is deliberately narrow: New Computer Modern is currently
-the only selectable body family, with all four faces registered across the
-browser, sidecar, and compiler. It covers the mapped body, caption, footnote,
-and inline constructs exercised by the differential suite. If the sidecar is
-unavailable or a paragraph cannot be represented safely, Plass fails over to
-the legacy JavaScript Knuth–Plass path; unsupported content therefore does not
-carry the exact-break guarantee. Historical font preferences remain stored,
-but the editor and export both resolve uncertified names to New Computer
-Modern instead of claiming machine-dependent fidelity.
+the only selectable body family, with all four faces registered in the browser
+and compiler. Historical font preferences remain stored, but the editor and
+export both resolve uncertified names to New Computer Modern instead of
+claiming machine-dependent fidelity. The earlier TypeScript/Rust line-break
+port remains as an opt-in differential test harness; its sidecar WASM is not
+loaded or shipped by the production editor.
 
 The editor and exported Typst document share page, type, and vertical-spacing
 settings. When a whole-document compile can be mapped safely, its page starts
 drive the live page spacers; mapped starts may be held briefly through an edit
-burst while a fresh answer is pending. Repeated failures, invalid geometry,
-or unsupported structures fall back to the complete local paginator, which
-handles footnote reservations and widow/orphan rules. This is a scoped,
-fail-closed agreement rather than a claim that every arbitrary Typst document
-or every browser raster detail is identical.
+burst while a fresh answer is pending. A failed compile, invalid geometry, or
+unsupported page boundary removes all page spacers and folios and switches to
+an explicitly labelled continuous editing surface. No browser-geometry
+paginator guesses what Typst would do; exact Proof remains one click away.
+This is a scoped, fail-closed agreement rather than a claim that every
+arbitrary Typst document or browser raster detail is identical.
+
+**Proof and PDF have one whole-document input boundary.** Proof is not a
+browser recreation of the export: it is sanitized multi-page SVG from Typst
+itself. Its presentation adds only outer page-gap transforms; every page-local
+Typst coordinate remains unchanged. PDF export consumes the same serializer,
+asset mapping, font fallback, and compiler worker path. Internal region markers
+used to project the live editor are compile-only; `.typ`, Proof, and PDF all
+receive the same uninstrumented prepared document. The browser gate rasterizes
+the real Proof pages and the real downloaded PDF and compares their page count,
+physical dimensions, ink coverage, and normalized paint divergence.
 
 ## What works today
 
 - **Oracle layout** (spec §1.3): the document lives in the DOM — native
   selection, cursor, IME, spell-check, screen readers — while a layout oracle
   imposes Typst-selected break offsets, hyphens, and per-line justification.
-  The fast local port and the compiled Typst verifier share pinned shaping and
-  font inputs within the supported contract.
-- **Real pages**: content flows across painted page boxes (US Letter/A4 from
-  document settings) with margins, inter-page gaps, and page numbers.
-  Paragraphs split across page boundaries at oracle-chosen line breaks while
-  remaining single editable nodes; lists and blockquotes break between
-  children. Widow/orphan control: a paragraph never leaves fewer than two
-  lines at the bottom of the page where it starts (it moves whole instead)
-  and never strands its last line alone at the top of a page (the break
-  retreats one line). Pagination is live — type on page 1 and watch page 3
-  reflow.
+  Unmatched and in-flight blocks stay browser-native; no local breaker is
+  promoted to settled authority.
+- **Real pages when exact, honest continuous editing otherwise**: content
+  flows across painted page boxes (US Letter/A4 from document settings) with
+  margins, inter-page gaps, headers, and page numbers only when the
+  whole-document Typst snapshot maps every boundary safely. Paragraphs remain
+  single editable nodes even when an exact boundary crosses one.
   Mechanism: the document stays one continuous editable flow; page boxes are
   painted behind it and exact-height spacer widgets push content past each
   boundary (inside a paragraph, a block-in-inline spacer replaces the line's
   `<br>`, so it forces the break and adds precisely the gap height). Print
   CSS zeroes the spacers — line breaks survive, gaps vanish — and `@page`
-  takes over for the printed artifact. Whole-document Typst page starts are
-  used when they compile and map safely; otherwise the full local paginator is
-  authoritative. A suffix-only paginator is currently development shadow
-  telemetry: it is compared with the full result, but never installed.
-- **Fast**: the edit path discovers and rebuilds only changed body, caption,
-  and footnote blocks, while unchanged block geometry stays cached. The direct
-  forced-break translator avoids the legacy path's repeated DOM measurement,
-  and pagination captures spacer/table geometry once per pass behind a
-  prefix-sum index. Browser tests enforce one line-decoration dispatch for a
-  normal edit and no redundant reinstall when the compiled verifier agrees.
-  Live diagnostic timings remain available in development, but wall-clock
-  values are not treated as portable performance promises.
+  takes over for the printed artifact. If Typst is pending without a proven
+  basis, fails, or yields an unrepresentable boundary, the widgets and finite
+  page claim disappear; the native document stays editable on a continuous
+  sheet until a new exact snapshot succeeds.
+- **Fast**: the keystroke path performs no line breaking or compiler work;
+  changed blocks paint with native browser wrapping. Settled work is debounced,
+  compiler jobs are latest-wins and priority-aware, and the direct forced-break
+  translator avoids a second break search. Pagination captures spacer geometry
+  once per pass behind a prefix-sum index. A publication builds one document
+  position index and fans out to every registered preview in linear time; it
+  does not walk the ProseMirror tree once per listener. Development telemetry
+  reports queue depth, wait time, stale work, and decoration publications
+  without installing production observers.
 - **Editing**: ProseMirror core. Markdown-style input rules (`#` headings,
   `**bold**`, `*italic*`, `` `code` ``, `>` quotes, `-`/`1.` lists, ` ``` `
   code blocks), keyboard shortcuts, undo/redo, autosave to localStorage.
@@ -124,12 +143,14 @@ or every browser raster detail is identical.
   appear as transient toasts. Insert
   shortcuts: ⌘⌥T table, ⌘⌥I figure, ⌘⌥F footnote, ⌘M/⌘⇧M math.
 - **Math**: type `$e^{i\pi}+1=0$` for inline math, `$$` on an empty line for
-  display math. Formulas display **Typst's own ink** — each is compiled by
-  the in-app compiler (mitex + New Computer Modern Math) and shown from that
-  compiled result, baseline-aligned to the text; KaTeX provides the immediate
-  editing preview and the compiled ink replaces it when ready. Click-to-edit
-  popover with live preview. The oracle justifies
-  around inline math using the Typst-exact atom width.
+  display math. Formulas display **Typst's own ink** (mitex + New Computer
+  Modern Math), cropped and baseline-aligned from the same whole-document
+  publication as PageOracle; many formulas still require one document task,
+  not one fragment job apiece. KaTeX is only the immediate editing echo while
+  that atomic publication settles. A display equation whose exact region
+  crosses a page remains editable with its KaTeX echo and points to Proof for
+  exact output instead of painting an overlapping multi-page crop.
+  Click-to-edit popover with live preview.
 - **Figures**: insert from the toolbar, or paste/drop an image. Editable
   inline captions with a painted "Figure N:" prefix that renumbers live; a
   label chip on the figure (hover top-right) names it for `@label`
@@ -146,47 +167,56 @@ or every browser raster detail is identical.
   real page-bottom footnotes. The
   superscript marker renumbers live; the body is ordinary editable rich text
   positioned at the foot of the page its marker lands on, above a separator
-  rule — and the paginator *reserves space* for bodies when deciding page
-  breaks, so text never collides with the footnote area and a marker always
-  shares a page with its note. Enter in a body returns to the marker;
+  rule whenever exact page geometry is active. In continuous mode bodies
+  become visible inline notes, so a failed page map never hides editable
+  content. Enter in a body returns to the marker;
   clicking a marker jumps to its body. Exports as Typst `#footnote[...]`
   (the PDF gets true Typst footnotes); in browser print, bodies degrade to
   inline notes.
 - **Tables** (⊞ in the toolbar): header row, Tab/Shift-Tab cell navigation,
-  and contextual controls that appear in the toolbar while inside a table —
-  add/delete rows and columns, merge/split cells, toggle header,
-  **per-column alignment (L/C/R — right-align for regression numbers)**, and
-  a **Style cycle: booktabs (academic default: horizontal rules only) →
-  grid → plain**. Cell selection by shift-click/drag. Breakable long tables
-  use a paged Typst mini-compile and appear as cropped page fragments,
-  including repeated `table.header` rows; content Typst keeps unbreakable is
-  pushed whole. While a split compile is pending or cannot be verified, the
-  existing split or atomic layout remains in place. Tables export as native
-  Typst — booktabs becomes `stroke: none` + `table.hline()` rules, alignment
-  becomes the `align: (…)` tuple with per-cell overrides, and merges become
-  `table.cell(colspan/rowspan)` — all preserved through the round trip. (Cells
-  keep browser layout — narrow measures justify badly.) For full Typst control,
-  the **Opts** button
-  stores raw `#table` arguments on the table (stroke/fill functions,
-  `inset`, fractional column widths, …), emitted verbatim into the export
-  and PDF — presets are suppressed while custom args exist. The document
-  **always shows the compiled table** (the in-app Typst render — same
-  fonts, engine, and centering as the PDF). Clicking it opens a focused
-  **editing card**, following the math-editor pattern: a plain cell grid
-  (Tab/arrows to move, header row bold, shift-click to select a range),
-  structural controls (rows, columns, merge/split, header toggle,
-  per-column alignment, style cycle), **clickable row boundaries** that
-  toggle booktabs midrules, a card-local **⌘Z/⌘⇧Z undo stack**, and a live
-  compiled result. The **Typst panel** at the bottom always shows the full
-  `#table(...)` arguments the current state compiles with — editing it
-  parses back through the importer, so GUI and source are two views of one
-  thing; custom arguments are additive with the style preset (add
-  `inset: 9pt` and booktabs stays). ⌘Enter saves as one undoable step; Esc
-  cancels. Cells with rich content (math, references) are preserved unless
-  their text is edited. Imported tables keep
-  unknown named arguments the same way; forms we can't reconstruct
-  faithfully (custom-positioned rules, vlines) fall back to raw-Typst
-  islands rather than being simplified.
+  rectangular selection/copy, and a compact contextual palette while the
+  caret is in a table — add rows or columns before/after, delete them,
+  merge/split cells, toggle a header row, align selected cells, choose
+  booktabs/grid/plain rules, set text size, and edit caption or label. The
+  table in the document is the one editable semantic ProseMirror tree — there
+  is no compiled clone or modal string grid. Tables that fit are atomic for
+  exact boundary translation; an unrepresentable split switches the entire
+  editing surface to continuous mode rather than guessing.
+  Native Typst export preserves rules, per-cell alignment, header rows,
+  `table.cell(colspan/rowspan)`, rich marks, math, citations, and multiple cell
+  paragraphs. Unknown named arguments remain attached for exact Proof/export;
+  because arbitrary Typst functions cannot be reproduced safely by CSS, the
+  native table shows the selected base style while that custom-argument badge
+  is present. Forms we cannot reconstruct faithfully become explicit
+  executable Typst embeds instead of being simplified.
+- **Code and Typst embeds are separate concepts.** Ordinary language-labelled
+  code is inert native source. Export uses an unlabelled Typst `raw` block so
+  Proof paints the same plain code as the editor, with the language and options
+  retained in a lossless inert comment for re-import. Executable Typst has its
+  own `typst_embed` node:
+  source remains directly editable and always visible beside a sanitized
+  preview cropped from the same full-document publication that PageOracle
+  consumes. Prior definitions, counters, show/set rules, fonts, and assets
+  therefore have their real document context, without one fragment compile per
+  embed. A failed revision retains the last good preview with an explicit
+  error; stale completions cannot publish. Zero-output definitions keep zero
+  flow height, and an embed spanning pages points to exact Proof instead of
+  painting an overlapping crop. An embed that changes the surrounding Typst
+  environment (`#set`, `#show`, state/counter updates, include/eval, explicit
+  breaks, or out-of-flow placement) is an explicit Proof-only boundary: its
+  source stays editable and executes exactly in Proof/PDF, while the mixed
+  native live surface switches to labelled continuous mode rather than
+  claiming geometry it cannot reproduce. Legacy `typst-raw` documents migrate
+  losslessly; `.typ`, Markdown `typst-exec`, and LaTeX fallback comments
+  preserve the source explicitly.
+- **Inline Typst is conservative and lossless.** One balanced, fixed-size
+  Typst expression is painted as an exact crop from the shared document
+  publication. The canonical flexible atom `#h(1fr)` consumes the slack in
+  the already-compiled line without starting another compiler job. Stateful,
+  block/page-producing, malformed, multiple, or otherwise context-dependent
+  source remains visible as an explicit source chip marked exact in Proof/PDF;
+  it is never approximated or discarded. Export always writes the original
+  Typst source verbatim.
 - **Citations & bibliography** (hover the References block → Edit, or
   Document → Bib → Import .bib): the BibTeX is editable in-app (live entry
   count, ⌘Enter to save, Download .bib to get it back out; saves are
@@ -196,9 +226,13 @@ or every browser raster detail is identical.
   (`#bibliography(bytes(...), style: "ieee")`), keeping files fully
   self-contained. Cite with the same `@` picker (searchable by key, author,
   or title); citations render as live "[n]" in first-use order — IEEE style,
-  matching the PDF — and a generated References block lists cited works in
-  order, renumbering as citations move. Typed `@key ` auto-converts when the
-  key is in the bibliography; clicking a citation jumps to the references.
+  matching the PDF — and the generated References block uses Typst's exact
+  bibliography ink cropped from the shared whole-document publication, not an
+  independently formatted or compiled fragment. It renumbers as citations
+  move. A references list spanning multiple Typst pages stays as an explicit
+  semantic fallback that directs the author to Proof rather than pretending
+  one atomic crop can reproduce page flow. Typed `@key ` auto-converts when
+  the key is in the bibliography; clicking a citation jumps to the references.
 - **Numbered equations & references**: display equations are numbered
   automatically and renumber live as you add/reorder them. Give an equation a
   label in its popover, then type `@` in text to open the reference picker —
@@ -235,8 +269,12 @@ or every browser raster detail is identical.
   pragmatic subset of hand-written Typst (headings, marked-up paragraphs,
   lists, quotes, fenced code, mitex math, labels/references, and the
   settings header, which applies live). Anything else (`#let`, `#show`,
-  unknown directives) is preserved verbatim as a raw-Typst island and
+  unknown directives) is preserved verbatim as an executable Typst embed and
   re-exported unchanged — open + save never destroys what we don't model.
+- **Exact Proof** (eye button): a deliberate read-only, keyboard-accessible
+  view of the current revision rendered directly by Typst. Multi-page output
+  is shown as separate paper sheets without changing Typst's page-local
+  geometry; Escape returns to native editing.
 - **One-click PDF export (Export flyout → PDF)**: the document compiles with
   the real Typst engine, as WASM, in a watchdog-protected Web Worker — no CLI,
   no install. The compiler (~28 MB) and bundled fonts in `public/fonts/` load
@@ -250,49 +288,76 @@ or every browser raster detail is identical.
   export as `(#ref(<label>, supplement: none))` so the PDF shows "(1)"
   exactly like the editor.
 - **Export**: `.typ` (Typst markup; math wrapped with mitex so it compiles —
-  `typst compile document.typ` also works from the CLI), plus Print/PDF of
-  the typeset view itself.
+  `typst compile document.typ` also works from the CLI), exact Typst PDF, and
+  a semantic `.tex` copy for journal workflows.
 
 ## Architecture (how the needle gets threaded)
 
 ```
-ProseMirror transaction → native DOM echo
-          │
-          └─ next microtask: discover changed body/caption/footnote blocks
-                         │
-                         ├─ cached compiled breaks, when available
-                         ├─ local Typst mirror + Rust/WASM primitives
-                         └─ legacy Knuth–Plass, only as fallback
-                                      │
-                                      ▼
-                         direct forced-break translation
-                         (src/layout/forced-layout.ts)
-                                      │
-                                      ▼
-                         block-relative line decorations
-                         (src/layout/line-decorations.ts)
-                                      │
-                                      ▼
-                         browser paints the selected layout
+ProseMirror transaction → strip touched forced lines → native DOM paint
 
-250 ms quiet period → compiled Typst verification + complete pagination
-                         ├─ exact mapped page starts, when available
-                         ├─ temporarily held mapped starts
-                         └─ full local fallback from one geometry snapshot
+250 ms quiet period → shared document-publication broker
+                         │  one PM document + asset epoch
+                         ▼
+              editor-instrumented full Typst SVG
+                    ├─ PageOracle
+                    │    └─ immutable LayoutSnapshot
+                    │       ├─ body/caption/footnote breaks
+                    │       └─ page starts ──────────────────┐
+                    └─ shared physical crops
+                         ├─ inline + display math
+                         ├─ bibliography / References
+                         ├─ typst_embed previews
+                         └─ supported fixed inline Typst atoms ─┤
+                                                               ▼
+                      same-publication readiness barrier
+                                                               │
+                      forced lines + exact page spacers + crops
+
+pending/fail/unmatched → native body DOM + continuous surface/source fallback
+
+cross-page atomic crop → semantic/KaTeX/source fallback + exact Proof
+
+Proof SVG ─┐
+           ├─ uninstrumented prepared source + assets ─→ protected final lane
+PDF export ┘
 ```
 
 Current architecture notes:
 
-1. **The fast certified path is a TypeScript mirror of Typst; Typst-WASM stays
-   the verifier and authority.** The legacy Knuth–Plass implementation remains
-   available for unsupported or degraded cases, not as the exactness claim.
-2. **Pagination has explicit exact, held, and fallback states.** Exact starts
-   come from the whole-document compiler; held starts stabilize a pending edit
-   burst; the full local paginator fails closed when exact mapping is not
-   available. The conservative suffix candidate runs only in development and
-   the full result is always installed.
-3. **Math is LaTeX/KaTeX, not Typst syntax** — friendlier to most academics;
-   the `.typ` export bridges via mitex.
+1. **PageOracle is the sole product line-and-page authority.** It consumes the
+   shared full-document Typst publication and maps body, caption, and footnote
+   lines plus page starts into one immutable snapshot. The local port, classic
+   Knuth–Plass implementation, and paragraph-fragment `TypstOracle` remain
+   opt-in test/research references, not product fallback paths.
+2. **Pagination has explicit exact, held, and continuous states.** Exact starts
+   come from the whole-document compiler. Held starts have explicit exact
+   provenance and survive only while a replacement is pending and geometry
+   validation succeeds. Every other state removes page spacers, sheets, and
+   folios and presents continuous native editing; there is no second page
+   typesetter in the production graph.
+3. **Editor previews share document context and publish atomically.** The
+   broker deduplicates layout, math, bibliography, executable-embed, and
+   supported inline-Typst demand for an immutable document revision. One
+   consumer cannot cancel work another still needs, and exact line/page chrome
+   waits until every geometry consumer has applied that same result. A
+   multi-page atomic preview is an honest terminal Proof-only state, not a
+   pending crop and not permission to invent browser pagination. Exact
+   Proof/PDF work has a separate protected final lane. The worker compiles one
+   vector, performs every region query against its live world, and renders that
+   same vector. Publication application builds its position lookup once, so
+   adding preview listeners remains O(document + listeners), not their product.
+4. **Tables are one semantic tree.** Native ProseMirror rows and rich cells are
+   the editable document and serialize directly to Typst; no compiled table
+   clone or hidden string-grid model participates in editing.
+5. **Math source is LaTeX/KaTeX, not Typst syntax** — friendlier to most
+   academics; the `.typ` export bridges via mitex. KaTeX supplies disposable
+   editing echo, while committed exact ink and geometry come from the shared
+   whole-document publication rather than separate formula jobs.
+6. **Executable escape hatches fail honestly.** Self-contained, in-flow Typst
+   embeds may use a live crop. Code that can affect later native content or
+   escape its flow interval remains lossless but makes the live page claim
+   continuous and points to exact Proof/PDF.
 
 ## Found & fixed while building (measurement-agreement war stories)
 

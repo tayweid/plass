@@ -18,10 +18,11 @@ import {
   type CompilerTask,
   validateCompilerTask,
 } from './typst-worker-protocol';
+import type { TypstDocumentSvgPublication } from './typst-document-publication';
 
 export class CompilerWorkerError extends Error {
   constructor(
-    public readonly code: 'invalid' | 'compile' | 'output-limit' | 'timeout' | 'crash' | 'queue-limit' | 'circuit-open',
+    public readonly code: 'invalid' | 'compile' | 'output-limit' | 'timeout' | 'crash' | 'queue-limit' | 'circuit-open' | 'canceled',
     message: string,
   ) {
     super(message);
@@ -36,6 +37,8 @@ interface QueuedRequest<T> {
   bytes: number;
   timeoutMs: number;
   onMessage: (message: string) => void;
+  signal?: AbortSignal;
+  abortListener?: () => void;
   resolve: (value: T) => void;
   reject: (error: CompilerWorkerError) => void;
 }
@@ -50,11 +53,61 @@ let queuedBytes = 0;
 let workersCreated = 0;
 let tasksPosted = 0;
 let circuitRejects = 0;
+let canceledRequests = 0;
+let workersAborted = 0;
 
 /** Empty the queue, restoring its byte budget, and hand back the entries. */
 function drainQueue(): Array<QueuedRequest<unknown>> {
   queuedBytes = 0;
   return queue.splice(0);
+}
+
+function detachAbort(request: QueuedRequest<unknown>): void {
+  if (request.signal && request.abortListener) {
+    request.signal.removeEventListener('abort', request.abortListener);
+  }
+  request.abortListener = undefined;
+}
+
+function cancellationMessage(signal: AbortSignal | undefined): string {
+  switch (signal?.reason) {
+    case 'newer-request':
+      return 'Typst compilation was canceled because newer source replaced it';
+    case 'final-preemption':
+      return 'Typst preview was canceled so an explicit final output could run';
+    default:
+      return 'Typst compilation was canceled';
+  }
+}
+
+/** Cancel exactly one queued or running request. Terminating the worker is the
+ * only reliable interruption for synchronous WASM; unlike a deadline, this is
+ * expected scheduler behavior and must never open the timeout circuit. */
+function abortRequest(request: QueuedRequest<unknown>): void {
+  if (current === request) {
+    window.clearTimeout(timeoutId);
+    timeoutId = 0;
+    if (worker) {
+      worker.terminate();
+      workersAborted++;
+    }
+    worker = null;
+    current = null;
+    detachAbort(request);
+    canceledRequests++;
+    request.reject(new CompilerWorkerError('canceled', cancellationMessage(request.signal)));
+    if (queue.length) queueMicrotask(pump);
+    return;
+  }
+
+  const index = queue.indexOf(request);
+  if (index < 0) return;
+  queue.splice(index, 1);
+  queuedBytes -= request.bytes;
+  detachAbort(request);
+  canceledRequests++;
+  request.reject(new CompilerWorkerError('canceled', cancellationMessage(request.signal)));
+  if (!current && queue.length === 0) scheduleIdleTermination();
 }
 
 function terminateIdleWorker() {
@@ -75,7 +128,10 @@ function rejectCurrent(code: 'timeout' | 'crash', message: string) {
   worker = null;
   const request = current;
   current = null;
-  request?.reject(new CompilerWorkerError(code, message));
+  if (request) {
+    detachAbort(request);
+    request.reject(new CompilerWorkerError(code, message));
+  }
 
   // A timeout can be caused by hostile input with a super-linear parser or
   // by a document that exhausts the compiler. Do not feed queued work from
@@ -89,6 +145,7 @@ function rejectCurrent(code: 'timeout' | 'crash', message: string) {
       const retained: Array<QueuedRequest<unknown>> = [];
       for (const queued of drainQueue()) {
         if (queued.epoch <= timedOutEpoch) {
+          detachAbort(queued);
           queued.reject(new CompilerWorkerError(
             'timeout',
             'Typst compilation was canceled after an earlier request timed out; retry the action or edit the document',
@@ -119,6 +176,7 @@ function handleResponse(source: Worker, response: CompilerResponse) {
   }
   window.clearTimeout(timeoutId);
   current = null;
+  detachAbort(request);
   if (response.ok) request.resolve(response.value);
   else {
     request.reject(new CompilerWorkerError(response.code, response.message));
@@ -167,6 +225,15 @@ function pump() {
     rejectCurrent('crash', 'Could not start the Typst compiler worker');
     return;
   }
+  // A status callback is allowed to cancel its own request. Do not post work
+  // to a worker created after that synchronous abort callback ran.
+  if (current !== request) {
+    if (worker === instance) {
+      instance.terminate();
+      worker = null;
+    }
+    return;
+  }
   timeoutId = window.setTimeout(() => {
     // A response could have won the event-loop race after this callback was
     // queued. Never let an old deadline terminate the next request.
@@ -182,14 +249,17 @@ function pump() {
   }
 }
 
-export function runCompilerTask<T extends string | Uint8Array | unknown[] | null>(
+export function runCompilerTask<T extends string | Uint8Array | unknown[] | TypstDocumentSvgPublication | null>(
   task: CompilerTask,
-  options: { timeoutMs: number; onMessage?: (message: string) => void },
+  options: { timeoutMs: number; onMessage?: (message: string) => void; signal?: AbortSignal },
 ): Promise<T> {
   const invalid = validateCompilerTask(task);
   if (invalid) return Promise.reject(new CompilerWorkerError('invalid', invalid));
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) {
     return Promise.reject(new CompilerWorkerError('invalid', 'Typst compiler deadline must be a positive duration'));
+  }
+  if (options.signal?.aborted) {
+    return Promise.reject(new CompilerWorkerError('canceled', cancellationMessage(options.signal)));
   }
   const epoch = compilerCircuitEpoch();
   if (isCompilerCircuitEpochBlocked(epoch)) {
@@ -207,17 +277,29 @@ export function runCompilerTask<T extends string | Uint8Array | unknown[] | null
     return Promise.reject(new CompilerWorkerError('queue-limit', 'Typst compiler queue is full; wait for current previews to finish'));
   }
   return new Promise<T>((resolve, reject) => {
-    queuedBytes += bytes;
-    queue.push({
+    const request: QueuedRequest<unknown> = {
       id: nextId++,
       epoch,
       task,
       bytes,
       timeoutMs: options.timeoutMs,
       onMessage: options.onMessage ?? (() => {}),
+      signal: options.signal,
       resolve: resolve as (value: unknown) => void,
       reject,
-    });
+    };
+    if (options.signal) {
+      request.abortListener = () => abortRequest(request);
+      options.signal.addEventListener('abort', request.abortListener, { once: true });
+    }
+    queuedBytes += bytes;
+    queue.push(request);
+    // AbortSignal events are synchronous, but a signal that came from another
+    // realm can already be aborted without replaying an event to a new listener.
+    if (options.signal?.aborted) {
+      abortRequest(request);
+      return;
+    }
     pump();
   });
 }
@@ -262,6 +344,8 @@ export function testCompilerLifecycleStats(): {
   workersCreated: number;
   tasksPosted: number;
   circuitRejects: number;
+  canceledRequests: number;
+  workersAborted: number;
   active: boolean;
   queued: number;
 } {
@@ -272,6 +356,8 @@ export function testCompilerLifecycleStats(): {
     workersCreated,
     tasksPosted,
     circuitRejects,
+    canceledRequests,
+    workersAborted,
     active: current !== null,
     queued: queue.length,
   };
@@ -282,9 +368,13 @@ import.meta.hot?.dispose(() => {
   window.clearTimeout(idleTimer);
   worker?.terminate();
   worker = null;
-  current?.reject(new CompilerWorkerError('crash', 'Compiler worker reloaded'));
+  if (current) {
+    detachAbort(current);
+    current.reject(new CompilerWorkerError('crash', 'Compiler worker reloaded'));
+  }
   current = null;
   for (const request of drainQueue()) {
+    detachAbort(request);
     request.reject(new CompilerWorkerError('crash', 'Compiler worker reloaded'));
   }
 });

@@ -24,7 +24,6 @@ class Deferred<T> {
 
 class FakeEnvironment implements LayoutSchedulerEnvironment {
   private nextId = 1;
-  readonly microtasks: Array<() => void> = [];
   readonly timeouts = new Map<number, { callback: () => void; delayMs: number }>();
   readonly frames = new Map<number, FrameRequestCallback>();
   readonly fontReady = new Deferred<unknown>();
@@ -39,10 +38,6 @@ class FakeEnvironment implements LayoutSchedulerEnvironment {
       return () => this.fontListeners.delete(listener);
     },
   };
-
-  queueMicrotask(callback: () => void): void {
-    this.microtasks.push(callback);
-  }
 
   setTimeout(callback: () => void, delayMs: number): number {
     const id = this.nextId++;
@@ -72,10 +67,6 @@ class FakeEnvironment implements LayoutSchedulerEnvironment {
     };
   }
 
-  flushMicrotasks(): void {
-    while (this.microtasks.length) this.microtasks.shift()!();
-  }
-
   flushFrames(): void {
     const pending = [...this.frames.values()];
     this.frames.clear();
@@ -96,11 +87,10 @@ class FakeEnvironment implements LayoutSchedulerEnvironment {
 function harness() {
   const environment = new FakeEnvironment();
   const widthTarget = { clientWidth: 800 } as HTMLElement;
-  const calls = { live: 0, settled: 0, invalidations: 0 };
+  const calls = { settled: 0, invalidations: 0 };
   const scheduler = new LayoutScheduler(
     widthTarget,
     {
-      runLive: () => calls.live++,
       runSettled: () => calls.settled++,
       invalidateMetrics: () => calls.invalidations++,
     },
@@ -120,30 +110,14 @@ function harness() {
   scheduler.destroy();
 }
 
-// Live layout is immediate-microtask work and coalesces independently.
-{
-  const { environment, calls, scheduler } = harness();
-  scheduler.scheduleLive();
-  scheduler.scheduleLive();
-  scheduler.scheduleLive();
-  assert.equal(environment.microtasks.length, 1);
-  environment.flushMicrotasks();
-  assert.equal(calls.live, 1);
-  scheduler.destroy();
-}
-
-// Same-task edits share one live pass and one restarted quiet-period timer.
+// Same-task edits share one restarted quiet-period timer.
 {
   const { environment, calls, scheduler } = harness();
   environment.flushFrames();
   for (let i = 0; i < 3; i++) {
-    scheduler.scheduleLive();
     scheduler.scheduleAfterEdit();
   }
-  assert.equal(environment.microtasks.length, 1);
   assert.equal(environment.timeouts.size, 1);
-  environment.flushMicrotasks();
-  assert.equal(calls.live, 1);
   environment.flushTimeouts();
   environment.flushFrames();
   assert.equal(calls.settled, 2);
@@ -167,18 +141,16 @@ function harness() {
   scheduler.destroy();
 }
 
-// Preserve the established ordering: a frame queued before an edit survives,
-// and the quiet-period timer requests the later authoritative settle.
+// A frame queued before an edit belongs to a stale revision. The edit cancels
+// it, then the quiet-period timer requests the authoritative settle.
 {
   const { environment, calls, scheduler } = harness();
-  scheduler.scheduleLive();
   scheduler.scheduleAfterEdit();
-  environment.flushMicrotasks();
   environment.flushFrames();
-  assert.deepEqual(calls, { live: 1, settled: 1, invalidations: 0 });
+  assert.deepEqual(calls, { settled: 0, invalidations: 0 });
   environment.flushTimeouts();
   environment.flushFrames();
-  assert.deepEqual(calls, { live: 1, settled: 2, invalidations: 0 });
+  assert.deepEqual(calls, { settled: 1, invalidations: 0 });
   scheduler.destroy();
 }
 
@@ -192,7 +164,6 @@ function harness() {
   scheduler = new LayoutScheduler(
     widthTarget,
     {
-      runLive: () => {},
       runSettled: () => {
         calls++;
         if (calls === 1) scheduler.scheduleSettled();
@@ -243,7 +214,6 @@ function harness() {
 // Destruction is idempotent and pending callbacks cannot reach the view.
 {
   const { environment, calls, scheduler } = harness();
-  scheduler.scheduleLive();
   scheduler.scheduleAfterEdit();
   scheduler.destroy();
   scheduler.destroy();
@@ -251,11 +221,10 @@ function harness() {
   assert.equal(environment.fontListeners.size, 0);
   assert.equal(environment.timeouts.size, 0);
   assert.equal(environment.frames.size, 0);
-  environment.flushMicrotasks();
   environment.emitLoadingDone();
   environment.fontReady.resolve(undefined);
   await Promise.resolve();
-  assert.deepEqual(calls, { live: 0, settled: 0, invalidations: 0 });
+  assert.deepEqual(calls, { settled: 0, invalidations: 0 });
 }
 
 console.log('layout scheduler tests passed');

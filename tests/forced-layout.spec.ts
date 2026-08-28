@@ -132,20 +132,20 @@ test('direct forced layout matches legacy output with fewer DOM measurements', a
       () => page.evaluate(() => window.__forcedLayoutAudit.snapshot().cases.length),
       { timeout: 15_000 },
     )
-    .toBeGreaterThanOrEqual(9);
+    .toBeGreaterThanOrEqual(3);
 
-  // Let the compiled oracle replace matching port answers; identical audit
-  // keys are overwritten rather than counted twice.
+  // Let any late compiled snapshot publication drain; identical audit keys
+  // are overwritten rather than counted twice. Unmatched body blocks remain
+  // native and therefore are intentionally absent from this translator audit.
   await page.waitForTimeout(1_000);
   const report = await page.evaluate(() => window.__forcedLayoutAudit.stop());
-  expect(report.cases.length).toBeGreaterThanOrEqual(9);
+  expect(report.cases.length).toBeGreaterThanOrEqual(3);
 
   for (const entry of report.cases) {
     if (!entry.fast && !entry.legacy) {
       // A compiled-oracle answer whose breaks failed to partition this block
-      // (hard-break and dash paragraphs do this today): both engines reject
-      // it identically and the cached port layout stays in place, so there is
-      // nothing to compare. Only one engine rejecting would be a real bug.
+      // is rejected by both translators, so there is nothing to compare. Only
+      // one translator rejecting would be a real bug.
       continue;
     }
     expect(entry.fast, `${entry.id} fast result`).not.toBeNull();

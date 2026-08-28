@@ -11,7 +11,7 @@ import { schema } from './schema';
 import { insertMath } from './math';
 import { insertFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
-import { insertTableWithEditor } from './table-editor';
+import { insertStructuredTable } from './table-editor';
 import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
 import { isPwaInstalled, onPwaInstallState, requestPwaInstall } from './pwa-install';
@@ -44,6 +44,7 @@ const ICONS: Record<string, string> = {
   book: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
   sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>',
   filedown: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 15 12 18 15 15"/><line x1="12" y1="11" x2="12" y2="18"/>',
   install: '<rect x="3" y="3" width="18" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/><polyline points="8.5 9.5 12 13 15.5 9.5"/><line x1="12" y1="6" x2="12" y2="13"/>',
   alignleft: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="14" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/>',
@@ -370,8 +371,14 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       return node.type === schema.nodes.heading ? (node.attrs.level as number) : null;
     };
     const next = (cur: number | null): number | null => (cur === null ? 1 : cur === 3 ? null : cur + 1);
+    let lastCurrent: number | null | undefined;
     const refresh = (state: EditorState) => {
       const cur = current(state);
+      // Character transactions leave the block-format UI unchanged. Besides
+      // avoiding redundant DOM writes, this keeps the flyout's offset reads
+      // entirely off the ordinary typing path (including native table cells).
+      if (cur === lastCurrent) return;
+      lastCurrent = cur;
       const nx = next(cur);
       tico.textContent = nx ? `H${nx}` : '¶';
       trigger.title = nx ? `Make this block Heading ${nx}` : 'Back to body text';
@@ -430,10 +437,10 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     { glyph: icon('alignright'), label: 'Right', title: 'Align right', run: () => setAlign('right') },
   ]);
   barBtn(icon('image'), 'Figure', 'Insert figure (⌘⌥I) — or paste/drop an image', runCmd(insertFigureCmd));
-  barBtn(icon('table'), 'Table', 'Insert table (⌘⌥T)', () => insertTableWithEditor(view));
+  barBtn(icon('table'), 'Table', 'Insert table (⌘⌥T)', () => insertStructuredTable(view));
   barBtn('<span class="ico tico">Σ</span>', 'Math', 'Inline math (⌘M) — or type $x^2$; ⌘⇧M for display', runCmd(insertMath(false)));
   barBtn('<span class="ico tico">†</span>', 'Note', 'Footnote (⌘⌥F) — or type ^[', runCmd(insertFootnote));
-  flyout(currentPod, icon('code'), 'Code block — source code or raw Typst', [
+  flyout(currentPod, icon('code'), 'Code and executable Typst embeds', [
     {
       glyph: icon('code'),
       label: 'Code',
@@ -446,9 +453,9 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     {
       glyph: '<span class="ico tico">#</span>',
       label: 'Typst',
-      title: 'Raw Typst block — compiles into the document (rules, spacing, anything Typst)',
+      title: 'Typst embed — native editable source beside its compiled preview',
       run: () => {
-        setBlockType(schema.nodes.code_block, { params: 'typst-raw' })(view.state, view.dispatch);
+        setBlockType(schema.nodes.typst_embed)(view.state, view.dispatch);
         view.focus();
       },
     },
@@ -493,6 +500,14 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     const div = document.createElement('span');
     div.className = 'tb-div';
     docPod.appendChild(div);
+    barBtn(icon('eye'), 'Proof', 'Exact read-only Typst proof — identical layout authority to PDF export', () => {
+      void import('./proof-view').then(({ openProofView }) =>
+        openProofView(fm.currentDoc(), {
+          documentName: fm.name,
+          onMessage: (message) => fm.notify(message),
+        }),
+      );
+    });
     flyout(docPod, icon('download'), 'Export — PDF, .typ, .tex', [
       { glyph: icon('filedown'), label: '.typ', title: 'Download a .typ copy', run: () => fm.exportCopy() },
       {
@@ -565,6 +580,8 @@ function showHelp(fm: FileManager) {
         <code>@</code><span>reference or cite — picker lists equations, figures, tables, sections, works</span>
         <code>^[note] · \\footnote{…}</code><span>footnotes (⌘⌥F); ] or Enter exits</span>
         <code>⌘⌥T · ⌘⌥I · ⌘⏎</code><span>insert table · insert figure · page break</span>
+        <code># Typst · #· inline</code><span>executable Typst with visible source + preview · inline escape hatch</span>
+        <code>Proof</code><span>open the exact read-only Typst output used as the PDF layout authority</span>
         <code>⌘O ⌘S</code><span>open · save (first save picks the paper's folder)</span>
       </div>
       <div class="bib-editor-foot">

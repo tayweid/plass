@@ -58,6 +58,16 @@ const BLOCK_DECORATION_KINDS = new Set<TypesetDecorationKind>([
   'line-page-gap',
 ]);
 
+/** Decorations that impose a line layout on editable text. Page gaps are
+ * deliberately excluded: they preserve the last settled page geometry while
+ * the active block temporarily returns to native browser wrapping. */
+const ACTIVE_LINE_DECORATION_KINDS = new Set<TypesetDecorationKind>([
+  'word-spacing',
+  'line-break',
+  'hyphen-break',
+  'no-spell',
+]);
+
 function typesetKind(spec: unknown): TypesetDecorationKind | null {
   if (!spec || typeof spec !== 'object') return null;
   const kind = (spec as { tsKind?: unknown }).tsKind;
@@ -327,6 +337,21 @@ export function decorationSignature(decorations: readonly Decoration[], relative
 /** Canonical semantic digest of a complete persistent DecorationSet. */
 export function decorationSetDigest(decos: DecorationSet): string {
   return decorationSignature(decos.find());
+}
+
+/** Return the previous settled layout with only the specified editable
+ * block's forced line presentation removed. This is the paint-first handoff:
+ * ProseMirror can show the DOM mutation immediately, while untouched blocks
+ * and the last settled page spacers remain stable until the next snapshot. */
+export function stripActiveLineDecorations(
+  decos: DecorationSet,
+  scope: BlockDecorationScope,
+): DecorationSet {
+  const remove = decorationsOwnedByBlock(decos, scope).filter((decoration) => {
+    const kind = typesetKind(decoration.spec);
+    return kind !== null && ACTIVE_LINE_DECORATION_KINDS.has(kind);
+  });
+  return remove.length ? decos.remove(remove) : decos;
 }
 
 function assertRange(range: DecorationRange, label: string): void {

@@ -14,6 +14,7 @@ import { Plugin, TextSelection } from 'prosemirror-state';
 import { baseKeymap, chainCommands, exitCode, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import { redo, undo } from 'prosemirror-history';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
+import { goToNextCell } from 'prosemirror-tables';
 import { Slice, type Mark, type MarkType } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
 import { schema } from './schema';
@@ -235,7 +236,7 @@ export function buildKeymap(): Plugin {
     'ArrowDown': verticalCaret(1),
     'Mod-Alt-t': (_state, dispatch, view) => {
       if (dispatch && view) {
-        void import('./table-editor').then(({ insertTableWithEditor }) => insertTableWithEditor(view));
+        void import('./table-editor').then(({ insertStructuredTable }) => insertStructuredTable(view));
       }
       return true;
     },
@@ -244,8 +245,12 @@ export function buildKeymap(): Plugin {
       if (dispatch && view) pickAndInsertFigure(view);
       return true;
     },
-    'Tab': sinkListItem(schema.nodes.list_item),
-    'Shift-Tab': liftListItem(schema.nodes.list_item),
+    // In a table, Tab is spreadsheet navigation. Outside one it keeps the
+    // existing list-indent behavior. The final cell deliberately falls
+    // through instead of manufacturing an implicit row; structure changes
+    // stay visible in the contextual table controls.
+    'Tab': chainCommands(goToNextCell(1), sinkListItem(schema.nodes.list_item)),
+    'Shift-Tab': chainCommands(goToNextCell(-1), liftListItem(schema.nodes.list_item)),
     'Shift-Enter': chainCommands(exitCode, (state, dispatch) => {
       if (dispatch) {
         dispatch(state.tr.replaceSelectionWith(schema.nodes.hard_break.create()).scrollIntoView());
@@ -304,7 +309,10 @@ export function collapseSpaces(): Plugin {
       if (!trs.some((tr) => tr.docChanged)) return null;
       const swaps: Array<[number, number, string, readonly Mark[]]> = [];
       state.doc.descendants((node, pos) => {
-        if (node.type.name === 'code_block') return false;
+        // Code-like textblocks are literal source. This covers ordinary code
+        // and executable Typst embeds without coupling normalization to their
+        // concrete node names.
+        if (node.type.spec.code) return false;
         if (!node.isTextblock) return true;
         node.forEach((child, offset) => {
           if (!child.isText || !child.text) return;

@@ -10,20 +10,18 @@
 // accessibility all see clean text. The DOM stays the editing surface —
 // native selection, IME, and spell-check keep working (spec §1.3).
 //
-// Scheduling (spec §3.6): mapped decorations preserve the previous shape
-// during the edit transaction, then an exact port-selected layout replaces
-// only the affected blocks in the same task. The settled pass verifies those
-// decisions against the compiled oracle and only dispatches when semantics
-// differ. Pagination may add a second synchronous update in the same task,
-// after measuring the exact line layout, so no intermediate state paints.
+// Scheduling: the active block returns to native browser wrapping inside the
+// edit transaction, so the keystroke can paint without waiting for global
+// line breaking. Untouched blocks and page geometry retain their last settled
+// layout. After the quiet period, one exact pass restores Typst-equivalent
+// lines and pages for the committed revision.
 //
-// Pagination model: the document stays one continuous editable flow; page
-// boxes are painted behind it (see #pages in main.ts), and exact-height
-// spacers push content past each page boundary. Between blocks the spacer is
-// an ordinary div; inside a paragraph it is a block-in-inline div sitting at
-// an oracle-chosen line break (the div itself forces the break, so it simply
-// replaces the <br> widget). Print needs no JS: print CSS zeroes the spacer
-// heights (line breaks survive, gaps vanish) and @page takes over.
+// Pagination has one authority: a successful full-document Typst snapshot.
+// Its page starts become exact-height spacers. Those exact starts may be
+// mapped briefly while their replacement compiles, but only while validation
+// succeeds. Any failure or invalidation removes every spacer and page claim;
+// the editor then presents one honest continuous native surface until Typst
+// produces a new exact snapshot.
 
 import { Plugin, type EditorState } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
@@ -35,75 +33,56 @@ import {
   type LayoutOptions,
   type LineLayout,
 } from './layout/paragraph';
-import { buildSpec, type TypstOracle, type AtomResolver, type SpecKind } from './layout/typst-oracle';
-import { portBreaks } from './layout/port/adapter';
-import { loadPrimitives, primitives } from './layout/primitives';
+import { buildSpec, type AtomResolver, type SpecKind } from './layout/typst-oracle';
 import type { PageOracle } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
-import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
 import { eqKey } from './equations';
-import { getInk, inkKey } from './math-ink';
-import {
-  applySplit,
-  clearSplit,
-  clearTableSplitCache,
-  getSplit,
-  onTableSplitReady,
-  requestTableSplit,
-  splitExtra,
-  type TableSplitLayout,
-} from './table-split';
 import { isFlexibleAtom } from './inline-raw';
-import { parseTypstSvg } from './safe-svg';
+import { classifyTypstInline } from './typst-inline-regions';
+import { inlineMathToTypst } from './math-typst';
 import { recordLayoutPerf } from './layout/perf';
-import { COMMON_PORT_KEYS, effectiveFont } from './font-registry';
+import { effectiveFont } from './font-registry';
 import {
   appendLineDecorations,
   blockSpacerDecoration,
   decorationSetDigest,
   decorationSignature,
-  decorationsOwnedByBlock,
-  pageGapWidget,
-  pageSpacerDecoration,
-  rebuildDecorationsOwnedByBlock,
+  stripActiveLineDecorations,
   type Spacer,
   type TypesetDecorationSpec,
 } from './layout/line-decorations';
 import {
   BlockLayoutCache,
-  blockLayoutSettingsKey,
-  blockOracleKey,
   consecutiveParagraph,
   createPaintedPrefixMeasurements,
   forcedBreakSignature,
   makeAtomWidth,
-  paragraphKeyTag,
   type AtomWidth,
-  type BlockLayoutAuthority,
   type BlockLayoutCacheKey,
 } from './layout/block-layout';
 import {
   typesetKey,
   type PageInfo,
   type TypesetMeta,
+  type ExactPageBasis,
   type TypesetState,
   type TypesetStats,
 } from './layout/typeset-state';
 import { LayoutScheduler } from './layout/layout-scheduler';
 import { OracleCoordinator } from './layout/oracle-coordinator';
+import { snapshotBreaksFor } from './layout/layout-snapshot';
+import {
+  acquireDocumentCompileBroker,
+  type DocumentCompileBrokerLease,
+} from './document-compile-broker';
+import { documentPreviewManagerFor } from './raw-preview';
 import {
   HeightIndex,
   createPaginationSnapshot,
   type PaginationSnapshot as HeightSnapshot,
 } from './layout/pagination-snapshot';
-import {
-  planSuffixPagination,
-  type SuffixPageMarker,
-  type SuffixPageSpacer,
-  type SuffixPaginationSeed,
-} from './layout/pagination-suffix';
 import { layoutForcedBlock } from './layout/forced-layout';
 import {
   ForcedLayoutAuditor,
@@ -113,32 +92,17 @@ import {
 export { typesetKey };
 export type { PageInfo, TypesetMeta, TypesetState, TypesetStats };
 
-/** Phase-3 flag (PORT.md): drive live typing with the ported Typst
- * breaker. Console: __usePort(false) to A/B against the legacy path;
- * __portStats() reports how often each path ran. */
-let USE_PORT = true;
-let portHits = 0;
-let legacyHits = 0;
-let adapterNulls = 0;
-let partitionMisses = 0;
 let forcedFastHits = 0;
 let forcedFallbacks = 0;
 if (typeof window !== 'undefined' && import.meta.env.DEV) {
   const w = window as unknown as {
-    __usePort: (v: boolean) => void;
-    __portStats: () => { port: number; legacy: number };
     __forcedPathStats: () => { fast: number; fallback: number };
   };
-  w.__usePort = (v) => {
-    USE_PORT = v;
-  };
-  w.__portStats = () => ({ port: portHits, legacy: legacyHits, adapterNulls, partitionMisses });
   w.__forcedPathStats = () => ({ fast: forcedFastHits, fallback: forcedFallbacks });
 }
 
 /** Vertical gap between stacked footnote bodies / height of the separator zone (px). */
 const FN_GAP = 6;
-const FN_SEP = 30;
 
 type CurrentSpacers = {
   lineMap: Map<number, Spacer>;
@@ -151,7 +115,6 @@ interface PaginationGeometrySnapshot {
   size: { w: number; h: number };
   marginTop: number;
   marginBottom: number;
-  contentHeight: number;
   stackTop: number;
   bodyPx: number;
   spacers: CurrentSpacers;
@@ -159,66 +122,10 @@ interface PaginationGeometrySnapshot {
   spacerHeights: HeightIndex;
 }
 
-type TableEffect =
-  | { type: 'apply'; node: PMNode; layout: TableSplitLayout; gaps: number[]; naturalHeight: number }
-  | { type: 'clear'; node: PMNode };
-
 interface PaginationPassResult {
   spacers: Spacer[];
   count: number;
-  tableEffects: TableEffect[];
 }
-
-interface PaginationFallbackSeed {
-  startPos: number;
-  page: number;
-  shift: number;
-  prefixSpacers: Spacer[];
-}
-
-interface PaginationFallbackResult extends PaginationPassResult {
-  visitedUnits: number;
-  anchors: Array<{ pos: number; page: number; kind: Spacer['kind'] }>;
-}
-
-interface FallbackBasisMarker {
-  childIndex: number;
-  page: number;
-  line: number;
-  unit: 'paragraph' | 'line';
-}
-
-interface SuffixPaginationStats {
-  attempts: number;
-  eligible: number;
-  compared: number;
-  matches: number;
-  mismatches: number;
-  fullUnits: number;
-  suffixUnits: number;
-  lastReason: string;
-  lastDifference: string | null;
-  lastStartPos: number | null;
-  lastAnchorPos: number | null;
-}
-
-const emptySuffixPaginationStats = (): SuffixPaginationStats => ({
-  attempts: 0,
-  eligible: 0,
-  compared: 0,
-  matches: 0,
-  mismatches: 0,
-  fullUnits: 0,
-  suffixUnits: 0,
-  lastReason: 'not-considered',
-  lastDifference: null,
-  lastStartPos: null,
-  lastAnchorPos: null,
-});
-
-type PaginationSuffixPlan =
-  | { kind: 'seed'; source: 'exact' | 'fallback-shadow'; seed: SuffixPaginationSeed }
-  | { kind: 'none'; reason: string };
 
 const viewRegistry = new WeakMap<EditorView, TypesetView>();
 
@@ -242,46 +149,108 @@ export function typesetPlugin(
   return new Plugin<TypesetState>({
     key: typesetKey,
     state: {
-      init: () => ({ decos: DecorationSet.empty, pageMarks: DecorationSet.empty }),
+      init: () => ({
+        decos: DecorationSet.empty,
+        pageMarks: DecorationSet.empty,
+        pageBasis: null,
+      }),
       apply(tr, val) {
         const meta = tr.getMeta(typesetKey) as TypesetMeta | undefined;
         if (meta?.type === 'decos') {
-          return { decos: meta.decos, pageMarks: meta.pageMarks ?? val.pageMarks.map(tr.mapping, tr.doc) };
-        }
-        if (meta?.type === 'pageMarks') return { decos: val.decos, pageMarks: meta.pageMarks };
-        if (tr.docChanged) {
-          let decos = val.decos.map(tr.mapping, tr.doc);
-          // A replace whose boundary coincides with a page spacer widget
-          // (e.g. the table card swapping the block that ENDS at a page
-          // start) silently drops the spacer, and the page below visibly
-          // jumps until the settle run. Spacers are load-bearing geometry:
-          // re-anchor any that mapping discarded.
-          const isSpacer = (spec: unknown) => {
-            const kind = (spec as Partial<TypesetDecorationSpec> | null)?.tsKind;
-            return kind === 'line-page-gap' || kind === 'block-page-gap';
+          return {
+            decos: meta.decos,
+            pageMarks: meta.pageMarks ?? val.pageMarks.map(tr.mapping, tr.doc),
+            pageBasis: meta.pageBasis === undefined ? val.pageBasis : meta.pageBasis,
           };
-          const had = val.decos.find(undefined, undefined, isSpacer);
-          if (had.length) {
-            const kept = new Set(
-              decos.find(undefined, undefined, isSpacer).map((d) => (d.spec as { key: string }).key),
-            );
-            const lost = had.filter((d) => !kept.has((d.spec as { key: string }).key));
-            if (lost.length) {
-              const revived = lost.map((d) => {
-                const spec = d.spec as { key: string; h: number; hy?: boolean };
-                const pos = Math.min(tr.mapping.map(d.from, -1), tr.doc.content.size);
-                return Decoration.widget(pos, () => pageGapWidget(spec.h, !!spec.hy, spec.key), {
-                  side: -1,
-                  key: spec.key,
-                  h: spec.h,
-                  hy: spec.hy,
-                  tsKind: spec.key.startsWith('pgb:') ? 'block-page-gap' : 'line-page-gap',
-                });
-              });
-              decos = decos.add(tr.doc, revived);
+        }
+        if (meta?.type === 'pageMarks') {
+          return { decos: val.decos, pageMarks: meta.pageMarks, pageBasis: meta.pageBasis };
+        }
+        if (tr.docChanged) {
+          // Remove the previous revision's forced lines before mapping the
+          // decoration set. Long paragraphs can own thousands of inline
+          // decorations; mapping all of them only to discard them made the
+          // first key after a settle noticeably slower than following keys.
+          const oldScopes = new Map<string, { from: number; to: number }>();
+          const addOldScopeAt = (pos: number) => {
+            const safe = Math.max(0, Math.min(pos, tr.before.content.size));
+            const $pos = tr.before.resolve(safe);
+            for (let depth = $pos.depth; depth > 0; depth--) {
+              const node = $pos.node(depth);
+              if (node.isTextblock || node.type.name === 'footnote') {
+                const from = $pos.before(depth);
+                const to = from + node.nodeSize;
+                oldScopes.set(`${from}:${to}`, { from, to });
+                return;
+              }
             }
+          };
+          tr.mapping.maps.forEach((stepMap, index) => {
+            stepMap.forEach((oldFrom, oldTo) => {
+              let originalFrom = oldFrom;
+              let originalTo = oldTo;
+              for (let prior = index - 1; prior >= 0; prior--) {
+                const inverse = tr.mapping.maps[prior].invert();
+                originalFrom = inverse.map(originalFrom, -1);
+                originalTo = inverse.map(originalTo, 1);
+              }
+              addOldScopeAt(originalFrom);
+              addOldScopeAt(originalTo);
+            });
+          });
+          let previousDecos = val.decos;
+          for (const scope of oldScopes.values()) {
+            previousDecos = stripActiveLineDecorations(previousDecos, scope);
           }
-          return { decos, pageMarks: val.pageMarks.map(tr.mapping, tr.doc) };
+
+          let decos = previousDecos.map(tr.mapping, tr.doc);
+          // Paint-first editing: mapped forced breaks belong to the previous
+          // document. Remove them only from blocks touched by this transaction
+          // so the browser can paint the new text immediately. Page gaps stay
+          // mapped to preserve the last settled page geometry; the quiet pass
+          // atomically publishes a new exact layout.
+          const scopes = new Map<string, { from: number; to: number }>();
+          const addScopeAt = (pos: number) => {
+            const safe = Math.max(0, Math.min(pos, tr.doc.content.size));
+            const $pos = tr.doc.resolve(safe);
+            for (let depth = $pos.depth; depth > 0; depth--) {
+              const node = $pos.node(depth);
+              if (node.isTextblock || node.type.name === 'footnote') {
+                const from = $pos.before(depth);
+                const to = from + node.nodeSize;
+                scopes.set(`${from}:${to}`, { from, to });
+                return;
+              }
+            }
+          };
+          tr.mapping.maps.forEach((stepMap, index) => {
+            const remaining = tr.mapping.slice(index + 1);
+            stepMap.forEach((_oldFrom, _oldTo, newFrom, newTo) => {
+              const from = remaining.map(newFrom, -1);
+              const to = remaining.map(newTo, 1);
+              addScopeAt(from);
+              addScopeAt(to);
+              tr.doc.nodesBetween(
+                Math.max(0, Math.min(from, tr.doc.content.size)),
+                Math.max(0, Math.min(Math.max(to, from), tr.doc.content.size)),
+                (node, pos) => {
+                  if (node.isTextblock || node.type.name === 'footnote') {
+                    scopes.set(`${pos}:${pos + node.nodeSize}`, { from: pos, to: pos + node.nodeSize });
+                    return false;
+                  }
+                  return true;
+                },
+              );
+            });
+          });
+          for (const scope of scopes.values()) {
+            decos = stripActiveLineDecorations(decos, scope);
+          }
+          return {
+            decos,
+            pageMarks: val.pageMarks.map(tr.mapping, tr.doc),
+            pageBasis: val.pageBasis,
+          };
         }
         return val;
       },
@@ -300,31 +269,23 @@ class TypesetView {
   private docSig = new WeakMap<PMNode, string>();
   private measurer: Measurer;
   private oracles: OracleCoordinator;
+  private documentCompilerLease: DocumentCompileBrokerLease;
   private scheduler!: LayoutScheduler;
   /** Signature of the last dispatched decoration set: identical layouts are
    *  never re-dispatched, so no-op runs cause zero paints. */
   private lastDecoSig = '';
-  private lastLiveDoc: PMNode | null = null;
-  private lastPageCount = 0;
-  private pendingPageMarks: DecorationSet | null = null;
-  private stopTableSplitReady: (() => void) | null = null;
+  private pendingPageMarks: {
+    marks: DecorationSet;
+    basis: ExactPageBasis | null;
+  } | null = null;
   /** Which source produced the last pagination (diagnostics). */
-  private pagPath: 'exact' | 'held' | 'fallback' = 'exact';
+  private pagPath: 'exact' | 'held' | 'continuous' = 'continuous';
   private pagLog: string[] = [];
   private pagWhy = '';
   private forcedAuditor: ForcedLayoutAuditor | null = null;
   private lineDecorationDispatches = 0;
   private pageMarkDispatches = 0;
-  private paginationSnapshotStats = { captures: 0, spacerScans: 0, tableScans: 0, heightQueries: 0 };
-  private suffixPaginationStats = emptySuffixPaginationStats();
-  private exactPageBasisDoc: PMNode | null = null;
-  private exactPageBasisEpoch = -1;
-  private exactPageBasisWidth = 0;
-  private fallbackPageBasisDoc: PMNode | null = null;
-  private fallbackPageBasisEpoch = -1;
-  private fallbackPageBasisWidth = 0;
-  private fallbackPageBasisMarkers: FallbackBasisMarker[] = [];
-  private pageSpacerAuthority: 'exact' | 'held' | 'fallback' = 'fallback';
+  private paginationSnapshotStats = { captures: 0, spacerScans: 0, heightQueries: 0 };
   private paginationGeometryEpoch = 0;
   private lastPaginationWidth = 0;
   private destroyed = false;
@@ -335,25 +296,17 @@ class TypesetView {
   ) {
     viewRegistry.set(view, this);
     this.measurer = new Measurer(view.dom);
-    // The ported Typst line breaker (PORT.md): loads the sidecar WASM +
-    // fonts in the background; until ready, liveRun uses the legacy path.
-    loadPrimitives().then(
-      () => {
-        if (!this.destroyed) this.requestRun();
-      },
-      (e) => console.warn('sidecar primitives failed to load', e),
-    );
+    this.documentCompilerLease = acquireDocumentCompileBroker(view);
     this.oracles = new OracleCoordinator({
-      fontFallback: FONT_FALLBACK,
-      onParagraphResults: () => this.requestRun(),
       onPageResults: () => this.requestRun(),
-    });
-    this.stopTableSplitReady = onTableSplitReady((readyView) => {
-      if (!this.destroyed && readyView === this.view) this.requestRun();
+      compileDocument: (doc, coordinated, signal) =>
+        this.documentCompilerLease.broker.request(doc, {
+          priority: coordinated?.priority ?? 'layout',
+          signal,
+        }),
     });
     if (import.meta.env.DEV) {
       const w = window as unknown as {
-        __oracle?: TypstOracle;
         __pageOracle?: PageOracle;
         __breakSig?: () => string;
         __forcedLayoutAudit?: {
@@ -365,56 +318,17 @@ class TypesetView {
         __paginationSnapshotStats?: (reset?: boolean) => {
           captures: number;
           spacerScans: number;
-          tableScans: number;
           heightQueries: number;
         };
-        __suffixPaginationStats?: (reset?: boolean) => SuffixPaginationStats;
+        __layoutSnapshotStats?: () => {
+          status: 'ok' | 'fail' | 'pending';
+          pages: number;
+          blocks: number;
+          revision: number;
+          reason: string | null;
+        };
       };
-      w.__oracle = this.oracles.paragraph;
       w.__pageOracle = this.oracles.page;
-      (w as unknown as { __comparePort: () => unknown }).__comparePort = () => {
-        const state = this.view.state;
-        const settings = getSettings(state);
-        const font = effectiveFont(settings.font);
-        const resolveAtom = this.atomResolver();
-        const settingsSig = blockLayoutSettingsKey(settings);
-        const out: unknown[] = [];
-        state.doc.descendants((node, pos) => {
-          if (!node.isTextblock || node.type.name !== 'paragraph') return true;
-          const el = this.view.nodeDOM(pos);
-          if (!(el instanceof HTMLElement)) return false;
-          const cs = getComputedStyle(el);
-          const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-          const spec = buildSpec(node, resolveAtom);
-          if (!spec) return false;
-          const okey = blockOracleKey(
-            settingsSig,
-            paragraphKeyTag(settings, state.doc, pos),
-            measure,
-            spec.key,
-          );
-          const oentry = this.oracles.paragraph.get(okey);
-          const atomWidth = makeAtomWidth(this.view, settings, pos);
-          const indented = settings.parIndent && consecutiveParagraph(state.doc, pos);
-          const port = portBreaks(node, measure, atomWidth, {
-            fontKeys: font.portKeys,
-            monoFontKey: COMMON_PORT_KEYS.mono,
-            sizePt: settings.sizePt,
-            hyphenate: settings.hyphenate,
-            firstLineIndentPx: indented ? 1.5 * this.bodyPx() : undefined,
-            atomWidthPt: this.typstAtomWidthPt(),
-          });
-          const fmt = (b: { at: number; hyphen: boolean }[] | null | undefined) =>
-            b ? b.map((x) => (x.hyphen ? 'hy' : 'br') + x.at).join(',') : String(b);
-          if (oentry?.status === 'ok' && port && fmt(oentry.breaks) !== fmt(port)) {
-            out.push({ pos, text: node.textContent.slice(0, 40), oracle: fmt(oentry.breaks), port: fmt(port) });
-          } else if (oentry && oentry.status !== 'ok') {
-            out.push({ pos, text: node.textContent.slice(0, 40), status: oentry.status, reason: (oentry as { reason?: string }).reason?.slice(0, 200), port: fmt(port) });
-          }
-          return false;
-        });
-        return out;
-      };
       (w as unknown as { __pagLog: () => string[] }).__pagLog = () => this.pagLog;
       w.__breakSig = () => {
         const st = typesetKey.getState(this.view.state);
@@ -432,7 +346,10 @@ class TypesetView {
         start: () => {
           this.forcedAuditor!.start();
           this.cache.clear();
-          this.requestRun();
+          // This opt-in diagnostic must observe a fresh translation even
+          // when the scheduler already owns a coalesced frame. Run it now;
+          // the auditor is development-only and deliberately expensive.
+          this.run();
         },
         snapshot: () => this.forcedAuditor!.snapshot(),
         stop: () => this.forcedAuditor!.stop(),
@@ -451,36 +368,38 @@ class TypesetView {
       w.__paginationSnapshotStats = (reset = false) => {
         const stats = { ...this.paginationSnapshotStats };
         if (reset) {
-          this.paginationSnapshotStats = { captures: 0, spacerScans: 0, tableScans: 0, heightQueries: 0 };
+          this.paginationSnapshotStats = { captures: 0, spacerScans: 0, heightQueries: 0 };
         }
         return stats;
       };
-      w.__suffixPaginationStats = (reset = false) => {
-        const stats = { ...this.suffixPaginationStats };
-        if (reset) this.suffixPaginationStats = emptySuffixPaginationStats();
-        return stats;
+      w.__layoutSnapshotStats = () => {
+        const entry = this.documentLayoutEntry(false);
+        return {
+          status: entry?.status ?? 'pending',
+          pages: entry?.snapshot?.pageCount ?? 0,
+          blocks: entry?.snapshot?.blocks.length ?? 0,
+          revision: entry?.snapshot?.revision ?? 0,
+          reason: entry?.reason ?? null,
+        };
       };
     }
     this.scheduler = new LayoutScheduler(view.dom, {
-      runLive: () => this.liveRun(),
       runSettled: () => this.run(),
       // Web fonts arriving change every browser metric. The Typst oracles
       // remain valid because their bundled font inputs did not change.
       invalidateMetrics: () => {
         this.paginationGeometryEpoch++;
-        this.pageSpacerAuthority = 'fallback';
-        this.clearExactPageBasis();
-        this.clearFallbackPageBasis();
+        this.abandonPageBasis();
         this.measurer.invalidate();
         this.cache.clear();
-        clearTableSplitCache();
       },
     });
   }
 
   /** Translate already-authoritative break offsets into browser line ranges.
    * The direct path performs no break search or syllabification; malformed or
-   * unsupported input falls back to the established translator. */
+   * unsupported input falls back to the general forced-break translator,
+   * which still consumes the same compiled offsets and never chooses breaks. */
   private layoutAuthoritative(
     block: PMNode,
     measure: number,
@@ -501,324 +420,83 @@ class TypesetView {
     // Document settings (font, size, hyphenation, …) invalidate every metric.
     if (view.state.doc.attrs !== prevState.doc.attrs) {
       this.paginationGeometryEpoch++;
-      this.pageSpacerAuthority = 'fallback';
-      this.clearExactPageBasis();
-      this.clearFallbackPageBasis();
+      this.abandonPageBasis();
       this.measurer.invalidate();
       this.cache.clear();
       this.oracles.clear();
-      clearTableSplitCache();
     }
     if (view.state.doc !== prevState.doc) {
-      this.scheduler.scheduleLive();
+      // The plugin state's transaction hook has already mapped decorations
+      // and stripped forced lines from every touched block. Synchronize the
+      // no-op signature with that paint-first state so the pending compiler
+      // pass does not dispatch an identical empty/native decoration set.
+      this.lastDecoSig = decorationSetDigest(
+        typesetKey.getState(view.state)?.decos ?? DecorationSet.empty,
+      );
+      // Results for the previous revision must not begin expensive SVG
+      // analysis while the user is typing. Completed cache entries survive;
+      // only queued/in-flight publication is superseded.
+      this.oracles.cancelPending();
+      // Exact paragraph optimization is intentionally absent from the
+      // pre-paint path. The changed block is already native in plugin state;
+      // the quiet-period pass publishes the next exact revision.
       this.scheduler.scheduleAfterEdit();
     }
-  }
-
-  /** Re-typeset just the edited blocks with authoritative compiled/ported
-   * breaks in the same paint as the keystroke. LayoutScheduler owns the
-   * microtask. */
-  private liveRun() {
-    if (this.destroyed) return;
-    const perfStart = performance.now();
-    const state = this.view.state;
-    const prev = this.lastLiveDoc;
-    this.lastLiveDoc = state.doc;
-    if (!prev || prev === state.doc) return;
-    // The doc changed: no previously-dispatched layout may be considered
-    // current, whatever path we take out of here.
-    this.lastDecoSig = '';
-    const start = prev.content.findDiffStart(state.doc.content);
-    if (start == null) return;
-    const endDiff = prev.content.findDiffEnd(state.doc.content);
-    const from = Math.min(start, state.doc.content.size);
-    const to = Math.min(Math.max(endDiff ? endDiff.b : start, from), state.doc.content.size);
-
-    const settings = getSettings(state);
-    const font = effectiveFont(settings.font);
-    const resolveAtom = font.exact ? this.atomResolver() : null;
-    const settingsSig = blockLayoutSettingsKey(settings);
-    type LiveBlockKind = 'body' | 'caption' | 'footnote';
-    const blocks: Array<{ node: PMNode; pos: number; kind: LiveBlockKind }> = [];
-    const addBlock = (node: PMNode, pos: number, kind: LiveBlockKind) => {
-      if (!blocks.some((block) => block.pos === pos && block.kind === kind)) blocks.push({ node, pos, kind });
-    };
-    state.doc.nodesBetween(from, to, (node, pos) => {
-      if (node.type.name === 'table') return false;
-      if (node.type.name === 'paragraph') {
-        addBlock(node, pos, 'body');
-        return false;
-      }
-      if (node.type.name === 'figure') {
-        addBlock(node, pos, 'caption');
-        return false;
-      }
-      return true;
-    });
-    // Edits inside a footnote body: the body block is nested inline content.
-    const $from = state.doc.resolve(from);
-    for (let d = $from.depth; d > 0; d--) {
-      if ($from.node(d).type.name === 'footnote') {
-        addBlock($from.node(d), $from.before(d), 'footnote');
-        break;
-      }
-    }
-    if (!blocks.length) return;
-
-    const discoveredAt = performance.now();
-    let lineLayoutMs = 0;
-    const figNums = new Map<PMNode, number>();
-    const fnNums = new Map<PMNode, number>();
-    if (blocks.some((block) => block.kind !== 'body')) {
-      let figNo = 0;
-      let fnNo = 0;
-      state.doc.descendants((node) => {
-        if (node.type.name === 'figure') figNums.set(node, ++figNo);
-        if (node.type.name === 'footnote') {
-          fnNums.set(node, ++fnNo);
-          return false;
-        }
-        return true;
-      });
-    }
-    const prefixes = blocks.some((block) => block.kind !== 'body')
-      ? createPaintedPrefixMeasurements(settings.font, this.bodyPx())
-      : null;
-
-    let decos = typesetKey.getState(state)?.decos ?? DecorationSet.empty;
-    let changed = false;
-    for (const b of blocks) {
-      const blockTo = b.pos + b.node.nodeSize;
-      // Footnote bodies are DOM-nested inside the paragraph: their break +
-      // justification decorations must survive an outer-block replacement.
-      const fnSpans: Array<{ from: number; to: number }> = [];
-      if (b.kind !== 'footnote') {
-        b.node.forEach((child, offset) => {
-          if (child.type.name === 'footnote') {
-            fnSpans.push({
-              from: b.pos + 1 + offset,
-              to: b.pos + 1 + offset + child.nodeSize,
-            });
-          }
-        });
-      }
-      const scope = { from: b.pos, to: blockTo, exclude: fnSpans };
-      if (b.node.content.size === 0 || (b.kind === 'body' && b.node.attrs.align)) {
-        const rebuilt = rebuildDecorationsOwnedByBlock(decos, state.doc, scope, []);
-        decos = rebuilt.decos;
-        changed ||= rebuilt.changed;
-        continue;
-      }
-      const number =
-        b.kind === 'caption'
-          ? (figNums.get(b.node) ?? 1)
-          : b.kind === 'footnote'
-            ? (fnNums.get(b.node) ?? 1)
-            : 0;
-      const extra: { firstLineIndent?: number; scale?: number } =
-        b.kind === 'caption'
-          ? { firstLineIndent: prefixes!.captionIndent(number) }
-          : b.kind === 'footnote'
-            ? { firstLineIndent: prefixes!.footnoteIndent(number), scale: prefixes!.footnoteScale }
-            : settings.parIndent && consecutiveParagraph(state.doc, b.pos)
-              ? { firstLineIndent: 1.5 * this.bodyPx() }
-              : {};
-      const skind: SpecKind =
-        b.kind === 'caption'
-          ? { kind: 'caption', figNo: number }
-          : b.kind === 'footnote'
-            ? { kind: 'footnote' }
-            : { kind: 'body' };
-      const keyTag =
-        b.kind === 'caption'
-          ? `cap${number}`
-          : b.kind === 'footnote'
-            ? `fn${number}`
-            : paragraphKeyTag(settings, state.doc, b.pos);
-      const el = this.view.nodeDOM(b.pos);
-      if (!(el instanceof HTMLElement)) continue;
-      const target =
-        b.kind === 'caption'
-          ? el.querySelector('figcaption')
-          : b.kind === 'footnote'
-            ? el.querySelector('.fn-body')
-            : el;
-      if (!(target instanceof HTMLElement)) continue;
-      const cs = getComputedStyle(target);
-      const measure =
-        b.kind === 'body'
-          ? target.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
-          : target.clientWidth;
-      if (!(measure > 60)) continue;
-      const atomWidth = makeAtomWidth(this.view, settings, b.pos);
-      const spec = resolveAtom ? buildSpec(b.node, resolveAtom) : null;
-      const okey = spec ? blockOracleKey(settingsSig, keyTag, measure, spec.key) : null;
-      const oentry = okey ? this.oracles.paragraph.get(okey) : undefined;
-      if (spec && okey && !oentry) {
-        this.oracles.paragraph.request(
-          okey,
-          spec,
-          measure,
-          settings,
-          skind,
-          b.kind === 'body' && !!extra.firstLineIndent,
-        );
-      }
-      // The ported Typst breaker: full-paragraph, globally optimal, and
-      // identical to what the oracle will confirm. Plain KP is the
-      // degraded-mode fallback (sidecar not loaded, unmapped content).
-      let lines: LineLayout[] | null = null;
-      let authority: BlockLayoutAuthority = 'fallback';
-      let breakSignature: string | null = null;
-      const lineStart = performance.now();
-      if (oentry?.status === 'ok' && oentry.breaks) {
-        lines = this.layoutAuthoritative(
-          b.node,
-          measure,
-          atomWidth,
-          {
-            hyphenate: settings.hyphenate,
-            ...extra,
-            forced: oentry.breaks,
-          },
-          `live@${b.pos}`,
-        );
-        if (lines) {
-          authority = 'compiled';
-          breakSignature = forcedBreakSignature(oentry.breaks);
-        }
-      }
-      if (!lines && USE_PORT && primitives()) {
-        try {
-          const forced = portBreaks(b.node, measure, atomWidth, {
-            fontKeys: font.portKeys,
-            monoFontKey: COMMON_PORT_KEYS.mono,
-            sizePt: settings.sizePt,
-            hyphenate: settings.hyphenate,
-            firstLineIndentPx: b.kind === 'caption' ? undefined : extra.firstLineIndent,
-            prefixText: b.kind === 'caption' ? `Figure ${number}: ` : undefined,
-            scale: extra.scale,
-            atomWidthPt: this.typstAtomWidthPt(),
-          });
-          if (forced) {
-            lines = this.layoutAuthoritative(
-              b.node,
-              measure,
-              atomWidth,
-              {
-                hyphenate: settings.hyphenate,
-                isFill: isFlexibleAtom,
-                ...extra,
-                forced,
-              },
-              `live@${b.pos}`,
-            );
-            if (lines) {
-              portHits++;
-              authority = 'port';
-              breakSignature = forcedBreakSignature(forced);
-            } else partitionMisses++;
-          } else {
-            adapterNulls++;
-          }
-        } catch (e) {
-          if (import.meta.env.DEV) console.warn('port breaker failed, using legacy path', e);
-        }
-      }
-      if (!lines) {
-        legacyHits++;
-        lines = layoutBlock(b.node, measure, this.measurer, atomWidth, {
-          hyphenate: settings.hyphenate,
-          isFill: isFlexibleAtom,
-          ...extra,
-        });
-      }
-      if (!lines) continue;
-      this.cache.set(b.node, {
-        measure,
-        lines,
-        oracle: oentry?.status ?? 'none',
-        key: okey,
-        indent: extra.firstLineIndent ?? 0,
-        scale: extra.scale ?? 1,
-        authority,
-        breakSignature,
-      });
-      lineLayoutMs += performance.now() - lineStart;
-      const base = b.pos + 1;
-      // Page spacers glued to mapped text positions break lines MID-LINE
-      // once the paragraph re-wraps around an edit above them. Strip them
-      // here and re-emit each at the nearest freshly-chosen break (same
-      // height — geometry stays stale-but-stable until repagination).
-      const pgStale = decorationsOwnedByBlock(decos, scope).filter(
-        (deco) => (deco.spec as Partial<TypesetDecorationSpec>).tsKind === 'line-page-gap',
-      );
-      let pgList = pgStale.map((d) => ({
-        from: d.from,
-        h: (d.spec as { h?: number }).h ?? 0,
-        hy: !!(d.spec as { hy?: boolean }).hy,
-      }));
-      const fresh: Decoration[] = [];
-      appendLineDecorations(fresh, b.node, b.pos, lines, (line, at) => {
-        // A spacer whose text position falls on this line moves to the
-        // line's break: pages only break at line boundaries.
-        const spIdx = pgList.findIndex((sp) => sp.from > base + line.from - 1 && sp.from <= at + 2);
-        if (spIdx < 0) return undefined;
-        const sp = pgList[spIdx];
-        pgList = pgList.filter((_, i) => i !== spIdx);
-        return { pos: at, height: sp.h, kind: 'line' };
-      });
-      // Spacers past the last chosen break (the page split the final line,
-      // which has since re-wrapped): snap to the block boundary — pages
-      // only break at line boundaries, and repagination corrects at settle.
-      for (const sp of pgList) {
-        const at = Math.min(Math.max(sp.from, base), blockTo - 1);
-        fresh.push(pageSpacerDecoration(at, sp.h, false));
-      }
-      const rebuilt = rebuildDecorationsOwnedByBlock(decos, state.doc, scope, fresh);
-      decos = rebuilt.decos;
-      changed ||= rebuilt.changed;
-    }
-    const decorationStart = performance.now();
-    this.lastDecoSig = decorationSetDigest(decos);
-    if (changed) {
-      const tr = state.tr.setMeta(typesetKey, { type: 'decos', decos } satisfies TypesetMeta);
-      tr.setMeta('addToHistory', false);
-      this.lineDecorationDispatches++;
-      this.view.dispatch(tr);
-    }
-    const perfEnd = performance.now();
-    recordLayoutPerf('live', {
-      totalMs: perfEnd - perfStart,
-      blockDiscoveryMs: discoveredAt - perfStart,
-      lineLayoutMs,
-      decorationMs: perfEnd - decorationStart,
-      changedBlocks: blocks.length,
-    });
   }
 
   destroy() {
     this.destroyed = true;
     viewRegistry.delete(this.view);
     this.scheduler.destroy();
-    this.stopTableSplitReady?.();
-    this.stopTableSplitReady = null;
     this.oracles.destroy();
+    this.documentCompilerLease.release();
     this.measurer.destroy();
   }
 
   /** Drop cached page-break decisions (asset bytes changed under same sig). */
   invalidatePages() {
     this.paginationGeometryEpoch++;
-    this.pageSpacerAuthority = 'fallback';
-    this.clearExactPageBasis();
-    this.clearFallbackPageBasis();
+    this.abandonPageBasis();
     this.oracles.clearPage();
-    clearTableSplitCache();
   }
 
   requestRun() {
     this.scheduler?.scheduleSettled();
+  }
+
+  /** Return (and optionally request) the one full-document Typst snapshot
+   * for the current revision. Both paragraph breaks and page starts come
+   * from this entry, so settled layout has one compiler authority. */
+  private documentLayoutEntry(request: boolean) {
+    const state = this.view.state;
+    const settings = getSettings(state);
+    if (!effectiveFont(settings.font).exact) return undefined;
+    let sig = this.docSig.get(state.doc);
+    if (!sig) {
+      try {
+        sig = docToTyp(state.doc);
+        this.docSig.set(state.doc, sig);
+      } catch {
+        return undefined;
+      }
+    }
+    const entry = this.oracles.page.get(sig);
+    if (!entry && request) {
+      this.oracles.page.request(sig, state.doc, settings, this.atomResolver());
+    }
+    return entry;
+  }
+
+  /** The SVG snapshot and every geometry-carrying crop are one atomic visual
+   * publication. The PageOracle may finish parsing first, but its lines/pages
+   * are not exact in the editor until the shared preview manager has applied
+   * that same result to all live nodes. */
+  private documentPublicationReady(): boolean {
+    return documentPreviewManagerFor(this.view).isReadyFor(this.view.state.doc);
+  }
+
+  private documentPublicationBlocker(): string | null {
+    return documentPreviewManagerFor(this.view).exactLayoutBlockerFor(this.view.state.doc);
   }
 
   /** The page spacers currently in the document, read back from the live
@@ -847,7 +525,7 @@ class TypesetView {
       if (!(h > 0)) continue;
       if (spec.tsKind === 'block-page-gap') blocks.push({ pos: d.from, height: h, kind: 'block' });
       else lineMap.set(d.from, { pos: d.from, height: h, kind: 'line' });
-      // lineMap/blocks retain the requested value so a held or suffix pass
+      // lineMap/blocks retain the requested value so a validated held pass
       // can recreate the same decoration. The geometry index alone consumes
       // physical height because it is undoing physical DOM displacement.
       const painted = spec.key ? paintedHeights.get(spec.key) : undefined;
@@ -857,23 +535,9 @@ class TypesetView {
     return { lineMap, blocks, sorted };
   }
 
-  /** Applied table-split extras (internal page gaps + repeated headers) as
-   *  pseudo-spacer entries at each table's END — merged with the widget
-   *  spacers when converting measured DOM geometry back to natural, so a
-   *  split table reads as its continuous height to everything below it. */
-  private tableExtras(): Array<{ pos: number; height: number }> {
-    const out: Array<{ pos: number; height: number }> = [];
-    this.view.state.doc.forEach((node, offset) => {
-      if (node.type.name !== 'table') return;
-      const a = getSplit(node);
-      if (a) out.push({ pos: offset + node.nodeSize, height: splitExtra(a) });
-    });
-    return out;
-  }
-
   /** Capture the complete height model once, after pass-one line decorations
-   * have been installed. Every exact/held/fallback candidate in this run
-   * reads this same immutable prefix index. */
+   * have been installed. Exact and validated-held translation both read this
+   * same immutable prefix index. */
   private capturePaginationSnapshot(): PaginationGeometrySnapshot {
     const host = this.view.dom.parentElement ?? this.view.dom;
     const width = this.view.dom.clientWidth;
@@ -886,17 +550,14 @@ class TypesetView {
     const marginTop = settings.marginTop * 96;
     const marginBottom = settings.marginBottom * 96;
     const spacers = this.currentSpacers();
-    const tableExtras = this.tableExtras();
-    const heights = createPaginationSnapshot({ spacers: spacers.sorted, tableExtras });
+    const heights = createPaginationSnapshot({ spacers: spacers.sorted, tableExtras: [] });
     this.paginationSnapshotStats.captures++;
     this.paginationSnapshotStats.spacerScans++;
-    this.paginationSnapshotStats.tableScans++;
     return {
       settings,
       size,
       marginTop,
       marginBottom,
-      contentHeight: size.h - marginTop - marginBottom,
       stackTop: host.getBoundingClientRect().top,
       bodyPx: this.bodyPx(),
       spacers,
@@ -910,179 +571,12 @@ class TypesetView {
     return (spacersOnly ? snapshot.spacerHeights : snapshot.heights.heights).heightAbove(pos);
   }
 
-  /** Table assignments are staged while candidates are evaluated. A failed
-   * exact or held attempt must not contaminate the fallback that follows. */
-  private applyTableEffects(effects: readonly TableEffect[]): void {
-    for (const effect of effects) {
-      if (effect.type === 'clear') clearSplit(effect.node);
-      else applySplit(effect.node, effect.layout, effect.gaps, effect.naturalHeight);
-    }
-  }
-
-  private suffixSpacers(snapshot: PaginationGeometrySnapshot): SuffixPageSpacer[] {
-    return [...snapshot.spacers.lineMap.values(), ...snapshot.spacers.blocks]
-      .map((spacer) => ({ ...spacer }))
-      .sort((a, b) => a.pos - b.pos);
-  }
-
-  private exactSuffixMarkers(): SuffixPageMarker[] {
-    const marks = typesetKey.getState(this.view.state)?.pageMarks.find() ?? [];
-    return marks
-      .map((mark) => {
-        const spec = mark.spec as {
-          psLine?: number;
-          psUnit?: string;
-          psPage?: number;
-          psEpoch?: number;
-        };
-        return {
-          pos: mark.from,
-          line: spec.psLine ?? Number.NaN,
-          unit: spec.psUnit ?? '',
-          page: spec.psEpoch === this.exactPageBasisEpoch ? (spec.psPage ?? Number.NaN) : Number.NaN,
-        };
-      })
-      .sort((a, b) => a.page - b.page);
-  }
-
-  private fallbackSuffixMarkers(doc: PMNode): SuffixPageMarker[] {
-    const positions: number[] = [];
-    doc.forEach((_node, pos) => positions.push(pos));
-    return this.fallbackPageBasisMarkers.map((marker) => ({
-      pos: positions[marker.childIndex] ?? Number.NaN,
-      line: marker.line,
-      unit: marker.unit,
-      page: marker.page,
-    }));
-  }
-
-  private planPaginationSuffix(snapshot: PaginationGeometrySnapshot): PaginationSuffixPlan {
-    if (!import.meta.env.DEV) return { kind: 'none', reason: 'shadow-disabled' };
-    const currentDoc = this.view.state.doc;
-    const spacers = this.suffixSpacers(snapshot);
-    let exactReason: string | null = null;
-
-    if (
-      this.exactPageBasisDoc &&
-      this.pageSpacerAuthority === 'exact' &&
-      Math.abs(this.exactPageBasisWidth - this.view.dom.clientWidth) <= 0.5
-    ) {
-      const decision = planSuffixPagination({
-        basisDoc: this.exactPageBasisDoc,
-        currentDoc,
-        markers: this.exactSuffixMarkers(),
-        spacers,
-        basisEpoch: this.exactPageBasisEpoch,
-        currentEpoch: this.paginationGeometryEpoch,
-      });
-      if (decision.kind === 'seed') return { kind: 'seed', source: 'exact', seed: decision.seed };
-      if (decision.kind === 'none') return { kind: 'none', reason: 'exact-unchanged' };
-      exactReason = `exact-${decision.reason}`;
-    }
-
-    // A previous local fallback is never promoted to production authority.
-    // In development it supplies large-corpus shadow checkpoints: the full
-    // result remains selected even when the suffix matches byte-for-byte.
-    if (
-      this.fallbackPageBasisDoc &&
-      Math.abs(this.fallbackPageBasisWidth - this.view.dom.clientWidth) <= 0.5
-    ) {
-      const decision = planSuffixPagination({
-        basisDoc: this.fallbackPageBasisDoc,
-        currentDoc,
-        markers: this.fallbackSuffixMarkers(currentDoc),
-        spacers,
-        basisEpoch: this.fallbackPageBasisEpoch,
-        currentEpoch: this.paginationGeometryEpoch,
-      });
-      if (decision.kind === 'seed') {
-        return { kind: 'seed', source: 'fallback-shadow', seed: decision.seed };
-      }
-      return {
-        kind: 'none',
-        reason: decision.kind === 'none' ? 'fallback-unchanged' : `fallback-${decision.reason}`,
-      };
-    }
-
-    return {
-      kind: 'none',
-      reason: exactReason ?? (this.exactPageBasisDoc ? 'exact-width-changed' : 'no-page-basis'),
-    };
-  }
-
-  private rememberFallbackBasis(result: PaginationFallbackResult): void {
-    const doc = this.view.state.doc;
-    const blocks: Array<{ node: PMNode; pos: number }> = [];
-    doc.forEach((node, pos) => blocks.push({ node, pos }));
-    const markers: FallbackBasisMarker[] = [];
-    for (const anchor of result.anchors) {
-      const childIndex = blocks.findIndex(
-        (block) => anchor.pos >= block.pos && anchor.pos < block.pos + block.node.nodeSize,
-      );
-      if (childIndex < 0 || blocks[childIndex].node.type.name !== 'paragraph') {
-        markers.length = 0;
-        break;
-      }
-      const block = blocks[childIndex];
-      if (anchor.kind === 'block') {
-        if (anchor.pos !== block.pos) {
-          markers.length = 0;
-          break;
-        }
-        markers.push({ childIndex, page: anchor.page, line: 0, unit: 'paragraph' });
-        continue;
-      }
-      const entry = this.cache.get(block.node);
-      const line = entry?.lines.findIndex((_item, index) => {
-        if (index === 0) return false;
-        return block.pos + 1 + entry.lines[index].from === anchor.pos;
-      }) ?? -1;
-      if (line < 1) {
-        markers.length = 0;
-        break;
-      }
-      markers.push({ childIndex, page: anchor.page, line, unit: 'line' });
-    }
-    this.fallbackPageBasisDoc = doc;
-    this.fallbackPageBasisEpoch = this.paginationGeometryEpoch;
-    this.fallbackPageBasisWidth = this.view.dom.clientWidth;
-    this.fallbackPageBasisMarkers = markers;
-  }
-
-  private clearExactPageBasis(): void {
-    this.exactPageBasisDoc = null;
-    this.exactPageBasisEpoch = -1;
-    this.exactPageBasisWidth = 0;
-  }
-
-  private clearFallbackPageBasis(): void {
-    this.fallbackPageBasisDoc = null;
-    this.fallbackPageBasisEpoch = -1;
-    this.fallbackPageBasisWidth = 0;
-    this.fallbackPageBasisMarkers = [];
-  }
-
-  private fallbackResultDifference(a: PaginationFallbackResult, b: PaginationFallbackResult): string | null {
-    if (a.count !== b.count) return `page-count ${a.count} != ${b.count}`;
-    if (a.spacers.length !== b.spacers.length) {
-      return `spacer-count ${a.spacers.length} != ${b.spacers.length}`;
-    }
-    if (a.tableEffects.length || b.tableEffects.length) {
-      return `table-effects ${a.tableEffects.length}/${b.tableEffects.length}`;
-    }
-    const differences = a.spacers.flatMap((spacer, index) => {
-      const other = b.spacers[index];
-      const equal = (
-        other &&
-        spacer.pos === other.pos &&
-        spacer.kind === other.kind &&
-        spacer.height.toFixed(2) === other.height.toFixed(2) &&
-        Math.abs(spacer.height - other.height) < 0.005
-      );
-      return equal ? [] : [`${index}:${spacer.kind}@${spacer.pos}:${spacer.height.toFixed(4)}!=` +
-        `${other?.kind}@${other?.pos}:${other?.height.toFixed(4)}`];
-    });
-    return differences.length ? differences.slice(0, 5).join('; ') : null;
+  /** Drop mapped exact provenance immediately. The empty marker publication
+   * is batched with the next decoration pass, so old page starts cannot
+   * reappear after a failure, resize, settings change, or rejected hold. */
+  private abandonPageBasis(): void {
+    this.oracles?.pageConfidence.abandon();
+    this.pendingPageMarks = { marks: DecorationSet.empty, basis: null };
   }
 
   /** Font size in px (body em). */
@@ -1113,10 +607,13 @@ class TypesetView {
 
   private run() {
     if (this.destroyed) return;
-    this.lastLiveDoc = this.view.state.doc;
 
     const t0 = performance.now();
     this.applyTopAdjust();
+    // Start the authoritative document compile before any local geometry
+    // work. Its immutable result drives both line and page decisions on the
+    // next settled publication; revision guards prevent stale installation.
+    this.documentLayoutEntry(true);
 
     // Pass 1: line layout with the CURRENT page spacers kept in place — in
     // the quiescent case this set equals the live one and the signature
@@ -1146,21 +643,27 @@ class TypesetView {
 
     // Single-page runs skip the second dispatch — flush pending markers.
     if (this.pendingPageMarks) {
-      const set = this.pendingPageMarks;
+      const pending = this.pendingPageMarks;
       this.pendingPageMarks = null;
-      const tr = this.view.state.tr.setMeta(typesetKey, { type: 'pageMarks', pageMarks: set } satisfies TypesetMeta);
+      const tr = this.view.state.tr.setMeta(typesetKey, {
+        type: 'pageMarks',
+        pageMarks: pending.marks,
+        pageBasis: pending.basis,
+      } satisfies TypesetMeta);
       tr.setMeta('addToHistory', false);
       this.pageMarkDispatches++;
       this.view.dispatch(tr);
     }
 
     const footnoteStart = performance.now();
-    this.placeFootnotes(count);
+    if (this.pagPath !== 'continuous') this.placeFootnotes(count);
     const footnoteMs = performance.now() - footnoteStart;
 
     const s = getSettings(this.view.state);
     const size = pageSize(s);
     this.opts.onPages?.({
+      mode: this.pagPath,
+      reason: this.pagWhy,
       count,
       pageW: size.w,
       pageH: size.h,
@@ -1186,79 +689,12 @@ class TypesetView {
    * will render it (same glyphs, same widths): citations as their painted
    * "[n]", references as "(1)", footnote markers as superscripts.
    */
-  /** Typst-true inline atom widths in pt via the sidecar (footnote markers
-   * at the font's OS/2 superscript scale, citations/refs as shaped text).
-   * Returns null for atoms whose DOM width is already Typst's (math ink). */
-  private typstAtomWidthPt(): (offset: number, child: PMNode) => number | null {
-    const prim = primitives();
-    if (!prim) return () => null;
-    const state = this.view.state;
-    const s = getSettings(state);
-    const font = effectiveFont(s.font);
-    const regularKey = font.portKeys.regular;
-    let order: Map<string, number> | null = null;
-    let labels: Map<string, string> | null = null;
-    let fnNums: WeakMap<PMNode, number> | null = null;
-    const upem = prim.upem(regularKey);
-    const shapeW = (text: string, sizePt: number) => {
-      let em = 0;
-      for (const g of prim.shape(regularKey, text)) em += g.xAdvance / upem;
-      return em * sizePt;
-    };
-    return (_offset, child) => {
-      switch (child.type.name) {
-        case 'citation': {
-          order ??= citeOrder(state.doc);
-          return shapeW('[' + (order.get(child.attrs.key as string) ?? '?') + ']', s.sizePt);
-        }
-        case 'eq_ref': {
-          labels ??= eqKey.getState(state)?.labels ?? new Map<string, string>();
-          return shapeW((labels.get(child.attrs.label as string) as string) ?? '(?)', s.sizePt);
-        }
-        case 'footnote': {
-          if (!fnNums) {
-            fnNums = new WeakMap();
-            let fn = 0;
-            state.doc.descendants((n) => {
-              if (n.type.name === 'footnote') {
-                fnNums!.set(n, ++fn);
-                return false;
-              }
-              return true;
-            });
-          }
-          const n = fnNums.get(child) ?? 1;
-          const sup = prim.superscriptHeight(regularKey) || 0.6;
-          return shapeW(String(n), sup * s.sizePt);
-        }
-        default:
-          return null;
-      }
-    };
-  }
-
   private atomResolver(): AtomResolver {
     const state = this.view.state;
     const labels = eqKey.getState(state)?.labels ?? new Map<string, string>();
     const order = citeOrder(state.doc);
     const settings = getSettings(state);
     const macros = parseMathMacros(settings.mathMacros);
-    // The compiled document renders a formula as concrete glyph text
-    // ("Π𝐴,𝐵,𝐶") that the oracle's line matcher must recognize. The math
-    // ink cache holds Typst's own SVG for each formula — its text layer IS
-    // that rendering. Absent ink (still compiling) falls back to the
-    // unknown-atom heuristic.
-    const inkText = (src: string): string | undefined => {
-      const ink = getInk(inkKey(src, false, settings));
-      if (!ink) return undefined;
-      const div = parseTypstSvg(ink.svg);
-      const text = [...div.querySelectorAll('.tsel')]
-        .map((t) => t.textContent ?? '')
-        .join('')
-        .replace(/\s+/g, ' ')
-        .trim();
-      return text || undefined;
-    };
     const fnNums = new Map<PMNode, number>();
     let fn = 0;
     state.doc.descendants((n) => {
@@ -1272,21 +708,17 @@ class TypesetView {
       switch (child.type.name) {
         case 'math_inline':
           return {
-            markup: '#mi(`' + expandMacrosWith(child.attrs.src as string, macros) + '`)',
-            text: inkText(child.attrs.src as string),
+            markup: inlineMathToTypst(expandMacrosWith(child.attrs.src as string, macros)),
           };
-        // Raw Typst passes through verbatim — it IS Typst markup. Its
-        // printed text is unknown (usually none: rules, spacers), so the
-        // matcher treats it as an unknown atom.
-        //
-        // A FLEXIBLE atom is unrepresentable: it prints no text and eats
-        // the rest of the line, and the matcher reads that empty tail as a
-        // second line — which then "fills" to the full measure. Returning
-        // null drops the paragraph to the local breaker (which models fr
-        // exactly), the documented fallback for content the spec can't
-        // express. These lines are form blanks, not justified prose.
-        case 'typst_inline':
-          return isFlexibleAtom(child) ? null : { markup: child.attrs.src as string };
+        case 'typst_inline': {
+          // Fixed atoms are recovered from the shared document crop;
+          // canonical #h(1fr) receives compiled line slack. Arbitrary or
+          // stateful source stays lossless but keeps this paragraph native.
+          const source = child.attrs.src as string;
+          return classifyTypstInline(source).kind === 'unsupported'
+            ? null
+            : { markup: source };
+        }
         case 'citation': {
           const t = `[${order.get(child.attrs.key as string) ?? '?'}]`;
           return { markup: escapeTyp(t), text: t };
@@ -1317,7 +749,9 @@ class TypesetView {
     const layoutOpts = { hyphenate: settings.hyphenate, isFill: isFlexibleAtom };
     const useOracle = font.exact;
     const resolveAtom = useOracle ? this.atomResolver() : null;
-    const settingsSig = blockLayoutSettingsKey(settings);
+    const documentSnapshot = this.documentPublicationReady()
+      ? this.documentLayoutEntry(false)?.snapshot
+      : undefined;
     let paragraphs = 0;
     let lineCount = 0;
     let figNo = 0;
@@ -1330,88 +764,70 @@ class TypesetView {
       measure: number,
       skind: SpecKind,
       extra: { firstLineIndent?: number; scale?: number },
-      keyTag: string,
     ) => {
       // Aligned paragraphs keep browser layout (CSS text-align centers or
       // right-sets each ragged line) — display lines, not justified prose.
       if (node.type.name === 'paragraph' && node.attrs.align) return;
-      const atomWidth = makeAtomWidth(this.view, settings, pos);
+      const atomWidth = makeAtomWidth(this.view, pos);
 
-      // Ask the Typst oracle for this block's authoritative breaks.
+      // Every textblock reads from the same immutable whole-document
+      // publication. A missing/malformed contextual region fails only that
+      // caption or footnote back to native wrapping; it never launches a
+      // second synthetic Typst world.
       const spec = resolveAtom ? buildSpec(node, resolveAtom) : null;
-      const okey = spec ? blockOracleKey(settingsSig, keyTag, measure, spec.key) : null;
-      const oentry = okey ? this.oracles.paragraph.get(okey) : undefined;
-      if (spec && okey && !oentry) {
-        const indented = skind.kind === 'body' && !!extra.firstLineIndent;
-        this.oracles.paragraph.request(okey, spec, measure, settings, skind, indented);
-      }
-      const ostatus = oentry?.status ?? 'none';
+      const exactDocumentBreaks =
+        spec
+          ? snapshotBreaksFor(documentSnapshot, pos, spec.key)
+          : undefined;
+      const ostatus = exactDocumentBreaks !== undefined ? 'ok' : 'none';
 
       const indent = extra.firstLineIndent ?? 0;
       const scale = extra.scale ?? 1;
-      const cacheKey: BlockLayoutCacheKey = { measure, oracle: ostatus, key: okey, indent, scale };
-      const compiledBreaks = oentry?.status === 'ok' ? oentry.breaks : undefined;
+      const cacheKey: BlockLayoutCacheKey = {
+        measure,
+        oracle: ostatus,
+        key: spec?.key ?? null,
+        indent,
+        scale,
+      };
+      const compiledBreaks = exactDocumentBreaks === undefined
+        ? undefined
+        : [...exactDocumentBreaks];
       let entry =
-        oentry?.status === 'ok' && !oentry.breaks
+        ostatus === 'ok' && !compiledBreaks
           ? undefined
           : this.cache.getReusable(node, cacheKey, compiledBreaks);
+      // Cache entries produced by the retired local deciders are never
+      // allowed to become settled authority. Native browser wrapping is the
+      // pending state; only a compiled Typst break set may force the DOM.
+      if (entry?.authority !== 'compiled') entry = undefined;
       if (!entry) {
         let lines: LineLayout[] | null = null;
-        let authority: BlockLayoutAuthority = 'fallback';
         let breakSignature: string | null = null;
         const auditId = `${skind.kind}@${pos}`;
-        if (oentry?.status === 'ok' && oentry.breaks) {
+        if (compiledBreaks) {
           lines = this.layoutAuthoritative(
             node,
             measure,
             atomWidth,
-            { ...layoutOpts, ...extra, forced: oentry.breaks },
+            { ...layoutOpts, ...extra, forced: compiledBreaks },
             auditId,
           );
           if (lines) {
-            authority = 'compiled';
-            breakSignature = forcedBreakSignature(oentry.breaks);
+            breakSignature = forcedBreakSignature(compiledBreaks);
           }
         }
-        // The ported Typst breaker stands in wherever the compiled oracle
-        // has no answer (pending, failed to match, or its breaks don't
-        // partition) — the port IS the same algorithm, computed locally.
-        if (!lines && USE_PORT && primitives()) {
-          try {
-            const forced = portBreaks(node, measure, atomWidth, {
-              fontKeys: font.portKeys,
-              monoFontKey: COMMON_PORT_KEYS.mono,
-              sizePt: settings.sizePt,
-              hyphenate: settings.hyphenate,
-              // Captions: the prefix is real text in Typst (proven exact by
-              // the context differ); footnotes keep the indent model.
-              firstLineIndentPx: skind.kind === 'caption' ? undefined : extra.firstLineIndent,
-              prefixText: skind.kind === 'caption' ? `Figure ${skind.figNo}: ` : undefined,
-              scale: extra.scale,
-              atomWidthPt: this.typstAtomWidthPt(),
-            });
-            if (forced) {
-              lines = this.layoutAuthoritative(
-                node,
-                measure,
-                atomWidth,
-                { ...layoutOpts, ...extra, forced },
-                auditId,
-              );
-              if (lines) {
-                authority = 'port';
-                breakSignature = forcedBreakSignature(forced);
-              }
-            }
-          } catch (e) {
-            if (import.meta.env.DEV) console.warn('port breaker (settle) failed', e);
-          }
+        // While the exact snapshot is pending or a block cannot be matched,
+        // leave it as ordinary editable DOM. Publishing an independent local
+        // optimum here recreates the double-typesetter bug by definition.
+        if (!lines) {
+          paragraphs++;
+          return;
         }
-        if (!lines) lines = layoutBlock(node, measure, this.measurer, atomWidth, { ...layoutOpts, ...extra })!;
         entry = this.cache.set(node, {
           ...cacheKey,
           lines,
-          authority,
+          authority: 'compiled',
           breakSignature,
         });
       }
@@ -1449,7 +865,6 @@ class TypesetView {
             firstLineIndent: prefixes.footnoteIndent(fnNo),
             scale: prefixes.footnoteScale,
           },
-          `fn${fnNo}`,
         );
       });
     };
@@ -1471,7 +886,6 @@ class TypesetView {
           capMeasure,
           { kind: 'caption', figNo },
           { firstLineIndent: prefixes.captionIndent(figNo) },
-          `cap${figNo}`,
         );
         handleFootnotes(node, pos);
         return false;
@@ -1499,7 +913,6 @@ class TypesetView {
         measure,
         { kind: 'body' },
         indented ? { firstLineIndent: 1.5 * bodyPx } : {},
-        indented ? 'pi' : 'p',
       );
       handleFootnotes(node, pos);
       return false;
@@ -1519,7 +932,8 @@ class TypesetView {
     const set = DecorationSet.create(state.doc, decos);
     const meta: TypesetMeta = { type: 'decos', decos: set };
     if (this.pendingPageMarks) {
-      meta.pageMarks = this.pendingPageMarks;
+      meta.pageMarks = this.pendingPageMarks.marks;
+      meta.pageBasis = this.pendingPageMarks.basis;
       this.pendingPageMarks = null;
     }
     const tr = state.tr.setMeta(typesetKey, meta);
@@ -1530,496 +944,131 @@ class TypesetView {
   }
 
   /**
-   * Walk the naturally-laid-out document and decide where pages break.
-   * Paragraphs split at oracle line boundaries; lists and blockquotes break
-   * between children; everything else moves to the next page whole. Footnote
-   * bodies reserve space at the bottom of the page their marker lands on, so
-   * a unit fits only if unit + its footnotes fit above the footnote area.
+   * Install page geometry only when it has explicit exact provenance.
+   * A mapped basis is a temporary visual hold while the replacement compile
+   * is pending; any failed validation drops straight to continuous mode.
    */
-  private paginate(snapshot: PaginationGeometrySnapshot): { spacers: Spacer[]; count: number } {
-    const view = this.view;
-    const s = snapshot.settings;
-    const size = snapshot.size;
-    const marginTop = snapshot.marginTop;
-    const marginBottom = snapshot.marginBottom;
-    const contentH = snapshot.contentHeight;
-    if (contentH < 120) return { spacers: [], count: 1 };
-
-    // Page-break oracle: when Typst has told us where its pages break for
-    // exactly this document, obey; otherwise paginate ourselves and ask.
-    if (effectiveFont(s.font).exact) {
-      let sig = this.docSig.get(view.state.doc);
-      if (!sig) {
-        try {
-          sig = docToTyp(view.state.doc);
-          this.docSig.set(view.state.doc, sig);
-        } catch {
-          sig = undefined;
-        }
-      }
-      if (sig) {
-        const entry = this.oracles.page.get(sig);
-        if (!entry) this.oracles.page.request(sig, view.state.doc, s, this.atomResolver());
-        if (entry?.status === 'ok' && entry.pageStarts) {
-          const forced = this.paginateForced(
-            snapshot,
-            entry.pageStarts,
-            entry.pageCount ?? entry.pageStarts.length + 1,
-          );
-          if (forced) {
-            this.pagPath = 'exact';
-            this.pagWhy = 'entry=exact';
-            // Persist the starts as mapped markers for the next edit burst.
-            this.lastPageCount = entry.pageCount ?? entry.pageStarts.length + 1;
-            this.exactPageBasisDoc = view.state.doc;
-            this.exactPageBasisEpoch = this.paginationGeometryEpoch;
-            this.exactPageBasisWidth = view.dom.clientWidth;
-            this.pageSpacerAuthority = 'exact';
-            this.clearFallbackPageBasis();
-            this.pendingPageMarks = DecorationSet.create(
-              view.state.doc,
-              entry.pageStarts.map((ps, index) =>
-                Decoration.widget(ps.pos, () => document.createElement('span'), {
-                  psLine: ps.line,
-                  psUnit: ps.unit,
-                  psPage: index + 1,
-                  psEpoch: this.paginationGeometryEpoch,
-                }),
-              ),
-            );
-            this.applyTableEffects(forced.tableEffects);
-            return { spacers: forced.spacers, count: forced.count };
-          }
-        }
-        // Oracle still compiling for this revision: reuse the LAST starts,
-        // mapped through the edits — pages hold still instead of falling
-        // back to a local guess that disagrees by a line. Only while
-        // PENDING: a failed match must not hold stale geometry forever.
-        const confidence = this.oracles.observePageEntry(entry);
-        const marks = confidence.hold
-          ? (typesetKey.getState(view.state)?.pageMarks.find() ?? [])
-          : [];
-        this.pagWhy = `entry=${confidence.status} marks=${marks.length}` +
-          (entry?.status === 'fail' ? ` streak=${confidence.failureStreak}` : '');
-        if (marks.length) {
-          const stale = marks
-            .map((m) => ({
-              pos: m.from,
-              line: (m.spec as { psLine: number }).psLine,
-              unit: (m.spec as { psUnit: string }).psUnit,
-            }))
-            .sort((a, b) => a.pos - b.pos);
-          const forced = this.paginateForced(
-            snapshot,
-            stale,
-            this.lastPageCount || stale.length + 1,
-            true,
-          );
-          if (forced) {
-            this.pagPath = 'held';
-            this.pageSpacerAuthority = 'held';
-            this.applyTableEffects(forced.tableEffects);
-            return { spacers: forced.spacers, count: forced.count };
-          }
-        }
-      }
-    }
-
-    this.pagPath = 'fallback';
-    const runFallback = (seed?: PaginationFallbackSeed): PaginationFallbackResult => {
-      // Origin: the stack top. view.dom (.ProseMirror) sits inside #editor's
-      // page-margin padding, so anchor to its parent, whose top is the top of
-      // the first painted page.
-      // Measurements run with the current spacers still in the DOM: convert
-      // to NATURAL (continuous) geometry by subtracting the spacers above —
-      // and the internal extras of any applied table splits.
-      const stackY = (clientTop: number, pos: number) =>
-        clientTop - snapshot.stackTop - this.heightAbove(snapshot, pos);
-
-      // Footnote bodies, in document order, consumed as units are placed.
-      const fnList: Array<{ pos: number; height: number }> = [];
-      if (!seed) {
-        view.state.doc.descendants((node, pos) => {
-          if (node.type.name !== 'footnote') return true;
-          const dom = view.nodeDOM(pos);
-          const body = dom instanceof HTMLElement ? dom.querySelector<HTMLElement>('.fn-body') : null;
-          fnList.push({ pos, height: body ? body.offsetHeight : 0 });
-          return false;
-        });
-      }
-      let fnIdx = 0;
-      const peekFnH = (endPos: number) => {
-        let h = 0;
-        for (let j = fnIdx; j < fnList.length && fnList[j].pos < endPos; j++) h += fnList[j].height + FN_GAP;
-        return h;
-      };
-      const takeFnH = (endPos: number) => {
-        let h = 0;
-        while (fnIdx < fnList.length && fnList[fnIdx].pos < endPos) {
-          h += fnList[fnIdx].height + FN_GAP;
-          fnIdx++;
-        }
-        return h;
-      };
-
-      const spacers: Spacer[] = seed ? seed.prefixSpacers.map((spacer) => ({ ...spacer })) : [];
-      const tableEffects: TableEffect[] = [];
-      const anchors: Array<{ pos: number; page: number; kind: Spacer['kind'] }> = [];
-      let shift = seed?.shift ?? 0;
-      let page = seed?.page ?? 0;
-      let pageFnH = 0;
-      let visitedUnits = 0;
-      const bottomFor = (extraFnH: number) => {
-        const total = pageFnH + extraFnH;
-        return page * (size.h + PAGE_GAP) + size.h - marginBottom - (total > 0 ? total + FN_SEP : 0);
-      };
-      // The same page-top ink adjustment paginateForced applies: fallback
-      // pagination must land units at identical offsets, or an oracle miss
-      // visibly shifts the whole page rhythm by the adjustment.
-      const F = snapshot.bodyPx;
-      const adjFor = (pos: number, kind: Spacer['kind']): number => {
-        if (kind === 'line') return pageTopAdjustEm(s, 'line') * F;
-        const n = view.state.doc.nodeAt(pos);
-        if (n?.type.name === 'paragraph') return pageTopAdjustEm(s, 'paragraph') * F;
-        if (n?.type.name === 'heading') {
-          const lv = Math.min(3, (n.attrs.level as number) || 1);
-          return pageTopAdjustEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;
-        }
-        return 0;
-      };
-      const breakBefore = (pos: number, y: number, kind: Spacer['kind']) => {
-        const delta = (page + 1) * (size.h + PAGE_GAP) + marginTop + adjFor(pos, kind) - (y + shift);
-        page++;
-        anchors.push({ pos, page, kind });
-        pageFnH = 0;
-        if (delta > 0) {
-          spacers.push({ pos, height: delta, kind });
-          shift += delta;
-        }
-      };
-
-      const rectOf = (pos: number): DOMRect | null => {
-        const el = view.nodeDOM(pos);
-        return el instanceof HTMLElement ? el.getBoundingClientRect() : null;
-      };
-
-      // Sticky anchor: a heading immediately above the current block — a break
-      // at the block's start must carry the heading along (Typst headings are
-      // sticky by default; the oracle already does this, the fallback must too).
-      let sticky: { pos: number; y: number } | null = null;
-      const breakStart = (pos: number, y: number) => {
-        const a = sticky ?? { pos, y };
-        breakBefore(a.pos, a.y, 'block');
-      };
-
-      /** `owner` is the enclosing list item, when this block is the first
-       *  thing inside one: moving the block whole must move the bullet too. */
-      const atomic = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
-        const endPos = pos + node.nodeSize;
-        const r = rectOf(pos);
-        if (!r || r.height === 0) {
-          pageFnH += takeFnH(endPos);
-          return;
-        }
-        const y = stackY(r.top, pos);
-        const ufH = takeFnH(endPos);
-        if (y + shift + r.height > bottomFor(ufH) + 0.5 && r.height <= contentH) {
-          breakStart(owner?.pos ?? pos, owner?.y ?? y);
-        }
-        pageFnH += ufH;
-      };
-
-      const paragraph = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
-        const endPos = pos + node.nodeSize;
-        const r = rectOf(pos);
-        if (!r) {
-          pageFnH += takeFnH(endPos);
-          return;
-        }
-        const yTop = stackY(r.top, pos);
-        // Whole-paragraph fast path: fits together with its footnotes.
-        if (yTop + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
-          pageFnH += takeFnH(endPos);
-          return;
-        }
-        const entry = this.cache.get(node);
-        if (!entry || entry.lines.length < 2) return atomic(pos, node, owner);
-
-        const el = view.nodeDOM(pos) as HTMLElement;
-        const lineH = parseFloat(getComputedStyle(el).lineHeight) || 24;
-        const base = pos + 1;
-        const lineTops = entry.lines.map((line) => {
-          const c = view.coordsAtPos(base + line.from);
-          // coordsAtPos returns the caret box; back off half-leading to
-          // approximate the line-box top.
-          return { pos: base + line.from, y: stackY(c.top, base + line.from) - Math.max(0, (lineH - (c.bottom - c.top)) / 2) };
-        });
-
-        const n = lineTops.length;
-        // Index of the first line on the current page (for orphan/widow rules
-        // across multi-page paragraphs).
-        let segStart = 0;
-        for (let k = 0; k < n; k++) {
-          const y = lineTops[k].y;
-          const h = k + 1 < n ? lineTops[k + 1].y - y : yTop + r.height - y;
-          const lineEnd = k + 1 < n ? base + entry.lines[k + 1].from : endPos;
-          const ufH = takeFnH(lineEnd);
-          if (y + shift + h <= bottomFor(ufH) + 0.5) {
-            pageFnH += ufH;
-            continue;
-          }
-
-          if (k === 0) {
-            // First line doesn't fit: the paragraph starts on the next page.
-            breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
-            pageFnH += ufH;
-            continue;
-          }
-          // A line already at a page top that still overflows is taller than
-          // the page — let it overflow rather than breaking at its own start.
-          if (k === segStart) {
-            pageFnH += ufH;
-            continue;
-          }
-
-          let kb = k;
-          // Widow control: never strand the paragraph's last line alone at the
-          // top of a page — break one line earlier so two lines move together.
-          if (n - kb === 1 && kb - 1 > segStart) kb = k - 1;
-          // Orphan control: never leave fewer than two lines at the bottom of
-          // the page where the paragraph starts — move the whole paragraph
-          // instead (unless it is taller than a page and must split somewhere).
-          if (segStart === 0 && kb < 2) {
-            if (r.height <= contentH) {
-              breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
-              pageFnH += ufH;
-              continue;
-            }
-            kb = Math.max(kb, 1);
-          }
-
-          breakBefore(lineTops[kb].pos, lineTops[kb].y, 'line');
-          segStart = kb;
-          pageFnH += ufH;
-        }
-      };
-
-      // Tables: Typst decides. A table crossing the page bottom is handed to
-      // the paged mini-compile (table-split.ts), which reproduces the real
-      // document's constraints — Typst answers with the same split rows,
-      // repeated headers, or a whole-block push it would use in the PDF. The
-      // node view renders the answer; page math advances per fragment.
-      const tableCase = (pos: number, node: PMNode) => {
-        const endPos = pos + node.nodeSize;
-        const r = rectOf(pos);
-        if (!r || r.height === 0) {
-          pageFnH += takeFnH(endPos);
-          return;
-        }
-        const assigned = getSplit(node);
-        const naturalH = assigned ? assigned.naturalPx : r.height;
-        const y = stackY(r.top, pos);
-        const ufH = takeFnH(endPos);
-        if (y + shift + naturalH <= bottomFor(ufH) + 0.5) {
-          if (assigned) tableEffects.push({ type: 'clear', node });
-          pageFnH += ufH;
-          return;
-        }
-        const pageTopAbs = page * (size.h + PAGE_GAP) + marginTop;
-        const offsetPt = Math.max(0, (y + shift - pageTopAbs) * 0.75);
-        const fresh = requestTableSplit(view, node, view.dom.clientWidth || 576, contentH * 0.75, offsetPt);
-        // While the compile is in flight, hold the current rendering steady
-        // (stale split, or the plain atomic push) — the answer triggers a
-        // repagination.
-        const layout: TableSplitLayout | null = fresh ?? assigned?.layout ?? null;
-        if (!layout) {
-          if (naturalH <= contentH) breakStart(pos, y);
-          pageFnH += ufH;
-          return;
-        }
-        if (layout.pushed) breakStart(pos, y);
-        if (layout.fragments.length <= 1) {
-          // Whole on one page (unbreakable figure, or it fits after the push).
-          tableEffects.push({ type: 'clear', node });
-          if (!layout.pushed && naturalH <= contentH) breakStart(pos, y);
-          pageFnH += ufH;
-          return;
-        }
-        const gaps: number[] = [];
-        let bottomAbs = y + shift + layout.fragments[0].heightPx;
-        for (let i = 1; i < layout.fragments.length; i++) {
-          page++;
-          pageFnH = 0;
-          const top = page * (size.h + PAGE_GAP) + marginTop;
-          gaps.push(top - bottomAbs);
-          bottomAbs = top + layout.fragments[i].heightPx;
-        }
-        tableEffects.push({ type: 'apply', node, layout, gaps, naturalHeight: naturalH });
-        const displayed = layout.fragments.reduce((s2, f) => s2 + f.heightPx, 0) + gaps.reduce((s2, g) => s2 + g, 0);
-        shift += displayed - naturalH;
-        pageFnH += ufH;
-      };
-
-      // Lists and blockquotes break between children (whole child moves).
-      const container = (pos: number, node: PMNode) => {
-        const endPos = pos + node.nodeSize;
-        const r = rectOf(pos);
-        if (!r) {
-          pageFnH += takeFnH(endPos);
-          return;
-        }
-        if (stackY(r.top, pos) + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
-          pageFnH += takeFnH(endPos);
-          return;
-        }
-        // Breaks found below are inside the container, so a heading sitting
-        // above it is no longer the thing being pushed onto the next page.
-        sticky = null;
-        node.forEach((child, offset) => {
-          const childPos = pos + 1 + offset;
-          const childEnd = childPos + child.nodeSize;
-          const cr = rectOf(childPos);
-          if (!cr || cr.height === 0) {
-            pageFnH += takeFnH(childEnd);
-            return;
-          }
-          const y = stackY(cr.top, childPos);
-          if (y + shift + cr.height <= bottomFor(peekFnH(childEnd)) + 0.5) {
-            pageFnH += takeFnH(childEnd);
-            return;
-          }
-          // The child overflows. A list item is NOT an atom: Typst breaks the
-          // prose inside it across pages like any other text, so break inside
-          // it too. Moving the whole item leaves the page short by the item's
-          // entire height — and an item taller than a page used to get no
-          // break at all, running straight off the bottom.
-          //
-          // Only the item's FIRST block carries the item as its owner: a break
-          // there must take the bullet with it, while a break before a later
-          // block genuinely belongs inside the item.
-          if (child.type.name === 'list_item') {
-            let owner: { pos: number; y: number } | undefined = { pos: childPos, y };
-            child.forEach((grand, grandOffset) => {
-              splitBlock(childPos + 1 + grandOffset, grand, owner);
-              owner = undefined;
-            });
-          } else {
-            splitBlock(childPos, child);
-          }
-          pageFnH += takeFnH(childEnd);
-        });
-        pageFnH += takeFnH(endPos);
-      };
-
-      /** Page-break one block wherever it sits — top level or nested in a
-       *  list item or quote. Mirrors the document-level dispatch below. */
-      const splitBlock = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
-        switch (node.type.name) {
-          case 'paragraph':
-            if (node.attrs.keep) atomic(pos, node, owner);
-            else paragraph(pos, node, owner);
-            break;
-          case 'bullet_list':
-          case 'ordered_list':
-          case 'blockquote':
-            container(pos, node);
-            break;
-          case 'table':
-            tableCase(pos, node);
-            break;
-          default:
-            atomic(pos, node, owner);
-        }
-      };
-
-      view.state.doc.forEach((node, offset) => {
-        if (offset < (seed?.startPos ?? 0)) return;
-        visitedUnits++;
-        switch (node.type.name) {
-          case 'page_break':
-          case 'numbering_restart': {
-            const r = rectOf(offset);
-            if (r) breakBefore(offset + node.nodeSize, stackY(r.bottom, offset), 'block');
-            pageFnH += takeFnH(offset + node.nodeSize);
-            break;
-          }
-          case 'paragraph':
-            if (node.attrs.keep) atomic(offset, node);
-            else paragraph(offset, node);
-            break;
-          case 'bullet_list':
-          case 'ordered_list':
-          case 'blockquote':
-            container(offset, node);
-            break;
-          case 'table':
-            tableCase(offset, node);
-            break;
-          default:
-            atomic(offset, node);
-            break;
-        }
-        if (node.type.name === 'heading') {
-          const hr = rectOf(offset);
-          sticky = sticky ?? (hr ? { pos: offset, y: stackY(hr.top, offset) } : null);
-        } else {
-          sticky = null;
-        }
-      });
-
-      return { spacers, count: page + 1, tableEffects, visitedUnits, anchors };
+  private paginate(snapshot: PaginationGeometrySnapshot): PaginationPassResult {
+    const { state } = this.view;
+    const settings = snapshot.settings;
+    const continuous = (reason: string, abandon = true): PaginationPassResult => {
+      this.pagPath = 'continuous';
+      this.pagWhy = reason;
+      if (abandon) this.abandonPageBasis();
+      return { spacers: [], count: 0 };
     };
 
-    this.suffixPaginationStats.attempts++;
-    const suffixPlan = this.planPaginationSuffix(snapshot);
-    if (suffixPlan.kind === 'seed') {
-      this.suffixPaginationStats.eligible++;
-      this.suffixPaginationStats.lastStartPos = suffixPlan.seed.dirtyPos;
-      this.suffixPaginationStats.lastAnchorPos = suffixPlan.seed.startPos;
-      const suffix = runFallback({
-        startPos: suffixPlan.seed.startPos,
-        page: suffixPlan.seed.page,
-        shift: suffixPlan.seed.shift,
-        prefixSpacers: suffixPlan.seed.prefixSpacers.map((spacer) => ({ ...spacer })),
-      });
-      this.suffixPaginationStats.suffixUnits += suffix.visitedUnits;
+    if (!effectiveFont(settings.font).exact) {
+      return continuous('font has no exact Typst/browser metric contract');
+    }
 
-      const full = runFallback();
-      this.suffixPaginationStats.compared++;
-      this.suffixPaginationStats.fullUnits += full.visitedUnits;
-      const difference = this.fallbackResultDifference(full, suffix);
-      const matches = difference === null;
-      this.suffixPaginationStats.lastDifference = difference;
-      if (matches) {
-        this.suffixPaginationStats.matches++;
-        this.suffixPaginationStats.lastReason = `matched-${suffixPlan.source}`;
-      } else {
-        this.suffixPaginationStats.mismatches++;
-        this.suffixPaginationStats.lastReason = `mismatch-${suffixPlan.source}`;
+    let sig = this.docSig.get(state.doc);
+    if (!sig) {
+      try {
+        sig = docToTyp(state.doc);
+        this.docSig.set(state.doc, sig);
+      } catch {
+        return continuous('document cannot be serialized');
       }
-      this.rememberFallbackBasis(full);
-      // Suffix replay remains a shadow until exact-source browser fixtures can
-      // exercise it in production mode. The full result is always installed;
-      // a mismatch can therefore affect telemetry, never page geometry.
-      this.pageSpacerAuthority = 'fallback';
-      this.clearExactPageBasis();
-      this.applyTableEffects(full.tableEffects);
-      return { spacers: full.spacers, count: full.count };
     }
 
-    const fallback = runFallback();
-    this.suffixPaginationStats.fullUnits += fallback.visitedUnits;
-    if (!suffixPlan.reason.endsWith('-unchanged') || this.suffixPaginationStats.compared === 0) {
-      this.suffixPaginationStats.lastReason = suffixPlan.reason;
-      this.suffixPaginationStats.lastDifference = null;
-      this.suffixPaginationStats.lastStartPos = null;
-      this.suffixPaginationStats.lastAnchorPos = null;
+    const entry = this.oracles.page.get(sig);
+    if (!entry) {
+      this.oracles.page.request(sig, state.doc, settings, this.atomResolver());
     }
-    this.rememberFallbackBasis(fallback);
-    this.pageSpacerAuthority = 'fallback';
-    this.clearExactPageBasis();
-    this.applyTableEffects(fallback.tableEffects);
-    return { spacers: fallback.spacers, count: fallback.count };
+
+    const publicationBlocker = this.documentPublicationBlocker();
+    const publicationReady = !publicationBlocker && this.documentPublicationReady();
+    if (entry?.status === 'ok' && entry.pageStarts && publicationReady) {
+      const forced = this.paginateForced(
+        snapshot,
+        entry.pageStarts,
+        entry.pageCount ?? entry.pageStarts.length + 1,
+      );
+      if (!forced) {
+        return continuous('fresh exact starts cannot be represented');
+      }
+
+      const basis: ExactPageBasis = {
+        provenance: 'exact',
+        pageCount: forced.count,
+        geometryEpoch: this.paginationGeometryEpoch,
+        editorWidth: this.view.dom.clientWidth,
+      };
+      this.pagPath = 'exact';
+      this.pagWhy = 'fresh full-document Typst snapshot';
+      this.pendingPageMarks = {
+        basis,
+        marks: DecorationSet.create(
+          state.doc,
+          entry.pageStarts.map((pageStart, index) =>
+            Decoration.widget(pageStart.pos, () => document.createElement('span'), {
+              psLine: pageStart.line,
+              psUnit: pageStart.unit,
+              psPage: index + 1,
+              psProvenance: 'exact',
+              psEpoch: basis.geometryEpoch,
+            }),
+          ),
+        ),
+      };
+      return forced;
+    }
+
+    // A parsed PageOracle answer whose shared crops are still decoding is a
+    // pending visual publication, not a fresh exact surface. Existing proven
+    // markers may be held briefly through this state; new ones wait.
+    const confidence = this.oracles.observePageEntry(publicationReady ? entry : undefined);
+    const pluginState = typesetKey.getState(state);
+    const basis = pluginState?.pageBasis;
+    const marks = pluginState?.pageMarks.find() ?? [];
+    const basisIsCurrent =
+      basis?.provenance === 'exact' &&
+      basis.geometryEpoch === this.paginationGeometryEpoch &&
+      Math.abs(basis.editorWidth - this.view.dom.clientWidth) <= 0.5;
+
+    // Holding is permitted only for an actually pending replacement and only
+    // for markers emitted by the last exact compile. A failure is terminal for
+    // this basis even if another request begins later.
+    if (confidence.hold && !entry && basisIsCurrent && marks.length === basis.pageCount - 1) {
+      const stale = marks
+        .map((mark) => {
+          const spec = mark.spec as {
+            psLine?: number;
+            psUnit?: string;
+            psProvenance?: string;
+            psEpoch?: number;
+          };
+          if (spec.psProvenance !== 'exact' || spec.psEpoch !== basis.geometryEpoch) return null;
+          return {
+            pos: mark.from,
+            line: spec.psLine ?? Number.NaN,
+            unit: spec.psUnit ?? '',
+          };
+        })
+        .filter((pageStart): pageStart is { pos: number; line: number; unit: string } => pageStart !== null)
+        .sort((a, b) => a.pos - b.pos);
+      if (stale.length === marks.length) {
+        const held = this.paginateForced(snapshot, stale, basis.pageCount, true);
+        if (held) {
+          this.pagPath = 'held';
+          this.pagWhy = 'mapped exact starts; replacement pending';
+          return held;
+        }
+      }
+      return continuous('mapped exact starts failed validation');
+    }
+
+    return continuous(
+      entry?.status === 'fail'
+        ? `Typst page map unavailable: ${entry.reason ?? 'unknown failure'}`
+        : publicationBlocker
+          ? `${publicationBlocker}; open Proof for exact output`
+        : entry?.status === 'ok' && !publicationReady
+          ? 'applying exact document publication'
+        : 'waiting for first exact page map',
+      entry?.status === 'fail' || !!basis,
+    );
   }
 
   /** Apply Typst's page starts verbatim (with per-unit ink offsets). */
@@ -2041,57 +1090,15 @@ class TypesetView {
       clientTop - snapshot.stackTop - this.heightAbove(snapshot, pos);
 
     const spacers: Spacer[] = [];
-    const tableEffects: TableEffect[] = [];
     let shift = 0;
     let page = 0;
     for (let psi = 0; psi < pageStarts.length; psi++) {
       const ps = pageStarts[psi];
-      // Page breaks INSIDE a table: rendered by the table view as split
-      // fragments (no spacer widget). The paged mini-compile answers with
-      // Typst's own fragments; the split must agree with the oracle's
-      // break count or the whole result fails (graceful fallback).
+      // Defensive boundary: PageOracle normally withholds pageStarts for a
+      // split native table, because editable structured content cannot accept
+      // a synthetic mid-node spacer. If one arrives, keep the table atomic.
       if (ps.unit === 'table' && ps.line > 0) {
-        const node = view.state.doc.nodeAt(ps.pos);
-        const el = view.nodeDOM(ps.pos);
-        if (!node || node.type.name !== 'table' || !(el instanceof HTMLElement)) return null;
-        let last = psi;
-        while (
-          last + 1 < pageStarts.length &&
-          pageStarts[last + 1].pos === ps.pos &&
-          pageStarts[last + 1].unit === 'table'
-        ) {
-          last++;
-        }
-        const breaks = last - psi + 1;
-        const assigned = getSplit(node);
-        const naturalH = assigned ? assigned.naturalPx : el.getBoundingClientRect().height;
-        const yTop = natural(el.getBoundingClientRect().top, ps.pos);
-        const pageTopAbs = page * (size.h + PAGE_GAP) + marginTop;
-        const offsetPt = Math.max(0, (yTop + shift - pageTopAbs) * 0.75);
-        const contentHPx = snapshot.contentHeight;
-        // The oracle's line indices are cumulative within the table unit:
-        // their diffs are the exact per-page line counts of the PDF, and
-        // the mini-compile must reproduce them (it nudges its offset until
-        // it does, so the split row IS the PDF's split row).
-        const targetLines: number[] = [];
-        for (let k = psi; k <= last; k++) {
-          targetLines.push(pageStarts[k].line - (k > psi ? pageStarts[k - 1].line : 0));
-        }
-        const layout = requestTableSplit(view, node, view.dom.clientWidth || 576, contentHPx * 0.75, offsetPt, targetLines);
-        if (!layout || layout.pushed || layout.fragments.length - 1 !== breaks) return null;
-        const gaps: number[] = [];
-        let bottomAbs = yTop + shift + layout.fragments[0].heightPx;
-        for (let k = 1; k < layout.fragments.length; k++) {
-          page++;
-          const top = page * (size.h + PAGE_GAP) + marginTop;
-          gaps.push(top - bottomAbs);
-          bottomAbs = top + layout.fragments[k].heightPx;
-        }
-        tableEffects.push({ type: 'apply', node, layout, gaps, naturalHeight: naturalH });
-        const displayed = layout.fragments.reduce((s2, f) => s2 + f.heightPx, 0) + gaps.reduce((s2, g) => s2 + g, 0);
-        shift += displayed - naturalH;
-        psi = last;
-        continue;
+        return null;
       }
       page++;
       let pos = ps.pos;
@@ -2160,7 +1167,7 @@ class TypesetView {
         return null;
       }
     }
-    return { spacers, count, tableEffects };
+    return { spacers, count };
   }
 
   /**

@@ -84,10 +84,10 @@ export function demoDoc(): PMNode {
   return schema.nodes.doc.create({ bib: { name: 'references.bib', content: DEMO_BIB } }, [
     h(1, 'Plass'),
     p(
-      { text: 'What you are reading is being typeset right now, as you edit it. ', marks: [] },
-      'Every line break in this document was chosen by the ',
-      { text: 'Knuth–Plass algorithm', marks: ['strong'] },
-      ' — the same optimizing paragraph breaker used by TeX and Typst — and imposed on ordinary, fully editable browser text. Click anywhere and start typing: the paragraph re-typesets around your cursor in about a millisecond, and every line lands exactly where the PDF will put it.',
+      { text: 'What you are reading is ordinary, fully editable browser text. ', marks: [] },
+      'Click anywhere and type: each keystroke paints immediately, before compilation or layout reconciliation. When input settles, one full-document ',
+      { text: 'Typst layout snapshot', marks: ['strong'] },
+      ' supplies the authoritative line and page breaks. The Proof button shows Typst’s direct output from the same document source and assets used by PDF export.',
       { note: ['Footnotes live at the bottom of the page their marker lands on — this text is editable right here, and the paginator reserves space for it when breaking pages. Type ', { text: '^[', marks: ['code'] }, ' anywhere to open one (', { text: ']', marks: ['code'] }, ' or Enter hops back out), or use ', { text: '⌘⌥F', marks: ['code'] }, '.'] },
     ),
     h(2, 'Why this exists'),
@@ -106,11 +106,9 @@ export function demoDoc(): PMNode {
       ' and pick an entry — works are numbered by first use and collected in the references list at the end, exactly as the PDF will render them.',
     ),
     p(
-      'The insight this editor is built on: ',
-      { text: 'every layout decision a TeX-class engine makes can be expressed in CSS', marks: ['em'] },
-      '. Line breaks, per-line word spacing, hyphenation points — all of it. So the document stays in the DOM, where selection, cursor movement, IME, spell-check, and screen readers all work natively, and a layout oracle demotes the browser from layout engine to rasterizer, imposing optimal breaks through generated styling. The editing surface ',
-      { text: 'is', marks: ['em'] },
-      ' the output surface.',
+      'The architectural idea is deliberately small: ',
+      { text: 'one document model, one compiled layout authority, and one final-output path', marks: ['em'] },
+      '. The document stays in the DOM, where selection, cursor movement, IME, spell-check, undo, and screen readers work natively. Typst runs after editing settles and returns an immutable snapshot; the browser projects those decisions without becoming a competing typesetter. Exact proof and PDF then consume the same serialization and asset map.',
     ),
     h(2, 'Mathematics'),
     p(
@@ -152,29 +150,29 @@ export function demoDoc(): PMNode {
     p(
       'Insert a table with ',
       { text: '⌘⌥T', marks: ['code'] },
-      '. What you see is the compiled table — click it to edit in a focused card (cells, rows, columns, alignment, style) with a live result. Tables export as native Typst ',
+      '. Cells are the document itself: click and type directly, use Tab to move, select a rectangle to merge or copy, and use the contextual controls for rows, columns, headers, alignment, style, caption, and label. Rich cell content stays structured and tables export as native Typst ',
       { text: '#table', marks: ['code'] },
-      ':',
+      '. The # menu also inserts an executable Typst embed with source and compiled preview visible side by side; ordinary code blocks never execute:',
     ),
     demoTable(),
     h(2, 'How it works'),
     schema.nodes.bullet_list.create(null, [
       schema.nodes.list_item.create(null, p(
-        { text: 'Measure.', marks: ['strong'] },
-        ' Every word is measured with the browser’s own font metrics, so the oracle’s arithmetic and the renderer’s pixels agree by construction.',
+        { text: 'Edit.', marks: ['strong'] },
+        ' Document transactions update native text first. No compiler, paragraph optimizer, toolbar reflow, or page calculation is allowed on the keystroke-to-paint path.',
       )),
       schema.nodes.list_item.create(null, p(
-        { text: 'Optimize.', marks: ['strong'] },
-        ' Knuth–Plass considers every feasible set of break points for the whole paragraph — including hyphenation points from Liang’s patterns, TeX’s own hyphenation algorithm — and minimizes total demerits.',
+        { text: 'Reconcile.', marks: ['strong'] },
+        ' After a short quiet period, a bounded latest-wins compiler queue asks Typst once for the whole document. Only the newest immutable snapshot may update line or page geometry.',
       )),
       schema.nodes.list_item.create(null, p(
-        { text: 'Impose.', marks: ['strong'] },
-        ' The chosen breaks and per-line spacing are applied as editor decorations: presentation only, invisible to the document model, the clipboard, and assistive technology.',
+        { text: 'Prove.', marks: ['strong'] },
+        ' Exact proof displays sanitized Typst SVG at physical scale. PDF export uses the same prepared Typst source, fonts, and assets, so the viewer and final artifact have one authority.',
       )),
     ]),
     schema.nodes.blockquote.create(null, [
       p(
-        'The first true WYSIWYG typesetting editor is not a research project; it is a translation layer between two mature systems, plus product polish.',
+        'The editor is native while you type, authoritative when it settles, and exact when you proof — without a hidden second document or a second production typesetter.',
       ),
     ]),
     p(
@@ -188,7 +186,7 @@ export function demoDoc(): PMNode {
       { text: '>', marks: ['code'] },
       ' for quotes, ',
       { text: '-', marks: ['code'] },
-      ' for lists. Documents autosave locally. Export produces a clean ',
+      ' for lists. Code stays inert; executable Typst is an explicit embed with its source always visible. Documents autosave locally. Export produces a clean ',
       { text: '.typ', marks: ['code'] },
       ' file — human-readable, git-friendly, and one ',
       { text: 'typst compile', marks: ['code'] },

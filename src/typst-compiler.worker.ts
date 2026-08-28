@@ -20,18 +20,37 @@ import {
   utf8OutputSize,
   validateCompilerTask,
 } from './typst-worker-protocol';
+import {
+  TYPST_EMBED_REGION_KIND,
+  TYPST_EMBED_REGION_LABEL,
+  type TypstEmbedRegion,
+  type TypstPagePosition,
+} from './typst-embed-regions';
+import type { TypstDocumentSvgPublication } from './typst-document-publication';
+import {
+  TYPST_LAYOUT_REGION_LABEL,
+  parseTypstLayoutRegions,
+} from './typst-layout-regions';
+import {
+  parseTypstPreviewRegions,
+  TYPST_PREVIEW_REGION_LABEL,
+} from './typst-preview-regions';
 
 interface TypstLike {
   addSource(path: string, content: string): Promise<void>;
   mapShadow(path: string, data: Uint8Array): Promise<void>;
   resetShadow(): Promise<void> | void;
   pdf(o: { mainFilePath: string }): Promise<Uint8Array | undefined>;
-  svg(o: { mainContent: string } | { mainFilePath: string }): Promise<string>;
+  svg(o: { mainContent: string } | { mainFilePath: string } | { vectorData: Uint8Array }): Promise<string>;
   getCompiler(): Promise<{
     runWithWorld<T>(
       o: { mainFilePath: string },
       cb: (world: {
         compile(o?: object): Promise<unknown>;
+        vector(o?: object): Promise<{
+          result?: Uint8Array;
+          diagnostics?: Array<{ severity?: string }>;
+        }>;
         query<T2>(o: { selector: string }): Promise<T2>;
       }) => Promise<T>,
     ): Promise<T>;
@@ -238,7 +257,60 @@ function boundedSvg(svg: string): string {
 
 class OutputLimitError extends Error {}
 
-async function runTask(task: CompilerTask): Promise<string | Uint8Array | unknown[] | null> {
+function point(value: unknown): TypstPagePosition | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as { page?: unknown; x?: unknown; y?: unknown };
+  const length = (input: unknown): number => {
+    if (typeof input !== 'string' || !/^-?\d+(?:\.\d+)?pt$/.test(input)) return Number.NaN;
+    return Number(input.slice(0, -2));
+  };
+  const page = candidate.page;
+  const x = length(candidate.x);
+  const y = length(candidate.y);
+  return Number.isSafeInteger(page) && (page as number) >= 1 && Number.isFinite(x) && Number.isFinite(y)
+    ? { page: page as number, x, y }
+    : null;
+}
+
+function embedRegions(query: unknown): TypstEmbedRegion[] {
+  const item = Array.isArray(query) && query.length === 1 ? query[0] : null;
+  const value = item && typeof item === 'object'
+    ? (item as { value?: unknown }).value
+    : null;
+  if (!value || typeof value !== 'object') throw new Error('Typst embed region metadata is missing');
+  const payload = value as { kind?: unknown; regions?: unknown };
+  if (payload.kind !== TYPST_EMBED_REGION_KIND || !Array.isArray(payload.regions)) {
+    throw new Error('Typst embed region metadata is invalid');
+  }
+
+  const pairs = new Map<number, { start?: TypstPagePosition; end?: TypstPagePosition }>();
+  for (const raw of payload.regions) {
+    if (!raw || typeof raw !== 'object') throw new Error('Typst embed region entry is invalid');
+    const candidate = raw as { index?: unknown; edge?: unknown; pos?: unknown };
+    if (!Number.isSafeInteger(candidate.index) || (candidate.index as number) < 0) {
+      throw new Error('Typst embed region index is invalid');
+    }
+    if (candidate.edge !== 'start' && candidate.edge !== 'end') {
+      throw new Error('Typst embed region edge is invalid');
+    }
+    const pos = point(candidate.pos);
+    if (!pos) throw new Error('Typst embed region position is invalid');
+    const index = candidate.index as number;
+    const pair = pairs.get(index) ?? {};
+    if (pair[candidate.edge]) throw new Error('Typst embed region edge is duplicated');
+    pair[candidate.edge] = pos;
+    pairs.set(index, pair);
+  }
+
+  return [...pairs.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([index, pair]) => {
+      if (!pair.start || !pair.end) throw new Error('Typst embed region is incomplete');
+      return { index, start: pair.start, end: pair.end };
+    });
+}
+
+async function runTask(task: CompilerTask): Promise<string | Uint8Array | unknown[] | TypstDocumentSvgPublication | null> {
   if (task.kind === 'test-busy') {
     if (!import.meta.env.DEV) throw new Error('Unsupported compiler task');
     const end = performance.now() + task.milliseconds;
@@ -248,16 +320,16 @@ async function runTask(task: CompilerTask): Promise<string | Uint8Array | unknow
     return null;
   }
 
-  if (sourceNeedsPinnedTypstPackage(task.source)) await loadPinnedPackage();
-  const typst = await loadTypst();
-  if (task.kind === 'svg') {
-    await typst.resetShadow();
-    return boundedSvg(await typst.svg({ mainContent: task.source }));
-  }
-  if (task.kind === 'query') {
-    await typst.resetShadow();
-    await typst.addSource('/probe.typ', task.source);
-    const compiler = await typst.getCompiler();
+  if (import.meta.env.DEV && (task.kind === 'svg' || task.kind === 'query')) {
+    if (sourceNeedsPinnedTypstPackage(task.source)) await loadPinnedPackage();
+    const researchTypst = await loadTypst();
+    if (task.kind === 'svg') {
+      await researchTypst.resetShadow();
+      return boundedSvg(await researchTypst.svg({ mainContent: task.source }));
+    }
+    await researchTypst.resetShadow();
+    await researchTypst.addSource('/probe.typ', task.source);
+    const compiler = await researchTypst.getCompiler();
     const value = await compiler.runWithWorld({ mainFilePath: '/probe.typ' }, async (world) => {
       const compiled = (await world.compile()) as
         | { diagnostics?: Array<{ severity?: string }> }
@@ -272,10 +344,62 @@ async function runTask(task: CompilerTask): Promise<string | Uint8Array | unknow
     }
     return JSON.parse(json) as unknown[] | null;
   }
+  if (task.kind === 'svg' || task.kind === 'query') throw new Error('Unsupported compiler task');
+
+  if (sourceNeedsPinnedTypstPackage(task.source)) await loadPinnedPackage();
+  const typst = await loadTypst();
 
   await installWorld(typst, task.source, task.assets);
   if (task.kind === 'document-svg') {
     return boundedSvg(await typst.svg({ mainFilePath: '/main.typ' }));
+  }
+  if (task.kind === 'document-svg-regions') {
+    const compiler = await typst.getCompiler();
+    const { vector, queries } = await compiler.runWithWorld({ mainFilePath: '/main.typ' }, async (world) => {
+      // `world.vector()` compiles this snapshot and returns its vector artifact.
+      // Query the same live world before it is freed, then render that exact
+      // artifact below. Calling the snippet's mainFilePath SVG helper here
+      // would take a second snapshot and compile the document a second time.
+      const compiled = await world.vector();
+      const errors = compiled?.diagnostics?.filter((diagnostic) => diagnostic.severity === 'error') ?? [];
+      if (errors.length) throw new Error('Typst document region query failed');
+      if (!compiled?.result) throw new Error('The compiler returned no Typst vector artifact');
+      const safeQuery = async (selector: string): Promise<unknown[] | null> => {
+        try {
+          return await world.query<unknown[]>({ selector });
+        } catch {
+          // Region metadata is auxiliary to the already-successful SVG. A
+          // collision or malformed one must blank only that preview/layout
+          // target, never pagination and every other shared consumer.
+          return null;
+        }
+      };
+      return {
+        vector: compiled.result,
+        queries: {
+          embeds: await safeQuery(`<${TYPST_EMBED_REGION_LABEL}>`),
+          layout: await safeQuery(`<${TYPST_LAYOUT_REGION_LABEL}>`),
+          preview: await safeQuery(`<${TYPST_PREVIEW_REGION_LABEL}>`),
+        },
+      };
+    });
+    const svg = boundedSvg(await typst.svg({ vectorData: vector }));
+    const queryJson = JSON.stringify(queries);
+    if (utf8OutputSize(queryJson) > COMPILER_LIMITS.queryOutputBytes) {
+      throw new OutputLimitError('Typst document region query exceeds the 2 MiB output limit');
+    }
+    let regions: TypstEmbedRegion[] = [];
+    try {
+      regions = embedRegions(queries.embeds);
+    } catch {
+      // See safeQuery above: exact page/line layout still consumes the SVG.
+    }
+    return {
+      svg,
+      regions,
+      layoutRegions: parseTypstLayoutRegions(queries.layout),
+      previewRegions: parseTypstPreviewRegions(queries.preview),
+    };
   }
   const pdf = await typst.pdf({ mainFilePath: '/main.typ' });
   if (!pdf) throw new Error('The compiler returned no PDF output');

@@ -1,3 +1,5 @@
+import type { TypstDocumentSvgPublication } from './typst-document-publication';
+
 // Structured-clone-only protocol shared by the UI and compiler worker.
 
 export const COMPILER_LIMITS = {
@@ -10,11 +12,10 @@ export const COMPILER_LIMITS = {
   queryOutputBytes: 2 * 1024 * 1024,
   selectorCharacters: 256,
   assetPathCharacters: 1024,
-  // Queue depth is a buffer, not a quota: a table-heavy document legitimately
-  // asks for hundreds of fragment previews at once, and a dropped request is a
-  // permanently blank table. What actually costs memory is the bytes those
-  // requests hold, so that is what the ceiling measures; the count only stops
-  // a runaway producer from growing the array without bound.
+  // Queue depth is a defensive buffer, not the product's scheduling model:
+  // normal editor work is coalesced into one whole-document publication.
+  // Byte ceilings carry the real memory bound; the count also stops a buggy
+  // or hostile low-level caller from growing the worker array without limit.
   pendingRequests: 512,
   pendingRequestBytes: 64 * 1024 * 1024,
 } as const;
@@ -34,6 +35,7 @@ export type CompilerTask =
   | { kind: 'svg'; source: string }
   | { kind: 'query'; source: string; selector: string }
   | { kind: 'document-svg'; source: string; assets: CompilerAsset[] }
+  | { kind: 'document-svg-regions'; source: string; assets: CompilerAsset[] }
   | { kind: 'pdf'; source: string; assets: CompilerAsset[] }
   // Development-only deterministic watchdog probe. The production worker
   // rejects it and Vite folds away its implementation.
@@ -45,7 +47,7 @@ export interface CompilerRequest {
 }
 
 export type CompilerResponse =
-  | { id: number; ok: true; value: string | Uint8Array | unknown[] | null }
+  | { id: number; ok: true; value: string | Uint8Array | unknown[] | TypstDocumentSvgPublication | null }
   | { id: number; ok: false; code: 'invalid' | 'compile' | 'output-limit'; message: string };
 
 function utf8Size(value: string, limit: number): number {
@@ -79,7 +81,7 @@ export function validateCompilerTask(task: CompilerTask): string | null {
   if (task.kind === 'query' && task.selector.length > COMPILER_LIMITS.selectorCharacters) {
     return 'Typst query selector is too long';
   }
-  if (task.kind !== 'document-svg' && task.kind !== 'pdf') return null;
+  if (task.kind !== 'document-svg' && task.kind !== 'document-svg-regions' && task.kind !== 'pdf') return null;
   if (task.assets.length > COMPILER_LIMITS.assetCount) {
     return `Document has more than ${COMPILER_LIMITS.assetCount} compiler assets`;
   }
@@ -108,7 +110,7 @@ export function utf8OutputSize(value: string): number {
 export function compilerTaskBytes(task: CompilerTask): number {
   if (task.kind === 'test-busy') return 0;
   let bytes = task.source.length;
-  if (task.kind === 'document-svg' || task.kind === 'pdf') {
+  if (task.kind === 'document-svg' || task.kind === 'document-svg-regions' || task.kind === 'pdf') {
     for (const asset of task.assets) bytes += asset.data.byteLength;
   }
   return bytes;

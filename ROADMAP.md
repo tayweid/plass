@@ -34,7 +34,8 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      math" affordance.
    - Per-selection cell fills (the fill presets ship; individual cells are
      still open). Complex-table stress testing and split-interaction polish.
-4. **Citations** (see the worked plan below — the largest planned feature).
+4. **Citation library and style options** (see the worked plan below; core
+   citations and exact shared-publication References already ship).
 5. **Paragraph typography odds and ends** — hyphenation language selection,
    per-document justification toggle, heading font pairing (sans headings
    over serif body).
@@ -54,10 +55,9 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
    to local PDF filenames, picker/reference entries could optionally link to
    those files. This pairs naturally with item 2 in the same code area.
 
-2. **Citation styles — minimal TS port, oracle-verified.** The
-   line-breaker pattern, not a CSL engine: hand-write per-style
-   formatters in TS and offer ONLY ported styles in a document-settings
-   dropdown. IEEE numeric is the existing first-use counter in
+2. **Citation styles — minimal TS formatter, shared-publication verified.**
+   Hand-write per-style formatters in TS and offer ONLY ported styles in a
+   document-settings dropdown. IEEE numeric is the existing first-use counter in
    `citations.ts`; author-year is ~150–250 lines (BibTeX name parsing —
    `von` parts, "Last, First" vs "First Last" —, et-al threshold,
    multi-cite separators, a/b year-suffix disambiguation over the cited
@@ -66,22 +66,19 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
    and AGAINST citeproc-js (a *different* CSL interpreter; would
    disagree with hayagriva in exactly the edge cases that matter).
    - Wiring: `"ieee"` is currently emitted by the document serializer and
-     compiled bibliography preview. Style becomes a document setting,
-     emitted as `style: "…"` on `#bibliography` and parsed back on import
-     (round-trip).
+     rendered in the shared-publication References crop. Style becomes a
+     document setting, emitted as `style: "…"` on `#bibliography` and parsed
+     back on import (round-trip).
    - Painting unchanged: decoration sets `data-cite-num`, CSS `::after`
-     paints it, and the typesetting adapter prices the painted text for the
-     line breaker — only the *source of the string* changes, from the TS
-     counter to the TS formatter.
-   - Verify: `compileInk`'s hidden-citation compile of the References
-     block doubles as the oracle — read the inline citation strings
-     back from the SVG text layer, diff against the TS formatter,
-     per-citation fallback to the oracle's text on mismatch + log
-     (the `__comparePort` discipline). Formatter bugs become invisible
-     corrections that also tell us where the port drifts.
-   - 1–2 days full (mostly formatter + tests; oracle plumbing is nearly
-     free). Half-day minimal version: dropdown wired to PDF + References
-     block only, quick TS author-year for the inline marks.
+     paints it, and PageOracle's matcher identifies the same rendered atom
+     inside the whole-document snapshot — only the *source of the string*
+     changes, from the TS counter to the TS formatter.
+   - Verify from the same instrumented whole-document publication already
+     shared by PageOracle, committed math, and the exact References crop.
+     Compare its inline citation selection text with the TS formatter; do not
+     restore a hidden References compile or add one task per citation. A
+     mismatch keeps the affected live mark non-exact and records actionable
+     parity evidence.
 
 ## Needs its own design session
 
@@ -96,7 +93,6 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
 
 ## Standing backlog
 
-- Raw-Typst-island compiled previews (same pattern as tables/math/bib).
 - **Source view toggle** — a toolbar button switching between the WYSIWYG
   view and the document's plain-text source (its on-disk format: .typ or
   .md, which `file-manager`'s text method already produces). Both directions

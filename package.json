@@ -19,7 +19,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "npm run verify:sidecar && npm run check:unused && npm run check:exports && npm run check:cycles && tsc --noEmit && vite build",
+    "build": "npm run check:unused && npm run check:exports && npm run check:cycles && tsc --noEmit && vite build",
     "check:cycles": "node --import tsx scripts/check-import-cycles.ts",
     "check:unused": "node --import tsx scripts/check-unused.ts",
     "check:exports": "knip --include exports,types",
@@ -29,7 +29,7 @@
     "verify:sidecar": "node --import tsx scripts/verify-sidecar.ts",
     "verify:production": "node --import tsx scripts/verify-production.ts",
     "preview": "vite preview",
-    "test": "tsx src/layout/knuth-plass.test.ts && tsx src/layout/block-layout.test.ts && tsx src/layout/line-decorations.test.ts && tsx src/layout/forced-layout.test.ts && tsx src/layout/pagination-snapshot.test.ts && tsx src/layout/pagination-suffix.test.ts && tsx src/layout/layout-scheduler.test.ts && tsx src/layout/oracle-coordinator.test.ts && tsx src/typ-parser.test.ts && tsx src/md-round.test.ts && tsx src/security.test.ts && tsx src/font-registry.test.ts",
+    "test": "tsx src/compiler/compile-coordinator.test.ts && tsx src/compiler/coordinated-compiler.test.ts && tsx src/document-compile-broker.test.ts && tsx src/transaction-impact.test.ts && tsx src/layout/knuth-plass.test.ts && tsx src/layout/block-layout.test.ts && tsx src/layout/line-decorations.test.ts && tsx src/layout/forced-layout.test.ts && tsx src/layout/layout-snapshot.test.ts && tsx src/layout/typst-oracle.test.ts && tsx src/typst-layout-regions.test.ts && tsx src/typst-preview-regions.test.ts && tsx src/layout/pagination-snapshot.test.ts && tsx src/layout/pagination-suffix.test.ts && tsx src/layout/layout-scheduler.test.ts && tsx src/layout/oracle-coordinator.test.ts && tsx src/table-integrity.test.ts && tsx src/native-table.test.ts && tsx src/typst-embed-policy.test.ts && tsx src/typst-embed.test.ts && tsx src/inline-raw.test.ts && tsx src/typ-parser.test.ts && tsx src/md-round.test.ts && tsx src/security.test.ts && tsx src/font-registry.test.ts",
     "test:layout": "tsx src/layout/port/port-smoke.test.ts && tsx src/layout/font-certification.test.ts",
     "test:browser": "playwright test",
     "sidecar": "node --import tsx scripts/build-sidecar.ts"

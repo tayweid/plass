@@ -1,7 +1,8 @@
 // Fast translation of authoritative Typst break offsets into browser line
 // layouts. This module never chooses breaks: it validates the supplied
 // ForcedBreak list, measures only the resulting line/style intervals, and
-// applies the same word-spacing rules as layoutBlock(...forced).
+// applies the same word-spacing rules as the conservative authoritative
+// translator used when this fast path declines.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import type { AtomWidth } from './block-layout';
@@ -16,11 +17,11 @@ export type ForcedLayoutMeasurer = Pick<
 >;
 
 export interface ForcedLayoutOptions {
-  /** Breaks selected by the port or compiled Typst oracle. */
+  /** Breaks selected by compiled Typst. */
   forced: readonly ForcedBreak[];
   /** Inline atoms whose width the line decides (raw Typst using `fr`). This
    *  path does not model them, so a block containing one declines to the
-   *  translator, which does. */
+   *  conservative authoritative translator, which does. */
   isFill?: (child: PMNode) => boolean;
   /** False means the legacy translator has no intra-word break items. */
   hyphenate?: boolean;
@@ -109,7 +110,7 @@ function adjacentCodePoints(text: string, offset: number): { before: string; aft
 /**
  * Translate authoritative breaks without syllabification or KP items.
  *
- * Conservative null cases intentionally fall back to the existing forced
+ * Conservative null cases intentionally fall back to the authoritative
  * translator: malformed/unordered offsets, a normal break that is not the
  * start of a retained whitespace run, a soft hyphen outside an alphabetic
  * word, a boundary between PM text runs, or a UTF-16 surrogate split.

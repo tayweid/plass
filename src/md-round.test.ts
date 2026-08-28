@@ -3,6 +3,7 @@
 // Run: npx tsx src/md-round.test.ts
 import { mdToDoc } from './md-parser';
 import { docToMd } from './md-serializer';
+import { schema } from './schema';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = '') {
@@ -46,6 +47,10 @@ print("hi")
 \`\`\`
 
 \`\`\`typst
+#let sample = "ordinary code"
+\`\`\`
+
+\`\`\`typst-exec
 #pagebreak()
 \`\`\`
 
@@ -115,14 +120,49 @@ check('table shape', (() => {
   });
   return ok;
 })());
-check('typst island', (() => {
+check('typst language fence stays ordinary code', (() => {
   let ok = false;
   doc.descendants((n) => {
-    if (n.type.name === 'code_block' && n.attrs.params === 'typst-raw' && /pagebreak/.test(n.textContent)) ok = true;
+    if (n.type.name === 'code_block' && n.attrs.params === 'typst' && /ordinary code/.test(n.textContent)) ok = true;
     return true;
   });
   return ok;
 })());
+check('explicit typst-exec fence becomes an embed', (() => {
+  let ok = false;
+  doc.descendants((n) => {
+    if (n.type.name === 'typst_embed' && /pagebreak/.test(n.textContent)) ok = true;
+    return true;
+  });
+  return ok;
+})());
+
+// The explicit representation chooses a long-enough fence, so arbitrary
+// blank/trailing lines and literal Markdown fences survive byte-for-byte.
+{
+  const source = '#let x = 1\n\n```typst\n#circle(radius: 2pt)\n```\n';
+  const embed = schema.nodes.doc.create(null, [
+    schema.nodes.typst_embed.create(null, schema.text(source)),
+  ]);
+  const markdown = docToMd(embed);
+  const restored = mdToDoc(markdown).doc.firstChild;
+  check('Typst embed uses explicit Markdown fence', /^````typst-exec\n/.test(markdown), JSON.stringify(markdown));
+  check('Typst embed Markdown source is lossless', restored?.type.name === 'typst_embed' && restored.textContent === source);
+  check('Typst embed Markdown round-trip converges', docToMd(mdToDoc(markdown).doc) === markdown);
+}
+
+// The only implicit executable migration is the exact persisted pre-split
+// marker. A normal `typst` language tag was asserted inert above.
+{
+  const source = '#line(length: 1in)';
+  const legacy = schema.nodes.doc.create(null, [
+    schema.nodes.code_block.create({ params: 'typst-raw' }, schema.text(source)),
+  ]);
+  const markdown = docToMd(legacy);
+  const restored = mdToDoc(markdown).doc.firstChild;
+  check('legacy typst-raw exports through explicit Markdown form', /^```typst-exec\n/.test(markdown));
+  check('legacy Markdown migration retains source', restored?.type.name === 'typst_embed' && restored.textContent === source);
+}
 
 // round trip: md -> doc -> md -> doc -> md must be stable
 const md1 = docToMd(doc);

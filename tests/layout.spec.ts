@@ -12,13 +12,12 @@ declare global {
     __paginationSnapshotStats: (reset?: boolean) => {
       captures: number;
       spacerScans: number;
-      tableScans: number;
       heightQueries: number;
     };
   }
 }
 
-test('exact live paragraph remains unchanged when the oracle settles', async ({ page }) => {
+test('the first settled exact paragraph remains unchanged when the oracle verifies it', async ({ page }) => {
   await page.goto('/?new=1');
   const text =
     'The Knuth-Plass algorithm is based on the idea of cost. A line which has a very tight or ' +
@@ -45,21 +44,21 @@ test('exact live paragraph remains unchanged when the oracle settles', async ({ 
   });
 
   await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
-  const liveBreaks = await page.evaluate(() => window.__breakSig());
-  expect(liveBreaks.length).toBeGreaterThan(0);
+  const settledBreaks = await page.evaluate(() => window.__breakSig());
+  expect(settledBreaks.length).toBeGreaterThan(0);
 
   await page.waitForTimeout(1200);
-  expect(await page.evaluate(() => window.__breakSig())).toBe(liveBreaks);
+  expect(await page.evaluate(() => window.__breakSig())).toBe(settledBreaks);
   expect(await page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
   expect(await paragraph.textContent()).toBe('Swiftly, ' + text);
 
   const perf = await page.evaluate(() => window.__layoutPerf());
-  expect(perf.live?.totalMs).toBeGreaterThan(0);
+  expect(perf.live).toBeNull();
   expect(perf.settle?.totalMs).toBeGreaterThan(0);
   expect(perf.settle?.paragraphs).toBe(1);
 });
 
-test('caption and footnote edits share one exact live decoration update', async ({ page }) => {
+test('caption and footnote edits share one exact compiled decoration update', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const { schema, doc: current } = window.view.state;
@@ -161,7 +160,6 @@ test('shrinking to one page removes every held page spacer', async ({ page }) =>
   await page.waitForTimeout(1_200);
   const paginationStats = await page.evaluate(() => window.__paginationSnapshotStats());
   expect(paginationStats.spacerScans).toBe(paginationStats.captures);
-  expect(paginationStats.tableScans).toBe(paginationStats.captures);
   expect(paginationStats.heightQueries).toBeGreaterThan(0);
 
   await page.evaluate(() => {
@@ -180,7 +178,7 @@ test('shrinking to one page removes every held page spacer', async ({ page }) =>
   expect(await page.locator('.ts-pagegap').count()).toBe(0);
 });
 
-test('strikethrough keeps live and compiled breaks in agreement', async ({ page }) => {
+test('strikethrough keeps compiled snapshot breaks stable', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const { state } = window.view;
@@ -213,12 +211,11 @@ test('strikethrough keeps live and compiled breaks in agreement', async ({ page 
     window.view.dispatch(state.tr.insertText('Reviewer two: ', 1));
   });
   await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
-  const liveBreaks = await page.evaluate(() => window.__breakSig());
+  const compiledBreaks = await page.evaluate(() => window.__breakSig());
   // The compiled oracle re-derives breaks from the exported Typst, which
-  // wraps the struck run in #strike[...]; the single live dispatch surviving
-  // the settle uncorrected means the decoration altered no metrics
-  // (line-through is paint-only).
+  // wraps the struck run in #strike[...]. A stable settle means the
+  // decoration altered no metrics (line-through is paint-only).
   await page.waitForTimeout(1_200);
-  expect(await page.evaluate(() => window.__breakSig())).toBe(liveBreaks);
+  expect(await page.evaluate(() => window.__breakSig())).toBe(compiledBreaks);
   expect(await page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
 });
