@@ -250,12 +250,28 @@ function extractPages(svg: string, yTolPt: number): PagedLine[] {
     } catch {
       return;
     }
-    const localBounds = (rect: DOMRect) => {
+    const localBounds = (element: Element) => {
+      // Typst's selection text is HTML inside a fixed SVG foreignObject. Its
+      // browser glyph box is not layout authority: on a cold Linux start it
+      // can briefly use fallback-font metrics, and adjacent physical lines
+      // can then merge before the webfont settles. The foreignObject already
+      // carries the exact compiled x/y/width/height, so transform that SVG
+      // rectangle into page coordinates without measuring its HTML child.
+      const foreign = element.closest('foreignObject') as SVGForeignObjectElement | null;
+      const selectionMatrix = foreign?.getScreenCTM();
+      if (!foreign || !selectionMatrix) return null;
+      const x = Number(foreign.getAttribute('x') ?? 0);
+      const y = Number(foreign.getAttribute('y') ?? 0);
+      const width = Number(foreign.getAttribute('width'));
+      const height = Number(foreign.getAttribute('height'));
+      if (![x, y, width, height].every(Number.isFinite) || width < 0 || height < 0) return null;
+      const point = (px: number, py: number) =>
+        new DOMPoint(px, py).matrixTransform(selectionMatrix).matrixTransform(inverse);
       const points = [
-        new DOMPoint(rect.left, rect.top).matrixTransform(inverse),
-        new DOMPoint(rect.right, rect.top).matrixTransform(inverse),
-        new DOMPoint(rect.left, rect.bottom).matrixTransform(inverse),
-        new DOMPoint(rect.right, rect.bottom).matrixTransform(inverse),
+        point(x, y),
+        point(x + width, y),
+        point(x, y + height),
+        point(x + width, y + height),
       ];
       return {
         top: Math.min(...points.map((point) => point.y)),
@@ -264,15 +280,15 @@ function extractPages(svg: string, yTolPt: number): PagedLine[] {
         right: Math.max(...points.map((point) => point.x)),
       };
     };
-    const runs = [...pageEl.querySelectorAll('.tsel')].map((el) => {
-      const runRect = localBounds(el.getBoundingClientRect());
-      return {
+    const runs = [...pageEl.querySelectorAll('.tsel')].flatMap((el) => {
+      const runRect = localBounds(el);
+      return runRect ? [{
         text: el.textContent ?? '',
         top: runRect.top,
         bottom: runRect.bottom,
         left: runRect.left,
         right: runRect.right,
-      };
+      }] : [];
     });
     // Preserve Typst's run order while grouping scripts/formula fragments
     // into their surrounding line, then order the completed lines physically

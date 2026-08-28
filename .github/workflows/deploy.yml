@@ -76,6 +76,11 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         timeout-minutes: 10
         run: npx --no-install playwright install-deps chromium firefox webkit
+      - name: Install the Proof/PDF parity renderer
+        timeout-minutes: 5
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends poppler-utils
       - run: npm run test:browser
       - run: npm run build
       - run: npm run verify:production

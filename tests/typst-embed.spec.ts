@@ -264,6 +264,15 @@ test('registered Typst embed recompiles when document settings change', async ({
 
 test('all Typst embeds share one exact document compile and prior definitions stay in scope', async ({ page }) => {
   await page.goto('/?new=1');
+  // The editor deliberately starts layout asynchronously. Under a loaded CI
+  // runner, the initial empty document's startup publication can begin after
+  // page.goto() but before the replacement below. Finish that separate
+  // document lifecycle before sampling the broker: the assertion then stays
+  // strict about the two embeds sharing one task for their immutable doc.
+  await expect.poll(
+    () => page.evaluate(() => window.__documentCompileBrokerStats().publications),
+    { timeout: 30_000 },
+  ).toBeGreaterThan(0);
   const before = await page.evaluate(() => ({
     embeds: window.__typstEmbedPreviewStats(),
     document: window.__documentCompileBrokerStats(),

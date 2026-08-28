@@ -95,9 +95,9 @@ test('rich table cells edit directly, navigate with Tab, and undo without flatte
   })).toBe('B');
   await page.keyboard.press('Shift+Tab');
 
-  await page.keyboard.press('Meta+z');
+  await page.keyboard.press('ControlOrMeta+z');
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).child(0).textContent)).not.toContain('!');
-  await page.keyboard.press('Meta+Shift+z');
+  await page.keyboard.press('ControlOrMeta+Shift+z');
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).child(0).textContent)).toContain('!');
 });
 
@@ -358,14 +358,14 @@ test('contextual controls mutate native structure and retain rich content', asyn
 
   await page.getByRole('button', { name: 'Add row below' }).click();
   await expect(page.locator('.ProseMirror table tr')).toHaveCount(3);
-  await page.keyboard.press('Meta+z');
+  await page.keyboard.press('ControlOrMeta+z');
   await expect(page.locator('.ProseMirror table tr')).toHaveCount(2);
-  await page.keyboard.press('Meta+Shift+z');
+  await page.keyboard.press('ControlOrMeta+Shift+z');
   await expect(page.locator('.ProseMirror table tr')).toHaveCount(3);
 
   await page.getByRole('button', { name: 'Add column after' }).click();
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).childCount)).toBe(3);
-  await page.keyboard.press('Meta+z');
+  await page.keyboard.press('ControlOrMeta+z');
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).childCount)).toBe(2);
 
   await page.evaluate(async () => {
@@ -452,10 +452,10 @@ test('focused caption and label fields stay synchronized through undo and redo',
   const caption = controls.getByLabel('Caption');
   await caption.fill('Undoable caption');
   expect(await page.evaluate(() => window.view.state.doc.child(0).attrs.caption)).toBe('Undoable caption');
-  await caption.press('Meta+z');
+  await caption.press('ControlOrMeta+z');
   await expect(caption).toHaveValue('');
   expect(await page.evaluate(() => window.view.state.doc.child(0).attrs.caption)).toBe('');
-  await caption.press('Meta+Shift+z');
+  await caption.press('ControlOrMeta+Shift+z');
   await expect(caption).toHaveValue('Undoable caption');
   expect(await page.evaluate(() => window.view.state.doc.child(0).attrs.caption)).toBe('Undoable caption');
 

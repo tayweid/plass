@@ -60,6 +60,38 @@ test('page oracle splits a long bullet across the page boundary', async ({ page 
   }
 });
 
+// Typst encodes every selection run's physical rectangle on its surrounding
+// SVG foreignObject. Browser HTML text metrics are not authoritative and can
+// transiently differ on a cold Linux font load. A poisoned inner text box
+// must therefore have no effect on compiled line/page extraction.
+test('page oracle ignores browser text boxes and reads compiled SVG geometry', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const realBounds = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function getBoundingClientRect() {
+      if (this.classList?.contains('tsel')) return new DOMRect(0, 0, 4_000, 4_000);
+      return realBounds.call(this);
+    };
+
+    const { state } = window.view;
+    const paragraphs = Array.from({ length: 40 }, (_, index) =>
+      state.schema.nodes.paragraph.create(
+        null,
+        state.schema.text(
+          `Geometry paragraph ${index + 1}. ` +
+            'Physical lines come from the compiler SVG rather than a browser fallback font. '.repeat(5),
+        ),
+      ),
+    );
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, paragraphs));
+  });
+
+  await expect(page.locator('#stack')).toHaveAttribute('data-page-mode', 'exact', { timeout: 30_000 });
+  await expect.poll(() => page.locator('.page-box').count()).toBeGreaterThan(1);
+  await expect.poll(() => page.locator('.ts-pagegap').count()).toBeGreaterThan(0);
+});
+
 
 // Fail closed: a compiler failure must remove every mapped page artifact and
 // advertise continuous editing instead of inventing browser-geometry pages.

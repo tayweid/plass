@@ -90,7 +90,9 @@ test('a late edit holds only mapped exact page starts while replacement layout i
 
   // Undo returns to the cached exact document. No local pagination pass is
   // available to manufacture a different result.
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  // Choose the browser engine's platform modifier. The test runner's Node
+  // host is not necessarily the same platform as the browser under test.
+  await page.keyboard.press('ControlOrMeta+z');
   await expect
     .poll(() => page.evaluate(() => window.view.state.selection.head), { timeout: 5_000 })
     .toBe(setup.insertionPos);

@@ -282,6 +282,9 @@ class TypesetView {
   private pagPath: 'exact' | 'held' | 'continuous' = 'continuous';
   private pagLog: string[] = [];
   private pagWhy = '';
+  /** Specific validation that rejected a fresh compiled page map. Kept
+   * separate from pagWhy so the outer confidence state can report both. */
+  private forcedPaginationFailure = '';
   private forcedAuditor: ForcedLayoutAuditor | null = null;
   private lineDecorationDispatches = 0;
   private pageMarkDispatches = 0;
@@ -986,7 +989,9 @@ class TypesetView {
         entry.pageCount ?? entry.pageStarts.length + 1,
       );
       if (!forced) {
-        return continuous('fresh exact starts cannot be represented');
+        return continuous(
+          `fresh exact starts cannot be represented: ${this.forcedPaginationFailure || 'unknown projection failure'}`,
+        );
       }
 
       const basis: ExactPageBasis = {
@@ -1086,6 +1091,11 @@ class TypesetView {
     const marginTop = snapshot.marginTop;
     const F = snapshot.bodyPx;
     const existing = snapshot.spacers.sorted;
+    this.forcedPaginationFailure = '';
+    const reject = (reason: string): null => {
+      this.forcedPaginationFailure = reason;
+      return null;
+    };
     const natural = (clientTop: number, pos: number) =>
       clientTop - snapshot.stackTop - this.heightAbove(snapshot, pos);
 
@@ -1098,7 +1108,7 @@ class TypesetView {
       // split native table, because editable structured content cannot accept
       // a synthetic mid-node spacer. If one arrives, keep the table atomic.
       if (ps.unit === 'table' && ps.line > 0) {
-        return null;
+        return reject(`page ${page + 2} splits a native table`);
       }
       page++;
       let pos = ps.pos;
@@ -1108,10 +1118,16 @@ class TypesetView {
       if (ps.unit === 'line' && ps.line > 0) {
         const node = view.state.doc.nodeAt(ps.pos);
         const entry = node ? this.cache.get(node) : undefined;
-        if (!node || !entry || ps.line >= entry.lines.length) return null;
+        if (!node) return reject(`page ${page + 1} line start has no node at ${ps.pos}`);
+        if (!entry) return reject(`page ${page + 1} line start has no compiled block layout at ${ps.pos}`);
+        if (ps.line >= entry.lines.length) {
+          return reject(
+            `page ${page + 1} requests line ${ps.line} of ${entry.lines.length} at ${ps.pos}`,
+          );
+        }
         const base = ps.pos + 1;
         const el = view.nodeDOM(ps.pos);
-        if (!(el instanceof HTMLElement)) return null;
+        if (!(el instanceof HTMLElement)) return reject(`page ${page + 1} line start has no DOM block at ${ps.pos}`);
         const lineH = parseFloat(getComputedStyle(el).lineHeight) || 24;
         const c = view.coordsAtPos(base + entry.lines[ps.line].from);
         pos = base + entry.lines[ps.line].from;
@@ -1120,7 +1136,7 @@ class TypesetView {
         adjKind = 'line';
       } else {
         const el = view.nodeDOM(ps.pos);
-        if (!(el instanceof HTMLElement)) return null;
+        if (!(el instanceof HTMLElement)) return reject(`page ${page + 1} block start has no DOM block at ${ps.pos}`);
         y = natural(el.getBoundingClientRect().top, ps.pos);
         if (ps.unit === 'h1' || ps.unit === 'h2' || ps.unit === 'h3') adjKind = ps.unit;
         else adjKind = 'paragraph';
@@ -1138,7 +1154,9 @@ class TypesetView {
         // page gaps are routinely hundreds of px when a block moved whole.
         const lineH = F * s.lineHeight;
         const prevH = existing[page - 1]?.height ?? 0;
-        if (delta - prevH > 3 * lineH + 80) return null;
+        if (delta - prevH > 3 * lineH + 80) {
+          return reject(`held page ${page + 1} grew ${Math.round(delta - prevH)}px beyond its prior gap`);
+        }
       }
       if (delta > 0) {
         spacers.push({ pos, height: delta, kind });
@@ -1147,7 +1165,7 @@ class TypesetView {
         // Content has outgrown this break (edits added lines above it):
         // these starts are stale — let live pagination move the break NOW.
         if (stale) this.pagWhy += ` bail@${pos}Δ${delta.toFixed(0)}`;
-        return null;
+        return reject(`page ${page + 1} compiled start is ${Math.round(-delta)}px above the projected start`);
       }
     }
     const count = Math.max(pageCount, page + 1);
@@ -1164,7 +1182,7 @@ class TypesetView {
       const lastBottom = count * (size.h + PAGE_GAP) - PAGE_GAP - snapshot.marginBottom;
       if (docBottom > lastBottom + 2 * F * s.lineHeight) {
         this.pagWhy += ` bail-overflow(${(docBottom - lastBottom).toFixed(0)}px)`;
-        return null;
+        return reject(`held final page overflows by ${Math.round(docBottom - lastBottom)}px`);
       }
     }
     return { spacers, count };
