@@ -20,6 +20,8 @@ import {
   matchParagraph,
   selectionRunTolerance,
   type AtomResolver,
+  type AtomLineBinding,
+  type AtomLineBindings,
   type SvgLine,
   type ParagraphSpec,
 } from './typst-oracle';
@@ -38,6 +40,14 @@ import {
 } from './layout-snapshot';
 import type { TypstDocumentSvgPublication } from '../typst-document-publication';
 import type { TypstLayoutRegion, TypstLayoutRegionKind } from '../typst-layout-regions';
+import {
+  classifyTypstInline,
+  typstInlineIndexFromLink,
+} from '../typst-inline-regions';
+import {
+  typstPreviewInlineMathIndexFromLink,
+  type TypstPreviewRegion,
+} from '../typst-preview-regions';
 import type { ForcedBreak } from './paragraph';
 
 export type PageStart = SnapshotPageStart;
@@ -70,6 +80,32 @@ interface PagedLine extends SvgLine {
   bottom: number;
   left: number;
   right: number;
+}
+
+interface PageBounds {
+  page: number;
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+type AtomLinkKey = `typst:${number}` | `math:${number}`;
+
+interface ExtractedPages {
+  lines: PagedLine[];
+  pageCount: number;
+  /** Unioned advance rectangles from reserved publication-only links. */
+  atomBounds: Map<AtomLinkKey, PageBounds>;
+  /** A malformed/duplicated rectangle can never authorize exact matching. */
+  ambiguousAtoms: Set<AtomLinkKey>;
+}
+
+interface DocumentAtomRef {
+  previewIndex: number;
+  /** Null only for a supported selection-free atom with a queried baseline. */
+  linkKey: AtomLinkKey | null;
+  kind: 'typst-inline' | 'math-inline';
 }
 
 interface ContextTarget {
@@ -224,25 +260,27 @@ export class PageOracle {
 
 /** Per-page tsel lines from the multi-page SVG. The svg renders at an
  *  arbitrary scale — per-page y tolerance is derived from the page height. */
-function extractPages(svg: string, yTolPt: number): PagedLine[] {
+function extractPages(svg: string, yTolPt: number): ExtractedPages {
   const div = parseTypstSvg(svg);
   div.style.cssText = 'position:absolute;visibility:hidden;left:-99999px;top:0;';
   const svgEl = div.querySelector('svg');
-  if (!svgEl) return [];
+  if (!svgEl) return { lines: [], pageCount: 0, atomBounds: new Map(), ambiguousAtoms: new Set() };
   svgEl.style.width = svgEl.getAttribute('width') + 'px';
   svgEl.style.height = 'auto';
   document.body.appendChild(div);
   const out: PagedLine[] = [];
+  const atomBounds = new Map<AtomLinkKey, PageBounds>();
+  const ambiguousAtoms = new Set<AtomLinkKey>();
   let nextLineId = 0;
   const pages = [...div.querySelectorAll('.typst-page')];
   pages.forEach((pageEl, page) => {
     // An SVG <g>'s client rect is the bounding box of its painted children,
-    // not the physical page. Using it as the page origin silently shifts
-    // every coordinate by the topmost ink (and changes that shift from page
-    // to page). Transform screen-space foreignObject rectangles back through
-    // the page group's actual CTM instead; the resulting user units are the
-    // same physical Typst points returned by `here().position()`.
-    const matrix = (pageEl as SVGGElement).getScreenCTM();
+    // not the physical page. Screen CTMs are not layout authority either:
+    // they cross the SVG/CSS foreignObject boundary and may include platform
+    // pixel snapping. Stay entirely in SVG user space so every fragment is
+    // compared in the same physical Typst coordinate system as
+    // `here().position()`.
+    const matrix = (pageEl as SVGGElement).getCTM();
     if (!matrix) return;
     let inverse: DOMMatrix;
     try {
@@ -250,23 +288,16 @@ function extractPages(svg: string, yTolPt: number): PagedLine[] {
     } catch {
       return;
     }
-    const localBounds = (element: Element) => {
-      // Typst's selection text is HTML inside a fixed SVG foreignObject. Its
-      // browser glyph box is not layout authority: on a cold Linux start it
-      // can briefly use fallback-font metrics, and adjacent physical lines
-      // can then merge before the webfont settles. The foreignObject already
-      // carries the exact compiled x/y/width/height, so transform that SVG
-      // rectangle into page coordinates without measuring its HTML child.
-      const foreign = element.closest('foreignObject') as SVGForeignObjectElement | null;
-      const selectionMatrix = foreign?.getScreenCTM();
-      if (!foreign || !selectionMatrix) return null;
-      const x = Number(foreign.getAttribute('x') ?? 0);
-      const y = Number(foreign.getAttribute('y') ?? 0);
-      const width = Number(foreign.getAttribute('width'));
-      const height = Number(foreign.getAttribute('height'));
+    const transformedBounds = (
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      ownerMatrix: DOMMatrix,
+    ): Omit<PageBounds, 'page'> | null => {
       if (![x, y, width, height].every(Number.isFinite) || width < 0 || height < 0) return null;
       const point = (px: number, py: number) =>
-        new DOMPoint(px, py).matrixTransform(selectionMatrix).matrixTransform(inverse);
+        new DOMPoint(px, py).matrixTransform(ownerMatrix).matrixTransform(inverse);
       const points = [
         point(x, y),
         point(x + width, y),
@@ -280,15 +311,124 @@ function extractPages(svg: string, yTolPt: number): PagedLine[] {
         right: Math.max(...points.map((point) => point.x)),
       };
     };
+    const localBounds = (element: Element) => {
+      // Typst's selection text is HTML inside a fixed SVG foreignObject. Its
+      // browser glyph box is not layout authority: on a cold Linux start it
+      // can briefly use fallback-font metrics, and adjacent physical lines
+      // can then merge before the webfont settles. The foreignObject already
+      // carries the exact compiled x/y/width/height, so transform that SVG
+      // rectangle into page coordinates without measuring its HTML child or
+      // consulting any screen/CSS coordinate API. The geometry attributes
+      // are expressed in the foreignObject parent's user space, so use that
+      // parent's CTM rather than the element's screen matrix.
+      const foreign = element.closest('foreignObject') as SVGForeignObjectElement | null;
+      const coordinateOwner = foreign?.parentElement as SVGGraphicsElement | null;
+      const selectionMatrix = coordinateOwner?.getCTM();
+      if (!foreign || !coordinateOwner || !selectionMatrix) return null;
+      const x = Number(foreign.getAttribute('x') ?? 0);
+      const y = Number(foreign.getAttribute('y') ?? 0);
+      const width = Number(foreign.getAttribute('width'));
+      const height = Number(foreign.getAttribute('height'));
+      return transformedBounds(x, y, width, height, selectionMatrix);
+    };
+
+    // The publication wraps every exact inline atom in a reserved transparent
+    // link. Its rectangle is the authoritative advance box for both painted
+    // and paint-only atoms. Union split link rectangles before classifying
+    // selection runs; arbitrary user links never enter this namespace.
+    const pageAtomBounds = new Map<AtomLinkKey, Omit<PageBounds, 'page'>>();
+    for (const anchor of pageEl.querySelectorAll<SVGAElement>('a')) {
+      const href = anchor.getAttribute('href') ?? anchor.getAttribute('xlink:href') ?? '';
+      const inlineIndex = typstInlineIndexFromLink(href);
+      const mathIndex = typstPreviewInlineMathIndexFromLink(href);
+      const key: AtomLinkKey | null = inlineIndex !== null
+        ? `typst:${inlineIndex}`
+        : mathIndex !== null
+          ? `math:${mathIndex}`
+          : null;
+      if (!key) continue;
+      const rect = anchor.querySelector<SVGRectElement>('rect');
+      const rectMatrix = rect?.getCTM();
+      const bounds = rect && rectMatrix
+        ? transformedBounds(
+            Number(rect.getAttribute('x') ?? 0),
+            Number(rect.getAttribute('y') ?? 0),
+            Number(rect.getAttribute('width')),
+            Number(rect.getAttribute('height')),
+            rectMatrix,
+          )
+        : null;
+      if (!bounds) {
+        ambiguousAtoms.add(key);
+        continue;
+      }
+      const previous = pageAtomBounds.get(key);
+      pageAtomBounds.set(key, previous ? {
+        top: Math.min(previous.top, bounds.top),
+        bottom: Math.max(previous.bottom, bounds.bottom),
+        left: Math.min(previous.left, bounds.left),
+        right: Math.max(previous.right, bounds.right),
+      } : bounds);
+    }
+    for (const [key, bounds] of pageAtomBounds) {
+      const previous = atomBounds.get(key);
+      if (previous && previous.page !== page) {
+        ambiguousAtoms.add(key);
+        continue;
+      }
+      atomBounds.set(key, previous ? {
+        page,
+        top: Math.min(previous.top, bounds.top),
+        bottom: Math.max(previous.bottom, bounds.bottom),
+        left: Math.min(previous.left, bounds.left),
+        right: Math.max(previous.right, bounds.right),
+      } : { page, ...bounds });
+    }
+
     const runs = [...pageEl.querySelectorAll('.tsel')].flatMap((el) => {
       const runRect = localBounds(el);
-      return runRect ? [{
+      if (!runRect) return [];
+      // Typst splits selection fragments at link boundaries. A fragment's
+      // center therefore has exactly one owner even when glyph bearings
+      // extend beyond the atom's advance rectangle. Multiple owners indicate
+      // damaged/overlapping instrumentation and fail that atom closed.
+      const cx = (runRect.left + runRect.right) / 2;
+      const cy = (runRect.top + runRect.bottom) / 2;
+      // Tall math scripts can sit outside the link's advance-height rect.
+      // Search no farther than half a line pitch, then require one uniquely
+      // nearest vertical band. This keeps repeated x-ranges on adjacent
+      // wrapped lines distinct; a tie or an extreme outlier fails closed.
+      const candidates = [...pageAtomBounds]
+        .filter(([, bounds]) => cx >= bounds.left - 1e-4 && cx <= bounds.right + 1e-4)
+        .map(([key, bounds]) => ({
+          key,
+          bounds,
+          distance: cy < bounds.top ? bounds.top - cy : cy > bounds.bottom ? cy - bounds.bottom : 0,
+        }))
+        .filter((candidate) => candidate.distance <= yTolPt + 1e-4)
+        .sort((left, right) => left.distance - right.distance);
+      const owners = candidates.length > 1 &&
+        candidates[1].distance - candidates[0].distance <= 1e-4
+        ? candidates.filter((candidate) => candidate.distance - candidates[0].distance <= 1e-4)
+        : candidates.slice(0, 1);
+      if (owners.length > 1) {
+        for (const owner of owners) ambiguousAtoms.add(owner.key);
+        return [{
+          text: el.textContent ?? '',
+          top: runRect.top,
+          bottom: runRect.bottom,
+          left: runRect.left,
+          right: runRect.right,
+        }];
+      }
+      if (owners.length === 1) return [];
+      return [{
         text: el.textContent ?? '',
         top: runRect.top,
         bottom: runRect.bottom,
         left: runRect.left,
         right: runRect.right,
-      }] : [];
+      }];
     });
     // Preserve Typst's run order while grouping scripts/formula fragments
     // into their surrounding line, then order the completed lines physically
@@ -317,10 +457,164 @@ function extractPages(svg: string, yTolPt: number): PagedLine[] {
     grouped.sort((left, right) => left.top - right.top || left.left - right.left);
     out.push(...grouped.map((line) => ({ ...line, id: nextLineId++, page })));
   });
-  // Record the page count on the array for the caller.
-  (out as PagedLine[] & { pageCount?: number }).pageCount = pages.length;
   div.remove();
-  return out;
+  for (const key of ambiguousAtoms) atomBounds.delete(key);
+  return { lines: out, pageCount: pages.length, atomBounds, ambiguousAtoms };
+}
+
+/** Mirror the serializer's inline/preview preorder namespaces once per
+ * immutable document. Absolute PM positions then bind ParagraphSpec atom
+ * offsets to publication geometry without rescanning the tree per block. */
+function documentAtomRefs(doc: PMNode): Map<number, DocumentAtomRef> {
+  const refs = new Map<number, DocumentAtomRef>();
+  let nextInline = 0;
+  let nextPreview = 0;
+  doc.descendants((node, pos) => {
+    if (node.type.name === 'typst_inline') {
+      const classification = classifyTypstInline(node.attrs.src as string);
+      const inlineIndex = nextInline++;
+      const previewIndex = nextPreview++;
+      // Unsupported source is intentionally absent: buildSpec keeps its
+      // paragraph native, and a future caller cannot accidentally treat a
+      // marker with no bounded semantics as atom authority.
+      if (classification.kind !== 'unsupported') {
+        refs.set(pos, {
+          previewIndex,
+          linkKey: classification.kind === 'fixed' ? `typst:${inlineIndex}` : null,
+          kind: 'typst-inline',
+        });
+      }
+    } else if (node.type.name === 'math_inline') {
+      const previewIndex = nextPreview++;
+      refs.set(pos, {
+        previewIndex,
+        linkKey: `math:${previewIndex}`,
+        kind: 'math-inline',
+      });
+    } else if (node.type.name === 'math_display' || node.type.name === 'bibliography') {
+      nextPreview++;
+    }
+    return true;
+  });
+  return refs;
+}
+
+/** Add an empty physical line only when an atom is the sole selectable-free
+ * content on that line. Existing prose lines win whenever the queried Typst
+ * baseline lies in their compiled band. */
+function bindAtomBaselines(
+  extraction: ExtractedPages,
+  previewRegions: readonly TypstPreviewRegion[] | undefined,
+  refs: ReadonlyMap<number, DocumentAtomRef>,
+  pitch: number,
+): Map<number, number> {
+  const byPreview = new Map<number, TypstPreviewRegion>();
+  const duplicatePreview = new Set<number>();
+  for (const region of previewRegions ?? []) {
+    if (byPreview.has(region.index)) duplicatePreview.add(region.index);
+    else byPreview.set(region.index, region);
+  }
+  for (const index of duplicatePreview) byPreview.delete(index);
+
+  const lineIdByPreview = new Map<number, number>();
+  let nextLineId = extraction.lines.reduce((largest, line) => Math.max(largest, line.id + 1), 0);
+  // A compiled prose foreignObject contains its baseline. Keep the tolerance
+  // well below the inter-line gap so an atom-only line is synthesized rather
+  // than attached to an adjacent physical line.
+  const tolerance = Math.max(1, pitch * 0.15);
+  for (const ref of refs.values()) {
+    if (lineIdByPreview.has(ref.previewIndex)) continue;
+    if (ref.linkKey && extraction.ambiguousAtoms.has(ref.linkKey)) continue;
+    const region = byPreview.get(ref.previewIndex);
+    if (
+      !region ||
+      (region.kind !== 'typst-inline' && region.kind !== 'math-inline') ||
+      region.kind !== ref.kind
+    ) continue;
+
+    const page = region.baseline.page - 1;
+    const bounds = ref.linkKey
+      ? extraction.atomBounds.get(ref.linkKey)
+      : {
+          page,
+          top: region.baseline.y,
+          bottom: region.baseline.y,
+          left: region.baseline.x,
+          right: region.baseline.x,
+        };
+    if (!bounds || bounds.page !== page) continue;
+    const candidates = extraction.lines
+      .map((line) => ({ line, distance: line.page === page
+        ? distanceToBand(line, region.baseline.y)
+        : Number.POSITIVE_INFINITY }))
+      .filter((candidate) => candidate.distance <= tolerance)
+      .sort((left, right) => left.distance - right.distance);
+    let line: PagedLine | null = null;
+    if (candidates.length === 1 || (
+      candidates.length > 1 && candidates[1].distance - candidates[0].distance > 1e-4
+    )) {
+      line = candidates[0].line;
+    } else if (!candidates.length) {
+      // A tall atom can overlap a neighboring prose band even though its own
+      // baseline is in the inter-line gap. In that case its reading-order
+      // slot is ambiguous, so never manufacture one from the box's top edge.
+      const overlapsLine = extraction.lines.some((candidate) =>
+        candidate.page === page &&
+        Math.min(candidate.bottom, bounds.bottom) > Math.max(candidate.top, bounds.top) + 1e-4,
+      );
+      if (overlapsLine) continue;
+      line = {
+        id: nextLineId++,
+        page,
+        text: '',
+        // Baseline y is comparable with the signal that selected existing
+        // lines above. Link-box top is not: ascenders and tall formula ink
+        // can extend far above the atom's actual reading-order position.
+        y: region.baseline.y,
+        top: region.baseline.y,
+        bottom: region.baseline.y,
+        left: bounds.left,
+        right: bounds.right,
+      };
+      extraction.lines.push(line);
+    }
+    if (line) lineIdByPreview.set(ref.previewIndex, line.id);
+  }
+  extraction.lines.sort((left, right) =>
+    left.page - right.page || left.top - right.top || left.left - right.left);
+  return lineIdByPreview;
+}
+
+interface BoundAtoms {
+  bindings: AtomLineBindings;
+  reason: string | null;
+}
+
+/** Convert absolute publication line identities into the local line indexes
+ * consumed by one paragraph/context matcher invocation. */
+function bindSpecAtoms(
+  spec: ParagraphSpec,
+  blockPos: number,
+  refs: ReadonlyMap<number, DocumentAtomRef>,
+  lineIdByPreview: ReadonlyMap<number, number>,
+  lines: readonly PagedLine[],
+): BoundAtoms {
+  const indexByLineId = new Map(lines.map((line, index) => [line.id, index]));
+  const bindings = new Map<number, AtomLineBinding>();
+  for (let tokenIndex = 0; tokenIndex < spec.tokens.length; tokenIndex++) {
+    const token = spec.tokens[tokenIndex];
+    if (token.kind !== 'atom' || token.text !== undefined) continue;
+    const absolutePos = blockPos + 1 + token.start;
+    const ref = refs.get(absolutePos);
+    if (!ref) return { bindings, reason: `atom@${tokenIndex} has no document identity` };
+    const lineId = lineIdByPreview.get(ref.previewIndex);
+    const lineIndex = lineId === undefined ? undefined : indexByLineId.get(lineId);
+    if (lineIndex === undefined) {
+      return { bindings, reason: `atom@${tokenIndex} has no unambiguous compiled baseline line` };
+    }
+    bindings.set(tokenIndex, lineIndex);
+  }
+  return { bindings, reason: null };
 }
 
 /** Build the document's unit list (blocks in reading order). */
@@ -404,13 +698,15 @@ function consumeContextLine(
   spec: ParagraphSpec,
   input: string,
   initial: ContextLineState,
+  lineIndex: number,
+  atomLines: AtomLineBindings,
 ): ContextLineResult | null {
   const tokens = spec.tokens;
   let ti = initial.token;
   let pendingSuffix = initial.pendingSuffix;
   const breaks = initial.breaks.slice();
   let text = input.replace(/\s+/g, ' ').trim();
-  const lineStartTi = ti;
+  let consumedOnLine = false;
   let brokeWithHyphen = false;
 
   while (text.length) {
@@ -418,38 +714,19 @@ function consumeContextLine(
       if (!text.startsWith(pendingSuffix)) return null;
       text = text.slice(pendingSuffix.length).trimStart();
       pendingSuffix = null;
+      consumedOnLine = true;
       continue;
     }
     if (ti >= tokens.length) return null;
     const token = tokens[ti];
     if (token.kind === 'hard') {
-      ti++;
-      continue;
+      return null;
     }
     if (token.text === undefined) {
-      let nextIndex = ti + 1;
-      while (
-        nextIndex < tokens.length &&
-        tokens[nextIndex].kind === 'atom' &&
-        tokens[nextIndex].text === undefined
-      ) nextIndex++;
-      const next = nextIndex < tokens.length && tokens[nextIndex].kind !== 'hard'
-        ? tokens[nextIndex]
-        : null;
-      if (!next || next.text === undefined) {
-        text = '';
-        ti = next ? ti + 1 : tokens.length;
-        continue;
-      }
-      const needle = (next.spaceBefore ? ' ' : '') + next.text;
-      const found = (text + ' ').indexOf(needle);
-      if (found < 0) {
-        text = '';
-        ti++;
-        continue;
-      }
-      text = text.slice(found).trimStart();
+      const binding = atomLines.get(ti);
+      if (binding === undefined || binding !== lineIndex) return null;
       ti++;
+      consumedOnLine = true;
       continue;
     }
 
@@ -462,6 +739,7 @@ function consumeContextLine(
           ? after
           : after.trimStart();
         ti++;
+        consumedOnLine = true;
         continue;
       }
     }
@@ -478,6 +756,7 @@ function consumeContextLine(
         pendingSuffix = word.slice(bare.length + dash);
         ti++;
         text = '';
+        consumedOnLine = true;
         brokeWithHyphen = true;
         continue;
       }
@@ -485,11 +764,31 @@ function consumeContextLine(
     return null;
   }
 
+  if (pendingSuffix === null) {
+    while (ti < tokens.length) {
+      const token = tokens[ti];
+      if (token.kind !== 'atom' || token.text !== undefined) break;
+      const binding = atomLines.get(ti);
+      if (binding === undefined) return null;
+      if (binding > lineIndex) break;
+      if (binding < lineIndex) return null;
+      ti++;
+      consumedOnLine = true;
+    }
+  }
+
+  let endedByHard = false;
+  if (pendingSuffix === null && ti < tokens.length && tokens[ti].kind === 'hard') {
+    if (!consumedOnLine) return null;
+    ti++;
+    endedByHard = true;
+  }
+
   const more = ti < tokens.length || pendingSuffix !== null;
-  if (more && !brokeWithHyphen) {
-    if (ti === lineStartTi) return null;
+  if (more && !brokeWithHyphen && !endedByHard) {
+    if (!consumedOnLine) return null;
     const previous = tokens[ti - 1];
-    if (previous.kind !== 'hard') breaks.push({ at: previous.end, hyphen: false });
+    breaks.push({ at: previous.end, hyphen: false });
   }
   return { state: { token: ti, pendingSuffix, breaks }, more };
 }
@@ -547,6 +846,7 @@ export function matchContextRegion(
   allLines: readonly PagedLine[],
   region: TypstLayoutRegion,
   pitch: number,
+  atomLinesInAll: AtomLineBindings = new Map(),
 ): ContextMatch | null {
   const startPage = region.start.page - 1;
   const endPage = region.end.page - 1;
@@ -564,6 +864,15 @@ export function matchContextRegion(
   });
   if (!candidates.length) return null;
 
+  const candidateIndexById = new Map(candidates.map((line, index) => [line.id, index]));
+  const atomLines = new Map<number, AtomLineBinding>();
+  for (const [token, binding] of atomLinesInAll) {
+    const line = allLines[binding];
+    const candidateIndex = line ? candidateIndexById.get(line.id) : undefined;
+    if (candidateIndex === undefined) return null;
+    atomLines.set(token, candidateIndex);
+  }
+
   let state: ContextLineState = { token: 0, pendingSuffix: null, breaks: [] };
   const used: PagedLine[] = [];
   let page = -1;
@@ -577,7 +886,13 @@ export function matchContextRegion(
     const variants = mayStripPrefix ? prefixVariants(line.text) : [line.text];
     let consumed: ContextLineResult | null = null;
     for (const variant of variants) {
-      consumed = consumeContextLine(spec, variant, state);
+      consumed = consumeContextLine(
+        spec,
+        variant,
+        state,
+        candidateIndexById.get(line.id)!,
+        atomLines,
+      );
       if (consumed) break;
     }
     if (!consumed) {
@@ -662,8 +977,11 @@ function analyze(
   const pitch = settings.lineHeight * settings.sizePt;
   const page = pageSize(settings);
   const pageHPt = page.h * 0.75;
-  const raw = extractPages(publication.svg, selectionRunTolerance(pitch));
-  const pageCount = (raw as PagedLine[] & { pageCount?: number }).pageCount ?? 1;
+  const extraction = extractPages(publication.svg, selectionRunTolerance(pitch));
+  const atomRefs = documentAtomRefs(doc);
+  const atomLineIds = bindAtomBaselines(extraction, publication.previewRegions, atomRefs, pitch);
+  const raw = extraction.lines;
+  const pageCount = extraction.pageCount || 1;
   if (!raw.length) return { status: 'fail', reason: 'no text layer' };
 
   // Page numbers render in the footer and reach the text layer too. A
@@ -708,8 +1026,11 @@ function analyze(
     const regions = new Map(publication.layoutRegions.map((region) => [region.index, region]));
     for (const target of targets) {
       const region = regions.get(target.index);
-      const match = target.spec && region && region.kind === target.kind
-        ? matchContextRegion(target.spec, all, region, pitch)
+      const bound = target.spec
+        ? bindSpecAtoms(target.spec, target.pos, atomRefs, atomLineIds, all)
+        : null;
+      const match = target.spec && bound && !bound.reason && region && region.kind === target.kind
+        ? matchContextRegion(target.spec, all, region, pitch, bound.bindings)
         : null;
       if (!match || !target.spec) {
         // Captions do not participate in body reading order, so their own
@@ -799,7 +1120,9 @@ function analyze(
         ...l,
         text: i === 0 && unit.marker ? l.text.replace(MARKER, '') : l.text,
       }));
-      const res = matchParagraph(unit.spec, slice, 0);
+      const bound = bindSpecAtoms(unit.spec, unit.pos, atomRefs, atomLineIds, slice);
+      if (bound.reason) return result(`unit@${unit.pos} (${unit.type}): ${bound.reason}`);
+      const res = matchParagraph(unit.spec, slice, 0, undefined, bound.bindings);
       if (res.status !== 'ok') {
         return result(`unit@${unit.pos} (${unit.type}): ${res.entry.reason}`);
       }

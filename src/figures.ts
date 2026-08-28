@@ -674,7 +674,12 @@ export class FigureView implements NodeView {
     this.node = node;
     if (sourceChanged) this.setSrc(node.attrs.src as string);
     this.updateChip();
-    this.updatePathChip();
+    // Outer node decorations (selection, compiled-line ownership) call
+    // update() even when the figure itself is unchanged. Do not erase a
+    // transient failed-load/retry state on those presentation-only updates;
+    // a source change, permission event, success, or explicit retry owns the
+    // next path-chip transition.
+    if (sourceChanged || !this.pathChip.classList.contains('remote-error')) this.updatePathChip();
     return true;
   }
 

@@ -34,6 +34,8 @@ interface PresentationSnapshot {
     stateText: string;
     lineWidgets: number;
     wordSpacedRuns: number;
+    forcedLineLock: boolean;
+    whiteSpace: string;
     lineDispatches: number;
     pageMarkDispatches: number;
     dispatches: DispatchCounts;
@@ -189,6 +191,8 @@ async function installTypingLatencyProbe(page: Page): Promise<void> {
           stateText: window.view.state.doc.firstChild?.textContent ?? '',
           lineWidgets: paragraph?.querySelectorAll('.ts-br, .ts-hyphen').length ?? 0,
           wordSpacedRuns: spacedRuns,
+          forcedLineLock: paragraph?.classList.contains('ts-forced-lines') ?? false,
+          whiteSpace: paragraph ? getComputedStyle(paragraph).whiteSpace : '',
           lineDispatches: layoutNow.lines - state.baseline!.lines,
           pageMarkDispatches: layoutNow.pageMarks - state.baseline!.pageMarks,
           dispatches: { ...state.dispatches },
@@ -348,6 +352,8 @@ function expectPaintFirst(
   expect(atPresentation!.pageMarkDispatches).toBe(0);
   expect(atPresentation!.dispatches.nonDoc).toBe(0);
   expect(atPresentation!.lineWidgets).toBe(0);
+  expect(atPresentation!.forcedLineLock).toBe(false);
+  expect(atPresentation!.whiteSpace).not.toBe('nowrap');
   // ProseMirror temporarily protects the active IME composition DOM node.
   // That node may retain its one mapped inline style until compositionend;
   // every non-composition run and every forced break must still be gone.
@@ -388,6 +394,9 @@ test('a real key paints a 5k-character active paragraph before exact layout', as
       timeout: 15_000,
     })
     .toBeGreaterThan(0);
+  await expect(page.locator('.ProseMirror > p').first()).toHaveClass(/ts-forced-lines/);
+  expect(await page.locator('.ProseMirror > p').first().evaluate((node) => getComputedStyle(node).whiteSpace))
+    .toBe('nowrap');
   const settled = await page.evaluate(() => ({
     layout: window.__layoutDispatchStats(),
     probe: window.__typingLatencyProbe!.snapshot(),
@@ -443,6 +452,7 @@ test('IME composition paints provisional text before exact layout and commits cl
       timeout: 15_000,
     })
     .toBeGreaterThan(0);
+  await expect(page.locator('.ProseMirror > p').first()).toHaveClass(/ts-forced-lines/);
   const settled = await page.evaluate(() => ({
     layout: window.__layoutDispatchStats(),
     dispatches: window.__typingLatencyProbe!.snapshot().dispatches,

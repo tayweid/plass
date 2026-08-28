@@ -32,8 +32,11 @@ const ASSET_EVENT = 'typeset-assets-changed';
 
 /** Dynamic boundary avoids a static typeset-plugin → inline view → preview
  * manager cycle while retaining the existing coalesced layout scheduler. */
-function scheduleDocumentLayout(view: EditorView): void {
-  void import('./typeset-plugin').then(({ scheduleTypeset }) => scheduleTypeset(view));
+function scheduleDocumentLayout(view: EditorView, failOpen = false, reason?: string): void {
+  void import('./typeset-plugin').then(({ failOpenTypesetPublication, scheduleTypeset }) => {
+    if (failOpen) failOpenTypesetPublication(view, reason);
+    else scheduleTypeset(view);
+  });
 }
 
 type PreviewState = 'idle' | 'pending' | 'ready' | 'empty' | 'proof' | 'error';
@@ -79,6 +82,14 @@ export interface ManagedDocumentPreviewView {
   compileError(message: string): void;
   needsDocumentPreview(): boolean;
   retainedDocumentPreview(): TypstDocumentSvgPublication | null;
+}
+
+/** Lifecycle of the geometry-carrying whole-document publication for one
+ * immutable ProseMirror document. `pending` is the only state in which the
+ * layout layer may temporarily retain mapped exact presentation. */
+export interface ExactLayoutPublicationState {
+  status: 'ready' | 'pending' | 'fail';
+  reason: string | null;
 }
 
 export interface PreparedInlineRegion {
@@ -295,6 +306,14 @@ export class TypstEmbedPreviewManager {
    * keep the same PM document identity, so object equality alone cannot make
    * a stale crop/page publication current. */
   private lastResultGeneration = -1;
+  /** Terminal failure for the current invalidation generation. A new
+   * invalidation clears it; merely waiting longer must not turn a failed
+   * compile/crop application back into a "pending" publication. */
+  private publicationFailure: {
+    doc: PMNode;
+    generation: number;
+    reason: string;
+  } | null = null;
   private indexedDoc: PMNode | null = null;
   private documentIndices: DocumentPreviewIndices | null = null;
   private readonly prepared = new Map<TypstDocumentSvgPublication, PreparedDocumentPublication>();
@@ -328,6 +347,7 @@ export class TypstEmbedPreviewManager {
     this.scheduleInspectorLayout();
     if (this.lastDoc === this.view.state.doc && this.lastResultGeneration === this.generation && this.lastResult) {
       if (listener.applyDocumentPreview(this.lastResult, this.lastDoc)) scheduleDocumentLayout(this.view);
+      this.updatePublicationApplicationState(this.lastDoc, this.lastResult);
       return;
     }
     this.invalidate(this.view.state.doc);
@@ -351,6 +371,7 @@ export class TypstEmbedPreviewManager {
       for (const listener of this.listeners) {
         geometryChanged = listener.applyDocumentPreview(this.lastResult, doc) || geometryChanged;
       }
+      this.updatePublicationApplicationState(doc, this.lastResult);
       if (geometryChanged) scheduleDocumentLayout(this.view);
       return;
     }
@@ -366,6 +387,7 @@ export class TypstEmbedPreviewManager {
 
     this.pendingDoc = doc;
     this.generation++;
+    this.publicationFailure = null;
     clearTimeout(this.timer);
     this.compileAbort?.abort('newer-request');
     this.compileAbort = null;
@@ -426,6 +448,7 @@ export class TypstEmbedPreviewManager {
       for (const listener of this.listeners) {
         geometryChanged = listener.applyDocumentPreview(result, doc) || geometryChanged;
       }
+      this.updatePublicationApplicationState(doc, result);
       this.scheduleInspectorLayout();
       this.prunePreparedPublications();
       if (geometryChanged) scheduleDocumentLayout(this.view);
@@ -438,8 +461,40 @@ export class TypstEmbedPreviewManager {
   }
 
   private publishError(message: string): void {
+    const doc = this.pendingDoc ?? this.view.state.doc;
+    this.publicationFailure = { doc, generation: this.generation, reason: message };
     for (const listener of this.listeners) {
       if (listener.needsDocumentPreview()) listener.compileError(message);
+    }
+    // Page/line layout may currently be holding the previous exact revision.
+    // A terminal compile failure must wake it so that hold is withdrawn.
+    scheduleDocumentLayout(this.view, true, message);
+  }
+
+  /** Retention equality, rather than applyDocumentPreview's geometry-change
+   * return value, proves that every required view accepted this publication.
+   * A view may validly return false when geometry did not change. */
+  private updatePublicationApplicationState(
+    doc: PMNode,
+    result: TypstDocumentSvgPublication,
+  ): void {
+    const rejected = [...this.listeners].some(
+      (listener) =>
+        listener.needsDocumentPreview() && listener.retainedDocumentPreview() !== result,
+    );
+    if (rejected) {
+      const reason = 'A compiled document preview could not be applied to every geometry consumer.';
+      this.publicationFailure = {
+        doc,
+        generation: this.generation,
+        reason,
+      };
+      scheduleDocumentLayout(this.view, true, reason);
+    } else if (
+      this.publicationFailure?.doc === doc &&
+      this.publicationFailure.generation === this.generation
+    ) {
+      this.publicationFailure = null;
     }
   }
 
@@ -493,16 +548,35 @@ export class TypstEmbedPreviewManager {
     return this.documentIndices;
   }
 
-  /** True only after every geometry-carrying listener has applied the one
-   * publication for this immutable document. Page/line chrome must not claim
-   * exactness while an embed or compiled atom still carries fallback geometry. */
-  isReadyFor(doc: PMNode): boolean {
-    if (this.destroyed) return false;
-    if (this.exactLayoutBlockerFor(doc)) return false;
+  /** Explicit publication lifecycle for the layout layer. A failure is not
+   * conflated with pending work: old exact chrome must fail open once the
+   * replacement is known to be impossible. */
+  exactLayoutStatusFor(doc: PMNode): ExactLayoutPublicationState {
+    if (this.destroyed) return { status: 'fail', reason: 'Document preview manager was destroyed.' };
+    const blocker = this.exactLayoutBlockerFor(doc);
+    if (blocker) return { status: 'fail', reason: blocker };
     const required = [...this.listeners].filter((listener) => listener.needsDocumentPreview());
-    if (!required.length) return true;
-    return this.lastDoc === doc && this.lastResultGeneration === this.generation && !!this.lastResult &&
-      required.every((listener) => listener.retainedDocumentPreview() === this.lastResult);
+    if (!required.length) return { status: 'ready', reason: null };
+    if (
+      this.lastDoc === doc &&
+      this.lastResultGeneration === this.generation &&
+      this.lastResult &&
+      required.every((listener) => listener.retainedDocumentPreview() === this.lastResult)
+    ) {
+      return { status: 'ready', reason: null };
+    }
+    if (
+      this.publicationFailure?.doc === doc &&
+      this.publicationFailure.generation === this.generation
+    ) {
+      return { status: 'fail', reason: this.publicationFailure.reason };
+    }
+    return { status: 'pending', reason: null };
+  }
+
+  /** Compatibility convenience for node views and diagnostics. */
+  isReadyFor(doc: PMNode): boolean {
+    return this.exactLayoutStatusFor(doc).status === 'ready';
   }
 
   private prunePreparedPublications(): void {
@@ -572,6 +646,7 @@ export class TypstEmbedPreviewManager {
     this.lastDoc = null;
     this.lastResult = null;
     this.lastResultGeneration = -1;
+    this.publicationFailure = null;
     this.indexedDoc = null;
     this.documentIndices = null;
   }
@@ -702,6 +777,7 @@ export class TypstEmbedView implements NodeView, ManagedDocumentPreviewView {
       this.setPreviewState('idle', 'Exact document preview has not compiled yet.');
     } else if (this.hasSource()) {
       this.publishProofOnly();
+      scheduleDocumentLayout(this.view, true);
     } else {
       this.publishEmpty('No Typst source to preview.');
     }
@@ -713,7 +789,10 @@ export class TypstEmbedView implements NodeView, ManagedDocumentPreviewView {
     const changed = !node.eq(this.node);
     this.node = node;
     if (!this.hasSource()) this.publishEmpty('No Typst source to preview.');
-    else if (this.previewPolicy().mode === 'proof') this.publishProofOnly();
+    else if (this.previewPolicy().mode === 'proof') {
+      this.publishProofOnly();
+      scheduleDocumentLayout(this.view, true);
+    }
     if (changed) this.manager.invalidate(this.view.state.doc);
     return true;
   }

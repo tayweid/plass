@@ -18,6 +18,9 @@ test('fixed inline Typst is cropped from the one exact document publication', as
   const before = await page.evaluate(() => window.__documentCompileBrokerStats());
 
   await page.evaluate(() => {
+    SVGGraphicsElement.prototype.getScreenCTM = function getScreenCTM() {
+      throw new Error('inline page extraction consulted poisoned screen geometry');
+    };
     const { state } = window.view;
     const atom = state.schema.nodes.typst_inline.create({ src: '#box[#circle(radius: 3pt)]' });
     const paragraph = state.schema.nodes.paragraph.create(null, [
@@ -40,6 +43,84 @@ test('fixed inline Typst is cropped from the one exact document publication', as
   expect(after.publications - before.publications).toBe(1);
   expect(after.owners).toBe(2);
   await expect(page.locator('a[href*="plass.invalid/.well-known/inline-atom"]')).toHaveCount(0);
+});
+
+test('selectable inline atom cannot impersonate following prose across a wrap', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const atom = state.schema.nodes.typst_inline.create({ src: '#box[in]' });
+    // At the default certified measure, the atom-painted `in` finishes line
+    // one while the source `in` wraps. An unbounded text wildcard mistakes
+    // the former for the latter and publishes no forced break.
+    const paragraph = state.schema.nodes.paragraph.create(null, [
+      state.schema.text(`N34:${'M'.repeat(34)} `),
+      atom,
+      state.schema.text(' in'),
+    ]);
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, paragraph));
+  });
+
+  await expect(page.locator('.ts-inline-raw')).toHaveAttribute('data-preview-state', 'ready', {
+    timeout: 30_000,
+  });
+  await expect(page.locator('#stack')).toHaveAttribute('data-page-mode', 'exact', { timeout: 30_000 });
+  await expect(page.locator('.ProseMirror p .ts-br')).toHaveCount(1);
+  const order = await page.locator('.ProseMirror p:has(.ts-inline-raw)').evaluate((paragraph) => {
+    const atom = paragraph.querySelector('.ts-inline-raw');
+    const br = paragraph.querySelector('.ts-br');
+    return !!atom && !!br && !!(atom.compareDocumentPosition(br) & Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+  expect(order).toBe(true);
+});
+
+test('inline math selection ownership stays bounded between adjacent prose', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const paragraph = (source: string) => state.schema.nodes.paragraph.create(null, [
+      state.schema.text('Before '),
+      state.schema.nodes.math_inline.create({ src: source }),
+      state.schema.text(' after.'),
+    ]);
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, [
+      paragraph('x^2'),
+      paragraph('\\frac{x_0}{1+y_0}'),
+    ]));
+  });
+
+  await expect(page.locator('.math-inline[data-preview-state="ready"]')).toHaveCount(2, {
+    timeout: 30_000,
+  });
+  await expect(page.locator('#stack')).toHaveAttribute('data-page-mode', 'exact', { timeout: 30_000 });
+  await expect(page.locator('.ProseMirror p .ts-br')).toHaveCount(0);
+});
+
+test('a terminal fixed inline Typst marker stays with its atom before display math', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const s = state.schema;
+    const inline: import('prosemirror-model').Node[] = [];
+    for (let index = 0; index < 30; index++) {
+      inline.push(s.text(`term ${index} `));
+      inline.push(index === 29
+        ? s.nodes.typst_inline.create({ src: '$x_29^2$' })
+        : s.nodes.math_inline.create({
+            src: index % 3 === 0 ? `\\frac{x_${index}}{1+y_${index}}` : `x_${index}^2`,
+          }));
+      inline.push(s.text(' '));
+    }
+    const paragraph = s.nodes.paragraph.create(null, inline);
+    const display = s.nodes.math_display.create({ src: '\\sum_{i=1}^{2} x_i = 1', label: 'eq:after' });
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, [paragraph, display]));
+  });
+
+  await expect(page.locator('.ts-inline-raw')).toHaveAttribute('data-preview-state', 'ready', {
+    timeout: 30_000,
+  });
+  await expect(page.locator('#stack')).toHaveAttribute('data-page-mode', 'exact', { timeout: 30_000 });
+  await expect(page.locator('.math-display')).toHaveAttribute('data-preview-state', 'ready');
 });
 
 test('unsupported inline Typst stays lossless, inert, and explicit', async ({ page }) => {
@@ -83,6 +164,26 @@ test('canonical flexible inline space uses compiled line slack without a fragmen
   expect(await fill.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(100);
   await expect(fill.locator('svg')).toHaveCount(0);
   await expect(page.locator('#stack')).toHaveAttribute('data-page-mode', 'exact', { timeout: 30_000 });
+});
+
+test('a terminal flexible inline Typst marker stays before following display math', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const s = state.schema;
+    const paragraph = s.nodes.paragraph.create(null, [
+      s.text('Terminal flexible fill'),
+      s.nodes.typst_inline.create({ src: '#h(1fr)' }),
+    ]);
+    const display = s.nodes.math_display.create({ src: '\\sum_{i=1}^{2} x_i = 1', label: 'eq:after-fill' });
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, [paragraph, display]));
+  });
+
+  const fill = page.locator('.ts-inline-raw');
+  await expect(fill).toHaveAttribute('data-inline-kind', 'flexible');
+  await expect(page.locator('#stack')).toHaveAttribute('data-page-mode', 'exact', { timeout: 30_000 });
+  await expect(fill).toHaveAttribute('data-preview-state', 'ready', { timeout: 30_000 });
+  await expect(page.locator('.math-display')).toHaveAttribute('data-preview-state', 'ready');
 });
 
 test('editor-only inline instrumentation preserves the normal Typst paint geometry', async ({ page }) => {

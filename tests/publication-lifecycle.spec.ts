@@ -14,6 +14,65 @@ const publicationSvg =
   '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">' +
   '<g class="typst-page" transform="translate(0, 0)"><path d="M10 10h10v10H10z"/></g></svg>';
 
+test('compile and preview-application failures are terminal publication states', async ({ page }) => {
+  await page.goto('/?new=1');
+  const result = await page.evaluate(async (svg) => {
+    const { TypstEmbedPreviewManager } = await import('/src/raw-preview.ts');
+    type Publication = import('/src/typst-document-publication').TypstDocumentSvgPublication;
+    type Listener = import('/src/raw-preview').ManagedDocumentPreviewView;
+    const waitForFailure = async (manager: InstanceType<typeof TypstEmbedPreviewManager>) => {
+      const deadline = performance.now() + 4_000;
+      while (manager.exactLayoutStatusFor(window.view.state.doc).status !== 'fail') {
+        if (performance.now() > deadline) throw new Error('publication failure wait timed out');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return manager.exactLayoutStatusFor(window.view.state.doc);
+    };
+
+    let compileMessage = '';
+    const compileFailure = new TypstEmbedPreviewManager(window.view, async () => null);
+    const compileListener: Listener = {
+      pending() {},
+      applyDocumentPreview: () => false,
+      compileError: (message) => { compileMessage = message; },
+      needsDocumentPreview: () => true,
+      retainedDocumentPreview: () => null,
+    };
+    compileFailure.register(compileListener);
+    const compileInitial = compileFailure.exactLayoutStatusFor(window.view.state.doc);
+    const compileTerminal = await waitForFailure(compileFailure);
+    compileFailure.destroy();
+
+    let retained: Publication | null = null;
+    const applyFailure = new TypstEmbedPreviewManager(window.view, async () => ({ svg, regions: [] }));
+    const applyListener: Listener = {
+      pending() {},
+      // Simulate a geometry consumer rejecting its crop. Returning false is
+      // not itself failure; refusing to retain the immutable result is.
+      applyDocumentPreview: () => false,
+      compileError() {},
+      needsDocumentPreview: () => true,
+      retainedDocumentPreview: () => retained,
+    };
+    applyFailure.register(applyListener);
+    const applyInitial = applyFailure.exactLayoutStatusFor(window.view.state.doc);
+    const applyTerminal = await waitForFailure(applyFailure);
+    applyFailure.destroy();
+
+    return { compileInitial, compileTerminal, compileMessage, applyInitial, applyTerminal };
+  }, publicationSvg);
+
+  expect(result.compileInitial).toEqual({ status: 'pending', reason: null });
+  expect(result.compileTerminal.status).toBe('fail');
+  expect(result.compileTerminal.reason).toContain('compilation failed');
+  expect(result.compileMessage).toContain('compilation failed');
+  expect(result.applyInitial).toEqual({ status: 'pending', reason: null });
+  expect(result.applyTerminal).toEqual({
+    status: 'fail',
+    reason: 'A compiled document preview could not be applied to every geometry consumer.',
+  });
+});
+
 test('asset-generation invalidation withdraws readiness until the replacement publication applies', async ({ page }) => {
   await page.goto('/?new=1');
   const result = await page.evaluate(async (svg) => {

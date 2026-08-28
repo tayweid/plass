@@ -43,7 +43,7 @@ test('unsupported stored fonts fall back without being overwritten', async ({ pa
     .toContain('New Computer Modern');
   expect(await page.evaluate(() => window.view.state.doc.attrs.settings.font)).toBe('Georgia');
 
-  await page.getByTitle('Document settings').evaluate((button: HTMLButtonElement) => button.click());
+  await page.getByTitle('Document settings', { exact: true }).evaluate((button: HTMLButtonElement) => button.click());
   await expect(page.locator('.settings-font-compat')).toContainText(
     'rendering and exporting as New Computer Modern',
   );

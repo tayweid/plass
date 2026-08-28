@@ -231,19 +231,25 @@ function inlineToTyp(node: PMNode): string {
       const linkedSource = /^\s*#h\s*\(/.test(source)
         ? `#box[${source}]`
         : source;
-      out += exportOpts.inlineRegions && classifyTypstInline(source).kind === 'fixed'
-        ? `#link(${JSON.stringify(typstInlineLink(index))})[${linkedSource}]` +
+      const classification = classifyTypstInline(source);
+      out += exportOpts.inlineRegions && classification.kind === 'fixed'
+        ? `#link(${JSON.stringify(typstInlineLink(index))})[` +
+          linkedSource +
           (previewIndex === null
             ? ''
-            : previewRegionMarker(previewIndex, 'typst-inline', 'baseline'))
-        : source;
+            : previewRegionMarker(previewIndex, 'typst-inline', 'baseline')) +
+          ']'
+        : (previewIndex !== null && classification.kind === 'flexible'
+            ? previewRegionMarker(previewIndex, 'typst-inline', 'baseline')
+            : '') +
+          source;
     } else if (child.type.name === 'math_inline') {
       const body = inlineMathToTypst(expandMacros(child.attrs.src));
       const index = exportOpts.previewRegions ? nextPreviewRegion++ : null;
       out += index === null
         ? body
-        : `#link(${JSON.stringify(typstPreviewInlineMathLink(index))})[#box[${body}]]` +
-          previewRegionMarker(index, 'math-inline', 'baseline');
+        : `#link(${JSON.stringify(typstPreviewInlineMathLink(index))})[` +
+          `#box[${body}${previewRegionMarker(index, 'math-inline', 'baseline')}]]`;
     } else if (child.type.name === 'eq_ref') {
       // Equation refs render as "(1)" to match the editor (Typst's default
       // would be "Equation 1"); figure refs keep "Figure 1".

@@ -63,6 +63,7 @@ const allDecorations = [...firstDecorations, ...secondDecorations, blockGap];
 assert.deepEqual(
   new Set(allDecorations.map(kindOf)),
   new Set<TypesetDecorationKind>([
+    'forced-lines',
     'word-spacing',
     'line-break',
     'hyphen-break',
@@ -71,6 +72,7 @@ assert.deepEqual(
     'block-page-gap',
   ]),
 );
+assert(firstDecorations.some((decoration) => decoration.spec.sig === 'nowrap'));
 assert(firstDecorations.some((decoration) => decoration.spec.sig === 'word-spacing:1.234px'));
 assert(firstDecorations.some((decoration) => decoration.spec.sig === 'nospell'));
 assert(firstDecorations.some((decoration) => decoration.spec.key === 'br:12'));

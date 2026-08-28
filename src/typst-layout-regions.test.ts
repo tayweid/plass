@@ -151,11 +151,13 @@ const match = (
   spec: NonNullable<ReturnType<typeof buildSpec>>,
   lines: TestPhysicalLine[],
   region: TypstLayoutRegion,
+  atomLines: ReadonlyMap<number, number> = new Map(),
 ) => matchContextRegion(
   spec,
   lines as Parameters<typeof matchContextRegion>[1],
   region,
   12,
+  atomLines,
 );
 
 // Figure numbering is paint-only, so a bounded prefix may be stripped while
@@ -231,6 +233,72 @@ const match = (
     start: { ...base.start, page: 2 },
   }), null);
   assert.equal(match(spec, [physicalLine(301, 0, 80, 'Target text')], base), null);
+}
+
+// Context matching obeys the same physical-line state machine as body prose:
+// a hyphen suffix finishes before later opaque atoms, and source hard breaks
+// can only be consumed at an actual SVG line boundary.
+{
+  const resolveMath: AtomResolver = (node) => node.type.name === 'math_inline'
+    ? { markup: '$x$' }
+    : null;
+  const hyphenSpec = buildSpec(footnote.create(null, [
+    schema.text('abcdef '),
+    schema.nodes.math_inline.create({ src: 'x' }),
+  ]), resolveMath);
+  assert.ok(hyphenSpec);
+  const twoLineRegion: TypstLayoutRegion = {
+    index: 0,
+    kind: 'footnote',
+    start: { page: 1, x: 20, y: 8 },
+    end: { page: 1, x: 180, y: 35 },
+  };
+  const hyphenLines = [
+    physicalLine(401, 0, 8, 'abc-'),
+    physicalLine(402, 0, 28, 'def'),
+  ];
+  assert.deepEqual(match(hyphenSpec, hyphenLines, twoLineRegion, new Map([[1, 1]])), {
+    breaks: [{ at: 3, hyphen: true }],
+    lineIds: [401, 402],
+  });
+  assert.equal(match(hyphenSpec, hyphenLines, twoLineRegion, new Map([[1, 0]])), null);
+
+  const hardSpec = buildSpec(footnote.create(null, [
+    schema.text('P'),
+    schema.nodes.hard_break.create(),
+    schema.text('tail'),
+  ]), () => null);
+  assert.ok(hardSpec);
+  assert.deepEqual(match(hardSpec, [
+    physicalLine(411, 0, 8, 'P'),
+    physicalLine(412, 0, 28, 'tail'),
+  ], twoLineRegion), {
+    breaks: [],
+    lineIds: [411, 412],
+  });
+  const oneLineRegion = { ...twoLineRegion, end: { page: 1, x: 180, y: 15 } };
+  assert.equal(match(hardSpec, [physicalLine(413, 0, 8, 'P tail')], oneLineRegion), null);
+
+  const atomHardSpec = buildSpec(footnote.create(null, [
+    schema.text('P '),
+    schema.nodes.math_inline.create({ src: 'x' }),
+    schema.nodes.hard_break.create(),
+    schema.text('tail'),
+  ]), resolveMath);
+  assert.ok(atomHardSpec);
+  assert.deepEqual(match(atomHardSpec, [
+    physicalLine(421, 0, 8, 'P'),
+    physicalLine(422, 0, 28, 'tail'),
+  ], twoLineRegion, new Map([[1, 0]])), {
+    breaks: [],
+    lineIds: [421, 422],
+  });
+  assert.equal(match(
+    atomHardSpec,
+    [physicalLine(423, 0, 8, 'P tail')],
+    oneLineRegion,
+    new Map([[1, 0]]),
+  ), null);
 }
 
 console.log('typst layout region tests passed');

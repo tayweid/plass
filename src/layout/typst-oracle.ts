@@ -380,6 +380,12 @@ export interface SvgTextRun {
   bottom: number;
 }
 
+/** Physical-line ownership for an atom whose selection text is deliberately
+ * excluded from the prose stream. Bindings come from the shared document
+ * publication's queried baselines, never inferred from neighboring prose. */
+export type AtomLineBinding = number;
+export type AtomLineBindings = ReadonlyMap<number, AtomLineBinding>;
+
 /**
  * A selection layer has one run per shaped fragment, not one run per prose
  * line. Inline math therefore contributes vertically offset superscript and
@@ -451,15 +457,18 @@ function skipParagraph(lines: SvgLine[], from: number, paraGap: number): number 
  * Match a paragraph's tokens against consecutive SVG lines; every line
  * boundary becomes a break. Tokens carry their exact rendered text and
  * whether a space precedes them, so glued punctuation and inline atoms
- * match precisely; unknown-text atoms (math) consume up to the next known
- * token. Hyphenations show up textually: a line ends with a prefix of the
- * pending word.
+ * match precisely. Opaque atom glyphs must already have been removed from
+ * `lines`, and every such token must carry physical-line ownership from the
+ * same compiled publication; neighboring prose is never an atom wildcard.
+ * Hyphenations show up textually: a line ends with a prefix of the pending
+ * word.
  */
 export function matchParagraph(
   spec: ParagraphSpec,
   lines: SvgLine[],
   cursor: number,
   stripFirst?: RegExp,
+  atomLines?: AtomLineBindings,
 ): { status: 'ok'; next: number; entry: OracleEntry } | { status: 'fail'; entry: OracleEntry } {
   const fail = (reason: string) => ({ status: 'fail' as const, entry: { status: 'fail' as const, reason } });
   const breaks: ForcedBreak[] = [];
@@ -474,7 +483,10 @@ export function matchParagraph(
     let text = lines[li].text.replace(/\s+/g, ' ').trim();
     // Painted prefixes ("Figure N: ", the entry number) are not tokens.
     if (stripFirst && li === cursor) text = text.replace(stripFirst, '');
-    const lineStartTi = ti;
+    // Selection text is not allowed to decide opaque-atom ownership. Track
+    // whether source content was bound to this physical line so empty or
+    // instrumentation-only lines cannot manufacture a break.
+    let consumedOnLine = false;
     let brokeWithHyphen = false;
 
     while (text.length) {
@@ -482,6 +494,7 @@ export function matchParagraph(
         if (text.startsWith(pendingSuffix)) {
           text = text.slice(pendingSuffix.length).trimStart();
           pendingSuffix = null;
+          consumedOnLine = true;
           continue;
         }
         return fail(`suffix mismatch: expected '${pendingSuffix}' got '${text.slice(0, 24)}'`);
@@ -489,29 +502,22 @@ export function matchParagraph(
       if (ti >= tokens.length) return fail(`extra line text: '${text.slice(0, 24)}'`);
       const tok = tokens[ti];
       if (tok.kind === 'hard') {
-        ti++;
-        continue;
+        return fail('hard break did not end the physical line');
       }
       if (tok.text === undefined) {
-        // Unknown-text atom (math): consume up to the next known token.
-        let nj = ti + 1;
-        while (nj < tokens.length && tokens[nj].kind === 'atom' && tokens[nj].text === undefined) nj++;
-        const next = nj < tokens.length && tokens[nj].kind !== 'hard' ? tokens[nj] : null;
-        if (!next || next.text === undefined) {
-          text = '';
-          ti = next ? ti + 1 : tokens.length;
-          continue;
+        const binding = atomLines?.get(ti);
+        if (binding === undefined) {
+          return fail(`atom@${ti} has no compiled line ownership`);
         }
-        const needle = (next.spaceBefore ? ' ' : '') + next.text;
-        const idx = (text + ' ').indexOf(needle);
-        if (idx < 0) {
-          // Next known token is on a later line: this atom owns the rest.
-          text = '';
-          ti++;
-          continue;
+        if (binding !== li) {
+          return fail(
+            binding < li
+              ? `atom@${ti} belongs to an already-consumed line`
+              : `atom@${ti} belongs to a later line`,
+          );
         }
-        text = text.slice(idx).trimStart();
         ti++;
+        consumedOnLine = true;
         continue;
       }
       // Known text (word or atom with known rendering).
@@ -527,6 +533,7 @@ export function matchParagraph(
         if (after === '' || after.startsWith(' ') || glueNext) {
           text = after.trimStart() === after && after !== '' && !after.startsWith(' ') ? after : after.trimStart();
           ti++;
+          consumedOnLine = true;
           continue;
         }
       }
@@ -541,6 +548,7 @@ export function matchParagraph(
           pendingSuffix = w.slice(bare.length + dash);
           ti++;
           text = '';
+          consumedOnLine = true;
           brokeWithHyphen = true;
           continue;
         }
@@ -548,13 +556,42 @@ export function matchParagraph(
       return fail(`token mismatch: expected '${w}' got '${text.slice(0, 24)}'`);
     }
 
+    // A paint-only atom can be the final item on a physical line, so the
+    // selection stream may become empty before the token is encountered.
+    // Advance only atoms whose compiled baseline names this exact line.
+    // A hyphenated word is not complete until its suffix is consumed on a
+    // later physical line. Source that follows the word cannot move ahead of
+    // that suffix merely because it has no selection text of its own.
+    if (pendingSuffix === null) {
+      while (ti < tokens.length) {
+        const tok = tokens[ti];
+        if (tok.kind !== 'atom' || tok.text !== undefined) break;
+        const binding = atomLines?.get(ti);
+        if (binding === undefined) return fail(`atom@${ti} has no compiled line ownership`);
+        if (binding > li) break;
+        if (binding < li) return fail(`atom@${ti} belongs to an already-consumed line`);
+        ti++;
+        consumedOnLine = true;
+      }
+    }
+
+    // A source hard break is the physical boundary just consumed. Advance it
+    // only after this line is empty; skipping it while text remains would
+    // certify an impossible merged line. The native hard_break node already
+    // paints the boundary, so do not emit a second forced-break decoration.
+    let endedByHard = false;
+    if (pendingSuffix === null && ti < tokens.length && tokens[ti].kind === 'hard') {
+      if (!consumedOnLine) return fail('hard break has no preceding physical-line content');
+      ti++;
+      endedByHard = true;
+    }
+
     // Line consumed. If the paragraph continues, this boundary is a break.
     const more = ti < tokens.length || pendingSuffix !== null;
-    if (more && !brokeWithHyphen) {
-      if (ti === lineStartTi) return fail('empty line inside paragraph');
+    if (more && !brokeWithHyphen && !endedByHard) {
+      if (!consumedOnLine) return fail('empty line inside paragraph');
       const prev = tokens[ti - 1];
-      // Hard breaks cut by themselves — no forced break needed.
-      if (prev.kind !== 'hard') breaks.push({ at: prev.end, hyphen: false });
+      breaks.push({ at: prev.end, hyphen: false });
     }
     li++;
     if (!more) break;

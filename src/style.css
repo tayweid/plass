@@ -870,6 +870,26 @@ body {
   text-align: justify;
 }
 
+/* A settled block has one line authority: Typst. The decoration that adds
+   this class is published with the explicit break/spacing decorations and
+   removed in the same synchronous transaction when the block is edited.
+   `nowrap` still honors explicit <br> and page-gap blocks; it only prevents
+   the browser from inventing extra lines between them. */
+.ProseMirror p.ts-forced-lines,
+.ProseMirror h1.ts-forced-lines,
+.ProseMirror h2.ts-forced-lines,
+.ProseMirror h3.ts-forced-lines,
+.ProseMirror h4.ts-forced-lines,
+.ProseMirror h5.ts-forced-lines,
+.ProseMirror h6.ts-forced-lines,
+.ProseMirror .ts-doctitle.ts-forced-lines,
+.ProseMirror .ts-docauthors.ts-forced-lines,
+.ProseMirror .ts-docdate.ts-forced-lines,
+.ProseMirror .ts-figure.ts-forced-lines > figcaption,
+.ProseMirror .ts-footnote.ts-forced-lines > .fn-body {
+  white-space: nowrap;
+}
+
 /* Aligned paragraphs are browser-laid display lines (no oracle
    decorations): CSS does the whole job. */
 .ProseMirror p[data-align='center'] {
@@ -1176,6 +1196,9 @@ body {
      justification takes over. */
   text-align: justify;
   text-indent: 0.9em;
+  /* Do not inherit a containing paragraph's compiled-line lock. Footnote
+     bodies receive and relinquish their own lock independently. */
+  white-space: normal;
 }
 
 /* Separator rule above the first footnote of a page. */

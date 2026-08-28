@@ -1,10 +1,37 @@
-import { expect, test } from 'playwright/test';
+import { expect, test, type Page } from 'playwright/test';
 
 declare global {
   interface Window {
     view: import('prosemirror-view').EditorView;
     __pagLog: () => string[];
   }
+}
+
+async function lineGeometry(page: Page) {
+  return page.locator('.ProseMirror > p').evaluateAll((paragraphs) =>
+    paragraphs.slice(0, 8).map((paragraph) => {
+      const explicit = paragraph.querySelectorAll(
+        'br.ts-br, .ts-hyphen > br, .ts-pagegap',
+      ).length + 1;
+      const tops: number[] = [];
+      const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+        if (!text.textContent) continue;
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        for (const rect of range.getClientRects()) {
+          if (rect.width > 0 && !tops.some((top) => Math.abs(top - rect.top) <= 1)) tops.push(rect.top);
+        }
+      }
+      return {
+        explicit,
+        physical: tops.length,
+        clientWidth: paragraph.clientWidth,
+        scrollWidth: paragraph.scrollWidth,
+        whiteSpace: getComputedStyle(paragraph).whiteSpace,
+      };
+    }),
+  );
 }
 
 // Regression: the SVG sanitizer once stripped the compiled text layer
@@ -61,10 +88,10 @@ test('page oracle splits a long bullet across the page boundary', async ({ page 
 });
 
 // Typst encodes every selection run's physical rectangle on its surrounding
-// SVG foreignObject. Browser HTML text metrics are not authoritative and can
-// transiently differ on a cold Linux font load. A poisoned inner text box
-// must therefore have no effect on compiled line/page extraction.
-test('page oracle ignores browser text boxes and reads compiled SVG geometry', async ({ page }) => {
+// SVG foreignObject. Browser text boxes and screen CTMs are not authoritative:
+// both cross the SVG/CSS boundary and can differ across platforms. Poisoning
+// them must have no effect because extraction stays in SVG user space.
+test('page oracle reads only compiled SVG user-space geometry', async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto('/?new=1');
   await page.evaluate(() => {
@@ -72,6 +99,9 @@ test('page oracle ignores browser text boxes and reads compiled SVG geometry', a
     Element.prototype.getBoundingClientRect = function getBoundingClientRect() {
       if (this.classList?.contains('tsel')) return new DOMRect(0, 0, 4_000, 4_000);
       return realBounds.call(this);
+    };
+    SVGGraphicsElement.prototype.getScreenCTM = function getScreenCTM() {
+      throw new Error('page extraction consulted poisoned screen geometry');
     };
 
     const { state } = window.view;
@@ -90,6 +120,48 @@ test('page oracle ignores browser text boxes and reads compiled SVG geometry', a
   await expect(page.locator('#stack')).toHaveAttribute('data-page-mode', 'exact', { timeout: 30_000 });
   await expect.poll(() => page.locator('.page-box').count()).toBeGreaterThan(1);
   await expect.poll(() => page.locator('.ts-pagegap').count()).toBeGreaterThan(0);
+});
+
+// Explicit compiled breaks must remain the only physical line boundaries.
+// Small font/spacing differences between macOS and Linux used to let the
+// browser wrap a forced line again, making the editor several lines taller
+// than Typst and moving the next compiled page start upward.
+test('compiled line membership cannot be rewrapped by browser metrics', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const paragraphs = Array.from({ length: 40 }, (_, index) =>
+      state.schema.nodes.paragraph.create(
+        null,
+        state.schema.text(
+          `Geometry paragraph ${index + 1}. ` +
+            'Physical lines come from the compiler SVG rather than a browser fallback font. '.repeat(5),
+        ),
+      ),
+    );
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, paragraphs));
+  });
+
+  await expect(page.locator('#stack')).toHaveAttribute('data-page-mode', 'exact', { timeout: 30_000 });
+  await expect.poll(() => page.locator('.ProseMirror > p.ts-forced-lines').count()).toBe(40);
+
+  const fitted = await lineGeometry(page);
+  for (const lines of fitted) {
+    expect(lines.physical).toBe(lines.explicit);
+    expect(lines.scrollWidth).toBeLessThanOrEqual(lines.clientWidth + 2);
+    expect(lines.whiteSpace).toBe('nowrap');
+  }
+
+  // Simulate the spacing discrepancy that exposed the Ubuntu failure. The
+  // glyphs may no longer fill the line perfectly, but CSS must not create a
+  // new line boundary that does not exist in the compiled snapshot.
+  await page.addStyleTag({
+    content: '.ProseMirror > p span[style*="word-spacing: -"] { word-spacing: 0 !important; }',
+  });
+
+  const lineCounts = await lineGeometry(page);
+  for (const lines of lineCounts) expect(lines.physical).toBe(lines.explicit);
 });
 
 

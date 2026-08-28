@@ -110,6 +110,19 @@ type CurrentSpacers = {
   sorted: Array<{ pos: number; height: number }>;
 };
 
+/** Whether mapped decoration state still carries visible exact ownership that
+ * can justify retaining its mapped page provenance through a pending compile. */
+function hasMappedExactPresentation(decos: DecorationSet): boolean {
+  return decos.find(
+    undefined,
+    undefined,
+    (spec) => {
+      const kind = (spec as Partial<TypesetDecorationSpec> | null)?.tsKind;
+      return kind === 'forced-lines' || kind === 'line-page-gap' || kind === 'block-page-gap';
+    },
+  ).length > 0;
+}
+
 interface PaginationGeometrySnapshot {
   settings: DocSettings;
   size: { w: number; h: number };
@@ -132,6 +145,16 @@ const viewRegistry = new WeakMap<EditorView, TypesetView>();
 /** Request a re-typeset without a document change (e.g. an image loaded). */
 export function scheduleTypeset(view: EditorView) {
   viewRegistry.get(view)?.requestRun();
+}
+
+/** A shared preview compile/crop failed for the current document. Withdraw
+ * mapped exact presentation immediately instead of waiting behind the
+ * typing quiet-period scheduler. */
+export function failOpenTypesetPublication(view: EditorView, reason?: string) {
+  const tv = viewRegistry.get(view);
+  if (!tv) return;
+  tv.failOpenPublication(reason);
+  tv.requestRun();
 }
 
 /** An asset changed on disk (image rewritten): page geometry may have moved
@@ -167,6 +190,24 @@ export function typesetPlugin(
           return { decos: val.decos, pageMarks: meta.pageMarks, pageBasis: meta.pageBasis };
         }
         if (tr.docChanged) {
+          // Some document-changing ProseMirror steps deliberately expose an
+          // empty StepMap (marks, node/doc attrs, and custom metadata steps).
+          // There is no sound owner range to invalidate or a meaningful way
+          // to map exact page provenance through those changes. Fail open in
+          // the transaction itself, before the updated DOM can paint.
+          const hasUnmappedDocumentChange = tr.mapping.maps.some((stepMap) => {
+            let described = false;
+            stepMap.forEach(() => { described = true; });
+            return !described;
+          });
+          if (hasUnmappedDocumentChange || tr.before.attrs !== tr.doc.attrs) {
+            return {
+              decos: DecorationSet.empty,
+              pageMarks: DecorationSet.empty,
+              pageBasis: null,
+            };
+          }
+
           // Remove the previous revision's forced lines before mapping the
           // decoration set. Long paragraphs can own thousands of inline
           // decorations; mapping all of them only to discard them made the
@@ -209,7 +250,8 @@ export function typesetPlugin(
           // so the browser can paint the new text immediately. Page gaps stay
           // mapped to preserve the last settled page geometry; the quiet pass
           // atomically publishes a new exact layout.
-          const scopes = new Map<string, { from: number; to: number }>();
+          type Scope = { from: number; to: number };
+          const scopes = new Map<string, Scope>();
           const addScopeAt = (pos: number) => {
             const safe = Math.max(0, Math.min(pos, tr.doc.content.size));
             const $pos = tr.doc.resolve(safe);
@@ -218,24 +260,42 @@ export function typesetPlugin(
               if (node.isTextblock || node.type.name === 'footnote') {
                 const from = $pos.before(depth);
                 const to = from + node.nodeSize;
-                scopes.set(`${from}:${to}`, { from, to });
-                return;
+                const scope = { from, to };
+                scopes.set(`${from}:${to}`, scope);
+                return scope;
               }
             }
+            return null;
           };
           tr.mapping.maps.forEach((stepMap, index) => {
             const remaining = tr.mapping.slice(index + 1);
             stepMap.forEach((_oldFrom, _oldTo, newFrom, newTo) => {
               const from = remaining.map(newFrom, -1);
               const to = remaining.map(newTo, 1);
-              addScopeAt(from);
-              addScopeAt(to);
+              const boundaryScopes = [addScopeAt(from), addScopeAt(to)].filter(
+                (scope): scope is Scope => scope !== null,
+              );
+              const rangeFrom = Math.max(0, Math.min(from, tr.doc.content.size));
+              const rangeTo = Math.max(0, Math.min(Math.max(to, from), tr.doc.content.size));
               tr.doc.nodesBetween(
-                Math.max(0, Math.min(from, tr.doc.content.size)),
-                Math.max(0, Math.min(Math.max(to, from), tr.doc.content.size)),
+                rangeFrom,
+                rangeTo,
                 (node, pos) => {
                   if (node.isTextblock || node.type.name === 'footnote') {
-                    scopes.set(`${pos}:${pos + node.nodeSize}`, { from: pos, to: pos + node.nodeSize });
+                    const nodeTo = pos + node.nodeSize;
+                    // nodesBetween visits an outer figure/paragraph before a
+                    // nested editable footnote. If the entire edit belongs
+                    // to that deeper boundary owner, descend without
+                    // invalidating the untouched outer text presentation.
+                    const whollyInNestedOwner = boundaryScopes.some(
+                      (scope) =>
+                        scope.from > pos &&
+                        scope.to < nodeTo &&
+                        rangeFrom >= scope.from &&
+                        rangeTo <= scope.to,
+                    );
+                    if (whollyInNestedOwner) return true;
+                    scopes.set(`${pos}:${nodeTo}`, { from: pos, to: nodeTo });
                     return false;
                   }
                   return true;
@@ -246,10 +306,18 @@ export function typesetPlugin(
           for (const scope of scopes.values()) {
             decos = stripActiveLineDecorations(decos, scope);
           }
+          const retainsExactPresentation = hasMappedExactPresentation(decos);
           return {
             decos,
-            pageMarks: val.pageMarks.map(tr.mapping, tr.doc),
-            pageBasis: val.pageBasis,
+            // Page provenance can survive only with some mapped exact visual
+            // owner. If the edit stripped the final owner, withdraw these
+            // state-only claims inside the document transaction too; the view
+            // update must not need a synchronous follow-up dispatch before the
+            // browser's first presentation opportunity.
+            pageMarks: retainsExactPresentation
+              ? val.pageMarks.map(tr.mapping, tr.doc)
+              : DecorationSet.empty,
+            pageBasis: retainsExactPresentation ? val.pageBasis : null,
           };
         }
         return val;
@@ -271,6 +339,12 @@ class TypesetView {
   private oracles: OracleCoordinator;
   private documentCompilerLease: DocumentCompileBrokerLease;
   private scheduler!: LayoutScheduler;
+  /** LayoutScheduler coalesces expensive resize work, but mapped nowrap/page
+   * ownership must be revoked immediately after ResizeObserver delivery—even
+   * during the edit quiet period. A zero-delay task avoids mutating observed
+   * DOM inside the observer's own delivery loop. */
+  private geometryResizeObserver: ResizeObserver;
+  private geometryResizeInvalidationQueued = false;
   /** Signature of the last dispatched decoration set: identical layouts are
    *  never re-dispatched, so no-op runs cause zero paints. */
   private lastDecoSig = '';
@@ -291,6 +365,13 @@ class TypesetView {
   private paginationSnapshotStats = { captures: 0, spacerScans: 0, heightQueries: 0 };
   private paginationGeometryEpoch = 0;
   private lastPaginationWidth = 0;
+  /** Proven geometry under which mapped exact presentation may survive while
+   * the replacement publication is genuinely pending. */
+  private mappedPublicationHold: {
+    doc: PMNode;
+    geometryEpoch: number;
+    editorWidth: number;
+  } | null = null;
   private destroyed = false;
 
   constructor(
@@ -308,6 +389,16 @@ class TypesetView {
           signal,
         }),
     });
+    this.lastPaginationWidth = view.dom.clientWidth;
+    this.geometryResizeObserver = new ResizeObserver(() => {
+      if (this.geometryResizeInvalidationQueued) return;
+      this.geometryResizeInvalidationQueued = true;
+      window.setTimeout(() => {
+        this.geometryResizeInvalidationQueued = false;
+        if (this.invalidateChangedEditorWidth()) this.requestRun();
+      }, 0);
+    });
+    this.geometryResizeObserver.observe(view.dom);
     if (import.meta.env.DEV) {
       const w = window as unknown as {
         __pageOracle?: PageOracle;
@@ -391,10 +482,12 @@ class TypesetView {
       // Web fonts arriving change every browser metric. The Typst oracles
       // remain valid because their bundled font inputs did not change.
       invalidateMetrics: () => {
+        this.mappedPublicationHold = null;
         this.paginationGeometryEpoch++;
         this.abandonPageBasis();
         this.measurer.invalidate();
         this.cache.clear();
+        this.clearPublishedLayout('browser font metrics changed');
       },
     });
   }
@@ -421,21 +514,36 @@ class TypesetView {
 
   update(view: EditorView, prevState: EditorState) {
     // Document settings (font, size, hyphenation, …) invalidate every metric.
-    if (view.state.doc.attrs !== prevState.doc.attrs) {
+    const settingsChanged = view.state.doc.attrs !== prevState.doc.attrs;
+    if (settingsChanged) {
+      this.mappedPublicationHold = null;
       this.paginationGeometryEpoch++;
       this.abandonPageBasis();
       this.measurer.invalidate();
       this.cache.clear();
       this.oracles.clear();
+      this.clearPublishedLayout('document settings changed');
     }
     if (view.state.doc !== prevState.doc) {
+      const pluginState = typesetKey.getState(view.state);
+      const hasMappedPresentation = !!pluginState && hasMappedExactPresentation(pluginState.decos);
+      this.mappedPublicationHold = !settingsChanged && hasMappedPresentation
+        ? {
+            doc: view.state.doc,
+            geometryEpoch: this.paginationGeometryEpoch,
+            editorWidth: view.dom.clientWidth,
+          }
+        : null;
       // The plugin state's transaction hook has already mapped decorations
       // and stripped forced lines from every touched block. Synchronize the
       // no-op signature with that paint-first state so the pending compiler
       // pass does not dispatch an identical empty/native decoration set.
       this.lastDecoSig = decorationSetDigest(
-        typesetKey.getState(view.state)?.decos ?? DecorationSet.empty,
+        pluginState?.decos ?? DecorationSet.empty,
       );
+      if (!settingsChanged && !this.mappedPublicationHold) {
+        this.clearPublishedLayout('document presentation changed');
+      }
       // Results for the previous revision must not begin expensive SVG
       // analysis while the user is typing. Completed cache entries survive;
       // only queued/in-flight publication is superseded.
@@ -450,6 +558,7 @@ class TypesetView {
   destroy() {
     this.destroyed = true;
     viewRegistry.delete(this.view);
+    this.geometryResizeObserver.disconnect();
     this.scheduler.destroy();
     this.oracles.destroy();
     this.documentCompilerLease.release();
@@ -458,13 +567,21 @@ class TypesetView {
 
   /** Drop cached page-break decisions (asset bytes changed under same sig). */
   invalidatePages() {
+    this.mappedPublicationHold = null;
     this.paginationGeometryEpoch++;
     this.abandonPageBasis();
     this.oracles.clearPage();
+    this.clearPublishedLayout('document assets changed');
   }
 
   requestRun() {
     this.scheduler?.scheduleSettled();
+  }
+
+  failOpenPublication(reason = 'exact document publication failed') {
+    this.mappedPublicationHold = null;
+    this.abandonPageBasis();
+    this.clearPublishedLayout(reason);
   }
 
   /** Return (and optionally request) the one full-document Typst snapshot
@@ -494,12 +611,8 @@ class TypesetView {
    * publication. The PageOracle may finish parsing first, but its lines/pages
    * are not exact in the editor until the shared preview manager has applied
    * that same result to all live nodes. */
-  private documentPublicationReady(): boolean {
-    return documentPreviewManagerFor(this.view).isReadyFor(this.view.state.doc);
-  }
-
-  private documentPublicationBlocker(): string | null {
-    return documentPreviewManagerFor(this.view).exactLayoutBlockerFor(this.view.state.doc);
+  private documentPublicationState() {
+    return documentPreviewManagerFor(this.view).exactLayoutStatusFor(this.view.state.doc);
   }
 
   /** The page spacers currently in the document, read back from the live
@@ -582,6 +695,72 @@ class TypesetView {
     this.pendingPageMarks = { marks: DecorationSet.empty, basis: null };
   }
 
+  /** Withdraw every exact line/page claim in one state-only transaction.
+   * Geometry invalidations and terminal failures must not leave old nowrap
+   * ownership or page gaps installed until a later successful compile. */
+  private clearPublishedLayout(reason = 'exact layout invalidated'): void {
+    this.mappedPublicationHold = null;
+    this.pendingPageMarks = null;
+    this.lastDecoSig = '';
+    this.publishContinuousMode(reason);
+    const current = typesetKey.getState(this.view.state);
+    if (
+      !current ||
+      (!current.decos.find().length && !current.pageMarks.find().length && !current.pageBasis)
+    ) return;
+    const tr = this.view.state.tr.setMeta(typesetKey, {
+      type: 'decos',
+      decos: DecorationSet.empty,
+      pageMarks: DecorationSet.empty,
+      pageBasis: null,
+    } satisfies TypesetMeta);
+    tr.setMeta('addToHistory', false);
+    this.lineDecorationDispatches++;
+    this.view.dispatch(tr);
+  }
+
+  private publishContinuousMode(reason: string): void {
+    this.pagPath = 'continuous';
+    this.pagWhy = reason;
+    const settings = getSettings(this.view.state);
+    const size = pageSize(settings);
+    this.opts.onPages?.({
+      mode: 'continuous',
+      reason,
+      count: 0,
+      pageW: size.w,
+      pageH: size.h,
+      gap: PAGE_GAP,
+      marginBottom: settings.marginBottom * 96,
+      marginLeft: settings.marginLeft * 96,
+      marginRight: settings.marginRight * 96,
+    });
+  }
+
+  private mappedPublicationHoldIsCurrent(): boolean {
+    const hold = this.mappedPublicationHold;
+    return !!hold &&
+      hold.doc === this.view.state.doc &&
+      hold.geometryEpoch === this.paginationGeometryEpoch &&
+      Math.abs(hold.editorWidth - this.view.dom.clientWidth) <= 0.5;
+  }
+
+  private invalidateChangedEditorWidth(): boolean {
+    if (this.destroyed) return false;
+    const width = this.view.dom.clientWidth;
+    if (!this.lastPaginationWidth || Math.abs(width - this.lastPaginationWidth) <= 0.5) {
+      this.lastPaginationWidth = width;
+      return false;
+    }
+    this.lastPaginationWidth = width;
+    this.mappedPublicationHold = null;
+    this.paginationGeometryEpoch++;
+    this.abandonPageBasis();
+    this.cache.clear();
+    this.clearPublishedLayout('editor width changed');
+    return true;
+  }
+
   /** Font size in px (body em). */
   private bodyPx(): number {
     return parseFloat(getComputedStyle(this.view.dom).fontSize) || 16.67;
@@ -612,6 +791,9 @@ class TypesetView {
     if (this.destroyed) return;
 
     const t0 = performance.now();
+    // ResizeObserver schedules this run before the next paint. Revoke the old
+    // nowrap/page geometry before reading spacers or attempting a new pass.
+    this.invalidateChangedEditorWidth();
     this.applyTopAdjust();
     // Start the authoritative document compile before any local geometry
     // work. Its immutable result drives both line and page decisions on the
@@ -752,9 +934,27 @@ class TypesetView {
     const layoutOpts = { hyphenate: settings.hyphenate, isFill: isFlexibleAtom };
     const useOracle = font.exact;
     const resolveAtom = useOracle ? this.atomResolver() : null;
-    const documentSnapshot = this.documentPublicationReady()
-      ? this.documentLayoutEntry(false)?.snapshot
-      : undefined;
+    const documentEntry = useOracle ? this.documentLayoutEntry(false) : undefined;
+    const publication = useOracle ? this.documentPublicationState() : null;
+    const publicationReady = publication?.status === 'ready';
+    const serializable = useOracle && this.docSig.has(state.doc);
+    const replacementPending = serializable && publication?.status !== 'fail' &&
+      documentEntry?.status !== 'fail' && (!documentEntry || publication?.status === 'pending');
+    const documentSnapshot = publicationReady ? documentEntry?.snapshot : undefined;
+    // The transaction hook already removed stale presentation from every
+    // touched owner. Rebuilding the whole set before its replacement snapshot
+    // exists would unnecessarily unwrap untouched blocks, then wrap them
+    // again milliseconds later: a visible second-typesetter pulse and an
+    // extra full decoration dispatch per keystroke.
+    if (
+      useOracle &&
+      this.mappedPublicationHoldIsCurrent() &&
+      replacementPending &&
+      !documentSnapshot
+    ) {
+      return { paragraphs: 0, lines: 0 };
+    }
+    this.mappedPublicationHold = null;
     let paragraphs = 0;
     let lineCount = 0;
     let figNo = 0;
@@ -796,10 +996,13 @@ class TypesetView {
       const compiledBreaks = exactDocumentBreaks === undefined
         ? undefined
         : [...exactDocumentBreaks];
-      let entry =
-        ostatus === 'ok' && !compiledBreaks
-          ? undefined
-          : this.cache.getReusable(node, cacheKey, compiledBreaks);
+      // Node identity alone cannot authorize compiled ownership. A cache hit
+      // is reusable only when the current document snapshot supplied the
+      // break list whose semantic signature validates that hit. Pending or
+      // failed publication without current breaks must remain native.
+      let entry = compiledBreaks
+        ? this.cache.getReusable(node, cacheKey, compiledBreaks)
+        : undefined;
       // Cache entries produced by the retired local deciders are never
       // allowed to become settled authority. Native browser wrapping is the
       // pending state; only a compiled Typst break set may force the DOM.
@@ -980,8 +1183,8 @@ class TypesetView {
       this.oracles.page.request(sig, state.doc, settings, this.atomResolver());
     }
 
-    const publicationBlocker = this.documentPublicationBlocker();
-    const publicationReady = !publicationBlocker && this.documentPublicationReady();
+    const publication = this.documentPublicationState();
+    const publicationReady = publication.status === 'ready';
     if (entry?.status === 'ok' && entry.pageStarts && publicationReady) {
       const forced = this.paginateForced(
         snapshot,
@@ -1002,6 +1205,10 @@ class TypesetView {
       };
       this.pagPath = 'exact';
       this.pagWhy = 'fresh full-document Typst snapshot';
+      // Geometry invalidation may have abandoned confidence while retaining a
+      // reusable current oracle entry. Publishing it is fresh exact authority
+      // and must reopen the next edit's pending-hold path.
+      this.oracles.pageConfidence.record(entry);
       this.pendingPageMarks = {
         basis,
         marks: DecorationSet.create(
@@ -1035,7 +1242,15 @@ class TypesetView {
     // Holding is permitted only for an actually pending replacement and only
     // for markers emitted by the last exact compile. A failure is terminal for
     // this basis even if another request begins later.
-    if (confidence.hold && !entry && basisIsCurrent && marks.length === basis.pageCount - 1) {
+    const replacementPending = this.docSig.has(state.doc) && publication.status !== 'fail' &&
+      entry?.status !== 'fail' && (!entry || publication.status === 'pending');
+    if (
+      confidence.hold &&
+      replacementPending &&
+      this.mappedPublicationHoldIsCurrent() &&
+      basisIsCurrent &&
+      marks.length === basis.pageCount - 1
+    ) {
       const stale = marks
         .map((mark) => {
           const spec = mark.spec as {
@@ -1067,12 +1282,12 @@ class TypesetView {
     return continuous(
       entry?.status === 'fail'
         ? `Typst page map unavailable: ${entry.reason ?? 'unknown failure'}`
-        : publicationBlocker
-          ? `${publicationBlocker}; open Proof for exact output`
-        : entry?.status === 'ok' && !publicationReady
+        : publication.status === 'fail'
+          ? publication.reason ?? 'Exact document publication failed'
+        : entry?.status === 'ok' && publication.status === 'pending'
           ? 'applying exact document publication'
         : 'waiting for first exact page map',
-      entry?.status === 'fail' || !!basis,
+      entry?.status === 'fail' || publication.status === 'fail' || !!basis,
     );
   }
 

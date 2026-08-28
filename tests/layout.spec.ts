@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test, type Locator } from 'playwright/test';
 
 declare global {
   interface Window {
@@ -15,6 +15,33 @@ declare global {
       heightQueries: number;
     };
   }
+}
+
+async function expectCompiledFit(owner: Locator) {
+  const geometry = await owner.evaluate((root) => {
+    const owns = (node: Node) =>
+      node.parentElement?.closest('p, figcaption, .fn-body') === root;
+    const explicit = [...root.querySelectorAll('br.ts-br, .ts-hyphen > br, .ts-pagegap')]
+      .filter(owns).length + 1;
+    const tops: number[] = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+      if (!text.textContent || !owns(text)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      for (const rect of range.getClientRects()) {
+        if (rect.width > 0 && !tops.some((top) => Math.abs(top - rect.top) <= 1)) tops.push(rect.top);
+      }
+    }
+    return {
+      explicit,
+      physical: tops.length,
+      clientWidth: root.clientWidth,
+      scrollWidth: root.scrollWidth,
+    };
+  });
+  expect(geometry.physical).toBe(geometry.explicit);
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 2);
 }
 
 test('the first settled exact paragraph remains unchanged when the oracle verifies it', async ({ page }) => {
@@ -83,20 +110,34 @@ test('caption and footnote edits share one exact compiled decoration update', as
   await expect(page.locator('figcaption')).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__breakSig().length)).toBeGreaterThan(0);
   await page.waitForTimeout(1_200);
+  await expect(page.locator('.ts-figure')).toHaveClass(/ts-forced-lines/);
+  await expect(page.locator('.ts-footnote')).toHaveClass(/ts-forced-lines/);
+  await expectCompiledFit(page.locator('figcaption'));
+  await expectCompiledFit(page.locator('.fn-body'));
 
   await page.evaluate(() => window.__layoutDispatchStats(true));
-  await page.evaluate(() => {
+  const captionHandoff = await page.evaluate(() => {
     const { state } = window.view;
     window.view.dispatch(state.tr.insertText('Precisely, ', 1));
+    const figure = document.querySelector('.ts-figure');
+    return {
+      locked: figure?.classList.contains('ts-forced-lines') ?? false,
+      whiteSpace: figure?.querySelector('figcaption')
+        ? getComputedStyle(figure.querySelector('figcaption')!).whiteSpace
+        : '',
+    };
   });
+  expect(captionHandoff).toEqual({ locked: false, whiteSpace: 'normal' });
   await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
+  await expect(page.locator('.ts-figure')).toHaveClass(/ts-forced-lines/);
+  expect(await page.locator('figcaption').evaluate((node) => getComputedStyle(node).whiteSpace)).toBe('nowrap');
   const captionBreaks = await page.evaluate(() => window.__breakSig());
   await page.waitForTimeout(1_200);
   expect(await page.evaluate(() => window.__breakSig())).toBe(captionBreaks);
   expect(await page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
 
   await page.evaluate(() => window.__layoutDispatchStats(true));
-  await page.evaluate(() => {
+  const footnoteHandoff = await page.evaluate(() => {
     const { state } = window.view;
     let footnotePos = -1;
     state.doc.descendants((node, pos) => {
@@ -108,8 +149,25 @@ test('caption and footnote edits share one exact compiled decoration update', as
     });
     if (footnotePos < 0) throw new Error('footnote fixture was not created');
     window.view.dispatch(state.tr.insertText('Notably, ', footnotePos + 1));
+    const figure = document.querySelector('.ts-figure');
+    const footnote = document.querySelector('.ts-footnote');
+    const body = footnote?.querySelector('.fn-body');
+    return {
+      figureLocked: figure?.classList.contains('ts-forced-lines') ?? false,
+      footnoteLocked: footnote?.classList.contains('ts-forced-lines') ?? false,
+      bodyWhiteSpace: body ? getComputedStyle(body).whiteSpace : '',
+    };
+  });
+  expect(footnoteHandoff).toEqual({
+    figureLocked: true,
+    footnoteLocked: false,
+    bodyWhiteSpace: 'normal',
   });
   await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
+  await expect(page.locator('.ts-footnote')).toHaveClass(/ts-forced-lines/);
+  expect(await page.locator('.fn-body').evaluate((node) => getComputedStyle(node).whiteSpace)).toBe('nowrap');
+  await expectCompiledFit(page.locator('figcaption'));
+  await expectCompiledFit(page.locator('.fn-body'));
   const footnoteBreaks = await page.evaluate(() => window.__breakSig());
   await page.waitForTimeout(1_200);
   expect(await page.evaluate(() => window.__breakSig())).toBe(footnoteBreaks);
