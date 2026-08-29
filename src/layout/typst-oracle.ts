@@ -21,6 +21,7 @@ import { escapeTyp, parityRules, textSetLine } from '../typ-serializer';
 import type { DocSettings } from '../settings';
 import type { ForcedBreak } from './paragraph';
 import { parseTypstSvg } from '../safe-svg';
+import { EDIT_SETTLE_DELAY_MS } from './layout-scheduler';
 
 /** A word (or atom) with its offsets in the block's content. */
 interface Token {
@@ -158,9 +159,14 @@ interface Queued {
   skind: SpecKind;
   /** Body paragraph carrying the classic first-line indent. */
   indented: boolean;
+  /** Stable identity of the requesting block (supersession tracking): a
+   * newer spec for the same block makes an older one permanently dead. */
+  blockId?: string;
 }
 
 const MAX_RESULTS = 800;
+/** How often a finished compile re-checks for quiet before analyzing. */
+const QUIET_POLL_MS = 100;
 /** Hyphen-like characters Typst may append to a hyphenated line. */
 const HYPHENS = /[-‐‑\u00ad]+$/;
 
@@ -175,6 +181,10 @@ export class TypstOracle {
    * destroy() was called. The underlying compiler task cannot be cancelled,
    * so publication has to be guarded when it returns. */
   private generation = 0;
+  /** Latest requested key per block identity: an in-flight or queued compile
+   * whose key is no longer the block's latest is dead and its result must
+   * never reach the main-thread analysis step. */
+  private latestForBlock = new Map<string, string>();
 
   constructor(
     private onResults: () => void,
@@ -183,15 +193,38 @@ export class TypstOracle {
       const { compileSvg } = await import('../pdf');
       return compileSvg(source);
     },
+    /** Whether the user is inside an edit's quiet window (mid typing burst).
+     * While true, no compile launches and no finished result is analyzed. */
+    private isEditing: () => boolean = () => false,
   ) {}
 
   get(key: string): OracleEntry | undefined {
     return this.results.get(key);
   }
 
-  request(key: string, spec: ParagraphSpec, widthPx: number, settings: DocSettings, skind: SpecKind = { kind: 'body' }, indented = false) {
+  request(
+    key: string,
+    spec: ParagraphSpec,
+    widthPx: number,
+    settings: DocSettings,
+    skind: SpecKind = { kind: 'body' },
+    indented = false,
+    blockId?: string,
+  ) {
     if (this.disposed || this.results.has(key) || this.queue.has(key)) return;
-    this.queue.set(key, { spec, widthPx, skind, indented });
+    if (blockId) {
+      // A newer spec for the same block supersedes an older one: the old
+      // text can never be verified against the document again. Drop it from
+      // the queue before it costs a compile.
+      const prior = this.latestForBlock.get(blockId);
+      if (prior !== undefined && prior !== key) this.queue.delete(prior);
+      this.latestForBlock.set(blockId, key);
+      if (this.latestForBlock.size > MAX_RESULTS) {
+        const ids = [...this.latestForBlock.keys()];
+        for (let i = 0; i < ids.length / 2; i++) this.latestForBlock.delete(ids[i]);
+      }
+    }
+    this.queue.set(key, { spec, widthPx, skind, indented, blockId });
     this.settings = settings;
     clearTimeout(this.timer);
     this.timer = window.setTimeout(() => void this.flush(), 80);
@@ -203,6 +236,7 @@ export class TypstOracle {
     this.timer = 0;
     this.results.clear();
     this.queue.clear();
+    this.latestForBlock.clear();
     this.settings = null;
   }
 
@@ -213,11 +247,25 @@ export class TypstOracle {
     clearTimeout(this.timer);
     this.timer = 0;
     this.queue.clear();
+    this.latestForBlock.clear();
     this.settings = null;
   }
 
   private async flush() {
     if (this.disposed || this.inflight || !this.queue.size || !this.settings) return;
+    // Never launch a compile mid-burst: the next keystroke would invalidate
+    // it. Requests keep coalescing into the queue; the flush retries once
+    // the edit-settle window can have elapsed.
+    if (this.isEditing()) {
+      clearTimeout(this.timer);
+      this.timer = window.setTimeout(() => void this.flush(), EDIT_SETTLE_DELAY_MS);
+      return;
+    }
+    // A key can be re-queued while its first compile was in flight (the
+    // settled pass re-requests anything not yet published). Published
+    // answers win — recompiling them would be pure waste.
+    for (const key of this.queue.keys()) if (this.results.has(key)) this.queue.delete(key);
+    if (!this.queue.size) return;
     this.inflight = true;
     const generation = this.generation;
     // One compile per measure: indented paragraphs (quotes, list items) have
@@ -273,14 +321,34 @@ export class TypstOracle {
       const svg = await this.compileSvg(src);
       if (this.disposed || generation !== this.generation) return;
 
+      // Result analysis parses, mounts, and measures the compiled SVG on the
+      // main thread. Mid-burst that steals frames from typing: hold the
+      // finished compile until the user goes quiet again.
+      while (this.isEditing()) {
+        await new Promise((resolve) => window.setTimeout(resolve, QUIET_POLL_MS));
+        if (this.disposed || generation !== this.generation) return;
+      }
+      // Edits during the compile may have superseded batch members. A key
+      // that is no longer its block's latest is dead: nothing will ever read
+      // it, so when the whole batch is dead the analysis is skipped outright
+      // (the finally block still reflushes whatever is queued).
+      const isLive = ([key, q]: [string, Queued]) =>
+        q.blockId === undefined || this.latestForBlock.get(q.blockId) === key;
+      if (!batch.some(isLive)) return;
+
       // Geometry thresholds at the SVG's 1px-per-pt scale.
       const pitch = s.lineHeight * s.sizePt;
       const paraGap = (s.lineHeight + 0.45) * s.sizePt; // between pitch and paragraph pitch
       const lines = svg ? extractLines(svg, pitch / 2) : null;
       let cursor = isFn ? 1 : 0; // footnotes: skip the anchor-markers line
       for (const [key, q] of batch) {
+        // A dead member still advances the line cursor below (the batch
+        // shares one compiled document) but its entry is never published.
+        const publish = isLive([key, q])
+          ? (entry: OracleEntry) => this.results.set(key, entry)
+          : () => {};
         if (!lines) {
-          this.results.set(key, { status: 'fail', reason: 'compile failed' });
+          publish({ status: 'fail', reason: 'compile failed' });
           continue;
         }
         const stripFirst =
@@ -292,11 +360,10 @@ export class TypstOracle {
         const res = matchParagraph(q.spec, lines, cursor, stripFirst);
         if (res.status === 'ok') {
           cursor = res.next;
-          this.results.set(key, res.entry);
         } else {
           cursor = skipParagraph(lines, cursor, paraGap);
-          this.results.set(key, res.entry);
         }
+        publish(res.entry);
       }
       if (this.results.size > MAX_RESULTS) {
         const keys = [...this.results.keys()];

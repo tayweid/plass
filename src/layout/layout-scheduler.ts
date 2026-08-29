@@ -108,6 +108,11 @@ export class LayoutScheduler {
     });
   }
 
+  /** Whether an edit's quiet period is still pending (the user is mid-burst). */
+  isInEditWindow(): boolean {
+    return this.editTimer !== null;
+  }
+
   /** Restart the quiet-period timer following a document edit. */
   scheduleAfterEdit(): void {
     if (this.destroyed) return;

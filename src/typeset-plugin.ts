@@ -396,6 +396,11 @@ class TypesetView {
       fontFallback: FONT_FALLBACK,
       onParagraphResults: () => this.requestRun(),
       onPageResults: () => this.requestRun(),
+      // Paragraph compiles launch — and their results are parsed/measured —
+      // only outside a typing burst. The scheduler owns the quiet-period
+      // definition (EDIT_SETTLE_DELAY_MS). The scheduler is constructed a
+      // few statements below; until then nothing is editing.
+      isEditing: () => (this.scheduler as LayoutScheduler | undefined)?.isInEditWindow() ?? false,
     });
     this.stopTableSplitReady = onTableSplitReady((readyView) => {
       if (!this.destroyed && readyView === this.view) this.requestRun();
@@ -678,12 +683,6 @@ class TypesetView {
             : settings.parIndent && consecutiveParagraph(state.doc, b.pos)
               ? { firstLineIndent: 1.5 * this.bodyPx() }
               : {};
-      const skind: SpecKind =
-        b.kind === 'caption'
-          ? { kind: 'caption', figNo: number }
-          : b.kind === 'footnote'
-            ? { kind: 'footnote' }
-            : { kind: 'body' };
       const keyTag =
         b.kind === 'caption'
           ? `cap${number}`
@@ -704,17 +703,11 @@ class TypesetView {
       const atomWidth = makeAtomWidth(this.view, settings, b.pos);
       const spec = resolveAtom ? buildSpec(b.node, resolveAtom) : null;
       const okey = spec ? blockOracleKey(settingsSig, keyTag, measure, spec.key) : null;
+      // Exact-path fast reuse only: the keystroke path never REQUESTS a
+      // compile (it would launch one for nearly every intermediate paragraph
+      // state). The settled pass — which only runs after the edit-settle
+      // quiet period — requests the final spec instead.
       const oentry = okey ? this.oracles.paragraph.get(okey) : undefined;
-      if (spec && okey && !oentry) {
-        this.oracles.paragraph.request(
-          okey,
-          spec,
-          measure,
-          settings,
-          skind,
-          b.kind === 'body' && !!extra.firstLineIndent,
-        );
-      }
       // The ported Typst breaker: full-paragraph, globally optimal, and
       // identical to what the oracle will confirm. Plain KP is the
       // degraded-mode fallback (sidecar not loaded, unmapped content).
@@ -1473,7 +1466,10 @@ class TypesetView {
       const oentry = okey ? this.oracles.paragraph.get(okey) : undefined;
       if (spec && okey && !oentry) {
         const indented = skind.kind === 'body' && !!extra.firstLineIndent;
-        this.oracles.paragraph.request(okey, spec, measure, settings, skind, indented);
+        // The block identity lets a newer spec for the same block supersede
+        // an older in-flight or queued compile (positions shifting between
+        // passes only cost a wasted-compile worst case, never correctness).
+        this.oracles.paragraph.request(okey, spec, measure, settings, skind, indented, `${skind.kind}@${pos}`);
       }
       const ostatus = oentry?.status ?? 'none';
 

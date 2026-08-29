@@ -6,7 +6,7 @@ import { EditorView } from 'prosemirror-view';
 import { history } from 'prosemirror-history';
 import { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
-import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock } from './editing';
+import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
 import { collapseSpaces } from './collapse-spaces';
 import { typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugin';
 import { MathView } from './math';
@@ -123,6 +123,7 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       buildKeymap(),
       baseKeys,
       history(),
+      isolateDocumentReplace(),
       equationsPlugin(),
       citationsPlugin(),
       figuresPlugin(),

@@ -12,7 +12,8 @@ import {
 import { keymap } from 'prosemirror-keymap';
 import { Plugin, TextSelection } from 'prosemirror-state';
 import { baseKeymap, chainCommands, exitCode, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
-import { redo, undo } from 'prosemirror-history';
+import { closeHistory, redo, undo } from 'prosemirror-history';
+import { ReplaceStep } from 'prosemirror-transform';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
 import { Slice, type MarkType } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
@@ -184,6 +185,32 @@ function verticalCaret(dir: -1 | 1): Command {
     }
     return false; // no target below/above (doc edge): browser default
   };
+}
+
+/**
+ * A transaction that replaces the entire document (an import, a programmatic
+ * rebuild, typing over a select-all) must not absorb the user's next edit
+ * into its undo group: prosemirror-history merges adjacent edits made within
+ * newGroupDelay (500 ms), and a whole-document replacement is adjacent to
+ * everything — one undo after a stray keypress would then discard the whole
+ * document. Closing the group makes the next edit its own undo event.
+ */
+export function isolateDocumentReplace(): Plugin {
+  return new Plugin({
+    appendTransaction(trs, _old, newState) {
+      const wholeDocReplace = trs.some(
+        (tr) =>
+          tr.docChanged &&
+          tr.steps.some(
+            (step, i) =>
+              step instanceof ReplaceStep &&
+              step.from === 0 &&
+              step.to === tr.docs[i].content.size,
+          ),
+      );
+      return wholeDocReplace ? closeHistory(newState.tr) : null;
+    },
+  });
 }
 
 export function buildKeymap(): Plugin {

@@ -62,6 +62,10 @@ export interface OracleCoordinatorOptions {
   fontFallback: string[];
   onParagraphResults: () => void;
   onPageResults: () => void;
+  /** Whether the user is inside an edit's quiet window (mid typing burst).
+   * The paragraph oracle neither launches compiles nor analyzes finished
+   * results while this reports true. */
+  isEditing?: () => boolean;
 }
 
 /** Owns oracle construction, teardown, cache clearing, and page confidence. */
@@ -73,9 +77,14 @@ export class OracleCoordinator {
   private destroyed = false;
 
   constructor(options: OracleCoordinatorOptions) {
-    this.paragraph = new TypstOracle(() => {
-      if (!this.destroyed) options.onParagraphResults();
-    }, options.fontFallback);
+    this.paragraph = new TypstOracle(
+      () => {
+        if (!this.destroyed) options.onParagraphResults();
+      },
+      options.fontFallback,
+      undefined,
+      options.isEditing,
+    );
     this.page = new PageOracle((entry) => {
       if (!this.destroyed) {
         this.pageConfidence.record(entry);
