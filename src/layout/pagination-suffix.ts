@@ -47,6 +47,11 @@ export interface SuffixPaginationSeed {
   /** Sum of the copied prefix page gaps, in their existing addition order. */
   readonly shift: number;
   readonly prefixSpacers: readonly SuffixPageSpacer[];
+  /** The preserved page-start markers, one per prefix gap, ending at the
+   * anchor. A caller holding an authoritative basis (exact Typst page starts)
+   * can re-force exactly these breaks against the live document to rebuild
+   * the prefix geometry independently of the stored spacer heights. */
+  readonly prefixMarkers: readonly SuffixPageMarker[];
 }
 
 export type SuffixPaginationRejectReason =
@@ -322,6 +327,7 @@ export function planSuffixPagination(input: SuffixPaginationInput): SuffixPagina
     page: anchor.page,
     shift,
     prefixSpacers: Object.freeze(prefixSpacers),
+    prefixMarkers: Object.freeze(prefixMarkers.map((marker) => Object.freeze({ ...marker }))),
   });
   return { kind: 'seed', seed };
 }

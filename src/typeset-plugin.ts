@@ -213,6 +213,17 @@ interface SuffixPaginationRun {
   mismatchDelta: number | null;
 }
 
+/** Per-seed-source shadow tallies. `referenceBails` counts eligible exact
+ * seeds whose live prefix re-force failed, so no comparison ran — neither a
+ * match nor a mismatch, but a retention-staleness signal in its own right. */
+interface SuffixSourceStats {
+  eligible: number;
+  compared: number;
+  matches: number;
+  mismatches: number;
+  referenceBails: number;
+}
+
 interface SuffixPaginationStats {
   attempts: number;
   eligible: number;
@@ -228,7 +239,19 @@ interface SuffixPaginationStats {
   /** Ineligibility-reason histogram over every attempted plan. */
   reasons: Record<string, number>;
   lastRun: SuffixPaginationRun | null;
+  bySource: {
+    exact: SuffixSourceStats;
+    'fallback-shadow': SuffixSourceStats;
+  };
 }
+
+const emptySuffixSourceStats = (): SuffixSourceStats => ({
+  eligible: 0,
+  compared: 0,
+  matches: 0,
+  mismatches: 0,
+  referenceBails: 0,
+});
 
 const emptySuffixPaginationStats = (): SuffixPaginationStats => ({
   attempts: 0,
@@ -244,6 +267,7 @@ const emptySuffixPaginationStats = (): SuffixPaginationStats => ({
   lastAnchorPos: null,
   reasons: {},
   lastRun: null,
+  bySource: { exact: emptySuffixSourceStats(), 'fallback-shadow': emptySuffixSourceStats() },
 });
 
 type PaginationSuffixPlan =
@@ -380,11 +404,18 @@ class TypesetView {
   private exactPageBasisDoc: PMNode | null = null;
   private exactPageBasisEpoch = -1;
   private exactPageBasisWidth = 0;
+  /** The exact publication in basis coordinates: Typst's page starts and the
+   * spacer geometry installed for them. Retained across later edits and
+   * fallback repaginations (the clean prefix keeps basis positions valid), so
+   * an edit landing on an exactly paginated document — or on a burst that
+   * began from one — seeds the shadow suffix pass from Typst's settled page
+   * starts instead of a prior local fallback snapshot. */
+  private exactPageBasisMarkers: SuffixPageMarker[] = [];
+  private exactPageBasisSpacers: SuffixPageSpacer[] = [];
   private fallbackPageBasisDoc: PMNode | null = null;
   private fallbackPageBasisEpoch = -1;
   private fallbackPageBasisWidth = 0;
   private fallbackPageBasisMarkers: FallbackBasisMarker[] = [];
-  private pageSpacerAuthority: 'exact' | 'held' | 'fallback' = 'fallback';
   private paginationGeometryEpoch = 0;
   private lastPaginationWidth = 0;
   /**
@@ -561,6 +592,10 @@ class TypesetView {
           lastRun: this.suffixPaginationStats.lastRun
             ? { ...this.suffixPaginationStats.lastRun }
             : null,
+          bySource: {
+            exact: { ...this.suffixPaginationStats.bySource.exact },
+            'fallback-shadow': { ...this.suffixPaginationStats.bySource['fallback-shadow'] },
+          },
         };
         if (reset) this.suffixPaginationStats = emptySuffixPaginationStats();
         return stats;
@@ -574,7 +609,6 @@ class TypesetView {
       invalidateMetrics: () => {
         this.paginationGeometryEpoch++;
         this.invalidateDomGeometry();
-        this.pageSpacerAuthority = 'fallback';
         this.clearExactPageBasis();
         this.clearFallbackPageBasis();
         this.measurer.invalidate();
@@ -608,7 +642,6 @@ class TypesetView {
     if (view.state.doc.attrs !== prevState.doc.attrs) {
       this.paginationGeometryEpoch++;
       this.invalidateDomGeometry();
-      this.pageSpacerAuthority = 'fallback';
       this.clearExactPageBasis();
       this.clearFallbackPageBasis();
       this.measurer.invalidate();
@@ -1017,7 +1050,6 @@ class TypesetView {
   invalidatePages() {
     this.paginationGeometryEpoch++;
     this.invalidateDomGeometry();
-    this.pageSpacerAuthority = 'fallback';
     this.clearExactPageBasis();
     this.clearFallbackPageBasis();
     this.oracles.clearPage();
@@ -1132,26 +1164,6 @@ class TypesetView {
       .sort((a, b) => a.pos - b.pos);
   }
 
-  private exactSuffixMarkers(): SuffixPageMarker[] {
-    const marks = typesetKey.getState(this.view.state)?.pageMarks.find() ?? [];
-    return marks
-      .map((mark) => {
-        const spec = mark.spec as {
-          psLine?: number;
-          psUnit?: string;
-          psPage?: number;
-          psEpoch?: number;
-        };
-        return {
-          pos: mark.from,
-          line: spec.psLine ?? Number.NaN,
-          unit: spec.psUnit ?? '',
-          page: spec.psEpoch === this.exactPageBasisEpoch ? (spec.psPage ?? Number.NaN) : Number.NaN,
-        };
-      })
-      .sort((a, b) => a.page - b.page);
-  }
-
   private fallbackSuffixMarkers(doc: PMNode): SuffixPageMarker[] {
     const positions: number[] = [];
     doc.forEach((_node, pos) => positions.push(pos));
@@ -1169,19 +1181,24 @@ class TypesetView {
   private planPaginationSuffix(snapshot: PaginationGeometrySnapshot): PaginationSuffixPlan {
     if (!import.meta.env.DEV) return { kind: 'none', reason: 'shadow-disabled' };
     const currentDoc = this.view.state.doc;
-    const spacers = this.suffixSpacers(snapshot);
     let exactReason: string | null = null;
 
+    // The exact basis outlives the 'exact' spacer authority: the settled
+    // state of a healthy document is exact pagination, and the first edit of
+    // a burst hands authority to the fallback engine without moving any page
+    // start above the edit. Markers and spacers are the retained install-time
+    // copies (basis coordinates — valid current positions across the clean
+    // prefix), not the currently painted spacers, which belong to whichever
+    // full fallback pass ran last.
     if (
       this.exactPageBasisDoc &&
-      this.pageSpacerAuthority === 'exact' &&
       Math.abs(this.exactPageBasisWidth - this.view.dom.clientWidth) <= 0.5
     ) {
       const decision = planSuffixPagination({
         basisDoc: this.exactPageBasisDoc,
         currentDoc,
-        markers: this.exactSuffixMarkers(),
-        spacers,
+        markers: this.exactPageBasisMarkers,
+        spacers: this.exactPageBasisSpacers,
         basisEpoch: this.exactPageBasisEpoch,
         currentEpoch: this.paginationGeometryEpoch,
       });
@@ -1201,7 +1218,7 @@ class TypesetView {
         basisDoc: this.fallbackPageBasisDoc,
         currentDoc,
         markers: this.fallbackSuffixMarkers(currentDoc),
-        spacers,
+        spacers: this.suffixSpacers(snapshot),
         basisEpoch: this.fallbackPageBasisEpoch,
         currentEpoch: this.paginationGeometryEpoch,
       });
@@ -1280,10 +1297,18 @@ class TypesetView {
     this.fallbackPageBasisMarkers = markers;
   }
 
+  /** Invalidate the retained exact basis. Called only for events that truly
+   * invalidate Typst's settled page starts (geometry epoch bumps: metrics,
+   * settings, assets) — never merely because a fallback pass ran: an edit
+   * below the seed boundary leaves every retained start above it valid, and
+   * structural damage above the boundary is detected per-attempt by the
+   * planner's clean-prefix diff. A newer exact publication overwrites it. */
   private clearExactPageBasis(): void {
     this.exactPageBasisDoc = null;
     this.exactPageBasisEpoch = -1;
     this.exactPageBasisWidth = 0;
+    this.exactPageBasisMarkers = [];
+    this.exactPageBasisSpacers = [];
   }
 
   private clearFallbackPageBasis(): void {
@@ -1937,16 +1962,24 @@ class TypesetView {
             this.exactPageBasisDoc = view.state.doc;
             this.exactPageBasisEpoch = this.paginationGeometryEpoch;
             this.exactPageBasisWidth = view.dom.clientWidth;
-            this.pageSpacerAuthority = 'exact';
+            // Basis-coordinate copies for the shadow suffix planner: page
+            // ordinals are the contiguous marker indices, and the spacers are
+            // the exact requested heights (not the painted, tolerance-held
+            // ones), so a later re-force reproduces them bit-for-bit.
+            this.exactPageBasisMarkers = entry.pageStarts.map((ps, index) => ({
+              pos: ps.pos,
+              line: ps.line,
+              unit: ps.unit,
+              page: index + 1,
+            }));
+            this.exactPageBasisSpacers = forced.spacers.map((sp) => ({ ...sp }));
             this.clearFallbackPageBasis();
             this.pendingPageMarks = DecorationSet.create(
               view.state.doc,
-              entry.pageStarts.map((ps, index) =>
+              entry.pageStarts.map((ps) =>
                 Decoration.widget(ps.pos, () => document.createElement('span'), {
                   psLine: ps.line,
                   psUnit: ps.unit,
-                  psPage: index + 1,
-                  psEpoch: this.paginationGeometryEpoch,
                 }),
               ),
             );
@@ -1980,7 +2013,6 @@ class TypesetView {
           );
           if (forced) {
             this.pagPath = 'held';
-            this.pageSpacerAuthority = 'held';
             this.applyTableEffects(forced.tableEffects);
             return { spacers: forced.spacers, count: forced.count };
           }
@@ -2356,7 +2388,9 @@ class TypesetView {
     this.suffixPaginationStats.attempts++;
     const suffixPlan = this.planPaginationSuffix(snapshot);
     if (suffixPlan.kind === 'seed') {
+      const sourceStats = this.suffixPaginationStats.bySource[suffixPlan.source];
       this.suffixPaginationStats.eligible++;
+      sourceStats.eligible++;
       this.suffixPaginationStats.lastStartPos = suffixPlan.seed.dirtyPos;
       this.suffixPaginationStats.lastAnchorPos = suffixPlan.seed.startPos;
       const suffix = runFallback({
@@ -2368,31 +2402,65 @@ class TypesetView {
       this.suffixPaginationStats.suffixUnits += suffix.visitedUnits;
 
       const full = runFallback();
-      this.suffixPaginationStats.compared++;
       this.suffixPaginationStats.fullUnits += full.visitedUnits;
-      const difference = this.fallbackResultDifference(full, suffix);
-      const matches = difference === null;
-      this.suffixPaginationStats.lastDifference = difference?.summary ?? null;
-      if (matches) {
-        this.suffixPaginationStats.matches++;
-        this.suffixPaginationStats.lastReason = `matched-${suffixPlan.source}`;
+      // The comparison reference must hold the same prefix constant as the
+      // seed. A fallback-shadow seed's prefix IS local-rule output, so the
+      // unseeded full pass regenerates it identically and doubles as the
+      // reference. An exact seed's prefix was decided by TYPST — the local
+      // full pass legitimately disagrees above the boundary, so comparing
+      // against it would measure prefix-authority differences, not runner
+      // bugs. Instead the reference re-forces the exact prefix breaks onto
+      // the live document and runs the same seeded suffix below them.
+      const reference =
+        suffixPlan.source === 'exact'
+          ? this.exactSuffixReference(snapshot, suffixPlan.seed, runFallback)
+          : full;
+      if (reference) {
+        this.suffixPaginationStats.compared++;
+        sourceStats.compared++;
+        const difference = this.fallbackResultDifference(reference, suffix);
+        const matches = difference === null;
+        this.suffixPaginationStats.lastDifference = difference?.summary ?? null;
+        if (matches) {
+          this.suffixPaginationStats.matches++;
+          sourceStats.matches++;
+          this.suffixPaginationStats.lastReason = `matched-${suffixPlan.source}`;
+        } else {
+          this.suffixPaginationStats.mismatches++;
+          sourceStats.mismatches++;
+          this.suffixPaginationStats.lastReason = `mismatch-${suffixPlan.source}`;
+        }
+        this.suffixPaginationStats.lastRun = {
+          eligible: true,
+          reason: suffixPlan.source,
+          matched: matches,
+          mismatchPage: difference?.page ?? null,
+          mismatchDelta: difference?.delta ?? null,
+        };
       } else {
-        this.suffixPaginationStats.mismatches++;
-        this.suffixPaginationStats.lastReason = `mismatch-${suffixPlan.source}`;
+        // The retained exact geometry no longer re-forces cleanly (a prefix
+        // block's live measure drifted, or a gap collapsed): the seed's
+        // premise is stale. Tallied separately — it gates retention quality,
+        // not runner correctness.
+        sourceStats.referenceBails++;
+        this.suffixPaginationStats.reasons['exact-reference-bail'] =
+          (this.suffixPaginationStats.reasons['exact-reference-bail'] ?? 0) + 1;
+        this.suffixPaginationStats.lastReason = 'exact-reference-bail';
+        this.suffixPaginationStats.lastDifference = null;
+        this.suffixPaginationStats.lastRun = {
+          eligible: true,
+          reason: 'exact-reference-bail',
+          matched: null,
+          mismatchPage: null,
+          mismatchDelta: null,
+        };
       }
-      this.suffixPaginationStats.lastRun = {
-        eligible: true,
-        reason: suffixPlan.source,
-        matched: matches,
-        mismatchPage: difference?.page ?? null,
-        mismatchDelta: difference?.delta ?? null,
-      };
       this.rememberFallbackBasis(full);
       // Suffix replay remains a shadow until exact-source browser fixtures can
       // exercise it in production mode. The full result is always installed;
-      // a mismatch can therefore affect telemetry, never page geometry.
-      this.pageSpacerAuthority = 'fallback';
-      this.clearExactPageBasis();
+      // a mismatch can therefore affect telemetry, never page geometry. The
+      // exact basis is NOT cleared: page starts above the seed boundary stay
+      // valid across fallback repaginations of the suffix.
       this.applyTableEffects(full.tableEffects);
       return { spacers: full.spacers, count: full.count };
     }
@@ -2415,10 +2483,38 @@ class TypesetView {
       this.suffixPaginationStats.lastAnchorPos = null;
     }
     this.rememberFallbackBasis(fallback);
-    this.pageSpacerAuthority = 'fallback';
-    this.clearExactPageBasis();
     this.applyTableEffects(fallback.tableEffects);
     return { spacers: fallback.spacers, count: fallback.count };
+  }
+
+  /** Same-prefix reference pass for an exact-basis seed: re-force the
+   * retained exact page starts of the prefix against the live document (the
+   * routine that installed them), then run the identical seeded suffix below
+   * them. On an unchanged prefix the re-forced gaps equal the stored ones
+   * bit-for-bit, so a comparison difference means retained geometry drifted
+   * or the suffix runner diverged — never that Typst and the local engine
+   * disagree about the prefix. Null when the prefix no longer re-forces
+   * one-gap-per-marker (the seed's premise is stale; tallied as a bail). */
+  private exactSuffixReference(
+    snapshot: PaginationGeometrySnapshot,
+    seed: SuffixPaginationSeed,
+    run: (seed?: PaginationFallbackSeed) => PaginationFallbackResult,
+  ): PaginationFallbackResult | null {
+    const forced = this.paginateForced(
+      snapshot,
+      seed.prefixMarkers.map((marker) => ({ pos: marker.pos, line: marker.line, unit: marker.unit })),
+      seed.page + 1,
+    );
+    if (!forced || forced.tableEffects.length) return null;
+    if (forced.spacers.length !== seed.prefixSpacers.length) return null;
+    let shift = 0;
+    for (const spacer of forced.spacers) shift += spacer.height;
+    return run({
+      startPos: seed.startPos,
+      page: seed.page,
+      shift,
+      prefixSpacers: forced.spacers.map((spacer) => ({ ...spacer })),
+    });
   }
 
   /** Apply Typst's page starts verbatim (with per-unit ink offsets). */

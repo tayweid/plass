@@ -59,10 +59,14 @@ assert.deepEqual(page2.seed, {
   page: 1,
   shift: 412.25,
   prefixSpacers: [page2Gap],
+  prefixMarkers: [page2Marker],
 });
 assert.notEqual(page2.seed.prefixSpacers[0], page2Gap);
+assert.notEqual(page2.seed.prefixMarkers[0], page2Marker);
 assert(Object.isFrozen(page2.seed));
 assert(Object.isFrozen(page2.seed.prefixSpacers));
+assert(Object.isFrozen(page2.seed.prefixMarkers));
+assert(Object.isFrozen(page2.seed.prefixMarkers[0]));
 console.log('  ok  page-two restart preserves one copied prefix gap and its exact shift');
 
 const midLine = planSuffixPagination(
@@ -110,6 +114,11 @@ assert.equal(skipBack.seed.startPos, splitParaPos);
 assert.equal(skipBack.seed.page, 1);
 assert.equal(skipBack.seed.shift, 410);
 assert.equal(skipBack.seed.prefixSpacers.length, 1);
+// The post-anchor mid-line marker joins the recomputed suffix, so it must not
+// leak into the prefix markers a reference pass would re-force.
+assert.deepEqual(skipBack.seed.prefixMarkers, [
+  { pos: splitParaPos, line: 0, unit: 'paragraph', page: 1 },
+]);
 console.log('  ok  the anchor skips back over a mid-line start to the latest block start');
 
 const thirdDirty = doc(
@@ -426,6 +435,10 @@ if (validMixedPrefix.kind !== 'seed') throw new Error('expected exact mixed pref
 assert.equal(validMixedPrefix.seed.page, 2);
 assert.equal(validMixedPrefix.seed.shift, 390);
 assert.equal(validMixedPrefix.seed.prefixSpacers.length, 2);
+assert.deepEqual(validMixedPrefix.seed.prefixMarkers, [
+  { pos: 0, line: 4, unit: 'line', page: 1 },
+  { pos: page3Pos, line: 0, unit: 'paragraph', page: 2 },
+]);
 assert.deepEqual(
   planSuffixPagination(
     input(
@@ -446,3 +459,75 @@ assert.deepEqual(
 console.log('  ok  copied prefix gaps match every preserved marker and end exactly at the anchor');
 
 console.log('\nall suffix pagination eligibility tests passed');
+
+// Exact-basis seed construction: markers shaped exactly as the plugin retains
+// them from a Typst publication (contiguous page ordinals in publication
+// order, mid-paragraph starts as line markers) with the forced pass's spacer
+// geometry (a line gap sits inside its textblock, after the split line's
+// start). An edit below the last page start seeds from the full exact prefix.
+const exactBasis = doc(
+  paragraph('exactly settled opening words'),
+  paragraph('a long middle paragraph that Typst split across pages two and three'),
+  paragraph('a closing paragraph with the original tail words'),
+);
+const exactCurrent = doc(
+  paragraph('exactly settled opening words'),
+  paragraph('a long middle paragraph that Typst split across pages two and three'),
+  paragraph('a closing paragraph with the revised tail words'),
+);
+const [, exactMiddlePos, exactClosingPos] = positions(exactCurrent);
+const exactPublication = [
+  { pos: exactMiddlePos, line: 0, unit: 'paragraph' },
+  { pos: exactMiddlePos, line: 5, unit: 'line' },
+  { pos: exactClosingPos, line: 0, unit: 'paragraph' },
+];
+const exactMarkers: SuffixPageMarker[] = exactPublication.map((ps, index) => ({
+  pos: ps.pos,
+  line: ps.line,
+  unit: ps.unit,
+  page: index + 1,
+}));
+const exactSpacers: SuffixPageSpacer[] = [
+  { pos: exactMiddlePos, height: 371.5, kind: 'block' },
+  { pos: exactMiddlePos + 24, height: 96.25, kind: 'line' },
+  { pos: exactClosingPos, height: 233.75, kind: 'block' },
+];
+const exactSeed = planSuffixPagination(input(exactBasis, exactCurrent, exactMarkers, exactSpacers));
+assert.equal(exactSeed.kind, 'seed');
+if (exactSeed.kind !== 'seed') throw new Error('expected exact-basis seed');
+assert.equal(exactSeed.seed.startPos, exactClosingPos);
+assert.equal(exactSeed.seed.page, 3);
+assert.equal(exactSeed.seed.shift, 371.5 + 96.25 + 233.75);
+assert.deepEqual(exactSeed.seed.prefixMarkers, exactMarkers);
+assert.deepEqual(exactSeed.seed.prefixSpacers, exactSpacers);
+console.log('  ok  a retained exact publication seeds the suffix with its full settled prefix');
+
+// An edit ABOVE every retained page start cannot hold any of them constant:
+// the planner rejects per-attempt (no-boundary-anchor) — retention never has
+// to clear the basis for structural damage above the boundary.
+const exactEditedAbove = doc(
+  paragraph('exactly settled revised opening words'),
+  paragraph('a long middle paragraph that Typst split across pages two and three'),
+  paragraph('a closing paragraph with the original tail words'),
+);
+assert.deepEqual(
+  planSuffixPagination(input(exactBasis, exactEditedAbove, exactMarkers, exactSpacers)),
+  { kind: 'reject', reason: 'no-boundary-anchor' },
+);
+console.log('  ok  an edit above the first retained page start rejects instead of seeding');
+
+// A mid-burst edit between two exact page starts: only the starts above the
+// dirty block survive into the seed; the rest are recomputed suffix.
+const exactMidEdit = doc(
+  paragraph('exactly settled opening words'),
+  paragraph('a long middle paragraph that someone reworded mid burst'),
+  paragraph('a closing paragraph with the original tail words'),
+);
+const exactMid = planSuffixPagination(input(exactBasis, exactMidEdit, exactMarkers, exactSpacers));
+assert.equal(exactMid.kind, 'seed');
+if (exactMid.kind !== 'seed') throw new Error('expected mid-burst exact seed');
+assert.equal(exactMid.seed.startPos, exactMiddlePos);
+assert.equal(exactMid.seed.page, 1);
+assert.equal(exactMid.seed.shift, 371.5);
+assert.deepEqual(exactMid.seed.prefixMarkers, [exactMarkers[0]]);
+console.log('  ok  a mid-burst edit keeps only the exact page starts above it');
