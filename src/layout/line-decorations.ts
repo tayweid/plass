@@ -299,12 +299,19 @@ function semanticEntry(decoration: Decoration, relativeTo: number): DecorationSe
   };
 }
 
+/** Binary code-unit order: only equality of the joined canonical string
+ * matters, and locale collation can rank distinct strings equal (and is far
+ * slower), so it must not decide the canonical order. */
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function compareSemanticEntries(a: DecorationSemanticEntry, b: DecorationSemanticEntry): number {
   return (
     a.from - b.from ||
     a.to - b.to ||
-    a.kind.localeCompare(b.kind) ||
-    a.identity.localeCompare(b.identity)
+    compareStrings(a.kind, b.kind) ||
+    compareStrings(a.identity, b.identity)
   );
 }
 

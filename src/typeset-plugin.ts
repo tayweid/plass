@@ -304,6 +304,10 @@ class TypesetView {
   /** Signature of the last dispatched decoration set: identical layouts are
    *  never re-dispatched, so no-op runs cause zero paints. */
   private lastDecoSig = '';
+  /** Set whose digest the live pass owes `lastDecoSig`. Digesting the whole
+   *  set is O(document); the keystroke path defers it here and the settled
+   *  run (already O(document)) computes it only when it needs the compare. */
+  private lastDecoSigSource: DecorationSet | null = null;
   private lastLiveDoc: PMNode | null = null;
   private lastPageCount = 0;
   private pendingPageMarks: DecorationSet | null = null;
@@ -528,6 +532,7 @@ class TypesetView {
     // The doc changed: no previously-dispatched layout may be considered
     // current, whatever path we take out of here.
     this.lastDecoSig = '';
+    this.lastDecoSigSource = null;
     const start = prev.content.findDiffStart(state.doc.content);
     if (start == null) return;
     const endDiff = prev.content.findDiffEnd(state.doc.content);
@@ -780,7 +785,9 @@ class TypesetView {
       changed ||= rebuilt.changed;
     }
     const decorationStart = performance.now();
-    this.lastDecoSig = decorationSetDigest(decos);
+    // Owed digest, not computed: enumerating every decoration is O(document)
+    // and must not run on the keystroke path for an O(edit) change.
+    this.lastDecoSigSource = decos;
     if (changed) {
       const tr = state.tr.setMeta(typesetKey, { type: 'decos', decos } satisfies TypesetMeta);
       tr.setMeta('addToHistory', false);
@@ -1510,6 +1517,12 @@ class TypesetView {
     }
 
     const sig = decorationSignature(decos);
+    // Settle the digest the live pass deferred (only positions the live pass
+    // itself dispatched can still be current — any later edit cleared this).
+    if (this.lastDecoSigSource) {
+      this.lastDecoSig = decorationSetDigest(this.lastDecoSigSource);
+      this.lastDecoSigSource = null;
+    }
     // Page-start markers are state-only authority and are flushed separately
     // at the end of run(); they must not reinstall identical line DOM.
     if (sig === this.lastDecoSig) {
