@@ -9,7 +9,7 @@ import {
 
 const paragraph = (text: string, attrs?: { keep?: boolean; align?: string | null }) =>
   schema.nodes.paragraph.create(attrs, text ? schema.text(text) : undefined);
-const doc = (...paragraphs: ReturnType<typeof paragraph>[]) => schema.nodes.doc.create(null, paragraphs);
+const doc = (...blocks: ReturnType<typeof paragraph>[]) => schema.nodes.doc.create(null, blocks);
 
 function positions(value: ReturnType<typeof doc>): number[] {
   const result: number[] = [];
@@ -76,6 +76,42 @@ const midLine = planSuffixPagination(
 assert.deepEqual(midLine, { kind: 'reject', reason: 'mid-line-anchor' });
 console.log('  ok  a latest mid-line page start cannot seed a block suffix');
 
+// A later mid-line start does not doom the plan when an earlier block-start
+// marker exists: the anchor skips back and the mid-line break joins the
+// recomputed suffix.
+const fourBlocks = doc(
+  paragraph('first page words'),
+  paragraph('a paragraph long enough to split across pages two and three'),
+  paragraph('fourth page original words'),
+);
+const fourEdited = doc(
+  paragraph('first page words'),
+  paragraph('a paragraph long enough to split across pages two and three'),
+  paragraph('fourth page revised words'),
+);
+const [, splitParaPos] = positions(fourEdited);
+const skipBack = planSuffixPagination(
+  input(
+    fourBlocks,
+    fourEdited,
+    [
+      { pos: splitParaPos, line: 0, unit: 'paragraph', page: 1 },
+      { pos: splitParaPos, line: 3, unit: 'line', page: 2 },
+    ],
+    [
+      { pos: splitParaPos, height: 410, kind: 'block' },
+      { pos: splitParaPos + 20, height: 180, kind: 'line' },
+    ],
+  ),
+);
+assert.equal(skipBack.kind, 'seed');
+if (skipBack.kind !== 'seed') throw new Error('expected skip-back seed');
+assert.equal(skipBack.seed.startPos, splitParaPos);
+assert.equal(skipBack.seed.page, 1);
+assert.equal(skipBack.seed.shift, 410);
+assert.equal(skipBack.seed.prefixSpacers.length, 1);
+console.log('  ok  the anchor skips back over a mid-line start to the latest block start');
+
 const thirdDirty = doc(
   paragraph('first page words'),
   paragraph('second page original words'),
@@ -88,7 +124,7 @@ assert.deepEqual(
   ),
   { kind: 'reject', reason: 'anchor-boundary' },
 );
-console.log('  ok  a marker nested inside a paragraph is not a top-level anchor');
+console.log('  ok  a marker inside a paragraph is not a block-boundary anchor');
 
 assert.deepEqual(
   planSuffixPagination(input(basis, current, [{ ...page2Marker, page: 2 }], [page2Gap])),
@@ -107,78 +143,170 @@ assert.deepEqual(
 );
 console.log('  ok  page ordinals must be contiguous and marker positions/lines monotone');
 
+// A top-level split or insertion no longer rejects: the clean prefix before
+// the first differing block still anchors the suffix restart.
 const insertedParagraph = doc(
   paragraph('first page words'),
   paragraph('new structural paragraph'),
   paragraph('second page original words'),
   paragraph('third paragraph words'),
 );
-assert.deepEqual(
-  planSuffixPagination(input(basis, insertedParagraph, [page2Marker], [page2Gap])),
-  { kind: 'reject', reason: 'top-level-structure' },
-);
+const inserted = planSuffixPagination(input(basis, insertedParagraph, [page2Marker], [page2Gap]));
+assert.equal(inserted.kind, 'seed');
+if (inserted.kind !== 'seed') throw new Error('expected structural-insert seed');
+assert.equal(inserted.seed.startPos, page2Pos);
+assert.equal(inserted.seed.dirtyIndex, 1);
+const removedParagraph = doc(paragraph('first page words'), paragraph('second page original words'));
+const removed = planSuffixPagination(input(basis, removedParagraph, [page2Marker], [page2Gap]));
+assert.equal(removed.kind, 'seed');
+if (removed.kind !== 'seed') throw new Error('expected structural-remove seed');
+assert.equal(removed.seed.startPos, page2Pos);
+console.log('  ok  block splits and joins keep the clean-prefix anchor');
+
+// A block attribute change dirties that block; the prefix anchor still holds.
 const changedAttrs = doc(
   paragraph('first page words'),
   paragraph('second page revised words', { keep: true }),
   paragraph('third paragraph words'),
 );
-assert.deepEqual(
-  planSuffixPagination(input(basis, changedAttrs, [page2Marker], [page2Gap])),
-  { kind: 'reject', reason: 'top-level-structure' },
-);
-console.log('  ok  top-level insertion and paragraph attribute changes reject suffix work');
+const attrsDirty = planSuffixPagination(input(basis, changedAttrs, [page2Marker], [page2Gap]));
+assert.equal(attrsDirty.kind, 'seed');
+if (attrsDirty.kind !== 'seed') throw new Error('expected attribute-change seed');
+assert.equal(attrsDirty.seed.dirtyIndex, 1);
+console.log('  ok  a paragraph attribute change is a dirty block, not a rejection');
 
+// Inline atoms — math, citations, footnote markers, hard breaks — are
+// eligible: the paginator only measures the enclosing line boxes, and the
+// runner reserves footnote-body heights identically on both passes.
 const citation = schema.nodes.citation.create({ key: 'special' });
 const specialCurrent = doc(
   paragraph('first page words'),
   schema.nodes.paragraph.create(null, [schema.text('second page '), citation, schema.text(' words')]),
   paragraph('third paragraph words'),
 );
-assert.deepEqual(
-  planSuffixPagination(input(basis, specialCurrent, [page2Marker], [page2Gap])),
-  { kind: 'reject', reason: 'special-inline' },
+const specialBasis = doc(
+  paragraph('first page words'),
+  schema.nodes.paragraph.create(null, [schema.text('second base '), citation, schema.text(' words')]),
+  paragraph('third paragraph words'),
 );
+const citationSeed = planSuffixPagination(input(specialBasis, specialCurrent, [page2Marker], [page2Gap]));
+assert.equal(citationSeed.kind, 'seed');
 const footnote = schema.nodes.footnote.create(null, schema.text('nested note'));
-const footnoteBasis = doc(paragraph('first page words'), schema.nodes.paragraph.create(null, [schema.text('claim'), footnote]));
-const footnoteCurrent = doc(
+const mathInline = schema.nodes.math_inline.create({ src: 'x^2' });
+const hardBreak = schema.nodes.hard_break.create();
+const atomBasis = doc(
   paragraph('first page words'),
-  schema.nodes.paragraph.create(null, [schema.text('revised claim'), footnote]),
+  schema.nodes.paragraph.create(null, [schema.text('claim'), footnote, hardBreak, mathInline]),
 );
-const [, footnotePage] = positions(footnoteCurrent);
-assert.deepEqual(
-  planSuffixPagination(
-    input(
-      footnoteBasis,
-      footnoteCurrent,
-      [{ pos: footnotePage, line: 0, unit: 'paragraph', page: 1 }],
-      [{ pos: footnotePage, height: 200, kind: 'block' }],
-    ),
+const atomCurrent = doc(
+  paragraph('first page words'),
+  schema.nodes.paragraph.create(null, [schema.text('revised claim'), footnote, hardBreak, mathInline]),
+);
+const [, atomPage] = positions(atomCurrent);
+const atomSeed = planSuffixPagination(
+  input(
+    atomBasis,
+    atomCurrent,
+    [{ pos: atomPage, line: 0, unit: 'paragraph', page: 1 }],
+    [{ pos: atomPage, height: 200, kind: 'block' }],
   ),
-  { kind: 'reject', reason: 'special-inline' },
 );
-console.log('  ok  inline atoms and editable footnotes retain full pagination');
+assert.equal(atomSeed.kind, 'seed');
+console.log('  ok  inline atoms, footnote markers, and hard breaks stay eligible');
 
-const listItem = (text: string) =>
-  schema.nodes.list_item.create(null, [paragraph(text)]);
-const listBasis = schema.nodes.doc.create(null, [
+// Headings, code blocks, blockquotes, figures, and math blocks are all
+// deterministic fallback units; a heading may itself anchor the restart.
+const heading = (text: string, level = 2) =>
+  schema.nodes.heading.create({ level }, schema.text(text));
+const richBasis = schema.nodes.doc.create(null, [
   paragraph('first page words'),
-  schema.nodes.bullet_list.create(null, [listItem('nested list words')]),
+  heading('Results'),
+  schema.nodes.code_block.create(null, schema.text('let x = 1;')),
+  schema.nodes.blockquote.create(null, [paragraph('quoted words')]),
+  schema.nodes.figure.create({ src: 'fig.png' }),
+  schema.nodes.math_display.create({ src: 'e = mc^2' }),
+  paragraph('closing original words'),
+]);
+const richCurrent = schema.nodes.doc.create(null, [
+  paragraph('first page words'),
+  heading('Results'),
+  schema.nodes.code_block.create(null, schema.text('let x = 1;')),
+  schema.nodes.blockquote.create(null, [paragraph('quoted words')]),
+  schema.nodes.figure.create({ src: 'fig.png' }),
+  schema.nodes.math_display.create({ src: 'e = mc^2' }),
+  paragraph('closing revised words'),
+]);
+const richPositions = positions(richCurrent);
+const headingPos = richPositions[1];
+const richSeed = planSuffixPagination(
+  input(
+    richBasis,
+    richCurrent,
+    [{ pos: headingPos, line: 0, unit: 'h2', page: 1 }],
+    [{ pos: headingPos, height: 240, kind: 'block' }],
+  ),
+);
+assert.equal(richSeed.kind, 'seed');
+if (richSeed.kind !== 'seed') throw new Error('expected heading-anchored seed');
+assert.equal(richSeed.seed.startPos, headingPos);
+assert.equal(richSeed.seed.startIndex, 1);
+assert.equal(richSeed.seed.dirtyIndex, 6);
+console.log('  ok  headings, code, quotes, figures, and math blocks seed a heading anchor');
+
+// Lists are eligible; a page start between list children is a valid PREFIX
+// marker (block spacer at the nested child boundary) but never an anchor.
+const listItem = (text: string) => schema.nodes.list_item.create(null, [paragraph(text)]);
+const list = schema.nodes.bullet_list.create(null, [
+  listItem('first item words'),
+  listItem('second item words'),
+]);
+const listBasis = schema.nodes.doc.create(null, [
+  list,
+  paragraph('middle page words'),
   paragraph('last original words'),
 ]);
 const listCurrent = schema.nodes.doc.create(null, [
-  paragraph('first page words'),
-  schema.nodes.bullet_list.create(null, [listItem('nested list words')]),
+  list,
+  paragraph('middle page words'),
   paragraph('last revised words'),
 ]);
-assert.deepEqual(
-  planSuffixPagination(input(listBasis, listCurrent, [], [])),
-  { kind: 'reject', reason: 'non-paragraph-document' },
+const listPositions = positions(listCurrent);
+const secondItemPos = listPositions[0] + 1 + listCurrent.child(0).child(0).nodeSize;
+const middlePos = listPositions[1];
+const listSeed = planSuffixPagination(
+  input(
+    listBasis,
+    listCurrent,
+    [
+      { pos: secondItemPos, line: 0, unit: 'list_item', page: 1 },
+      { pos: middlePos, line: 0, unit: 'paragraph', page: 2 },
+    ],
+    [
+      { pos: secondItemPos, height: 130, kind: 'block' },
+      { pos: middlePos, height: 210, kind: 'block' },
+    ],
+  ),
 );
+assert.equal(listSeed.kind, 'seed');
+if (listSeed.kind !== 'seed') throw new Error('expected list-prefix seed');
+assert.equal(listSeed.seed.startPos, middlePos);
+assert.equal(listSeed.seed.page, 2);
+assert.equal(listSeed.seed.shift, 340);
+const listAnchorInside = planSuffixPagination(
+  input(
+    listBasis,
+    doc(list, paragraph('middle edited words'), paragraph('last original words')),
+    [{ pos: secondItemPos, line: 0, unit: 'list_item', page: 1 }],
+    [{ pos: secondItemPos, height: 130, kind: 'block' }],
+  ),
+);
+assert.deepEqual(listAnchorInside, { kind: 'reject', reason: 'anchor-boundary' });
+console.log('  ok  list-internal page starts validate as prefix gaps but never anchor');
 
-const tableCell = (text: string) =>
-  schema.nodes.table_cell.create(null, [paragraph(text)]);
-const tableRow = (text: string) =>
-  schema.nodes.table_row.create(null, [tableCell(text)]);
+// Tables stay on the whole-document path: a table crossing a page bottom
+// launches a mini-compile with staged effects the shadow cannot replay.
+const tableCell = (text: string) => schema.nodes.table_cell.create(null, [paragraph(text)]);
+const tableRow = (text: string) => schema.nodes.table_row.create(null, [tableCell(text)]);
 const tableBasis = schema.nodes.doc.create(null, [
   paragraph('first page words'),
   schema.nodes.table.create(null, [tableRow('table words')]),
@@ -191,15 +319,42 @@ const tableCurrent = schema.nodes.doc.create(null, [
 ]);
 assert.deepEqual(
   planSuffixPagination(input(tableBasis, tableCurrent, [], [])),
-  { kind: 'reject', reason: 'non-paragraph-document' },
+  { kind: 'reject', reason: 'table' },
 );
-console.log('  ok  lists and tables retain full pagination');
+console.log('  ok  tables retain full pagination');
+
+// Document attributes carry settings and the bibliography: a change there
+// invalidates every stored page start.
+const bibDoc = schema.nodes.doc.create(
+  { ...basis.attrs, bib: { name: 'refs.bib', content: '@book{k}' } },
+  [paragraph('first page words'), paragraph('second page revised words'), paragraph('third paragraph words')],
+);
+assert.deepEqual(
+  planSuffixPagination(input(basis, bibDoc, [page2Marker], [page2Gap])),
+  { kind: 'reject', reason: 'doc-attrs' },
+);
+console.log('  ok  a document attribute change rejects edit-only reuse');
 
 assert.deepEqual(
   planSuffixPagination(input(basis, current, [page2Marker], [page2Gap], [4, 5])),
   { kind: 'reject', reason: 'epoch-changed' },
 );
 console.log('  ok  a global geometry epoch change rejects edit-only reuse');
+
+// A stale or unmappable marker AFTER the anchor ends the prefix scan instead
+// of rejecting: the seeded pass recomputes everything past the anchor anyway.
+const staleTail = planSuffixPagination(
+  input(
+    basis,
+    current,
+    [page2Marker, { pos: Number.NaN, line: 0, unit: 'paragraph', page: 2 }],
+    [page2Gap],
+  ),
+);
+assert.equal(staleTail.kind, 'seed');
+if (staleTail.kind !== 'seed') throw new Error('expected stale-tail seed');
+assert.equal(staleTail.seed.startPos, page2Pos);
+console.log('  ok  an unmappable post-anchor marker only ends the prefix scan');
 
 const accumulatedBasis = doc(
   paragraph('page one'),

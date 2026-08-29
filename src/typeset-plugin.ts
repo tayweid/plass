@@ -191,9 +191,26 @@ interface PaginationFallbackResult extends PaginationPassResult {
 
 interface FallbackBasisMarker {
   childIndex: number;
+  /** Anchor position minus its top-level block's position (0 at the block
+   * itself; positive for a boundary nested inside a list or blockquote). */
+  offset: number;
   page: number;
   line: number;
-  unit: 'paragraph' | 'line';
+  unit: string;
+}
+
+/** One shadow-planner outcome, structured enough to diagnose without a
+ * debugger: why a pass was ineligible, or where a compared pass diverged. */
+interface SuffixPaginationRun {
+  eligible: boolean;
+  /** Seed source when eligible; first ineligibility reason otherwise. */
+  reason: string;
+  matched: boolean | null;
+  /** Zero-based physical page index of the first differing spacer. */
+  mismatchPage: number | null;
+  /** Height delta (suffix minus full) when the same spacer differs only in
+   * height; null for structural differences (see lastDifference). */
+  mismatchDelta: number | null;
 }
 
 interface SuffixPaginationStats {
@@ -208,6 +225,9 @@ interface SuffixPaginationStats {
   lastDifference: string | null;
   lastStartPos: number | null;
   lastAnchorPos: number | null;
+  /** Ineligibility-reason histogram over every attempted plan. */
+  reasons: Record<string, number>;
+  lastRun: SuffixPaginationRun | null;
 }
 
 const emptySuffixPaginationStats = (): SuffixPaginationStats => ({
@@ -222,6 +242,8 @@ const emptySuffixPaginationStats = (): SuffixPaginationStats => ({
   lastDifference: null,
   lastStartPos: null,
   lastAnchorPos: null,
+  reasons: {},
+  lastRun: null,
 });
 
 type PaginationSuffixPlan =
@@ -533,7 +555,13 @@ class TypesetView {
         return stats;
       };
       w.__suffixPaginationStats = (reset = false) => {
-        const stats = { ...this.suffixPaginationStats };
+        const stats = {
+          ...this.suffixPaginationStats,
+          reasons: { ...this.suffixPaginationStats.reasons },
+          lastRun: this.suffixPaginationStats.lastRun
+            ? { ...this.suffixPaginationStats.lastRun }
+            : null,
+        };
         if (reset) this.suffixPaginationStats = emptySuffixPaginationStats();
         return stats;
       };
@@ -1128,7 +1156,10 @@ class TypesetView {
     const positions: number[] = [];
     doc.forEach((_node, pos) => positions.push(pos));
     return this.fallbackPageBasisMarkers.map((marker) => ({
-      pos: positions[marker.childIndex] ?? Number.NaN,
+      pos:
+        positions[marker.childIndex] !== undefined
+          ? positions[marker.childIndex] + marker.offset
+          : Number.NaN,
       line: marker.line,
       unit: marker.unit,
       page: marker.page,
@@ -1191,36 +1222,57 @@ class TypesetView {
 
   private rememberFallbackBasis(result: PaginationFallbackResult): void {
     const doc = this.view.state.doc;
-    const blocks: Array<{ node: PMNode; pos: number }> = [];
-    doc.forEach((node, pos) => blocks.push({ node, pos }));
     const markers: FallbackBasisMarker[] = [];
     for (const anchor of result.anchors) {
-      const childIndex = blocks.findIndex(
-        (block) => anchor.pos >= block.pos && anchor.pos < block.pos + block.node.nodeSize,
-      );
-      if (childIndex < 0 || blocks[childIndex].node.type.name !== 'paragraph') {
+      if (anchor.pos < 0 || anchor.pos > doc.content.size) {
         markers.length = 0;
         break;
       }
-      const block = blocks[childIndex];
+      const $pos = doc.resolve(anchor.pos);
+      const childIndex = $pos.index(0);
+      const topPos = $pos.depth === 0 ? anchor.pos : $pos.before(1);
       if (anchor.kind === 'block') {
-        if (anchor.pos !== block.pos) {
+        // Block page starts sit at a block boundary: top-level, or a child
+        // boundary inside a container (list item, blockquote child).
+        const after = $pos.nodeAfter;
+        if (!after || after.isInline) {
           markers.length = 0;
           break;
         }
-        markers.push({ childIndex, page: anchor.page, line: 0, unit: 'paragraph' });
+        markers.push({
+          childIndex,
+          offset: anchor.pos - topPos,
+          page: anchor.page,
+          line: 0,
+          unit: after.type.name,
+        });
         continue;
       }
-      const entry = this.cache.get(block.node);
+      // Line page starts live inside a textblock (possibly nested in a list
+      // item or blockquote); the stored position is the textblock's own
+      // boundary, plus the oracle line index of the split.
+      if ($pos.depth === 0 || !$pos.parent.isTextblock) {
+        markers.length = 0;
+        break;
+      }
+      const textblock = $pos.parent;
+      const textblockStart = $pos.start($pos.depth);
+      const entry = this.cache.get(textblock);
       const line = entry?.lines.findIndex((_item, index) => {
         if (index === 0) return false;
-        return block.pos + 1 + entry.lines[index].from === anchor.pos;
+        return textblockStart + entry.lines[index].from === anchor.pos;
       }) ?? -1;
       if (line < 1) {
         markers.length = 0;
         break;
       }
-      markers.push({ childIndex, page: anchor.page, line, unit: 'line' });
+      markers.push({
+        childIndex,
+        offset: textblockStart - 1 - topPos,
+        page: anchor.page,
+        line,
+        unit: 'line',
+      });
     }
     this.fallbackPageBasisDoc = doc;
     this.fallbackPageBasisEpoch = this.paginationGeometryEpoch;
@@ -1241,27 +1293,58 @@ class TypesetView {
     this.fallbackPageBasisMarkers = [];
   }
 
-  private fallbackResultDifference(a: PaginationFallbackResult, b: PaginationFallbackResult): string | null {
-    if (a.count !== b.count) return `page-count ${a.count} != ${b.count}`;
-    if (a.spacers.length !== b.spacers.length) {
-      return `spacer-count ${a.spacers.length} != ${b.spacers.length}`;
-    }
+  /** Compare a full and a seeded shadow pass. `page` is the zero-based
+   * physical page index at the first differing spacer (spacer i starts page
+   * i + 1); `delta` is the suffix-minus-full height difference when the same
+   * spacer differs only in height. The summary is capped for stats storage. */
+  private fallbackResultDifference(
+    a: PaginationFallbackResult,
+    b: PaginationFallbackResult,
+  ): { summary: string; page: number | null; delta: number | null } | null {
     if (a.tableEffects.length || b.tableEffects.length) {
-      return `table-effects ${a.tableEffects.length}/${b.tableEffects.length}`;
+      return {
+        summary: `table-effects ${a.tableEffects.length}/${b.tableEffects.length}`,
+        page: null,
+        delta: null,
+      };
     }
-    const differences = a.spacers.flatMap((spacer, index) => {
+    const spacerCount = Math.max(a.spacers.length, b.spacers.length);
+    const differences: string[] = [];
+    let firstPage: number | null = null;
+    let firstDelta: number | null = null;
+    for (let index = 0; index < spacerCount; index++) {
+      const spacer = a.spacers[index];
       const other = b.spacers[index];
       const equal = (
+        spacer &&
         other &&
         spacer.pos === other.pos &&
         spacer.kind === other.kind &&
         spacer.height.toFixed(2) === other.height.toFixed(2) &&
         Math.abs(spacer.height - other.height) < 0.005
       );
-      return equal ? [] : [`${index}:${spacer.kind}@${spacer.pos}:${spacer.height.toFixed(4)}!=` +
-        `${other?.kind}@${other?.pos}:${other?.height.toFixed(4)}`];
-    });
-    return differences.length ? differences.slice(0, 5).join('; ') : null;
+      if (equal) continue;
+      if (firstPage === null) {
+        firstPage = index + 1;
+        firstDelta =
+          spacer && other && spacer.pos === other.pos && spacer.kind === other.kind
+            ? other.height - spacer.height
+            : null;
+      }
+      if (differences.length < 5) {
+        const format = (s?: Spacer) => (s ? `${s.kind}@${s.pos}:${s.height.toFixed(4)}` : 'none');
+        differences.push(`${index}:${format(spacer)}!=${format(other)}`);
+      }
+    }
+    if (a.count !== b.count) {
+      return {
+        summary: `page-count ${a.count} != ${b.count}; ${differences.join('; ')}`.slice(0, 400),
+        page: firstPage ?? Math.min(a.count, b.count),
+        delta: firstDelta,
+      };
+    }
+    if (!differences.length) return null;
+    return { summary: differences.join('; ').slice(0, 400), page: firstPage, delta: firstDelta };
   }
 
   /** Drop memoized per-element geometry reads (see domGeometryEpoch). */
@@ -1918,16 +2001,21 @@ class TypesetView {
 
       // Footnote bodies, in document order, consumed as units are placed.
       const fnList: Array<{ pos: number; height: number }> = [];
-      if (!seed) {
-        view.state.doc.descendants((node, pos) => {
-          if (node.type.name !== 'footnote') return true;
-          const dom = view.nodeDOM(pos);
-          const body = dom instanceof HTMLElement ? dom.querySelector<HTMLElement>('.fn-body') : null;
-          fnList.push({ pos, height: body ? body.offsetHeight : 0 });
-          return false;
-        });
-      }
+      view.state.doc.descendants((node, pos) => {
+        if (node.type.name !== 'footnote') return true;
+        const dom = view.nodeDOM(pos);
+        const body = dom instanceof HTMLElement ? dom.querySelector<HTMLElement>('.fn-body') : null;
+        fnList.push({ pos, height: body ? body.offsetHeight : 0 });
+        return false;
+      });
       let fnIdx = 0;
+      // A seed restarts at a top-level page start: every block before it has
+      // been fully placed, so its footnotes belong to earlier pages — exactly
+      // the state the full pass reaches when it consumes footnotes per placed
+      // unit and resets the page reservation at the seed's break.
+      if (seed) {
+        while (fnIdx < fnList.length && fnList[fnIdx].pos < seed.startPos) fnIdx++;
+      }
       const peekFnH = (endPos: number) => {
         let h = 0;
         for (let j = fnIdx; j < fnList.length && fnList[j].pos < endPos; j++) h += fnList[j].height + FN_GAP;
@@ -1987,6 +2075,21 @@ class TypesetView {
       // at the block's start must carry the heading along (Typst headings are
       // sticky by default; the oracle already does this, the fallback must too).
       let sticky: { pos: number; y: number } | null = null;
+      // A seeded pass must enter its first block with the same sticky state
+      // the full pass has there: replay the heading/reset updates the skipped
+      // prefix would have applied (only a heading run directly above the seed
+      // boundary survives them).
+      if (seed) {
+        view.state.doc.forEach((node, offset) => {
+          if (offset >= seed.startPos) return;
+          if (node.type.name === 'heading') {
+            const hr = rectOf(offset);
+            sticky = sticky ?? (hr ? { pos: offset, y: stackY(hr.top, offset) } : null);
+          } else {
+            sticky = null;
+          }
+        });
+      }
       const breakStart = (pos: number, y: number) => {
         const a = sticky ?? { pos, y };
         breakBefore(a.pos, a.y, 'block');
@@ -2269,7 +2372,7 @@ class TypesetView {
       this.suffixPaginationStats.fullUnits += full.visitedUnits;
       const difference = this.fallbackResultDifference(full, suffix);
       const matches = difference === null;
-      this.suffixPaginationStats.lastDifference = difference;
+      this.suffixPaginationStats.lastDifference = difference?.summary ?? null;
       if (matches) {
         this.suffixPaginationStats.matches++;
         this.suffixPaginationStats.lastReason = `matched-${suffixPlan.source}`;
@@ -2277,6 +2380,13 @@ class TypesetView {
         this.suffixPaginationStats.mismatches++;
         this.suffixPaginationStats.lastReason = `mismatch-${suffixPlan.source}`;
       }
+      this.suffixPaginationStats.lastRun = {
+        eligible: true,
+        reason: suffixPlan.source,
+        matched: matches,
+        mismatchPage: difference?.page ?? null,
+        mismatchDelta: difference?.delta ?? null,
+      };
       this.rememberFallbackBasis(full);
       // Suffix replay remains a shadow until exact-source browser fixtures can
       // exercise it in production mode. The full result is always installed;
@@ -2289,6 +2399,15 @@ class TypesetView {
 
     const fallback = runFallback();
     this.suffixPaginationStats.fullUnits += fallback.visitedUnits;
+    this.suffixPaginationStats.reasons[suffixPlan.reason] =
+      (this.suffixPaginationStats.reasons[suffixPlan.reason] ?? 0) + 1;
+    this.suffixPaginationStats.lastRun = {
+      eligible: false,
+      reason: suffixPlan.reason,
+      matched: null,
+      mismatchPage: null,
+      mismatchDelta: null,
+    };
     if (!suffixPlan.reason.endsWith('-unchanged') || this.suffixPaginationStats.compared === 0) {
       this.suffixPaginationStats.lastReason = suffixPlan.reason;
       this.suffixPaginationStats.lastDifference = null;
