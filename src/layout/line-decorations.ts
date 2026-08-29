@@ -11,7 +11,6 @@ import { applyFill } from '../inline-raw';
  * independent of widget keys: callers can select layout decorations without
  * inferring their meaning from a key prefix. */
 export type TypesetDecorationKind =
-  | 'forced-lines'
   | 'word-spacing'
   | 'line-break'
   | 'hyphen-break'
@@ -52,23 +51,11 @@ export interface BlockDecorationRebuild {
 }
 
 const BLOCK_DECORATION_KINDS = new Set<TypesetDecorationKind>([
-  'forced-lines',
   'word-spacing',
   'line-break',
   'hyphen-break',
   'no-spell',
   'line-page-gap',
-]);
-
-/** Decorations that impose a line layout on editable text. Page gaps are
- * deliberately excluded: they preserve the last settled page geometry while
- * the active block temporarily returns to native browser wrapping. */
-const ACTIVE_LINE_DECORATION_KINDS = new Set<TypesetDecorationKind>([
-  'forced-lines',
-  'word-spacing',
-  'line-break',
-  'hyphen-break',
-  'no-spell',
 ]);
 
 function typesetKind(spec: unknown): TypesetDecorationKind | null {
@@ -202,19 +189,6 @@ export function appendLineDecorations(
   lines: readonly LineLayout[],
   spacerAt?: LineSpacerResolver,
 ) {
-  // Once Typst has supplied the line membership, CSS may not choose a
-  // second set of wraps around the explicit break widgets below. A node
-  // decoration makes that ownership atomic with the rest of the compiled
-  // presentation and lets the edit handoff remove it synchronously.
-  target.push(
-    Decoration.node(
-      pos,
-      pos + node.nodeSize,
-      { class: 'ts-forced-lines' },
-      { sig: 'nowrap', tsKind: 'forced-lines' } satisfies TypesetDecorationSpec,
-    ),
-  );
-
   const base = pos + 1;
   const fnRanges: Array<[number, number]> = [];
   node.forEach((child, offset) => {
@@ -311,7 +285,6 @@ function semanticEntry(decoration: Decoration, relativeTo: number): DecorationSe
       break;
     case 'word-spacing':
     case 'no-spell':
-    case 'forced-lines':
       identity = spec?.sig ?? '';
       break;
     default:
@@ -354,21 +327,6 @@ export function decorationSignature(decorations: readonly Decoration[], relative
 /** Canonical semantic digest of a complete persistent DecorationSet. */
 export function decorationSetDigest(decos: DecorationSet): string {
   return decorationSignature(decos.find());
-}
-
-/** Return the previous settled layout with only the specified editable
- * block's forced line presentation removed. This is the paint-first handoff:
- * ProseMirror can show the DOM mutation immediately, while untouched blocks
- * and the last settled page spacers remain stable until the next snapshot. */
-export function stripActiveLineDecorations(
-  decos: DecorationSet,
-  scope: BlockDecorationScope,
-): DecorationSet {
-  const remove = decorationsOwnedByBlock(decos, scope).filter((decoration) => {
-    const kind = typesetKind(decoration.spec);
-    return kind !== null && ACTIVE_LINE_DECORATION_KINDS.has(kind);
-  });
-  return remove.length ? decos.remove(remove) : decos;
 }
 
 function assertRange(range: DecorationRange, label: string): void {

@@ -11,12 +11,12 @@ export default defineConfig({
     { name: 'chromium', use: { browserName: 'chromium' } },
     {
       name: 'firefox-fallback',
-      testMatch: /(?:fallback|cross-browser-core)\.spec\.ts/,
+      testMatch: /fallback\.spec\.ts/,
       use: { browserName: 'firefox' },
     },
     {
       name: 'webkit-fallback',
-      testMatch: /(?:fallback|cross-browser-core)\.spec\.ts/,
+      testMatch: /fallback\.spec\.ts/,
       use: { browserName: 'webkit' },
     },
   ],

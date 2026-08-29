@@ -4,24 +4,12 @@
 // input; compare line texts string-for-string. Exposed as window.__differ
 // for Playwright.
 
-import { compileSvg } from './research/typst-tools';
+import { compileSvg } from './pdf';
 import { extractLines } from './layout/typst-oracle';
 import { loadPrimitives } from './layout/primitives';
 import { defaultConfig, prepare } from './layout/port/prepare';
 import { linebreak } from './layout/port/linebreak';
 import { COMMON_PORT_KEYS, DEFAULT_FONT, cssFontStack } from './font-registry';
-import { releaseCoordinatedCompilerKey } from './compiler/coordinated-compiler';
-
-let nextDifferCompileId = 1;
-
-async function compileDifferSvg(src: string, channel: string): Promise<string | null> {
-  const key = `dev:differ:${channel}:${nextDifferCompileId++}`;
-  try {
-    return await compileSvg(src, () => {}, { key, revision: 1, priority: 'background' });
-  } finally {
-    releaseCoordinatedCompilerKey(key);
-  }
-}
 
 /** Escape plain prose for Typst markup. '-' is escaped so corpus hyphens
  * stay hyphen-minus (no smart-dash merging); straight quotes are escaped to
@@ -43,7 +31,7 @@ async function typstLines(c: DiffCase, measure: number, sizePt: number): Promise
     ``,
     body,
   ].join('\n');
-  const svg = await compileDifferSvg(src, 'paragraph');
+  const svg = await compileSvg(src);
   if (!svg) return null;
   return extractLines(svg, sizePt).map((l) => l.text);
 }
@@ -177,7 +165,7 @@ async function pmTypstLines(c: PMCase, measure: number, sizePt: number): Promise
     ``,
     pmMarkup(c.parts),
   ].join('\n');
-  const svg = await compileDifferSvg(src, 'pm');
+  const svg = await compileSvg(src);
   if (!svg) return null;
   return extractLines(svg, sizePt).map((l) => l.text);
 }
@@ -314,7 +302,7 @@ async function ctxTypstLines(c: CtxCase, measurePx: number): Promise<string[] | 
       `#counter(figure.where(kind: image)).update(${n - 1})\n` +
       `#figure(rect(height: 0pt, stroke: none), kind: image, supplement: [Figure], caption: [${body}])`;
   }
-  const svg = await compileDifferSvg(src, 'context');
+  const svg = await compileSvg(src);
   if (!svg) return null;
   const pitch = s.lineHeight * s.sizePt;
   let lines = extractLines(svg, pitch / 2).map((l) => l.text);

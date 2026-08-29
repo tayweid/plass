@@ -1,36 +1,27 @@
 import 'katex/dist/katex.min.css';
 import './style.css';
-import './typst-embed.css';
 
 import { EditorState } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { history } from 'prosemirror-history';
-import { tableEditing } from 'prosemirror-tables';
 import { Node as PMNode } from 'prosemirror-model';
-import { migrateLegacyTypstEmbeds, schema } from './schema';
+import { schema } from './schema';
 import { baseKeys, buildInputRules, buildKeymap, collapseSpaces, copyTextWithoutItsBlock } from './editing';
-import { typesetKey, typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugin';
+import { typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugin';
 import { MathView } from './math';
 import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
-import { structuredTablePlugin } from './table-editor';
+import { TablePreviewView } from './table-preview';
 import { equationsPlugin } from './equations';
 import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
-import {
-  CodeBlockView,
-  TypstEmbedView,
-  typstEmbedPreviewPlugin,
-  typstEmbedPreviewStats,
-} from './raw-preview';
-import { typstEmbedMigrationPlugin } from './typst-embed-migration';
+import { CodeBlockView, rawIslandPlugin } from './raw-preview';
 import { TypstInlineView } from './inline-raw';
 import { refAutocomplete } from './ref-autocomplete';
 import { applySettings, formatPageNumber, getSettings } from './settings';
 import { FileManager } from './file-manager';
 import { resetCompilerCircuit } from './compiler-circuit';
-import { documentCompileBrokerStats } from './document-compile-broker';
 
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
@@ -123,9 +114,7 @@ function scheduleSave(view: EditorView) {
 
 function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState {
   return EditorState.create({
-    // Upgrade the exact historical `typst-raw` marker before the first DOM
-    // paint, so restored documents never flash the old executable-code view.
-    doc: migrateLegacyTypstEmbeds(doc),
+    doc,
     plugins: [
       // Before the keymaps: the popup must see Enter/Tab/arrows first.
       refAutocomplete(),
@@ -136,17 +125,11 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       equationsPlugin(),
       citationsPlugin(),
       figuresPlugin(),
-      typstEmbedMigrationPlugin(),
-      typstEmbedPreviewPlugin(),
+      rawIslandPlugin(),
       footnoteGuard(),
       collapseSpaces(),
       copyTextWithoutItsBlock(),
       typesetPlugin({ onStats, onPages: renderPages }),
-      // Native cell selection, rectangular copy/paste, and structural table
-      // invariants. Keep this last so its broad arrow/mouse handlers only run
-      // after more specific editor behavior has had a chance.
-      structuredTablePlugin(),
-      tableEditing(),
     ],
   });
 }
@@ -168,27 +151,12 @@ const hudEl = document.getElementById('hud')!;
 const toastEl = document.getElementById('toast')!;
 const stackEl = document.getElementById('stack')!;
 const pagesEl = document.getElementById('pages')!;
-stackEl.dataset.pageMode = 'continuous';
 
 let pageCount = 0;
-let pageMode: PageInfo['mode'] = 'continuous';
-let pageModeReason = 'waiting for exact layout';
 let pageSignature = '';
 
 /** Paint the page boxes + numbers behind the editor. */
 function renderPages(info: PageInfo) {
-  pageMode = info.mode;
-  pageModeReason = info.reason ?? '';
-  stackEl.dataset.pageMode = info.mode;
-  stackEl.dataset.pageReason = pageModeReason;
-  if (info.mode === 'continuous') {
-    stackEl.style.height = 'auto';
-    pageCount = 0;
-    pageSignature = '';
-    pagesEl.replaceChildren();
-    updateStatus();
-    return;
-  }
   stackEl.style.height = `${info.count * (info.pageH + info.gap) - info.gap}px`;
   pageCount = info.count;
   const s = getSettings(view.state);
@@ -217,7 +185,7 @@ function renderPages(info: PageInfo) {
       : k < restartPage
         ? formatPageNumber({ ...s, pageNumFormat: 'i' }, k + 1, restartPage)
         : formatPageNumber(s, k - restartPage + 1, info.count - restartPage);
-  const sig = `${info.mode}:${info.count}:${info.pageH}:${info.marginBottom}:${info.marginLeft}:${info.marginRight}:${s.pageNumShow}:${s.pageNumFormat}:${s.pageNumAlign}:${s.pageNumStart}:${s.headerText}:${s.headerAlign}:${s.headerFirstPage}:${restartPage}`;
+  const sig = `${info.count}:${info.pageH}:${info.marginBottom}:${info.marginLeft}:${info.marginRight}:${s.pageNumShow}:${s.pageNumFormat}:${s.pageNumAlign}:${s.pageNumStart}:${s.headerText}:${s.headerAlign}:${s.headerFirstPage}:${restartPage}`;
   if (sig !== pageSignature) {
     pageSignature = sig;
     const frag = document.createDocumentFragment();
@@ -286,33 +254,32 @@ const view = new EditorView(editorEl, {
     image: (node, v, getPos) => new ImageView(node, v, getPos),
     figure: (node, v, getPos) => new FigureView(node, v, getPos),
     footnote: (node) => new FootnoteView(node),
-    bibliography: (node, v, getPos) => new BibliographyView(node, v, getPos),
+    bibliography: (node, v) => new BibliographyView(node, v),
+    table: (node, v, getPos) => new TablePreviewView(node, v, getPos),
     code_block: (node, v, getPos) => new CodeBlockView(node, v, getPos),
-    typst_embed: (node, v, getPos) => new TypstEmbedView(node, v, getPos),
     typst_inline: (node, v, getPos) => new TypstInlineView(node, v, getPos),
   },
   attributes: { spellcheck: 'true' },
   handleClick: (v, _pos, event) => footnoteMarkerClick(v, event),
   dispatchTransaction(tr) {
     const prevAttrs = view.state.doc.attrs;
+    const prevMacros = getSettings(view.state).mathMacros;
     const newState = view.state.apply(tr);
     // A real document change is the trusted boundary that lets background
     // Typst previews resume after a timeout. Selection/decorations/layout
     // transactions do not reset the circuit, so retry loops cannot reopen it.
     if (tr.docChanged) resetCompilerCircuit();
     view.updateState(newState);
-    // Decoration/page-marker transactions update editor geometry only. They
-    // must not perform another toolbar layout pass or repeat UI work already
-    // handled by the originating document/selection transaction.
-    const layoutOnly = !tr.docChanged && tr.getMeta(typesetKey) !== undefined;
-    if (!layoutOnly) toolbar?.update(newState);
+    toolbar?.update(newState);
     if (newState.doc.attrs !== prevAttrs) {
       applySettings(newState);
+      // Macro changes must re-render every math node view.
+      if (getSettings(newState).mathMacros !== prevMacros) queueMicrotask(refreshMathNodes);
     }
     if (tr.docChanged) {
       scheduleSave(view);
       fileManager.noteChange();
-      scheduleWordCount();
+      updateStatus();
     }
   },
 });
@@ -339,7 +306,6 @@ const fileManager = new FileManager({
     view.updateState(makeState(doc, onStats));
     applySettings(view.state);
     toolbar?.update(view.state);
-    wordCount = readWordCount();
     updateStatus();
     scheduleSave(view);
     view.focus();
@@ -357,23 +323,6 @@ const fileManager = new FileManager({
 });
 
 toolbar = buildToolbar(toolbarEl, view, fileManager);
-const openExactProof = () => {
-  void import('./proof-view').then(({ openProofView }) =>
-    openProofView(fileManager.currentDoc(), {
-      documentName: fileManager.name,
-      onMessage: (message) => fileManager.notify(message),
-    }),
-  );
-};
-hudEl.tabIndex = 0;
-hudEl.setAttribute('role', 'button');
-hudEl.setAttribute('aria-label', 'Open exact Typst proof');
-hudEl.addEventListener('click', openExactProof);
-hudEl.addEventListener('keydown', (event) => {
-  if (event.key !== 'Enter' && event.key !== ' ') return;
-  event.preventDefault();
-  openExactProof();
-});
 setFigureFileManager(fileManager);
 const stopAssetWatch = startAssetWatch(view);
 import.meta.hot?.dispose(() => {
@@ -465,6 +414,21 @@ window.addEventListener(
   { capture: true },
 );
 
+/** Touch every math node (same attrs) so node views re-render with new macros. */
+function refreshMathNodes() {
+  let tr = view.state.tr;
+  view.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'math_inline' || node.type.name === 'math_display') {
+      tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs });
+    }
+    return true;
+  });
+  if (tr.steps.length) {
+    tr.setMeta('addToHistory', false);
+    view.dispatch(tr);
+  }
+}
+
 let messageTimer = 0;
 function showMessage(text: string, action?: { label: string; run: () => void }) {
   toastEl.textContent = text;
@@ -490,39 +454,14 @@ function showMessage(text: string, action?: { label: string; run: () => void }) 
   }, action ? 8000 : 3500);
 }
 
-let wordCount = 0;
-let wordCountTimer = 0;
-
-function readWordCount(): number {
-  return view.state.doc.textBetween(0, view.state.doc.content.size, ' ', ' ')
+function updateStatus() {
+  const words = view.state.doc.textBetween(0, view.state.doc.content.size, ' ', ' ')
     .split(/\s+/)
     .filter(Boolean).length;
+  const pages = pageCount ? `${pageCount} p · ` : '';
+  hudEl.textContent = `${pages}${words} words`;
+  hudEl.title = lastStats ? `layout oracle: ${lastStats.ms.toFixed(1)} ms for ${lastStats.lines} lines` : '';
 }
-
-function scheduleWordCount() {
-  clearTimeout(wordCountTimer);
-  wordCountTimer = window.setTimeout(() => {
-    wordCount = readWordCount();
-    updateStatus();
-  }, 150);
-}
-
-function updateStatus() {
-  if (pageMode === 'continuous') {
-    hudEl.textContent = `Continuous edit · Exact Proof · ${wordCount} words`;
-    hudEl.title = `Exact page geometry is unavailable (${pageModeReason || 'Typst layout pending'}). ` +
-      'Editing remains continuous and native. Click to open exact Proof.';
-    return;
-  }
-  const updating = pageMode === 'held' ? ' · updating' : '';
-  hudEl.textContent = `${pageCount} p${updating} · ${wordCount} words`;
-  hudEl.title = pageMode === 'held'
-    ? 'Mapped starts from the last exact Typst layout while its replacement compiles. Click for exact Proof.'
-    : lastStats
-      ? `Exact Typst layout: ${lastStats.ms.toFixed(1)} ms for ${lastStats.lines} lines. Click for Proof.`
-      : 'Exact Typst page layout. Click for Proof.';
-}
-wordCount = readWordCount();
 updateStatus();
 
 view.focus();
@@ -533,17 +472,6 @@ view.focus();
 declare global {
   interface Window {
     view: EditorView;
-    __typstEmbedPreviewStats(): Readonly<{
-      requests: number;
-      publications: number;
-      views: number;
-    }>;
-    __documentCompileBrokerStats(): Readonly<{
-      compilerTasks: number;
-      publications: number;
-      sharedRequests: number;
-      owners: number;
-    }>;
   }
 }
 if (import.meta.env.DEV) {
@@ -554,6 +482,4 @@ if (import.meta.env.DEV) {
   (window as unknown as { __fm: FileManager }).__fm = fileManager;
   (window as unknown as { __migrateEmbedded: () => Promise<void> }).__migrateEmbedded = () =>
     migrateEmbeddedFigures(view);
-  window.__typstEmbedPreviewStats = () => typstEmbedPreviewStats(view);
-  window.__documentCompileBrokerStats = () => documentCompileBrokerStats(view);
 }

@@ -14,10 +14,6 @@ import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
 import { getSettings } from './settings';
 import { getBib } from './citations';
-import {
-  transactionChangesDerivedStructure,
-  type DerivedStructureRules,
-} from './transaction-impact';
 
 interface EqState {
   decos: DecorationSet;
@@ -25,30 +21,6 @@ interface EqState {
 }
 
 export const eqKey = new PluginKey<EqState>('equations');
-
-// Only attributes and topology which can alter numbers or reference targets
-// invalidate the full-document index. Text inside headings, figure captions,
-// footnotes, and table cells maps the existing decorations through the
-// transaction. Caption text is presentation metadata, but crossing the
-// empty/non-empty boundary starts or stops a Typst table figure from consuming
-// a number. Labels and semantic row/header/cell structure remain exact-value
-// invalidations.
-const NUMBERING_STRUCTURE: DerivedStructureRules = {
-  heading: { attrs: ['level', 'label'] },
-  math_display: { attrs: ['label', 'numbered'] },
-  figure: { attrs: ['label'] },
-  table: {
-    attrs: ['label'],
-    attrPresence: ['caption'],
-    structure: {
-      table_row: [],
-      table_cell: ['colspan', 'rowspan', 'colwidth', 'align'],
-      table_header: ['colspan', 'rowspan', 'colwidth', 'align'],
-    },
-  },
-  footnote: {},
-  eq_ref: { attrs: ['label'] },
-};
 
 function figNumWidget(text: string) {
   return () => {
@@ -130,14 +102,9 @@ function build(doc: PMNode, numberEquations: boolean, numberSections: boolean): 
       return true;
     }
     if (node.type.name === 'table') {
-      const caption = node.attrs.caption as string;
+      tab++;
       const label = node.attrs.label as string;
-      // The serializer emits a numbered Typst figure only when a table has a
-      // caption or label. Plain native tables must not consume that counter.
-      if (caption || label) {
-        tab++;
-        if (label && !labels.has(label)) labels.set(label, `Table ${tab}`);
-      }
+      if (label && !labels.has(label)) labels.set(label, `Table ${tab}`);
       return false;
     }
     if (node.type.name === 'footnote') {
@@ -191,17 +158,10 @@ export function equationsPlugin() {
         const s = getSettings(state);
         return build(state.doc, s.numberEquations, s.numberSections);
       },
-      apply: (tr, val, oldState, newState) => {
+      apply: (tr, val, _old, newState) => {
         if (!tr.docChanged) return val;
-        const before = getSettings(oldState);
-        const after = getSettings(newState);
-        const settingsChanged =
-          before.numberEquations !== after.numberEquations ||
-          before.numberSections !== after.numberSections;
-        if (!settingsChanged && !transactionChangesDerivedStructure(tr, NUMBERING_STRUCTURE)) {
-          return { decos: val.decos.map(tr.mapping, tr.doc), labels: val.labels };
-        }
-        return build(newState.doc, after.numberEquations, after.numberSections);
+        const s = getSettings(newState);
+        return build(newState.doc, s.numberEquations, s.numberSections);
       },
     },
     props: {

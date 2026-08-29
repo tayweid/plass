@@ -1,24 +1,24 @@
-// Shared paragraph serialization and SVG-line matching primitives, plus the
-// historical paragraph-fragment TypstOracle used by focused tests/research.
+// The Typst line-break oracle (spec M0): the editor's structural answer to
+// "why aren't the editor and the PDF pixel-identical?" — because two
+// independent Knuth-Plass implementations may choose different optima. This
+// module removes the second decider: paragraphs are compiled by the real
+// Typst (WASM, in-app) and its exact break decisions are imposed on the DOM.
 //
-// Production builds ParagraphSpecs here, then PageOracle matches them against
-// the text-selection runs and contextual caption/footnote regions from one
-// brokered whole-document publication. PageOracle alone may publish settled
-// line/page decisions; a pending or unmatched block remains browser-native.
+// Extraction channel: the compiled SVG's invisible text-selection layer
+// (.tsel spans) — one per rendered text run, carrying the line's actual
+// text. The compiled document is byte-identical to what the PDF pipeline
+// sees (no probes, no instrumentation), so the breaks are guaranteed
+// faithful; an earlier probe-injection design perturbed knife-edge breaks
+// through sub-pixel item-boundary effects. Line texts are matched back to
+// character offsets word by word; hyphenation points arrive textually
+// (the line ends with a word prefix).
 //
-// The TypstOracle class below deliberately compiles synthetic fragments and
-// is therefore not an export-fidelity or product-layout path. It remains useful
-// for differential fixtures and for testing the word-by-word matcher, including
-// textual hyphenation points at the ends of selection-layer lines.
+// The JS Knuth-Plass remains the instant first pass and the fallback for
+// content the matcher can't align.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { escapeTyp, parityRules, textSetLine } from '../typ-serializer';
 import type { DocSettings } from '../settings';
-import {
-  cancelCoordinatedCompilerTask,
-  releaseCoordinatedCompilerKey,
-  type CoordinatedCompileRequest,
-} from '../compiler/coordinated-compiler';
 import type { ForcedBreak } from './paragraph';
 import { parseTypstSvg } from '../safe-svg';
 
@@ -55,8 +55,8 @@ export interface AtomResolver {
 
 /**
  * Build the Typst markup + token table for one paragraph. Returns null when
- * the paragraph contains content we can't represent — the caller keeps the
- * native editable DOM for it.
+ * the paragraph contains content we can't represent — the caller keeps using
+ * the JS oracle for it.
  */
 export function buildSpec(node: PMNode, resolveAtom: AtomResolver): ParagraphSpec | null {
   let src = '';
@@ -127,23 +127,12 @@ export function buildSpec(node: PMNode, resolveAtom: AtomResolver): ParagraphSpe
       }
       if (child.type.name === 'math_inline') hasMath = true;
       src += resolved.markup;
-      const spaceBefore = take();
       tokens.push({
         kind: 'atom',
         start: offset,
         end: offset + child.nodeSize,
-        // Formula selection text is a drawing detail, not source text. A
-        // tall inline formula is emitted as several SVG runs (base,
-        // superscript, subscript) whose glyph count and order have no
-        // correspondence to ProseMirror's one-offset atom. Always match
-        // inline math opaquely between its surrounding source anchors; paint
-        // geometry arrives separately from the shared document publication.
-        text: child.type.name === 'math_inline' ? undefined : resolved.text,
-        // Typst's footnote call consumes preceding source whitespace and
-        // paints its superscript against the previous glyph. Model that
-        // visible boundary, otherwise `word.1` cannot match a PM source that
-        // happens to contain a space before the footnote atom.
-        spaceBefore: child.type.name === 'footnote' ? false : spaceBefore,
+        text: resolved.text,
+        spaceBefore: take(),
       });
       key += `⟦${resolved.markup}⟧`;
     }
@@ -172,12 +161,9 @@ interface Queued {
 }
 
 const MAX_RESULTS = 800;
-let nextParagraphOracleId = 1;
 /** Hyphen-like characters Typst may append to a hyphenated line. */
 const HYPHENS = /[-‐‑\u00ad]+$/;
 
-/** Test/research-only synthetic-fragment compiler. Product code uses the pure
- * helpers above through PageOracle's shared whole-document publication. */
 export class TypstOracle {
   results = new Map<string, OracleEntry>();
   queue = new Map<string, Queued>();
@@ -186,26 +172,16 @@ export class TypstOracle {
   disposed = false;
   private settings: DocSettings | null = null;
   /** Invalidates completions that were already compiling when clear() or
-   * destroy() was called. Abort stops pre-admission imports and coordinator
-   * cancellation terminates admitted obsolete worker work; generation remains
-   * the final publication guard for executors that ignore cancellation. */
+   * destroy() was called. The underlying compiler task cannot be cancelled,
+   * so publication has to be guarded when it returns. */
   private generation = 0;
-  private compileRevision = 0;
-  private compileAbort: AbortController | null = null;
-  private readonly compileKey = `layout:paragraphs:${nextParagraphOracleId++}`;
 
   constructor(
     private onResults: () => void,
     private fontFallback: string[],
-    private compileSvg: (
-      source: string,
-      coordinated?: CoordinatedCompileRequest,
-      signal?: AbortSignal,
-    ) => Promise<string | null> = async (source, coordinated, signal) => {
-      if (signal?.aborted) return null;
-      const { compileSvg } = await import('../research/typst-tools');
-      if (signal?.aborted) return null;
-      return compileSvg(source, () => {}, coordinated);
+    private compileSvg: (source: string) => Promise<string | null> = async (source) => {
+      const { compileSvg } = await import('../pdf');
+      return compileSvg(source);
     },
   ) {}
 
@@ -223,26 +199,9 @@ export class TypstOracle {
 
   clear() {
     this.generation++;
-    this.compileAbort?.abort('canceled');
-    this.compileAbort = null;
-    cancelCoordinatedCompilerTask(this.compileKey);
     clearTimeout(this.timer);
     this.timer = 0;
     this.results.clear();
-    this.queue.clear();
-    this.settings = null;
-  }
-
-  /** Supersede work for an edited document without discarding reusable
-   * completed entries. An in-flight worker task may still return, but the
-   * generation guard prevents its SVG from being parsed on the main thread. */
-  cancelPending() {
-    this.generation++;
-    this.compileAbort?.abort('canceled');
-    this.compileAbort = null;
-    cancelCoordinatedCompilerTask(this.compileKey);
-    clearTimeout(this.timer);
-    this.timer = 0;
     this.queue.clear();
     this.settings = null;
   }
@@ -251,9 +210,6 @@ export class TypstOracle {
     if (this.disposed) return;
     this.disposed = true;
     this.generation++;
-    this.compileAbort?.abort('canceled');
-    this.compileAbort = null;
-    releaseCoordinatedCompilerKey(this.compileKey);
     clearTimeout(this.timer);
     this.timer = 0;
     this.queue.clear();
@@ -264,8 +220,6 @@ export class TypstOracle {
     if (this.disposed || this.inflight || !this.queue.size || !this.settings) return;
     this.inflight = true;
     const generation = this.generation;
-    const compileAbort = new AbortController();
-    this.compileAbort = compileAbort;
     // One compile per measure: indented paragraphs (quotes, list items) have
     // narrower lines and must be broken at their own width. Footnote specs
     // compile separately — their lines render at the page bottom, after all
@@ -316,17 +270,13 @@ export class TypstOracle {
       }
 
       if (this.disposed || generation !== this.generation) return;
-      const svg = await this.compileSvg(src, {
-        key: this.compileKey,
-        revision: ++this.compileRevision,
-        priority: 'layout',
-      }, compileAbort.signal);
+      const svg = await this.compileSvg(src);
       if (this.disposed || generation !== this.generation) return;
 
       // Geometry thresholds at the SVG's 1px-per-pt scale.
       const pitch = s.lineHeight * s.sizePt;
       const paraGap = (s.lineHeight + 0.45) * s.sizePt; // between pitch and paragraph pitch
-      const lines = svg ? extractLines(svg, selectionRunTolerance(pitch)) : null;
+      const lines = svg ? extractLines(svg, pitch / 2) : null;
       let cursor = isFn ? 1 : 0; // footnotes: skip the anchor-markers line
       for (const [key, q] of batch) {
         if (!lines) {
@@ -358,7 +308,6 @@ export class TypstOracle {
       for (const [key] of batch) this.results.set(key, { status: 'fail', reason: String(e).slice(0, 120) });
     } finally {
       this.inflight = false;
-      if (this.compileAbort === compileAbort) this.compileAbort = null;
       if (!this.disposed && this.queue.size) {
         clearTimeout(this.timer);
         this.timer = window.setTimeout(() => void this.flush(), 20);
@@ -371,50 +320,6 @@ export class TypstOracle {
 export interface SvgLine {
   text: string;
   y: number;
-}
-
-export interface SvgTextRun {
-  text: string;
-  /** Top and bottom in one rendered coordinate space. */
-  top: number;
-  bottom: number;
-}
-
-/** Physical-line ownership for an atom whose selection text is deliberately
- * excluded from the prose stream. Bindings come from the shared document
- * publication's queried baselines, never inferred from neighboring prose. */
-export type AtomLineBinding = number;
-export type AtomLineBindings = ReadonlyMap<number, AtomLineBinding>;
-
-/**
- * A selection layer has one run per shaped fragment, not one run per prose
- * line. Inline math therefore contributes vertically offset superscript and
- * subscript runs. Group intersecting painted bands, with a half-pitch
- * tolerance for rounding and short script offsets. Real wrapped lines still
- * advance a full pitch, while every glyph run inside one atomic formula
- * stays on its surrounding source line. Keeping the fallback at half pitch
- * also prevents the smaller lines in footnote text from collapsing.
- */
-export function selectionRunTolerance(linePitch: number): number {
-  return linePitch / 2;
-}
-
-export function groupSelectionRuns(runs: readonly SvgTextRun[], yTolerance: number): SvgLine[] {
-  const grouped: Array<SvgLine & { top: number; bottom: number }> = [];
-  for (const run of runs) {
-    const last = grouped[grouped.length - 1];
-    const overlapsBand = !!last && Math.min(last.bottom, run.bottom) > Math.max(last.top, run.top);
-    if (last && (overlapsBand || Math.abs(run.top - last.y) < yTolerance)) {
-      last.text += run.text;
-      // Keep the first run's top as the line coordinate used by paragraph
-      // gap detection, but widen the painted band for the rest of this line.
-      last.top = Math.min(last.top, run.top);
-      last.bottom = Math.max(last.bottom, run.bottom);
-    } else {
-      grouped.push({ text: run.text, y: run.top, top: run.top, bottom: run.bottom });
-    }
-  }
-  return grouped.map(({ text, y }) => ({ text, y }));
 }
 
 /**
@@ -432,15 +337,14 @@ export function extractLines(svg: string, yTol: number): SvgLine[] {
   svgEl.style.height = 'auto';
   document.body.appendChild(div);
   const top = svgEl.getBoundingClientRect().top;
-  const runs = [...div.querySelectorAll('.tsel')].map((el): SvgTextRun => {
-    const rect = el.getBoundingClientRect();
-    return {
-      text: el.textContent ?? '',
-      top: rect.top - top,
-      bottom: rect.bottom - top,
-    };
-  });
-  const lines = groupSelectionRuns(runs, yTol);
+  const lines: SvgLine[] = [];
+  for (const el of div.querySelectorAll('.tsel')) {
+    const y = el.getBoundingClientRect().top - top;
+    const text = el.textContent ?? '';
+    const L = lines[lines.length - 1];
+    if (L && Math.abs(y - L.y) < yTol) L.text += text;
+    else lines.push({ text, y });
+  }
   div.remove();
   return lines;
 }
@@ -457,18 +361,15 @@ function skipParagraph(lines: SvgLine[], from: number, paraGap: number): number 
  * Match a paragraph's tokens against consecutive SVG lines; every line
  * boundary becomes a break. Tokens carry their exact rendered text and
  * whether a space precedes them, so glued punctuation and inline atoms
- * match precisely. Opaque atom glyphs must already have been removed from
- * `lines`, and every such token must carry physical-line ownership from the
- * same compiled publication; neighboring prose is never an atom wildcard.
- * Hyphenations show up textually: a line ends with a prefix of the pending
- * word.
+ * match precisely; unknown-text atoms (math) consume up to the next known
+ * token. Hyphenations show up textually: a line ends with a prefix of the
+ * pending word.
  */
 export function matchParagraph(
   spec: ParagraphSpec,
   lines: SvgLine[],
   cursor: number,
   stripFirst?: RegExp,
-  atomLines?: AtomLineBindings,
 ): { status: 'ok'; next: number; entry: OracleEntry } | { status: 'fail'; entry: OracleEntry } {
   const fail = (reason: string) => ({ status: 'fail' as const, entry: { status: 'fail' as const, reason } });
   const breaks: ForcedBreak[] = [];
@@ -483,10 +384,7 @@ export function matchParagraph(
     let text = lines[li].text.replace(/\s+/g, ' ').trim();
     // Painted prefixes ("Figure N: ", the entry number) are not tokens.
     if (stripFirst && li === cursor) text = text.replace(stripFirst, '');
-    // Selection text is not allowed to decide opaque-atom ownership. Track
-    // whether source content was bound to this physical line so empty or
-    // instrumentation-only lines cannot manufacture a break.
-    let consumedOnLine = false;
+    const lineStartTi = ti;
     let brokeWithHyphen = false;
 
     while (text.length) {
@@ -494,7 +392,6 @@ export function matchParagraph(
         if (text.startsWith(pendingSuffix)) {
           text = text.slice(pendingSuffix.length).trimStart();
           pendingSuffix = null;
-          consumedOnLine = true;
           continue;
         }
         return fail(`suffix mismatch: expected '${pendingSuffix}' got '${text.slice(0, 24)}'`);
@@ -502,22 +399,29 @@ export function matchParagraph(
       if (ti >= tokens.length) return fail(`extra line text: '${text.slice(0, 24)}'`);
       const tok = tokens[ti];
       if (tok.kind === 'hard') {
-        return fail('hard break did not end the physical line');
+        ti++;
+        continue;
       }
       if (tok.text === undefined) {
-        const binding = atomLines?.get(ti);
-        if (binding === undefined) {
-          return fail(`atom@${ti} has no compiled line ownership`);
+        // Unknown-text atom (math): consume up to the next known token.
+        let nj = ti + 1;
+        while (nj < tokens.length && tokens[nj].kind === 'atom' && tokens[nj].text === undefined) nj++;
+        const next = nj < tokens.length && tokens[nj].kind !== 'hard' ? tokens[nj] : null;
+        if (!next || next.text === undefined) {
+          text = '';
+          ti = next ? ti + 1 : tokens.length;
+          continue;
         }
-        if (binding !== li) {
-          return fail(
-            binding < li
-              ? `atom@${ti} belongs to an already-consumed line`
-              : `atom@${ti} belongs to a later line`,
-          );
+        const needle = (next.spaceBefore ? ' ' : '') + next.text;
+        const idx = (text + ' ').indexOf(needle);
+        if (idx < 0) {
+          // Next known token is on a later line: this atom owns the rest.
+          text = '';
+          ti++;
+          continue;
         }
+        text = text.slice(idx).trimStart();
         ti++;
-        consumedOnLine = true;
         continue;
       }
       // Known text (word or atom with known rendering).
@@ -533,7 +437,6 @@ export function matchParagraph(
         if (after === '' || after.startsWith(' ') || glueNext) {
           text = after.trimStart() === after && after !== '' && !after.startsWith(' ') ? after : after.trimStart();
           ti++;
-          consumedOnLine = true;
           continue;
         }
       }
@@ -548,7 +451,6 @@ export function matchParagraph(
           pendingSuffix = w.slice(bare.length + dash);
           ti++;
           text = '';
-          consumedOnLine = true;
           brokeWithHyphen = true;
           continue;
         }
@@ -556,42 +458,13 @@ export function matchParagraph(
       return fail(`token mismatch: expected '${w}' got '${text.slice(0, 24)}'`);
     }
 
-    // A paint-only atom can be the final item on a physical line, so the
-    // selection stream may become empty before the token is encountered.
-    // Advance only atoms whose compiled baseline names this exact line.
-    // A hyphenated word is not complete until its suffix is consumed on a
-    // later physical line. Source that follows the word cannot move ahead of
-    // that suffix merely because it has no selection text of its own.
-    if (pendingSuffix === null) {
-      while (ti < tokens.length) {
-        const tok = tokens[ti];
-        if (tok.kind !== 'atom' || tok.text !== undefined) break;
-        const binding = atomLines?.get(ti);
-        if (binding === undefined) return fail(`atom@${ti} has no compiled line ownership`);
-        if (binding > li) break;
-        if (binding < li) return fail(`atom@${ti} belongs to an already-consumed line`);
-        ti++;
-        consumedOnLine = true;
-      }
-    }
-
-    // A source hard break is the physical boundary just consumed. Advance it
-    // only after this line is empty; skipping it while text remains would
-    // certify an impossible merged line. The native hard_break node already
-    // paints the boundary, so do not emit a second forced-break decoration.
-    let endedByHard = false;
-    if (pendingSuffix === null && ti < tokens.length && tokens[ti].kind === 'hard') {
-      if (!consumedOnLine) return fail('hard break has no preceding physical-line content');
-      ti++;
-      endedByHard = true;
-    }
-
     // Line consumed. If the paragraph continues, this boundary is a break.
     const more = ti < tokens.length || pendingSuffix !== null;
-    if (more && !brokeWithHyphen && !endedByHard) {
-      if (!consumedOnLine) return fail('empty line inside paragraph');
+    if (more && !brokeWithHyphen) {
+      if (ti === lineStartTi) return fail('empty line inside paragraph');
       const prev = tokens[ti - 1];
-      breaks.push({ at: prev.end, hyphen: false });
+      // Hard breaks cut by themselves — no forced break needed.
+      if (prev.kind !== 'hard') breaks.push({ at: prev.end, hyphen: false });
     }
     li++;
     if (!more) break;

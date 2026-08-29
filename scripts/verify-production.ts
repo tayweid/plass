@@ -67,8 +67,7 @@ assert(
   'bundled assets must use host-independent relative paths',
 );
 
-const assetNames = readdirSync(join(dist, 'assets'));
-const workerName = assetNames.find((name) => /^typst-compiler\.worker-.*\.js$/.test(name));
+const workerName = readdirSync(join(dist, 'assets')).find((name) => /^typst-compiler\.worker-.*\.js$/.test(name));
 assert(workerName, 'isolated Typst worker artifact is missing');
 const worker = readFileSync(join(dist, 'assets', workerName), 'utf8');
 assert(worker.includes('../fonts/'), 'worker font base does not escape the assets directory');
@@ -76,30 +75,13 @@ assert(worker.includes(TYPST_PACKAGE_POLICY.url), 'worker does not contain the e
 assert(worker.includes(TYPST_PACKAGE_POLICY.sha256), 'worker does not contain the pinned package digest');
 assert(worker.includes('Dynamic JavaScript construction is disabled'), 'worker fail-closed Function shim is missing');
 
+const sidecarName = readdirSync(join(dist, 'assets')).find((name) => /^typeset_sidecar_bg-.*\.wasm$/.test(name));
+assert(sidecarName, 'line-breaking sidecar WASM artifact is missing');
 assert(
-  !assetNames.some((name) => /^typeset_sidecar_bg-.*\.wasm$/.test(name)),
-  'retired line-breaking sidecar WASM must not ship in the production bundle',
-);
-const shippedJavaScript = assetNames
-  .filter((name) => name.endsWith('.js'))
-  .map((name) => readFileSync(join(dist, 'assets', name), 'utf8'))
-  .join('\n');
-assert(
-  !shippedJavaScript.includes('prefix-spacer-mismatch'),
-  'research-only suffix pagination must not ship in the production bundle',
-);
-assert(
-  !shippedJavaScript.includes('layout:paragraphs:'),
-  'the frozen paragraph-fragment Typst oracle must not ship in the production bundle',
-);
-assert(
-  !shippedJavaScript.includes('research fragment compile failed') &&
-    !shippedJavaScript.includes('research Typst query failed'),
-  'low-level research Typst tools must not ship in the production bundle',
-);
-assert(
-  !shippedJavaScript.includes('dev:differ:'),
-  'the differential research harness must not ship in the production bundle',
+  readFileSync(join(dist, 'assets', sidecarName)).equals(
+    readFileSync(join(process.cwd(), 'sidecar/pkg/typeset_sidecar_bg.wasm')),
+  ),
+  'built sidecar WASM differs from the provenance-checked source artifact',
 );
 
 console.log('production security artifact verified');

@@ -6,11 +6,11 @@ execute active content, leak local data, or silently destroy work.
 
 ## Development setup
 
-Use Node.js 22 and install exactly from the lockfile. The production editor no
-longer ships or loads the historical line-breaking sidecar. Rust 1.97.0,
-Cargo, and wasm-pack 0.15.0 are needed only when explicitly exercising or
-changing that opt-in differential harness. The first Cargo-backed check may
-need network access to populate the local crate cache.
+Use Node.js 22 and install exactly from the lockfile. Rust 1.97.0 and Cargo
+are also required: the checked WASM sidecar has Rust source tests, and license
+verification resolves its locked crate graph. Rebuilding that artifact also
+requires wasm-pack 0.15.0. The first Cargo-backed check may need network access
+to populate the local crate cache.
 
 ```sh
 npm ci
@@ -30,8 +30,8 @@ npm run build
 npm run verify:production
 ```
 
-For any change under `sidecar/`, or when certifying the optional differential
-harness, also run the pinned Rust audit and native sidecar tests:
+For a release or any change under `sidecar/`, also run the pinned Rust audit
+and native sidecar tests:
 
 ```sh
 cargo install cargo-audit --locked --version 0.22.2
@@ -88,10 +88,9 @@ check, TypeScript check, and Vite production build. Production verification
 must run after that build because it inspects `dist/` rather than source files.
 
 The GitHub **Verify and deploy** workflow pins Node and Rust, then runs the npm
-and historical-sidecar Rust audits, sidecar source tests, license, unit,
-layout, browser, build, and production-artifact gates. Production verification
-also rejects any accidental sidecar WASM artifact. The advisory
-sidecar-reproducibility check warns rather than blocks. CodeQL runs separately on
+and sidecar Rust audits, sidecar source tests, license, unit, layout, browser,
+build, and production-artifact gates, plus an advisory sidecar-reproducibility
+check that warns rather than blocks. CodeQL runs separately on
 pushes, pull requests from this repository, a weekly schedule, and manual
 dispatches. Run the same gates locally; a remote green check is not a
 substitute for verifying the exact release worktree.
@@ -104,52 +103,21 @@ Layout changes carry a stricter contract than ordinary UI changes:
   algorithmic references. Do not mix changes to either file into a renderer,
   cache, scheduling, or pagination refactor. A deliberate upstream-port change
   requires its own review and regenerated differential evidence.
-- Typst's whole-document compile is the only production line-breaking
-  authority. The local port may compare results in an explicitly invoked test
-  harness, but it may not be imported, loaded, or used as a live fallback.
-  Pending, failed, and safely-unmappable blocks stay browser-native.
-- `PageOracle` is the only product component allowed to publish settled line
-  or page decisions. It derives body, caption, footnote, and page mappings from
-  one immutable full-document publication; the paragraph-fragment
-  `TypstOracle` is a test/research utility only.
-- Layout, math, bibliography, executable-embed previews, and supported fixed
-  inline Typst atoms must acquire that publication through the per-editor
-  document broker. A document revision plus asset epoch admits at most one
-  live compile, and one consumer's cancellation must not discard work another
-  still needs. Do not reintroduce per-formula or per-bibliography fragment
-  compiles.
-- The shared worker task must compile one vector artifact, run every region
-  query against that artifact's still-live world, and render that same vector.
-  A query pass followed by a second main-file SVG compile is not one atomic
-  publication, even if its source string is identical.
-- Publication fan-out must index document positions once per immutable
-  document/publication. Do not replace it with one `doc.descendants` traversal
-  per node view or listener; the browser lifecycle gate intentionally registers
-  hundreds of consumers to keep application O(document + consumers).
-- Exact line and page decorations may publish only after every live
-  geometry-carrying view has applied the same immutable publication. Keep this
-  readiness barrier object-identity based; a parsed PageOracle result beside a
-  pending or last-good crop is not an exact editor surface.
-- A normal edit must remove touched forced-line presentation before its first
-  paint, then install at most one settled line-decoration update. A matching
-  snapshot result is a no-op, not a second visual correction.
-- Compiler work is bounded, priority-aware, and latest-revision-wins. Stale or
-  canceled work may neither publish nor block a final Proof/PDF action behind
-  disposable background work.
-- Contextual caption/footnote boundary markers must be zero-flow. All internal
-  preview instrumentation must be collision-resistant and removed from the
-  sanitized preview asset; `.typ`, Proof, and PDF must continue through the
-  uninstrumented prepared-source boundary.
+- The live port and compiled Typst oracle must choose the same ordered break
+  offsets and hyphen kinds for every certified font and supported content
+  context. Browser-greedy breaks, frozen-prefix approximations, or stability
+  costs must never replace the selected exact breaks.
+- A normal edit installs at most one line-decoration update. A matching oracle
+  result must be a no-op, not a second visual correction.
 - Line breaks, spacing, hyphens, and page gaps stay presentation-only. They may
   not enter document content, undo history, clipboard data, accessibility
   text, persistence, or exported source.
 - Pagination optimizations must fail closed on structural edits, inline atoms,
   footnotes, tables, lists, changed settings or geometry, invalid markers, and
-  stale asynchronous results. "Fail closed" means clearing page markers,
-  spacers, sheets, and folios and entering labelled continuous mode; it never
-  means invoking a browser-geometry page planner. Mapped starts may be held
-  only with explicit provenance from the last exact compile, only while its
-  replacement is pending, and only after stale-geometry validation.
+  stale asynchronous results. Suffix pagination currently runs as a
+  full-versus-suffix shadow only: the full result is always installed. Do not
+  promote the suffix candidate until a production-mode exact-source browser
+  fixture proves zero corrections and the promotion has an explicit review.
 
 For any layout change, in addition to the full command set above:
 
@@ -161,70 +129,29 @@ For any layout change, in addition to the full command set above:
    ```
 
 2. Run `npm run test:layout` for port smoke and font certification, `npm test`
-   for pure layout contracts, and `npm run test:browser` for live/PageOracle,
-   shared-publication, decoration, pagination, selection, undo, and
-   writing-stability behavior.
-3. Confirm the full-document snapshot belongs to the latest serialized source,
-   page starts and line ranges retain their signatures, and the first-paint and
-   queue counters do not exceed their checked-in budgets. Do not loosen a
-   tolerance or update a baseline without attaching the before/after fixture
-   and explaining the numerical cause.
-
-## Structured editing and Typst escape hatches
-
-- A table is one native ProseMirror tree of rows and rich cells. Extend that
-  model and its direct Typst serializer; do not add a compiled table clone,
-  modal string grid, or second source of cell truth.
-- Ordinary language-labelled code blocks are inert, including a `typst`
-  fence. Only the dedicated `typst_embed` node executes Typst. Keep legacy
-  migration keyed to the exact historical `typst-raw` marker so opening a
-  normal code sample can never make it executable. Keep ordinary code visually
-  plain in both native editing and Proof: the generated unlabelled `#raw` plus
-  inert `typeset:code-block-params` comment is its lossless round-trip boundary.
-- A Typst embed's editable source remains visible, and its preview is a crop
-  from the shared whole-document publication so earlier definitions, settings,
-  counters, fonts, and assets are in scope. Do not reintroduce per-embed
-  synthetic compiles.
-- Environment-mutating or out-of-flow embeds (`#set`, `#show`, include/eval,
-  place/move, explicit page/column breaks, and state/counter updates) are
-  Proof-only layout boundaries. Preserve and execute them exactly in Proof/PDF,
-  keep their source editable, and label the live surface continuous with the
-  blocker reason. Never certify later native DOM against effects it does not
-  paint.
-- Inline Typst support is deliberately classified: one balanced fixed atom may
-  use a shared-publication crop, and canonical `#h(1fr)` may consume compiled
-  line slack. Everything else stays lossless and visibly unsupported in the
-  editor while remaining exact in `.typ`, Proof, and PDF; never approximate or
-  silently discard arbitrary inline source.
-- Committed math and a populated References block obtain their exact ink and
-  geometry from the shared publication. KaTeX and the semantic bibliography
-  DOM are immediate, disposable fallbacks; neither may become settled width,
-  line, page, or export authority.
-- A bounded preview region that crosses Typst pages cannot be represented as
-  one live atomic crop. Retain the current publication, show an explicit
-  Proof-only state with editable/semantic fallback, and let the independent
-  page mapper fail continuous when the internal boundary is unrepresentable.
-  Never paint a page-spanning overlay or charge invented height to document
-  flow merely to make the crop look present.
+   for pure layout contracts, and `npm run test:browser` for live/oracle,
+   decoration, pagination, selection, undo, and writing-stability behavior.
+3. Confirm the compiled oracle causes no correction in certified cases, page
+   starts and line ranges retain their signatures, and performance counters do
+   not exceed their checked-in budgets. Do not loosen a tolerance or update a
+   baseline without attaching the before/after fixture and explaining the
+   numerical cause.
 
 ## Supported-font contract
 
 New Computer Modern is currently the only exact, selectable body family. Its
 regular, italic, bold, and bold-italic faces are explicitly registered for the
-browser and Typst compiler through `src/font-registry.ts`; the optional
-differential sidecar retains matching fixtures for research tests. Other
-bundled or historical font names are compatibility inputs, not fidelity
+browser, Typst compiler, and shaping sidecar through `src/font-registry.ts`.
+Other bundled or historical font names are compatibility inputs, not fidelity
 claims: Plass preserves the stored preference but `effectiveFont` resolves it
 to New Computer Modern consistently for live layout, CSS, compilation, and
 export.
 
 Do not expose another family in the selector merely because its files are
 bundled. A new public family needs all four faces from one licensed family,
-matching browser/compiler identities, notices, registry tests, full-document
-snapshot coverage, Proof/PDF comparison, and browser coverage. The optional
-port fixtures may provide additional evidence but are not a production
-dependency. A family may be marked `exact` and `selectable` only after every
-required layer passes.
+matching browser/compiler/sidecar identities, notices, registry tests, port
+smoke coverage, font certification, and browser differential coverage. It may
+be marked `exact` and `selectable` only after every layer passes.
 
 ## Public-release maintainer checklist
 
@@ -244,16 +171,11 @@ For each release, also confirm:
 - the built preview passes document creation, open/save and external-conflict
   handling, project-image reload, remote-image consent, Typst round-trip, PDF
   export, refresh/session recovery, and supported-browser smoke tests;
-- the mixed-document soak, large-document typing budgets, compile preemption,
-  publication lifecycle/readiness, Chromium/Firefox/WebKit core flow, and real
-  Proof-versus-downloaded-PDF raster comparison pass without relaxed budgets;
 - `npm run verify:production` passes after the final build, and the deployed
   HTTPS site is checked again for its CSP, compiler worker, startup, and PDF
   export; and
-- the production import graph contains no local or suffix pagination planner
-  and no paragraph-fragment layout authority; broker-sharing and PageOracle
-  failure/recovery browser tests prove that stale page artifacts do not
-  resurrect before a new exact success.
+- suffix pagination remains shadow-gated unless the exact-source production
+  promotion requirement above has been satisfied.
 
 ## Change discipline
 

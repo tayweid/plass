@@ -175,17 +175,6 @@ test('hostile bibliography values never become autocomplete markup', async ({ pa
 test('compiled bibliography SVG cannot restore a dangerous URL', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
-    const sources = new Map<string, Promise<string>>();
-    const createObjectURL = URL.createObjectURL.bind(URL);
-    URL.createObjectURL = ((object: Blob | MediaSource) => {
-      const url = createObjectURL(object);
-      if (object instanceof Blob && /svg/i.test(object.type)) sources.set(url, object.text());
-      return url;
-    }) as typeof URL.createObjectURL;
-    (window as Window & { __capturedSvgSource?: (url: string) => Promise<string> })
-      .__capturedSvgSource = async (url) => await sources.get(url) ?? '';
-  });
-  await page.evaluate(() => {
     const app = window as typeof window & { view: import('prosemirror-view').EditorView };
     const { state } = app.view;
     const citation = state.schema.nodes.citation.create({ key: 'safe' });
@@ -201,33 +190,19 @@ test('compiled bibliography SVG cannot restore a dangerous URL', async ({ page }
 
   const ink = page.locator('.bib-ink');
   await expect(ink.locator('svg')).toBeVisible({ timeout: 20_000 });
-  // Bibliography paint is now a viewport onto one sanitized whole-document
-  // blob, not a copied subtree. Inspect that shared asset itself so this gate
-  // still reaches Typst's real glyph/link markup instead of merely checking
-  // the inert outer <image> element.
-  const publication = await ink.locator('image[data-exact-document-publication]').evaluate(async (image) => {
-    const href = image.getAttribute('href') ?? '';
-    const source = await (window as Window & {
-      __capturedSvgSource?: (url: string) => Promise<string>;
-    }).__capturedSvgSource?.(href) ?? '';
-    const svg = new DOMParser().parseFromString(source, 'image/svg+xml').documentElement;
-    return {
-      href,
-      hasGlyphUse: svg.querySelectorAll('use').length > 0,
-      active: [...svg.querySelectorAll('*')].flatMap((element) =>
-        element.getAttributeNames()
-          .filter((name) => name.startsWith('on') || /^(?:href|xlink:href)$/i.test(name))
-          .map((name) => `${name}=${element.getAttribute(name)}`),
-      ),
-    };
-  });
-  expect(publication.href).toMatch(/^blob:/);
-  expect(publication.hasGlyphUse).toBe(true);
-  expect(publication.active.some((attr) => /javascript:/i.test(attr))).toBe(false);
-  expect(publication.active.some((attr) => /^on/i.test(attr))).toBe(false);
+  await expect(ink.locator('use')).not.toHaveCount(0);
+  const active = await ink.locator('*').evaluateAll((els) =>
+    els.flatMap((el) =>
+      el.getAttributeNames()
+        .filter((name) => name.startsWith('on') || /^(?:href|xlink:href)$/i.test(name))
+        .map((name) => `${name}=${el.getAttribute(name)}`),
+    ),
+  );
+  expect(active.some((attr) => /javascript:/i.test(attr))).toBe(false);
+  expect(active.some((attr) => /^on/i.test(attr))).toBe(false);
 });
 
-test('Typst embed previews use the sanitized SVG boundary', async ({ page }) => {
+test('raw Typst previews use the sanitized SVG boundary', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const app = window as typeof window & { view: import('prosemirror-view').EditorView };
@@ -239,7 +214,7 @@ test('Typst embed previews use the sanitized SVG boundary', async ({ page }) => 
     app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, raw));
   });
 
-  const render = page.locator('.ts-typst-preview-render');
+  const render = page.locator('.ts-raw-render');
   await expect(render.locator('svg')).toHaveCount(1, { timeout: 20_000 });
   const active = await render.locator('*').evaluateAll((elements) =>
     elements.flatMap((element) =>
@@ -266,14 +241,14 @@ test('compiler package policy makes only one pinned integrity-checked request', 
   await page.goto('/?new=1');
 
   const unsupported = await page.evaluate(async () => {
-    const { compileSvg } = await import('/src/research/typst-tools.ts');
+    const { compileSvg } = await import('/src/pdf.ts');
     return compileSvg('#import "@preview/not-a-real-package:9.9.9": *\n[probe]');
   });
   expect(unsupported).toBeNull();
   expect(packageRequests).toEqual([]);
 
   const tampered = await page.evaluate(async () => {
-    const { compileSvg } = await import('/src/research/typst-tools.ts');
+    const { compileSvg } = await import('/src/pdf.ts');
     return compileSvg('#import "@preview/mitex:0.2.5": mitex\n#mitex(`x`)');
   });
   expect(tampered).toBeNull();
@@ -300,10 +275,10 @@ test('compiler timeout circuit blocks automatic retries until a document edit re
     const watchdogMs = performance.now() - started;
     window.clearInterval(timer);
 
-    // The low-level error-erasing SVG/query wrappers must fail fast while the
-    // circuit is open. The already-scheduled whole-document publication must
-    // do the same without feeding another worker.
-    const { compileSvg, compileTyp, typstQuery } = await import('/src/research/typst-tools.ts');
+    // compileSvg is the error-erasing wrapper used by raw previews and math
+    // ink. It must fail fast while the circuit is open, and the raw node's
+    // own delayed retry must do the same without creating or feeding a worker.
+    const { compileSvg, compileTyp, typstQuery } = await import('/src/pdf.ts');
     const beforeRetry = testCompilerLifecycleStats();
     const blockedSvg = await compileSvg('[automatic retry must stay blocked]');
     const blockedQuery = await typstQuery('[automatic query must stay blocked]', 'metadata');
@@ -386,29 +361,6 @@ test('an explicit PDF export resets an open compiler circuit', async ({ page }) 
   expect(result).toEqual({ wasOpen: true, reset: true, postedFreshWork: true, exported: true });
 });
 
-test('an exact proof resets an open compiler circuit and runs fresh final work', async ({ page }) => {
-  await page.goto('/?new=1');
-  const result = await page.evaluate(async () => {
-    const app = window as typeof window & { view: import('prosemirror-view').EditorView };
-    const { testCompilerLifecycleStats, testCompilerTimeoutCircuitBreaker } =
-      await import('/src/typst-worker-client.ts');
-    await testCompilerTimeoutCircuitBreaker();
-    const before = testCompilerLifecycleStats();
-
-    const { compileDocProofSvg } = await import('/src/pdf.ts');
-    const svg = await compileDocProofSvg(app.view.state.doc);
-    const after = testCompilerLifecycleStats();
-    return {
-      wasOpen: before.circuitOpen,
-      reset: !after.circuitOpen,
-      epochAdvanced: after.epoch === before.epoch + 1,
-      rendered: svg?.includes('<svg') ?? false,
-    };
-  });
-
-  expect(result).toEqual({ wasOpen: true, reset: true, epochAdvanced: true, rendered: true });
-});
-
 test('an old compiler timeout preserves work from a newer document epoch', async ({ page }) => {
   await page.goto('/?new=1');
   const result = await page.evaluate(async () => {
@@ -457,14 +409,11 @@ test('an old compiler timeout preserves work from a newer document epoch', async
   });
 });
 
-test('native table edits reset a timed-out compiler without mounting a compiled card', async ({ page }) => {
+test('table-card open and local edits authorize fresh compiler epochs', async ({ page }) => {
   await page.goto('/?new=1');
   const result = await page.evaluate(async () => {
     const app = window as typeof window & { view: import('prosemirror-view').EditorView };
-    // Use the view's schema instance. Vite HMR can give a dynamic import a
-    // second NodeType identity, which ProseMirror correctly refuses to splice
-    // into the live document even when the names match.
-    const { schema } = app.view.state;
+    const { schema } = await import('/src/schema.ts');
     const cell = (text: string) => schema.nodes.table_cell.create(
       null,
       schema.nodes.paragraph.create(null, schema.text(text)),
@@ -478,12 +427,13 @@ test('native table edits reset a timed-out compiler without mounting a compiled 
 
     const { testCompilerLifecycleStats, testCompilerTimeoutCircuitBreaker } =
       await import('/src/typst-worker-client.ts');
-    const { focusTable } = await import('/src/table-editor.ts');
-    focusTable(app.view, 0);
-    const nativeTablesBefore = document.querySelectorAll('.ProseMirror table').length;
+    const { openTableEditor } = await import('/src/table-editor.ts');
+    const beforeOpen = testCompilerLifecycleStats();
+    openTableEditor(app.view, 0);
+    const afterOpen = testCompilerLifecycleStats();
 
-    // Let document-level layout work settle before deterministically opening
-    // the circuit. A native table has no table-local preview compiler.
+    // Let the document and card's legitimate initial previews settle before
+    // deterministically opening the circuit.
     await new Promise((resolve) => window.setTimeout(resolve, 50));
     for (let i = 0; i < 100; i++) {
       const stats = testCompilerLifecycleStats();
@@ -491,30 +441,27 @@ test('native table edits reset a timed-out compiler without mounting a compiled 
       await new Promise((resolve) => window.setTimeout(resolve, 50));
     }
     await testCompilerTimeoutCircuitBreaker();
-    const beforeEdit = testCompilerLifecycleStats();
-    const editState = app.view.state;
-    app.view.dispatch(editState.tr.insertText('x', editState.selection.from));
-    const afterEdit = testCompilerLifecycleStats();
+    const beforeInput = testCompilerLifecycleStats();
+    const caption = document.querySelector<HTMLInputElement>('.table-card-caption');
+    if (!caption) throw new Error('Table-card caption input was not mounted');
+    caption.value = 'Fresh local input';
+    caption.dispatchEvent(new Event('input', { bubbles: true }));
+    const afterInput = testCompilerLifecycleStats();
+    document.querySelector<HTMLButtonElement>('.table-card-overlay .bib-cancel')?.click();
 
     return {
-      circuitWasOpen: beforeEdit.circuitOpen,
-      editAdvanced: afterEdit.epoch === beforeEdit.epoch + 1,
-      editReset: !afterEdit.circuitOpen,
-      nativeTables: document.querySelectorAll('.ProseMirror table').length,
-      nativeTablesBefore,
-      topNode: app.view.state.doc.firstChild?.type.name ?? '',
-      compiledTableSurfaces: document.querySelectorAll('.ProseMirror table svg, .ts-table-block, .table-card-overlay').length,
+      openAdvanced: afterOpen.epoch === beforeOpen.epoch + 1,
+      circuitWasOpen: beforeInput.circuitOpen,
+      inputAdvanced: afterInput.epoch === beforeInput.epoch + 1,
+      inputReset: !afterInput.circuitOpen,
     };
   });
 
   expect(result).toEqual({
+    openAdvanced: true,
     circuitWasOpen: true,
-    editAdvanced: true,
-    editReset: true,
-    nativeTables: 1,
-    nativeTablesBefore: 1,
-    topNode: 'table',
-    compiledTableSurfaces: 0,
+    inputAdvanced: true,
+    inputReset: true,
   });
 });
 

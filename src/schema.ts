@@ -1,4 +1,4 @@
-import { Fragment, Schema, type Node as PMNode, type NodeSpec } from 'prosemirror-model';
+import { Schema, type NodeSpec } from 'prosemirror-model';
 import { schema as base } from 'prosemirror-schema-basic';
 import { addListNodes } from 'prosemirror-schema-list';
 import { tableNodes } from 'prosemirror-tables';
@@ -146,11 +146,12 @@ const figure: NodeSpec = {
   ],
 };
 
-// Inline Typst is a lossless escape hatch, not a miniature free-form compiler.
-// The node view classifies its source conservatively: one balanced fixed atom
-// is cropped from the brokered whole-document publication, canonical
-// `#h(1fr)` receives the already-compiled line slack, and every unsupported
-// form stays visible as source. Serialization always emits the original text.
+// A footnote: an inline marker whose editable body is rendered at the bottom
+// Inline raw Typst: an escape hatch mid-sentence, the inline twin of the
+// raw-Typst island block. Renders as its compiled self; the source is the
+// document's truth and exports verbatim. `#h(1fr)` and other fr content is
+// FLEXIBLE — the paginator measures the line's slack and hands it over
+// (see inline-raw.ts), the one atom whose width layout decides.
 const typstInline: NodeSpec = {
   group: 'inline',
   inline: true,
@@ -165,48 +166,8 @@ const typstInline: NodeSpec = {
   toDOM: (node) => ['span', { 'data-typst': node.attrs.src, class: 'ts-inline-raw' }, node.attrs.src],
 };
 
-/**
- * Executable Typst is deliberately not a code-block mode. Its text remains
- * normal ProseMirror content (selection, IME, undo and clipboard all keep
- * working), while its node view may render an adjacent crop from the shared
- * whole-document publication.
- * Static DOM serialization keeps the source visible even when that node view
- * is not registered (clipboard, tests, or a reduced editor build).
- */
-const typstEmbed: NodeSpec = {
-  group: 'block',
-  content: 'text*',
-  marks: '',
-  code: true,
-  defining: true,
-  isolating: true,
-  whitespace: 'pre',
-  parseDOM: [
-    {
-      tag: 'div[data-typst-embed]',
-      contentElement: 'code[data-typst-source]',
-    },
-  ],
-  toDOM: () => [
-    'div',
-    { 'data-typst-embed': '', class: 'ts-typst-embed' },
-    ['pre', { class: 'ts-typst-source' }, ['code', { 'data-typst-source': '' }, 0]],
-    [
-      'div',
-      {
-        'data-typst-preview': '',
-        'data-preview-state': 'idle',
-        class: 'ts-typst-preview',
-        contenteditable: 'false',
-      },
-    ],
-  ],
-};
-
-// A footnote is an inline marker with an editable body. Exact PageOracle
-// geometry lets the editor position the body at the bottom of the marker's
-// page; continuous mode leaves it inline and visible. The superscript number
-// is painted by the numbering plugin, never stored.
+// of the page the marker lands on (positioned by the paginator). The
+// superscript number is painted by the numbering plugin, never stored.
 const footnote: NodeSpec = {
   group: 'inline',
   inline: true,
@@ -275,12 +236,12 @@ const tables = tableNodes({
 const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
   .append(tables)
   // Paragraphs may be kept together across page breaks (block(breakable:
-  // false) on export; the exact page-map translator treats them as atomic).
+  // false) on export; the paginator treats them as atomic).
   .update('paragraph', {
     ...base.spec.nodes.get('paragraph')!,
     // keep: held together across page breaks. align: null = justified body
     // text (the default); 'center'/'right' lay out via the browser (like
-    // table cells) — short display lines, not PageOracle-mapped prose.
+    // table cells) — short display lines, not oracle-broken prose.
     attrs: { keep: { default: false }, align: { default: null } },
     parseDOM: [
       {
@@ -378,17 +339,14 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
       bib: { default: null },
     },
   })
-  // Language/params tag on ordinary, inert code blocks. `typst-raw` is kept
-  // only as a persisted-document compatibility marker; the migration below
-  // converts that exact old marker to typst_embed. A normal `typst` language
-  // fence remains code and is never executable.
+  // Language/params tag on code blocks; 'typst-raw' marks a raw-Typst island
+  // that the exporter passes through verbatim.
   .update('code_block', {
     ...base.spec.nodes.get('code_block')!,
     attrs: { params: { default: '' } },
   })
   .addToEnd('math_inline', mathInline)
   .addToEnd('typst_inline', typstInline)
-  .addToEnd('typst_embed', typstEmbed)
   .addToEnd('math_display', mathDisplay)
   .addToEnd('figure', figure)
   .addToEnd('footnote', footnote)
@@ -418,35 +376,3 @@ const marks = base.spec.marks.addToEnd('strike', {
 });
 
 export const schema = new Schema({ nodes, marks });
-
-/** Exact old marker used by persisted Plass documents before embeds had a
- * dedicated node type. Do not broaden this to `typst`: that is an ordinary
- * language-labelled code fence and must remain inert. */
-export const LEGACY_TYPST_RAW_PARAMS = 'typst-raw';
-
-export function isLegacyTypstRawBlock(node: PMNode): boolean {
-  return node.type.name === 'code_block' && node.attrs.params === LEGACY_TYPST_RAW_PARAMS;
-}
-
-/** Pure, lossless migration used by startup/plugin code and tests. Unchanged
- * subtrees retain identity; only explicit legacy raw blocks change type. */
-export function migrateLegacyTypstEmbeds(doc: PMNode): PMNode {
-  let changed = false;
-  const migrate = (node: PMNode): PMNode => {
-    if (isLegacyTypstRawBlock(node)) {
-      changed = true;
-      return schema.nodes.typst_embed.create(null, node.content);
-    }
-    if (node.isLeaf) return node;
-    let childChanged = false;
-    const children: PMNode[] = [];
-    node.forEach((child) => {
-      const migrated = migrate(child);
-      childChanged ||= migrated !== child;
-      children.push(migrated);
-    });
-    return childChanged ? node.copy(Fragment.fromArray(children)) : node;
-  };
-  const migrated = migrate(doc);
-  return changed ? migrated : doc;
-}

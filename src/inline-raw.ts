@@ -1,31 +1,30 @@
-// Inline Typst is an escape hatch, not a second compiler world.
+// Inline raw Typst: `#h(1fr)`, `#box(width: 2in, line(length: 100%))`, or
+// any other Typst expression, mid-sentence. The node stores the source; the
+// view shows the compiled result, so the document reads as what it prints.
 //
-// Conservative fixed atoms are boxed and tagged only in the editor's shared
-// whole-document SVG publication, then cropped from those exact pixels here.
-// Canonical #h(1fr) is invisible and receives the line's compiled slack.
-// Everything else stays byte-for-byte source and is shown as an explicit
-// "Exact in Proof" chip; arbitrary code is never reinterpreted or guessed.
+// Two width regimes:
+//
+//   FIXED — the fragment has an intrinsic size (a 2in box, a symbol, #h(1em)).
+//   It compiles in an auto-width page and reports its own width, exactly like
+//   inline math ink.
+//
+//   FLEXIBLE (fr) — `1fr` means "absorb the leftover space on this line", so
+//   the width is a LAYOUT result, not a property of the fragment. The
+//   breaker treats these atoms as zero-width (as Typst does), the line's
+//   slack is handed back here by the typeset plugin, and the fragment
+//   recompiles in a page of exactly that width — which is how a fill RULE
+//   ends up the right length instead of collapsing to nothing.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { NodeSelection } from 'prosemirror-state';
 import type { EditorView, NodeView } from 'prosemirror-view';
+import { mountTypstSvg } from './safe-svg';
 import { schema } from './schema';
-import type { DocSettings } from './settings';
-import { textSetLine } from './typ-serializer';
-import {
-  documentPreviewManagerFor,
-  type ManagedDocumentPreviewView,
-  type TypstEmbedPreviewManager,
-} from './raw-preview';
-import type { TypstDocumentSvgPublication } from './typst-document-publication';
-import { classifyTypstInline } from './typst-inline-regions';
-
-const SVG_NS = 'http://www.w3.org/2000/svg';
-const PT_TO_PX = 4 / 3;
+import { getSettings } from './settings';
 
 /** Does this source flex to fill the line? (Typst's `fr` unit.) */
 export function isFlexible(src: string): boolean {
-  return classifyTypstInline(src).kind === 'flexible';
+  return /\d*\.?\d+\s*fr\b/.test(src);
 }
 
 /** The layout layer's question: is this child an atom whose width the LINE
@@ -67,21 +66,51 @@ export function getFill(node: PMNode): number | undefined {
   return fills.get(node);
 }
 
-/** Use the same normalized font decision as whole-document Proof/PDF. Stored
- * legacy or uncertified preferences never interpolate unsafe names. Retained
- * as a small public compatibility helper; product inline views no longer
- * compile fragments or consume this preamble. */
-export function inlineRawPreamble(settings: DocSettings): string {
-  return textSetLine(settings);
+// ---------- compile cache ----------
+
+const cache = new Map<string, string | 'pending' | 'failed'>();
+const CACHE_MAX = 64;
+
+function preamble(view: EditorView): string {
+  const s = getSettings(view.state);
+  return `#set text(size: ${s.sizePt}pt, font: "${s.font}", hyphenate: ${s.hyphenate})\n`;
 }
 
-export class TypstInlineView implements NodeView, ManagedDocumentPreviewView {
+/** Compile one inline fragment. `widthPt` null = auto (intrinsic) width. */
+async function compile(view: EditorView, src: string, widthPt: number | null): Promise<string | null> {
+  const { compileSvg } = await import('./pdf');
+  const page = widthPt === null
+    ? '#set page(width: auto, height: auto, margin: 0pt)'
+    : `#set page(width: ${widthPt.toFixed(2)}pt, height: auto, margin: 0pt)`;
+  return compileSvg(`${page}\n${preamble(view)}\n${src}\n`);
+}
+
+function cachedCompile(view: EditorView, src: string, widthPt: number | null, done: () => void): string | null {
+  const key = `${widthPt === null ? 'auto' : widthPt.toFixed(1)}|${preamble(view)}|${src}`;
+  const hit = cache.get(key);
+  if (typeof hit === 'string' && hit !== 'pending' && hit !== 'failed') return hit;
+  if (hit === 'pending' || hit === 'failed') return null;
+  cache.set(key, 'pending');
+  if (cache.size > CACHE_MAX) {
+    for (const k of cache.keys()) {
+      if (cache.size <= CACHE_MAX) break;
+      if (cache.get(k) !== 'pending') cache.delete(k);
+    }
+  }
+  void compile(view, src, widthPt)
+    .then((svg) => {
+      cache.set(key, svg ?? 'failed');
+      if (svg) done();
+    })
+    .catch(() => cache.set(key, 'failed'));
+  return null;
+}
+
+export class TypstInlineView implements NodeView {
   dom: HTMLElement;
   private destroyed = false;
   private unsubscribe: () => void;
-  private manager: TypstEmbedPreviewManager;
-  private renderedResult: TypstDocumentSvgPublication | null = null;
-  private regionKey = '';
+  private shown = '';
 
   constructor(
     private node: PMNode,
@@ -99,165 +128,52 @@ export class TypstInlineView implements NodeView, ManagedDocumentPreviewView {
       this.view.focus();
       openInlineRawEditor(this.view, pos);
     });
-    this.manager = documentPreviewManagerFor(view);
-    this.unsubscribe = onFillsChanged(() => this.renderLocalState());
-    this.renderLocalState();
-    this.manager.register(this);
+    this.unsubscribe = onFillsChanged(() => this.render());
+    this.render();
   }
 
   update(node: PMNode): boolean {
     if (node.type !== schema.nodes.typst_inline) return false;
-    const changed = node.attrs.src !== this.node.attrs.src;
     this.node = node;
-    if (changed) {
-      this.renderedResult = null;
-      this.regionKey = '';
-      this.renderLocalState();
-      this.manager.invalidate(this.view.state.doc);
-    } else {
-      this.renderLocalState();
-    }
+    this.render();
     return true;
   }
 
-  needsDocumentPreview(): boolean {
-    return classifyTypstInline(this.node.attrs.src as string).kind === 'fixed';
-  }
-
-  retainedDocumentPreview(): TypstDocumentSvgPublication | null {
-    return this.renderedResult;
-  }
-
-  pending(): void {
-    if (!this.needsDocumentPreview()) return;
-    this.dom.dataset.previewState = 'pending';
-    this.dom.title = this.renderedResult
-      ? 'Updating from the exact whole-document Typst publication.'
-      : 'Compiling in exact document context…';
-  }
-
-  private clearGeometry(): void {
-    for (const property of ['display', 'position', 'width', 'height', 'line-height', 'vertical-align']) {
-      this.dom.style.removeProperty(property);
-    }
-  }
-
-  private sourceChip(state: 'pending' | 'unsupported' | 'error', detail: string): void {
-    this.clearGeometry();
-    this.dom.replaceChildren(document.createTextNode(this.node.attrs.src as string));
-    this.dom.dataset.previewState = state;
-    this.dom.title = detail;
-  }
-
-  private renderLocalState() {
+  private render() {
     if (this.destroyed) return;
     const src = this.node.attrs.src as string;
-    const classification = classifyTypstInline(src);
-    this.dom.dataset.inlineKind = classification.kind;
-    if (classification.kind === 'flexible') {
-      const fill = getFill(this.node);
-      this.dom.replaceChildren();
+    const flexible = isFlexible(src);
+    const fill = flexible ? getFill(this.node) : undefined;
+    if (flexible) {
+      // Layout owns the width; paint nothing until it is known.
       this.dom.style.display = 'inline-block';
-      this.dom.style.position = 'relative';
       this.dom.style.width = fill === undefined ? '0px' : `${fill}px`;
-      this.dom.style.height = '0px';
-      this.dom.style.lineHeight = '0';
-      this.dom.style.verticalAlign = 'baseline';
-      this.dom.dataset.previewState = fill === undefined ? 'pending' : 'ready';
-      this.dom.title = '#h(1fr) uses the exact slack of its compiled line.';
-      return;
+      if (fill === undefined) {
+        this.dom.replaceChildren();
+        this.shown = '';
+        return;
+      }
     }
-    if (classification.kind === 'unsupported') {
-      this.renderedResult = null;
-      this.regionKey = '';
-      this.sourceChip(
-        'unsupported',
-        `${classification.reason}; source is preserved exactly and rendered in Proof/PDF.`,
-      );
-      return;
-    }
-    if (!this.renderedResult) {
-      this.sourceChip('pending', 'Compiling in exact document context…');
-    }
-  }
-
-  applyDocumentPreview(result: TypstDocumentSvgPublication, doc: PMNode): boolean {
-    if (this.destroyed || !this.needsDocumentPreview()) return false;
-    const pos = this.getPos();
-    const index = pos === undefined ? null : this.manager.regionIndexAt(doc, pos, 'inline');
-    const publication = this.manager.publicationFor(result);
-    const region = index === null ? null : publication?.inlineRegions.get(index);
-    const previewIndex = pos === undefined ? null : this.manager.regionIndexAt(doc, pos, 'preview');
-    const baselineMeta = previewIndex === null ? null : publication?.previewRegions.get(previewIndex);
-    if (!publication || !region || baselineMeta?.kind !== 'typst-inline') {
-      this.compileError('The exact document did not expose a safe inline-atom region.');
-      return false;
-    }
-    const pageTop = publication.pageY[baselineMeta.baseline.page - 1];
-    if (pageTop === undefined) {
-      this.compileError('The exact inline-atom baseline page was unavailable.');
-      return false;
-    }
-    const baseline = pageTop + baselineMeta.baseline.y;
-    const descent = Math.max(0, region.y + region.height - baseline);
-    const key = [region.index, region.x, region.y, region.width, region.height,
-      region.cropX, region.cropY, region.cropWidth, region.cropHeight, baseline].join(':');
-    if (result === this.renderedResult && key === this.regionKey) {
-      this.dom.dataset.previewState = 'ready';
-      return false;
-    }
-
-    const previousWidth = Number.parseFloat(this.dom.style.width) || 0;
-    const previousHeight = Number.parseFloat(this.dom.style.height) || 0;
-    this.dom.replaceChildren();
-    this.dom.style.display = 'inline-block';
-    this.dom.style.position = 'relative';
-    this.dom.style.width = `${region.width * PT_TO_PX}px`;
-    this.dom.style.height = `${region.height * PT_TO_PX}px`;
-    this.dom.style.lineHeight = '0';
-    this.dom.style.verticalAlign = `${(-descent * PT_TO_PX).toFixed(3)}px`;
-
-    if (region.cropWidth > 0 && region.cropHeight > 0) {
-      const svg = document.createElementNS(SVG_NS, 'svg');
-      svg.setAttribute('viewBox', `${region.cropX} ${region.cropY} ${region.cropWidth} ${region.cropHeight}`);
-      svg.setAttribute('width', String(region.cropWidth));
-      svg.setAttribute('height', String(region.cropHeight));
-      svg.style.position = 'absolute';
-      svg.style.pointerEvents = 'none';
-      // Clip the shared whole-document image to this padded paint viewport.
-      // The positioned SVG itself may overhang the atom; its image may not.
-      svg.style.overflow = 'hidden';
-      svg.style.left = `${(region.cropX - region.x) * PT_TO_PX}px`;
-      svg.style.top = `${(region.cropY - region.y) * PT_TO_PX}px`;
-      svg.style.width = `${region.cropWidth * PT_TO_PX}px`;
-      svg.style.height = `${region.cropHeight * PT_TO_PX}px`;
-      const image = document.createElementNS(SVG_NS, 'image');
-      image.setAttribute('href', publication.objectUrl);
-      image.setAttribute('x', String(publication.viewBox[0]));
-      image.setAttribute('y', String(publication.viewBox[1]));
-      image.setAttribute('width', String(publication.viewBox[2]));
-      image.setAttribute('height', String(publication.viewBox[3]));
-      image.setAttribute('preserveAspectRatio', 'none');
-      image.setAttribute('data-exact-document-publication', '');
-      svg.appendChild(image);
-      this.dom.appendChild(svg);
-    }
-    this.renderedResult = result;
-    this.regionKey = key;
-    this.dom.dataset.previewState = 'ready';
-    this.dom.title = 'Exact atom from the current whole-document Typst publication.';
-    return Math.abs(previousWidth - region.width * PT_TO_PX) > 0.5 ||
-      Math.abs(previousHeight - region.height * PT_TO_PX) > 0.5;
-  }
-
-  compileError(message: string): void {
-    if (this.destroyed || !this.needsDocumentPreview()) return;
-    if (this.renderedResult) {
-      this.dom.dataset.previewState = 'error';
-      this.dom.title = `Exact update failed; showing the last good atom. ${message}`;
+    const widthPt = flexible ? (fill as number) * 0.75 : null;
+    const key = `${widthPt === null ? 'auto' : widthPt.toFixed(1)}|${src}`;
+    const svg = cachedCompile(this.view, src, widthPt, () => this.render());
+    if (!svg || key === this.shown) return;
+    this.shown = key;
+    const svgEl = mountTypstSvg(this.dom, svg);
+    if (!svgEl) return;
+    const w = parseFloat(svgEl.getAttribute('width') ?? '0');
+    const h = parseFloat(svgEl.getAttribute('height') ?? '0');
+    svgEl.style.width = `${(w * 4) / 3}px`;
+    // Sub-pixel-tall fragments (a hairline rule) need a padded viewBox or
+    // the browser has nothing to project into.
+    if (h < 1.5) {
+      svgEl.setAttribute('viewBox', `0 -1 ${w} ${h + 2}`);
+      svgEl.style.height = `${((h + 2) * 4) / 3}px`;
     } else {
-      this.sourceChip('error', `${message} Source remains exact in Proof/PDF.`);
+      svgEl.style.height = `${(h * 4) / 3}px`;
     }
+    svgEl.style.display = 'inline-block';
+    svgEl.style.verticalAlign = 'baseline';
   }
 
   stopEvent() {
@@ -271,7 +187,6 @@ export class TypstInlineView implements NodeView, ManagedDocumentPreviewView {
   destroy() {
     this.destroyed = true;
     this.unsubscribe();
-    this.manager.unregister(this);
   }
 }
 
@@ -284,7 +199,7 @@ export function openInlineRawEditor(view: EditorView, pos: number) {
   const panel = document.createElement('div');
   panel.className = 'math-editor inline-raw-editor';
   panel.innerHTML = `
-    <div class="math-editor-preview inline-raw-preview" role="status"></div>
+    <div class="math-editor-preview inline-raw-preview"></div>
     <textarea class="math-editor-input" rows="2" spellcheck="false"
       placeholder="#h(1fr)  ·  #box(width: 2in, line(length: 100%))"></textarea>
     <div class="math-editor-hint">Raw Typst · <kbd>Enter</kbd> save · <kbd>Esc</kbd> cancel · <kbd>⌫</kbd> on empty removes</div>`;
@@ -298,29 +213,20 @@ export function openInlineRawEditor(view: EditorView, pos: number) {
   document.body.appendChild(panel);
 
   let previewTimer = 0;
-  let closed = false;
   const updatePreview = () => {
-    if (closed) return;
     clearTimeout(previewTimer);
     previewTimer = window.setTimeout(() => {
-      if (closed) return;
       const src = input.value.trim();
-      const classification = classifyTypstInline(src);
-      preview.dataset.inlineKind = classification.kind;
-      preview.textContent = classification.kind === 'fixed'
-        ? 'Exact whole-document preview appears in the line after save.'
-        : classification.kind === 'flexible'
-          ? 'Flexible space uses the exact remaining width of its compiled line.'
-          : `Source-only in the editor · Exact in Proof (${classification.reason}).`;
-    }, 40);
+      // Preview flexible fragments at a nominal width — on the page they
+      // take the line's slack, which has no meaning inside the card.
+      const svg = cachedCompile(view, src || '#h(0pt)', isFlexible(src) ? 180 : null, updatePreview);
+      if (svg) mountTypstSvg(preview, svg);
+    }, 120);
   };
   updatePreview();
   input.addEventListener('input', updatePreview);
 
   const close = () => {
-    if (closed) return;
-    closed = true;
-    clearTimeout(previewTimer);
     document.removeEventListener('mousedown', onDown, true);
     panel.remove();
     view.focus();

@@ -7,9 +7,9 @@
 //   - math is extracted BEFORE tokenization ($x$ and $$ blocks would be
 //     mangled by emphasis rules) and restored from sentinels afterward
 //   - [@key] becomes a citation, @tag:id an equation/figure reference
-//   - ```typst is ordinary source code; only the explicit ```typst-exec
-//     fence becomes an executable Typst embed. ```bibtex becomes the
-//     document's embedded bibliography
+//   - ```typst fences become raw-Typst islands (the same never-destroy
+//     policy as the Typst importer), ```bibtex becomes the document's
+//     embedded bibliography
 //   - YAML frontmatter carries the standard title/author/date keys and
 //     nothing app-specific — unknown keys are reported, not silently eaten
 //
@@ -203,7 +203,7 @@ export function mdToDoc(src: string): MdImport {
           break;
         case 'code_inline': {
           // `#h(1fr)`{=typst} — pandoc's raw attribute — is inline raw
-          // Typst, the mirror of the explicit ```typst-exec block fence.
+          // Typst, the mirror of the ```typst fence for block islands.
           const after = children[ti + 1];
           if (after?.type === 'text' && after.content.startsWith('{=typst}')) {
             out.push(schema.nodes.typst_inline.create({ src: t.content }));
@@ -300,8 +300,8 @@ export function mdToDoc(src: string): MdImport {
         case 'fence': {
           const lang = t.info.trim().toLowerCase();
           const body = t.content.replace(/\n$/, '');
-          if (lang === 'typst-exec') {
-            nodes.push(schema.nodes.typst_embed.create(null, body ? [schema.text(body)] : []));
+          if (lang === 'typst') {
+            nodes.push(code_block.create({ params: 'typst-raw' }, body ? [schema.text(body)] : []));
           } else if ((lang === 'bibtex' || lang === 'bib') && !bib) {
             const sizeError = textSizeError(body, INPUT_LIMITS.bibliographyBytes, 'Embedded bibliography');
             if (sizeError) {

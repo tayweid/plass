@@ -13,7 +13,6 @@ import {
   pageSpacerDecoration,
   rebuildDecorationsOwnedByBlock,
   removeDecorationsOwnedByBlock,
-  stripActiveLineDecorations,
   type BlockDecorationScope,
   type TypesetDecorationKind,
 } from './line-decorations';
@@ -63,7 +62,6 @@ const allDecorations = [...firstDecorations, ...secondDecorations, blockGap];
 assert.deepEqual(
   new Set(allDecorations.map(kindOf)),
   new Set<TypesetDecorationKind>([
-    'forced-lines',
     'word-spacing',
     'line-break',
     'hyphen-break',
@@ -72,7 +70,6 @@ assert.deepEqual(
     'block-page-gap',
   ]),
 );
-assert(firstDecorations.some((decoration) => decoration.spec.sig === 'nowrap'));
 assert(firstDecorations.some((decoration) => decoration.spec.sig === 'word-spacing:1.234px'));
 assert(firstDecorations.some((decoration) => decoration.spec.sig === 'nospell'));
 assert(firstDecorations.some((decoration) => decoration.spec.key === 'br:12'));
@@ -96,15 +93,6 @@ assert.equal(
   1,
 );
 console.log('  ok  range ownership excludes adjacent blocks and block-level page gaps');
-
-const nativeFirst = stripActiveLineDecorations(set, firstScope);
-assert.deepEqual(
-  decorationsOwnedByBlock(nativeFirst, firstScope).map(kindOf),
-  ['line-page-gap'],
-);
-assert.equal(blockDecorationDigest(nativeFirst, secondScope), blockDecorationDigest(set, secondScope));
-assert.equal(nativeFirst.find(undefined, undefined, (spec) => spec.tsKind === 'block-page-gap').length, 1);
-console.log('  ok  active-block handoff removes forced lines while retaining settled page geometry');
 
 const sameReplacements = [...firstDecorations].reverse();
 const sameReplacementsBefore = sameReplacements.slice();

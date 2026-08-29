@@ -288,13 +288,6 @@ function blockToTex(node: PMNode, s: DocSettings): string {
       }
       return `\\begin{verbatim}\n${node.textContent}\n\\end{verbatim}\n\n`;
     }
-    case 'typst_embed': {
-      // There is no safe semantics-preserving Typst→LaTeX translation here.
-      // Keep every source line in the exported file and make the mismatch
-      // explicit instead of silently dropping an executable document block.
-      const lines = node.textContent.split('\n').map((line) => `% ${line}`);
-      return `% [Plass] executable Typst embed has no LaTeX equivalent; source preserved below:\n${lines.join('\n')}\n\n`;
-    }
     case 'table':
       return tableToTex(node, s);
     case 'bibliography':

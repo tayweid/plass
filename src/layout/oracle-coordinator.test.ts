@@ -3,6 +3,7 @@ import { PageOracle, type PageOracleEntry } from './page-oracle';
 import { TypstOracle, type ParagraphSpec } from './typst-oracle';
 import { DEFAULT_SETTINGS } from '../settings';
 import type { Node as PMNode } from 'prosemirror-model';
+import { TableSplitPendingViews } from '../table-split';
 
 function check(label: string, condition: boolean) {
   if (!condition) throw new Error(`FAIL: ${label}`);
@@ -10,42 +11,54 @@ function check(label: string, condition: boolean) {
 }
 
 const policy = new PageHoldConfidence();
-const failure: PageOracleEntry = { status: 'fail', reason: 'compiler unavailable' };
+const failures: PageOracleEntry[] = Array.from({ length: 4 }, (_, i) => ({
+  status: 'fail',
+  reason: `failure ${i + 1}`,
+}));
 
 let decision = policy.observe(undefined);
 check(
-  'missing entry before an exact result is continuous',
-  !decision.hold && decision.confidence === 'continuous' && decision.status === 'pending',
+  'missing entry can hold',
+  decision.hold && decision.confidence === 'held' && decision.failureStreak === 0 && decision.status === 'pending',
+);
+
+decision = policy.observe(failures[0]);
+check('first failed entry can hold', decision.hold && decision.failureStreak === 1);
+decision = policy.observe(failures[0]);
+check('same failed entry increments once', decision.hold && decision.failureStreak === 1);
+
+decision = policy.observe(failures[1]);
+check('second distinct failed entry can hold', decision.hold && decision.failureStreak === 2);
+decision = policy.observe(failures[2]);
+check('third distinct failed entry can hold', decision.hold && decision.failureStreak === 3);
+decision = policy.observe(failures[3]);
+check(
+  'fourth distinct failed entry abandons hold',
+  !decision.hold && decision.confidence === 'fallback' && decision.failureStreak === 4,
+);
+
+decision = policy.observe(undefined);
+check(
+  'pending entry can hold after failure cutoff',
+  decision.hold && decision.confidence === 'held' && decision.failureStreak === 4,
 );
 
 decision = policy.observe({ status: 'ok', pageStarts: [], pageCount: 1 });
 check(
   'successful entry is exact rather than permission to hold older starts',
-  !decision.hold && decision.confidence === 'exact',
+  !decision.hold && decision.confidence === 'exact' && decision.failureStreak === 0,
 );
 
-decision = policy.observe(undefined);
-check(
-  'pending replacement may hold a proven exact basis',
-  decision.hold && decision.confidence === 'held',
-);
-
-decision = policy.observe(failure);
-check('one failed replacement abandons the mapped basis', !decision.hold && decision.confidence === 'continuous');
-
-decision = policy.observe(undefined);
-check(
-  'a later pending request cannot resurrect an abandoned basis',
-  !decision.hold && decision.confidence === 'continuous',
-);
-
+policy.record(failures[0]);
 policy.record({ status: 'ok', pageStarts: [], pageCount: 1 });
 decision = policy.observe(undefined);
-check('a new exact success reopens the mapped hold path', decision.hold && decision.confidence === 'held');
+check(
+  'published success heals the streak before the recovery path reads it',
+  decision.hold && decision.confidence === 'held' && decision.failureStreak === 0,
+);
 
-policy.abandon();
-decision = policy.observe(undefined);
-check('explicit geometry invalidation remains abandoned while pending', !decision.hold);
+decision = policy.observe(failures[3]);
+check('failure after success begins a new streak', decision.hold && decision.failureStreak === 1);
 
 console.log('\nall oracle coordinator tests passed');
 
@@ -146,62 +159,24 @@ async function checkDestroyGeneration() {
   );
 }
 
-async function checkCancelPendingKeepsCache() {
-  const firstParagraph = deferred<string | null>();
-  const staleParagraph = deferred<string | null>();
-  const paragraphCompiles = [firstParagraph, staleParagraph];
-  let paragraphNotifications = 0;
-  const paragraph = new TypstOracle(
-    () => paragraphNotifications++,
-    [],
-    () => paragraphCompiles.shift()!.promise,
-  );
-  const spec: ParagraphSpec = { key: 'cached', src: 'cached', tokens: [], hasMath: false };
-  paragraph.request('cached', spec, 400, DEFAULT_SETTINGS);
-  const firstParagraphFlush = (paragraph as unknown as { flush(): Promise<void> }).flush();
-  firstParagraph.resolve(null);
-  await firstParagraphFlush;
-  paragraph.request('stale', { ...spec, key: 'stale' }, 400, DEFAULT_SETTINGS);
-  const staleParagraphFlush = (paragraph as unknown as { flush(): Promise<void> }).flush();
-  paragraph.cancelPending();
-  staleParagraph.resolve(null);
-  await staleParagraphFlush;
-
-  const firstPage = deferred<string | null>();
-  const stalePage = deferred<string | null>();
-  const pageCompiles = [firstPage, stalePage];
-  let pageNotifications = 0;
-  const page = new PageOracle(
-    () => pageNotifications++,
-    () => pageCompiles.shift()!.promise,
-  );
-  const doc = {} as PMNode;
-  page.request('cached', doc, DEFAULT_SETTINGS, () => null);
-  const firstPageFlush = (page as unknown as { flush(): Promise<void> }).flush();
-  firstPage.resolve(null);
-  await firstPageFlush;
-  page.request('stale', doc, DEFAULT_SETTINGS, () => null);
-  const stalePageFlush = (page as unknown as { flush(): Promise<void> }).flush();
-  page.cancelPending();
-  stalePage.resolve(null);
-  await stalePageFlush;
-
-  check(
-    'cancelPending rejects stale completions without discarding completed caches',
-    paragraph.get('cached')?.status === 'fail' &&
-      !paragraph.get('stale') &&
-      paragraphNotifications === 1 &&
-      page.get('cached')?.status === 'fail' &&
-      !page.get('stale') &&
-      pageNotifications === 1,
-  );
-  paragraph.destroy();
-  page.destroy();
+function checkTableSplitWaiters() {
+  const pending = new TableSplitPendingViews<object>();
+  const first = {};
+  const second = {};
+  pending.add('shared', first);
+  pending.add('shared', first);
+  pending.add('shared', second);
+  const waiting = pending.take('shared');
+  check('shared table compile wakes each waiting editor exactly once', waiting.size === 2 && waiting.has(first) && waiting.has(second));
+  check('taking table waiters consumes the pending key', pending.take('shared').size === 0);
+  pending.add('stale', first);
+  pending.clear();
+  check('table cache clear discards stale pending editors', pending.take('stale').size === 0);
 }
 
 await checkParagraphGeneration();
 await checkPageGeneration();
 await checkDestroyGeneration();
-await checkCancelPendingKeepsCache();
+checkTableSplitWaiters();
 
 console.log('\nall oracle lifecycle tests passed');

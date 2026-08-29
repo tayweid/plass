@@ -1,756 +1,1198 @@
-// Native structured table editing.
+// The table editing card: tables follow the math-editor pattern. The
+// document shows only the compiled (PDF-exact) table; clicking it opens
+// this focused card and saving replaces the node in one undoable step.
 //
-// A table has exactly one editable representation: its ProseMirror rows,
-// cells, paragraphs, and inline content. The old spreadsheet card copied
-// cells into a parallel string grid and compiled a second visual table; that
-// made ordinary typing modal and could flatten rich cell content on save.
+// The card is a small spreadsheet: a plain cell grid (Tab/arrows move,
+// shift-click selects a range for merging), row-boundary strips toggle
+// midrules (booktabs-style table.hline), and the Typst panel at the bottom
+// always shows the full #table(...) arguments the current state produces —
+// edits there parse back through the importer, so the GUI and the source
+// stay two views of one thing. ⌘Z/⌘⇧Z operate on a card-local undo stack.
 
-import type { Node as PMNode, ResolvedPos } from 'prosemirror-model';
-import { Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
-import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
-import {
-  CellSelection,
-  TableMap,
-  addColumnAfter,
-  addColumnBefore,
-  addRowAfter,
-  addRowBefore,
-  deleteColumn,
-  deleteRow,
-  deleteTable,
-  mergeCells,
-  selectedRect,
-  setCellAttr,
-  splitCell,
-  toggleHeaderRow,
-} from 'prosemirror-tables';
-import { isHistoryTransaction, redo, undo } from 'prosemirror-history';
-import { isPortableCitationKey } from './bibtex';
+import type { Node as PMNode } from 'prosemirror-model';
+import { NodeSelection, TextSelection } from 'prosemirror-state';
+import type { EditorView } from 'prosemirror-view';
 import { schema } from './schema';
-import {
-  transactionChangesDerivedStructure,
-  type DerivedStructureRules,
-} from './transaction-impact';
+import { docToTyp } from './typ-serializer';
+import { parseTable } from './typ-parser';
+import { mountTypstSvg } from './safe-svg';
+import { resetCompilerCircuit } from './compiler-circuit';
+import { presetH, presetV, effective, cycleRule, ruleTitle, cellsOf, encodeCells } from './table-rules';
 
-interface TableContext { pos: number; node: PMNode }
-
-function tableContext(state: Pick<EditorState, 'selection'>): TableContext | null {
-  const $pos = state.selection.$anchor;
-  for (let depth = $pos.depth; depth > 0; depth--) {
-    const node = $pos.node(depth);
-    if (node.type.spec.tableRole === 'table') return { pos: $pos.before(depth), node };
-  }
-  return null;
+export interface CellModel {
+  text: string;
+  align: string | null;
+  colspan: number;
+  rowspan: number;
+  header: boolean;
+  /** Cell with non-plain content, preserved verbatim unless its text is edited. */
+  rich: PMNode | null;
 }
 
-function dispatchTableAttrs(view: EditorView, attrs: Record<string, unknown>): boolean {
-  const context = tableContext(view.state);
-  if (!context) return false;
-  view.dispatch(view.state.tr.setNodeMarkup(context.pos, undefined, { ...context.node.attrs, ...attrs }).scrollIntoView());
-  return true;
-}
-
-export function setTableStyle(style: 'booktabs' | 'grid' | 'plain'): Command {
-  return (state, dispatch) => {
-    const context = tableContext(state);
-    if (!context) return false;
-    if (dispatch && context.node.attrs.style !== style) {
-      dispatch(state.tr.setNodeMarkup(context.pos, undefined, { ...context.node.attrs, style }));
-    }
-    return true;
-  };
-}
-
-export function alignSelectedTableCells(align: 'left' | 'center' | 'right' | null): Command {
-  return setCellAttr('align', align);
-}
-
-/** Put a native caret in the table at a document position. */
-export function focusTable(view: EditorView, pos: number): void {
-  const table = view.state.doc.nodeAt(pos);
-  if (!table || table.type.spec.tableRole !== 'table') return;
-  const firstCell = TableMap.get(table).map[0];
-  if (firstCell === undefined) return;
-  const cellPos = pos + 1 + firstCell;
-  view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(cellPos + 1), 1)).scrollIntoView());
-  view.focus();
-}
-
-/** Insert a 3 x 3 semantic table and start typing directly in its first cell. */
-export function insertStructuredTable(view: EditorView): void {
-  const { table, table_row, table_cell, table_header, paragraph } = schema.nodes;
-  const cell = (header: boolean, text = '') => (header ? table_header : table_cell).create(
-    null,
-    paragraph.create(null, text ? schema.text(text) : undefined),
-  );
-  const node = table.create({ style: 'booktabs' }, [
-    table_row.create(null, [cell(true, 'Column 1'), cell(true, 'Column 2'), cell(true, 'Column 3')]),
-    table_row.create(null, [cell(false), cell(false), cell(false)]),
-    table_row.create(null, [cell(false), cell(false), cell(false)]),
-  ]);
-  const { $from } = view.state.selection;
-  const insertPos = $from.depth > 0 ? $from.after(1) : view.state.selection.to;
-  const tr = view.state.tr.insert(insertPos, node);
-  const inserted = tr.doc.nodeAt(insertPos);
-  if (!inserted) return;
-  const firstCell = TableMap.get(inserted).map[0];
-  tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 1 + firstCell + 1), 1));
-  view.dispatch(tr.scrollIntoView());
-  view.focus();
-}
-
-// The editor enforces the same lossless subset as the Typst serializer.
-const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code']);
-const TABLE_CELL_INLINE = new Set(['text', 'hard_break', 'math_inline', 'eq_ref', 'citation']);
-
-const tableIssueCache = new WeakMap<PMNode, string | null>();
-
-function tableCellIssue(table: PMNode): string | null {
-  const cached = tableIssueCache.get(table);
-  if (cached !== undefined || tableIssueCache.has(table)) return cached ?? null;
-  let issue: string | null = null;
-  table.descendants((node) => {
-    if (issue) return false;
-    if (node.type.spec.tableRole !== 'cell' && node.type.spec.tableRole !== 'header_cell') return true;
-    node.forEach((block) => {
-      if (issue) return;
-      if (block.type.name !== 'paragraph') {
-        issue = `${block.type.name} blocks are not losslessly supported in table cells`;
-        return;
-      }
-      if (block.attrs.keep || block.attrs.align) {
-        issue = 'paragraph layout attributes are not losslessly supported in table cells';
-        return;
-      }
-      block.descendants((inline) => {
-        if (issue) return false;
-        if (!TABLE_CELL_INLINE.has(inline.type.name)) {
-          issue = `${inline.type.name} is not losslessly supported inside table cells`;
-          return false;
-        }
-        const marks = inline.marks.map((mark) => mark.type.name);
-        const unsupported = marks.find((mark) => !TABLE_CELL_MARKS.has(mark));
-        if (unsupported) {
-          issue = `${unsupported} marks are not losslessly supported inside table cells`;
-          return false;
-        }
-        if (!inline.isText && marks.length) {
-          issue = `marks on ${inline.type.name} are not losslessly supported inside table cells`;
-          return false;
-        }
-        if (marks.includes('code') && marks.length > 1) {
-          issue = 'code combined with another mark is not losslessly supported inside table cells';
-          return false;
-        }
-        const source = inline.isText ? inline.text ?? '' : inline.type.name === 'math_inline' ? String(inline.attrs.src ?? '') : '';
-        if (/[\r\n]/.test(source)) {
-          issue = 'multiline inline content is not losslessly supported inside table cells';
-          return false;
-        }
-        if (inline.type.name === 'citation') {
-          const key = String(inline.attrs.key ?? '');
-          if (!isPortableCitationKey(key)) {
-            issue = `citation ${JSON.stringify(key)} is not portable Typst syntax`;
-            return false;
-          }
-        }
-        return true;
-      });
-    });
-    return false;
-  });
-  tableIssueCache.set(table, issue);
-  return issue;
-}
-
-let noticeTimer = 0;
-function announceTableConstraint(issue: string): void {
-  if (typeof document === 'undefined') return;
-  document.querySelector('.native-table-notice')?.remove();
-  const notice = document.createElement('div');
-  notice.className = 'native-table-notice';
-  notice.setAttribute('role', 'status');
-  notice.textContent = `${issue}. The edit was not applied, so table export remains lossless.`;
-  document.body.appendChild(notice);
-  window.clearTimeout(noticeTimer);
-  noticeTimer = window.setTimeout(() => notice.remove(), 4200);
-}
-
-function tablesTouchedBy(transaction: Transaction): Map<PMNode, number> {
-  const touched = new Map<PMNode, number>();
-  const size = transaction.doc.content.size;
-  transaction.mapping.maps.forEach((stepMap, index) => {
-    stepMap.forEach((_oldStart, _oldEnd, newStart, newEnd) => {
-      // Map early-step coordinates through the remaining steps so the range
-      // addresses the transaction's final document.
-      const rest = transaction.mapping.slice(index + 1);
-      const mappedStart = rest.map(newStart, -1);
-      const mappedEnd = rest.map(newEnd, 1);
-      const from = Math.max(0, Math.min(mappedStart, mappedEnd) - 1);
-      const to = Math.min(size, Math.max(mappedStart, mappedEnd) + 1);
-      if (to < from) return;
-      transaction.doc.nodesBetween(from, to, (node, pos) => {
-        if (node.type.spec.tableRole === 'table') {
-          touched.set(node, pos);
-          return false;
-        }
-        return true;
-      });
-    });
-  });
-  // Attribute-only and selection-preserving structural commands can expose a
-  // zero-width map. The selected table is the exact cheap fallback target.
-  const selected = tableContext({ selection: transaction.selection });
-  if (selected) touched.set(selected.node, selected.pos);
-  return touched;
-}
-
-function keepsUnsupportedTablesVerbatim(before: PMNode, transaction: Transaction): { ok: boolean; issue?: string } {
-  // An undo/redo transaction can legitimately reinsert an unsupported legacy
-  // table that was already part of this editor session. Such content never
-  // entered history through this guard (the introducing edit would have been
-  // rejected), so restoring it is safe and must not make undo lie about
-  // succeeding while leaving the document changed.
-  if (isHistoryTransaction(transaction)) return { ok: true };
-  const changedUnsupported: Array<{ node: PMNode; issue: string }> = [];
-  for (const table of tablesTouchedBy(transaction).keys()) {
-    const issue = tableCellIssue(table);
-    if (issue) changedUnsupported.push({ node: table, issue });
-  }
-  if (!changedUnsupported.length) return { ok: true };
-
-  // Slow path only for a transaction that actually contains unsupported cell
-  // content. Unchanged legacy tables retain node identity and may be moved or
-  // deleted; a newly introduced or edited unsupported table is rejected.
-  const priorTables = new Set<PMNode>();
-  before.descendants((node) => {
-    if (node.type.spec.tableRole === 'table') {
-      priorTables.add(node);
-      return false;
-    }
-    return true;
-  });
-  const changed = changedUnsupported.find(({ node }) => !priorTables.has(node));
-  return changed ? { ok: false, issue: changed.issue } : { ok: true };
-}
-
-interface NativeTablePluginState {
-  decorations: DecorationSet;
-  /** Changes only when controls-relevant metadata or topology changes. */
-  controlsRevision: number;
-}
-
-const tableControlsKey = new PluginKey<NativeTablePluginState>('native-table-controls');
-
-// Table text is intentionally absent. A character edit leaves every command,
-// select, and metadata field unchanged, so the plugin view can retain its
-// semantic UI and defer only a possible geometry adjustment. Structural
-// commands and table metadata remain explicit, transaction-local revisions.
-const TABLE_CONTROL_STRUCTURE: DerivedStructureRules = {
-  table: {
-    attrs: ['style', 'params', 'caption', 'label', 'fontSize'],
-    structure: {
-      table_row: [],
-      table_cell: ['colspan', 'rowspan', 'colwidth', 'align'],
-      table_header: ['colspan', 'rowspan', 'colwidth', 'align'],
-    },
-  },
-};
-
-interface CaptionDecorationSpec {
-  nativeTableCaptionWidget: true;
-  id: string;
+interface GridModel {
+  rows: CellModel[][];
+  style: string;
+  /** Custom #table params (midrules excluded — they live in `hlines`). */
+  params: string;
+  /** Explicit row-boundary rules (y: 0 = top edge … rows = bottom edge)
+   * with weight ('light' 0.05em | 'heavy' 0.08em | 'none' = suppress the
+   * style preset's rule there). Boundaries not in the map show the style
+   * preset's own rule, if any. */
+  hlines: Map<number, 'light' | 'heavy' | 'none'>;
   caption: string;
   label: string;
-  number: number;
+  /** Per-column widths ('auto' | '1fr' | '2cm' | …). */
+  widths: string[];
+  /** Fill preset ('none' | 'header' | 'zebra' | 'both' | 'custom'). */
+  fill: string;
+  /** Table text size ('' = document size, else e.g. '0.85em'). */
+  fontSize: string;
+  /** Explicit column-boundary rules (x: 0 = left edge … cols = right edge),
+   * same semantics as `hlines`. */
+  vlines: Map<number, 'light' | 'heavy' | 'none'>;
+  /** Partial horizontal rules (cmidrule-style): boundary y = i, columns
+   * [a, b) — Typst's start/end. Emitted with start FIRST so the full-rule
+   * regexes (preset yield, parser fidelity) never match them. */
+  hspans: RuleSpan[];
+  /** Partial vertical rules: boundary x = i, rows [a, b). */
+  vspans: RuleSpan[];
+  /** Cell inset preset ('' = Typst default, else a canonical length). */
+  inset: string;
 }
 
-interface CaptionOwnerDecorationSpec {
-  nativeTableCaptionOwner: true;
-  id: string;
+export interface RuleSpan {
+  i: number;
+  a: number;
+  b: number;
+  w: 'light' | 'heavy' | 'none';
 }
 
-let nextTableCaptionId = 1;
+export type Rule = 'light' | 'heavy' | 'none';
 
-function captionWidget(pos: number, caption: string, label: string, number: number, id: string): Decoration {
-  const text = caption ? `Table ${number}: ${caption}` : `Table ${number}`;
-  const spec: CaptionDecorationSpec = { nativeTableCaptionWidget: true, id, caption, label, number };
-  return Decoration.widget(pos, () => {
-    const element = document.createElement('div');
-    element.className = 'native-table-caption';
-    element.id = id;
-    element.setAttribute('role', 'note');
-    element.contentEditable = 'false';
-    element.textContent = text;
-    return element;
-  }, { side: -1, key: `table-caption-${id}-${text}`, ...spec });
-}
+const RULE_RE = /table\.(hline|vline)\(([^)]*)\)\s*,?/g;
+const COLUMNS_RE = /columns\s*:\s*\(([^)]*)\)\s*,?/;
+const INSET_RE = /(^|[\s,(])inset\s*:\s*(3pt|8pt)\s*,?/;
 
-function captionDecorationPair(
-  pos: number,
-  table: PMNode,
-  caption: string,
-  label: string,
-  number: number,
-  id = `native-table-caption-${nextTableCaptionId++}`,
-): Decoration[] {
-  const end = pos + table.nodeSize;
-  const owner: CaptionOwnerDecorationSpec = { nativeTableCaptionOwner: true, id };
-  return [
-    Decoration.node(pos, end, { 'aria-describedby': id }, owner),
-    captionWidget(end, caption, label, number, id),
-  ];
-}
-
-function captionDecorations(doc: PMNode): DecorationSet {
-  const decorations: Decoration[] = [];
-  let tableNumber = 0;
-  doc.descendants((node, pos) => {
-    if (node.type.spec.tableRole !== 'table') return true;
-    const caption = String(node.attrs.caption ?? '');
-    const label = String(node.attrs.label ?? '');
-    if (caption || label) {
-      tableNumber++;
-      decorations.push(...captionDecorationPair(pos, node, caption, label, tableNumber));
-    }
-    return false;
-  });
-  return DecorationSet.create(doc, decorations);
-}
-
-function tableNumberAt(doc: PMNode, targetPos: number): number {
-  let number = 0;
-  doc.descendants((node, pos) => {
-    if (pos > targetPos) return false;
-    if (node.type.spec.tableRole !== 'table') return true;
-    if (node.attrs.caption || node.attrs.label) number++;
-    return false;
-  });
-  return number;
-}
-
-function updateCaptionDecorations(
-  transaction: Transaction,
-  decorations: DecorationSet,
-  oldState: EditorState,
-  newState: EditorState,
-): DecorationSet {
-  let mapped = decorations.map(transaction.mapping, transaction.doc);
-  const before = tableContext(oldState);
-  const after = tableContext({ selection: transaction.selection });
-  const touched = tablesTouchedBy(transaction);
-  const beforeCaptioned = before && (before.node.attrs.caption || before.node.attrs.label) ? 1 : 0;
-  const afterCaptioned = [...touched.keys()].filter((node) => node.attrs.caption || node.attrs.label).length;
-
-  // Adding/removing a numbered table changes every later table number. Those
-  // metadata/structure operations are rare, so rebuild then; ordinary typing
-  // only maps and checks the one touched table instead of scanning the doc.
-  if (beforeCaptioned !== afterCaptioned || (beforeCaptioned && !after) || touched.size > 1) {
-    return captionDecorations(newState.doc);
-  }
-
-  for (const [table, pos] of touched) {
-    const end = pos + table.nodeSize;
-    const caption = String(table.attrs.caption ?? '');
-    const label = String(table.attrs.label ?? '');
-    const existing = mapped.find(
-      Math.max(0, end - 1),
-      Math.min(newState.doc.content.size, end + 1),
-      (spec) => (spec as Partial<CaptionDecorationSpec>).nativeTableCaptionWidget === true,
-    );
-    const current = existing[0]?.spec as Partial<CaptionDecorationSpec> | undefined;
-    if (current?.caption === caption && current.label === label) continue;
-    if (current?.id) {
-      const pair = mapped.find(
-        Math.max(0, pos),
-        Math.min(newState.doc.content.size, end + 1),
-        (spec) =>
-          (spec as Partial<CaptionDecorationSpec | CaptionOwnerDecorationSpec>).id === current.id,
-      );
-      if (pair.length) mapped = mapped.remove(pair);
-    } else if (existing.length) {
-      mapped = mapped.remove(existing);
-    }
-    if (caption || label) {
-      const number = current?.number ?? tableNumberAt(newState.doc, pos);
-      mapped = mapped.add(
-        newState.doc,
-        captionDecorationPair(pos, table, caption, label, number, current?.id),
-      );
-    }
-  }
-  return mapped;
-}
-
-function cellPosition($pos: ResolvedPos): number {
-  for (let depth = $pos.depth; depth > 0; depth--) {
-    const role = $pos.node(depth).type.spec.tableRole;
-    if (role === 'cell' || role === 'header_cell') return $pos.before(depth);
-  }
-  return -1;
-}
-
-/** Selection identity at the granularity which changes table commands. A
- * caret moving while text is inserted in one cell keeps this signature; a
- * cell selection, row/column move, or table transition does not. */
-function tableControlSelectionSignature(state: EditorState, context: TableContext): string {
-  const selection = state.selection;
-  if (selection instanceof CellSelection) {
-    return `${context.pos}:cells:${selection.$anchorCell.pos}:${selection.$headCell.pos}`;
-  }
-  return `${context.pos}:text:${cellPosition(selection.$anchor)}:${cellPosition(selection.$head)}`;
-}
-
-type ButtonSpec = { button: HTMLButtonElement; command: Command };
-
-class NativeTableControls {
-  private readonly root: HTMLDivElement;
-  private readonly styleSelect: HTMLSelectElement;
-  private readonly fontSelect: HTMLSelectElement;
-  private readonly captionInput: HTMLInputElement;
-  private readonly labelInput: HTMLInputElement;
-  private readonly advanced: HTMLSpanElement;
-  private readonly commandButtons: ButtonSpec[] = [];
-  private readonly alignButtons = new Map<string, HTMLButtonElement>();
-  private currentTable: HTMLElement | null = null;
-  private detailsOpen = false;
-  private controlsRevision = -1;
-  private selectionSignature = '';
-  private positionFrame = 0;
-  private positionAfterPaint = false;
-  private positionGeneration = 0;
-  private destroyed = false;
-
-  constructor(private readonly view: EditorView) {
-    this.root = document.createElement('div');
-    this.root.className = 'native-table-toolbar';
-    this.root.hidden = true;
-    this.root.setAttribute('role', 'toolbar');
-    this.root.setAttribute('aria-label', 'Table controls');
-    const main = document.createElement('div');
-    main.className = 'native-table-toolbar-main';
-    this.root.appendChild(main);
-
-    const group = (label: string) => {
-      const element = document.createElement('div');
-      element.className = 'native-table-toolbar-group';
-      element.setAttribute('role', 'group');
-      element.setAttribute('aria-label', label);
-      main.appendChild(element);
-      return element;
-    };
-    const commandButton = (parent: HTMLElement, label: string, title: string, command: Command, danger = false) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = label;
-      button.title = title;
-      button.setAttribute('aria-label', title);
-      if (danger) button.classList.add('is-danger');
-      button.addEventListener('mousedown', (event) => event.preventDefault());
-      button.addEventListener('click', () => this.run(command));
-      parent.appendChild(button);
-      this.commandButtons.push({ button, command });
-      return button;
-    };
-
-    const structure = group('Rows and columns');
-    commandButton(structure, '↑ Row', 'Add row above', addRowBefore);
-    commandButton(structure, '↓ Row', 'Add row below', addRowAfter);
-    commandButton(structure, '− Row', 'Delete selected row', deleteRow);
-    commandButton(structure, '← Col', 'Add column before', addColumnBefore);
-    commandButton(structure, 'Col →', 'Add column after', addColumnAfter);
-    commandButton(structure, '− Col', 'Delete selected column', deleteColumn);
-    const cells = group('Cells');
-    commandButton(cells, 'Merge', 'Merge selected cells', mergeCells);
-    commandButton(cells, 'Split', 'Split merged cell', splitCell);
-    commandButton(cells, 'Header', 'Toggle selected row as header', toggleHeaderRow);
-    const alignment = group('Cell alignment');
-    for (const [value, label] of [['left', 'L'], ['center', 'C'], ['right', 'R']] as const) {
-      const button = commandButton(alignment, label, `Align selected cells ${value}`, alignSelectedTableCells(value));
-      button.classList.add('native-table-align');
-      this.alignButtons.set(value, button);
-    }
-
-    const appearance = group('Table appearance');
-    this.styleSelect = document.createElement('select');
-    this.styleSelect.className = 'native-table-style';
-    this.styleSelect.title = 'Table rule style';
-    this.styleSelect.setAttribute('aria-label', 'Table rule style');
-    for (const [value, label] of [['booktabs', 'Booktabs'], ['grid', 'Grid'], ['plain', 'Plain']]) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = label;
-      this.styleSelect.appendChild(option);
-    }
-    this.styleSelect.addEventListener('change', () => this.run(setTableStyle(this.styleSelect.value as 'booktabs' | 'grid' | 'plain'), false));
-    appearance.appendChild(this.styleSelect);
-
-    this.fontSelect = document.createElement('select');
-    this.fontSelect.className = 'native-table-size';
-    this.fontSelect.title = 'Table text size';
-    this.fontSelect.setAttribute('aria-label', 'Table text size');
-    for (const [value, label] of [['', '100%'], ['0.9em', '90%'], ['0.85em', '85%'], ['0.8em', '80%'], ['0.75em', '75%']]) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = label;
-      this.fontSelect.appendChild(option);
-    }
-    this.fontSelect.addEventListener('change', () => {
-      dispatchTableAttrs(this.view, { fontSize: this.fontSelect.value });
-    });
-    appearance.appendChild(this.fontSelect);
-
-    const detailsButton = document.createElement('button');
-    detailsButton.type = 'button';
-    detailsButton.textContent = 'Details';
-    detailsButton.title = 'Caption and reference label';
-    detailsButton.setAttribute('aria-expanded', 'false');
-    detailsButton.addEventListener('mousedown', (event) => event.preventDefault());
-    detailsButton.addEventListener('click', () => {
-      this.detailsOpen = !this.detailsOpen;
-      this.root.classList.toggle('show-details', this.detailsOpen);
-      detailsButton.setAttribute('aria-expanded', String(this.detailsOpen));
-      this.schedulePosition(false);
-    });
-    appearance.appendChild(detailsButton);
-    commandButton(appearance, 'Delete', 'Delete table', deleteTable, true);
-
-    const details = document.createElement('div');
-    details.className = 'native-table-toolbar-details';
-    this.root.appendChild(details);
-    const field = (label: string, placeholder: string) => {
-      const wrapper = document.createElement('label');
-      const text = document.createElement('span');
-      text.textContent = label;
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.placeholder = placeholder;
-      input.spellcheck = label === 'Caption';
-      wrapper.append(text, input);
-      details.appendChild(wrapper);
-      return input;
-    };
-    this.captionInput = field('Caption', 'Optional table caption');
-    this.labelInput = field('Label', 'tab:results');
-    this.labelInput.maxLength = 128;
-    this.labelInput.pattern = '[A-Za-z0-9][A-Za-z0-9:._-]{0,127}';
-    this.labelInput.title = 'Letters and numbers, followed by letters, numbers, colon, dot, underscore, or hyphen';
-    this.captionInput.addEventListener('input', () => dispatchTableAttrs(this.view, { caption: this.captionInput.value }));
-    this.labelInput.addEventListener('input', () => {
-      const normalized = this.labelInput.value
-        .replace(/[^A-Za-z0-9:._-]/g, '-')
-        .replace(/^[^A-Za-z0-9]+/, '')
-        .slice(0, 128);
-      if (normalized !== this.labelInput.value) this.labelInput.value = normalized;
-      dispatchTableAttrs(this.view, { label: normalized });
-    });
-    for (const input of [this.captionInput, this.labelInput]) input.addEventListener('keydown', (event) => {
-      const mod = event.metaKey || event.ctrlKey;
-      const key = event.key.toLowerCase();
-      const isUndo = mod && key === 'z' && !event.shiftKey;
-      const isRedo = mod && ((key === 'z' && event.shiftKey) || key === 'y');
-      if (!isUndo && !isRedo) return;
-      event.preventDefault();
-      if (!this.run(isRedo ? redo : undo, false)) return;
-      const context = tableContext(this.view.state);
-      if (context) this.syncMetadataInputs(context, true);
-    });
-    this.advanced = document.createElement('span');
-    this.advanced.className = 'native-table-advanced';
-    this.advanced.textContent = 'Custom Typst options are exact in Proof/export; native cells show the base style';
-    details.appendChild(this.advanced);
-
-    document.body.appendChild(this.root);
-    window.addEventListener('resize', this.scheduleViewportPosition);
-    document.addEventListener('scroll', this.scheduleViewportPosition, true);
-    this.update(view);
-  }
-
-  update = (view: EditorView, prevState?: EditorState): void => {
-    const context = tableContext(view.state);
-    if (!context) {
-      this.currentTable = null;
-      this.selectionSignature = '';
-      this.controlsRevision = -1;
-      this.root.hidden = true;
-      return;
-    }
-    const pluginState = tableControlsKey.getState(view.state);
-    const revision = pluginState?.controlsRevision ?? 0;
-    const selectionSignature = tableControlSelectionSignature(view.state, context);
-    const refreshControls =
-      !this.currentTable ||
-      revision !== this.controlsRevision ||
-      selectionSignature !== this.selectionSignature;
-
-    // An ordinary text transaction can change the table's rendered height,
-    // but it cannot change any control semantics. Retain every control DOM
-    // value and move the optional geometry read past the first text paint.
-    if (!refreshControls) {
-      if (prevState && prevState.doc !== view.state.doc) this.schedulePosition(true);
-      return;
-    }
-    const dom = view.nodeDOM(context.pos);
-    const element = dom instanceof HTMLElement
-      ? dom.matches('table') ? dom : dom.querySelector<HTMLElement>('table')
-      : dom?.parentElement?.closest<HTMLElement>('table') ?? null;
-    if (!element) {
-      this.root.hidden = true;
-      return;
-    }
-    this.currentTable = element;
-    this.controlsRevision = revision;
-    this.selectionSignature = selectionSignature;
-    this.root.hidden = false;
-    this.styleSelect.value = String(context.node.attrs.style || 'booktabs');
-    this.fontSelect.value = String(context.node.attrs.fontSize || '');
-    this.syncMetadataInputs(context);
-    this.advanced.hidden = !String(context.node.attrs.params ?? '').trim();
-    for (const { button, command } of this.commandButtons) button.disabled = !command(view.state);
-
-    let alignment: string | null = null;
-    try {
-      const rect = selectedRect(view.state);
-      const offset = rect.map.map[rect.top * rect.map.width + rect.left];
-      alignment = (rect.table.nodeAt(offset)?.attrs.align as string | null) ?? null;
-    } catch { alignment = null; }
-    for (const [value, button] of this.alignButtons) {
-      button.disabled = false;
-      button.classList.toggle('is-active', alignment === value);
-      button.setAttribute('aria-pressed', String(alignment === value));
-    }
-    this.schedulePosition(false);
-  };
-
-  private syncMetadataInputs(context: TableContext, force = false): void {
-    if (force || document.activeElement !== this.captionInput) {
-      this.captionInput.value = String(context.node.attrs.caption ?? '');
-    }
-    if (force || document.activeElement !== this.labelInput) {
-      this.labelInput.value = String(context.node.attrs.label ?? '');
-    }
-  }
-
-  private run(command: Command, focus = true): boolean {
-    const handled = command(this.view.state, this.view.dispatch, this.view);
-    if (focus) this.view.focus();
-    return handled;
-  }
-
-  /** Queue geometry outside ProseMirror's dispatch. Text edits take the
-   * two-frame path: the character gets one rendering opportunity before the
-   * contextual chrome reads layout and publishes its next position. */
-  private schedulePosition(afterPaint: boolean): void {
-    if (this.destroyed) return;
-    if (!afterPaint) {
-      if (this.positionFrame) cancelAnimationFrame(this.positionFrame);
-      this.positionAfterPaint = false;
-      const generation = ++this.positionGeneration;
-      this.positionFrame = requestAnimationFrame(() => {
-        this.positionFrame = 0;
-        if (generation !== this.positionGeneration) return;
-        this.positionNow();
-      });
-      return;
-    }
-    if (this.positionAfterPaint) return;
-    if (this.positionFrame) cancelAnimationFrame(this.positionFrame);
-    this.positionAfterPaint = true;
-    const generation = ++this.positionGeneration;
-    this.positionFrame = requestAnimationFrame(() => {
-      this.positionFrame = 0;
-      // A task posted from rAF runs after that rendering opportunity. This is
-      // the same paint boundary used by the editor's latency probes and keeps
-      // contextual chrome out of the frame which presents the character.
-      const channel = new MessageChannel();
-      channel.port1.onmessage = () => {
-        channel.port1.close();
-        channel.port2.close();
-        if (generation !== this.positionGeneration || this.destroyed) return;
-        this.positionAfterPaint = false;
-        this.positionNow();
-      };
-      channel.port2.postMessage(null);
-    });
-  }
-
-  private scheduleViewportPosition = (): void => {
-    // ProseMirror may scroll a selection as part of the same native input
-    // transaction. Do not let that scroll event promote a post-paint table
-    // update back into the first-frame lane.
-    this.schedulePosition(this.positionAfterPaint);
-  };
-
-  private positionNow(): void {
-    if (this.root.hidden || !this.currentTable) return;
-    const rect = this.currentTable.getBoundingClientRect();
-    if (rect.bottom < 0 || rect.top > window.innerHeight) {
-      this.root.style.visibility = 'hidden';
-      return;
-    }
-    this.root.style.visibility = 'hidden';
-    const width = this.root.offsetWidth;
-    const height = this.root.offsetHeight;
-    const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + (rect.width - width) / 2));
-    const top = rect.top > height + 18 ? rect.top - height - 8 : Math.min(window.innerHeight - height - 12, rect.bottom + 8);
-    this.root.style.left = `${Math.round(left)}px`;
-    this.root.style.top = `${Math.round(Math.max(12, top))}px`;
-    this.root.style.visibility = 'visible';
-  }
-
-  destroy(): void {
-    this.destroyed = true;
-    this.positionGeneration++;
-    if (this.positionFrame) cancelAnimationFrame(this.positionFrame);
-    window.removeEventListener('resize', this.scheduleViewportPosition);
-    document.removeEventListener('scroll', this.scheduleViewportPosition, true);
-    this.root.remove();
-  }
-}
-
-/** Contextual controls, captions, and the lossless table-cell guard. */
-export function structuredTablePlugin(): Plugin {
-  return new Plugin<NativeTablePluginState>({
-    key: tableControlsKey,
-    state: {
-      init: (_config, state) => ({
-        decorations: captionDecorations(state.doc),
-        controlsRevision: 0,
-      }),
-      apply: (transaction, value, oldState, newState) => {
-        if (!transaction.docChanged) return value;
-        return {
-          decorations: updateCaptionDecorations(
-            transaction,
-            value.decorations,
-            oldState,
-            newState,
-          ),
-          controlsRevision:
-            value.controlsRevision +
-            (transactionChangesDerivedStructure(transaction, TABLE_CONTROL_STRUCTURE) ? 1 : 0),
-        };
-      },
-    },
-    filterTransaction(transaction, state) {
-      if (!transaction.docChanged) return true;
-      const result = keepsUnsupportedTablesVerbatim(state.doc, transaction);
-      if (!result.ok) announceTableConstraint(result.issue ?? 'That content');
-      return result.ok;
-    },
-    props: { decorations: (state) => tableControlsKey.getState(state)?.decorations ?? null },
-    view: (view) => new NativeTableControls(view),
-  });
-}
-
-export {
-  CellSelection,
-  addColumnAfter,
-  addRowAfter,
-  deleteColumn,
-  deleteRow,
-  deleteTable,
-  mergeCells,
-  splitCell,
-  toggleHeaderRow,
+// Canonical fill presets (recognized on read, emitted on write).
+const FILLS: Record<string, string> = {
+  header: 'fill: (x, y) => if y == 0 { luma(240) }',
+  zebra: 'fill: (x, y) => if calc.odd(y) { luma(248) }',
+  both: 'fill: (x, y) => if y == 0 { luma(240) } else if calc.odd(y) { luma(248) }',
 };
+
+function readModel(table: PMNode): GridModel {
+  const rows: CellModel[][] = [];
+  table.forEach((row) => {
+    const cells: CellModel[] = [];
+    row.forEach((cell) => {
+      const plain =
+        cell.childCount === 1 &&
+        cell.child(0).type.name === 'paragraph' &&
+        !cell.child(0).content.content.some((n) => !n.isText || n.marks.length > 0);
+      cells.push({
+        text: cell.textContent,
+        align: (cell.attrs.align as string | null) ?? null,
+        colspan: (cell.attrs.colspan as number) ?? 1,
+        rowspan: (cell.attrs.rowspan as number) ?? 1,
+        header: cell.type.name === 'table_header',
+        rich: plain ? null : cell,
+      });
+    });
+    rows.push(cells);
+  });
+  const colCount0 = Math.max(...rows.map((r) => r.reduce((n, c) => n + c.colspan, 0)));
+  const hlines = new Map<number, 'light' | 'heavy' | 'none'>();
+  const vlines = new Map<number, 'light' | 'heavy' | 'none'>();
+  const hspans: RuleSpan[] = [];
+  const vspans: RuleSpan[] = [];
+  const weight = (stroke: string | undefined): 'light' | 'heavy' | 'none' =>
+    stroke === 'none' ? 'none' : parseFloat(stroke ?? '0.05') >= 0.07 ? 'heavy' : 'light';
+  let inset = '';
+  const raw = (table.attrs.params as string) || '';
+  let widths: string[] = [];
+  const params = raw
+    .replace(RULE_RE, (match, kind: string, args: string) => {
+      const h = kind === 'hline';
+      const at = /(?:^|[,\s])(?:y|x)\s*:\s*(\d+)/.exec(args)?.[1];
+      if (at === undefined) return match; // positionless preset rule — not ours
+      const stroke = /stroke\s*:\s*(none|[\d.]+em)/.exec(args)?.[1];
+      const start = +(/start\s*:\s*(\d+)/.exec(args)?.[1] ?? 0);
+      const endRaw = /end\s*:\s*(\d+)/.exec(args)?.[1];
+      const axisLen = h ? colCount0 : rows.length;
+      const end = endRaw === undefined ? axisLen : +endRaw;
+      if (start <= 0 && end >= axisLen) (h ? hlines : vlines).set(+at, weight(stroke));
+      else (h ? hspans : vspans).push({ i: +at, a: start, b: end, w: weight(stroke) });
+      return '';
+    })
+    .replace(COLUMNS_RE, (_, tuple: string) => {
+      widths = tuple.split(',').map((w) => w.trim()).filter(Boolean);
+      return '';
+    })
+    .replace(INSET_RE, (_, pre: string, val: string) => {
+      inset = val;
+      return pre;
+    })
+    .replace(/,\s*,/g, ',')
+    .replace(/^\s*,\s*/, '')
+    .replace(/[,\s]+$/, '')
+    .trim();
+  const colCount = Math.max(...rows.map((r) => r.reduce((n, c) => n + c.colspan, 0)));
+  while (widths.length < colCount) widths.push('auto');
+  widths = widths.slice(0, colCount);
+  let fill = 'none';
+  let cleaned = params;
+  // Most specific first — 'header' is a prefix of 'both'.
+  for (const mode of ['both', 'header', 'zebra']) {
+    const pattern = FILLS[mode];
+    if (cleaned.includes(pattern)) {
+      fill = mode;
+      cleaned = cleaned.replace(pattern, '').replace(/,\s*,/g, ',').replace(/^\s*,\s*/, '').replace(/[,\s]+$/, '').trim();
+      break;
+    }
+  }
+  if (fill === 'none' && /(^|[\s,(])fill\s*:/.test(cleaned)) fill = 'custom';
+  return {
+    rows,
+    style: (table.attrs.style as string) || 'booktabs',
+    params: cleaned,
+    hlines,
+    caption: (table.attrs.caption as string) || '',
+    label: (table.attrs.label as string) || '',
+    widths,
+    fill,
+    fontSize: (table.attrs.fontSize as string) || '',
+    vlines,
+    hspans,
+    vspans,
+    inset,
+  };
+}
+
+function composeParams(model: GridModel): string {
+  const parts: string[] = [];
+  if (model.widths.some((w) => w !== 'auto')) parts.push(`columns: (${model.widths.join(', ')})`);
+  if (FILLS[model.fill]) parts.push(FILLS[model.fill]);
+  if (model.inset) parts.push(`inset: ${model.inset}`);
+  if (model.params) parts.push(model.params);
+  const stroke = (w: 'light' | 'heavy' | 'none') => (w === 'none' ? 'none' : w === 'heavy' ? '0.08em' : '0.05em');
+  for (const [y, w] of [...model.hlines.entries()].sort((a, b) => a[0] - b[0])) {
+    parts.push(`table.hline(y: ${y}, stroke: ${stroke(w)})`);
+  }
+  for (const [x, w] of [...model.vlines.entries()].sort((a, b) => a[0] - b[0])) {
+    parts.push(`table.vline(x: ${x}, stroke: ${stroke(w)})`);
+  }
+  // Partial rules: start first, so the full-rule regexes elsewhere (preset
+  // yield in the serializer, booktabs fidelity in the parser) skip them.
+  const spanSort = (s: RuleSpan[]) => [...s].sort((p, q) => p.i - q.i || p.a - q.a);
+  for (const sp of spanSort(model.hspans)) {
+    parts.push(`table.hline(start: ${sp.a}, end: ${sp.b}, y: ${sp.i}, stroke: ${stroke(sp.w)})`);
+  }
+  for (const sp of spanSort(model.vspans)) {
+    parts.push(`table.vline(start: ${sp.a}, end: ${sp.b}, x: ${sp.i}, stroke: ${stroke(sp.w)})`);
+  }
+  return parts.join(',\n');
+}
+
+function buildNode(model: GridModel): PMNode {
+  const { table, table_row, table_cell, table_header, paragraph } = schema.nodes;
+  const rows = model.rows.map((cells) =>
+    table_row.create(
+      null,
+      cells.map((c) => {
+        if (c.rich && c.rich.textContent === c.text) {
+          return c.rich.type.create({ ...c.rich.attrs, align: c.align }, c.rich.content);
+        }
+        const type = c.header ? table_header : table_cell;
+        return type.create(
+          { align: c.align, colspan: c.colspan, rowspan: c.rowspan },
+          [paragraph.create(null, c.text ? [schema.text(c.text)] : [])],
+        );
+      }),
+    ),
+  );
+  return table.create(
+    {
+      style: model.style,
+      params: composeParams(model),
+      caption: model.caption,
+      label: model.label,
+      fontSize: model.fontSize,
+    },
+    rows,
+  );
+}
+
+function cloneModel(m: GridModel): GridModel {
+  return {
+    rows: m.rows.map((r) => r.map((c) => ({ ...c }))),
+    style: m.style,
+    params: m.params,
+    hlines: new Map(m.hlines),
+    caption: m.caption,
+    label: m.label,
+    widths: [...m.widths],
+    fill: m.fill,
+    fontSize: m.fontSize,
+    vlines: new Map(m.vlines),
+    hspans: m.hspans.map((sp) => ({ ...sp })),
+    vspans: m.vspans.map((sp) => ({ ...sp })),
+    inset: m.inset,
+  };
+}
+
+const STYLES = ['booktabs', 'grid', 'plain'];
+const CELL_ROW_RE = /^\s*(table\.header\(|\[|table\.cell\()/;
+
+let cardOpen = false;
+
+/** Open the editing card for the table at `pos`. */
+export function openTableEditor(view: EditorView, pos: number) {
+  if (cardOpen) return;
+  const node = view.state.doc.nodeAt(pos);
+  if (!node || node.type !== schema.nodes.table) return;
+  // Opening this explicit editor is a fresh user action even before its
+  // card-local model is saved back through a ProseMirror transaction.
+  resetCompilerCircuit();
+  cardOpen = true;
+
+  let model = readModel(node);
+  let lastFocus = { r: 0, c: 0 };
+  let anchor: { r: number; c: number } | null = null;
+  let sel: { r0: number; c0: number; r1: number; c1: number } | null = null;
+
+  // ---------- card-local undo ----------
+  const undoStack: GridModel[] = [];
+  const redoStack: GridModel[] = [];
+  let typingCell: string | null = null;
+  const snapshot = () => {
+    undoStack.push(cloneModel(model));
+    if (undoStack.length > 100) undoStack.shift();
+    redoStack.length = 0;
+  };
+  const restore = (m: GridModel) => {
+    model = m;
+    sel = null;
+    typingCell = null;
+    renderGrid();
+    captionInput.value = model.caption;
+    labelInput.value = model.label;
+    fillSelect.value = model.fill;
+    sizeSelect.value = model.fontSize;
+    refreshPanel();
+    schedulePreview();
+  };
+
+  const overlay = document.createElement('div');
+  overlay.className = 'bib-editor-overlay table-card-overlay';
+  overlay.innerHTML = `
+    <div class="bib-editor table-card" role="dialog" aria-label="Edit table">
+      <div class="bib-editor-head"><span>Table</span></div>
+      <div class="table-card-tools">
+        <button type="button" data-act="row+">+ Row</button>
+        <button type="button" data-act="row-">− Row</button>
+        <button type="button" data-act="col+">+ Col</button>
+        <button type="button" data-act="col-">− Col</button>
+        <span class="table-card-sep"></span>
+        <button type="button" data-act="merge" title="Merge the selected cells (shift-click to select a range)">Merge</button>
+        <button type="button" data-act="split" title="Split the focused merged cell">Split</button>
+        <span class="table-card-sep"></span>
+        <button type="button" data-act="header">Header row</button>
+        <span class="table-card-sep"></span>
+        <button type="button" data-act="alignL" title="Align focused column left">L</button>
+        <button type="button" data-act="alignC" title="Align focused column center">C</button>
+        <button type="button" data-act="alignR" title="Align focused column right">R</button>
+        <button type="button" data-act="alignD" title="Align focused column on the decimal point">.0</button>
+        <span class="table-card-sep"></span>
+        <span class="tc-style-select"></span>
+        <select class="table-card-size" title="Table text size">
+          <option value="">100%</option>
+          <option value="0.9em">90%</option>
+          <option value="0.85em">85%</option>
+          <option value="0.8em">80%</option>
+          <option value="0.75em">75%</option>
+        </select>
+        <select class="table-card-inset" title="Cell density">
+          <option value="">Normal</option>
+          <option value="3pt">Compact</option>
+          <option value="8pt">Roomy</option>
+        </select>
+        <select class="table-card-fill" title="Row shading">
+          <option value="none">No fill</option>
+          <option value="header">Header fill</option>
+          <option value="zebra">Zebra</option>
+          <option value="both">Header + zebra</option>
+        </select>
+      </div>
+      <div class="table-card-grid"></div>
+      <div class="table-card-meta">
+        <input class="table-card-caption" placeholder="Caption — makes this “Table N: …”, numbered and referenceable" spellcheck="false">
+        <input class="table-card-label" placeholder="label (@tab:…)" spellcheck="false">
+      </div>
+      <div class="table-card-preview"><div class="table-card-preview-label">Result</div><div class="table-card-preview-body"></div></div>
+      <details class="table-card-typst">
+        <summary>Typst <span class="table-card-typst-hint">— the full arguments this table compiles with; edit to fine-tune</span></summary>
+        <textarea class="table-card-typst-text" rows="7" spellcheck="false"></textarea>
+      </details>
+      <div class="bib-editor-foot">
+        <span class="bib-editor-hint">Click a cell edge for a rule on just that edge (light · heavy · off) · the pills at the left / top toggle whole lines · <kbd>⌘Z</kbd> undo · <kbd>⌘Enter</kbd> save · <kbd>Esc</kbd> cancel</span>
+        <span class="bib-editor-actions">
+          <button type="button" class="bib-cancel">Cancel</button>
+          <button type="button" class="bib-save">Save</button>
+        </span>
+      </div>
+    </div>`;
+  const gridEl = overlay.querySelector('.table-card-grid') as HTMLElement;
+  const previewBody = overlay.querySelector('.table-card-preview-body') as HTMLElement;
+  const typstText = overlay.querySelector('.table-card-typst-text') as HTMLTextAreaElement;
+  const sizeSelect = overlay.querySelector('.table-card-size') as HTMLSelectElement;
+  if (model.fontSize && ![...sizeSelect.options].some((o) => o.value === model.fontSize)) {
+    const opt = document.createElement('option');
+    opt.value = model.fontSize;
+    opt.textContent = model.fontSize;
+    sizeSelect.appendChild(opt);
+  }
+  sizeSelect.value = model.fontSize;
+  sizeSelect.addEventListener('change', () => {
+    snapshot();
+    model.fontSize = sizeSelect.value;
+    refreshPanel();
+    schedulePreview();
+  });
+  const fillSelect = overlay.querySelector('.table-card-fill') as HTMLSelectElement;
+  if (model.fill === 'custom') {
+    const opt = document.createElement('option');
+    opt.value = 'custom';
+    opt.textContent = 'Custom fill';
+    fillSelect.appendChild(opt);
+  }
+  fillSelect.value = model.fill;
+  fillSelect.addEventListener('change', () => {
+    snapshot();
+    model.fill = fillSelect.value;
+    refreshPanel();
+    schedulePreview();
+  });
+  const insetSelect = overlay.querySelector('.table-card-inset') as HTMLSelectElement;
+  insetSelect.value = model.inset;
+  insetSelect.addEventListener('change', () => {
+    snapshot();
+    model.inset = insetSelect.value;
+    refreshPanel();
+    schedulePreview();
+  });
+  // Style picker: the settings-panel dropdown look, without the current-
+  // choice dot — picking a style is an action on this table, not a
+  // persisted preference.
+  const styleWrap = overlay.querySelector('.tc-style-select') as HTMLElement;
+  styleWrap.className = 'ts-select tc-style-select';
+  const styleBtn = document.createElement('button');
+  styleBtn.type = 'button';
+  styleBtn.className = 'ts-select-btn';
+  styleBtn.title = 'Table style';
+  styleBtn.textContent = 'Style';
+  styleWrap.appendChild(styleBtn);
+  let styleMenu: HTMLElement | null = null;
+  const onOutsideStyle = (e: MouseEvent) => {
+    if (styleMenu && !styleWrap.contains(e.target as Node)) closeStyleMenu();
+  };
+  const closeStyleMenu = () => {
+    styleMenu?.remove();
+    styleMenu = null;
+    document.removeEventListener('mousedown', onOutsideStyle, true);
+  };
+  styleBtn.addEventListener('click', () => {
+    if (styleMenu) {
+      closeStyleMenu();
+      return;
+    }
+    styleMenu = document.createElement('div');
+    styleMenu.className = 'ts-select-menu';
+    for (const v of STYLES) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'ts-select-item';
+      item.textContent = v;
+      item.addEventListener('click', () => {
+        closeStyleMenu();
+        snapshot();
+        model.style = v;
+        renderGrid({ r: lastFocus.r, c: lastFocus.c });
+        refreshPanel();
+        schedulePreview();
+      });
+      styleMenu.appendChild(item);
+    }
+    styleWrap.appendChild(styleMenu);
+    document.addEventListener('mousedown', onOutsideStyle, true);
+  });
+  const captionInput = overlay.querySelector('.table-card-caption') as HTMLInputElement;
+  const labelInput = overlay.querySelector('.table-card-label') as HTMLInputElement;
+  captionInput.value = model.caption;
+  labelInput.value = model.label;
+  captionInput.addEventListener('input', () => {
+    model.caption = captionInput.value;
+    schedulePreview();
+  });
+  labelInput.addEventListener('input', () => {
+    model.label = labelInput.value.trim().replace(/[^a-zA-Z0-9:._-]/g, '-');
+    schedulePreview();
+  });
+
+  const cols = () => Math.max(...model.rows.map((r) => r.reduce((n, c) => n + c.colspan, 0)));
+  const noSpans = () => model.rows.every((r) => r.every((c) => c.colspan === 1 && c.rowspan === 1));
+
+  // ---------- grid ----------
+  const WIDTH_CHOICES = ['auto', '1fr', '2fr', '3fr'];
+
+  // Rule boundary encode/decode helpers (presetH, presetV, effective,
+  // cycleRule, ruleTitle, cellsOf, encodeCells) live in ./table-rules.
+
+  const renderGrid = (focus?: { r: number; c: number }) => {
+    const t = document.createElement('table');
+    const totalCols = cols();
+    while (model.widths.length < totalCols) model.widths.push('auto');
+    model.widths.length = totalCols;
+
+    // Boundary rows are pure spacing now: the per-cell segments overlaid
+    // after layout carry the ink and the clicks.
+    const hBoundaryTr = (y: number): HTMLTableRowElement => {
+      const btr = document.createElement('tr');
+      btr.className = 'tc-boundary';
+      btr.dataset.hy = String(y);
+      const btd = document.createElement('td');
+      btd.colSpan = totalCols;
+      btr.appendChild(btd);
+      return btr;
+    };
+
+    // Width chips: one select per column (auto / fractions / custom length).
+    {
+      const wtr = document.createElement('tr');
+      wtr.className = 'tc-widths';
+      for (let c = 0; c < totalCols; c++) {
+        const td = document.createElement('td');
+        td.className = 'tc-width-cell';
+        const sel2 = document.createElement('select');
+        sel2.title = 'Column width';
+        const current = model.widths[c];
+        const opts = [...WIDTH_CHOICES];
+        if (!opts.includes(current)) opts.push(current);
+        for (const w of opts) {
+          const o = document.createElement('option');
+          o.value = w;
+          o.textContent = w;
+          sel2.appendChild(o);
+        }
+        const custom = document.createElement('option');
+        custom.value = '__custom__';
+        custom.textContent = 'custom…';
+        sel2.appendChild(custom);
+        sel2.value = current;
+        sel2.addEventListener('change', () => {
+          let v = sel2.value;
+          if (v === '__custom__') {
+            const entered = prompt('Column width (e.g. 2cm, 1in, 80pt, 1.5fr)', current === 'auto' ? '2cm' : current);
+            if (entered === null || !/^[\d.]+\s*(pt|mm|cm|in|em|fr|%)$/.test(entered.trim())) {
+              sel2.value = current;
+              return;
+            }
+            v = entered.trim();
+          }
+          snapshot();
+          model.widths[c] = v;
+          renderGrid({ r: lastFocus.r, c: lastFocus.c });
+          refreshPanel();
+          schedulePreview();
+        });
+        td.appendChild(sel2);
+        wtr.appendChild(td);
+      }
+      t.appendChild(wtr);
+    }
+    model.rows.forEach((row, ri) => {
+      t.appendChild(hBoundaryTr(ri));
+      const tr = document.createElement('tr');
+      tr.dataset.row = String(ri);
+      row.forEach((cell, ci) => {
+        const td = document.createElement(cell.header ? 'th' : 'td');
+        if (cell.colspan > 1) td.colSpan = cell.colspan;
+        if (cell.rowspan > 1) td.rowSpan = cell.rowspan;
+        if (sel && ri >= sel.r0 && ri <= sel.r1 && ci >= sel.c0 && ci <= sel.c1) td.classList.add('tc-sel');
+        const input = document.createElement('input');
+        input.value = cell.text;
+        input.dataset.r = String(ri);
+        input.dataset.c = String(ci);
+        input.style.textAlign = cell.align === 'decimal' ? 'right' : (cell.align ?? (cell.header ? 'center' : 'left'));
+        if (cell.rich) input.title = 'Contains rich content (math/references) — editing replaces it with plain text';
+        input.addEventListener('beforeinput', () => {
+          const key = `${ri}:${ci}`;
+          if (typingCell !== key) {
+            snapshot();
+            typingCell = key;
+          }
+        });
+        input.addEventListener('input', () => {
+          cell.text = input.value;
+          refreshPanel();
+          schedulePreview();
+        });
+        input.addEventListener('focus', () => {
+          lastFocus = { r: ri, c: ci };
+        });
+        input.addEventListener('mousedown', (e) => {
+          if (e.shiftKey && anchor) {
+            e.preventDefault();
+            sel = {
+              r0: Math.min(anchor.r, ri),
+              c0: Math.min(anchor.c, ci),
+              r1: Math.max(anchor.r, ri),
+              c1: Math.max(anchor.c, ci),
+            };
+            renderGrid();
+          } else {
+            anchor = { r: ri, c: ci };
+            if (sel) {
+              sel = null;
+              renderGrid({ r: ri, c: ci });
+            }
+          }
+        });
+        input.addEventListener('keydown', (e) => {
+          const move = (dr: number, dc: number) => {
+            const target = gridEl.querySelector<HTMLInputElement>(`input[data-r="${ri + dr}"][data-c="${ci + dc}"]`);
+            if (target) {
+              e.preventDefault();
+              target.focus();
+              target.select();
+            }
+          };
+          if (e.key === 'ArrowUp') move(-1, 0);
+          else if (e.key === 'ArrowDown' || (e.key === 'Enter' && !e.metaKey && !e.ctrlKey)) move(1, 0);
+          else if (e.key === 'ArrowLeft' && input.selectionStart === 0 && input.selectionEnd === 0) move(0, -1);
+          else if (e.key === 'ArrowRight' && input.selectionStart === input.value.length) move(0, 1);
+        });
+        td.appendChild(input);
+        tr.appendChild(td);
+      });
+      t.appendChild(tr);
+    });
+    t.appendChild(hBoundaryTr(model.rows.length));
+    gridEl.replaceChildren(t);
+
+    // Overlays: per-cell boundary segments (the ink and the click targets)
+    // plus whole-line handles at the ends of every boundary. Absolutely
+    // positioned over the table so col/rowspans don't matter.
+    {
+      const gridRect = gridEl.getBoundingClientRect();
+      const sl = gridEl.scrollLeft;
+      const st = gridEl.scrollTop;
+      const widthTds = [...t.querySelectorAll<HTMLTableCellElement>('.tc-widths td')];
+      const rowTrs = [...t.querySelectorAll<HTMLTableRowElement>('tr[data-row]')];
+      const wtr = t.querySelector('.tc-widths')!;
+      const top = wtr.getBoundingClientRect().bottom - gridRect.top;
+      // Column c's [left, right] and boundary x's center, in gridEl coords.
+      const colBox = (c: number): { l: number; r: number } => {
+        const r = widthTds[c].getBoundingClientRect();
+        return { l: r.left - gridRect.left + sl, r: r.right - gridRect.left + sl };
+      };
+      const rowBox = (r: number): { t: number; b: number } => {
+        const rect = rowTrs[r].getBoundingClientRect();
+        return { t: rect.top - gridRect.top + st, b: rect.bottom - gridRect.top + st };
+      };
+      const boundaryAt = (x: number): number => {
+        if (x <= 0) return colBox(0).l - 4.5;
+        if (x >= totalCols) return colBox(totalCols - 1).r + 4.5;
+        return (colBox(x - 1).r + colBox(x).l) / 2;
+      };
+      const commit = () => {
+        renderGrid();
+        refreshPanel();
+        schedulePreview();
+      };
+      // One segment per grid cell along every boundary. Segments extend to
+      // the midpoints of the border-spacing gaps, so a uniform rule reads
+      // as one continuous line.
+      const segCycle = (cur: Rule | undefined): Rule | undefined =>
+        !cur ? 'light' : cur === 'light' ? 'heavy' : undefined;
+      const hSegX = (c: number): { l: number; r: number } => ({
+        l: c === 0 ? colBox(0).l : (colBox(c - 1).r + colBox(c).l) / 2,
+        r: c === totalCols - 1 ? colBox(c).r : (colBox(c).r + colBox(c + 1).l) / 2,
+      });
+      const vSegY = (r: number): { t: number; b: number } => ({
+        t: r === 0 ? rowBox(0).t : (rowBox(r - 1).b + rowBox(r).t) / 2,
+        b: r === rowTrs.length - 1 ? rowBox(r).b : (rowBox(r).b + rowBox(r + 1).t) / 2,
+      });
+      const segEl = (horizontal: boolean, w: Rule | undefined): HTMLElement => {
+        const seg = document.createElement('div');
+        seg.className =
+          (horizontal ? 'tc-hseg' : 'tc-vseg') +
+          (w && w !== 'none' ? ' tc-seg-on' : '') +
+          (w === 'heavy' ? ' tc-seg-heavy' : '');
+        seg.title = ruleTitle(w === 'none' ? undefined : w) + ' (this cell edge only)';
+        return seg;
+      };
+      // Whole-line handles: a tiny rule-shaped pill (horizontal for row
+      // boundaries, vertical for columns) — the shape says what it toggles.
+      const handleEl = (horizontal: boolean, title: string, on: boolean, x: number, y: number): HTMLElement => {
+        const h = document.createElement('button');
+        h.type = 'button';
+        h.className = (horizontal ? 'tc-handle-h' : 'tc-handle-v') + (on ? ' tc-handle-on' : '');
+        h.title = title;
+        h.style.left = `${x}px`;
+        h.style.top = `${y}px`;
+        return h;
+      };
+
+      // Horizontal boundaries: per-column segments + whole-row handles at
+      // both sides.
+      for (const btr of t.querySelectorAll<HTMLTableRowElement>('tr[data-hy]')) {
+        const y = +btr.dataset.hy!;
+        const preset = presetH(model.style, model.rows, y);
+        const rowTop = btr.getBoundingClientRect().top - gridRect.top + st;
+        const arr = cellsOf(y, preset, model.hlines, model.hspans, totalCols);
+        arr.forEach((w, c) => {
+          const seg = segEl(true, w);
+          const { l, r } = hSegX(c);
+          seg.style.left = `${l}px`;
+          seg.style.width = `${r - l}px`;
+          seg.style.top = `${rowTop}px`;
+          seg.addEventListener('click', () => {
+            snapshot();
+            const cells = cellsOf(y, preset, model.hlines, model.hspans, totalCols);
+            cells[c] = segCycle(cells[c]);
+            encodeCells(y, preset, model.hlines, model.hspans, cells);
+            commit();
+          });
+          gridEl.appendChild(seg);
+        });
+        const eff = effective(model.hlines, y, preset);
+        const whole = handleEl(
+          true,
+          'Whole row boundary: ' + ruleTitle(eff === 'none' ? undefined : eff).toLowerCase(),
+          arr.some((w) => !!w),
+          colBox(0).l - 21,
+          rowTop + 1.5,
+        );
+        whole.addEventListener('click', () => {
+          snapshot();
+          for (let k = model.hspans.length - 1; k >= 0; k--) if (model.hspans[k].i === y) model.hspans.splice(k, 1);
+          cycleRule(model.hlines, y, presetH(model.style, model.rows, y));
+          commit();
+        });
+        gridEl.appendChild(whole);
+      }
+
+      // Vertical boundaries: per-row segments + whole-column handles above
+      // and below the table.
+      for (let x = 0; x <= totalCols; x++) {
+        if (!widthTds.length || !rowTrs.length) break;
+        const preset = presetV(model.style);
+        const at = boundaryAt(x);
+        const arr = cellsOf(x, preset, model.vlines, model.vspans, rowTrs.length);
+        arr.forEach((w, r) => {
+          const seg = segEl(false, w);
+          const { t: st2, b } = vSegY(r);
+          seg.style.top = `${st2}px`;
+          seg.style.height = `${b - st2}px`;
+          seg.style.left = `${at - 4.5}px`;
+          seg.addEventListener('click', () => {
+            snapshot();
+            const cells = cellsOf(x, preset, model.vlines, model.vspans, rowTrs.length);
+            cells[r] = segCycle(cells[r]);
+            encodeCells(x, preset, model.vlines, model.vspans, cells);
+            commit();
+          });
+          gridEl.appendChild(seg);
+        });
+        const eff = effective(model.vlines, x, preset);
+        const whole = handleEl(
+          false,
+          'Whole column boundary: ' + ruleTitle(eff === 'none' ? undefined : eff).toLowerCase(),
+          arr.some((w) => !!w),
+          at - 1.5,
+          top + st - 18,
+        );
+        whole.addEventListener('click', () => {
+          snapshot();
+          for (let k = model.vspans.length - 1; k >= 0; k--) if (model.vspans[k].i === x) model.vspans.splice(k, 1);
+          cycleRule(model.vlines, x, presetV(model.style));
+          commit();
+        });
+        gridEl.appendChild(whole);
+      }
+    }
+
+    if (focus) {
+      const target = gridEl.querySelector<HTMLInputElement>(`input[data-r="${focus.r}"][data-c="${focus.c}"]`);
+      (target ?? gridEl.querySelector('input'))?.focus();
+    }
+  };
+
+  // ---------- live compiled preview ----------
+  let previewTimer = 0;
+  let previewGeneration = 0;
+  let lastSrc = '';
+  const schedulePreview = () => {
+    // Table-card edits live outside ProseMirror until Save, so their local
+    // preview boundary must authorize the new compiler generation itself.
+    resetCompilerCircuit();
+    clearTimeout(previewTimer);
+    const generation = ++previewGeneration;
+    previewTimer = window.setTimeout(() => void compilePreview(generation), 300);
+  };
+  const emit = (): string => {
+    const tempDoc = schema.nodes.doc.create(view.state.doc.attrs, [buildNode(model)]);
+    const widthPx = view.dom.clientWidth || 576;
+    let src = docToTyp(tempDoc).replace(
+      /#set page\((.*)\)/,
+      `#set page(width: ${(widthPx * 0.75).toFixed(2)}pt, height: auto, margin: 0pt)`,
+    );
+    if (model.caption || model.label) {
+      let index = 0;
+      let seen = 0;
+      view.state.doc.descendants((n) => {
+        if (n.type.name === 'table') {
+          seen++;
+          if (n === view.state.doc.nodeAt(pos)) index = seen;
+          return false;
+        }
+        return true;
+      });
+      src = src.replace(
+        '\n\n#figure(',
+        `\n\n#counter(figure.where(kind: table)).update(${Math.max(0, index - 1)})\n#figure(`,
+      );
+    }
+    return src;
+  };
+  const compilePreview = async (generation: number) => {
+    try {
+      const src = emit();
+      if (src === lastSrc) return;
+      const { compileSvg } = await import('./pdf');
+      if (generation !== previewGeneration || !cardOpen) return;
+      const svg = await compileSvg(src);
+      if (!svg || !cardOpen || generation !== previewGeneration) return;
+      lastSrc = src;
+      const svgEl = mountTypstSvg(previewBody, svg);
+      if (svgEl) {
+        svgEl.style.width = `${(parseFloat(svgEl.getAttribute('width') ?? '0') * 4) / 3}px`;
+        svgEl.style.height = 'auto';
+      }
+    } catch (e) {
+      console.warn('table preview failed', e);
+    }
+  };
+
+  // ---------- the Typst panel (bidirectional) ----------
+  const callBody = (): { args: string[]; rows: string[] } => {
+    const emitted = emit();
+    const open = emitted.indexOf('table(\n');
+    const closeIdx = emitted.lastIndexOf('\n))');
+    const body = emitted.slice(open + 'table(\n'.length, closeIdx);
+    const lines = body.split('\n');
+    return {
+      args: lines.filter((l) => !CELL_ROW_RE.test(l)).map((l) => l.replace(/^  /, '')),
+      rows: lines.filter((l) => CELL_ROW_RE.test(l)),
+    };
+  };
+  const refreshPanel = () => {
+    if (document.activeElement === typstText) return;
+    typstText.value = callBody().args.join('\n');
+    typstText.classList.remove('tc-typst-bad');
+  };
+  let panelTimer = 0;
+  typstText.addEventListener('input', () => {
+    clearTimeout(panelTimer);
+    panelTimer = window.setTimeout(() => {
+      const { rows } = callBody();
+      const argsText = typstText.value
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .map((l) => '  ' + l.replace(/,?\s*$/, ','))
+        .join('\n');
+      const src = `#table(\n${argsText}\n${rows.join('\n')}\n)`;
+      const parsed = parseTable(src);
+      if (!parsed) {
+        typstText.classList.add('tc-typst-bad');
+        return;
+      }
+      typstText.classList.remove('tc-typst-bad');
+      snapshot();
+      model = readModel(parsed);
+      renderGrid();
+      fillSelect.value = FILLS[model.fill] || model.fill === 'none' ? model.fill : 'custom';
+      schedulePreview();
+    }, 500);
+  });
+  typstText.addEventListener('blur', () => refreshPanel());
+
+  // ---------- structural actions ----------
+  const focused = (): { r: number; c: number } => {
+    const el = document.activeElement as HTMLInputElement | null;
+    // Tool buttons steal focus before their click handlers run — fall back
+    // to the last focused cell.
+    if (el?.dataset.r !== undefined) return { r: +el.dataset.r, c: +(el.dataset.c ?? 0) };
+    return lastFocus;
+  };
+  const blank = (header: boolean): CellModel => ({ text: '', align: null, colspan: 1, rowspan: 1, header, rich: null });
+
+  /** Occupancy grid: for each (row, grid-col), which cell covers it.
+   *  origin marks the covering cell's top-left corner. */
+  interface Occ {
+    r: number;
+    ci: number;
+    g0: number;
+    origin: boolean;
+  }
+  const occupancy = (): Array<Array<Occ | null>> => {
+    const width = cols();
+    const grid: Array<Array<Occ | null>> = model.rows.map(() => new Array<Occ | null>(width).fill(null));
+    model.rows.forEach((row, r) => {
+      let gc = 0;
+      row.forEach((cell, ci) => {
+        while (gc < width && grid[r][gc]) gc++;
+        for (let dr = 0; dr < cell.rowspan; dr++) {
+          for (let dc = 0; dc < cell.colspan; dc++) {
+            if (grid[r + dr]) grid[r + dr][gc + dc] = { r, ci, g0: gc, origin: dr === 0 && dc === 0 };
+          }
+        }
+        gc += cell.colspan;
+      });
+    });
+    return grid;
+  };
+  /** Grid column of the focused cell's LEFT edge. */
+  const gridColOf = (f: { r: number; c: number }): number => {
+    const grid = occupancy();
+    for (const cell of grid[f.r] ?? []) {
+      if (cell && cell.r === f.r && cell.ci === f.c) return cell.g0;
+    }
+    return 0;
+  };
+  /** Insert a blank grid column at boundary G (cells spanning G widen). */
+  const insertGridCol = (G: number) => {
+    const grid = occupancy();
+    const widened = new Set<string>();
+    model.rows.forEach((row, r) => {
+      const left = G > 0 ? grid[r][G - 1] : null;
+      const right = G < grid[r].length ? grid[r][G] : null;
+      if (left && right && left.r === right.r && left.ci === right.ci) {
+        // One cell spans the boundary: widen it (once, at its origin row).
+        const key = `${left.r}:${left.ci}`;
+        if (!widened.has(key)) {
+          widened.add(key);
+          model.rows[left.r][left.ci].colspan++;
+        }
+        return;
+      }
+      if (right && right.r !== r) return; // covered by a rowspan from above
+      // Insert a blank before the cell that starts at/after G.
+      const at = right ? right.ci : row.length;
+      row.splice(at, 0, blank(row[Math.min(at, row.length - 1)]?.header ?? false));
+    });
+    model.widths.splice(Math.min(G, model.widths.length), 0, 'auto');
+    model.vlines = new Map([...model.vlines].map(([x, w]) => [x >= G ? x + 1 : x, w]));
+    model.vspans = model.vspans.map((sp) => ({ ...sp, i: sp.i >= G ? sp.i + 1 : sp.i }));
+    model.hspans = model.hspans.map((sp) => ({
+      ...sp,
+      a: sp.a >= G ? sp.a + 1 : sp.a,
+      b: sp.b > G ? sp.b + 1 : sp.b,
+    }));
+  };
+  /** Delete grid column G (cells spanning it shrink). */
+  const deleteGridCol = (G: number) => {
+    const grid = occupancy();
+    const shrunk = new Set<string>();
+    for (let r = model.rows.length - 1; r >= 0; r--) {
+      const hit = grid[r][G];
+      if (!hit || hit.r !== r) continue; // covered from above: owner handles it
+      const cell = model.rows[hit.r][hit.ci];
+      const key = `${hit.r}:${hit.ci}`;
+      if (cell.colspan > 1) {
+        if (!shrunk.has(key)) {
+          shrunk.add(key);
+          cell.colspan--;
+        }
+      } else {
+        model.rows[hit.r].splice(hit.ci, 1);
+      }
+    }
+    model.widths.splice(Math.min(G, model.widths.length - 1), 1);
+    model.vlines = new Map(
+      [...model.vlines].map(([x, w]) => [x > G ? x - 1 : x, w] as const).filter(([x]) => x >= 0 && x <= cols()),
+    );
+    model.vspans = model.vspans
+      .map((sp) => ({ ...sp, i: sp.i > G ? sp.i - 1 : sp.i }))
+      .filter((sp) => sp.i >= 0 && sp.i <= cols());
+    model.hspans = model.hspans
+      .map((sp) => ({ ...sp, a: sp.a > G ? sp.a - 1 : sp.a, b: sp.b > G ? sp.b - 1 : sp.b }))
+      .filter((sp) => sp.a < sp.b);
+  };
+  /** Insert a blank row after row R (rowspans crossing the seam widen). */
+  const insertRowAfter = (R: number) => {
+    const grid = occupancy();
+    const width = cols();
+    const newRow: CellModel[] = [];
+    const grown = new Set<string>();
+    for (let g = 0; g < width; g++) {
+      const above = grid[R][g];
+      const below = R + 1 < grid.length ? grid[R + 1][g] : null;
+      if (above && below && above.r === below.r && above.ci === below.ci) {
+        // A rowspan crosses the seam: grow it instead of adding a cell.
+        const key = `${above.r}:${above.ci}`;
+        if (!grown.has(key)) {
+          grown.add(key);
+          model.rows[above.r][above.ci].rowspan++;
+        }
+        g = above.g0 + model.rows[above.r][above.ci].colspan - 1;
+        continue;
+      }
+      newRow.push(blank(false));
+    }
+    const bottom = model.rows.length; // bottom-edge overrides follow the edge
+    model.rows.splice(R + 1, 0, newRow);
+    model.hlines = new Map(
+      [...model.hlines.entries()].map(([y, w]) => [y > R + 1 || y === bottom ? y + 1 : y, w] as const),
+    );
+    model.hspans = model.hspans.map((sp) => ({ ...sp, i: sp.i > R + 1 || sp.i === bottom ? sp.i + 1 : sp.i }));
+    model.vspans = model.vspans.map((sp) => ({
+      ...sp,
+      a: sp.a >= R + 1 ? sp.a + 1 : sp.a,
+      b: sp.b > R + 1 ? sp.b + 1 : sp.b,
+    }));
+  };
+  /** Delete row R (rowspans through it shrink; origins in it push their
+   *  remainder down). */
+  const deleteRow = (R: number) => {
+    const grid = occupancy();
+    const width = cols();
+    // Cells ORIGINATING in row R with rowspan > 1 continue below: move the
+    // remainder into row R+1 at the right position.
+    const moves: Array<{ g0: number; cell: CellModel }> = [];
+    const handled = new Set<string>();
+    for (let g = 0; g < width; g++) {
+      const hit = grid[R][g];
+      if (!hit) continue;
+      const key = `${hit.r}:${hit.ci}`;
+      if (handled.has(key)) continue;
+      handled.add(key);
+      const cell = model.rows[hit.r][hit.ci];
+      if (hit.r === R) {
+        if (cell.rowspan > 1) moves.push({ g0: hit.g0, cell: { ...cell, rowspan: cell.rowspan - 1 } });
+      } else {
+        cell.rowspan--; // spans through R from above
+      }
+    }
+    model.rows.splice(R, 1);
+    if (moves.length && R < model.rows.length) {
+      const target = model.rows[R];
+      const tGrid = occupancy();
+      for (const mv of moves.sort((a, b) => a.g0 - b.g0)) {
+        // Insertion index: before the first origin cell at/after g0.
+        let at = target.length;
+        for (let g = mv.g0; g < width; g++) {
+          const hit2 = tGrid[R]?.[g];
+          if (hit2 && hit2.r === R) {
+            at = hit2.ci;
+            break;
+          }
+        }
+        target.splice(at, 0, mv.cell);
+      }
+    }
+    model.hlines = new Map(
+      [...model.hlines.entries()]
+        .map(([y, w]) => [y > R ? y - 1 : y, w] as const)
+        .filter(([y]) => y >= 0 && y <= model.rows.length),
+    );
+    model.hspans = model.hspans
+      .map((sp) => ({ ...sp, i: sp.i > R ? sp.i - 1 : sp.i }))
+      .filter((sp) => sp.i >= 0 && sp.i <= model.rows.length);
+    model.vspans = model.vspans
+      .map((sp) => ({ ...sp, a: sp.a > R ? sp.a - 1 : sp.a, b: sp.b > R ? sp.b - 1 : sp.b }))
+      .filter((sp) => sp.a < sp.b);
+  };
+
+  overlay.querySelectorAll<HTMLButtonElement>('.table-card-tools button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const f = focused();
+      switch (btn.dataset.act) {
+        case 'row+':
+          snapshot();
+          insertRowAfter(f.r);
+          renderGrid({ r: f.r + 1, c: 0 });
+          break;
+        case 'row-':
+          if (model.rows.length > 1) {
+            snapshot();
+            deleteRow(f.r);
+            renderGrid({ r: Math.max(0, f.r - 1), c: 0 });
+          }
+          break;
+        case 'col+': {
+          snapshot();
+          const cell = model.rows[f.r]?.[f.c];
+          insertGridCol(gridColOf(f) + (cell?.colspan ?? 1));
+          renderGrid({ r: f.r, c: f.c + 1 });
+          break;
+        }
+        case 'col-':
+          if (cols() > 1) {
+            snapshot();
+            deleteGridCol(gridColOf(f));
+            renderGrid({ r: f.r, c: Math.max(0, f.c - 1) });
+          }
+          break;
+        case 'merge': {
+          if (!sel || (sel.r0 === sel.r1 && sel.c0 === sel.c1)) break;
+          if (!noSpans()) break;
+          const box = sel;
+          snapshot();
+          const texts: string[] = [];
+          for (let r = box.r0; r <= box.r1; r++)
+            for (let c = box.c0; c <= box.c1; c++) {
+              const txt = model.rows[r][c].text.trim();
+              if (txt) texts.push(txt);
+            }
+          const target = model.rows[box.r0][box.c0];
+          target.text = texts.join(' ');
+          target.colspan = box.c1 - box.c0 + 1;
+          target.rowspan = box.r1 - box.r0 + 1;
+          target.rich = null;
+          for (let r = box.r0; r <= box.r1; r++) {
+            const keep = r === box.r0 ? box.c0 : -1;
+            model.rows[r] = model.rows[r].filter((_, c) => c < box.c0 || c > box.c1 || c === keep);
+          }
+          sel = null;
+          renderGrid({ r: box.r0, c: box.c0 });
+          break;
+        }
+        case 'split': {
+          const cell = model.rows[f.r]?.[f.c];
+          if (!cell || (cell.colspan === 1 && cell.rowspan === 1)) break;
+          snapshot();
+          const w = cell.colspan;
+          const h = cell.rowspan;
+          cell.colspan = 1;
+          cell.rowspan = 1;
+          for (let k = 1; k < w; k++) model.rows[f.r].splice(f.c + 1, 0, blank(cell.header));
+          for (let r = f.r + 1; r < f.r + h && r < model.rows.length; r++) {
+            for (let k = 0; k < w; k++) model.rows[r].splice(Math.min(f.c, model.rows[r].length), 0, blank(false));
+          }
+          renderGrid({ r: f.r, c: f.c });
+          break;
+        }
+        case 'header': {
+          snapshot();
+          const on = !model.rows[0][0].header;
+          model.rows[0].forEach((c) => (c.header = on));
+          renderGrid({ r: 0, c: f.c });
+          break;
+        }
+        case 'alignL':
+        case 'alignC':
+        case 'alignR':
+        case 'alignD': {
+          snapshot();
+          const a =
+            btn.dataset.act === 'alignL'
+              ? 'left'
+              : btn.dataset.act === 'alignC'
+                ? 'center'
+                : btn.dataset.act === 'alignR'
+                  ? 'right'
+                  : 'decimal';
+          model.rows.forEach((row) => {
+            if (row[f.c]) row[f.c].align = a === 'left' ? null : a;
+          });
+          renderGrid({ r: f.r, c: f.c });
+          break;
+        }
+      }
+      typingCell = null;
+      refreshPanel();
+      schedulePreview();
+    });
+  });
+
+  // ---------- lifecycle ----------
+  const close = () => {
+    cardOpen = false;
+    previewGeneration++;
+    closeStyleMenu();
+    clearTimeout(previewTimer);
+    clearTimeout(panelTimer);
+    document.removeEventListener('keydown', onKey, true);
+    overlay.remove();
+    view.focus();
+  };
+  const save = () => {
+    const current = view.state.doc.nodeAt(pos);
+    if (current && current.type === schema.nodes.table) {
+      const tr = view.state.tr.replaceWith(pos, pos + current.nodeSize, buildNode(model));
+      tr.setSelection(TextSelection.near(tr.doc.resolve(pos), 1));
+      view.dispatch(tr);
+    }
+    close();
+  };
+  overlay.querySelector('.bib-save')!.addEventListener('click', save);
+  overlay.querySelector('.bib-cancel')!.addEventListener('click', close);
+  overlay.addEventListener('mousedown', (e) => {
+    // Only a genuine backdrop press closes — grid re-renders mid-dispatch
+    // can detach the event target, which must not read as "outside".
+    if (e.target === overlay) close();
+  });
+  // Document-level while the card is open: boundary clicks and tool buttons
+  // leave nothing focused inside the overlay, and the browser's own ⌘Z
+  // (Safari: "reopen closed tab") must never win.
+  const onKey = (e: KeyboardEvent) => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+    } else if (e.key === 'Enter' && mod) {
+      e.preventDefault();
+      save();
+    } else if (mod && e.key.toLowerCase() === 'z' && document.activeElement !== typstText) {
+      // Card-local undo/redo (covers structural changes and typing alike).
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.shiftKey) {
+        if (redoStack.length) {
+          undoStack.push(cloneModel(model));
+          restore(redoStack.pop()!);
+        }
+      } else if (undoStack.length) {
+        redoStack.push(cloneModel(model));
+        restore(undoStack.pop()!);
+      }
+    }
+  };
+  document.addEventListener('keydown', onKey, true);
+
+  document.body.appendChild(overlay);
+  renderGrid({ r: model.rows[0]?.[0]?.header && model.rows.length > 1 ? 1 : 0, c: 0 });
+  refreshPanel();
+  void compilePreview(++previewGeneration);
+}
+
+/** Insert a fresh table and open its editor. */
+export function insertTableWithEditor(view: EditorView) {
+  const { table, table_row, table_cell, table_header, paragraph } = schema.nodes;
+  const mk = (header: boolean, text = '') =>
+    (header ? table_header : table_cell).create(null, [paragraph.create(null, text ? [schema.text(text)] : [])]);
+  const node = table.create({ style: 'booktabs' }, [
+    table_row.create(null, [mk(true, 'Column 1'), mk(true, 'Column 2'), mk(true, 'Column 3')]),
+    table_row.create(null, [mk(false), mk(false), mk(false)]),
+    table_row.create(null, [mk(false), mk(false), mk(false)]),
+  ]);
+  const { $from } = view.state.selection;
+  const insertPos = $from.after($from.depth > 0 ? 1 : 0);
+  const tr = view.state.tr.insert(insertPos, node);
+  tr.setSelection(NodeSelection.create(tr.doc, insertPos));
+  view.dispatch(tr);
+  view.focus();
+  requestAnimationFrame(() => openTableEditor(view, insertPos));
+}

@@ -6,9 +6,8 @@
 //
 //   - only the standard title/author/date keys ride in YAML frontmatter;
 //     document settings are .typ territory (saving warns when non-default)
-//   - executable Typst uses the explicit ```typst-exec fence; ordinary
-//     ```typst remains ordinary code. The embedded bibliography becomes a
-//     ```bibtex fence at the end
+//   - raw-Typst islands stay ```typst fences; the embedded bibliography
+//     becomes a ```bibtex fence at the end
 //   - display math keeps its label as `$$ {#eq:name}`, citations are
 //     pandoc-style [@key], references stay @tag:id
 //
@@ -17,7 +16,6 @@
 
 import type { Node as PMNode, Mark } from 'prosemirror-model';
 import { DEFAULT_SETTINGS, type DocSettings } from './settings';
-import { isLegacyTypstRawBlock } from './schema';
 
 export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): string {
   const out: string[] = [];
@@ -47,15 +45,6 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
       .replace(/~(?=~)/g, '\\~')
       .replace(/(^|\s)_/g, '$1\\_')
       .replace(/_(?=\s|$)/g, '\\_');
-
-  // Use a fence longer than any run in the source. This makes executable
-  // embeds (and ordinary code) lossless even when their literal text contains
-  // a triple-backtick fence of its own.
-  const fenced = (info: string, source: string): string => {
-    const longest = Math.max(0, ...(source.match(/`+/g) ?? []).map((run) => run.length));
-    const fence = '`'.repeat(Math.max(3, longest + 1));
-    return `${fence}${info}\n${source}\n${fence}`;
-  };
 
   const inline = (node: PMNode): string => {
     let md = '';
@@ -157,13 +146,9 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
       }
       case 'code_block': {
         const params = node.attrs.params as string;
-        // Old persisted documents can be exported before the startup plugin
-        // runs. Preserve their exact executable intent using the new explicit
-        // representation; never broaden ordinary `typst` language fences.
-        return fenced(isLegacyTypstRawBlock(node) ? 'typst-exec' : params, node.textContent);
+        const lang = params === 'typst-raw' ? 'typst' : params;
+        return `\`\`\`${lang}\n${node.textContent}\n\`\`\``;
       }
-      case 'typst_embed':
-        return fenced('typst-exec', node.textContent);
       case 'blockquote': {
         const inner: string[] = [];
         node.forEach((child) => inner.push(block(child, indent)));
@@ -199,9 +184,9 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
       case 'horizontal_rule':
         return '---';
       case 'page_break':
-        return fenced('typst-exec', '#pagebreak()');
+        return '```typst\n#pagebreak()\n```';
       case 'numbering_restart':
-        return fenced('typst-exec', '#pagebreak()\n#set page(numbering: "1")\n#counter(page).update(1)');
+        return '```typst\n#pagebreak()\n#set page(numbering: "1")\n#counter(page).update(1)\n```';
       case 'bibliography':
         return ''; // regenerated from the bibtex fence below
       case 'doc_title':
@@ -210,7 +195,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
         return ''; // frontmatter
       default:
         warn(`"${node.type.name}" has no Markdown form — kept as Typst`);
-        return fenced('typst-exec', '// unsupported block');
+        return '```typst\n// unsupported block\n```';
     }
   };
 

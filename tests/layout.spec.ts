@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from 'playwright/test';
+import { expect, test } from 'playwright/test';
 
 declare global {
   interface Window {
@@ -12,39 +12,13 @@ declare global {
     __paginationSnapshotStats: (reset?: boolean) => {
       captures: number;
       spacerScans: number;
+      tableScans: number;
       heightQueries: number;
     };
   }
 }
 
-async function expectCompiledFit(owner: Locator) {
-  const geometry = await owner.evaluate((root) => {
-    const owns = (node: Node) =>
-      node.parentElement?.closest('p, figcaption, .fn-body') === root;
-    const explicit = [...root.querySelectorAll('br.ts-br, .ts-hyphen > br, .ts-pagegap')]
-      .filter(owns).length + 1;
-    const tops: number[] = [];
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
-      if (!text.textContent || !owns(text)) continue;
-      const range = document.createRange();
-      range.selectNodeContents(text);
-      for (const rect of range.getClientRects()) {
-        if (rect.width > 0 && !tops.some((top) => Math.abs(top - rect.top) <= 1)) tops.push(rect.top);
-      }
-    }
-    return {
-      explicit,
-      physical: tops.length,
-      clientWidth: root.clientWidth,
-      scrollWidth: root.scrollWidth,
-    };
-  });
-  expect(geometry.physical).toBe(geometry.explicit);
-  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 2);
-}
-
-test('the first settled exact paragraph remains unchanged when the oracle verifies it', async ({ page }) => {
+test('exact live paragraph remains unchanged when the oracle settles', async ({ page }) => {
   await page.goto('/?new=1');
   const text =
     'The Knuth-Plass algorithm is based on the idea of cost. A line which has a very tight or ' +
@@ -71,21 +45,21 @@ test('the first settled exact paragraph remains unchanged when the oracle verifi
   });
 
   await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
-  const settledBreaks = await page.evaluate(() => window.__breakSig());
-  expect(settledBreaks.length).toBeGreaterThan(0);
+  const liveBreaks = await page.evaluate(() => window.__breakSig());
+  expect(liveBreaks.length).toBeGreaterThan(0);
 
   await page.waitForTimeout(1200);
-  expect(await page.evaluate(() => window.__breakSig())).toBe(settledBreaks);
+  expect(await page.evaluate(() => window.__breakSig())).toBe(liveBreaks);
   expect(await page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
   expect(await paragraph.textContent()).toBe('Swiftly, ' + text);
 
   const perf = await page.evaluate(() => window.__layoutPerf());
-  expect(perf.live).toBeNull();
+  expect(perf.live?.totalMs).toBeGreaterThan(0);
   expect(perf.settle?.totalMs).toBeGreaterThan(0);
   expect(perf.settle?.paragraphs).toBe(1);
 });
 
-test('caption and footnote edits share one exact compiled decoration update', async ({ page }) => {
+test('caption and footnote edits share one exact live decoration update', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const { schema, doc: current } = window.view.state;
@@ -110,34 +84,20 @@ test('caption and footnote edits share one exact compiled decoration update', as
   await expect(page.locator('figcaption')).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__breakSig().length)).toBeGreaterThan(0);
   await page.waitForTimeout(1_200);
-  await expect(page.locator('.ts-figure')).toHaveClass(/ts-forced-lines/);
-  await expect(page.locator('.ts-footnote')).toHaveClass(/ts-forced-lines/);
-  await expectCompiledFit(page.locator('figcaption'));
-  await expectCompiledFit(page.locator('.fn-body'));
 
   await page.evaluate(() => window.__layoutDispatchStats(true));
-  const captionHandoff = await page.evaluate(() => {
+  await page.evaluate(() => {
     const { state } = window.view;
     window.view.dispatch(state.tr.insertText('Precisely, ', 1));
-    const figure = document.querySelector('.ts-figure');
-    return {
-      locked: figure?.classList.contains('ts-forced-lines') ?? false,
-      whiteSpace: figure?.querySelector('figcaption')
-        ? getComputedStyle(figure.querySelector('figcaption')!).whiteSpace
-        : '',
-    };
   });
-  expect(captionHandoff).toEqual({ locked: false, whiteSpace: 'normal' });
   await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
-  await expect(page.locator('.ts-figure')).toHaveClass(/ts-forced-lines/);
-  expect(await page.locator('figcaption').evaluate((node) => getComputedStyle(node).whiteSpace)).toBe('nowrap');
   const captionBreaks = await page.evaluate(() => window.__breakSig());
   await page.waitForTimeout(1_200);
   expect(await page.evaluate(() => window.__breakSig())).toBe(captionBreaks);
   expect(await page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
 
   await page.evaluate(() => window.__layoutDispatchStats(true));
-  const footnoteHandoff = await page.evaluate(() => {
+  await page.evaluate(() => {
     const { state } = window.view;
     let footnotePos = -1;
     state.doc.descendants((node, pos) => {
@@ -149,25 +109,8 @@ test('caption and footnote edits share one exact compiled decoration update', as
     });
     if (footnotePos < 0) throw new Error('footnote fixture was not created');
     window.view.dispatch(state.tr.insertText('Notably, ', footnotePos + 1));
-    const figure = document.querySelector('.ts-figure');
-    const footnote = document.querySelector('.ts-footnote');
-    const body = footnote?.querySelector('.fn-body');
-    return {
-      figureLocked: figure?.classList.contains('ts-forced-lines') ?? false,
-      footnoteLocked: footnote?.classList.contains('ts-forced-lines') ?? false,
-      bodyWhiteSpace: body ? getComputedStyle(body).whiteSpace : '',
-    };
-  });
-  expect(footnoteHandoff).toEqual({
-    figureLocked: true,
-    footnoteLocked: false,
-    bodyWhiteSpace: 'normal',
   });
   await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
-  await expect(page.locator('.ts-footnote')).toHaveClass(/ts-forced-lines/);
-  expect(await page.locator('.fn-body').evaluate((node) => getComputedStyle(node).whiteSpace)).toBe('nowrap');
-  await expectCompiledFit(page.locator('figcaption'));
-  await expectCompiledFit(page.locator('.fn-body'));
   const footnoteBreaks = await page.evaluate(() => window.__breakSig());
   await page.waitForTimeout(1_200);
   expect(await page.evaluate(() => window.__breakSig())).toBe(footnoteBreaks);
@@ -218,6 +161,7 @@ test('shrinking to one page removes every held page spacer', async ({ page }) =>
   await page.waitForTimeout(1_200);
   const paginationStats = await page.evaluate(() => window.__paginationSnapshotStats());
   expect(paginationStats.spacerScans).toBe(paginationStats.captures);
+  expect(paginationStats.tableScans).toBe(paginationStats.captures);
   expect(paginationStats.heightQueries).toBeGreaterThan(0);
 
   await page.evaluate(() => {
@@ -236,7 +180,7 @@ test('shrinking to one page removes every held page spacer', async ({ page }) =>
   expect(await page.locator('.ts-pagegap').count()).toBe(0);
 });
 
-test('strikethrough keeps compiled snapshot breaks stable', async ({ page }) => {
+test('strikethrough keeps live and compiled breaks in agreement', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const { state } = window.view;
@@ -269,11 +213,12 @@ test('strikethrough keeps compiled snapshot breaks stable', async ({ page }) => 
     window.view.dispatch(state.tr.insertText('Reviewer two: ', 1));
   });
   await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
-  const compiledBreaks = await page.evaluate(() => window.__breakSig());
+  const liveBreaks = await page.evaluate(() => window.__breakSig());
   // The compiled oracle re-derives breaks from the exported Typst, which
-  // wraps the struck run in #strike[...]. A stable settle means the
-  // decoration altered no metrics (line-through is paint-only).
+  // wraps the struck run in #strike[...]; the single live dispatch surviving
+  // the settle uncorrected means the decoration altered no metrics
+  // (line-through is paint-only).
   await page.waitForTimeout(1_200);
-  expect(await page.evaluate(() => window.__breakSig())).toBe(compiledBreaks);
+  expect(await page.evaluate(() => window.__breakSig())).toBe(liveBreaks);
   expect(await page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
 });

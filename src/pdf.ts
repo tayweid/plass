@@ -10,33 +10,18 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { docToTyp } from './typ-serializer';
 import { loadRemoteImage, remoteImageStatus, sanitizeSvgImage } from './remote-images';
 import { FONT_FALLBACK } from './typst-config';
-import {
-  runCoordinatedCompilerTask,
-  runFinalCompilerTask,
-  type CompilerValue,
-  type CoordinatedCompileRequest,
-} from './compiler/coordinated-compiler';
+import { runCompilerTask } from './typst-worker-client';
 import {
   COMPILER_DEADLINES,
   COMPILER_LIMITS,
   isValidAssetPath,
   type CompilerAsset,
-  type CompilerTask,
 } from './typst-worker-protocol';
 import { resetCompilerCircuit } from './compiler-circuit';
-import { documentTypstEmbedImagePaths } from './typst-embed-assets';
-import type { TypstDocumentSvgPublication } from './typst-document-publication';
 
 export { FONT_FALLBACK } from './typst-config';
 type Asset = CompilerAsset;
 class AssetLimitError extends Error {}
-
-interface PreparedDocumentCompileInput {
-  source: string;
-  assets: Asset[];
-  missing: number;
-  blockedRemote: number;
-}
 
 /** Reads project-relative asset paths (set by the app's FileManager). */
 let assetReader: ((path: string, maxBytes: number) => Promise<Uint8Array | null>) | null = null;
@@ -125,15 +110,6 @@ async function prepareAssets(doc: PMNode): Promise<{
     }
     return true;
   });
-  // Executable embeds are arbitrary Typst rather than structured figure
-  // nodes. Direct literal image paths are nevertheless statically knowable
-  // and must enter the same VFS used by Proof/PDF and exact embed crops.
-  for (const src of documentTypstEmbedImagePaths(doc)) {
-    srcs.add(src);
-    if (srcs.size > COMPILER_LIMITS.assetCount) {
-      throw new AssetLimitError(`Document has more than ${COMPILER_LIMITS.assetCount} image assets`);
-    }
-  }
 
   const addAsset = (path: string, data: Uint8Array) => {
     if (assets.length >= COMPILER_LIMITS.assetCount) {
@@ -229,73 +205,51 @@ async function prepareAssets(doc: PMNode): Promise<{
   return { map, assets, missing, blockedRemote };
 }
 
-/** The single serialization/asset boundary for every whole-document output.
- * Exact proof SVG and exported PDF intentionally consume this same value so
- * neither surface can acquire a private serializer, fallback, or asset map. */
-async function prepareDocumentCompileInput(
-  doc: PMNode,
-  instrumentEditorPublication = false,
-): Promise<PreparedDocumentCompileInput> {
-  const { map, assets, missing, blockedRemote } = await prepareAssets(doc);
-  return {
-    source: docToTyp(doc, {
-      resolveImage: (src) => map.get(src) ?? src,
-      fontFallback: FONT_FALLBACK,
-      embedRegions: instrumentEditorPublication,
-      layoutRegions: instrumentEditorPublication,
-      inlineRegions: instrumentEditorPublication,
-      previewRegions: instrumentEditorPublication,
-    }),
-    assets,
-    missing,
-    blockedRemote,
-  };
+/**
+ * Compile a Typst fragment to SVG (content-hugging page). Used for in-editor
+ * previews of blocks whose styling the DOM cannot reproduce.
+ */
+export function compileSvg(src: string, onMsg: (m: string) => void = () => {}): Promise<string | null> {
+  return runCompilerTask<string>(
+    { kind: 'svg', source: src },
+    { timeoutMs: COMPILER_DEADLINES.previewMs, onMessage: onMsg },
+  ).catch((error) => {
+    console.warn('fragment compile failed', error);
+    return null;
+  });
 }
 
-function wholeDocumentTask(kind: 'document-svg' | 'document-svg-regions' | 'pdf', input: PreparedDocumentCompileInput) {
-  return { kind, source: input.source, assets: input.assets } as const;
-}
-
-/** Keep direct/test callers behind the same lazy worker-client boundary as
- * coordinated product work. Product previews supply a coordinator request;
- * this fallback exists for low-level security tests and API compatibility. */
-async function runDirectCompilerTask<T extends CompilerValue>(
-  task: CompilerTask,
-  options: { timeoutMs: number; onMessage?: (message: string) => void },
-): Promise<T> {
-  const { runCompilerTask } = await import('./typst-worker-client');
-  return runCompilerTask<T>(task, options);
+/** Query a compiled fragment (e.g. position probes). Returns null on failure. */
+export function typstQuery<T = unknown>(
+  src: string,
+  selector: string,
+  onMsg: (m: string) => void = () => {},
+): Promise<T[] | null> {
+  return runCompilerTask<unknown[]>(
+    { kind: 'query', source: src, selector },
+    { timeoutMs: COMPILER_DEADLINES.previewMs, onMessage: onMsg },
+  ).then(
+    (value) => value as T[],
+    (error) => {
+      console.warn('typst query failed', error);
+      return null;
+    },
+  );
 }
 
 /**
  * Compile the full document (with embedded assets) to a multi-page SVG —
  * the page-break oracle's channel. Returns null on failure.
  */
-export function compileDocSvg(
-  doc: PMNode,
-  onMsg: (m: string) => void = () => {},
-  coordinated?: CoordinatedCompileRequest,
-  signal?: AbortSignal,
-): Promise<string | null> {
+export function compileDocSvg(doc: PMNode, onMsg: (m: string) => void = () => {}): Promise<string | null> {
   return (async () => {
     try {
-      if (signal?.aborted) return null;
-      const input = await prepareDocumentCompileInput(doc);
-      // Asset readers and approved remote images are asynchronous. A view can
-      // disappear before this work reaches the coordinator, where cancel(key)
-      // cannot see it yet. Do not admit that now-invisible compile afterward.
-      if (signal?.aborted) return null;
-      const task = wholeDocumentTask('document-svg', input);
-      return coordinated
-        ? await runCoordinatedCompilerTask<string>(task, {
-            ...coordinated,
-            timeoutMs: COMPILER_DEADLINES.documentMs,
-            onMessage: onMsg,
-          })
-        : await runDirectCompilerTask<string>(
-            task,
-            { timeoutMs: COMPILER_DEADLINES.documentMs, onMessage: onMsg },
-          );
+      const { map, assets } = await prepareAssets(doc);
+      const source = docToTyp(doc, { resolveImage: (s) => map.get(s) ?? s, fontFallback: FONT_FALLBACK });
+      return await runCompilerTask<string>(
+        { kind: 'document-svg', source, assets },
+        { timeoutMs: COMPILER_DEADLINES.documentMs, onMessage: onMsg },
+      );
     } catch (error) {
       console.warn('doc svg compile failed', error);
       return null;
@@ -303,79 +257,13 @@ export function compileDocSvg(
   })();
 }
 
-/** Compile the exact prepared whole document and return physical start/end
- * positions for every dedicated Typst embed. One caller can distribute this
- * result to all node views; no embed receives a synthetic or assetless world. */
-export function compileDocSvgWithEmbedRegions(
-  doc: PMNode,
-  onMsg: (m: string) => void = () => {},
-  coordinated?: CoordinatedCompileRequest,
-  signal?: AbortSignal,
-): Promise<TypstDocumentSvgPublication | null> {
-  return (async () => {
-    try {
-      if (signal?.aborted) return null;
-      const input = await prepareDocumentCompileInput(doc, true);
-      if (signal?.aborted) return null;
-      const task = wholeDocumentTask('document-svg-regions', input);
-      return coordinated
-        ? await runCoordinatedCompilerTask<TypstDocumentSvgPublication>(task, {
-            ...coordinated,
-            timeoutMs: COMPILER_DEADLINES.documentMs,
-            onMessage: onMsg,
-          })
-        : await runDirectCompilerTask<TypstDocumentSvgPublication>(
-            task,
-            { timeoutMs: COMPILER_DEADLINES.documentMs, onMessage: onMsg },
-          );
-    } catch (error) {
-      console.warn('embed document svg compile failed', error);
-      return null;
-    }
-  })();
-}
-
-/** Compile the deliberate read-only proof through the protected final lane.
- * Asset preparation is shared with PDF export and remains cancelable before
- * admission; once admitted, the user-owned proof cannot be evicted or aborted
- * by preview churn. Like export, opening Proof is a trusted retry boundary
- * after an earlier background timeout opened the compiler circuit. */
-export async function compileDocProofSvg(
-  doc: PMNode,
-  onMsg: (m: string) => void = () => {},
-  signal?: AbortSignal,
-): Promise<string | null> {
-  if (signal?.aborted) return null;
-  resetCompilerCircuit();
-  const input = await prepareDocumentCompileInput(doc);
-  if (signal?.aborted) return null;
-  return runFinalCompilerTask<string>(
-    wholeDocumentTask('document-svg', input),
-    { timeoutMs: COMPILER_DEADLINES.documentMs, onMessage: onMsg },
-  );
-}
-
-export interface CompiledDocumentPdf {
-  data: Uint8Array;
-  missing: number;
-  blockedRemote: number;
-}
-
-/** Compile the same prepared whole-document input used by exact proof. */
-export async function compileDocPdf(
-  doc: PMNode,
-  onMsg: (m: string) => void = () => {},
-): Promise<CompiledDocumentPdf> {
-  const input = await prepareDocumentCompileInput(doc);
-  const data = await runFinalCompilerTask<Uint8Array>(
-    wholeDocumentTask('pdf', input),
+/** Compile raw Typst source to PDF bytes (assets must already be mapped).
+ * Reached only via dynamic import() from tests/security.spec.ts — not dead code. */
+export function compileTyp(src: string, onMsg: (m: string) => void = () => {}): Promise<Uint8Array> {
+  return runCompilerTask<Uint8Array>(
+    { kind: 'pdf', source: src, assets: [] },
     { timeoutMs: COMPILER_DEADLINES.exportMs, onMessage: onMsg },
   );
-  return {
-    data,
-    missing: input.missing,
-    blockedRemote: input.blockedRemote,
-  };
 }
 
 export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string) => void): Promise<void> {
@@ -384,9 +272,18 @@ export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string
   resetCompilerCircuit();
   try {
     onMsg('Preparing document…');
+    const { map, assets, missing, blockedRemote } = await prepareAssets(doc);
+    const src = docToTyp(doc, {
+      resolveImage: (s) => map.get(s) ?? s,
+      fontFallback: FONT_FALLBACK,
+    });
+
     onMsg('Typesetting with Typst…');
     const t0 = performance.now();
-    const { data, missing, blockedRemote } = await compileDocPdf(doc, onMsg);
+    const data = await runCompilerTask<Uint8Array>(
+      { kind: 'pdf', source: src, assets },
+      { timeoutMs: COMPILER_DEADLINES.exportMs, onMessage: onMsg },
+    );
 
     const blob = new Blob([data.buffer as ArrayBuffer], { type: 'application/pdf' });
     const a = document.createElement('a');

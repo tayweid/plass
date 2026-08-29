@@ -3,8 +3,6 @@ import { demoDoc } from './demo-doc.ts';
 import { docToTyp } from './typ-serializer.ts';
 import { typToDoc } from './typ-parser.ts';
 import { schema } from './schema.ts';
-import { DEFAULT_SETTINGS } from './settings.ts';
-import { displayMathToTypst, inlineMathToTypst } from './math-typst.ts';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = '') {
@@ -76,8 +74,8 @@ function firstDiff(a: string, b: string): string {
 
   check('unknown directives kept as raw islands', warnings.length === 1, warnings.join('; '));
   const first = doc.child(0);
-  check('unknown executable source is a Typst embed', first.type.name === 'typst_embed');
-  check('Typst embed preserves both lines', first.textContent === '#let answer = 42\n#show heading: set text(blue)');
+  check('raw island is code_block(typst-raw)', first.type.name === 'code_block' && first.attrs.params === 'typst-raw');
+  check('raw island preserves both lines', first.textContent === '#let answer = 42\n#show heading: set text(blue)');
 
   check('heading parsed', doc.child(1).type.name === 'heading');
   const para = doc.child(2);
@@ -101,9 +99,9 @@ function firstDiff(a: string, b: string): string {
   check('bullet list parsed', doc.child(3).type.name === 'bullet_list' && doc.child(3).childCount === 2);
   check('escapes unescaped on import', doc.child(4).textContent === 'Escaped * star and @ at-sign.');
 
-  // and the Typst embed survives a re-export verbatim
+  // and the raw island survives a re-export verbatim
   const out = docToTyp(doc);
-  check('Typst embed re-exports verbatim', out.includes('#let answer = 42\n#show heading: set text(blue)'));
+  check('raw island re-exports verbatim', out.includes('#let answer = 42\n#show heading: set text(blue)'));
 }
 
 // --- 5. labels and references survive ---
@@ -508,121 +506,6 @@ function firstDiff(a: string, b: string): string {
   const t = (src: string) => typToDoc(src).doc.textContent;
   check('mixed nbsp run collapses', t('a~ ~b') === 'a b', JSON.stringify(t('a~ ~b')));
   check('pure nbsp run survives', t('a~~b') === 'a\u00a0\u00a0b', JSON.stringify(t('a~~b')));
-}
-
-// --- 18. comment tokens and backticks stay literal, compilable content ---
-{
-  const { doc: docType, paragraph } = schema.nodes;
-  const source = 'Visible // note and https://example.test remain';
-  const code = 'alpha ` beta `` gamma';
-  const doc = docType.create(null, [
-    paragraph.create(null, [
-      schema.text(source + ' '),
-      schema.text(code, [schema.marks.code.create()]),
-    ]),
-  ]);
-  const out = docToTyp(doc);
-  check('literal comment opener is escaped', out.includes('Visible \\/\\/ note'), out.slice(0, 180));
-  check('URL remains safe markup text', out.includes('https:\\/\\/example.test'), out.slice(0, 180));
-  check('code containing backticks uses inline raw function', out.includes('#raw("alpha ` beta `` gamma", block: false)'), out.slice(0, 220));
-  const back = typToDoc(out).doc;
-  check('comment and backtick content round-trips exactly', back.textContent === source + ' ' + code, JSON.stringify(back.textContent));
-  check('backtick content remains code-marked', back.firstChild?.lastChild?.marks.some((mark) => mark.type.name === 'code') === true);
-  check('comment/backtick export is idempotent', docToTyp(back) === out, firstDiff(out, docToTyp(back)));
-}
-
-// --- 19. escaped literal text in non-inline settings/attrs round-trips ---
-{
-  const literal = 'A ~ B // C';
-  const { doc: docType, table, table_row, table_cell, paragraph } = schema.nodes;
-  const cell = table_cell.create(null, [paragraph.create(null, [schema.text('value')])]);
-  const doc = docType.create(
-    { settings: { ...DEFAULT_SETTINGS, headerText: literal }, bib: null },
-    [
-      table.create(
-        { style: 'booktabs', params: '', caption: literal, label: '', fontSize: '' },
-        [table_row.create(null, [cell])],
-      ),
-    ],
-  );
-  const out = docToTyp(doc);
-  check('header and table caption escape literal tilde/comment opener',
-    out.includes('A \\~ B \\/\\/ C'), out.slice(0, 400));
-  const back = typToDoc(out).doc;
-  let importedCaption = '';
-  back.descendants((node) => {
-    if (node.type.name === 'table') importedCaption = node.attrs.caption as string;
-    return true;
-  });
-  check('running header unescapes exactly', back.attrs.settings.headerText === literal,
-    JSON.stringify(back.attrs.settings.headerText));
-  check('table caption unescapes exactly', importedCaption === literal, JSON.stringify(importedCaption));
-  check('settings/attribute escape export is idempotent', docToTyp(back) === out, firstDiff(out, docToTyp(back)));
-}
-
-// --- 20. math source is an inert JSON/raw argument, never Typst syntax ---
-{
-  const inlineSource = '\\text{tick ` and #mi(raw("fake"), block: false))}';
-  const displaySource = '\\text{display ` and #mitex(raw("fake"), block: true)) <eq:fake>}';
-  const { doc: docType, paragraph, math_inline, math_display } = schema.nodes;
-  const doc = docType.create(
-    { settings: { ...DEFAULT_SETTINGS, numberEquations: false }, bib: null },
-    [
-      paragraph.create(null, [schema.text('Inline '), math_inline.create({ src: inlineSource })]),
-      // Exercise the current set/call/restore parser as well as label recovery.
-      math_display.create({ src: displaySource, label: 'eq:safe-math', numbered: true }),
-    ],
-  );
-  const out = docToTyp(doc);
-  check('inline math uses an inert raw string', out.includes(inlineMathToTypst(inlineSource)), out.slice(-500));
-  check('display math uses an inert raw string', out.includes(displayMathToTypst(displaySource)), out.slice(-500));
-  check('current math export has no backtick-delimited call',
-    !out.includes('#mi(`') && !out.includes('#mitex(`'), out.slice(-500));
-
-  const back = typToDoc(out).doc;
-  let inlineBack = '';
-  const displayNodes: Array<{ src: string; label: string; numbered: boolean | null }> = [];
-  back.descendants((node) => {
-    if (node.type.name === 'math_inline') inlineBack = node.attrs.src as string;
-    if (node.type.name === 'math_display') {
-      displayNodes.push({
-        src: node.attrs.src as string,
-        label: node.attrs.label as string,
-        numbered: node.attrs.numbered as boolean | null,
-      });
-    }
-    return true;
-  });
-  const displayBack = displayNodes[0];
-  check('safe inline math decodes exactly', inlineBack === inlineSource, JSON.stringify(inlineBack));
-  check('safe display math decodes delimiter-like content exactly',
-    displayBack?.src === displaySource, JSON.stringify(displayBack));
-  check('safe display math preserves label and numbering override',
-    displayBack?.label === 'eq:safe-math' && displayBack.numbered === true,
-    JSON.stringify(displayBack));
-  check('safe math export is idempotent', docToTyp(back) === out, firstDiff(out, docToTyp(back)));
-}
-
-// --- 21. ordinary code stays visually plain and round-trips losslessly ---
-{
-  const source = 'def f(x):\n    return `literal` + " // not a comment"\n``` marker';
-  const { doc: docType, code_block } = schema.nodes;
-  const original = docType.create(null, [
-    code_block.create({ params: 'python title="Exact code"' }, schema.text(source)),
-  ]);
-  const out = docToTyp(original);
-  check('ordinary code uses unlabelled block raw instead of syntax highlighting',
-    out.includes('// typeset:code-block-params "python title=\\"Exact code\\""') &&
-      out.includes('#raw("def f(x):\\n'), out.slice(-400));
-  check('ordinary code export has no language fence', !out.includes('```python'), out.slice(-300));
-  const restored = typToDoc(out).doc.firstChild;
-  check('ordinary code source and params decode exactly',
-    restored?.type.name === 'code_block' &&
-      restored.attrs.params === 'python title="Exact code"' &&
-      restored.textContent === source,
-    JSON.stringify(restored?.toJSON()));
-  check('ordinary code export is idempotent', docToTyp(typToDoc(out).doc) === out,
-    firstDiff(out, docToTyp(typToDoc(out).doc)));
 }
 
 declare const process: { exitCode?: number };
