@@ -250,6 +250,29 @@ export function stripListMarker(text: string, marker: boolean | string | undefin
   return text.replace(MARKER, '');
 }
 
+/** The resync target when an opaque block hands off to the next exact unit:
+ * that unit's first two words, plus its own marker (if any) — a list item
+ * carries one, and Typst glues it onto the rendered line's front exactly
+ * like it does for the exact-match branch above. */
+export interface Anchor {
+  text: string;
+  marker?: boolean | string;
+}
+
+/**
+ * Whether an opaque block's current SVG line is where the next exact unit
+ * (the anchor) begins. The anchor's own marker must be stripped from the
+ * candidate line first — Typst glues a list item's marker onto its first
+ * line with no separating space, so an un-stripped comparison can never
+ * satisfy `startsWith` and the opaque block would consume straight past
+ * its real end into lines that belong to the marked item.
+ */
+export function matchesAnchor(lineText: string, anchor: Anchor | null): boolean {
+  if (!anchor) return false;
+  const text = stripListMarker(lineText.replace(/\s+/g, ' ').trim(), anchor.marker);
+  return text === anchor.text || text.startsWith(anchor.text + ' ') || text.startsWith(anchor.text);
+}
+
 /** First words of every footnote body, in document order. */
 export function footnoteHeads(doc: PMNode): string[] {
   const heads: string[] = [];
@@ -356,12 +379,12 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
     }
   };
 
-  const anchorFor = (idx: number): { text: string } | null => {
+  const anchorFor = (idx: number): Anchor | null => {
     for (let j = idx; j < units.length; j++) {
       const u = units[j];
       if (u.kind === 'exact' && u.spec) {
         const words = u.spec.tokens.filter((t) => t.text).slice(0, 2);
-        if (words.length) return { text: words.map((t) => t.text).join(' ') };
+        if (words.length) return { text: words.map((t) => t.text).join(' '), marker: u.marker };
       }
     }
     return null;
@@ -388,8 +411,7 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
       const anchor = anchorFor(ui + 1);
       let consumed = 0;
       while (cursor < lines.length) {
-        const text = lines[cursor].text.replace(/\s+/g, ' ').trim();
-        if (anchor && (text === anchor.text || text.startsWith(anchor.text + ' ') || text.startsWith(anchor.text))) break;
+        if (matchesAnchor(lines[cursor].text, anchor)) break;
         notePage(cursor, unit, consumed === 0 ? 0 : consumed);
         cursor++;
         consumed++;

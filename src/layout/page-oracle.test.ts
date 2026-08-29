@@ -11,7 +11,7 @@
 // never overrides it) and stripListMarker requires it verbatim.
 
 import { schema } from '../schema';
-import { buildUnits, stripListMarker, type Unit } from './page-oracle';
+import { buildUnits, matchesAnchor, stripListMarker, type Unit } from './page-oracle';
 import type { AtomResolver } from './typst-oracle';
 
 function check(label: string, condition: boolean) {
@@ -85,4 +85,35 @@ const item = (text: string) => schema.nodes.list_item.create(null, paragraph(tex
   check('only the first block of a multi-block item gets a marker', paraUnits[0].marker === '1.');
   check('the second block of the same item gets none', !paraUnits[1].marker);
   check('the next item still gets its own marker', paraUnits[2].marker === '2.');
+}
+
+// --- matchesAnchor: opaque-block resync onto a MARKED next unit -----------
+//
+// Regression for the opaque-block-swallows-the-marked-item bug: an opaque
+// block (a code_block, a figure, a table, …) resyncs onto the next exact
+// unit by comparing SVG line text against that unit's first two words. When
+// that next unit is a list item, Typst glues its marker onto the line's
+// front — the un-stripped comparison could never match, so the opaque
+// block consumed straight past its real end into the marked item's own
+// lines (reproduced end-to-end as a permanent "page splits inside atomic
+// block" failure for a code_block immediately followed by an ordered_list).
+
+{
+  check(
+    'an ordered marker glued onto the anchor line still matches',
+    matchesAnchor('1.Ordered item one immediately after the block.', { text: 'Ordered item', marker: '1.' }),
+  );
+  check(
+    'a bullet glyph glued onto the anchor line still matches',
+    matchesAnchor('• Bullet item one.', { text: 'Bullet item', marker: true }),
+  );
+  check(
+    'a mismatched ordered marker still fails to match (fail closed)',
+    !matchesAnchor('2.Ordered item one immediately after the block.', { text: 'Ordered item', marker: '1.' }),
+  );
+  check(
+    'an unmarked anchor matches its line exactly as before',
+    matchesAnchor('Plain paragraph text.', { text: 'Plain paragraph' }),
+  );
+  check('a null anchor never matches (trailing opaque content owns the rest)', !matchesAnchor('Anything.', null));
 }
