@@ -38,7 +38,7 @@ import {
 import { buildSpec, type TypstOracle, type AtomResolver, type SpecKind } from './layout/typst-oracle';
 import { portBreaks } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
-import type { PageOracle } from './layout/page-oracle';
+import type { PageOracle, PageOracleEntry } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
 import { FONT_FALLBACK } from './pdf';
@@ -115,6 +115,13 @@ import {
   ForcedLayoutAuditor,
   type ForcedLayoutAuditReport,
 } from './layout/forced-layout-audit';
+import {
+  diffPageStarts,
+  emptyPageParityStats,
+  recordParityDiff,
+  type PageParityStats,
+  type PageStartEntry,
+} from './layout/page-parity';
 
 export { typesetKey };
 export type { PageInfo, TypesetMeta, TypesetState, TypesetStats };
@@ -450,6 +457,19 @@ class TypesetView {
   private paginationSnapshotStats = { captures: 0, spacerScans: 0, tableScans: 0, heightQueries: 0 };
   private suffixPaginationStats = emptySuffixPaginationStats();
   private suffixControl = new SuffixPaginationControl();
+  /** PAGE-PORT.md Phase 0 (DEV only): parity telemetry between the local
+   * fallback paginator's page starts and Typst's exact answer for the same
+   * document revision. Never read outside `__pageParityStats`; every write
+   * site is gated on `import.meta.env.DEV` so this costs nothing in
+   * production. */
+  private pageParityStats = emptyPageParityStats();
+  /** The most recent local fallback prediction awaiting an exact answer for
+   * the same doc signature (capture point (a): a fallback window). */
+  private lastLocalPagePrediction: { sig: string; entries: PageStartEntry[] } | null = null;
+  /** Doc signature of the last exact publication a shadow prediction ran
+   * against — throttles capture point (b) to at most one shadow run per
+   * settled exact publication. */
+  private lastParityShadowSig: string | null = null;
   /** Monotone pagination-pass id: any later pass invalidates a pending
    * verification ticket (the installed geometry it describes is gone). */
   private paginationPassCounter = 0;
@@ -538,6 +558,7 @@ class TypesetView {
           heightQueries: number;
         };
         __suffixPaginationStats?: (reset?: boolean) => SuffixPaginationStatsReport;
+        __pageParityStats?: (reset?: boolean) => PageParityStats;
         __suffixPaginationControl?: (opts?: {
           mode?: SuffixPaginationMode;
           revive?: boolean;
@@ -677,6 +698,20 @@ class TypesetView {
           // Restart the deterministic verification sample with the stats
           // window, so its first install is verified. Kill state persists.
           this.suffixControl.resetSampling();
+        }
+        return stats;
+      };
+      w.__pageParityStats = (reset = false) => {
+        const stats: PageParityStats = {
+          ...this.pageParityStats,
+          byCause: { ...this.pageParityStats.byCause },
+          skipped: { ...this.pageParityStats.skipped },
+          last: this.pageParityStats.last ? { ...this.pageParityStats.last } : null,
+        };
+        if (reset) {
+          this.pageParityStats = emptyPageParityStats();
+          this.lastLocalPagePrediction = null;
+          this.lastParityShadowSig = null;
         }
         return stats;
       };
@@ -2146,6 +2181,143 @@ class TypesetView {
     return { paragraphs, lines: lineCount };
   }
 
+  /** PAGE-PORT.md Phase 0 (DEV only): normalize a local fallback pass's
+   * `anchors` (`{pos, page, kind}`, `kind` only distinguishing `line` from
+   * `block`) into the oracle's own `{pos, line, unit}` vocabulary, so a
+   * local prediction and an exact answer can be diffed apples-to-apples.
+   * A `line`-kind anchor's `pos` is already the resolved absolute position
+   * of the line start (unlike the oracle's, which is the enclosing
+   * paragraph's position plus a line index) — recovered here by resolving
+   * the enclosing paragraph (which may be nested inside a list item or
+   * blockquote, not necessarily a top-level block) and searching its cached
+   * line layout, mirroring what `paginateForced` does in the opposite
+   * direction. */
+  private anchorsToPageStartEntries(
+    anchors: Array<{ pos: number; page: number; kind: Spacer['kind'] }>,
+  ): PageStartEntry[] {
+    const doc = this.view.state.doc;
+    return anchors.map((a): PageStartEntry => {
+      if (a.kind === 'block') {
+        const node = doc.nodeAt(a.pos);
+        let unit = 'block';
+        if (node?.type.name === 'heading') {
+          unit = `h${Math.min(3, (node.attrs.level as number) || 1)}`;
+        } else if (node?.type.name === 'table') {
+          unit = 'table';
+        } else if (node?.type.name === 'paragraph') {
+          unit = 'paragraph';
+        }
+        return { pos: a.pos, line: 0, unit };
+      }
+      // kind === 'line': recover the enclosing paragraph's position and the
+      // line index within its cached layout.
+      try {
+        const $pos = doc.resolve(a.pos);
+        let paraPos: number | null = null;
+        let node: PMNode | null = null;
+        for (let d = $pos.depth; d >= 0; d--) {
+          if ($pos.node(d).type.name === 'paragraph') {
+            paraPos = $pos.before(d);
+            node = $pos.node(d);
+            break;
+          }
+        }
+        if (paraPos === null || !node) return { pos: a.pos, line: 0, unit: 'line' };
+        const entry = this.cache.get(node);
+        if (!entry) return { pos: paraPos, line: 0, unit: 'line' };
+        const base = paraPos + 1;
+        const line = entry.lines.findIndex((l) => base + l.from === a.pos);
+        return { pos: paraPos, line: line >= 0 ? line : 0, unit: 'line' };
+      } catch {
+        return { pos: a.pos, line: 0, unit: 'line' };
+      }
+    });
+  }
+
+  /** PAGE-PORT.md Phase 0 (DEV only), capture point (a): remember the local
+   * fallback pass's page starts for the document revision it ran against, so
+   * that if an exact answer for the SAME revision later arrives, it can be
+   * diffed against what the local paginator predicted while Typst was still
+   * compiling. A no-op outside DEV and whenever the document has no oracle
+   * signature yet (nothing will ever arrive to compare against). */
+  private recordLocalPagePrediction(
+    anchors: Array<{ pos: number; page: number; kind: Spacer['kind'] }>,
+  ): void {
+    if (!import.meta.env.DEV) return;
+    const sig = this.docSig.get(this.view.state.doc);
+    if (!sig) return;
+    this.lastLocalPagePrediction = { sig, entries: this.anchorsToPageStartEntries(anchors) };
+  }
+
+  /** PAGE-PORT.md Phase 0 (DEV only): fold one local-vs-exact page-start
+   * comparison into `pageParityStats`, given entries already normalized to
+   * the oracle's `{pos, line, unit}` vocabulary. */
+  private recordPageParity(local: PageStartEntry[], exact: PageStartEntry[]): void {
+    const diff = diffPageStarts(local, exact, { doc: this.view.state.doc });
+    recordParityDiff(this.pageParityStats, diff);
+  }
+
+  /** PAGE-PORT.md Phase 0 (DEV only): called whenever a fresh Typst exact
+   * page answer just installed for `sig`. Drives both telemetry capture
+   * points:
+   *  (a) fallback windows — if a local fallback prediction was captured for
+   *      this same revision while the oracle was still compiling, diff it
+   *      against the now-arrived exact answer.
+   *  (b) predict-always shadow — on a healthy document the exact path
+   *      installs directly and the local paginator never runs, so run it
+   *      once per settled exact publication as a PREDICTION-ONLY pass
+   *      purely to feed the same telemetry. Never installs its result: no
+   *      spacers, dispatch, or table-split side effects reach the document.
+   *      Skipped (and counted) for documents containing tables — a table
+   *      crossing a page boundary would call `requestTableSplit`, which
+   *      caches and kicks off a real compile — and for documents over ~50
+   *      pages, to bound the cost of a shadow full pass. */
+  private observeExactPageAnswer(
+    sig: string,
+    snapshot: PaginationGeometrySnapshot,
+    entry: PageOracleEntry,
+  ): void {
+    if (!entry.pageStarts) return;
+    const exactEntries: PageStartEntry[] = entry.pageStarts.map((ps) => ({
+      pos: ps.pos,
+      line: ps.line,
+      unit: ps.unit,
+    }));
+
+    if (this.lastLocalPagePrediction && this.lastLocalPagePrediction.sig === sig) {
+      this.recordPageParity(this.lastLocalPagePrediction.entries, exactEntries);
+      this.lastLocalPagePrediction = null;
+    }
+
+    if (this.lastParityShadowSig === sig) return;
+    this.lastParityShadowSig = sig;
+    const pageCount = entry.pageCount ?? entry.pageStarts.length + 1;
+    if (pageCount > 50) {
+      this.pageParityStats.skipped.tooLarge++;
+      return;
+    }
+    // A table may sit nested inside a list item or blockquote, not just at
+    // the top level — descendants() is the only check that finds those too.
+    let hasTable = false;
+    this.view.state.doc.descendants((node) => {
+      if (hasTable) return false;
+      if (node.type.name === 'table') {
+        hasTable = true;
+        return false;
+      }
+      return true;
+    });
+    if (hasTable) {
+      this.pageParityStats.skipped.tables++;
+      return;
+    }
+    // Prediction-only: the return value is diffed and discarded. Verified
+    // side-effect-free for a table-free document — see runFallbackPass's
+    // tableCase, the only branch that reaches outside its own locals.
+    const shadow = this.runFallbackPass(snapshot);
+    this.recordPageParity(this.anchorsToPageStartEntries(shadow.anchors), exactEntries);
+  }
+
   /**
    * Walk the naturally-laid-out document and decide where pages break.
    * Paragraphs split at oracle line boundaries; lists and blockquotes break
@@ -2212,6 +2384,7 @@ class TypesetView {
               ),
             );
             this.applyTableEffects(forced.tableEffects);
+            if (import.meta.env.DEV) this.observeExactPageAnswer(sig, snapshot, entry);
             return { spacers: forced.spacers, count: forced.count };
           }
         }
@@ -2323,20 +2496,19 @@ class TypesetView {
         // prefix pages (one anchor per preserved gap) plus the recomputed
         // suffix anchors. An eligible seed guarantees one gap per prefix
         // page, so the reconstruction is exact.
-        this.rememberFallbackBasis({
-          ...suffix,
-          anchors: [
-            ...suffixPlan.seed.prefixSpacers.map((spacer, index) => ({
-              pos: spacer.pos,
-              page: index + 1,
-              kind: spacer.kind,
-            })),
-            ...suffix.anchors,
-          ],
-        });
+        const installedAnchors = [
+          ...suffixPlan.seed.prefixSpacers.map((spacer, index) => ({
+            pos: spacer.pos,
+            page: index + 1,
+            kind: spacer.kind,
+          })),
+          ...suffix.anchors,
+        ];
+        this.rememberFallbackBasis({ ...suffix, anchors: installedAnchors });
         // Eligibility excludes tables, so there are no table effects to
         // stage; apply defensively to keep the contract with the full path.
         this.applyTableEffects(suffix.tableEffects);
+        if (import.meta.env.DEV) this.recordLocalPagePrediction(installedAnchors);
         return { spacers: suffix.spacers, count: suffix.count };
       }
 
@@ -2406,6 +2578,7 @@ class TypesetView {
       // cleared: page starts above the seed boundary stay valid across
       // fallback repaginations of the suffix.
       this.applyTableEffects(full.tableEffects);
+      if (import.meta.env.DEV) this.recordLocalPagePrediction(full.anchors);
       return { spacers: full.spacers, count: full.count };
     }
 
@@ -2443,6 +2616,7 @@ class TypesetView {
     }
     this.rememberFallbackBasis(fallback);
     this.applyTableEffects(fallback.tableEffects);
+    if (import.meta.env.DEV) this.recordLocalPagePrediction(fallback.anchors);
     return { spacers: fallback.spacers, count: fallback.count };
   }
 
