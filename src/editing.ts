@@ -14,7 +14,7 @@ import { Plugin, TextSelection } from 'prosemirror-state';
 import { baseKeymap, chainCommands, exitCode, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import { redo, undo } from 'prosemirror-history';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
-import { Slice, type Mark, type MarkType } from 'prosemirror-model';
+import { Slice, type MarkType } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
 import { schema } from './schema';
 import { insertMath, mathDisplayRule, mathInlineRule } from './math';
@@ -258,14 +258,6 @@ export function buildKeymap(): Plugin {
 
 export const baseKeys = keymap(baseKeymap);
 
-/**
- * Typst collapses runs of ordinary spaces to a single space, so a document
- * holding "a  b" PRINTS as "a b" — and the live breaker and the compiled
- * oracle would forever disagree about the paragraph's text. Keep the
- * document in printed form: after any edit, collapse space runs in plain
- * text (code blocks and code-marked text keep their spaces — raw preserves
- * them in Typst too). Non-breaking spaces are meaningful and untouched.
- */
 /** Copying TEXT out of a bullet copies the text, not the bullet.
  *
  *  ProseMirror slices a selection at its own depth, so highlighting the words
@@ -294,55 +286,6 @@ export function copyTextWithoutItsBlock(): Plugin {
         if (content.childCount && !content.child(0).isInline) return slice;
         return new Slice(content, 0, 0);
       },
-    },
-  });
-}
-
-export function collapseSpaces(): Plugin {
-  return new Plugin({
-    appendTransaction(trs, _old, state) {
-      if (!trs.some((tr) => tr.docChanged)) return null;
-      const swaps: Array<[number, number, string, readonly Mark[]]> = [];
-      state.doc.descendants((node, pos) => {
-        if (node.type.name === 'code_block') return false;
-        if (!node.isTextblock) return true;
-        node.forEach((child, offset) => {
-          if (!child.isText || !child.text) return;
-          if (child.marks.some((m) => m.type.name === 'code')) return;
-          const text = child.text;
-          // Whitespace runs collapse to ONE plain space — including runs
-          // the browser polluted with non-breaking spaces (contenteditable
-          // substitutes U+00A0 when spaces are typed adjacently, and the
-          // editor honors nbsp as glue, welding words together). A run of
-          // PURE nbsp is intentional (~~) and stays.
-          const re = /[ \u00a0]{2,}/g;
-          let m: RegExpExecArray | null;
-          while ((m = re.exec(text))) {
-            if (!m[0].includes(' ')) continue;
-            const base = pos + 1 + offset + m.index;
-            swaps.push([base, base + m[0].length, ' ', child.marks]);
-          }
-          // Typst dash shorthands print differently than they type: the
-          // document holds the printed glyphs (--- em, -- en — including
-          // the "–-" state mid-way through typing an em dash — and a
-          // whitespace-preceded hyphen before a digit is a minus sign).
-          const dashRe = /---|\u2013-|--|(?<=^|\s)-(?=\d)/g;
-          while ((m = dashRe.exec(text))) {
-            const base = pos + 1 + offset + m.index;
-            const glyph = m[0] === '--' ? '\u2013' : m[0] === '-' ? '\u2212' : '\u2014';
-            swaps.push([base, base + m[0].length, glyph, child.marks]);
-          }
-        });
-        return true;
-      });
-      if (!swaps.length) return null;
-      const tr = state.tr;
-      // Descending order keeps earlier positions valid; marks carry over so
-      // a normalized character inside bold/italic text stays styled.
-      for (const [from, to, text, marks] of swaps.sort((a, b) => b[0] - a[0])) {
-        tr.replaceWith(from, to, state.schema.text(text, marks));
-      }
-      return tr;
     },
   });
 }
