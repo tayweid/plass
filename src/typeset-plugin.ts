@@ -105,6 +105,11 @@ import {
   type SuffixPageSpacer,
   type SuffixPaginationSeed,
 } from './layout/pagination-suffix';
+import {
+  SuffixPaginationControl,
+  type SuffixKillDetail,
+  type SuffixPaginationMode,
+} from './layout/pagination-suffix-control';
 import { layoutForcedBlock } from './layout/forced-layout';
 import {
   ForcedLayoutAuditor,
@@ -199,8 +204,9 @@ interface FallbackBasisMarker {
   unit: string;
 }
 
-/** One shadow-planner outcome, structured enough to diagnose without a
- * debugger: why a pass was ineligible, or where a compared pass diverged. */
+/** One planner outcome, structured enough to diagnose without a debugger:
+ * why a pass was ineligible, what was installed, or where a compared pass
+ * diverged. */
 interface SuffixPaginationRun {
   eligible: boolean;
   /** Seed source when eligible; first ineligibility reason otherwise. */
@@ -213,7 +219,7 @@ interface SuffixPaginationRun {
   mismatchDelta: number | null;
 }
 
-/** Per-seed-source shadow tallies. `referenceBails` counts eligible exact
+/** Per-seed-source comparison tallies. `referenceBails` counts eligible exact
  * seeds whose live prefix re-force failed, so no comparison ran — neither a
  * match nor a mismatch, but a retention-staleness signal in its own right. */
 interface SuffixSourceStats {
@@ -227,6 +233,16 @@ interface SuffixSourceStats {
 interface SuffixPaginationStats {
   attempts: number;
   eligible: number;
+  /** Suffix results installed as the live pagination (promoted path). */
+  installs: number;
+  /** Full fallback passes executed (ineligible installs, shadow-mode
+   * references, and sampled-verification references). */
+  fullRuns: number;
+  /** Deferred verifications that completed a comparison. */
+  sampledVerifications: number;
+  /** Sampled tickets invalidated (doc/geometry moved) before the idle
+   * verification could run soundly. */
+  verificationsDropped: number;
   compared: number;
   matches: number;
   mismatches: number;
@@ -236,13 +252,25 @@ interface SuffixPaginationStats {
   lastDifference: string | null;
   lastStartPos: number | null;
   lastAnchorPos: number | null;
+  /** Most recent installed suffix pass (cost diagnostics). */
+  lastSuffixPass: { units: number; ms: number } | null;
+  /** Most recent installed full pass (cost diagnostics). */
+  lastFullPass: { units: number; ms: number } | null;
   /** Ineligibility-reason histogram over every attempted plan. */
   reasons: Record<string, number>;
   lastRun: SuffixPaginationRun | null;
   bySource: {
     exact: SuffixSourceStats;
-    'fallback-shadow': SuffixSourceStats;
+    fallback: SuffixSourceStats;
   };
+}
+
+/** The DEV stats report: the mutable tallies plus the control's live state. */
+interface SuffixPaginationStatsReport extends SuffixPaginationStats {
+  killed: boolean;
+  killDetail: SuffixKillDetail | null;
+  mode: SuffixPaginationMode;
+  verifyEvery: number;
 }
 
 const emptySuffixSourceStats = (): SuffixSourceStats => ({
@@ -256,6 +284,10 @@ const emptySuffixSourceStats = (): SuffixSourceStats => ({
 const emptySuffixPaginationStats = (): SuffixPaginationStats => ({
   attempts: 0,
   eligible: 0,
+  installs: 0,
+  fullRuns: 0,
+  sampledVerifications: 0,
+  verificationsDropped: 0,
   compared: 0,
   matches: 0,
   mismatches: 0,
@@ -265,14 +297,30 @@ const emptySuffixPaginationStats = (): SuffixPaginationStats => ({
   lastDifference: null,
   lastStartPos: null,
   lastAnchorPos: null,
+  lastSuffixPass: null,
+  lastFullPass: null,
   reasons: {},
   lastRun: null,
-  bySource: { exact: emptySuffixSourceStats(), 'fallback-shadow': emptySuffixSourceStats() },
+  bySource: { exact: emptySuffixSourceStats(), fallback: emptySuffixSourceStats() },
 });
 
 type PaginationSuffixPlan =
-  | { kind: 'seed'; source: 'exact' | 'fallback-shadow'; seed: SuffixPaginationSeed }
+  | { kind: 'seed'; source: 'exact' | 'fallback'; seed: SuffixPaginationSeed }
   | { kind: 'none'; reason: string };
+
+/** A sampled suffix install awaiting idle verification. Valid only while the
+ * exact conditions of the install persist — the same document revision, the
+ * same geometry epochs, the same width, and no later pagination pass. */
+interface SuffixVerificationTicket {
+  doc: PMNode;
+  source: 'exact' | 'fallback';
+  seed: SuffixPaginationSeed;
+  result: PaginationFallbackResult;
+  passId: number;
+  pagEpoch: number;
+  domEpoch: number;
+  width: number;
+}
 
 const viewRegistry = new WeakMap<EditorView, TypesetView>();
 
@@ -401,6 +449,12 @@ class TypesetView {
   private pageMarkDispatches = 0;
   private paginationSnapshotStats = { captures: 0, spacerScans: 0, tableScans: 0, heightQueries: 0 };
   private suffixPaginationStats = emptySuffixPaginationStats();
+  private suffixControl = new SuffixPaginationControl();
+  /** Monotone pagination-pass id: any later pass invalidates a pending
+   * verification ticket (the installed geometry it describes is gone). */
+  private paginationPassCounter = 0;
+  private pendingSuffixVerification: SuffixVerificationTicket | null = null;
+  private suffixVerifyScheduled = false;
   private exactPageBasisDoc: PMNode | null = null;
   private exactPageBasisEpoch = -1;
   private exactPageBasisWidth = 0;
@@ -408,7 +462,7 @@ class TypesetView {
    * spacer geometry installed for them. Retained across later edits and
    * fallback repaginations (the clean prefix keeps basis positions valid), so
    * an edit landing on an exactly paginated document — or on a burst that
-   * began from one — seeds the shadow suffix pass from Typst's settled page
+   * began from one — seeds the suffix pass from Typst's settled page
    * starts instead of a prior local fallback snapshot. */
   private exactPageBasisMarkers: SuffixPageMarker[] = [];
   private exactPageBasisSpacers: SuffixPageSpacer[] = [];
@@ -483,7 +537,18 @@ class TypesetView {
           tableScans: number;
           heightQueries: number;
         };
-        __suffixPaginationStats?: (reset?: boolean) => SuffixPaginationStats;
+        __suffixPaginationStats?: (reset?: boolean) => SuffixPaginationStatsReport;
+        __suffixPaginationControl?: (opts?: {
+          mode?: SuffixPaginationMode;
+          revive?: boolean;
+          injectMismatch?: boolean;
+        }) => {
+          mode: SuffixPaginationMode;
+          killed: boolean;
+          killDetail: SuffixKillDetail | null;
+          installs: number;
+          verifyEvery: number;
+        };
       };
       w.__oracle = this.oracles.paragraph;
       w.__pageOracle = this.oracles.page;
@@ -586,19 +651,50 @@ class TypesetView {
         return stats;
       };
       w.__suffixPaginationStats = (reset = false) => {
-        const stats = {
+        const stats: SuffixPaginationStatsReport = {
           ...this.suffixPaginationStats,
           reasons: { ...this.suffixPaginationStats.reasons },
           lastRun: this.suffixPaginationStats.lastRun
             ? { ...this.suffixPaginationStats.lastRun }
             : null,
+          lastSuffixPass: this.suffixPaginationStats.lastSuffixPass
+            ? { ...this.suffixPaginationStats.lastSuffixPass }
+            : null,
+          lastFullPass: this.suffixPaginationStats.lastFullPass
+            ? { ...this.suffixPaginationStats.lastFullPass }
+            : null,
           bySource: {
             exact: { ...this.suffixPaginationStats.bySource.exact },
-            'fallback-shadow': { ...this.suffixPaginationStats.bySource['fallback-shadow'] },
+            fallback: { ...this.suffixPaginationStats.bySource.fallback },
           },
+          killed: this.suffixControl.killed,
+          killDetail: this.suffixControl.killDetail,
+          mode: this.suffixControl.mode,
+          verifyEvery: this.suffixControl.verifyEvery,
         };
-        if (reset) this.suffixPaginationStats = emptySuffixPaginationStats();
+        if (reset) {
+          this.suffixPaginationStats = emptySuffixPaginationStats();
+          // Restart the deterministic verification sample with the stats
+          // window, so its first install is verified. Kill state persists.
+          this.suffixControl.resetSampling();
+        }
         return stats;
+      };
+      w.__suffixPaginationControl = (opts = {}) => {
+        if (opts.mode) this.suffixControl.mode = opts.mode;
+        if (opts.revive) this.suffixControl.revive();
+        if (opts.injectMismatch) {
+          // Exercise the REAL soundness path: kill, then a clean full-pass
+          // takeover through the ordinary install machinery.
+          this.suffixSoundnessEvent({ source: 'injected', summary: 'dev-injected mismatch' });
+        }
+        return {
+          mode: this.suffixControl.mode,
+          killed: this.suffixControl.killed,
+          killDetail: this.suffixControl.killDetail,
+          installs: this.suffixControl.installs,
+          verifyEvery: this.suffixControl.verifyEvery,
+        };
       };
     }
     this.scheduler = new LayoutScheduler(view.dom, {
@@ -1179,7 +1275,10 @@ class TypesetView {
   }
 
   private planPaginationSuffix(snapshot: PaginationGeometrySnapshot): PaginationSuffixPlan {
-    if (!import.meta.env.DEV) return { kind: 'none', reason: 'shadow-disabled' };
+    // Session policy first: a tripped kill-switch (first verified mismatch)
+    // or the forced-full measurement mode runs every pass full.
+    const inactive = this.suffixControl.inactiveReason();
+    if (inactive) return { kind: 'none', reason: inactive };
     const currentDoc = this.view.state.doc;
     let exactReason: string | null = null;
 
@@ -1207,9 +1306,10 @@ class TypesetView {
       exactReason = `exact-${decision.reason}`;
     }
 
-    // A previous local fallback is never promoted to production authority.
-    // In development it supplies large-corpus shadow checkpoints: the full
-    // result remains selected even when the suffix matches byte-for-byte.
+    // The fallback basis: page starts the local engine itself installed last
+    // time. Seeding from it holds local-rule output constant above the edit,
+    // which the full local pass regenerates identically — so installing the
+    // seeded suffix is indistinguishable from re-running the full pass.
     if (
       this.fallbackPageBasisDoc &&
       Math.abs(this.fallbackPageBasisWidth - this.view.dom.clientWidth) <= 0.5
@@ -1223,7 +1323,7 @@ class TypesetView {
         currentEpoch: this.paginationGeometryEpoch,
       });
       if (decision.kind === 'seed') {
-        return { kind: 'seed', source: 'fallback-shadow', seed: decision.seed };
+        return { kind: 'seed', source: 'fallback', seed: decision.seed };
       }
       return {
         kind: 'none',
@@ -1318,7 +1418,7 @@ class TypesetView {
     this.fallbackPageBasisMarkers = [];
   }
 
-  /** Compare a full and a seeded shadow pass. `page` is the zero-based
+  /** Compare a reference and a seeded suffix pass. `page` is the zero-based
    * physical page index at the first differing spacer (spacer i starts page
    * i + 1); `delta` is the suffix-minus-full height difference when the same
    * spacer differs only in height. The summary is capped for stats storage. */
@@ -1544,6 +1644,135 @@ class TypesetView {
       lines: stats.lines,
     });
     this.opts.onStats?.({ ms: totalMs, paragraphs: stats.paragraphs, lines: stats.lines });
+    // A sampled suffix install verifies against its reference pass at idle,
+    // after this result has painted — never blocking the install itself.
+    this.scheduleSuffixVerification();
+  }
+
+  /** Low-priority deferral: after the installing frame paints, then a
+   * macrotask. The scheduler has no idle queue of its own; this preserves
+   * its contract (a verification never delays a live or settled run — any
+   * such run simply invalidates the ticket first). */
+  private scheduleSuffixVerification(): void {
+    if (!this.pendingSuffixVerification || this.suffixVerifyScheduled) return;
+    this.suffixVerifyScheduled = true;
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        this.suffixVerifyScheduled = false;
+        const ticket = this.pendingSuffixVerification;
+        this.pendingSuffixVerification = null;
+        if (ticket && !this.destroyed) this.runSuffixVerification(ticket);
+      }, 0);
+    });
+  }
+
+  /**
+   * Sampled soundness check for an installed suffix result. The ticket is
+   * honored only while the install's exact conditions persist — the same
+   * document revision, geometry epochs, and width, and no later pagination
+   * pass — because the reference must measure the same natural geometry the
+   * suffix measured. The reference is source-appropriate: a fallback seed's
+   * prefix is local-rule output the unseeded full pass regenerates
+   * identically, while an exact seed's prefix was decided by Typst, so the
+   * reference re-forces those breaks and runs the same seeded suffix below
+   * them (comparing against the plain full pass would measure
+   * prefix-authority differences, not suffix-runner bugs).
+   */
+  private runSuffixVerification(ticket: SuffixVerificationTicket): void {
+    const stats = this.suffixPaginationStats;
+    if (
+      this.view.state.doc !== ticket.doc ||
+      this.paginationPassCounter !== ticket.passId ||
+      this.paginationGeometryEpoch !== ticket.pagEpoch ||
+      this.domGeometryEpoch !== ticket.domEpoch ||
+      Math.abs(this.view.dom.clientWidth - ticket.width) > 0.5
+    ) {
+      stats.verificationsDropped++;
+      return;
+    }
+    const snapshot = this.capturePaginationSnapshot();
+    const runFallback = (seed?: PaginationFallbackSeed) => this.runFallbackPass(snapshot, seed);
+    const sourceStats = stats.bySource[ticket.source];
+    let reference: PaginationFallbackResult | null;
+    if (ticket.source === 'exact') {
+      reference = this.exactSuffixReference(snapshot, ticket.seed, runFallback);
+    } else {
+      reference = runFallback();
+      stats.fullRuns++;
+      stats.fullUnits += reference.visitedUnits;
+    }
+    if (!reference) {
+      // The retained exact geometry no longer re-forces cleanly: the
+      // installed result's premise is stale. Not a runner mismatch — the
+      // kill-switch stays untripped — but the display can no longer be
+      // trusted either: drop both bases and repaginate full immediately.
+      sourceStats.referenceBails++;
+      stats.reasons['exact-reference-bail'] = (stats.reasons['exact-reference-bail'] ?? 0) + 1;
+      stats.lastReason = 'exact-reference-bail';
+      stats.lastDifference = null;
+      stats.lastRun = {
+        eligible: true,
+        reason: 'exact-reference-bail',
+        matched: null,
+        mismatchPage: null,
+        mismatchDelta: null,
+      };
+      this.clearExactPageBasis();
+      this.clearFallbackPageBasis();
+      this.run();
+      return;
+    }
+    stats.sampledVerifications++;
+    stats.compared++;
+    sourceStats.compared++;
+    const difference = this.fallbackResultDifference(reference, ticket.result);
+    if (difference === null) {
+      stats.matches++;
+      sourceStats.matches++;
+      stats.lastDifference = null;
+      stats.lastReason = `verified-${ticket.source}`;
+      stats.lastRun = {
+        eligible: true,
+        reason: `verified-${ticket.source}`,
+        matched: true,
+        mismatchPage: null,
+        mismatchDelta: null,
+      };
+      return;
+    }
+    this.suffixSoundnessEvent(
+      { source: ticket.source, summary: difference.summary },
+      difference,
+    );
+  }
+
+  /**
+   * A verified mismatch (or a dev-injected one): correctness beats
+   * stability. Trip the kill-switch — every later pass runs full for the
+   * session — and repaginate full NOW so the corrected pages install
+   * through the ordinary machinery, correcting visibly if they differ.
+   */
+  private suffixSoundnessEvent(
+    detail: SuffixKillDetail,
+    difference?: { summary: string; page: number | null; delta: number | null },
+  ): void {
+    const stats = this.suffixPaginationStats;
+    stats.mismatches++;
+    if (detail.source === 'exact' || detail.source === 'fallback') {
+      stats.bySource[detail.source].mismatches++;
+    }
+    stats.lastReason = `mismatch-${detail.source}`;
+    stats.lastDifference = detail.summary;
+    stats.lastRun = {
+      eligible: true,
+      reason: `mismatch-${detail.source}`,
+      matched: false,
+      mismatchPage: difference?.page ?? null,
+      mismatchDelta: difference?.delta ?? null,
+    };
+    this.suffixControl.recordMismatch(detail);
+    this.pendingSuffixVerification = null;
+    if (!this.destroyed) this.run();
   }
 
   /**
@@ -1925,13 +2154,12 @@ class TypesetView {
    * a unit fits only if unit + its footnotes fit above the footnote area.
    */
   private paginate(snapshot: PaginationGeometrySnapshot): { spacers: Spacer[]; count: number } {
+    // Any pagination pass supersedes the geometry a pending verification
+    // ticket describes; the stale ticket is dropped at verification time.
+    this.paginationPassCounter++;
     const view = this.view;
     const s = snapshot.settings;
-    const size = snapshot.size;
-    const marginTop = snapshot.marginTop;
-    const marginBottom = snapshot.marginBottom;
-    const contentH = snapshot.contentHeight;
-    if (contentH < 120) return { spacers: [], count: 1 };
+    if (snapshot.contentHeight < 120) return { spacers: [], count: 1 };
 
     // Page-break oracle: when Typst has told us where its pages break for
     // exactly this document, obey; otherwise paginate ourselves and ask.
@@ -1962,7 +2190,7 @@ class TypesetView {
             this.exactPageBasisDoc = view.state.doc;
             this.exactPageBasisEpoch = this.paginationGeometryEpoch;
             this.exactPageBasisWidth = view.dom.clientWidth;
-            // Basis-coordinate copies for the shadow suffix planner: page
+            // Basis-coordinate copies for the suffix planner: page
             // ordinals are the contiguous marker indices, and the spacers are
             // the exact requested heights (not the painted, tolerance-held
             // ones), so a later re-force reproduces them bit-for-bit.
@@ -2021,369 +2249,13 @@ class TypesetView {
     }
 
     this.pagPath = 'fallback';
-    const runFallback = (seed?: PaginationFallbackSeed): PaginationFallbackResult => {
-      // Origin: the stack top. view.dom (.ProseMirror) sits inside #editor's
-      // page-margin padding, so anchor to its parent, whose top is the top of
-      // the first painted page.
-      // Measurements run with the current spacers still in the DOM: convert
-      // to NATURAL (continuous) geometry by subtracting the spacers above —
-      // and the internal extras of any applied table splits.
-      const stackY = (clientTop: number, pos: number) =>
-        clientTop - snapshot.stackTop - this.heightAbove(snapshot, pos);
-
-      // Footnote bodies, in document order, consumed as units are placed.
-      const fnList: Array<{ pos: number; height: number }> = [];
-      view.state.doc.descendants((node, pos) => {
-        if (node.type.name !== 'footnote') return true;
-        const dom = view.nodeDOM(pos);
-        const body = dom instanceof HTMLElement ? dom.querySelector<HTMLElement>('.fn-body') : null;
-        fnList.push({ pos, height: body ? body.offsetHeight : 0 });
-        return false;
-      });
-      let fnIdx = 0;
-      // A seed restarts at a top-level page start: every block before it has
-      // been fully placed, so its footnotes belong to earlier pages — exactly
-      // the state the full pass reaches when it consumes footnotes per placed
-      // unit and resets the page reservation at the seed's break.
-      if (seed) {
-        while (fnIdx < fnList.length && fnList[fnIdx].pos < seed.startPos) fnIdx++;
-      }
-      const peekFnH = (endPos: number) => {
-        let h = 0;
-        for (let j = fnIdx; j < fnList.length && fnList[j].pos < endPos; j++) h += fnList[j].height + FN_GAP;
-        return h;
-      };
-      const takeFnH = (endPos: number) => {
-        let h = 0;
-        while (fnIdx < fnList.length && fnList[fnIdx].pos < endPos) {
-          h += fnList[fnIdx].height + FN_GAP;
-          fnIdx++;
-        }
-        return h;
-      };
-
-      const spacers: Spacer[] = seed ? seed.prefixSpacers.map((spacer) => ({ ...spacer })) : [];
-      const tableEffects: TableEffect[] = [];
-      const anchors: Array<{ pos: number; page: number; kind: Spacer['kind'] }> = [];
-      let shift = seed?.shift ?? 0;
-      let page = seed?.page ?? 0;
-      let pageFnH = 0;
-      let visitedUnits = 0;
-      const bottomFor = (extraFnH: number) => {
-        const total = pageFnH + extraFnH;
-        return page * (size.h + PAGE_GAP) + size.h - marginBottom - (total > 0 ? total + FN_SEP : 0);
-      };
-      // The same page-top ink adjustment paginateForced applies: fallback
-      // pagination must land units at identical offsets, or an oracle miss
-      // visibly shifts the whole page rhythm by the adjustment.
-      const F = snapshot.bodyPx;
-      const adjFor = (pos: number, kind: Spacer['kind']): number => {
-        if (kind === 'line') return pageTopAdjustEm(s, 'line') * F;
-        const n = view.state.doc.nodeAt(pos);
-        if (n?.type.name === 'paragraph') return pageTopAdjustEm(s, 'paragraph') * F;
-        if (n?.type.name === 'heading') {
-          const lv = Math.min(3, (n.attrs.level as number) || 1);
-          return pageTopAdjustEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;
-        }
-        return 0;
-      };
-      const breakBefore = (pos: number, y: number, kind: Spacer['kind']) => {
-        const delta = (page + 1) * (size.h + PAGE_GAP) + marginTop + adjFor(pos, kind) - (y + shift);
-        page++;
-        anchors.push({ pos, page, kind });
-        pageFnH = 0;
-        if (delta > 0) {
-          spacers.push({ pos, height: delta, kind });
-          shift += delta;
-        }
-      };
-
-      const rectOf = (pos: number): DOMRect | null => {
-        const el = view.nodeDOM(pos);
-        return el instanceof HTMLElement ? el.getBoundingClientRect() : null;
-      };
-
-      // Sticky anchor: a heading immediately above the current block — a break
-      // at the block's start must carry the heading along (Typst headings are
-      // sticky by default; the oracle already does this, the fallback must too).
-      let sticky: { pos: number; y: number } | null = null;
-      // A seeded pass must enter its first block with the same sticky state
-      // the full pass has there: replay the heading/reset updates the skipped
-      // prefix would have applied (only a heading run directly above the seed
-      // boundary survives them).
-      if (seed) {
-        view.state.doc.forEach((node, offset) => {
-          if (offset >= seed.startPos) return;
-          if (node.type.name === 'heading') {
-            const hr = rectOf(offset);
-            sticky = sticky ?? (hr ? { pos: offset, y: stackY(hr.top, offset) } : null);
-          } else {
-            sticky = null;
-          }
-        });
-      }
-      const breakStart = (pos: number, y: number) => {
-        const a = sticky ?? { pos, y };
-        breakBefore(a.pos, a.y, 'block');
-      };
-
-      /** `owner` is the enclosing list item, when this block is the first
-       *  thing inside one: moving the block whole must move the bullet too. */
-      const atomic = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
-        const endPos = pos + node.nodeSize;
-        const r = rectOf(pos);
-        if (!r || r.height === 0) {
-          pageFnH += takeFnH(endPos);
-          return;
-        }
-        const y = stackY(r.top, pos);
-        const ufH = takeFnH(endPos);
-        if (y + shift + r.height > bottomFor(ufH) + 0.5 && r.height <= contentH) {
-          breakStart(owner?.pos ?? pos, owner?.y ?? y);
-        }
-        pageFnH += ufH;
-      };
-
-      const paragraph = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
-        const endPos = pos + node.nodeSize;
-        const r = rectOf(pos);
-        if (!r) {
-          pageFnH += takeFnH(endPos);
-          return;
-        }
-        const yTop = stackY(r.top, pos);
-        // Whole-paragraph fast path: fits together with its footnotes.
-        if (yTop + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
-          pageFnH += takeFnH(endPos);
-          return;
-        }
-        const entry = this.cache.get(node);
-        if (!entry || entry.lines.length < 2) return atomic(pos, node, owner);
-
-        const el = view.nodeDOM(pos) as HTMLElement;
-        const lineH = this.blockLineHeight(el);
-        const base = pos + 1;
-        const lineTops = entry.lines.map((line) => {
-          const c = view.coordsAtPos(base + line.from);
-          // coordsAtPos returns the caret box; back off half-leading to
-          // approximate the line-box top.
-          return { pos: base + line.from, y: stackY(c.top, base + line.from) - Math.max(0, (lineH - (c.bottom - c.top)) / 2) };
-        });
-
-        const n = lineTops.length;
-        // Index of the first line on the current page (for orphan/widow rules
-        // across multi-page paragraphs).
-        let segStart = 0;
-        for (let k = 0; k < n; k++) {
-          const y = lineTops[k].y;
-          const h = k + 1 < n ? lineTops[k + 1].y - y : yTop + r.height - y;
-          const lineEnd = k + 1 < n ? base + entry.lines[k + 1].from : endPos;
-          const ufH = takeFnH(lineEnd);
-          if (y + shift + h <= bottomFor(ufH) + 0.5) {
-            pageFnH += ufH;
-            continue;
-          }
-
-          if (k === 0) {
-            // First line doesn't fit: the paragraph starts on the next page.
-            breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
-            pageFnH += ufH;
-            continue;
-          }
-          // A line already at a page top that still overflows is taller than
-          // the page — let it overflow rather than breaking at its own start.
-          if (k === segStart) {
-            pageFnH += ufH;
-            continue;
-          }
-
-          let kb = k;
-          // Widow control: never strand the paragraph's last line alone at the
-          // top of a page — break one line earlier so two lines move together.
-          if (n - kb === 1 && kb - 1 > segStart) kb = k - 1;
-          // Orphan control: never leave fewer than two lines at the bottom of
-          // the page where the paragraph starts — move the whole paragraph
-          // instead (unless it is taller than a page and must split somewhere).
-          if (segStart === 0 && kb < 2) {
-            if (r.height <= contentH) {
-              breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
-              pageFnH += ufH;
-              continue;
-            }
-            kb = Math.max(kb, 1);
-          }
-
-          breakBefore(lineTops[kb].pos, lineTops[kb].y, 'line');
-          segStart = kb;
-          pageFnH += ufH;
-        }
-      };
-
-      // Tables: Typst decides. A table crossing the page bottom is handed to
-      // the paged mini-compile (table-split.ts), which reproduces the real
-      // document's constraints — Typst answers with the same split rows,
-      // repeated headers, or a whole-block push it would use in the PDF. The
-      // node view renders the answer; page math advances per fragment.
-      const tableCase = (pos: number, node: PMNode) => {
-        const endPos = pos + node.nodeSize;
-        const r = rectOf(pos);
-        if (!r || r.height === 0) {
-          pageFnH += takeFnH(endPos);
-          return;
-        }
-        const assigned = getSplit(node);
-        const naturalH = assigned ? assigned.naturalPx : r.height;
-        const y = stackY(r.top, pos);
-        const ufH = takeFnH(endPos);
-        if (y + shift + naturalH <= bottomFor(ufH) + 0.5) {
-          if (assigned) tableEffects.push({ type: 'clear', node });
-          pageFnH += ufH;
-          return;
-        }
-        const pageTopAbs = page * (size.h + PAGE_GAP) + marginTop;
-        const offsetPt = Math.max(0, (y + shift - pageTopAbs) * 0.75);
-        const fresh = requestTableSplit(view, node, view.dom.clientWidth || 576, contentH * 0.75, offsetPt);
-        // While the compile is in flight, hold the current rendering steady
-        // (stale split, or the plain atomic push) — the answer triggers a
-        // repagination.
-        const layout: TableSplitLayout | null = fresh ?? assigned?.layout ?? null;
-        if (!layout) {
-          if (naturalH <= contentH) breakStart(pos, y);
-          pageFnH += ufH;
-          return;
-        }
-        if (layout.pushed) breakStart(pos, y);
-        if (layout.fragments.length <= 1) {
-          // Whole on one page (unbreakable figure, or it fits after the push).
-          tableEffects.push({ type: 'clear', node });
-          if (!layout.pushed && naturalH <= contentH) breakStart(pos, y);
-          pageFnH += ufH;
-          return;
-        }
-        const gaps: number[] = [];
-        let bottomAbs = y + shift + layout.fragments[0].heightPx;
-        for (let i = 1; i < layout.fragments.length; i++) {
-          page++;
-          pageFnH = 0;
-          const top = page * (size.h + PAGE_GAP) + marginTop;
-          gaps.push(top - bottomAbs);
-          bottomAbs = top + layout.fragments[i].heightPx;
-        }
-        tableEffects.push({ type: 'apply', node, layout, gaps, naturalHeight: naturalH });
-        const displayed = layout.fragments.reduce((s2, f) => s2 + f.heightPx, 0) + gaps.reduce((s2, g) => s2 + g, 0);
-        shift += displayed - naturalH;
-        pageFnH += ufH;
-      };
-
-      // Lists and blockquotes break between children (whole child moves).
-      const container = (pos: number, node: PMNode) => {
-        const endPos = pos + node.nodeSize;
-        const r = rectOf(pos);
-        if (!r) {
-          pageFnH += takeFnH(endPos);
-          return;
-        }
-        if (stackY(r.top, pos) + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
-          pageFnH += takeFnH(endPos);
-          return;
-        }
-        // Breaks found below are inside the container, so a heading sitting
-        // above it is no longer the thing being pushed onto the next page.
-        sticky = null;
-        node.forEach((child, offset) => {
-          const childPos = pos + 1 + offset;
-          const childEnd = childPos + child.nodeSize;
-          const cr = rectOf(childPos);
-          if (!cr || cr.height === 0) {
-            pageFnH += takeFnH(childEnd);
-            return;
-          }
-          const y = stackY(cr.top, childPos);
-          if (y + shift + cr.height <= bottomFor(peekFnH(childEnd)) + 0.5) {
-            pageFnH += takeFnH(childEnd);
-            return;
-          }
-          // The child overflows. A list item is NOT an atom: Typst breaks the
-          // prose inside it across pages like any other text, so break inside
-          // it too. Moving the whole item leaves the page short by the item's
-          // entire height — and an item taller than a page used to get no
-          // break at all, running straight off the bottom.
-          //
-          // Only the item's FIRST block carries the item as its owner: a break
-          // there must take the bullet with it, while a break before a later
-          // block genuinely belongs inside the item.
-          if (child.type.name === 'list_item') {
-            let owner: { pos: number; y: number } | undefined = { pos: childPos, y };
-            child.forEach((grand, grandOffset) => {
-              splitBlock(childPos + 1 + grandOffset, grand, owner);
-              owner = undefined;
-            });
-          } else {
-            splitBlock(childPos, child);
-          }
-          pageFnH += takeFnH(childEnd);
-        });
-        pageFnH += takeFnH(endPos);
-      };
-
-      /** Page-break one block wherever it sits — top level or nested in a
-       *  list item or quote. Mirrors the document-level dispatch below. */
-      const splitBlock = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
-        switch (node.type.name) {
-          case 'paragraph':
-            if (node.attrs.keep) atomic(pos, node, owner);
-            else paragraph(pos, node, owner);
-            break;
-          case 'bullet_list':
-          case 'ordered_list':
-          case 'blockquote':
-            container(pos, node);
-            break;
-          case 'table':
-            tableCase(pos, node);
-            break;
-          default:
-            atomic(pos, node, owner);
-        }
-      };
-
-      view.state.doc.forEach((node, offset) => {
-        if (offset < (seed?.startPos ?? 0)) return;
-        visitedUnits++;
-        switch (node.type.name) {
-          case 'page_break':
-          case 'numbering_restart': {
-            const r = rectOf(offset);
-            if (r) breakBefore(offset + node.nodeSize, stackY(r.bottom, offset), 'block');
-            pageFnH += takeFnH(offset + node.nodeSize);
-            break;
-          }
-          case 'paragraph':
-            if (node.attrs.keep) atomic(offset, node);
-            else paragraph(offset, node);
-            break;
-          case 'bullet_list':
-          case 'ordered_list':
-          case 'blockquote':
-            container(offset, node);
-            break;
-          case 'table':
-            tableCase(offset, node);
-            break;
-          default:
-            atomic(offset, node);
-            break;
-        }
-        if (node.type.name === 'heading') {
-          const hr = rectOf(offset);
-          sticky = sticky ?? (hr ? { pos: offset, y: stackY(hr.top, offset) } : null);
-        } else {
-          sticky = null;
-        }
-      });
-
-      return { spacers, count: page + 1, tableEffects, visitedUnits, anchors };
-    };
+    // The exact-font branch rewrites pagWhy every pass; when it was skipped
+    // (non-exact font, or an unserializable doc) reset the stale value so
+    // the suffix-install annotation below cannot accumulate across passes.
+    if (!effectiveFont(s.font).exact || !this.docSig.get(view.state.doc)) {
+      this.pagWhy = 'entry=local';
+    }
+    const runFallback = (seed?: PaginationFallbackSeed) => this.runFallbackPass(snapshot, seed);
 
     this.suffixPaginationStats.attempts++;
     const suffixPlan = this.planPaginationSuffix(snapshot);
@@ -2393,18 +2265,91 @@ class TypesetView {
       sourceStats.eligible++;
       this.suffixPaginationStats.lastStartPos = suffixPlan.seed.dirtyPos;
       this.suffixPaginationStats.lastAnchorPos = suffixPlan.seed.startPos;
+      const suffixStart = performance.now();
       const suffix = runFallback({
         startPos: suffixPlan.seed.startPos,
         page: suffixPlan.seed.page,
         shift: suffixPlan.seed.shift,
         prefixSpacers: suffixPlan.seed.prefixSpacers.map((spacer) => ({ ...spacer })),
       });
+      const suffixMs = performance.now() - suffixStart;
       this.suffixPaginationStats.suffixUnits += suffix.visitedUnits;
 
+      if (this.suffixControl.installsSuffix) {
+        // PROMOTED PATH: the suffix result IS the fallback pagination. It is
+        // returned through the identical install machinery the full pass
+        // uses (reinstall tolerance, dispatch, snapshot capture, footnotes),
+        // and no full pass runs. Soundness rests on the shadow soaks'
+        // 120/120 record plus the sampled verification below; the first
+        // verified mismatch kills the suffix paginator for the session.
+        this.suffixPaginationStats.installs++;
+        this.suffixPaginationStats.lastSuffixPass = { units: suffix.visitedUnits, ms: suffixMs };
+        this.suffixPaginationStats.lastReason = `installed-${suffixPlan.source}`;
+        this.suffixPaginationStats.lastRun = {
+          eligible: true,
+          reason: `installed-${suffixPlan.source}`,
+          matched: null,
+          mismatchPage: null,
+          mismatchDelta: null,
+        };
+        this.pagWhy += ` suffix=${suffixPlan.source}@${suffixPlan.seed.startPos} units=${suffix.visitedUnits}`;
+        if (this.suffixControl.recordInstall()) {
+          // Deterministic sample: stash a ticket for the idle verification
+          // (scheduled by run() after this result has painted). The clone
+          // freezes the installed answer against later reads.
+          this.pendingSuffixVerification = {
+            doc: this.view.state.doc,
+            source: suffixPlan.source,
+            seed: suffixPlan.seed,
+            result: {
+              spacers: suffix.spacers.map((spacer) => ({ ...spacer })),
+              count: suffix.count,
+              tableEffects: [],
+              visitedUnits: suffix.visitedUnits,
+              anchors: [],
+            },
+            passId: this.paginationPassCounter,
+            pagEpoch: this.paginationGeometryEpoch,
+            domEpoch: this.domGeometryEpoch,
+            width: this.view.dom.clientWidth,
+          };
+        } else if (this.pendingSuffixVerification?.doc === this.view.state.doc) {
+          // A re-settle of the same document reinstalled identical geometry
+          // (same basis, same seed): keep the earlier sampled ticket alive
+          // for its idle verification instead of orphaning it.
+          this.pendingSuffixVerification.passId = this.paginationPassCounter;
+        }
+        // The next fallback basis is the installed pagination: the seed's
+        // prefix pages (one anchor per preserved gap) plus the recomputed
+        // suffix anchors. An eligible seed guarantees one gap per prefix
+        // page, so the reconstruction is exact.
+        this.rememberFallbackBasis({
+          ...suffix,
+          anchors: [
+            ...suffixPlan.seed.prefixSpacers.map((spacer, index) => ({
+              pos: spacer.pos,
+              page: index + 1,
+              kind: spacer.kind,
+            })),
+            ...suffix.anchors,
+          ],
+        });
+        // Eligibility excludes tables, so there are no table effects to
+        // stage; apply defensively to keep the contract with the full path.
+        this.applyTableEffects(suffix.tableEffects);
+        return { spacers: suffix.spacers, count: suffix.count };
+      }
+
+      // DEV shadow-soak mode: the full pass runs and is installed; the
+      // suffix result is compared always and affects telemetry only.
+      const fullStart = performance.now();
       const full = runFallback();
+      const fullMs = performance.now() - fullStart;
+      this.suffixPaginationStats.fullRuns++;
       this.suffixPaginationStats.fullUnits += full.visitedUnits;
+      this.suffixPaginationStats.lastFullPass = { units: full.visitedUnits, ms: fullMs };
       // The comparison reference must hold the same prefix constant as the
-      // seed. A fallback-shadow seed's prefix IS local-rule output, so the
+      // seed. A fallback seed's prefix IS local-rule output, so the
       // unseeded full pass regenerates it identically and doubles as the
       // reference. An exact seed's prefix was decided by TYPST — the local
       // full pass legitimately disagrees above the boundary, so comparing
@@ -2456,19 +2401,33 @@ class TypesetView {
         };
       }
       this.rememberFallbackBasis(full);
-      // Suffix replay remains a shadow until exact-source browser fixtures can
-      // exercise it in production mode. The full result is always installed;
-      // a mismatch can therefore affect telemetry, never page geometry. The
-      // exact basis is NOT cleared: page starts above the seed boundary stay
-      // valid across fallback repaginations of the suffix.
+      // In shadow mode the full result is always installed; a mismatch can
+      // affect telemetry, never page geometry. The exact basis is NOT
+      // cleared: page starts above the seed boundary stay valid across
+      // fallback repaginations of the suffix.
       this.applyTableEffects(full.tableEffects);
       return { spacers: full.spacers, count: full.count };
     }
 
+    const fullStart = performance.now();
     const fallback = runFallback();
+    const fullMs = performance.now() - fullStart;
+    this.suffixPaginationStats.fullRuns++;
     this.suffixPaginationStats.fullUnits += fallback.visitedUnits;
+    this.suffixPaginationStats.lastFullPass = { units: fallback.visitedUnits, ms: fullMs };
     this.suffixPaginationStats.reasons[suffixPlan.reason] =
       (this.suffixPaginationStats.reasons[suffixPlan.reason] ?? 0) + 1;
+    // An unchanged-document re-settle (oracle results arriving, images
+    // decoding) reinstalls identical geometry, so a pending verification
+    // ticket's premises still hold: keep it alive rather than letting the
+    // pass counter orphan the sample before its idle slot arrives.
+    if (
+      this.pendingSuffixVerification &&
+      suffixPlan.reason.endsWith('-unchanged') &&
+      this.pendingSuffixVerification.doc === this.view.state.doc
+    ) {
+      this.pendingSuffixVerification.passId = this.paginationPassCounter;
+    }
     this.suffixPaginationStats.lastRun = {
       eligible: false,
       reason: suffixPlan.reason,
@@ -2485,6 +2444,385 @@ class TypesetView {
     this.rememberFallbackBasis(fallback);
     this.applyTableEffects(fallback.tableEffects);
     return { spacers: fallback.spacers, count: fallback.count };
+  }
+
+  /** One local fallback pagination pass over the naturally-laid-out
+   * document. With a seed, pagination restarts at the seed's top-level
+   * boundary with its prefix pages held constant; without one, it walks
+   * the whole document. Deterministic for a given snapshot + DOM instant:
+   * a seeded pass and a full pass measuring the same DOM agree exactly
+   * below the seed boundary. */
+  private runFallbackPass(
+    snapshot: PaginationGeometrySnapshot,
+    seed?: PaginationFallbackSeed,
+  ): PaginationFallbackResult {
+    const view = this.view;
+    const s = snapshot.settings;
+    const size = snapshot.size;
+    const marginTop = snapshot.marginTop;
+    const marginBottom = snapshot.marginBottom;
+    const contentH = snapshot.contentHeight;
+    // Origin: the stack top. view.dom (.ProseMirror) sits inside #editor's
+    // page-margin padding, so anchor to its parent, whose top is the top of
+    // the first painted page.
+    // Measurements run with the current spacers still in the DOM: convert
+    // to NATURAL (continuous) geometry by subtracting the spacers above —
+    // and the internal extras of any applied table splits.
+    const stackY = (clientTop: number, pos: number) =>
+      clientTop - snapshot.stackTop - this.heightAbove(snapshot, pos);
+
+    // Footnote bodies, in document order, consumed as units are placed.
+    const fnList: Array<{ pos: number; height: number }> = [];
+    view.state.doc.descendants((node, pos) => {
+      if (node.type.name !== 'footnote') return true;
+      const dom = view.nodeDOM(pos);
+      const body = dom instanceof HTMLElement ? dom.querySelector<HTMLElement>('.fn-body') : null;
+      fnList.push({ pos, height: body ? body.offsetHeight : 0 });
+      return false;
+    });
+    let fnIdx = 0;
+    // A seed restarts at a top-level page start: every block before it has
+    // been fully placed, so its footnotes belong to earlier pages — exactly
+    // the state the full pass reaches when it consumes footnotes per placed
+    // unit and resets the page reservation at the seed's break.
+    if (seed) {
+      while (fnIdx < fnList.length && fnList[fnIdx].pos < seed.startPos) fnIdx++;
+    }
+    const peekFnH = (endPos: number) => {
+      let h = 0;
+      for (let j = fnIdx; j < fnList.length && fnList[j].pos < endPos; j++) h += fnList[j].height + FN_GAP;
+      return h;
+    };
+    const takeFnH = (endPos: number) => {
+      let h = 0;
+      while (fnIdx < fnList.length && fnList[fnIdx].pos < endPos) {
+        h += fnList[fnIdx].height + FN_GAP;
+        fnIdx++;
+      }
+      return h;
+    };
+
+    const spacers: Spacer[] = seed ? seed.prefixSpacers.map((spacer) => ({ ...spacer })) : [];
+    const tableEffects: TableEffect[] = [];
+    const anchors: Array<{ pos: number; page: number; kind: Spacer['kind'] }> = [];
+    let shift = seed?.shift ?? 0;
+    let page = seed?.page ?? 0;
+    let pageFnH = 0;
+    let visitedUnits = 0;
+    const bottomFor = (extraFnH: number) => {
+      const total = pageFnH + extraFnH;
+      return page * (size.h + PAGE_GAP) + size.h - marginBottom - (total > 0 ? total + FN_SEP : 0);
+    };
+    // The same page-top ink adjustment paginateForced applies: fallback
+    // pagination must land units at identical offsets, or an oracle miss
+    // visibly shifts the whole page rhythm by the adjustment.
+    const F = snapshot.bodyPx;
+    const adjFor = (pos: number, kind: Spacer['kind']): number => {
+      if (kind === 'line') return pageTopAdjustEm(s, 'line') * F;
+      const n = view.state.doc.nodeAt(pos);
+      if (n?.type.name === 'paragraph') return pageTopAdjustEm(s, 'paragraph') * F;
+      if (n?.type.name === 'heading') {
+        const lv = Math.min(3, (n.attrs.level as number) || 1);
+        return pageTopAdjustEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;
+      }
+      return 0;
+    };
+    const breakBefore = (pos: number, y: number, kind: Spacer['kind']) => {
+      const delta = (page + 1) * (size.h + PAGE_GAP) + marginTop + adjFor(pos, kind) - (y + shift);
+      page++;
+      anchors.push({ pos, page, kind });
+      pageFnH = 0;
+      if (delta > 0) {
+        spacers.push({ pos, height: delta, kind });
+        shift += delta;
+      }
+    };
+
+    const rectOf = (pos: number): DOMRect | null => {
+      const el = view.nodeDOM(pos);
+      return el instanceof HTMLElement ? el.getBoundingClientRect() : null;
+    };
+
+    // Sticky anchor: a heading immediately above the current block — a break
+    // at the block's start must carry the heading along (Typst headings are
+    // sticky by default; the oracle already does this, the fallback must too).
+    let sticky: { pos: number; y: number } | null = null;
+    // A seeded pass must enter its first block with the same sticky state
+    // the full pass has there: replay the heading/reset updates the skipped
+    // prefix would have applied (only a heading run directly above the seed
+    // boundary survives them).
+    if (seed) {
+      view.state.doc.forEach((node, offset) => {
+        if (offset >= seed.startPos) return;
+        if (node.type.name === 'heading') {
+          const hr = rectOf(offset);
+          sticky = sticky ?? (hr ? { pos: offset, y: stackY(hr.top, offset) } : null);
+        } else {
+          sticky = null;
+        }
+      });
+    }
+    const breakStart = (pos: number, y: number) => {
+      const a = sticky ?? { pos, y };
+      breakBefore(a.pos, a.y, 'block');
+    };
+
+    /** `owner` is the enclosing list item, when this block is the first
+     *  thing inside one: moving the block whole must move the bullet too. */
+    const atomic = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
+      const endPos = pos + node.nodeSize;
+      const r = rectOf(pos);
+      if (!r || r.height === 0) {
+        pageFnH += takeFnH(endPos);
+        return;
+      }
+      const y = stackY(r.top, pos);
+      const ufH = takeFnH(endPos);
+      if (y + shift + r.height > bottomFor(ufH) + 0.5 && r.height <= contentH) {
+        breakStart(owner?.pos ?? pos, owner?.y ?? y);
+      }
+      pageFnH += ufH;
+    };
+
+    const paragraph = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
+      const endPos = pos + node.nodeSize;
+      const r = rectOf(pos);
+      if (!r) {
+        pageFnH += takeFnH(endPos);
+        return;
+      }
+      const yTop = stackY(r.top, pos);
+      // Whole-paragraph fast path: fits together with its footnotes.
+      if (yTop + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
+        pageFnH += takeFnH(endPos);
+        return;
+      }
+      const entry = this.cache.get(node);
+      if (!entry || entry.lines.length < 2) return atomic(pos, node, owner);
+
+      const el = view.nodeDOM(pos) as HTMLElement;
+      const lineH = this.blockLineHeight(el);
+      const base = pos + 1;
+      const lineTops = entry.lines.map((line) => {
+        const c = view.coordsAtPos(base + line.from);
+        // coordsAtPos returns the caret box; back off half-leading to
+        // approximate the line-box top.
+        return { pos: base + line.from, y: stackY(c.top, base + line.from) - Math.max(0, (lineH - (c.bottom - c.top)) / 2) };
+      });
+
+      const n = lineTops.length;
+      // Index of the first line on the current page (for orphan/widow rules
+      // across multi-page paragraphs).
+      let segStart = 0;
+      for (let k = 0; k < n; k++) {
+        const y = lineTops[k].y;
+        const h = k + 1 < n ? lineTops[k + 1].y - y : yTop + r.height - y;
+        const lineEnd = k + 1 < n ? base + entry.lines[k + 1].from : endPos;
+        const ufH = takeFnH(lineEnd);
+        if (y + shift + h <= bottomFor(ufH) + 0.5) {
+          pageFnH += ufH;
+          continue;
+        }
+
+        if (k === 0) {
+          // First line doesn't fit: the paragraph starts on the next page.
+          breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
+          pageFnH += ufH;
+          continue;
+        }
+        // A line already at a page top that still overflows is taller than
+        // the page — let it overflow rather than breaking at its own start.
+        if (k === segStart) {
+          pageFnH += ufH;
+          continue;
+        }
+
+        let kb = k;
+        // Widow control: never strand the paragraph's last line alone at the
+        // top of a page — break one line earlier so two lines move together.
+        if (n - kb === 1 && kb - 1 > segStart) kb = k - 1;
+        // Orphan control: never leave fewer than two lines at the bottom of
+        // the page where the paragraph starts — move the whole paragraph
+        // instead (unless it is taller than a page and must split somewhere).
+        if (segStart === 0 && kb < 2) {
+          if (r.height <= contentH) {
+            breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
+            pageFnH += ufH;
+            continue;
+          }
+          kb = Math.max(kb, 1);
+        }
+
+        breakBefore(lineTops[kb].pos, lineTops[kb].y, 'line');
+        segStart = kb;
+        pageFnH += ufH;
+      }
+    };
+
+    // Tables: Typst decides. A table crossing the page bottom is handed to
+    // the paged mini-compile (table-split.ts), which reproduces the real
+    // document's constraints — Typst answers with the same split rows,
+    // repeated headers, or a whole-block push it would use in the PDF. The
+    // node view renders the answer; page math advances per fragment.
+    const tableCase = (pos: number, node: PMNode) => {
+      const endPos = pos + node.nodeSize;
+      const r = rectOf(pos);
+      if (!r || r.height === 0) {
+        pageFnH += takeFnH(endPos);
+        return;
+      }
+      const assigned = getSplit(node);
+      const naturalH = assigned ? assigned.naturalPx : r.height;
+      const y = stackY(r.top, pos);
+      const ufH = takeFnH(endPos);
+      if (y + shift + naturalH <= bottomFor(ufH) + 0.5) {
+        if (assigned) tableEffects.push({ type: 'clear', node });
+        pageFnH += ufH;
+        return;
+      }
+      const pageTopAbs = page * (size.h + PAGE_GAP) + marginTop;
+      const offsetPt = Math.max(0, (y + shift - pageTopAbs) * 0.75);
+      const fresh = requestTableSplit(view, node, view.dom.clientWidth || 576, contentH * 0.75, offsetPt);
+      // While the compile is in flight, hold the current rendering steady
+      // (stale split, or the plain atomic push) — the answer triggers a
+      // repagination.
+      const layout: TableSplitLayout | null = fresh ?? assigned?.layout ?? null;
+      if (!layout) {
+        if (naturalH <= contentH) breakStart(pos, y);
+        pageFnH += ufH;
+        return;
+      }
+      if (layout.pushed) breakStart(pos, y);
+      if (layout.fragments.length <= 1) {
+        // Whole on one page (unbreakable figure, or it fits after the push).
+        tableEffects.push({ type: 'clear', node });
+        if (!layout.pushed && naturalH <= contentH) breakStart(pos, y);
+        pageFnH += ufH;
+        return;
+      }
+      const gaps: number[] = [];
+      let bottomAbs = y + shift + layout.fragments[0].heightPx;
+      for (let i = 1; i < layout.fragments.length; i++) {
+        page++;
+        pageFnH = 0;
+        const top = page * (size.h + PAGE_GAP) + marginTop;
+        gaps.push(top - bottomAbs);
+        bottomAbs = top + layout.fragments[i].heightPx;
+      }
+      tableEffects.push({ type: 'apply', node, layout, gaps, naturalHeight: naturalH });
+      const displayed = layout.fragments.reduce((s2, f) => s2 + f.heightPx, 0) + gaps.reduce((s2, g) => s2 + g, 0);
+      shift += displayed - naturalH;
+      pageFnH += ufH;
+    };
+
+    // Lists and blockquotes break between children (whole child moves).
+    const container = (pos: number, node: PMNode) => {
+      const endPos = pos + node.nodeSize;
+      const r = rectOf(pos);
+      if (!r) {
+        pageFnH += takeFnH(endPos);
+        return;
+      }
+      if (stackY(r.top, pos) + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
+        pageFnH += takeFnH(endPos);
+        return;
+      }
+      // Breaks found below are inside the container, so a heading sitting
+      // above it is no longer the thing being pushed onto the next page.
+      sticky = null;
+      node.forEach((child, offset) => {
+        const childPos = pos + 1 + offset;
+        const childEnd = childPos + child.nodeSize;
+        const cr = rectOf(childPos);
+        if (!cr || cr.height === 0) {
+          pageFnH += takeFnH(childEnd);
+          return;
+        }
+        const y = stackY(cr.top, childPos);
+        if (y + shift + cr.height <= bottomFor(peekFnH(childEnd)) + 0.5) {
+          pageFnH += takeFnH(childEnd);
+          return;
+        }
+        // The child overflows. A list item is NOT an atom: Typst breaks the
+        // prose inside it across pages like any other text, so break inside
+        // it too. Moving the whole item leaves the page short by the item's
+        // entire height — and an item taller than a page used to get no
+        // break at all, running straight off the bottom.
+        //
+        // Only the item's FIRST block carries the item as its owner: a break
+        // there must take the bullet with it, while a break before a later
+        // block genuinely belongs inside the item.
+        if (child.type.name === 'list_item') {
+          let owner: { pos: number; y: number } | undefined = { pos: childPos, y };
+          child.forEach((grand, grandOffset) => {
+            splitBlock(childPos + 1 + grandOffset, grand, owner);
+            owner = undefined;
+          });
+        } else {
+          splitBlock(childPos, child);
+        }
+        pageFnH += takeFnH(childEnd);
+      });
+      pageFnH += takeFnH(endPos);
+    };
+
+    /** Page-break one block wherever it sits — top level or nested in a
+     *  list item or quote. Mirrors the document-level dispatch below. */
+    const splitBlock = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
+      switch (node.type.name) {
+        case 'paragraph':
+          if (node.attrs.keep) atomic(pos, node, owner);
+          else paragraph(pos, node, owner);
+          break;
+        case 'bullet_list':
+        case 'ordered_list':
+        case 'blockquote':
+          container(pos, node);
+          break;
+        case 'table':
+          tableCase(pos, node);
+          break;
+        default:
+          atomic(pos, node, owner);
+      }
+    };
+
+    view.state.doc.forEach((node, offset) => {
+      if (offset < (seed?.startPos ?? 0)) return;
+      visitedUnits++;
+      switch (node.type.name) {
+        case 'page_break':
+        case 'numbering_restart': {
+          const r = rectOf(offset);
+          if (r) breakBefore(offset + node.nodeSize, stackY(r.bottom, offset), 'block');
+          pageFnH += takeFnH(offset + node.nodeSize);
+          break;
+        }
+        case 'paragraph':
+          if (node.attrs.keep) atomic(offset, node);
+          else paragraph(offset, node);
+          break;
+        case 'bullet_list':
+        case 'ordered_list':
+        case 'blockquote':
+          container(offset, node);
+          break;
+        case 'table':
+          tableCase(offset, node);
+          break;
+        default:
+          atomic(offset, node);
+          break;
+      }
+      if (node.type.name === 'heading') {
+        const hr = rectOf(offset);
+        sticky = sticky ?? (hr ? { pos: offset, y: stackY(hr.top, offset) } : null);
+      } else {
+        sticky = null;
+      }
+    });
+
+    return { spacers, count: page + 1, tableEffects, visitedUnits, anchors };
   }
 
   /** Same-prefix reference pass for an exact-basis seed: re-force the

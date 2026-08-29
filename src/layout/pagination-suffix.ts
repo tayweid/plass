@@ -92,8 +92,8 @@ function topLevelBlocks(doc: PMNode): TopLevelBlock[] {
  * whole. Both the seeded and the full pass read the same DOM at the same
  * instant, so async heights (figures, committed math, bibliographies) cannot
  * diverge between them. Tables are excluded: a table crossing a page bottom
- * launches a Typst mini-compile and stages table effects, which the shadow
- * comparison cannot replay side-effect-free. */
+ * launches a Typst mini-compile and stages table effects, which a seeded or
+ * comparison pass cannot replay side-effect-free. */
 const ELIGIBLE_BLOCK_TYPES = new Set([
   'paragraph',
   'heading',
