@@ -477,6 +477,21 @@ class TypesetView {
         });
         return out;
       };
+      (w as unknown as { __blockAuthority: (pos: number) => unknown }).__blockAuthority = (
+        pos: number,
+      ) => {
+        const node = this.view.state.doc.nodeAt(pos);
+        if (!node) return null;
+        const entry = this.cache.get(node);
+        return entry
+          ? {
+              authority: entry.authority ?? null,
+              oracle: entry.oracle,
+              breakSignature: entry.breakSignature ?? null,
+              lines: entry.lines.length,
+            }
+          : null;
+      };
       (w as unknown as { __pagLog: () => string[] }).__pagLog = () => this.pagLog;
       w.__breakSig = () => {
         const st = typesetKey.getState(this.view.state);

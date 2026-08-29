@@ -222,20 +222,32 @@ export function portBreaks(
     let b = ln.endByte;
     while (b > 0 && p.text.charAt(b - 1) === ' ') b--;
     if (b === ln.endByte) {
-      // No space before the break: a compound '-' (or dash) opportunity —
-      // the item stream models these as glyphless hyphen items at the
-      // split offset.
-      if (/[-–—]/.test(p.text.charBefore(b))) {
-        const at = pmAt(b);
-        if (at === null) {
-          lastBail = 'compound-unmapped@' + b;
-          return null;
-        }
-        out.push({ at, hyphen: true });
-        continue;
+      // No space before the break: an intra-token split. Typst renders a
+      // Normal breakpoint with NO added glyph (only bp 'hyphen' and lines
+      // ending in SHY gain one), so every punctuation-adjacent split — an
+      // existing dash, an em-dash carried to the next line, a '/' or '.'
+      // boundary inside a link — is a glyphless ForcedBreak. The forced
+      // translator re-derives glyphlessness from the same adjacency rule
+      // (a glyph only between two letters), so the two cases the contract
+      // cannot express bail to legacy: a letter|letter Normal break (deep
+      // inside a >=16-char link segment) would gain a spurious glyph, and
+      // a SHY break loses the glyph Typst paints.
+      const before = p.text.charBefore(b);
+      const after = p.text.charAt(b);
+      const letter = /^\p{L}$/u.test(before) && /^\p{L}$/u.test(after);
+      const shy = '\u00ad';
+      const obj = '\ufffc';
+      if (letter || before === shy || before === obj || after === obj) {
+        lastBail = 'nonspace-break@' + b + ':' + JSON.stringify(p.text.slice(Math.max(0, b - 12), Math.min(p.text.len, b + 6)));
+        return null; // unrepresentable opportunity → fallback
       }
-      lastBail = 'nonspace-break@' + b + ':' + JSON.stringify(p.text.slice(Math.max(0, b - 12), Math.min(p.text.len, b + 6)));
-      return null; // unmodeled opportunity (e.g. em-dash split) → fallback
+      const at = pmAt(b);
+      if (at === null) {
+        lastBail = 'split-unmapped@' + b;
+        return null;
+      }
+      out.push({ at, hyphen: true });
+      continue;
     }
     const at = pmAt(b);
     if (at === null) {

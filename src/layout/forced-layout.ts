@@ -20,7 +20,9 @@ export interface ForcedLayoutOptions {
    *  path does not model them, so a block containing one declines to the
    *  translator, which does. */
   isFill?: (child: PMNode) => boolean;
-  /** False means the legacy translator has no intra-word break items. */
+  /** False rejects glyph-injecting hyphenation cuts (letter|letter);
+   *  glyphless splits at existing dashes and punctuation stay valid —
+   *  Typst breaks there regardless of the hyphenation setting. */
   hyphenate?: boolean;
   /** Width consumed by a painted prefix on the first line. */
   firstLineIndent?: number;
@@ -111,8 +113,13 @@ function adjacentCodePoints(text: string, offset: number): { before: string; aft
  *
  * Conservative null cases intentionally fall back to the existing forced
  * translator: malformed/unordered offsets, a normal break that is not the
- * start of a retained whitespace run, a soft hyphen outside an alphabetic
- * word, a boundary between PM text runs, or a UTF-16 surrogate split.
+ * start of a retained whitespace run, a break after a soft hyphen (SHY),
+ * a hyphenation cut while hyphenation is disabled, a boundary between PM
+ * text runs, or a UTF-16 surrogate split. Intra-token `hyphen` cuts whose
+ * adjacency is not letter|letter translate as glyphless breaks (existing
+ * dashes, em-dashes carried forward, link punctuation) — the legacy
+ * partitioner has no item at most of those offsets, so this translator is
+ * their only representation.
  *
  * Hard breaks are always partitioned, including after the last forced point.
  * This fixes the legacy forced translator's accidental final-segment merge;
@@ -154,8 +161,7 @@ export function layoutForcedBlock(
       !Number.isSafeInteger(forced.at) ||
       forced.at < 0 ||
       forced.at > block.content.size ||
-      forced.at <= previousAt ||
-      (forced.hyphen && opts.hyphenate === false)
+      forced.at <= previousAt
     ) {
       return null;
     }
@@ -213,9 +219,19 @@ export function layoutForcedBlock(
             invalid = true;
             return;
           }
+          // A glyph is injected only for a real hyphenation point
+          // (letter|letter, and only with hyphenation enabled). Every other
+          // split — an existing dash, an em-dash carried to the next line, a
+          // '/' or '.' boundary inside a link — breaks glyphlessly, exactly
+          // as Typst renders a Normal breakpoint. SHY stays unrepresentable
+          // (Typst paints a glyph the adjacency rule would drop): decline.
           const { before, after } = adjacentCodePoints(text, local);
-          const glyphless = /[-–—]/.test(before);
-          if (!glyphless && (!/^\p{L}$/u.test(before) || !/^\p{L}$/u.test(after))) {
+          if (before === '\u00ad') {
+            invalid = true;
+            return;
+          }
+          const letterBoth = /^\p{L}$/u.test(before) && /^\p{L}$/u.test(after);
+          if (letterBoth && opts.hyphenate === false) {
             invalid = true;
             return;
           }
@@ -226,8 +242,8 @@ export function layoutForcedBlock(
         let partStart = localStart;
         for (const partEnd of [...cuts, localEnd]) {
           if (partStart !== localStart) {
-            const { before } = adjacentCodePoints(text, partStart);
-            const glyphless = /[-–—]/.test(before);
+            const { before, after } = adjacentCodePoints(text, partStart);
+            const glyphless = !(/^\p{L}$/u.test(before) && /^\p{L}$/u.test(after));
             tokens.push({
               kind: 'hyphen',
               from: offset + partStart,

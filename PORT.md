@@ -200,6 +200,13 @@ fallback.
 - The adapter maps text and supported marks, the shared mono code face,
   hard breaks, measured inline atoms, first-line indents, real caption-prefix
   text, and the 0.85-em footnote context.
+- Intra-token Normal breakpoints translate as glyphless splits when their
+  adjacency is not letter|letter: an em-dash carried to the next line, '/'
+  and '.' boundaries inside links, and compound-dash breaks all flow through
+  the direct forced translator with no injected glyph, exactly as Typst
+  renders them. A letter|letter Normal break (deep inside a ≥16-char link
+  segment), a SHY break (Typst paints a glyph there), and a break glued to
+  an inline atom stay unrepresentable and fall back.
 - Runs are shaped as runs, preserving cross-word shaping and safe-to-break
   slice behavior. Unsupported structures return `null` instead of inventing
   an approximately equivalent Typst input.
