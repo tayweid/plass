@@ -13,7 +13,7 @@ import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
 import { wrapAligned } from './math-src';
 import { getSettings, parseMathMacros } from './settings';
-import { forgetInk, getInk, inkKey, onInk, requestInk } from './math-ink';
+import { forgetInk, getInk, inkFailed, inkKey, onInk, requestInk } from './math-ink';
 import { scheduleTypeset } from './typeset-plugin';
 import { mountTypstSvg } from './safe-svg';
 
@@ -33,12 +33,29 @@ function renderInto(el: HTMLElement, src: string, displayMode: boolean, macros: 
   }
 }
 
+/** NodeView lookup by document element — the editor popover starts and
+ * settles the width hold through it (see MathView.beginWidthHold). */
+const mathViews = new WeakMap<Node, MathView>();
+
 export class MathView implements NodeView {
   dom: HTMLElement;
   private lastMacros: string;
   private display: boolean;
   private inkApplied = '';
   private stopInk: () => void;
+  /**
+   * Width hold (anti-jitter): while a math-editor session touches this
+   * formula, the document keeps painting the last COMPILED ink — geometry
+   * frozen — even after a commit changes the source. The popover's live
+   * KaTeX preview is the user's echo; the in-document swap happens exactly
+   * once, when the new compile lands. Lifecycle: begins at editor open
+   * (only when compiled ink exists), ends at the first render where the
+   * current source has its own settled ink, or is abandoned (fall back to
+   * KaTeX, one re-layout) when the new compile fails or the held ink is
+   * evicted. `data-math-hold-width` mirrors the held advance for
+   * makeAtomWidth, so every line breaker keeps the held reservation.
+   */
+  private holdKey: string | null = null;
 
   constructor(
     private node: PMNode,
@@ -50,6 +67,7 @@ export class MathView implements NodeView {
     this.dom = document.createElement(display ? 'div' : 'span');
     this.dom.className = display ? 'math-display' : 'math-inline';
     this.dom.setAttribute('data-math', node.attrs.src);
+    mathViews.set(this.dom, this);
     this.lastMacros = getSettings(view.state).mathMacros;
     this.render();
     this.stopInk = onInk(() => this.render());
@@ -74,10 +92,36 @@ export class MathView implements NodeView {
    * KaTeX instantly until then. Ink arrival re-runs the typesetter so line
    * justification picks up the exact atom width.
    */
+  /** Editor open: freeze this formula's reservation at its compiled ink. */
+  beginWidthHold() {
+    const src = this.node.attrs.src as string;
+    if (!src.trim()) return;
+    const key = inkKey(src, this.display, getSettings(this.view.state));
+    const ink = getInk(key);
+    if (!ink) return;
+    this.holdKey = key;
+    this.dom.dataset.mathHoldWidth = String(ink.widthPx);
+  }
+
+  /** Editor closed: settle immediately if the current source is compiled
+   * (unchanged source, or the new ink already arrived). Otherwise the hold
+   * ends at the next render with settled ink. */
+  settleWidthHold() {
+    if (this.holdKey === null) return;
+    const key = inkKey(this.node.attrs.src as string, this.display, getSettings(this.view.state));
+    if (getInk(key)) this.endWidthHold();
+  }
+
+  private endWidthHold() {
+    this.holdKey = null;
+    delete this.dom.dataset.mathHoldWidth;
+  }
+
   private render() {
     const src = this.node.attrs.src as string;
     const settings = getSettings(this.view.state);
     if (!src.trim()) {
+      this.endWidthHold();
       this.inkApplied = '';
       renderInto(this.dom, src, this.display);
       return;
@@ -85,6 +129,7 @@ export class MathView implements NodeView {
     const key = inkKey(src, this.display, settings);
     const ink = getInk(key);
     if (ink) {
+      this.endWidthHold();
       if (this.inkApplied === key) return;
       this.inkApplied = key;
       mountTypstSvg(this.dom, ink.svg);
@@ -103,6 +148,20 @@ export class MathView implements NodeView {
       }
       scheduleTypeset(this.view);
       return;
+    }
+    // No settled ink for the current source yet. During a width hold the
+    // document keeps the held compiled ink painted (geometry frozen; the
+    // popover shows the live KaTeX echo) and only queues the new compile —
+    // the surrounding line re-breaks once, when that compile settles.
+    if (this.holdKey !== null) {
+      if (getInk(this.holdKey) && !inkFailed(key)) {
+        requestInk(key, src, this.display, settings);
+        return;
+      }
+      // New source failed to compile, or the held ink was evicted: abandon
+      // the hold and fall back to the KaTeX echo (one re-layout).
+      this.endWidthHold();
+      scheduleTypeset(this.view);
     }
     if (this.inkApplied) {
       this.inkApplied = '';
@@ -151,6 +210,13 @@ export function openMathEditor(view: EditorView, pos: number) {
   if (!node || (node.type !== schema.nodes.math_inline && node.type !== schema.nodes.math_display)) return;
   if (mathEditorOpen) return;
   mathEditorOpen = true;
+
+  // Anti-jitter width hold: the surrounding text keeps this formula's
+  // compiled reservation for the whole editor session (see MathView).
+  {
+    const dom = view.nodeDOM(pos);
+    if (dom) mathViews.get(dom)?.beginWidthHold();
+  }
 
   const display = node.type.name === 'math_display';
 
@@ -228,6 +294,10 @@ export function openMathEditor(view: EditorView, pos: number) {
     closed = true;
     mathEditorOpen = false;
     panel.remove();
+    // Source unchanged (or already compiled): release the width hold now.
+    // A changed source keeps its hold until the new ink settles.
+    const dom = view.nodeDOM(pos);
+    if (dom) mathViews.get(dom)?.settleWidthHold();
     view.focus();
   };
 

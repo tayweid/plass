@@ -39,6 +39,11 @@ export function getInk(key: string): MathInk | undefined {
   return v && v !== 'pending' && v !== 'failed' ? v : undefined;
 }
 
+/** Whether this formula's compile terminally failed (no ink will arrive). */
+export function inkFailed(key: string): boolean {
+  return cache.get(key) === 'failed';
+}
+
 /** Schedule a compile for this formula (deduped; notifies on arrival). */
 export function requestInk(key: string, src: string, display: boolean, s: DocSettings) {
   if (cache.has(key)) return;

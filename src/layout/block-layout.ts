@@ -190,14 +190,25 @@ export type AtomWidth = (offset: number, child: PMNode) => number;
  */
 export function makeAtomWidth(view: EditorView, settings: DocSettings, pos: number): AtomWidth {
   return (offset, child) => {
-    if (child.type.name === 'math_inline') {
+    const isMath = child.type.name === 'math_inline';
+    if (isMath) {
       const ink = getInk(inkKey(child.attrs.src as string, false, settings));
       if (ink) return ink.widthPx;
     }
     // A flexible inline island has no natural width — layout gives it one.
     if (isFlexibleAtom(child)) return 0;
     const dom = view.nodeDOM(pos + 1 + offset);
-    if (dom instanceof HTMLElement) return dom.getBoundingClientRect().width;
+    if (dom instanceof HTMLElement) {
+      // Width hold: a formula inside a math-editor session keeps its last
+      // compiled advance (mirrored onto the element by MathView) until the
+      // edited source compiles, so the line does not re-break through the
+      // KaTeX-width gap.
+      if (isMath) {
+        const held = Number.parseFloat(dom.dataset.mathHoldWidth ?? '');
+        if (Number.isFinite(held)) return held;
+      }
+      return dom.getBoundingClientRect().width;
+    }
     return child.nodeSize * 8;
   };
 }
