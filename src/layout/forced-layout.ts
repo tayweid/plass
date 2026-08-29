@@ -12,7 +12,7 @@ const FORCED_EPS = 1.5;
 
 export type ForcedLayoutMeasurer = Pick<
   Measurer,
-  'fontFor' | 'intervalWidths' | 'spaceWidth' | 'hyphenWidth'
+  'fontFor' | 'intervalWidthsBatch' | 'spaceWidth' | 'hyphenWidth'
 >;
 
 export interface ForcedLayoutOptions {
@@ -337,8 +337,16 @@ export function layoutForcedBlock(
     });
   }
 
-  for (const run of runs) {
-    if (run.intervals.length) run.widths = measurer.intervalWidths(run.text, run.intervals, run.font);
+  // One batch: all probe writes land before all Range reads, so measuring
+  // every run costs a single forced layout pass.
+  const measuredRuns = runs.filter((run) => run.intervals.length);
+  if (measuredRuns.length) {
+    const widths = measurer.intervalWidthsBatch(
+      measuredRuns.map((run) => ({ text: run.text, intervals: run.intervals, key: run.font })),
+    );
+    measuredRuns.forEach((run, index) => {
+      run.widths = widths[index];
+    });
   }
 
   const baseFont = measurer.fontFor([]);

@@ -45,6 +45,12 @@ class DeterministicMeasurer implements ForcedLayoutMeasurer {
     return intervals.map(({ start, end }) => this.prefix(text, end, key) - this.prefix(text, start, key));
   }
 
+  intervalWidthsBatch(
+    requests: ReadonlyArray<{ text: string; intervals: readonly TextMeasureInterval[]; key: string }>,
+  ): number[][] {
+    return requests.map(({ text, intervals, key }) => this.intervalWidths(text, intervals, key));
+  }
+
   spaceWidth(): number {
     return 3;
   }

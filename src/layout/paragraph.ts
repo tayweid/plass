@@ -139,21 +139,27 @@ export function layoutBlock(
     items.push({ kp: { type: 'penalty', width: 0, penalty: -INF, flagged: false }, from, to, kind });
   };
 
+  // Phase 1 — plan every child without touching the measurement probe. Atom
+  // DOM reads happen here, while layout is still clean, so they share one
+  // forced reflow with any earlier geometry read instead of forcing their own
+  // after a probe write.
+  interface Seg {
+    start: number;
+    end: number;
+    space: boolean;
+    hyphenBefore: boolean;
+  }
+  type ChildPlan =
+    | { kind: 'text'; offset: number; font: string; text: string; segs: Seg[]; widths: number[] }
+    | { kind: 'nodebreak'; offset: number; size: number }
+    | { kind: 'atom'; offset: number; size: number; width: number; fill: boolean };
+  const plans: ChildPlan[] = [];
   block.forEach((child, offset) => {
     if (child.isText && child.text) {
-      const font = measurer.fontFor(child.marks);
-      const hyphenW = measurer.hyphenWidth(font) * K;
       const text = child.text;
-
       // Split the run into contiguous segments (spaces, and syllables within
-      // words), then measure them all at once as prefix differences over the
-      // full string so cross-boundary kerning is captured.
-      interface Seg {
-        start: number;
-        end: number;
-        space: boolean;
-        hyphenBefore: boolean;
-      }
+      // words); they are measured below as prefix differences over the full
+      // string so cross-boundary kerning is captured.
       const segs: Seg[] = [];
       const re = /\s+|\S+/g;
       let m: RegExpExecArray | null;
@@ -170,14 +176,54 @@ export function layoutBlock(
           });
         }
       }
-      const widths = measurer.segmentWidths(
-        text,
-        segs.map((s) => s.end),
-        font,
-      );
+      plans.push({ kind: 'text', offset, font: measurer.fontFor(child.marks), text, segs, widths: [] });
+    } else if (child.type.name === 'hard_break') {
+      plans.push({ kind: 'nodebreak', offset, size: child.nodeSize });
+    } else {
+      // Inline atom (math, …): a single unbreakable box measured from its
+      // DOM. A flexible (fr) atom contributes nothing to the natural width
+      // — it absorbs whatever is left over once the line is chosen.
+      const fill = opts.isFill?.(child) ?? false;
+      plans.push({
+        kind: 'atom',
+        offset,
+        size: child.nodeSize,
+        width: fill ? 0 : atomWidth(offset, child),
+        fill,
+      });
+    }
+  });
 
-      segs.forEach((seg, i) => {
-        const w = widths[i] * K;
+  // Phase 2 — measure every text run in one batch (all probe writes, then
+  // all Range reads: one forced layout for the whole block). The consecutive
+  // prefix-difference intervals reproduce segmentWidths' values exactly.
+  const textPlans = plans.filter(
+    (plan): plan is Extract<ChildPlan, { kind: 'text' }> => plan.kind === 'text' && plan.segs.length > 0,
+  );
+  if (textPlans.length) {
+    const widths = measurer.intervalWidthsBatch(
+      textPlans.map((plan) => {
+        let prev = 0;
+        const intervals = plan.segs.map((seg) => {
+          const interval = { start: prev, end: seg.end };
+          prev = seg.end;
+          return interval;
+        });
+        return { text: plan.text, intervals, key: plan.font };
+      }),
+    );
+    textPlans.forEach((plan, index) => {
+      plan.widths = widths[index];
+    });
+  }
+
+  // Phase 3 — build the item stream exactly as before.
+  for (const plan of plans) {
+    if (plan.kind === 'text') {
+      const { text, offset } = plan;
+      const hyphenW = measurer.hyphenWidth(plan.font) * K;
+      plan.segs.forEach((seg, i) => {
+        const w = plan.widths[i] * K;
         if (seg.space) {
           // Leading spaces (paragraph start / after a hard break) collapse.
           const last = items[items.length - 1];
@@ -208,22 +254,18 @@ export function layoutBlock(
           });
         }
       });
-    } else if (child.type.name === 'hard_break') {
-      pushEndOfSegment(offset, offset + child.nodeSize, 'nodebreak');
+    } else if (plan.kind === 'nodebreak') {
+      pushEndOfSegment(plan.offset, plan.offset + plan.size, 'nodebreak');
     } else {
-      // Inline atom (math, …): a single unbreakable box measured from its
-      // DOM. A flexible (fr) atom contributes nothing to the natural width
-      // — it absorbs whatever is left over once the line is chosen.
-      const fill = opts.isFill?.(child) ?? false;
       items.push({
-        kp: { type: 'box', width: fill ? 0 : atomWidth(offset, child) },
-        from: offset,
-        to: offset + child.nodeSize,
+        kp: { type: 'box', width: plan.width },
+        from: plan.offset,
+        to: plan.offset + plan.size,
         kind: 'box',
-        fill,
+        fill: plan.fill,
       });
     }
-  });
+  }
 
   if (!items.some((i) => i.kp.type === 'box')) return [];
   pushEndOfSegment(block.content.size, block.content.size, 'end');

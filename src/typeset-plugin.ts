@@ -224,7 +224,12 @@ const viewRegistry = new WeakMap<EditorView, TypesetView>();
 
 /** Request a re-typeset without a document change (e.g. an image loaded). */
 export function scheduleTypeset(view: EditorView) {
-  viewRegistry.get(view)?.requestRun();
+  const tv = viewRegistry.get(view);
+  if (!tv) return;
+  // Something painted outside the document flow (image decoded, math ink
+  // arrived, preview swapped): per-element geometry caches may be stale.
+  tv.invalidateDomGeometry();
+  tv.requestRun();
 }
 
 /** An asset changed on disk (image rewritten): page geometry may have moved
@@ -352,6 +357,25 @@ class TypesetView {
   private pageSpacerAuthority: 'exact' | 'held' | 'fallback' = 'fallback';
   private paginationGeometryEpoch = 0;
   private lastPaginationWidth = 0;
+  /**
+   * Epoch for memoized per-element geometry reads (block measure widths,
+   * line-heights, body font size). Bumped by every event that can move
+   * column geometry: font arrival, settings/doc-attrs changes, asset
+   * changes, external repaints (scheduleTypeset), and an observed editor
+   * width change. Values served under an unchanged epoch are exactly what a
+   * fresh read returned when the entry was populated.
+   */
+  private domGeometryEpoch = 0;
+  private domGeometryWidth = -1;
+  private bodyPxCache: number | null = null;
+  private blockMeasureCache = new WeakMap<
+    HTMLElement,
+    { epoch: number; parent: Node | null; measure: number }
+  >();
+  private lineHeightCache = new WeakMap<
+    HTMLElement,
+    { epoch: number; parent: Node | null; value: number }
+  >();
   private destroyed = false;
 
   constructor(
@@ -493,6 +517,7 @@ class TypesetView {
       // remain valid because their bundled font inputs did not change.
       invalidateMetrics: () => {
         this.paginationGeometryEpoch++;
+        this.invalidateDomGeometry();
         this.pageSpacerAuthority = 'fallback';
         this.clearExactPageBasis();
         this.clearFallbackPageBasis();
@@ -526,6 +551,7 @@ class TypesetView {
     // Document settings (font, size, hyphenation, …) invalidate every metric.
     if (view.state.doc.attrs !== prevState.doc.attrs) {
       this.paginationGeometryEpoch++;
+      this.invalidateDomGeometry();
       this.pageSpacerAuthority = 'fallback';
       this.clearExactPageBasis();
       this.clearFallbackPageBasis();
@@ -590,6 +616,9 @@ class TypesetView {
       }
     }
     if (!blocks.length) return;
+    // One geometry read: an editor-width change no epoch event described
+    // must not serve stale cached measures.
+    this.syncDomGeometryWidth();
 
     const discoveredAt = performance.now();
     let lineLayoutMs = 0;
@@ -670,11 +699,7 @@ class TypesetView {
             ? el.querySelector('.fn-body')
             : el;
       if (!(target instanceof HTMLElement)) continue;
-      const cs = getComputedStyle(target);
-      const measure =
-        b.kind === 'body'
-          ? target.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
-          : target.clientWidth;
+      const measure = this.blockMeasure(target, b.kind === 'body');
       if (!(measure > 60)) continue;
       const atomWidth = makeAtomWidth(this.view, settings, b.pos);
       const spec = resolveAtom ? buildSpec(b.node, resolveAtom) : null;
@@ -838,6 +863,7 @@ class TypesetView {
   /** Drop cached page-break decisions (asset bytes changed under same sig). */
   invalidatePages() {
     this.paginationGeometryEpoch++;
+    this.invalidateDomGeometry();
     this.pageSpacerAuthority = 'fallback';
     this.clearExactPageBasis();
     this.clearFallbackPageBasis();
@@ -1113,9 +1139,70 @@ class TypesetView {
     return differences.length ? differences.slice(0, 5).join('; ') : null;
   }
 
-  /** Font size in px (body em). */
+  /** Drop memoized per-element geometry reads (see domGeometryEpoch). */
+  invalidateDomGeometry(): void {
+    this.domGeometryEpoch++;
+    this.bodyPxCache = null;
+  }
+
+  /** Detect a column-width change the epoch events did not describe (editor
+   * resized between passes). One clientWidth read per layout pass. */
+  private syncDomGeometryWidth(): void {
+    const width = this.view.dom.clientWidth;
+    if (Math.abs(width - this.domGeometryWidth) > 0.5) {
+      this.domGeometryWidth = width;
+      this.invalidateDomGeometry();
+    }
+  }
+
+  /**
+   * A textblock's measure. A block's width only changes with page geometry
+   * (settings, fonts, editor width), never with typing inside it, so the
+   * keystroke path reuses the last fresh read under an unchanged geometry
+   * epoch and an unchanged parent (re-wrapping into e.g. a blockquote moves
+   * the element). The settled pass reads fresh and repopulates the entry.
+   */
+  private blockMeasure(target: HTMLElement, padded: boolean, fresh = false): number {
+    const cached = this.blockMeasureCache.get(target);
+    if (
+      !fresh &&
+      cached &&
+      cached.epoch === this.domGeometryEpoch &&
+      cached.parent === target.parentNode
+    ) {
+      return cached.measure;
+    }
+    let measure: number;
+    if (padded) {
+      const cs = getComputedStyle(target);
+      measure = target.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    } else {
+      measure = target.clientWidth;
+    }
+    this.blockMeasureCache.set(target, {
+      epoch: this.domGeometryEpoch,
+      parent: target.parentNode,
+      measure,
+    });
+    return measure;
+  }
+
+  /** A block's computed line-height in px, memoized per element + epoch
+   * (line-height only moves with settings/fonts, both epoch events). */
+  private blockLineHeight(el: HTMLElement): number {
+    const cached = this.lineHeightCache.get(el);
+    if (cached && cached.epoch === this.domGeometryEpoch && cached.parent === el.parentNode) {
+      return cached.value;
+    }
+    const value = parseFloat(getComputedStyle(el).lineHeight) || 24;
+    this.lineHeightCache.set(el, { epoch: this.domGeometryEpoch, parent: el.parentNode, value });
+    return value;
+  }
+
+  /** Font size in px (body em). Memoized per geometry epoch; the settled
+   * pass re-reads it fresh once per run. */
   private bodyPx(): number {
-    return parseFloat(getComputedStyle(this.view.dom).fontSize) || 16.67;
+    return (this.bodyPxCache ??= parseFloat(getComputedStyle(this.view.dom).fontSize) || 16.67);
   }
 
   private unitKindOf(node: PMNode | null): 'paragraph' | 'h1' | 'h2' | 'h3' | null {
@@ -1144,6 +1231,11 @@ class TypesetView {
     this.lastLiveDoc = this.view.state.doc;
 
     const t0 = performance.now();
+    // The settled pass re-reads global geometry fresh once; its per-block
+    // fresh reads below repopulate the per-element caches for the next
+    // keystroke burst.
+    this.syncDomGeometryWidth();
+    this.bodyPxCache = null;
     this.applyTopAdjust();
 
     // Pass 1: line layout with the CURRENT page spacers kept in place — in
@@ -1476,7 +1568,7 @@ class TypesetView {
         const wrap = this.view.nodeDOM(fnPos);
         const body = wrap instanceof HTMLElement ? wrap.querySelector('.fn-body') : null;
         if (!(body instanceof HTMLElement)) return;
-        const bMeasure = body.clientWidth;
+        const bMeasure = this.blockMeasure(body, false, true);
         if (!(bMeasure > 60)) return;
         layoutInto(
           child,
@@ -1501,7 +1593,7 @@ class TypesetView {
         const el = this.view.nodeDOM(pos);
         const cap = el instanceof HTMLElement ? el.querySelector('figcaption') : null;
         if (!(cap instanceof HTMLElement)) return false;
-        const capMeasure = cap.clientWidth;
+        const capMeasure = this.blockMeasure(cap, false, true);
         if (!(capMeasure > 60)) return false;
         layoutInto(
           node,
@@ -1524,8 +1616,7 @@ class TypesetView {
 
       const el = this.view.nodeDOM(pos);
       if (!(el instanceof HTMLElement)) return false;
-      const cs = getComputedStyle(el);
-      const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const measure = this.blockMeasure(el, true, true);
       if (!(measure > 60)) return false;
 
       // Classic mode: consecutive paragraphs carry a first-line indent
@@ -1790,7 +1881,7 @@ class TypesetView {
         if (!entry || entry.lines.length < 2) return atomic(pos, node, owner);
 
         const el = view.nodeDOM(pos) as HTMLElement;
-        const lineH = parseFloat(getComputedStyle(el).lineHeight) || 24;
+        const lineH = this.blockLineHeight(el);
         const base = pos + 1;
         const lineTops = entry.lines.map((line) => {
           const c = view.coordsAtPos(base + line.from);
@@ -2149,7 +2240,7 @@ class TypesetView {
         const base = ps.pos + 1;
         const el = view.nodeDOM(ps.pos);
         if (!(el instanceof HTMLElement)) return null;
-        const lineH = parseFloat(getComputedStyle(el).lineHeight) || 24;
+        const lineH = this.blockLineHeight(el);
         const c = view.coordsAtPos(base + entry.lines[ps.line].from);
         pos = base + entry.lines[ps.line].from;
         y = natural(c.top, pos) - Math.max(0, (lineH - (c.bottom - c.top)) / 2);

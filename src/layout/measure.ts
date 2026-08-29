@@ -27,6 +27,13 @@ export interface TextMeasureInterval {
   end: number;
 }
 
+/** One styled run whose interval widths a batch measurement should produce. */
+export interface RunMeasureRequest {
+  text: string;
+  intervals: readonly TextMeasureInterval[];
+  key: string;
+}
+
 export interface MeasurementStats {
   /** Layout-triggering Range.getBoundingClientRect calls. */
   rangeReads: number;
@@ -85,8 +92,13 @@ export class Measurer {
       .join(',');
   }
 
-  private contextFor(key: string): MarkContext {
-    let ctx = this.contexts.get(key);
+  /**
+   * @param ordinal pool slot: a batch measuring several runs with the same
+   * mark key needs one populated text node per run, all live at once.
+   */
+  private contextFor(key: string, ordinal = 0): MarkContext {
+    const mapKey = ordinal ? `${key}\x1e${ordinal}` : key;
+    let ctx = this.contexts.get(mapKey);
     if (ctx) return ctx;
     const p = document.createElement('p');
     let cur: HTMLElement = p;
@@ -99,7 +111,7 @@ export class Measurer {
     cur.appendChild(textNode);
     this.probe.appendChild(p);
     ctx = { textNode };
-    this.contexts.set(key, ctx);
+    this.contexts.set(mapKey, ctx);
     return ctx;
   }
 
@@ -126,13 +138,71 @@ export class Measurer {
    */
   intervalWidths(text: string, intervals: readonly TextMeasureInterval[], key: string): number[] {
     if (!intervals.length) return [];
-    const offsets: number[] = [];
-    for (const { start, end } of intervals) {
-      if (start > end) throw new RangeError(`text interval starts after it ends: ${start} > ${end}`);
-      offsets.push(start, end);
+    return this.intervalWidthsBatch([{ text, intervals, key }])[0];
+  }
+
+  /**
+   * intervalWidths for several styled runs, with every probe population
+   * (DOM write) grouped before every Range read. A batch therefore forces a
+   * single layout pass instead of one per run; each run still measures the
+   * same full-run prefixes in its own text node, so the values are identical
+   * to per-run intervalWidths calls.
+   */
+  intervalWidthsBatch(requests: readonly RunMeasureRequest[]): number[][] {
+    // Validate everything up front so a malformed request writes nothing.
+    const plans = requests.map(({ text, intervals, key }) => {
+      const unique = new Set<number>();
+      for (const { start, end } of intervals) {
+        if (start > end) throw new RangeError(`text interval starts after it ends: ${start} > ${end}`);
+        unique.add(start);
+        unique.add(end);
+      }
+      for (const offset of unique) {
+        if (!Number.isInteger(offset) || offset < 0 || offset > text.length) {
+          throw new RangeError(`text measurement offset ${offset} is outside 0..${text.length}`);
+        }
+      }
+      const prefixes = new Map<number, number>();
+      prefixes.set(0, 0);
+      return {
+        text,
+        intervals,
+        key,
+        prefixes,
+        pending: [...unique].filter((offset) => offset !== 0).sort((a, b) => a - b),
+        ctx: null as MarkContext | null,
+      };
+    });
+
+    // Write phase: populate one pooled text node per measured run.
+    const perKey = new Map<string, number>();
+    for (const plan of plans) {
+      if (!plan.pending.length) continue;
+      const ordinal = perKey.get(plan.key) ?? 0;
+      perKey.set(plan.key, ordinal + 1);
+      plan.ctx = this.contextFor(plan.key, ordinal);
+      plan.ctx.textNode.data = plan.text;
+      this.measurementStats.probePopulations++;
     }
-    const prefixes = this.measurePrefixes(text, offsets, key);
-    return intervals.map(({ start, end }) => prefixes.get(end)! - prefixes.get(start)!);
+    // Read phase: one Range layout read per unique, non-zero prefix offset.
+    try {
+      for (const plan of plans) {
+        if (!plan.ctx) continue;
+        this.range.setStart(plan.ctx.textNode, 0);
+        for (const offset of plan.pending) {
+          this.range.setEnd(plan.ctx.textNode, offset);
+          this.measurementStats.rangeReads++;
+          plan.prefixes.set(offset, this.range.getBoundingClientRect().width);
+        }
+      }
+    } finally {
+      for (const plan of plans) {
+        if (plan.ctx) plan.ctx.textNode.data = '';
+      }
+    }
+    return plans.map((plan) =>
+      plan.intervals.map(({ start, end }) => plan.prefixes.get(end)! - plan.prefixes.get(start)!),
+    );
   }
 
   /** One Range layout read per unique, non-zero prefix offset. */
