@@ -8,6 +8,7 @@ import {
   blockOracleKey,
   canReuseBlockLayoutEntry,
   forcedBreakSignature,
+  lineBreakSignature,
   type BlockLayoutCacheKey,
   type BlockLayoutEntry,
 } from './block-layout';
@@ -102,13 +103,37 @@ check(
     canReuseBlockLayoutEntry(matchingPortEntry, { ...key, oracle: 'fail' }, null),
 );
 check(
-  'compiled comparison fails closed for legacy and fallback entries',
+  'compiled comparison fails closed for signatureless entries',
   !canReuseBlockLayoutEntry(entry, { ...key, oracle: 'ok' }, compiledBreaks) &&
     !canReuseBlockLayoutEntry(
-      { ...matchingPortEntry, authority: 'fallback' },
+      { ...matchingPortEntry, authority: 'fallback', breakSignature: null },
       { ...key, oracle: 'ok' },
       compiledBreaks,
     ),
+);
+check(
+  // Spacing is path-independent (lineWordSpacing): a fallback layout whose
+  // KP-chosen breaks equal the compiled ones is bit-identical to the forced
+  // rebuild, so agreement reuses it instead of rebuilding.
+  'fallback entries with matching semantic breaks are reused against compiled breaks',
+  canReuseBlockLayoutEntry(
+    { ...matchingPortEntry, authority: 'fallback' },
+    { ...key, oracle: 'ok' },
+    compiledBreaks,
+  ) &&
+    !canReuseBlockLayoutEntry(
+      { ...matchingPortEntry, authority: 'fallback' },
+      { ...key, oracle: 'ok' },
+      [{ at: 12, hyphen: false }],
+    ),
+);
+check(
+  'lineBreakSignature derives the forced-equivalent signature from lines',
+  lineBreakSignature([
+    { from: 0, to: 11, spacing: 1, breakPos: 13, hyphen: false, oracleBreak: { at: 12, hyphen: false } },
+    { from: 13, to: 30, spacing: 0.5, breakPos: 27, hyphen: true, oracleBreak: { at: 27, hyphen: true } },
+    { from: 27, to: 40, spacing: 0, breakPos: null, hyphen: false },
+  ]) === forcedBreakSignature(compiledBreaks) && lineBreakSignature([]) === forcedBreakSignature([]),
 );
 check(
   'semantic reuse still rejects stable input drift',

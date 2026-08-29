@@ -36,8 +36,11 @@ export interface BlockLayoutEntry {
    */
   authority?: BlockLayoutAuthority;
   /**
-   * Semantic signature of authoritative compiled/port breaks. `null` (or an
-   * absent value during migration) means the entry came from fallback layout.
+   * Semantic break signature of the layout: authoritative compiled/port
+   * breaks, or the KP-chosen breaks of a fallback layout (derived from its
+   * lines). `null`/absent means the breaks are unknown (migration-era entry
+   * or a layout that reported none); such entries are never reused against
+   * compiled breaks.
    */
   breakSignature?: string | null;
 }
@@ -64,6 +67,19 @@ export function forcedBreakSignature(breaks: readonly ForcedBreak[]): string {
   return `v1:${breaks.map((item) => `${item.hyphen ? 'h' : 's'}${item.at}`).join(',')}`;
 }
 
+/**
+ * Semantic break signature derived from laid-out lines: exactly the forced
+ * break list a forced layout would need to reproduce them (segment-final
+ * lines carry no break, matching the oracle contract). Gives fallback (KP)
+ * layouts a comparable signature, so later-arriving identical compiled
+ * breaks are recognized as agreement instead of forcing a rebuild.
+ */
+export function lineBreakSignature(lines: readonly LineLayout[]): string {
+  const breaks: ForcedBreak[] = [];
+  for (const line of lines) if (line.oracleBreak) breaks.push(line.oracleBreak);
+  return forcedBreakSignature(breaks);
+}
+
 /** Match stable inputs while deliberately ignoring transient oracle status. */
 export function blockLayoutEntryBaseMatches(
   entry: BlockLayoutEntry,
@@ -86,10 +102,12 @@ export function blockLayoutEntryMatches(entry: BlockLayoutEntry, expected: Block
  * Decide whether an entry remains valid for the coordinator's current view.
  *
  * Pending/missing/failed compiled results do not change layout semantics, so
- * stable inputs alone are sufficient. Once compiled breaks are available,
- * only an authoritative port/compiled entry with the identical semantic
- * break list can be retained. Legacy entries without the new metadata fail
- * closed and are recomputed once.
+ * stable inputs alone are sufficient. Once compiled breaks are available, an
+ * entry is retained only when its semantic break list is identical — which,
+ * because the spacing formula is path-independent (see lineWordSpacing),
+ * guarantees identical lines whether the entry came from the port, an earlier
+ * compile, or the KP fallback. Entries without a signature (migration-era, or
+ * a path that reported none) fail closed and are recomputed once.
  */
 export function canReuseBlockLayoutEntry(
   entry: BlockLayoutEntry,
@@ -98,7 +116,7 @@ export function canReuseBlockLayoutEntry(
 ): boolean {
   if (!blockLayoutEntryBaseMatches(entry, expected)) return false;
   if (compiledBreaks == null) return true;
-  if (entry.authority !== 'port' && entry.authority !== 'compiled') return false;
+  if (entry.breakSignature == null) return false;
   return entry.breakSignature === forcedBreakSignature(compiledBreaks);
 }
 

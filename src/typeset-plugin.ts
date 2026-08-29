@@ -78,6 +78,7 @@ import {
   consecutiveParagraph,
   createPaintedPrefixMeasurements,
   forcedBreakSignature,
+  lineBreakSignature,
   makeAtomWidth,
   paragraphKeyTag,
   type AtomWidth,
@@ -776,6 +777,10 @@ class TypesetView {
           isFill: isFlexibleAtom,
           ...extra,
         });
+        // The fallback's KP-chosen breaks get a real signature: compiled
+        // breaks that later confirm them reuse this entry (agreement is a
+        // no-op on every path, never a rebuild).
+        if (lines) breakSignature = lineBreakSignature(lines);
       }
       if (!lines) continue;
       this.cache.set(b.node, {
@@ -1533,7 +1538,12 @@ class TypesetView {
             if (import.meta.env.DEV) console.warn('port breaker (settle) failed', e);
           }
         }
-        if (!lines) lines = layoutBlock(node, measure, this.measurer, atomWidth, { ...layoutOpts, ...extra })!;
+        if (!lines) {
+          lines = layoutBlock(node, measure, this.measurer, atomWidth, { ...layoutOpts, ...extra })!;
+          // Fallback breaks carry their semantic signature so identical
+          // compiled breaks arriving later reuse this entry unchanged.
+          breakSignature = lineBreakSignature(lines);
+        }
         entry = this.cache.set(node, {
           ...cacheKey,
           lines,

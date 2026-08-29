@@ -13,12 +13,55 @@ import { Measurer } from './measure';
 
 const BIG_STRETCH = 1e6;
 const HYPHEN_PENALTY = 45;
-/** Justify to slightly under the measure so rounding never overflows a line. */
-const FIT_EPS = 0.5;
-/** Forced (oracle) lines must NEVER browser-rewrap — an overflow makes an
- *  orphan word. Scaled contexts (footnote bodies) accumulate extra sub-pixel
- *  error, so forced lines aim a bit further under the measure. */
-const FORCED_EPS = 1.5;
+/** Justify to slightly under the measure so rounding never overflows a line —
+ *  an overflow browser-rewraps the line and makes an orphan word. ONE value on
+ *  every path (live KP, forced translator, direct forced translator): when the
+ *  settled oracle confirms the live breaks, the spacing math must agree
+ *  bit-for-bit or the no-op settle repaints the paragraph (justification
+ *  shimmer). The value is the old forced epsilon; the extra px under the
+ *  measure is invisible and protects the live path harder too. */
+const FIT_EPS = 1.5;
+/** Scaled contexts (footnote bodies) accumulate extra sub-pixel width-model
+ *  error the canvas can't see; aim further under the measure there — ~0.3px of
+ *  extra shrink per space, invisible, never an orphan. */
+const SCALED_FIT_EXTRA = 4.5;
+
+/** Under-measure epsilon for a given content scale. Shared by every layout
+ *  path so identical inputs give identical targets. */
+export function fitEps(scale: number): number {
+  return FIT_EPS + (scale !== 1 ? SCALED_FIT_EXTRA : 0);
+}
+
+/**
+ * Word-spacing (extra px per space) for one laid-out line. This is the ONLY
+ * spacing formula: every path — live KP fallback, forced translator, direct
+ * forced translator — must emit bit-identical values for identical breaks and
+ * inputs, so that oracle agreement is a repaint no-op.
+ *
+ * `justified` = the line breaks at a space or a hyphen; segment-final lines
+ * (paragraph end, hard break) stay ragged, as in TeX.
+ */
+export function lineWordSpacing(
+  justified: boolean,
+  spaces: number,
+  natural: number,
+  measure: number,
+  eps: number,
+  baseSpace: number,
+): number {
+  if (justified && spaces > 0) {
+    // A laid-out line must never overflow into a browser re-wrap (the
+    // typesetter fit this content), so shrink far beyond nominal if needed.
+    const spacing = (measure - eps - natural) / spaces;
+    return Math.max(-0.9 * baseSpace, Math.min(spacing, 3 * baseSpace));
+  }
+  if (spaces > 0 && natural > measure - eps) {
+    // Ragged line the browser would wrap (its metrics run a hair wider than
+    // the canvas's): shrink it to fit.
+    return Math.max(-0.45 * baseSpace, (measure - eps - natural) / spaces);
+  }
+  return 0;
+}
 /** A flexible (fr) atom absorbs the slack EXACTLY, leaving a line with no
  *  give at all; the DOM's own text measurement differs from the canvas by a
  *  fraction, which would wrap the line. Give the fill a couple of px back. */
@@ -51,6 +94,13 @@ export interface LineLayout {
    *  they absorb the line's slack instead of the spaces (Typst's rule), so
    *  such a line is never justified. */
   fills?: { offsets: number[]; width: number };
+  /** The authoritative-equivalent break for this line: exactly the
+   *  ForcedBreak a forced layout would need to reproduce it (`at` = the
+   *  space/hyphen item's start offset; glyphless hyphen breaks count as
+   *  hyphens). Absent on segment-final lines (paragraph end, hard break),
+   *  which the oracle does not report — so collecting these fields over a
+   *  KP-chosen layout yields its semantic break signature. */
+  oracleBreak?: ForcedBreak;
 }
 
 export interface LayoutOptions {
@@ -309,23 +359,18 @@ export function layoutBlock(
     if (hyphenKind && brk.kp.type === 'penalty') natural += brk.kp.width;
 
     // Justify lines that break at a space or hyphen; segment-final lines
-    // (paragraph end, hard break) stay ragged, as in TeX.
-    let spacing = 0;
-    // Scaled contexts (footnote bodies) carry a couple px of width-model
-    // error the canvas can't see; aim further under the measure there —
-    // ~0.3px of extra shrink per space, invisible, never an orphan.
-    const eps = (opts.forced ? FORCED_EPS : FIT_EPS) + (K !== 1 ? 4.5 : 0);
-    if ((brk.kind === 'space' || hyphenKind) && spaces > 0) {
-      spacing = (measure - eps - natural) / spaces;
-      // Forced (oracle) lines must never overflow into a browser re-wrap:
-      // Typst fit this content, so shrink as far as needed.
-      const minS = opts.forced ? -0.9 * baseSpace : -0.45 * baseSpace;
-      spacing = Math.max(minS, Math.min(spacing, 3 * baseSpace));
-    } else if (opts.forced && spaces > 0 && natural > measure - eps) {
-      // Oracle-forced ragged line that the browser would wrap (its metrics
-      // run a hair wider than Typst's): shrink it to fit — Typst fit it.
-      spacing = Math.max(-0.45 * baseSpace, (measure - eps - natural) / spaces);
-    }
+    // (paragraph end, hard break) stay ragged, as in TeX. The formula is
+    // deliberately path-independent (no opts.forced): identical breaks must
+    // give identical spacing, or the settle pass repaints agreement.
+    const eps = fitEps(K);
+    let spacing = lineWordSpacing(
+      brk.kind === 'space' || hyphenKind,
+      spaces,
+      natural,
+      measure,
+      eps,
+      baseSpace,
+    );
 
     // Flexible atoms take the leftover space, so the spaces keep their
     // natural width — a line with an fr on it is never justified. Underfill
@@ -346,6 +391,8 @@ export function layoutBlock(
       breakPos: brk.kind === 'space' ? brk.to : hyphenKind ? brk.from : null,
       hyphen: hyphenGlyph,
       fills,
+      oracleBreak:
+        brk.kind === 'space' || hyphenKind ? { at: brk.from, hyphen: hyphenKind } : undefined,
     });
   }
   return out;

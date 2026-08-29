@@ -6,9 +6,7 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import type { AtomWidth } from './block-layout';
 import type { Measurer, TextMeasureInterval } from './measure';
-import type { ForcedBreak, LineLayout } from './paragraph';
-
-const FORCED_EPS = 1.5;
+import { fitEps, lineWordSpacing, type ForcedBreak, type LineLayout } from './paragraph';
 
 export type ForcedLayoutMeasurer = Pick<
   Measurer,
@@ -80,6 +78,8 @@ interface LineDraft {
   spaces: number;
   contributions: Array<number | MeasuredContribution>;
   breakKind: Token['kind'];
+  /** Start offset of the break token (LineLayout.oracleBreak's `at`). */
+  breakAt: number;
   breakPos: number | null;
   hyphen: boolean;
   hyphenWidth: number;
@@ -326,6 +326,7 @@ export function layoutForcedBlock(
       spaces,
       contributions,
       breakKind: breakToken.kind,
+      breakAt: breakToken.from,
       breakPos:
         breakToken.kind === 'space'
           ? breakToken.to
@@ -351,7 +352,7 @@ export function layoutForcedBlock(
 
   const baseFont = measurer.fontFor([]);
   const baseSpace = measurer.spaceWidth(baseFont) * K;
-  const eps = FORCED_EPS + (K !== 1 ? 4.5 : 0);
+  const eps = fitEps(K);
 
   return drafts.map((draft) => {
     let natural = 0;
@@ -363,13 +364,8 @@ export function layoutForcedBlock(
     }
     natural += draft.hyphenWidth;
 
-    let spacing = 0;
-    if ((draft.breakKind === 'space' || draft.breakKind === 'hyphen') && draft.spaces > 0) {
-      spacing = (measure - eps - natural) / draft.spaces;
-      spacing = Math.max(-0.9 * baseSpace, Math.min(spacing, 3 * baseSpace));
-    } else if (draft.spaces > 0 && natural > measure - eps) {
-      spacing = Math.max(-0.45 * baseSpace, (measure - eps - natural) / draft.spaces);
-    }
+    const justified = draft.breakKind === 'space' || draft.breakKind === 'hyphen';
+    const spacing = lineWordSpacing(justified, draft.spaces, natural, measure, eps, baseSpace);
 
     return {
       from: draft.from,
@@ -377,6 +373,7 @@ export function layoutForcedBlock(
       spacing,
       breakPos: draft.breakPos,
       hyphen: draft.hyphen,
+      oracleBreak: justified ? { at: draft.breakAt, hyphen: draft.breakKind === 'hyphen' } : undefined,
     };
   });
 }
