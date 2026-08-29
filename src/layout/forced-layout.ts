@@ -267,6 +267,11 @@ export function layoutForcedBlock(
       trimTrailingSpaces();
       tokens.push({ kind: 'nodebreak', from: offset, to: offset + child.nodeSize });
     } else {
+      // A footnote marker glues to whatever precedes it no matter what the
+      // document holds: Typst drops a source space immediately ahead of the
+      // superscript rather than rendering it (see layoutBlock's identical
+      // treatment in paragraph.ts and ResolvedAtom.glueLeft in the oracle).
+      if (child.type.name === 'footnote') trimTrailingSpaces();
       tokens.push({
         kind: 'box',
         from: offset,

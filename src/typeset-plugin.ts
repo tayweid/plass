@@ -1937,9 +1937,12 @@ class TypesetView {
         case 'footnote': {
           // Real #footnote with the counter preset: the marker must have the
           // exact width the exported document will have (the body renders at
-          // the compiled page's bottom, out of the line flow).
+          // the compiled page's bottom, out of the line flow). Typst drops a
+          // source space immediately before the mark rather than rendering
+          // it — the mark glues to whatever precedes it even when the
+          // document itself has a real space there.
           const n = footnoteNums().get(child) ?? 1;
-          return { markup: `#counter(footnote).update(${n - 1});#footnote[.]`, text: String(n) };
+          return { markup: `#counter(footnote).update(${n - 1});#footnote[.]`, text: String(n), glueLeft: true };
         }
         default:
           return null;

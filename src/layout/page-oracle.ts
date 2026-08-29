@@ -35,17 +35,22 @@ export interface PageOracleEntry {
   reason?: string;
 }
 
-interface Unit {
+export interface Unit {
   kind: 'exact' | 'opaque';
   pos: number;
   type: string;
   level?: number;
   spec?: ParagraphSpec;
-  /** exact list-item paragraphs may carry a marker glyph on their first line. */
-  marker?: boolean;
+  /** exact list-item paragraphs may carry a marker glued onto their first
+   * line: `true` for a bullet/quote marker glyph (stripped by the generic
+   * MARKER pattern below) or the exact literal text Typst renders for an
+   * ordered-list marker ("1.", "2.", …) — deterministic from the item's
+   * position in its own list, so it is matched and stripped exactly rather
+   * than guessed at. */
+  marker?: boolean | string;
 }
 
-interface PagedLine extends SvgLine {
+export interface PagedLine extends SvgLine {
   page: number;
 }
 
@@ -173,9 +178,9 @@ function extractPages(svg: string, yTolPt: number, pageHPt: number): PagedLine[]
 }
 
 /** Build the document's unit list (blocks in reading order). */
-function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
+export function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
   const units: Unit[] = [];
-  const push = (node: PMNode, pos: number, marker = false) => {
+  const push = (node: PMNode, pos: number, marker: boolean | string = false) => {
     if (node.type.name === 'paragraph' && node.attrs.align) {
       // Aligned paragraphs are browser-laid (no line cache): opaque, so a
       // page can start AT them but a split inside one fails to fallback.
@@ -199,10 +204,23 @@ function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
       units.push({ kind: 'opaque', pos, type: 'abstract-label' });
       node.forEach((child, off) => push(child, pos + 1 + off));
     } else if (node.type.name === 'bullet_list' || node.type.name === 'ordered_list' || node.type.name === 'blockquote') {
+      // Ordered markers are deterministic per item: Typst's default enum
+      // numbering ("1.", "2.", …) restarts at 1 for every list (including a
+      // nested one), regardless of the export's own item-`order` attr — the
+      // exporter (typ-serializer's `+` items) never emits a start override,
+      // so this counts along with what actually gets compiled. Only the
+      // item's FIRST block carries the marker; a second paragraph or a
+      // nested list inside the same list_item has none.
+      const ordered = node.type.name === 'ordered_list';
+      let itemIndex = 0;
       node.forEach((child, off) => {
         const childPos = pos + 1 + off;
         if (child.type.name === 'list_item') {
-          child.forEach((g, goff) => push(g, childPos + 1 + goff, true));
+          itemIndex++;
+          const itemMarker: boolean | string = ordered
+            ? `${itemIndex}.`
+            : node.type.name === 'bullet_list';
+          child.forEach((g, goff) => push(g, childPos + 1 + goff, goff === 0 ? itemMarker : false));
         } else {
           push(child, childPos);
         }
@@ -217,8 +235,23 @@ function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
 
 const MARKER = /^[•‣–\-*]?\s*|^\d+[.)]\s*/;
 
+/**
+ * Strip a list-item's marker off the first line of its rendered text.
+ * `marker === true` is a bullet/quote glyph (matched loosely — the exact
+ * glyph varies by nesting depth and Typst's own default cycle); a string
+ * is an ordered-list marker's exact predicted text ("1.", "2.", …), which
+ * must match verbatim — left untouched otherwise, so a real mismatch
+ * still surfaces as a token-mismatch failure downstream (fail closed,
+ * never a fuzzy skip that could paper over a genuinely wrong layout).
+ */
+export function stripListMarker(text: string, marker: boolean | string | undefined): string {
+  if (!marker) return text;
+  if (typeof marker === 'string') return text.startsWith(marker) ? text.slice(marker.length) : text;
+  return text.replace(MARKER, '');
+}
+
 /** First words of every footnote body, in document order. */
-function footnoteHeads(doc: PMNode): string[] {
+export function footnoteHeads(doc: PMNode): string[] {
   const heads: string[] = [];
   doc.descendants((n) => {
     if (n.type.name === 'footnote') {
@@ -231,7 +264,7 @@ function footnoteHeads(doc: PMNode): string[] {
 }
 
 /** Remove per-page trailing footnote-area lines (matched against known texts). */
-function stripFootnoteLines(lines: PagedLine[], heads: string[]): PagedLine[] {
+export function stripFootnoteLines(lines: PagedLine[], heads: string[]): PagedLine[] {
   if (!heads.length) return lines;
   let hi = 0;
   const drop = new Set<number>();
@@ -338,11 +371,12 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
     const unit = units[ui];
     if (cursor >= lines.length) break;
     if (unit.kind === 'exact' && unit.spec) {
-      // List markers ride on the first line; strip before matching.
-      const slice = lines.slice(cursor).map((l, i) => ({
-        ...l,
-        text: i === 0 && unit.marker ? l.text.replace(MARKER, '') : l.text,
-      }));
+      // List markers ride on the first line; strip before matching. An
+      // ordered marker's exact text is known — require it verbatim (fail
+      // closed on a mismatch instead of silently leaving it, which would
+      // just surface as a token-mismatch failure downstream, exactly as it
+      // should for a genuinely wrong layout).
+      const slice = lines.slice(cursor).map((l, i) => (i === 0 ? { ...l, text: stripListMarker(l.text, unit.marker) } : l));
       const res = matchParagraph(unit.spec, slice, 0);
       if (res.status !== 'ok') {
         return { status: 'fail', reason: `unit@${unit.pos} (${unit.type}): ${res.entry.reason}` };

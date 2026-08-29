@@ -202,7 +202,7 @@ export function layoutBlock(
   type ChildPlan =
     | { kind: 'text'; offset: number; font: string; text: string; segs: Seg[]; widths: number[] }
     | { kind: 'nodebreak'; offset: number; size: number }
-    | { kind: 'atom'; offset: number; size: number; width: number; fill: boolean };
+    | { kind: 'atom'; offset: number; size: number; width: number; fill: boolean; glueLeft: boolean };
   const plans: ChildPlan[] = [];
   block.forEach((child, offset) => {
     if (child.isText && child.text) {
@@ -232,7 +232,11 @@ export function layoutBlock(
     } else {
       // Inline atom (math, …): a single unbreakable box measured from its
       // DOM. A flexible (fr) atom contributes nothing to the natural width
-      // — it absorbs whatever is left over once the line is chosen.
+      // — it absorbs whatever is left over once the line is chosen. A
+      // footnote marker glues to whatever precedes it no matter what the
+      // document holds: Typst drops a source space immediately ahead of the
+      // superscript rather than rendering it (see ResolvedAtom.glueLeft in
+      // the oracle's own token model — same Typst behavior, same fix here).
       const fill = opts.isFill?.(child) ?? false;
       plans.push({
         kind: 'atom',
@@ -240,6 +244,7 @@ export function layoutBlock(
         size: child.nodeSize,
         width: fill ? 0 : atomWidth(offset, child),
         fill,
+        glueLeft: child.type.name === 'footnote',
       });
     }
   });
@@ -307,6 +312,13 @@ export function layoutBlock(
     } else if (plan.kind === 'nodebreak') {
       pushEndOfSegment(plan.offset, plan.offset + plan.size, 'nodebreak');
     } else {
+      // A glueLeft atom (footnote marker) glues to whatever precedes it —
+      // Typst renders no gap there even when the document holds a real
+      // space, so drop that space item rather than let the local layout
+      // reserve width the settled oracle will never confirm.
+      if (plan.glueLeft) {
+        while (items.length && items[items.length - 1].kind === 'space') items.pop();
+      }
       items.push({
         kp: { type: 'box', width: plan.width },
         from: plan.offset,

@@ -61,6 +61,38 @@ test('page oracle splits a long bullet across the page boundary', async ({ page 
 });
 
 
+// Regression: Typst renders an ordered item's marker ("1.", "2.", …) glued
+// directly onto its first word in the extracted text layer, with no
+// separating space. The oracle's marker-strip regex happened to work for
+// bullet glyphs but silently no-op'd on a leading digit, so every document
+// containing an ordered_list permanently lost exact pagination.
+test('page oracle reaches exact pagination for an ordered list', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const { schema } = state;
+    const p = schema.nodes.paragraph;
+    const li = schema.nodes.list_item;
+    const doc = schema.nodes.doc.create(state.doc.attrs, [
+      schema.nodes.heading.create({ level: 1 }, schema.text('Ordered list pagination')),
+      schema.nodes.ordered_list.create(null, [
+        li.create(null, p.create(null, schema.text('Ordered item one.'))),
+        li.create(null, p.create(null, schema.text('Ordered item two.'))),
+        li.create(null, p.create(null, schema.text('Ordered item three.'))),
+      ]),
+    ]);
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
+  });
+
+  await expect
+    .poll(
+      () => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('exact[') ?? false),
+      { timeout: 30_000, intervals: [500, 1_000, 2_000] },
+    )
+    .toBe(true);
+});
+
 // The oracle is not always the one answering — a long document, a timeout, or
 // a compile failure puts the local fallback in charge. It used to move a list
 // item whole, which is the same large gap the test above guards against, so it

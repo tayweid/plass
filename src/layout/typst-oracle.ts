@@ -48,6 +48,11 @@ export interface ResolvedAtom {
   markup: string;
   /** Rendered text as it appears in the selection layer, when known. */
   text?: string;
+  /** True when Typst always glues this atom to the preceding token with no
+   * gap in the rendered/extracted text, regardless of whether the document
+   * has a real space before it (a footnote marker: Typst drops a source
+   * space immediately ahead of the superscript rather than rendering it). */
+  glueLeft?: boolean;
 }
 
 export interface AtomResolver {
@@ -128,12 +133,17 @@ export function buildSpec(node: PMNode, resolveAtom: AtomResolver): ParagraphSpe
       }
       if (child.type.name === 'math_inline') hasMath = true;
       src += resolved.markup;
+      // A real document space just consumed by take() still separates this
+      // atom from the next token — but a glueLeft atom (a footnote marker)
+      // renders glued to whatever precedes it no matter what the source
+      // held, so the predicted stream must say so too.
+      const hadSpace = take();
       tokens.push({
         kind: 'atom',
         start: offset,
         end: offset + child.nodeSize,
         text: resolved.text,
-        spaceBefore: take(),
+        spaceBefore: resolved.glueLeft ? false : hadSpace,
       });
       key += `⟦${resolved.markup}⟧`;
     }
