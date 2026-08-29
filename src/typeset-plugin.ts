@@ -141,6 +141,13 @@ if (typeof window !== 'undefined' && import.meta.env.DEV) {
 const FN_GAP = 6;
 const FN_SEP = 30;
 
+/** A settled pagination whose spacer differs from the installed one by less
+ * than this many px is measurement noise around a live-adjusted height, not a
+ * new page decision: keep the installed height so the settle dispatch becomes
+ * a signature no-op (zero spacer churn). Always compared against the freshly
+ * computed absolute height, so the tolerance can never accumulate. */
+const SPACER_REINSTALL_TOLERANCE_PX = 0.75;
+
 type CurrentSpacers = {
   lineMap: Map<number, Spacer>;
   blocks: Spacer[];
@@ -648,6 +655,18 @@ class TypesetView {
 
     let decos = typesetKey.getState(state)?.decos ?? DecorationSet.empty;
     let changed = false;
+    // Candidate for live page-invariant maintenance (see
+    // adjustSpacerAfterLiveEdit): only an unambiguous single-body-block edit
+    // qualifies; every other shape fails open to today's stale-height behavior.
+    let liveAdjust: {
+      pos: number;
+      blockTo: number;
+      el: HTMLElement;
+      newLines: number;
+      measure: number;
+      indent: number;
+      spacerInside: boolean;
+    } | null = null;
     for (const b of blocks) {
       const blockTo = b.pos + b.node.nodeSize;
       // Footnote bodies are DOM-nested inside the paragraph: their break +
@@ -793,6 +812,17 @@ class TypesetView {
         authority,
         breakSignature,
       });
+      if (blocks.length === 1 && b.kind === 'body') {
+        liveAdjust = {
+          pos: b.pos,
+          blockTo,
+          el: target,
+          newLines: lines.length,
+          measure,
+          indent: extra.firstLineIndent ?? 0,
+          spacerInside: false, // set below once the block's spacers are known
+        };
+      }
       lineLayoutMs += performance.now() - lineStart;
       const base = b.pos + 1;
       // Page spacers glued to mapped text positions break lines MID-LINE
@@ -802,6 +832,7 @@ class TypesetView {
       const pgStale = decorationsOwnedByBlock(decos, scope).filter(
         (deco) => (deco.spec as Partial<TypesetDecorationSpec>).tsKind === 'line-page-gap',
       );
+      if (liveAdjust && liveAdjust.pos === b.pos && pgStale.length) liveAdjust.spacerInside = true;
       let pgList = pgStale.map((d) => ({
         from: d.from,
         h: (d.spec as { h?: number }).h ?? 0,
@@ -828,6 +859,18 @@ class TypesetView {
       decos = rebuilt.decos;
       changed ||= rebuilt.changed;
     }
+    // The edit changed the block's height by a whole number of lines: restore
+    // the page invariant NOW by resizing the next spacer, instead of letting
+    // the settled pass correct a held-stale height 250ms later (the visible
+    // "double-typesetter" jump). `from > pos` guarantees the pre-edit block
+    // starts at the same position in the previous document.
+    if (liveAdjust && !liveAdjust.spacerInside && liveAdjust.pos < from) {
+      const adjusted = this.adjustSpacerAfterLiveEdit(state, prev, decos, settings, liveAdjust);
+      if (adjusted) {
+        decos = adjusted;
+        changed = true;
+      }
+    }
     const decorationStart = performance.now();
     // Owed digest, not computed: enumerating every decoration is O(document)
     // and must not run on the keystroke path for an O(edit) change.
@@ -846,6 +889,75 @@ class TypesetView {
       decorationMs: perfEnd - decorationStart,
       changedBlocks: blocks.length,
     });
+  }
+
+  /**
+   * Live page-invariant maintenance. For a fixed set of page starts, the
+   * content between two spacers plus the FOLLOWING spacer's height is a
+   * constant (they sum to one page). When a keystroke burst changes one body
+   * paragraph's height by ΔH = Δlines × line-height, the spacer terminating
+   * its page must shrink or grow by exactly -ΔH for the pages below to hold
+   * still. Doing that here — instead of keeping the stale height and letting
+   * the settled repagination move everything back — makes the settled pass a
+   * confirmation (no-op) whenever the page-start set is unchanged.
+   *
+   * ΔH costs no new reflows: line counts come from the layout entries the
+   * live pass just computed (and its predecessor cached), line-height from
+   * the per-element geometry cache. Every ambiguous shape fails open to
+   * today's behavior — multi-block edits, a spacer inside the edited block,
+   * an unknown or differently-measured previous layout, a result outside the
+   * representable spacer range. Only the provisional height changes; the
+   * settled pass remains the sole authority and overwrites or confirms it,
+   * whichever spacer set (exact, held, or fallback) is installed.
+   */
+  private adjustSpacerAfterLiveEdit(
+    state: EditorState,
+    prev: PMNode,
+    decos: DecorationSet,
+    settings: DocSettings,
+    edit: {
+      pos: number;
+      blockTo: number;
+      el: HTMLElement;
+      newLines: number;
+      measure: number;
+      indent: number;
+    },
+  ): DecorationSet | null {
+    // The corresponding pre-edit block: document content is identical before
+    // the diff start, so the old block begins at this same position.
+    if (edit.pos >= prev.content.size) return null;
+    const oldNode = prev.nodeAt(edit.pos);
+    if (!oldNode || oldNode.type !== state.doc.nodeAt(edit.pos)?.type) return null;
+    const oldEntry = this.cache.get(oldNode);
+    if (!oldEntry || oldEntry.measure !== edit.measure || oldEntry.indent !== edit.indent) return null;
+    const deltaLines = edit.newLines - oldEntry.lines.length;
+    if (!deltaLines) return null;
+    const deltaH = deltaLines * this.blockLineHeight(edit.el);
+    if (!Number.isFinite(deltaH)) return null;
+    // Only the first spacer after the edited block terminates its page; the
+    // invariant for every later page is untouched once this one absorbs ΔH.
+    const isSpacer = (spec: unknown) => {
+      const kind = (spec as Partial<TypesetDecorationSpec> | null)?.tsKind;
+      return kind === 'line-page-gap' || kind === 'block-page-gap';
+    };
+    const following = decos.find(edit.blockTo, state.doc.content.size, isSpacer);
+    if (!following.length) return null; // last page: nothing below to protect
+    let next = following[0];
+    for (const d of following) if (d.from < next.from) next = d;
+    const spec = next.spec as Partial<TypesetDecorationSpec>;
+    const oldH = spec.h ?? 0;
+    const newH = oldH - deltaH;
+    // A spacer spans at most a page of slack plus both margins and the
+    // painted inter-page gap. Out of representable range means the
+    // page-start set itself has to change — a decision that belongs to the
+    // settled pass, so keep today's stale height and let it correct.
+    if (!(oldH > 0) || !(newH > 0.5) || newH >= pageSize(settings).h + PAGE_GAP) return null;
+    const replacement =
+      spec.tsKind === 'block-page-gap'
+        ? blockSpacerDecoration({ pos: next.from, height: newH, kind: 'block' })
+        : pageSpacerDecoration(next.from, newH, !!spec.hy);
+    return decos.remove([next]).add(state.doc, [replacement]);
   }
 
   destroy() {
@@ -1254,9 +1366,21 @@ class TypesetView {
     this.pagLog.push(this.pagPath + '[' + this.pagWhy + ']:' + spacers.map((sp) => `${sp.pos}@${Math.round(sp.height)}`).join(','));
     if (this.pagLog.length > 40) this.pagLog.shift();
     if (spacers.length || held.lineMap.size || held.blocks.length) {
+      // A computed spacer that matches an installed one (same position and
+      // kind, height within the sub-pixel tolerance) keeps the installed
+      // height: the live pass already maintained the page invariant, and
+      // reinstalling for noise would churn widget DOM without moving pixels.
+      // When everything matches, the dispatch below becomes a signature no-op.
+      const effective = spacers.map((sp) => {
+        const installed =
+          sp.kind === 'line' ? held.lineMap.get(sp.pos) : held.blocks.find((b) => b.pos === sp.pos);
+        return installed && Math.abs(installed.height - sp.height) < SPACER_REINSTALL_TOLERANCE_PX
+          ? { ...sp, height: installed.height }
+          : sp;
+      });
       const lineSpacers = new Map<number, Spacer>();
       const blockSpacers: Spacer[] = [];
-      for (const sp of spacers) (sp.kind === 'line' ? lineSpacers.set(sp.pos, sp) : blockSpacers.push(sp));
+      for (const sp of effective) (sp.kind === 'line' ? lineSpacers.set(sp.pos, sp) : blockSpacers.push(sp));
       const secondLineStart = performance.now();
       this.dispatchDecos(lineSpacers, blockSpacers);
       lineLayoutMs += performance.now() - secondLineStart;
