@@ -3,7 +3,7 @@
 // list. The BibTeX source lives in a document attribute — autosaved,
 // undoable, and embedded in the .typ export so files stay self-contained.
 
-import { Plugin, PluginKey, type EditorState } from 'prosemirror-state';
+import { Plugin, PluginKey, type EditorState, type Transaction } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView, type NodeView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
@@ -73,12 +73,52 @@ function build(state: EditorState): DecorationSet {
   return DecorationSet.create(state.doc, decos);
 }
 
+/** Whether [from, to] holds a citation or the bibliography — a shallow
+ *  nodesBetween over one step's own range, not a document walk. */
+function rangeHasCitation(doc: PMNode, from: number, to: number): boolean {
+  let found = false;
+  doc.nodesBetween(Math.max(0, Math.min(from, doc.content.size)), Math.min(to, doc.content.size), (node) => {
+    if (found) return false;
+    if (node.type.name === 'citation' || node.type.name === 'bibliography') {
+      found = true;
+      return false;
+    }
+    return true;
+  });
+  return found;
+}
+
+/** True when a transaction could change the cited set or its first-use
+ *  numbering: some step replaced content holding a citation (or the
+ *  bibliography block), on either side of the replacement. */
+function touchesCitations(tr: Transaction): boolean {
+  for (let i = 0; i < tr.steps.length; i++) {
+    const before = tr.docs[i];
+    const after = tr.docs[i + 1] ?? tr.doc;
+    let hit = false;
+    tr.steps[i].getMap().forEach((oldStart, oldEnd, newStart, newEnd) => {
+      hit ||= rangeHasCitation(before, oldStart, oldEnd) || rangeHasCitation(after, newStart, newEnd);
+    });
+    if (hit) return true;
+  }
+  return false;
+}
+
 export function citationsPlugin() {
   return new Plugin<DecorationSet>({
     key: citeKey,
     state: {
       init: (_, state) => build(state),
-      apply: (tr, val, _old, newState) => (tr.docChanged ? build(newState) : val),
+      apply: (tr, val, oldState, newState) => {
+        if (!tr.docChanged) return val;
+        // Rebuilding is O(document); an edit that touches no citation and
+        // leaves the bib attr alone cannot change any "[n]" or the
+        // reference-list signature, so the mapped set is already exact.
+        if (oldState.doc.attrs.bib !== newState.doc.attrs.bib || touchesCitations(tr)) {
+          return build(newState);
+        }
+        return val.map(tr.mapping, tr.doc);
+      },
     },
     props: {
       decorations: (state) => citeKey.getState(state),

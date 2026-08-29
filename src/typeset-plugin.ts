@@ -255,15 +255,36 @@ export function typesetPlugin(
           // (e.g. the table card swapping the block that ENDS at a page
           // start) silently drops the spacer, and the page below visibly
           // jumps until the settle run. Spacers are load-bearing geometry:
-          // re-anchor any that mapping discarded.
+          // re-anchor any that mapping discarded. Mapping only discards
+          // widgets inside REPLACED content, so the scan is bounded to the
+          // deleted envelope — a plain insertion pays nothing, and scanning
+          // the whole set on every keystroke is avoided.
+          let delFrom = Infinity;
+          let delTo = -Infinity;
+          for (let i = 0; i < tr.steps.length; i++) {
+            // Step ranges live in the doc before THAT step; express them in
+            // the transaction-start doc `val.decos` is anchored to.
+            const back = i ? tr.mapping.slice(0, i).invert() : null;
+            tr.steps[i].getMap().forEach((oldStart, oldEnd) => {
+              if (oldEnd <= oldStart) return;
+              const from = back ? back.map(oldStart, -1) : oldStart;
+              const to = back ? back.map(oldEnd, 1) : oldEnd;
+              if (from < delFrom) delFrom = from;
+              if (to > delTo) delTo = to;
+            });
+          }
           const isSpacer = (spec: unknown) => {
             const kind = (spec as Partial<TypesetDecorationSpec> | null)?.tsKind;
             return kind === 'line-page-gap' || kind === 'block-page-gap';
           };
-          const had = val.decos.find(undefined, undefined, isSpacer);
+          const scanFrom = Math.max(0, delFrom - 1);
+          const scanTo = Math.min(tr.before.content.size, delTo + 1);
+          const had = delTo >= delFrom ? val.decos.find(scanFrom, scanTo, isSpacer) : [];
           if (had.length) {
+            const keptFrom = Math.max(0, tr.mapping.map(scanFrom, -1));
+            const keptTo = Math.min(tr.doc.content.size, tr.mapping.map(scanTo, 1));
             const kept = new Set(
-              decos.find(undefined, undefined, isSpacer).map((d) => (d.spec as { key: string }).key),
+              decos.find(keptFrom, keptTo, isSpacer).map((d) => (d.spec as { key: string }).key),
             );
             const lost = had.filter((d) => !kept.has((d.spec as { key: string }).key));
             if (lost.length) {
@@ -1247,7 +1268,6 @@ class TypesetView {
   private atomResolver(): AtomResolver {
     const state = this.view.state;
     const labels = eqKey.getState(state)?.labels ?? new Map<string, string>();
-    const order = citeOrder(state.doc);
     const settings = getSettings(state);
     const macros = parseMathMacros(settings.mathMacros);
     // The compiled document renders a formula as concrete glyph text
@@ -1266,15 +1286,25 @@ class TypesetView {
         .trim();
       return text || undefined;
     };
-    const fnNums = new Map<PMNode, number>();
-    let fn = 0;
-    state.doc.descendants((n) => {
-      if (n.type.name === 'footnote') {
-        fnNums.set(n, ++fn);
-        return false;
+    // Citation order and footnote numbering are whole-document walks; a
+    // live pass over an atom-free paragraph must not pay for them, so both
+    // resolve lazily on the first atom that needs them.
+    let order: Map<string, number> | null = null;
+    let fnNums: Map<PMNode, number> | null = null;
+    const footnoteNums = () => {
+      if (!fnNums) {
+        fnNums = new Map<PMNode, number>();
+        let fn = 0;
+        state.doc.descendants((n) => {
+          if (n.type.name === 'footnote') {
+            fnNums!.set(n, ++fn);
+            return false;
+          }
+          return true;
+        });
       }
-      return true;
-    });
+      return fnNums;
+    };
     return (child) => {
       switch (child.type.name) {
         case 'math_inline':
@@ -1295,6 +1325,7 @@ class TypesetView {
         case 'typst_inline':
           return isFlexibleAtom(child) ? null : { markup: child.attrs.src as string };
         case 'citation': {
+          order ??= citeOrder(state.doc);
           const t = `[${order.get(child.attrs.key as string) ?? '?'}]`;
           return { markup: escapeTyp(t), text: t };
         }
@@ -1306,7 +1337,7 @@ class TypesetView {
           // Real #footnote with the counter preset: the marker must have the
           // exact width the exported document will have (the body renders at
           // the compiled page's bottom, out of the line flow).
-          const n = fnNums.get(child) ?? 1;
+          const n = footnoteNums().get(child) ?? 1;
           return { markup: `#counter(footnote).update(${n - 1});#footnote[.]`, text: String(n) };
         }
         default:
