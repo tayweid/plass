@@ -41,6 +41,7 @@ import { loadPrimitives, primitives } from './layout/primitives';
 import type { PageOracle, PageOracleEntry } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
+import { footnoteEntryCost, footnoteHeadReservePx, footnotePositions } from './layout/flow-rules';
 import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
 import { eqKey } from './equations';
@@ -148,10 +149,6 @@ if (typeof window !== 'undefined' && import.meta.env.DEV) {
   w.__portStats = () => ({ port: portHits, legacy: legacyHits, adapterNulls, partitionMisses });
   w.__forcedPathStats = () => ({ fast: forcedFastHits, fallback: forcedFallbacks });
 }
-
-/** Vertical gap between stacked footnote bodies / height of the separator zone (px). */
-const FN_GAP = 6;
-const FN_SEP = 30;
 
 /** A settled pagination whose spacer differs from the installed one by less
  * than this many px is measurement noise around a live-adjusted height, not a
@@ -2648,6 +2645,10 @@ class TypesetView {
     const stackY = (clientTop: number, pos: number) =>
       clientTop - snapshot.stackTop - this.heightAbove(snapshot, pos);
 
+    // The same body font-size source used everywhere else in the paginator;
+    // needed below too, for the footnote ledger's em-derived gap/clearance.
+    const F = snapshot.bodyPx;
+
     // Footnote bodies, in document order, consumed as units are placed.
     const fnList: Array<{ pos: number; height: number }> = [];
     view.state.doc.descendants((node, pos) => {
@@ -2665,15 +2666,19 @@ class TypesetView {
     if (seed) {
       while (fnIdx < fnList.length && fnList[fnIdx].pos < seed.startPos) fnIdx++;
     }
+    // Per-entry ledger term (gap + height, Typst's `push_footnote`): a peek
+    // doesn't commit fnIdx, a take does — both charge the identical
+    // per-entry cost, so the fit test can never diverge from what's
+    // actually consumed.
     const peekFnH = (endPos: number) => {
       let h = 0;
-      for (let j = fnIdx; j < fnList.length && fnList[j].pos < endPos; j++) h += fnList[j].height + FN_GAP;
+      for (let j = fnIdx; j < fnList.length && fnList[j].pos < endPos; j++) h += footnoteEntryCost(fnList[j].height, F);
       return h;
     };
     const takeFnH = (endPos: number) => {
       let h = 0;
       while (fnIdx < fnList.length && fnList[fnIdx].pos < endPos) {
-        h += fnList[fnIdx].height + FN_GAP;
+        h += footnoteEntryCost(fnList[fnIdx].height, F);
         fnIdx++;
       }
       return h;
@@ -2686,14 +2691,18 @@ class TypesetView {
     let page = seed?.page ?? 0;
     let pageFnH = 0;
     let visitedUnits = 0;
+    // pageFnH (+ any peeked extraFnH) is the running sum of per-entry costs
+    // (footnoteEntryCost) for every footnote consumed so far on this page;
+    // the once-per-page clearance+separator head reservation is added on
+    // top exactly when that running sum is nonzero — the same decomposition
+    // `footnoteAreaHeight` uses, so this and `placeFootnotes` can't drift.
     const bottomFor = (extraFnH: number) => {
       const total = pageFnH + extraFnH;
-      return page * (size.h + PAGE_GAP) + size.h - marginBottom - (total > 0 ? total + FN_SEP : 0);
+      return page * (size.h + PAGE_GAP) + size.h - marginBottom - (total > 0 ? total + footnoteHeadReservePx(F) : 0);
     };
     // The same page-top ink adjustment paginateForced applies: fallback
     // pagination must land units at identical offsets, or an oracle miss
     // visibly shifts the whole page rhythm by the adjustment.
-    const F = snapshot.bodyPx;
     const adjFor = (pos: number, kind: Spacer['kind']): number => {
       if (kind === 'line') return pageTopAdjustEm(s, 'line') * F;
       const n = view.state.doc.nodeAt(pos);
@@ -3185,6 +3194,7 @@ class TypesetView {
     const marginBottom = s.marginBottom * 96;
     const host = view.dom.parentElement ?? view.dom;
     const stackTop = host.getBoundingClientRect().top;
+    const F = this.bodyPx();
 
     const groups = new Map<number, Array<{ el: HTMLElement; height: number }>>();
     view.state.doc.descendants((node, pos) => {
@@ -3205,16 +3215,22 @@ class TypesetView {
     // ink adjustment shifts it away from exactly one margin).
     const pmOffset = view.dom.getBoundingClientRect().top - stackTop;
     for (const [page, list] of groups) {
-      const bottomLimit = page * (size.h + PAGE_GAP) + size.h - marginBottom;
-      const total = list.reduce((sum, f) => sum + f.height, 0) + FN_GAP * (list.length - 1);
-      let y = bottomLimit - total - pmOffset;
+      const bottomEdge = page * (size.h + PAGE_GAP) + size.h - marginBottom;
+      // Same formula the fit test reserves against (footnoteAreaHeight):
+      // clearance + separator once, then (gap + height) per entry — so the
+      // painted stack can never drift from what pagination assumed fit.
+      const { entryTops } = footnotePositions(
+        list.map((f) => f.height),
+        F,
+        bottomEdge,
+      );
       list.forEach((f, i) => {
+        const y = entryTops[i] - pmOffset;
         // Hysteresis: sub-pixel re-measurements must not nudge the body.
         const prev = parseFloat(f.el.style.top);
         if (!(Math.abs(prev - y) < 0.75)) f.el.style.top = `${y.toFixed(1)}px`;
         f.el.classList.toggle('fn-first', i === 0);
         f.el.style.visibility = 'visible';
-        y += f.height + FN_GAP;
       });
     }
   }

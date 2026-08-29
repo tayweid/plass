@@ -1333,14 +1333,20 @@ body {
   text-indent: 0.9em;
 }
 
-/* Separator rule above the first footnote of a page. */
+/* Separator rule above the first footnote of a page: positioned exactly
+   `gap + separator-thickness` above the entry, both resolved against the
+   BODY text size (--doc-size, not this rule's own 0.85em) via pure CSS
+   arithmetic — the same values src/layout/flow-rules.ts uses for
+   reservation, so paint and reservation cannot drift. Typst defaults
+   (model/footnote.rs): gap = 0.5em, separator = an absolute 0.5pt line
+   spanning 30% of the entry's width. */
 .fn-body.fn-first::before {
   content: '';
   position: absolute;
-  top: -9px;
+  top: calc(-0.5pt - var(--doc-size) * 0.5);
   left: 0;
   width: 30%;
-  border-top: 0.5px solid #1a1a1a;
+  border-top: 0.5pt solid #1a1a1a;
 }
 
 .fn-num {
