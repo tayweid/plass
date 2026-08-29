@@ -30,7 +30,7 @@
     "verify:production": "node --import tsx scripts/verify-production.ts",
     "preview": "vite preview",
     "test": "tsx src/layout/knuth-plass.test.ts && tsx src/layout/block-layout.test.ts && tsx src/layout/line-decorations.test.ts && tsx src/layout/forced-layout.test.ts && tsx src/layout/pagination-snapshot.test.ts && tsx src/layout/pagination-suffix.test.ts && tsx src/layout/layout-scheduler.test.ts && tsx src/layout/oracle-coordinator.test.ts && tsx src/typ-parser.test.ts && tsx src/md-round.test.ts && tsx src/collapse-spaces.test.ts && tsx src/security.test.ts && tsx src/font-registry.test.ts",
-    "test:layout": "tsx src/layout/port/port-smoke.test.ts && tsx src/layout/font-certification.test.ts",
+    "test:layout": "tsx src/layout/port/port-smoke.test.ts && tsx src/layout/port/shape-cache.test.ts && tsx src/layout/font-certification.test.ts",
     "test:browser": "playwright test",
     "sidecar": "node --import tsx scripts/build-sidecar.ts"
   },
