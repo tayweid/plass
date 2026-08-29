@@ -14,6 +14,7 @@ import type { FontFaceKeys } from '../../font-registry';
 import { ByteText } from './bytes';
 import { defaultConfig, prepare, type InputSegment } from './prepare';
 import { linebreak } from './linebreak';
+import { linebreakIncremental } from './incremental';
 
 const PT_PER_PX = 0.75;
 
@@ -185,8 +186,21 @@ export function portBreaks(
   };
 
   // --- run the breaker ---
+  // Incremental across keystrokes: identical result to a from-scratch
+  // linebreak() by construction (see incremental.ts). A null return is the
+  // CJ-mutation tripwire: the preparation's shared glyphs were mutated
+  // mid-run, so rebuild the preparation and run the plain breaker.
   const measurePt = measurePx * PT_PER_PX;
-  const lines = linebreak(p, measurePt);
+  let lines = linebreakIncremental(p, measurePt);
+  if (lines === null) {
+    lines = linebreak(
+      prepare(
+        pieces.map((pc) => pc.seg),
+        config,
+      ),
+      measurePt,
+    );
+  }
   if (!lines.length) return null;
 
   // --- lines → ForcedBreak[] ---

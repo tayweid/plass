@@ -173,7 +173,10 @@ export class ShapedText {
     if (left === null) return null;
     const right = this.findSafeToBreak(end);
     if (right === null) return null;
-    return this.glyphs.list.slice(left, right);
+    // this.glyphs.list.slice(left, right) without materializing the full
+    // kept-view copy first (left/right are kept-view indices ≤ length).
+    const g = this.glyphs;
+    return g.inner.slice(g.keptStart + left, g.keptStart + right);
   }
 
   /** Mirror of find_safe_to_break (LTR only). */

@@ -241,6 +241,16 @@ fallback.
 - Semantic break signatures let the compiled verifier reuse a matching port
   layout. Browser regressions require one line-decoration dispatch for an
   ordinary body, caption, or footnote edit and no identical settle reinstall.
+- The keystroke path is incremental across runs
+  (`src/layout/port/incremental.ts`): both DP passes always re-execute in
+  full — the approximate pass's paragraph-global cost bound and the
+  float-accumulated totals make cached-DP-state splicing unprovable at knife
+  edges — but `line()` construction, the per-candidate O(paragraph) cost, is
+  served from the previous run wherever a byte range lies inside a region
+  whose text and shaped glyph values are verified equal (offset-mapped).
+  Any mismatch, non-'en' language, or CJ-mutation-capable glyph fails open
+  to fresh construction; `incremental-linebreak.test.ts` differentially
+  gates the served path against from-scratch runs per edit.
 - Conservative forced-layout tolerances and the legacy translator remain as
   browser-rendering guards; they are not alternate break-selection policies.
 
