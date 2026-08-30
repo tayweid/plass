@@ -14,7 +14,7 @@ import { NodeSelection, Plugin, TextSelection } from 'prosemirror-state';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 import type { EditorView, NodeView } from 'prosemirror-view';
 import { schema } from './schema';
-import { fragmentSource } from './table-split';
+import { fragmentSource } from './fragment-source';
 import { scheduleTypeset } from './typeset-plugin';
 import { mountTypstSvg } from './safe-svg';
 

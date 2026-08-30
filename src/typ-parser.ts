@@ -287,7 +287,9 @@ function fuseDecimalColumns(table: PMNode, logicalDecimals: number[]): PMNode {
 }
 
 function unescapeTypText(t: string): string {
-  return t.replace(/\\([\\#$*_`@<>\[\]])/g, '$1');
+  // Table captions use the table-cell-safe text encoder, which also protects
+  // literal tildes and Typst comment openers.
+  return t.replace(/\\([\\#$*_`@<>\[\]~\/])/g, '$1');
 }
 
 /** Body numbering format captured from a numbering-restart marker. */
@@ -529,15 +531,11 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     // table: #align(center, [text(size…, )]table(…)) or bare #table(…)
     const centered = t.startsWith('#align(center, table(') || t.startsWith('#align(center, text(size:');
     if (centered || t.startsWith('#table(')) {
-      const body: string[] = [line];
-      let depth = countParens(line);
+      let whole = line;
+      const callOpen = whole.indexOf('(');
       i++;
-      while (i < n && depth > 0) {
-        body.push(lines[i]);
-        depth += countParens(lines[i]);
-        i++;
-      }
-      let src = body.join('\n');
+      while (i < n && matchParen(whole, callOpen) < 0) whole += `\n${lines[i++]}`;
+      let src = whole;
       let tableSize = '';
       if (centered) {
         src = src.trim();
@@ -556,7 +554,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
         pendingDecimals = null;
       } else {
         warnings.push('kept as raw Typst: #table(…) (unrecognized form)');
-        out.push(schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text(body.join('\n'))]));
+        out.push(schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text(whole)]));
       }
       continue;
     }
@@ -592,31 +590,15 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
 
     // captioned table: #figure(\n  table(…),\n  caption: […],\n) <label>
     if (/^#figure\(\s*$/.test(t) || /^#figure\(\s*table\(/.test(t)) {
-      const body: string[] = [line];
-      let depth = countParens(line);
+      let whole = line;
+      const figureOpen = whole.indexOf('(');
       i++;
-      while (i < n && depth > 0) {
-        body.push(lines[i]);
-        depth += countParens(lines[i]);
-        i++;
-      }
-      const whole = body.join('\n');
+      while (i < n && matchParen(whole, figureOpen) < 0) whole += `\n${lines[i++]}`;
       const figSize = /text\(size:\s*([\d.]+em),\s*table\(/.exec(whole)?.[1] ?? '';
       const tStart = whole.indexOf('table(', whole.indexOf('(') + 1);
       if (tStart >= 0) {
-        // Balanced span of the table(...) call.
-        let d = 0;
-        let tEnd = -1;
-        for (let k = tStart + 'table('.length - 1; k < whole.length; k++) {
-          if (whole[k] === '(') d++;
-          else if (whole[k] === ')') {
-            d--;
-            if (d === 0) {
-              tEnd = k;
-              break;
-            }
-          }
-        }
+        // Content-block parens are visible text, not call delimiters.
+        const tEnd = matchParen(whole, tStart + 'table'.length);
         if (tEnd > 0) {
           const capM = /caption:\s*\[/.exec(whole.slice(tEnd));
           let caption = '';
@@ -715,20 +697,6 @@ export function parseInline(text: string): PMNode[] {
   return out;
 }
 
-/** Net change in paren depth over a line (ignoring escaped parens). */
-function countParens(line: string): number {
-  let d = 0;
-  for (let j = 0; j < line.length; j++) {
-    if (line[j] === '\\') {
-      j++;
-      continue;
-    }
-    if (line[j] === '(') d++;
-    else if (line[j] === ')') d--;
-  }
-  return d;
-}
-
 interface ParsedCell {
   content: string;
   colspan: number;
@@ -737,10 +705,91 @@ interface ParsedCell {
   align: string | null;
 }
 
+export interface TableSourceParts {
+  /** Non-cell positional/named arguments, without their trailing commas. */
+  args: string[];
+  /** Cell and table.header arguments, without their trailing commas. */
+  rows: string[];
+}
+
+/** Skip a quoted Typst string or raw string, returning its closing index. */
+function quotedEnd(src: string, open: number): number {
+  const quote = src[open];
+  for (let i = open + 1; i < src.length; i++) {
+    if (src[i] === '\\') {
+      i++;
+      continue;
+    }
+    if (src[i] === quote) return i;
+  }
+  return src.length - 1;
+}
+
+interface ParsedRawMathCall {
+  src: string;
+  /** First source offset after the two closing call parentheses. */
+  end: number;
+}
+
+/** Parse only the inert inline-math shape emitted for certified table cells. */
+function parseRawMathCall(source: string, start: number): ParsedRawMathCall | null {
+  const prefix = '#mi(raw(';
+  if (!source.startsWith(prefix, start)) return null;
+  const quote = start + prefix.length;
+  if (source[quote] !== '"') return null;
+  const end = quotedEnd(source, quote);
+  if (end <= quote || source[end] !== '"') return null;
+  const suffix = /^,\s*block:\s*false\)\)/.exec(source.slice(end + 1));
+  if (!suffix) return null;
+  try {
+    const decoded = JSON.parse(source.slice(quote, end + 1)) as unknown;
+    return typeof decoded === 'string'
+      ? { src: decoded, end: end + 1 + suffix[0].length }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Matching `)` for a Typst call. Content blocks are opaque to parens. */
+function matchParen(src: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (c === '\\') {
+      i++;
+      continue;
+    }
+    if (c === '"' || c === '`') {
+      i = quotedEnd(src, i);
+      continue;
+    }
+    if (c === '/' && src[i + 1] === '/') {
+      const nl = src.indexOf('\n', i + 2);
+      if (nl < 0) return -1;
+      i = nl;
+      continue;
+    }
+    if (c === '[') {
+      const end = matchBracket(src, i);
+      if (end < 0) return -1;
+      i = end;
+      continue;
+    }
+    if (c === '(') depth++;
+    else if (c === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 /** Split a Typst argument list at depth-0 commas. */
 function splitTopArgs(inner: string): string[] {
   const args: string[] = [];
-  let depth = 0;
+  let parens = 0;
+  let braces = 0;
   let start = 0;
   for (let i = 0; i < inner.length; i++) {
     const c = inner[i];
@@ -748,9 +797,27 @@ function splitTopArgs(inner: string): string[] {
       i++;
       continue;
     }
-    if (c === '(' || c === '[' || c === '{') depth++;
-    else if (c === ')' || c === ']' || c === '}') depth--;
-    else if (c === ',' && depth === 0) {
+    if (c === '"' || c === '`') {
+      i = quotedEnd(inner, i);
+      continue;
+    }
+    if (c === '/' && inner[i + 1] === '/') {
+      const nl = inner.indexOf('\n', i + 2);
+      if (nl < 0) break;
+      i = nl;
+      continue;
+    }
+    if (c === '[') {
+      const end = matchBracket(inner, i);
+      if (end < 0) return [];
+      i = end;
+      continue;
+    }
+    if (c === '(') parens++;
+    else if (c === ')') parens--;
+    else if (c === '{') braces++;
+    else if (c === '}') braces--;
+    else if (c === ',' && parens === 0 && braces === 0) {
       args.push(inner.slice(start, i));
       start = i + 1;
     }
@@ -768,7 +835,7 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
   }
   if (arg.startsWith('table.cell(')) {
     const argsStart = 'table.cell('.length;
-    const argsEnd = arg.indexOf(')', argsStart);
+    const argsEnd = matchParen(arg, argsStart - 1);
     const bracket = arg.indexOf('[', argsEnd);
     if (argsEnd < 0 || bracket < 0) return null;
     const end = matchBracket(arg, bracket);
@@ -785,6 +852,55 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
   return null;
 }
 
+const CELL_ARG_RE = /^(?:\[|table\.cell\(|table\.header\()/;
+
+/** Extract the balanced table call from generated source, excluding any
+ * surrounding centered/figure wrapper and tolerating visible cell parens. */
+export function extractTableSourceParts(src: string): TableSourceParts | null {
+  let at = 0;
+  let call = -1;
+  while ((at = src.indexOf('table(', at)) >= 0) {
+    const prev = src[at - 1] ?? '';
+    if (!/[\w.]/.test(prev)) {
+      call = at;
+      break;
+    }
+    at += 'table('.length;
+  }
+  if (call < 0) return null;
+  const open = call + 'table'.length;
+  const close = matchParen(src, open);
+  if (close < 0) return null;
+  const top = splitTopArgs(src.slice(open + 1, close));
+  if (!top.length) return null;
+  return {
+    args: top.filter((arg) => !CELL_ARG_RE.test(arg)),
+    rows: top.filter((arg) => CELL_ARG_RE.test(arg)),
+  };
+}
+
+/** Table cells are a lossless paragraph-only subset of the broader schema. */
+function parseTableCellContent(content: string): PMNode[] | null {
+  const trimmed = content.trim();
+  if (!trimmed) return [schema.nodes.paragraph.create()];
+  const chunks = trimmed.split(/\n[ \t]*\n/);
+  const paragraphs: PMNode[] = [];
+  for (const chunk of chunks) {
+    const lines = chunk.split('\n');
+    const first = lines[0]?.trim() ?? '';
+    if (/^(?:```|={1,3}\s|[-+]\s|#(?:pagebreak|line|quote|align|block)\b)/.test(first)) return null;
+    if (
+      first === '// typeset:empty-table-paragraph' &&
+      lines.slice(1).every((line) => !line.trim() || line.trim() === '~')
+    ) {
+      paragraphs.push(schema.nodes.paragraph.create());
+      continue;
+    }
+    paragraphs.push(schema.nodes.paragraph.create(null, parseParagraph(lines)));
+  }
+  return paragraphs.length ? paragraphs : [schema.nodes.paragraph.create()];
+}
+
 /**
  * Parse our emitted #table form into a table node; null if unrecognized
  * (the caller preserves the source verbatim as a raw island). Named
@@ -794,18 +910,7 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
 export function parseTable(src: string): PMNode | null {
   const open = src.indexOf('(');
   if (open < 0) return null;
-  let d = 0;
-  let close = -1;
-  for (let j = open; j < src.length; j++) {
-    if (src[j] === '(') d++;
-    else if (src[j] === ')') {
-      d--;
-      if (d === 0) {
-        close = j;
-        break;
-      }
-    }
-  }
+  const close = matchParen(src, open);
   if (close < 0) return null;
 
   const args = splitTopArgs(src.slice(open + 1, close));
@@ -900,7 +1005,7 @@ export function parseTable(src: string): PMNode | null {
   }
 
   // Chunk the flat cell list into rows, honoring col/rowspans.
-  const { table, table_row, table_cell, table_header, paragraph } = schema.nodes;
+  const { table, table_row, table_cell, table_header } = schema.nodes;
   const rows: PMNode[] = [];
   const pending = new Array<number>(columns).fill(0); // rows still occupied by rowspans
   let idx = 0;
@@ -916,19 +1021,25 @@ export function parseTable(src: string): PMNode | null {
       const c = cells[idx++];
       if (!c) break;
       const type = c.header ? table_header : table_cell;
-      const para = paragraph.create(null, parseInline(c.content.trim()));
+      const content = parseTableCellContent(c.content);
+      if (!content) return null;
       rowCells.push(
-        type.create({ colspan: c.colspan, rowspan: c.rowspan, align: c.align ?? colAligns[col] }, [para]),
+        type.create({ colspan: c.colspan, rowspan: c.rowspan, align: c.align ?? colAligns[col] }, content),
       );
       for (let k = col; k < Math.min(columns, col + c.colspan); k++) {
         if (c.rowspan > 1) pending[k] += c.rowspan - 1;
       }
       col += c.colspan;
     }
-    if (rowCells.length) rows.push(table_row.create(null, rowCells));
-    else break;
+    if (rowCells.length) {
+      rows.push(table_row.create(null, rowCells));
+    } else {
+      // The flat Typst stream can advance through a row fully occupied by a
+      // prior rowspan; this subset has no lossless delimiter for that row.
+      return null;
+    }
   }
-  if (!rows.length) return null;
+  if (!rows.length || idx !== cells.length || pending.some((remaining) => remaining > 0)) return null;
   // Booktabs fidelity: the bare positional rules must be exactly the
   // preset's own — top, bottom, and the header midrule — minus any the
   // user replaced with an explicit y: rule at that boundary.
@@ -953,13 +1064,23 @@ export function parseTable(src: string): PMNode | null {
   }
 }
 
-/** Index of the `]` matching the `[` at `open`, honoring escapes and nesting. */
+/** Index of the `]` matching the `[` at `open`, honoring Typst literals. */
 function matchBracket(src: string, open: number): number {
   let depth = 0;
   for (let j = open; j < src.length; j++) {
     const c = src[j];
     if (c === '\\') {
       j++;
+      continue;
+    }
+    if (c === '"' || c === '`') {
+      j = quotedEnd(src, j);
+      continue;
+    }
+    if (c === '/' && src[j + 1] === '/') {
+      const nl = src.indexOf('\n', j + 2);
+      if (nl < 0) return -1;
+      j = nl;
       continue;
     }
     if (c === '[') depth++;
@@ -1100,6 +1221,14 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
         continue;
       }
     }
+    const safeMath = parseRawMathCall(src, i);
+    if (safeMath) {
+      flush();
+      out.push(schema.nodes.math_inline.create({ src: safeMath.src }));
+      i = safeMath.end;
+      continue;
+    }
+    // Legacy inline math remains supported for existing Plass documents.
     if (src.startsWith('#mi(`', i)) {
       const end = src.indexOf('`)', i + 5);
       if (end >= 0) {
@@ -1116,6 +1245,26 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
         out.push(schema.nodes.image.create({ src: src.slice(i + 8, end) }));
         i = end + 2;
         continue;
+      }
+    }
+    // A certified code-marked table cell containing a literal backtick uses
+    // the unambiguous inline raw string form.
+    if (src.startsWith('#raw("', i)) {
+      const quote = i + '#raw('.length;
+      const end = quotedEnd(src, quote);
+      const suffix = /^,\s*block:\s*false\)/.exec(src.slice(end + 1));
+      if (end > quote && suffix) {
+        try {
+          const value = JSON.parse(src.slice(quote, end + 1)) as unknown;
+          if (typeof value === 'string') {
+            flush();
+            out.push(schema.text(value, [...marks, schema.marks.code.create()]));
+            i = end + 1 + suffix[0].length;
+            continue;
+          }
+        } catch {
+          // Let the generic raw-Typst preservation path handle malformed calls.
+        }
       }
     }
     if (ch === '@') {

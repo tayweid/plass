@@ -11,7 +11,7 @@ import { schema } from './schema';
 import { insertMath } from './math';
 import { insertFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
-import { insertTableWithEditor } from './table-editor';
+import { insertStructuredTable } from './table-editor';
 import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
 import { isPwaInstalled, onPwaInstallState, requestPwaInstall } from './pwa-install';
@@ -370,8 +370,14 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       return node.type === schema.nodes.heading ? (node.attrs.level as number) : null;
     };
     const next = (cur: number | null): number | null => (cur === null ? 1 : cur === 3 ? null : cur + 1);
+    let lastCurrent: number | null | undefined;
     const refresh = (state: EditorState) => {
       const cur = current(state);
+      // Character transactions leave the block-format UI unchanged. Besides
+      // avoiding redundant DOM writes, this keeps the flyout's offset reads
+      // entirely off the ordinary typing path (including native table cells).
+      if (cur === lastCurrent) return;
+      lastCurrent = cur;
       const nx = next(cur);
       tico.textContent = nx ? `H${nx}` : '¶';
       trigger.title = nx ? `Make this block Heading ${nx}` : 'Back to body text';
@@ -430,7 +436,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     { glyph: icon('alignright'), label: 'Right', title: 'Align right', run: () => setAlign('right') },
   ]);
   barBtn(icon('image'), 'Figure', 'Insert figure (⌘⌥I) — or paste/drop an image', runCmd(insertFigureCmd));
-  barBtn(icon('table'), 'Table', 'Insert table (⌘⌥T)', () => insertTableWithEditor(view));
+  barBtn(icon('table'), 'Table', 'Insert table (⌘⌥T)', () => insertStructuredTable(view));
   barBtn('<span class="ico tico">Σ</span>', 'Math', 'Inline math (⌘M) — or type $x^2$; ⌘⇧M for display', runCmd(insertMath(false)));
   barBtn('<span class="ico tico">†</span>', 'Note', 'Footnote (⌘⌥F) — or type ^[', runCmd(insertFootnote));
   flyout(currentPod, icon('code'), 'Code block — source code or raw Typst', [

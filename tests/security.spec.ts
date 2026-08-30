@@ -409,11 +409,11 @@ test('an old compiler timeout preserves work from a newer document epoch', async
   });
 });
 
-test('table-card open and local edits authorize fresh compiler epochs', async ({ page }) => {
+test('native table focus is inert and a cell edit authorizes a fresh compiler epoch', async ({ page }) => {
   await page.goto('/?new=1');
-  const result = await page.evaluate(async () => {
+  await page.evaluate(() => {
     const app = window as typeof window & { view: import('prosemirror-view').EditorView };
-    const { schema } = await import('/src/schema.ts');
+    const { schema } = app.view.state;
     const cell = (text: string) => schema.nodes.table_cell.create(
       null,
       schema.nodes.paragraph.create(null, schema.text(text)),
@@ -424,16 +424,16 @@ test('table-card open and local edits authorize fresh compiler epochs', async ({
     );
     const state = app.view.state;
     app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, table));
+  });
 
+  await expect(page.locator('.ProseMirror table')).toHaveCount(1);
+  await expect(page.locator('.table-card-overlay, .ts-table-preview')).toHaveCount(0);
+
+  const beforeFocus = await page.evaluate(async () => {
     const { testCompilerLifecycleStats, testCompilerTimeoutCircuitBreaker } =
       await import('/src/typst-worker-client.ts');
-    const { openTableEditor } = await import('/src/table-editor.ts');
-    const beforeOpen = testCompilerLifecycleStats();
-    openTableEditor(app.view, 0);
-    const afterOpen = testCompilerLifecycleStats();
-
-    // Let the document and card's legitimate initial previews settle before
-    // deterministically opening the circuit.
+    // Let the document's legitimate compile settle before deterministically
+    // opening the circuit. Native tables launch no private preview compile.
     await new Promise((resolve) => window.setTimeout(resolve, 50));
     for (let i = 0; i < 100; i++) {
       const stats = testCompilerLifecycleStats();
@@ -441,28 +441,24 @@ test('table-card open and local edits authorize fresh compiler epochs', async ({
       await new Promise((resolve) => window.setTimeout(resolve, 50));
     }
     await testCompilerTimeoutCircuitBreaker();
-    const beforeInput = testCompilerLifecycleStats();
-    const caption = document.querySelector<HTMLInputElement>('.table-card-caption');
-    if (!caption) throw new Error('Table-card caption input was not mounted');
-    caption.value = 'Fresh local input';
-    caption.dispatchEvent(new Event('input', { bubbles: true }));
-    const afterInput = testCompilerLifecycleStats();
-    document.querySelector<HTMLButtonElement>('.table-card-overlay .bib-cancel')?.click();
-
-    return {
-      openAdvanced: afterOpen.epoch === beforeOpen.epoch + 1,
-      circuitWasOpen: beforeInput.circuitOpen,
-      inputAdvanced: afterInput.epoch === beforeInput.epoch + 1,
-      inputReset: !afterInput.circuitOpen,
-    };
+    return testCompilerLifecycleStats();
   });
 
-  expect(result).toEqual({
-    openAdvanced: true,
-    circuitWasOpen: true,
-    inputAdvanced: true,
-    inputReset: true,
+  await page.locator('.ProseMirror td').first().click();
+  const afterFocus = await page.evaluate(async () => {
+    const { testCompilerLifecycleStats } = await import('/src/typst-worker-client.ts');
+    return testCompilerLifecycleStats();
   });
+  await page.keyboard.type('X');
+  const afterInput = await page.evaluate(async () => {
+    const { testCompilerLifecycleStats } = await import('/src/typst-worker-client.ts');
+    return testCompilerLifecycleStats();
+  });
+
+  expect(beforeFocus.circuitOpen).toBe(true);
+  expect(afterFocus).toMatchObject({ circuitOpen: true, epoch: beforeFocus.epoch });
+  expect(afterInput.epoch).toBe(beforeFocus.epoch + 1);
+  expect(afterInput.circuitOpen).toBe(false);
 });
 
 test('compiler circuit breaker leaves the successful queue path byte-stable', async ({ page }) => {

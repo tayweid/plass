@@ -52,16 +52,6 @@ import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
 import { eqKey } from './equations';
 import { getInk, inkKey } from './math-ink';
-import {
-  applySplit,
-  clearSplit,
-  clearTableSplitCache,
-  getSplit,
-  onTableSplitReady,
-  requestTableSplit,
-  splitExtra,
-  type TableSplitLayout,
-} from './table-split';
 import { isFlexibleAtom } from './inline-raw';
 import { parseTypstSvg } from './safe-svg';
 import { recordLayoutPerf } from './layout/perf';
@@ -182,14 +172,9 @@ interface PaginationGeometrySnapshot {
   spacerHeights: HeightIndex;
 }
 
-type TableEffect =
-  | { type: 'apply'; node: PMNode; layout: TableSplitLayout; gaps: number[]; naturalHeight: number }
-  | { type: 'clear'; node: PMNode };
-
 interface PaginationPassResult {
   spacers: Spacer[];
   count: number;
-  tableEffects: TableEffect[];
 }
 
 interface PaginationFallbackSeed {
@@ -449,7 +434,6 @@ class TypesetView {
   private lastLiveDoc: PMNode | null = null;
   private lastPageCount = 0;
   private pendingPageMarks: DecorationSet | null = null;
-  private stopTableSplitReady: (() => void) | null = null;
   /** Which source produced the last pagination (diagnostics). */
   private pagPath: 'exact' | 'held' | 'fallback' = 'exact';
   private pagLog: string[] = [];
@@ -460,7 +444,7 @@ class TypesetView {
   private forcedAuditor: ForcedLayoutAuditor | null = null;
   private lineDecorationDispatches = 0;
   private pageMarkDispatches = 0;
-  private paginationSnapshotStats = { captures: 0, spacerScans: 0, tableScans: 0, heightQueries: 0 };
+  private paginationSnapshotStats = { captures: 0, spacerScans: 0, heightQueries: 0 };
   private suffixPaginationStats = emptySuffixPaginationStats();
   private suffixControl = new SuffixPaginationControl();
   /** PAGE-PORT.md Phase 0 (DEV only): parity telemetry between the local
@@ -543,9 +527,6 @@ class TypesetView {
       // few statements below; until then nothing is editing.
       isEditing: () => (this.scheduler as LayoutScheduler | undefined)?.isInEditWindow() ?? false,
     });
-    this.stopTableSplitReady = onTableSplitReady((readyView) => {
-      if (!this.destroyed && readyView === this.view) this.requestRun();
-    });
     if (import.meta.env.DEV) {
       const w = window as unknown as {
         __oracle?: TypstOracle;
@@ -560,7 +541,6 @@ class TypesetView {
         __paginationSnapshotStats?: (reset?: boolean) => {
           captures: number;
           spacerScans: number;
-          tableScans: number;
           heightQueries: number;
         };
         __suffixPaginationStats?: (reset?: boolean) => SuffixPaginationStatsReport;
@@ -674,7 +654,7 @@ class TypesetView {
       w.__paginationSnapshotStats = (reset = false) => {
         const stats = { ...this.paginationSnapshotStats };
         if (reset) {
-          this.paginationSnapshotStats = { captures: 0, spacerScans: 0, tableScans: 0, heightQueries: 0 };
+          this.paginationSnapshotStats = { captures: 0, spacerScans: 0, heightQueries: 0 };
         }
         return stats;
       };
@@ -751,7 +731,6 @@ class TypesetView {
         this.clearFallbackPageBasis();
         this.measurer.invalidate();
         this.cache.clear();
-        clearTableSplitCache();
       },
     });
   }
@@ -785,7 +764,6 @@ class TypesetView {
       this.measurer.invalidate();
       this.cache.clear();
       this.oracles.clear();
-      clearTableSplitCache();
     }
     if (view.state.doc !== prevState.doc) {
       this.scheduler.scheduleLive();
@@ -1178,8 +1156,6 @@ class TypesetView {
     this.destroyed = true;
     viewRegistry.delete(this.view);
     this.scheduler.destroy();
-    this.stopTableSplitReady?.();
-    this.stopTableSplitReady = null;
     this.oracles.destroy();
     this.measurer.destroy();
   }
@@ -1191,7 +1167,6 @@ class TypesetView {
     this.clearExactPageBasis();
     this.clearFallbackPageBasis();
     this.oracles.clearPage();
-    clearTableSplitCache();
   }
 
   requestRun() {
@@ -1234,20 +1209,6 @@ class TypesetView {
     return { lineMap, blocks, sorted };
   }
 
-  /** Applied table-split extras (internal page gaps + repeated headers) as
-   *  pseudo-spacer entries at each table's END — merged with the widget
-   *  spacers when converting measured DOM geometry back to natural, so a
-   *  split table reads as its continuous height to everything below it. */
-  private tableExtras(): Array<{ pos: number; height: number }> {
-    const out: Array<{ pos: number; height: number }> = [];
-    this.view.state.doc.forEach((node, offset) => {
-      if (node.type.name !== 'table') return;
-      const a = getSplit(node);
-      if (a) out.push({ pos: offset + node.nodeSize, height: splitExtra(a) });
-    });
-    return out;
-  }
-
   /** Capture the complete height model once, after pass-one line decorations
    * have been installed. Every exact/held/fallback candidate in this run
    * reads this same immutable prefix index. */
@@ -1263,11 +1224,9 @@ class TypesetView {
     const marginTop = settings.marginTop * 96;
     const marginBottom = settings.marginBottom * 96;
     const spacers = this.currentSpacers();
-    const tableExtras = this.tableExtras();
-    const heights = createPaginationSnapshot({ spacers: spacers.sorted, tableExtras });
+    const heights = createPaginationSnapshot({ spacers: spacers.sorted, tableExtras: [] });
     this.paginationSnapshotStats.captures++;
     this.paginationSnapshotStats.spacerScans++;
-    this.paginationSnapshotStats.tableScans++;
     return {
       settings,
       size,
@@ -1285,15 +1244,6 @@ class TypesetView {
   private heightAbove(snapshot: PaginationGeometrySnapshot, pos: number, spacersOnly = false): number {
     this.paginationSnapshotStats.heightQueries++;
     return (spacersOnly ? snapshot.spacerHeights : snapshot.heights.heights).heightAbove(pos);
-  }
-
-  /** Table assignments are staged while candidates are evaluated. A failed
-   * exact or held attempt must not contaminate the fallback that follows. */
-  private applyTableEffects(effects: readonly TableEffect[]): void {
-    for (const effect of effects) {
-      if (effect.type === 'clear') clearSplit(effect.node);
-      else applySplit(effect.node, effect.layout, effect.gaps, effect.naturalHeight);
-    }
   }
 
   private suffixSpacers(snapshot: PaginationGeometrySnapshot): SuffixPageSpacer[] {
@@ -1468,13 +1418,6 @@ class TypesetView {
     a: PaginationFallbackResult,
     b: PaginationFallbackResult,
   ): { summary: string; page: number | null; delta: number | null } | null {
-    if (a.tableEffects.length || b.tableEffects.length) {
-      return {
-        summary: `table-effects ${a.tableEffects.length}/${b.tableEffects.length}`,
-        page: null,
-        delta: null,
-      };
-    }
     const spacerCount = Math.max(a.spacers.length, b.spacers.length);
     const differences: string[] = [];
     let firstPage: number | null = null;
@@ -2278,11 +2221,9 @@ class TypesetView {
    *      installs directly and the local paginator never runs, so run it
    *      once per settled exact publication as a PREDICTION-ONLY pass
    *      purely to feed the same telemetry. Never installs its result: no
-   *      spacers, dispatch, or table-split side effects reach the document.
-   *      Skipped (and counted) for documents containing tables — a table
-   *      crossing a page boundary would call `requestTableSplit`, which
-   *      caches and kicks off a real compile — and for documents over ~50
-   *      pages, to bound the cost of a shadow full pass. */
+   *      spacers or dispatches reach the document. Skipped for table documents
+   *      (kept aligned with suffix-seeding eligibility) and documents over ~50
+   *      pages, to bound or defer the shadow work. */
   private observeExactPageAnswer(
     sig: string,
     snapshot: PaginationGeometrySnapshot,
@@ -2307,8 +2248,9 @@ class TypesetView {
       this.pageParityStats.skipped.tooLarge++;
       return;
     }
-    // A table may sit nested inside a list item or blockquote, not just at
-    // the top level — descendants() is the only check that finds those too.
+    // Preserve the existing telemetry fence for table documents. Tables are
+    // still ineligible for suffix seeding, so parity sampling stays aligned
+    // with that contract until the follow-up relaxation happens as one change.
     let hasTable = false;
     this.view.state.doc.descendants((node) => {
       if (hasTable) return false;
@@ -2322,9 +2264,7 @@ class TypesetView {
       this.pageParityStats.skipped.tables++;
       return;
     }
-    // Prediction-only: the return value is diffed and discarded. Verified
-    // side-effect-free for a table-free document — see runFallbackPass's
-    // tableCase, the only branch that reaches outside its own locals.
+    // Prediction-only: the return value is diffed and discarded.
     const shadow = this.runFallbackPass(snapshot);
     this.recordPageParity(this.anchorsToPageStartEntries(shadow.anchors), exactEntries);
   }
@@ -2394,7 +2334,6 @@ class TypesetView {
                 }),
               ),
             );
-            this.applyTableEffects(forced.tableEffects);
             if (import.meta.env.DEV) this.observeExactPageAnswer(sig, snapshot, entry);
             return { spacers: forced.spacers, count: forced.count };
           }
@@ -2425,7 +2364,6 @@ class TypesetView {
           );
           if (forced) {
             this.pagPath = 'held';
-            this.applyTableEffects(forced.tableEffects);
             return { spacers: forced.spacers, count: forced.count };
           }
         }
@@ -2488,7 +2426,6 @@ class TypesetView {
             result: {
               spacers: suffix.spacers.map((spacer) => ({ ...spacer })),
               count: suffix.count,
-              tableEffects: [],
               visitedUnits: suffix.visitedUnits,
               anchors: [],
             },
@@ -2516,9 +2453,6 @@ class TypesetView {
           ...suffix.anchors,
         ];
         this.rememberFallbackBasis({ ...suffix, anchors: installedAnchors });
-        // Eligibility excludes tables, so there are no table effects to
-        // stage; apply defensively to keep the contract with the full path.
-        this.applyTableEffects(suffix.tableEffects);
         if (import.meta.env.DEV) this.recordLocalPagePrediction(installedAnchors);
         return { spacers: suffix.spacers, count: suffix.count };
       }
@@ -2588,7 +2522,6 @@ class TypesetView {
       // affect telemetry, never page geometry. The exact basis is NOT
       // cleared: page starts above the seed boundary stay valid across
       // fallback repaginations of the suffix.
-      this.applyTableEffects(full.tableEffects);
       if (import.meta.env.DEV) this.recordLocalPagePrediction(full.anchors);
       return { spacers: full.spacers, count: full.count };
     }
@@ -2626,7 +2559,6 @@ class TypesetView {
       this.suffixPaginationStats.lastAnchorPos = null;
     }
     this.rememberFallbackBasis(fallback);
-    this.applyTableEffects(fallback.tableEffects);
     if (import.meta.env.DEV) this.recordLocalPagePrediction(fallback.anchors);
     return { spacers: fallback.spacers, count: fallback.count };
   }
@@ -2696,7 +2628,6 @@ class TypesetView {
     };
 
     const spacers: Spacer[] = seed ? seed.prefixSpacers.map((spacer) => ({ ...spacer })) : [];
-    const tableEffects: TableEffect[] = [];
     const anchors: Array<{ pos: number; page: number; kind: Spacer['kind'] }> = [];
     let shift = seed?.shift ?? 0;
     let page = seed?.page ?? 0;
@@ -2890,62 +2821,6 @@ class TypesetView {
       }
     };
 
-    // Tables: Typst decides. A table crossing the page bottom is handed to
-    // the paged mini-compile (table-split.ts), which reproduces the real
-    // document's constraints — Typst answers with the same split rows,
-    // repeated headers, or a whole-block push it would use in the PDF. The
-    // node view renders the answer; page math advances per fragment.
-    const tableCase = (pos: number, node: PMNode) => {
-      const endPos = pos + node.nodeSize;
-      const r = rectOf(pos);
-      if (!r || r.height === 0) {
-        pageFnH += takeFnH(endPos);
-        return;
-      }
-      const assigned = getSplit(node);
-      const naturalH = assigned ? assigned.naturalPx : r.height;
-      const y = stackY(r.top, pos);
-      const ufH = takeFnH(endPos);
-      if (y + shift + naturalH <= bottomFor(ufH) + 0.5) {
-        if (assigned) tableEffects.push({ type: 'clear', node });
-        pageFnH += ufH;
-        return;
-      }
-      const pageTopAbs = page * (size.h + PAGE_GAP) + marginTop;
-      const offsetPt = Math.max(0, (y + shift - pageTopAbs) * 0.75);
-      const fresh = requestTableSplit(view, node, view.dom.clientWidth || 576, contentH * 0.75, offsetPt);
-      // While the compile is in flight, hold the current rendering steady
-      // (stale split, or the plain atomic push) — the answer triggers a
-      // repagination.
-      const layout: TableSplitLayout | null = fresh ?? assigned?.layout ?? null;
-      if (!layout) {
-        if (naturalH <= contentH) breakStart(pos, y);
-        pageFnH += ufH;
-        return;
-      }
-      if (layout.pushed) breakStart(pos, y);
-      if (layout.fragments.length <= 1) {
-        // Whole on one page (unbreakable figure, or it fits after the push).
-        tableEffects.push({ type: 'clear', node });
-        if (!layout.pushed && naturalH <= contentH) breakStart(pos, y);
-        pageFnH += ufH;
-        return;
-      }
-      const gaps: number[] = [];
-      let bottomAbs = y + shift + layout.fragments[0].heightPx;
-      for (let i = 1; i < layout.fragments.length; i++) {
-        page++;
-        pageFnH = 0;
-        const top = page * (size.h + PAGE_GAP) + marginTop;
-        gaps.push(top - bottomAbs);
-        bottomAbs = top + layout.fragments[i].heightPx;
-      }
-      tableEffects.push({ type: 'apply', node, layout, gaps, naturalHeight: naturalH });
-      const displayed = layout.fragments.reduce((s2, f) => s2 + f.heightPx, 0) + gaps.reduce((s2, g) => s2 + g, 0);
-      shift += displayed - naturalH;
-      pageFnH += ufH;
-    };
-
     // Lists and blockquotes break between children (whole child moves).
     const container = (pos: number, node: PMNode) => {
       const endPos = pos + node.nodeSize;
@@ -3010,9 +2885,6 @@ class TypesetView {
         case 'blockquote':
           container(pos, node);
           break;
-        case 'table':
-          tableCase(pos, node);
-          break;
         default:
           atomic(pos, node, owner);
       }
@@ -3038,9 +2910,6 @@ class TypesetView {
         case 'blockquote':
           container(offset, node);
           break;
-        case 'table':
-          tableCase(offset, node);
-          break;
         default:
           atomic(offset, node);
           break;
@@ -3053,7 +2922,7 @@ class TypesetView {
       }
     });
 
-    return { spacers, count: page + 1, tableEffects, visitedUnits, anchors };
+    return { spacers, count: page + 1, visitedUnits, anchors };
   }
 
   /** Same-prefix reference pass for an exact-basis seed: re-force the
@@ -3074,7 +2943,7 @@ class TypesetView {
       seed.prefixMarkers.map((marker) => ({ pos: marker.pos, line: marker.line, unit: marker.unit })),
       seed.page + 1,
     );
-    if (!forced || forced.tableEffects.length) return null;
+    if (!forced) return null;
     if (forced.spacers.length !== seed.prefixSpacers.length) return null;
     let shift = 0;
     for (const spacer of forced.spacers) shift += spacer.height;
@@ -3105,57 +2974,19 @@ class TypesetView {
       clientTop - snapshot.stackTop - this.heightAbove(snapshot, pos);
 
     const spacers: Spacer[] = [];
-    const tableEffects: TableEffect[] = [];
     let shift = 0;
     let page = 0;
     for (let psi = 0; psi < pageStarts.length; psi++) {
       const ps = pageStarts[psi];
-      // Page breaks INSIDE a table: rendered by the table view as split
-      // fragments (no spacer widget). The paged mini-compile answers with
-      // Typst's own fragments; the split must agree with the oracle's
-      // break count or the whole result fails (graceful fallback).
+      // A native table is one continuous editable structure and cannot accept
+      // a synthetic mid-node spacer. Decline this exact map, withdraw any
+      // retained exact markers for the revision, and let the local paginator
+      // place the table as an atomic unit.
       if (ps.unit === 'table' && ps.line > 0) {
-        const node = view.state.doc.nodeAt(ps.pos);
-        const el = view.nodeDOM(ps.pos);
-        if (!node || node.type.name !== 'table' || !(el instanceof HTMLElement)) return null;
-        let last = psi;
-        while (
-          last + 1 < pageStarts.length &&
-          pageStarts[last + 1].pos === ps.pos &&
-          pageStarts[last + 1].unit === 'table'
-        ) {
-          last++;
-        }
-        const breaks = last - psi + 1;
-        const assigned = getSplit(node);
-        const naturalH = assigned ? assigned.naturalPx : el.getBoundingClientRect().height;
-        const yTop = natural(el.getBoundingClientRect().top, ps.pos);
-        const pageTopAbs = page * (size.h + PAGE_GAP) + marginTop;
-        const offsetPt = Math.max(0, (yTop + shift - pageTopAbs) * 0.75);
-        const contentHPx = snapshot.contentHeight;
-        // The oracle's line indices are cumulative within the table unit:
-        // their diffs are the exact per-page line counts of the PDF, and
-        // the mini-compile must reproduce them (it nudges its offset until
-        // it does, so the split row IS the PDF's split row).
-        const targetLines: number[] = [];
-        for (let k = psi; k <= last; k++) {
-          targetLines.push(pageStarts[k].line - (k > psi ? pageStarts[k - 1].line : 0));
-        }
-        const layout = requestTableSplit(view, node, view.dom.clientWidth || 576, contentHPx * 0.75, offsetPt, targetLines);
-        if (!layout || layout.pushed || layout.fragments.length - 1 !== breaks) return null;
-        const gaps: number[] = [];
-        let bottomAbs = yTop + shift + layout.fragments[0].heightPx;
-        for (let k = 1; k < layout.fragments.length; k++) {
-          page++;
-          const top = page * (size.h + PAGE_GAP) + marginTop;
-          gaps.push(top - bottomAbs);
-          bottomAbs = top + layout.fragments[k].heightPx;
-        }
-        tableEffects.push({ type: 'apply', node, layout, gaps, naturalHeight: naturalH });
-        const displayed = layout.fragments.reduce((s2, f) => s2 + f.heightPx, 0) + gaps.reduce((s2, g) => s2 + g, 0);
-        shift += displayed - naturalH;
-        psi = last;
-        continue;
+        this.pendingPageMarks = DecorationSet.empty;
+        this.lastPageCount = 0;
+        this.clearExactPageBasis();
+        return null;
       }
       page++;
       let pos = ps.pos;
@@ -3224,7 +3055,7 @@ class TypesetView {
         return null;
       }
     }
-    return { spacers, count, tableEffects };
+    return { spacers, count };
   }
 
   /**

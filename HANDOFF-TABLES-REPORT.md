@@ -2,112 +2,257 @@
 
 Date: 2026-08-29  
 Branch: `codex/native-tables-port`  
-Base: current `main` at `df52679`
+Base: `main` at `df52679`
 
 ## Outcome
 
-The port was not started because the handoff does not fit the current tree within its scope fence. Per the instruction, "If a step doesn't fit, stop and write the report instead of improvising," I stopped after the read-only preflight and scripted browser baseline. No source or test files were changed.
+Amendment 1 resolved the four preflight blockers. The native editable table
+port is complete: tables are ProseMirror table trees edited in place, the
+modal/compiled-preview/split-rendering path is gone, Typst table serialization
+is lossless for the certified cell subset, and crossing tables settle on the
+existing atomic fallback without reviving retained exact markers.
 
-## What was ported
+No new Markdown representation or continuous-pagination mode was introduced.
+The untracked repository-root `AGENTS.md` was preserved and is not part of the
+commit.
 
-Nothing. The required branch was created from current `main`, and every named archive implementation/test plus the current integration seams was audited before editing.
+## Ported implementation
 
-The current app was also reproduced in a scripted browser before any change: choosing **Table** opens the existing modal dialog named **Edit table**, with the spreadsheet card and compiled preview. This confirms the pre-port behavior that the handoff intends to replace.
+### Native editing and controls
 
-## Blocking scope conflicts
+- Replaced `src/table-editor.ts` with the archive implementation byte-for-byte.
+  It provides `tableEditing()`/`structuredTablePlugin()` integration, direct
+  rich-cell editing, rectangular `CellSelection`, row/column/header/merge/split
+  commands, alignment and style controls, caption/label details, caption
+  decorations, and the floating `NativeTableControls` toolbar.
+- The archive `filterTransaction` guard remains intact. Unsupported new table
+  content is rejected before it enters the document and a visible
+  `.native-table-notice` explains that the edit was not applied. Undo/redo is
+  exempt so historical unsupported content can be restored exactly.
+- Lifted `src/transaction-impact.ts` and
+  `src/transaction-impact.test.ts` byte-for-byte. `controlsRevision` and the
+  numbering plugin map ordinary cell/caption typing instead of rebuilding
+  derived structure.
+- Lifted the archive `src/equations.ts` integration byte-for-byte. Plain tables
+  do not consume table numbers; caption/label presence and table topology still
+  invalidate numbering/reference structure when required.
+- `src/editing.ts` now inserts `insertStructuredTable` and chains native
+  `goToNextCell` before the existing list Tab/Shift-Tab commands.
+- `src/toolbar.ts` inserts native tables and avoids redundant block-format DOM
+  updates when the current block kind has not changed.
+- `src/main.ts` installs `structuredTablePlugin()` and `tableEditing()` last,
+  removes the table preview node view, and exposes a development-only
+  `window.__nativeTableProofGeometry()` hook. That hook uses the running app's
+  compiler/sanitizer instances so Playwright never imports a second `/src/...`
+  module graph inside `page.evaluate`.
 
-### 1. The required `src/table-split.ts` deletion breaks out-of-scope code
+The existing table schema already matched the archive's required native attrs
+(`style`, `params`, `caption`, `label`, `fontSize`, cell `align`, colspan,
+rowspan, and colwidth), so `src/schema.ts` required no change.
 
-The handoff requires deleting `src/table-split.ts`, but current `main` still has these live imports:
+### Preview and split deletion
 
-```text
-src/raw-preview.ts:17:import { fragmentSource } from './table-split';
-src/layout/oracle-coordinator.test.ts:6:import { TableSplitPendingViews } from '../table-split';
+- Deleted `src/table-preview.ts`, `src/table-rules.ts`, and the split machinery
+  in `src/table-split.ts`.
+- Moved only the still-shared `fragmentSource` helper to
+  `src/fragment-source.ts`; `src/raw-preview.ts` now imports it there.
+- Removed the split-ready listener/cache lifecycle, `TableEffect`,
+  `tableExtras`, staged split effects, split requests, and `tableCase()` from
+  `src/typeset-plugin.ts`. Tables now reach the existing default atomic
+  fallback branch.
+- Removed only the `TableSplitPendingViews` import and test block from
+  `src/layout/oracle-coordinator.test.ts`, exactly as Amendment 1 permits.
+- Removed the obsolete table scan metric/assertion from
+  `tests/layout.spec.ts`; it measured the deleted `tableExtras` scan.
+- Preserved the existing table skip in PageParity shadow telemetry and left
+  `src/layout/pagination-suffix.ts` byte-unchanged.
+
+### Exact-map rejection and fallback
+
+`paginateForced` now rejects an exact page start whose unit is `table` and
+whose line is greater than zero. Before returning the existing `null` path it:
+
+1. stages an empty page-marker set,
+2. resets the retained page count, and
+3. clears the retained exact basis.
+
+The successful exact result is therefore not eligible for the held-marker
+recovery path. Local fallback then treats the table as one atomic block. An
+oversized table follows the existing oversize rule and overflows; there is no
+new continuous surface.
+
+The added browser regression first installs a fitting four-row table and waits
+for an `exact[...]` publication. In the same app instance, retaining that exact
+basis, it replaces the document with a 45-row crossing table, observes a real
+PageOracle answer with a mid-table start, then requires
+`pagPath === 'fallback'`. It also requires a 600 ms quiet interval with byte-identical
+pagination count/log entry, table rectangle, and page-gap keys/heights, plus no
+page errors or captured warning/error console messages.
+
+### CSS and vertical parity
+
+- Ported the archive native table toolbar, caption, selection, booktabs/grid/
+  plain, intrinsic-width, font-size, and print rules.
+- Native tables use centered intrinsic width, inherited line height and weight,
+  5 pt inline inset, and the archive empty-cell 5 pt block-inset restoration.
+  No layout-height adjustment is implemented with a paint-only substitute.
+- Removed legacy modal-card, compiled-preview, cell-hit, split-render, and
+  orphan preview SVG styles.
+
+## Typst compatibility and losslessness
+
+The archive's certified table-cell subset was adapted to current main's
+`code_block({ params: 'typst-raw' })` raw-island architecture rather than
+importing the reverted archive-wide embed architecture.
+
+- Cells serialize one or more paragraphs containing text, strong/emphasis/
+  strike/code marks, hard breaks, inline math, equation references, and valid
+  citations. Empty paragraphs receive an inert private boundary that the parser
+  removes again.
+- Table-scoped escaping keeps literal `//`, tildes, backticks in code, raw-string
+  inline math, unmatched visible parentheses, and caption text non-executable
+  and round-trippable.
+- Portable table/reference labels and bibliography-backed citations are
+  validated. Unsupported blocks, inline nodes, marks, combined code marks, or
+  multiline inline sources throw instead of flattening or dropping content.
+- The parser uses balanced table/figure/cell extraction, understands the safe
+  raw-string shapes, reconstructs multiple paragraphs, and fails closed on
+  unrepresentable rowspan topology. A rejected hand-written table is retained
+  verbatim as a raw Typst island.
+- Legacy inline-math and existing generated table forms continue to import.
+
+The Node suites prove idempotent `.typ` serialization for plain, styled,
+header-row, captioned/labeled, decimal, custom-parameter, multi-paragraph, and
+rich marked/inline-atom tables. Existing `.typ` parser tests remain green.
+
+## Markdown compatibility demonstrations
+
+`src/md-parser.ts` and `src/md-serializer.ts` are unchanged. No private syntax
+was added. The new integrity test pins current-main behavior explicitly.
+
+Canonical GFM is byte-stable:
+
+```markdown
+| Left | Right |
+| --- | ---: |
+| A | 1 |
 ```
 
-`src/raw-preview.ts` calls `fragmentSource` for raw-Typst island rendering. `src/layout/oracle-coordinator.test.ts` constructs and tests `TableSplitPendingViews`. Neither file is in the permitted edit set, and the latter is explicitly inside `src/layout/**`, where the handoff allows only the two named `src/typeset-plugin.ts` seams. Deleting the file would therefore fail TypeScript compilation and the existing `npm test`; retaining or relocating its shared exports would violate the mandatory deletion or scope fence.
+The following non-representable cases are no worse than current main:
 
-### 2. Required editor/test wiring lives outside the scope fence
+- **Styled:** a native `grid`, `fontSize: 0.85em` table with cells `H`/`V`
+  saves as the plain GFM below and reopens with the existing defaults
+  (`booktabs`, default size):
 
-The archive editor exports `insertStructuredTable`, but current callers outside the allowed set still depend on `insertTableWithEditor`:
+  ```markdown
+  | H |
+  | --- |
+  | V |
+  ```
 
-```text
-src/editing.ts:265:        void import('./table-editor').then(({ insertTableWithEditor }) => insertTableWithEditor(view));
-src/toolbar.ts:14:import { insertTableWithEditor } from './table-editor';
-```
+- **Captioned/labeled:** the same GFM body is emitted, caption and label are
+  omitted, and the existing warning is produced verbatim:
+  `table styling/captions are not representable in Markdown — simplified to a plain table`.
+- **Merged:** a two-column header cell `Wide` is flattened to
+  `| Wide |  |`, followed by the two normal columns, and the existing warning
+  is produced verbatim: `merged table cells flattened for Markdown`.
+- **Multi-paragraph:** cell paragraphs `First` and `Second` serialize as the
+  existing single GFM cell `First Second` and reopen as one paragraph.
 
-The archive's native Tab/Shift-Tab behavior also requires `goToNextCell` wiring in `src/editing.ts`. In addition:
+Canonical GFM header cells still import as native `table_header` nodes.
 
-- The verbatim `src/transaction-impact.test.ts` assertions require the archive's derived-structure integration in `src/equations.ts`; current code rebuilds labels on ordinary table typing and counts uncaptioned tables. `src/equations.ts` is outside the fence.
-- Existing `tests/previews.spec.ts` asserts the compiled table-preview DOM that the handoff deletes.
-- Existing `tests/security.spec.ts` invokes the removed `openTableEditor` modal API.
+## Test adaptations
 
-Both Playwright files are outside the listed table test port, yet the required full Chromium run cannot pass unmodified after the deletion.
-
-### 3. The requested crossing-table continuous mode is absent on current `main`
-
-The archive's exact-map guard rejects a page start inside a table into a real labeled continuous surface. Current `main` instead defines:
-
-```text
-private pagPath: 'exact' | 'held' | 'fallback' = 'exact';
-```
-
-Its `PageInfo` and `src/main.ts` have no continuous mode/reason contract. A `null` result from current `paginateForced` enters local fallback pagination and can retain mapped exact page markers/basis; it does not publish the requested continuous surface. Implementing the verification gate would require broader state, publication, and UI changes outside the two authorized `src/typeset-plugin.ts` seams.
-
-Current `tests/layout.spec.ts` also requires `tableScans === captures`. Removing table-split telemetry mechanically would fail that existing pagination spec, which the handoff says must pass unmodified.
-
-### 4. The Markdown unchanged-round-trip gate is not implemented on either branch
-
-The archive and current Markdown table parser/serializer are identical. Canonical GFM tables round-trip as native nodes, but Markdown cannot retain the requested styled/captioned cases under the repository's pure-Markdown policy:
-
-- `grid` and `plain` reopen as the default `booktabs` style.
-- `fontSize`, `caption`, `label`, and raw table `params` are not serialized.
-- merged cells and multiple cell paragraphs are flattened.
-
-The serializer warns for some unrepresentable metadata, but `open -> save unchanged` for styled and captioned Markdown is impossible without choosing a new representation. The archive contains no such representation, so satisfying this gate would be a product/format redesign forbidden by the handoff.
-
-## Audited adaptations that would otherwise be needed
-
-These were identified but not applied because of the blockers above:
-
-- Replace `src/table-editor.ts` with the archive native editor and add the dependency-free `src/transaction-impact.ts`.
-- Add `structuredTablePlugin()` and `tableEditing()` to `src/main.ts`; remove the table preview node view.
-- Keep the already-compatible table schema attributes in `src/schema.ts` unchanged.
-- Port the lossless `tableCellContentToTyp`/balanced-bracket serialization path, bibliography-aware citation validation, and parser's balanced table extraction/multi-paragraph/fail-closed rowspan logic without importing the archive's reverted `typst_embed` architecture.
-- Replace the legacy preview/card CSS with the archive native toolbar, table, caption, selection, 5pt inset, and print rules.
-- Remove table-split effects from `src/typeset-plugin.ts`, let tables use its existing atomic default, and reject exact page maps whose starts land inside a table while also abandoning retained exact markers.
-- Leave `src/layout/pagination-suffix.ts` unchanged. Its table ineligibility could be relaxed later once tables are plain atomic units, as requested by the handoff.
-- Port the three Node test files and `tests/native-tables.spec.ts`, adapting raw-island expectations to current `code_block({ params: 'typst-raw' })` and removing all dynamic `/src/...` imports from `page.evaluate`.
+- `src/native-table.test.ts` is byte-identical to the archive and is wired into
+  `npm test` together with the adapted archive `src/table-integrity.test.ts`.
+- `tests/native-tables.spec.ts` retains every archive assertion. Archive-only
+  module imports were adapted to live app globals; the new exact/fallback test
+  was added as described above.
+- `tests/previews.spec.ts` now asserts that all 30 tables mount as native
+  editable DOM with no legacy preview/loading queue.
+- `tests/security.spec.ts` now drives the native surface: focusing a cell is
+  compiler-epoch inert, while a real cell edit advances the epoch and resets
+  the open timeout circuit. It also asserts the removed modal/preview DOM is
+  absent.
+- `tests/layout.spec.ts` lost only the deleted table-scan assertion.
 
 ## Verification results
 
-Required verification gates were not run because implementation stopped at the mandatory preflight blocker. Running them on an unmodified branch would not verify the requested port, while deleting `src/table-split.ts` as directed would produce known import failures in the two files quoted above.
-
-Commands/actions completed:
+All required gates were run on the completed tree. Command results are copied
+verbatim below.
 
 ```text
-$ git switch -c codex/native-tables-port
-Switched to a new branch 'codex/native-tables-port'
+$ npm test
+all transaction impact tests passed
+all oracle lifecycle tests passed
+all table-integrity tests passed
+all native-table tests passed
+all typ-parser tests passed
+all md round-trip tests passed
+all security boundary tests passed
+all font registry tests passed
+exit 0
 ```
 
 ```text
-Scripted browser baseline: PASS
-Table toolbar action -> dialog "Edit table" (legacy modal-card editor present)
+$ npx tsc --noEmit
+(no output)
+exit 0
 ```
-
-Not run due to the handoff's stop-on-mismatch rule:
 
 ```text
-npm test
-npx tsc --noEmit
-npm run check:cycles
-npm run check:unused
-npm run check:exports
-npx playwright test --project=chromium
+$ npm run check:cycles
+static import graph is acyclic (93 modules)
+exit 0
+
+$ npm run check:unused
+unused-code check passed (one documented frozen-port exception)
+exit 0
+
+$ npm run check:exports
+(no output)
+exit 0
 ```
 
-## Files changed
+```text
+$ npx playwright test tests/native-tables.spec.ts --project=chromium
+6 passed (7.3s)
+exit 0
+```
 
-- `HANDOFF-TABLES-REPORT.md` only.
+```text
+$ npx playwright test --project=chromium
+67 passed (26.8s)
+exit 0
+```
 
-The unrelated untracked `AGENTS.md` was preserved and not staged.
+```text
+$ npm run build
+sidecar source, provenance, and WASM verified (8be3dd182b4e653d596b8468bd0054caaa47d7b9d277bd0ded01ec065614aa2e)
+unused-code check passed (one documented frozen-port exception)
+static import graph is acyclic (93 modules)
+✓ 114 modules transformed.
+✓ built in 665ms
+exit 0
+```
+
+```text
+$ git diff --check
+(no output)
+exit 0
+
+$ git diff --exit-code -- src/layout/pagination-suffix.ts
+(no output)
+exit 0
+```
+
+## Deliberately left unchanged / follow-up
+
+- `src/layout/pagination-suffix.ts` still excludes tables from suffix seeding,
+  as required. Now that tables are plain atomic units, that restriction and the
+  matching PageParity telemetry skip could be relaxed together in a later,
+  separately verified change.
+- Markdown retains its existing pure-GFM degradation for styling, captions,
+  merged cells, and multiple cell paragraphs; no new representation was
+  invented.
+- Nothing else from the amended brief is left undone.
