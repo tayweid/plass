@@ -85,6 +85,46 @@ write the report instead of improvising.
 4. Serializer round-trips: `.typ` and `.md` docs with tables (plain,
    styled, header row, captioned) survive open→save unchanged.
 
+## Amendment 1 (responds to HANDOFF-TABLES-REPORT.md's four blockers)
+
+All four blockers are accepted as spec defects in this brief. Resolutions:
+
+1. **table-split deletion.** Do not delete wholesale. Move `fragmentSource`
+   into a new tiny module `src/fragment-source.ts` (raw-preview.ts updates
+   its one import line — that edit is now in scope), then delete the rest
+   of `src/table-split.ts`. In `src/layout/oracle-coordinator.test.ts`,
+   delete only the `TableSplitPendingViews` test block (it covers deleted
+   machinery); that file is in scope for that deletion alone.
+2. **Wiring fence widened.** `src/editing.ts` (insert-command swap +
+   `goToNextCell` Tab/Shift-Tab wiring), `src/toolbar.ts`
+   (`insertStructuredTable`), and `src/equations.ts` (the derived-structure
+   integration the archive's transaction-impact assertions require) are in
+   scope. `tests/previews.spec.ts`, `tests/security.spec.ts`, and the
+   `tableScans === captures` assertion in `tests/layout.spec.ts` may be
+   updated ONLY where they pin the deleted modal/preview/split machinery —
+   replace with the native-equivalent assertion (e.g. security spec drives
+   the native editing surface instead of `openTableEditor`), and justify
+   each change in the report.
+3. **No continuous mode — corrected behavior.** Current main has no labeled
+   continuous surface; do not build one. Correct spec: an exact page map
+   with a start inside a table is declined (return the existing null/fail
+   path) AND the retained exact markers/basis are dropped for that
+   revision so the held path cannot resurrect a mid-table split; pagination
+   then proceeds on the existing local fallback with the table atomic. A
+   table taller than the page content height overflows per the existing
+   oversize rule. The verification gate becomes: the crossing-table
+   document settles on the fallback path (`pagPath === 'fallback'`) with
+   stable geometry, no error loops, no console spam.
+4. **Markdown gate relaxed.** Canonical GFM tables must round-trip
+   unchanged. Styled/captioned/merged/multi-paragraph tables follow the
+   serializer's existing degradation (identical on both branches): the
+   gate is "no worse than current main," demonstrated in the report with
+   one example per degradation class. No new Markdown representation may
+   be invented. The `.typ` round-trip gate stays as written (lossless).
+
+Everything else in the original brief stands, including stop-and-report on
+any further mismatch.
+
 ## Report
 
 Finish by writing `HANDOFF-TABLES-REPORT.md` at the repo root (committed on
