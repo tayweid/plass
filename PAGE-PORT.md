@@ -1,5 +1,28 @@
 # PAGE-PORT: porting Typst's page breaker
 
+## Status (2026-08-30)
+
+- Phase 0 (parity telemetry): **landed** 9defb17. Soak at c316f99: 96
+  predictions, 1 agreement; byCause page-top-adjust 30, widow-orphan 28,
+  spacing 15, footnote 12, sticky 10.
+- Phase 4 (footnote arithmetic): **landed** 7b55335 (migration rule still
+  deferred). Known interaction gap with Phase 2's fresh-page need check —
+  chipped as its own task.
+- Phase 2 (widow/orphan need): **landed** 9a2b21b. Plain-prose agreement
+  6/25 → 19/25; most "page-top-adjust" disagreements were downstream of
+  the old retro-pull heuristic.
+- Phase 1 (Regions + spacing collapse): **landed** cbd4410 (fit-test and
+  container page-top scope; painted CSS untouched). Residual plain-prose
+  spacing disagreement traced to pageTopAdjustEm rounding → Phase 6.
+- Oracle coverage fixes along the way: 613b11d (ordered-list markers,
+  footnote glue), 9d35355 (opaque-block resync vs list markers). Known
+  open oracle family: inline math butted against a known token
+  (typst-oracle.ts ~482–502) — not yet reproduced in isolation.
+- Next up: Phase 3 (sticky), Phase 6 (retire pageTopAdjustEm — now the
+  dominant residual), Phase 4's migration rule, Phase 7 below.
+- Native-tables port: handed off to Codex — see HANDOFF-TABLES.md
+  (branch `codex/native-tables-port`, atomic tables; review before merge).
+
 Goal: the local paginator's page decisions become identical to Typst's for
 supported content, the same way the line-break port (PORT.md) made local line
 decisions identical. Typst's compiled answer remains the runtime authority
@@ -203,6 +226,31 @@ underneath are exact.
    editor-measured heights; the telemetry histogram is flat zero on the
    corpus; disagreement with an exact answer is treated as a bug with a
    named bucket, exactly like a line-break mismatch today.
+
+## Phase 7 — table row-breaking (after the native-tables port merges)
+
+Native tables land atomic: a compiled page start inside a table declines
+the exact page map. This phase restores mid-table page breaks as pure
+presentation, the same trick paragraphs use — the document keeps one
+editable table node; the break is decorations:
+
+1. Oracle: accept page starts inside tables by matching row text against
+   the compiled SVG lines (a new row-level unit in the matcher, built like
+   paragraph line matching; fail closed on ambiguity).
+2. Local paginator: row boundaries become break candidates with
+   DOM-measured row heights, mirroring Typst's grid rules — break between
+   rows, never inside one, and account for repeated-header height
+   (`table.header` repetition) on continuation pages.
+3. Presentation: the break at row boundary = per-cell padding (or a
+   spacer row) sized to the page gap, a closing rule at the page bottom,
+   and a non-editable repeated header decoration at the next page top.
+   Booktabs styling (no vertical borders, no background) makes the
+   interrupted-table visual correct with only these pieces.
+4. Fail open: a merged cell (rowspan) crossing the candidate boundary
+   declines exact for that map — the table goes atomic/continuous exactly
+   as the ported baseline behaves. Typst's rowspan-splitting logic
+   (grid/rowspans.rs) is explicitly out of scope until the simple case is
+   proven.
 
 ## Non-goals
 
