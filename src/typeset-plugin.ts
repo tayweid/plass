@@ -41,7 +41,13 @@ import { loadPrimitives, primitives } from './layout/primitives';
 import type { PageOracle, PageOracleEntry } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
-import { footnoteEntryCost, footnoteHeadReservePx, footnotePositions, lineNeeds } from './layout/flow-rules';
+import {
+  containerPageTopDropEm,
+  footnoteEntryCost,
+  footnoteHeadReservePx,
+  footnotePositions,
+  lineNeeds,
+} from './layout/flow-rules';
 import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
 import { eqKey } from './equations';
@@ -2710,6 +2716,21 @@ class TypesetView {
       if (n?.type.name === 'heading') {
         const lv = Math.min(3, (n.attrs.level as number) || 1);
         return pageTopAdjustEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;
+      }
+      // Every other top-level block's own "above" spacing is weak in
+      // Typst's model (Auto block spacing or `#quote`'s explicit default —
+      // both weakness >= 1, src/layout/flow-rules.ts's SPACING_WEAKNESS),
+      // so it drops unconditionally when the block starts a fresh region
+      // (flow/distribute.rs::keep_spacing's region-top case). Paragraphs,
+      // lines, and headings get a calibrated ascent-based landing spot via
+      // pageTopAdjustEm above; the container kinds below have no such
+      // calibration yet, so this only drops the certain part — the block's
+      // own painted padding-top, which otherwise survives in full at a page
+      // top even though Typst never charges it there.
+      if (n) {
+        const isRaw = n.type.name === 'code_block' && n.attrs.params === 'typst-raw';
+        const dropEm = containerPageTopDropEm(n.type.name, isRaw);
+        if (dropEm) return -dropEm * F;
       }
       return 0;
     };

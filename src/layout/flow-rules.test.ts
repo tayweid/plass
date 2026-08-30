@@ -8,6 +8,19 @@ import {
   footnotePositions,
   footnoteSeparatorHeightPx,
   lineNeeds,
+  fits,
+  uniformRegions,
+  isFull,
+  mayBreak,
+  mayProgress,
+  regionsNext,
+  SPACING_WEAKNESS,
+  type FlowItem,
+  keepSpacing,
+  pushSpacing,
+  trimSpacing,
+  peekWeakSpacing,
+  containerPageTopDropEm,
 } from './flow-rules';
 
 const F = 16.666666666666668; // bodyPx at the app default (12.5pt @ 96dpi)
@@ -172,6 +185,241 @@ const LEAD = 6; // an arbitrary leading, distinct from any height below
     heights,
   );
   console.log('  ok  both costs disabled: needs equal own heights (opt-out honored)');
+}
+
+// --- Regions (typst-library/src/layout/regions.rs) ------------------------
+
+{
+  assert.equal(fits(10, 10), true);
+  assert.equal(fits(10, 10 + 1e-5), true); // within ABS_EPS
+  assert.equal(fits(10, 10.1), false);
+  assert.equal(fits(0, 0), true);
+  console.log('  ok  fits: container holds content within EPS slack, Abs::fits semantics');
+}
+
+{
+  const r = uniformRegions(500, 800);
+  assert.equal(r.size, 500);
+  assert.equal(r.full, 800);
+  assert.deepEqual(r.backlog, []);
+  assert.equal(r.last, 800);
+  console.log('  ok  uniformRegions: same-height pages repeat via `last`, empty backlog');
+}
+
+{
+  // is_full: Abs::zero().fits(size.y) && may_progress() — full exactly when
+  // the remaining space is ~0 AND a next region would actually differ.
+  assert.equal(isFull(uniformRegions(0, 800)), true);
+  assert.equal(isFull(uniformRegions(1e-5, 800)), true); // within EPS of zero
+  assert.equal(isFull(uniformRegions(5, 800)), false);
+  // A region already at its own repeating height ("last") is not "full"
+  // even at size 0 in the pathological single-region case (no progress
+  // possible): mayProgress() is false when size === last.
+  assert.equal(isFull({ size: 0, full: 0, backlog: [], last: 0 }), false);
+  console.log('  ok  isFull: zero-remaining AND a next region could help');
+}
+
+{
+  assert.equal(mayBreak(uniformRegions(500, 800)), true);
+  assert.equal(mayBreak({ size: 500, full: 800, backlog: [], last: null }), false);
+  assert.equal(mayBreak({ size: 500, full: 800, backlog: [200], last: null }), true);
+  console.log('  ok  mayBreak: a following region exists (backlog or last)');
+}
+
+{
+  // may_progress: false exactly when advancing changes nothing (empty
+  // backlog, and `last` repeats the CURRENT size) — Typst's guard against
+  // migrating forever into regions that can never fit the content.
+  assert.equal(mayProgress(uniformRegions(500, 800)), true); // size(500) != last(800)
+  assert.equal(mayProgress({ size: 800, full: 800, backlog: [], last: 800 }), false);
+  assert.equal(mayProgress({ size: 800, full: 800, backlog: [800], last: 800 }), true);
+  assert.equal(mayProgress({ size: 800, full: 800, backlog: [], last: null }), false);
+  console.log('  ok  mayProgress: false iff the next region would be identical');
+}
+
+{
+  const r = regionsNext(uniformRegions(120, 800));
+  assert.equal(r.size, 800);
+  assert.equal(r.full, 800);
+  console.log('  ok  regionsNext: uniform pages advance to a fresh full region');
+}
+
+{
+  const r = regionsNext({ size: 50, full: 800, backlog: [600, 700], last: 800 });
+  assert.equal(r.size, 600);
+  assert.equal(r.full, 600);
+  assert.deepEqual(r.backlog, [700]);
+  const r2 = regionsNext(r);
+  assert.equal(r2.size, 700);
+  assert.deepEqual(r2.backlog, []);
+  const r3 = regionsNext(r2);
+  assert.equal(r3.size, 800); // backlog drained: repeats `last`
+  console.log('  ok  regionsNext: backlog drains before repeating `last`');
+}
+
+// --- Spacing collapse (flow/distribute.rs::{rel,keep_spacing,trim_spacing})
+// Scenarios mirror the Rust: weak-at-top drops, dominance replacement,
+// trailing trim.
+
+function content(): FlowItem {
+  return { kind: 'content' };
+}
+
+{
+  // Weak spacing at region top (nothing precedes it at all) drops entirely
+  // — AND does not charge the region's remaining size, since it was never
+  // actually kept.
+  const items: FlowItem[] = [];
+  const r = uniformRegions(500, 800);
+  pushSpacing(r, items, 12, SPACING_WEAKNESS.blockAuto);
+  assert.deepEqual(items, []);
+  assert.equal(r.size, 500);
+  console.log('  ok  weak spacing at region top drops entirely, charging nothing');
+}
+
+{
+  // Weak spacing right after content (nothing pending) is kept as a normal
+  // new item, and its amount is charged against the region.
+  const items: FlowItem[] = [content()];
+  const r = uniformRegions(500, 800);
+  pushSpacing(r, items, 12, SPACING_WEAKNESS.blockAuto);
+  assert.deepEqual(items, [content(), { kind: 'spacing', amount: 12, weakness: SPACING_WEAKNESS.blockAuto }]);
+  assert.equal(r.size, 488);
+  console.log('  ok  weak spacing right after content is kept and charged');
+}
+
+{
+  // Strong spacing (weakness 0) is transparent to the region-top scan: a
+  // weak item that only has strong spacing ahead of it still drops.
+  const items: FlowItem[] = [{ kind: 'spacing', amount: 3, weakness: SPACING_WEAKNESS.explicit }];
+  const r = uniformRegions(500, 800);
+  pushSpacing(r, items, 12, SPACING_WEAKNESS.blockAuto);
+  assert.deepEqual(items, [{ kind: 'spacing', amount: 3, weakness: SPACING_WEAKNESS.explicit }]);
+  assert.equal(r.size, 500);
+  console.log('  ok  strong spacing is transparent: a weak item behind only strong spacing still drops at top');
+}
+
+{
+  // Dominance: a strictly stronger (lower-numbered) weak item REPLACES a
+  // pending weaker one, regardless of amount (heading `above`, weakness 3,
+  // displacing a smaller-tier paragraph auto-spacing, weakness 4). The
+  // region is only charged the DELTA (3 - 5 = -2: it gets 2 back).
+  const items: FlowItem[] = [content(), { kind: 'spacing', amount: 5, weakness: SPACING_WEAKNESS.blockAuto }];
+  const r = uniformRegions(500, 800);
+  pushSpacing(r, items, 3, SPACING_WEAKNESS.blockExplicit);
+  assert.deepEqual(items, [content(), { kind: 'spacing', amount: 3, weakness: SPACING_WEAKNESS.blockExplicit }]);
+  assert.equal(r.size, 502);
+  console.log('  ok  a strictly stronger weak item replaces a pending weaker one outright (even if smaller)');
+}
+
+{
+  // Dominance: a strictly WEAKER item never displaces a pending stronger
+  // one, even if larger in amount — and never charges the region either.
+  const items: FlowItem[] = [content(), { kind: 'spacing', amount: 3, weakness: SPACING_WEAKNESS.blockExplicit }];
+  const r = uniformRegions(500, 800);
+  pushSpacing(r, items, 100, SPACING_WEAKNESS.blockAuto);
+  assert.deepEqual(items, [content(), { kind: 'spacing', amount: 3, weakness: SPACING_WEAKNESS.blockExplicit }]);
+  assert.equal(r.size, 500);
+  console.log('  ok  a strictly weaker item never displaces a pending stronger one, however large');
+}
+
+{
+  // Dominance at a tie: same weakness, the LARGER amount replaces (e.g. two
+  // adjacent headings' explicit above/below both at weakness 3), charging
+  // only the incremental delta.
+  const items: FlowItem[] = [content(), { kind: 'spacing', amount: 5, weakness: SPACING_WEAKNESS.blockExplicit }];
+  const r = uniformRegions(500, 800);
+  pushSpacing(r, items, 8, SPACING_WEAKNESS.blockExplicit);
+  assert.deepEqual(items, [content(), { kind: 'spacing', amount: 8, weakness: SPACING_WEAKNESS.blockExplicit }]);
+  assert.equal(r.size, 497);
+  console.log('  ok  tied weakness: the larger amount replaces the smaller');
+}
+
+{
+  // Dominance at a tie: same weakness, an EQUAL or SMALLER amount does NOT
+  // replace — the first (earlier-pushed) item survives. This is exactly why
+  // two ordinary adjacent paragraphs (same par.spacing amount, both
+  // weakness 4) only ever produce ONE gap, not two summed.
+  const items: FlowItem[] = [content(), { kind: 'spacing', amount: 8, weakness: SPACING_WEAKNESS.blockAuto }];
+  const r = uniformRegions(500, 800);
+  pushSpacing(r, items, 8, SPACING_WEAKNESS.blockAuto); // equal amount, same weakness
+  assert.deepEqual(items, [content(), { kind: 'spacing', amount: 8, weakness: SPACING_WEAKNESS.blockAuto }]);
+  pushSpacing(r, items, 3, SPACING_WEAKNESS.blockAuto); // smaller amount, same weakness
+  assert.deepEqual(items, [content(), { kind: 'spacing', amount: 8, weakness: SPACING_WEAKNESS.blockAuto }]);
+  assert.equal(r.size, 500);
+  console.log('  ok  tied weakness, equal-or-smaller amount: the earlier item survives unchanged');
+}
+
+{
+  // keepSpacing never appends the candidate itself — callers rely on this:
+  // when it returns false (drop or in-place replace), `items.length` is
+  // unchanged relative to before the call.
+  const items: FlowItem[] = [content(), { kind: 'spacing', amount: 5, weakness: SPACING_WEAKNESS.blockAuto }];
+  const r = uniformRegions(500, 800);
+  const lenBefore = items.length;
+  const kept = keepSpacing(r, items, 2, SPACING_WEAKNESS.blockAuto);
+  assert.equal(kept, false);
+  assert.equal(items.length, lenBefore);
+  console.log('  ok  keepSpacing never grows items itself: callers push only when it returns true');
+}
+
+{
+  // Trailing weak spacing trims at region end (finalize()'s trim_spacing),
+  // giving the trimmed amount back to the region.
+  const items: FlowItem[] = [content(), { kind: 'spacing', amount: 7, weakness: SPACING_WEAKNESS.blockAuto }];
+  const r = uniformRegions(100, 800);
+  const trimmed = trimSpacing(r, items);
+  assert.equal(trimmed, 7);
+  assert.deepEqual(items, [content()]);
+  assert.equal(r.size, 107);
+  console.log('  ok  trailing weak spacing trims at region end and is credited back');
+}
+
+{
+  // trim_spacing scans past strong spacing (transparent) to find the
+  // trailing weak item.
+  const items: FlowItem[] = [
+    content(),
+    { kind: 'spacing', amount: 7, weakness: SPACING_WEAKNESS.blockAuto },
+    { kind: 'spacing', amount: 2, weakness: SPACING_WEAKNESS.explicit },
+  ];
+  const r = uniformRegions(100, 800);
+  const trimmed = trimSpacing(r, items);
+  assert.equal(trimmed, 7);
+  assert.deepEqual(items, [content(), { kind: 'spacing', amount: 2, weakness: SPACING_WEAKNESS.explicit }]);
+  console.log('  ok  trim_spacing scans past strong spacing to reach the trailing weak item');
+}
+
+{
+  // Nothing trails (region ends right on content, or is empty): trim is a
+  // no-op, returning 0 and leaving the region untouched.
+  const r = uniformRegions(100, 800);
+  assert.equal(trimSpacing(r, [content()]), 0);
+  assert.equal(trimSpacing(r, []), 0);
+  assert.equal(r.size, 100);
+  console.log('  ok  trim_spacing is a no-op with nothing weak trailing');
+}
+
+{
+  // weak_spacing peeks without mutating.
+  const items: FlowItem[] = [content(), { kind: 'spacing', amount: 4, weakness: SPACING_WEAKNESS.blockAuto }];
+  assert.equal(peekWeakSpacing(items), 4);
+  assert.equal(items.length, 2);
+  assert.equal(peekWeakSpacing([content()]), 0);
+  console.log('  ok  peekWeakSpacing reads the trailing weak amount without removing it');
+}
+
+// --- containerPageTopDropEm ------------------------------------------------
+
+{
+  assert.equal(containerPageTopDropEm('blockquote'), 0.66);
+  assert.equal(containerPageTopDropEm('code_block'), 0.8);
+  assert.equal(containerPageTopDropEm('code_block', true), 0); // typst-raw: no padding-top
+  assert.equal(containerPageTopDropEm('figure'), 0.4);
+  assert.equal(containerPageTopDropEm('bullet_list'), 0); // no padding-top to drop
+  assert.equal(containerPageTopDropEm('table'), 0);
+  assert.equal(containerPageTopDropEm('paragraph'), 0); // handled by pageTopAdjustEm instead
+  console.log('  ok  containerPageTopDropEm: only the padded container kinds drop, typst-raw excluded');
 }
 
 console.log('all flow-rules tests passed');

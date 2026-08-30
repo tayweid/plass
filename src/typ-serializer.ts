@@ -57,26 +57,71 @@ const HEADINGS: Array<{ level: number; hs: number; padTop: number; marginBottom:
   { level: 3, hs: 1.15, padTop: 1.4, marginBottom: 0.5, shift: 0.1833 },
 ];
 
+/**
+ * `#set par(spacing: ...)` in body em: the Auto block-spacing fallback
+ * Typst resolves for every block whose `above`/`below` isn't explicitly
+ * set (`styles.resolve(ParElem::spacing)` in `flow/collect.rs::block`) —
+ * paragraphs, lists, plain code blocks, raw-Typst islands, figures, and
+ * tables all collapse to this SAME value on both sides when adjacent,
+ * since Auto is independently resolved for `above` and `below` alike.
+ * Exported so `flow-rules.ts` can build the weakness-tagged spacing item
+ * Typst's collector assigns this construct (weakness 4) without
+ * duplicating the formula.
+ */
+export function parSpacingEm(s: DocSettings): number {
+  const m = parityMetrics(s.font);
+  // Classic (indented) paragraphs flow with no extra gap: spacing = leading.
+  const parGapEm = s.parIndent ? 0 : 0.9;
+  return s.lineHeight + parGapEm - m.extent;
+}
+
+/**
+ * Explicit `#set block(above/below: ...)` (body em) a heading's show rule
+ * emits — Typst's weakness-3 explicit block spacing for headings (see
+ * `parityRules` below, which calls this per level so the emitted text and
+ * this value can never drift apart). Exported for `flow-rules.ts`'s
+ * region-top spacing-drop rule.
+ */
+export function headingBlockSpacingEm(s: DocSettings, level: 1 | 2 | 3): { above: number; below: number } {
+  const m = parityMetrics(s.font);
+  const lh = s.lineHeight;
+  const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
+  const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
+  const h = HEADINGS[level - 1];
+  const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
+  const hSlackBelow = (h.hs * (1.25 + m.cssD - m.cssA)) / 2;
+  const above = pSlackBelow + 0.9 + h.padTop * h.hs + hSlackAbove - (m.typDesc + m.typAsc * h.hs) - h.shift;
+  const below = hSlackBelow + h.marginBottom * h.hs + pSlackAbove - (m.typDesc * h.hs + m.typAsc) + h.shift;
+  return { above, below };
+}
+
+/**
+ * Explicit `#set block(above/below: ...)` (body em) the display-math show
+ * rule emits — weakness-3 explicit block spacing, same status as headings'.
+ * Exported for `flow-rules.ts`'s region-top spacing-drop rule.
+ */
+export function equationBlockSpacingEm(s: DocSettings): { above: number; below: number } {
+  const m = parityMetrics(s.font);
+  const lh = s.lineHeight;
+  const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
+  const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
+  const above = pSlackBelow + 0.9 + 0.5 - m.typDesc;
+  const below = 0.5 + 0.9 + pSlackAbove - m.typAsc;
+  return { above, below };
+}
+
 /** The parity header: set/show rules reproducing editor spacing in Typst. */
 export function parityRules(s: DocSettings): string {
   const m = parityMetrics(s.font);
   const lh = s.lineHeight;
   const pt = (em: number) => `${(em * s.sizePt).toFixed(3)}pt`;
-  // Baseline → block-edge slack of a body paragraph line (em).
-  const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
-  const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
   let out = '';
-  // Classic (indented) paragraphs flow with no extra gap: spacing = leading.
-  const parGapEm = s.parIndent ? 0 : 0.9;
-  out += `#set par(justify: true, leading: ${pt(lh - m.extent)}, spacing: ${pt(lh + parGapEm - m.extent)})\n`;
+  out += `#set par(justify: true, leading: ${pt(lh - m.extent)}, spacing: ${pt(parSpacingEm(s))})\n`;
   if (s.parIndent) out += `#set par(first-line-indent: 1.5em)\n`;
   out += `#set list(spacing: ${pt(lh + 0.25 - m.extent)})\n`;
   out += `#set enum(spacing: ${pt(lh + 0.25 - m.extent)})\n`;
   for (const h of HEADINGS) {
-    const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
-    const hSlackBelow = (h.hs * (1.25 + m.cssD - m.cssA)) / 2;
-    const above = pSlackBelow + 0.9 + h.padTop * h.hs + hSlackAbove - (m.typDesc + m.typAsc * h.hs) - h.shift;
-    const below = hSlackBelow + h.marginBottom * h.hs + pSlackAbove - (m.typDesc * h.hs + m.typAsc) + h.shift;
+    const { above, below } = headingBlockSpacingEm(s, h.level as 1 | 2 | 3);
     out += `#show heading.where(level: ${h.level}): set text(size: ${pt(h.hs)})\n`;
     out += `#show heading.where(level: ${h.level}): set block(above: ${pt(above)}, below: ${pt(below)})\n`;
     out += `#show heading.where(level: ${h.level}): set par(leading: ${pt((1.25 - m.extent) * h.hs)})\n`;
@@ -85,8 +130,7 @@ export function parityRules(s: DocSettings): string {
   // same ratio) have identical advance widths.
   out += `#show raw.where(block: false): set text(font: "DejaVu Sans Mono", size: ${pt(0.8)})\n`;
   // Display math: the editor shows Typst's own ink inside 0.5em padding.
-  const eqAbove = pSlackBelow + 0.9 + 0.5 - m.typDesc;
-  const eqBelow = 0.5 + 0.9 + pSlackAbove - m.typAsc;
+  const { above: eqAbove, below: eqBelow } = equationBlockSpacingEm(s);
   out += `#show math.equation.where(block: true): set block(above: ${pt(eqAbove)}, below: ${pt(eqBelow)})\n`;
   // Tables break across pages Typst-natively (repeated table.header rows
   // and all): the editor mirrors the split via the paged mini-compile in

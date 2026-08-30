@@ -169,3 +169,266 @@ export function lineNeeds(
     return height;
   });
 }
+
+// ---------------------------------------------------------------------------
+// Regions — ported from Typst's `typst-library/src/layout/regions.rs`. The
+// editor's pages are all the same height (no column balancing, no shrinking
+// last region), so this is intentionally small: it exists to give the
+// spacing-collapse rules below (and future ported rules) Typst's own
+// vocabulary for "how much room is left" and "would breaking help", rather
+// than each rule re-deriving its own ad hoc version of the same guard.
+// `may_progress` in particular is Typst's infinite-migration guard: it is
+// `false` exactly when the next region would be identical to this one, i.e.
+// advancing cannot possibly create more room.
+
+/** Typst's `Abs::EPS` (`typst-library/src/layout/abs.rs`): the slack
+ * `Abs::fits` allows so an exact-equality boundary rounds toward "fits"
+ * instead of failing on float error. Shared by `fits` and the spacing
+ * collapse helpers below, which compare the same kind of length. */
+export const ABS_EPS = 1e-4;
+
+/** Typst's `Abs::fits(self, other)`: whether `content` fits into
+ * `container` — `container` may be a hair short of `content`, within
+ * `ABS_EPS`, and still be judged as fitting it. */
+export function fits(container: number, content: number): boolean {
+  return container + ABS_EPS >= content;
+}
+
+/**
+ * A sequence of regions to lay out into (Typst's `Regions`), specialized to
+ * the editor's world: every page has the same content height, so `backlog`
+ * is always empty and `last` always repeats that one height. Built via
+ * `uniformRegions`, not as a literal, so that invariant lives in one place.
+ */
+export interface Regions {
+  /** Remaining height of the CURRENT region. */
+  size: number;
+  /** The current region's own full height (for relative sizing — unused by
+   * the editor's absolute-height rules today, kept for parity with the
+   * Rust and for any future rule that needs it). */
+  full: number;
+  /** Heights of already-known upcoming regions that differ from `last`.
+   * Always empty for the editor (every page is the same height): kept as a
+   * real field, not dropped, so this stays a faithful `Regions` rather than
+   * a uniform-only stand-in. */
+  backlog: readonly number[];
+  /** The height every region repeats once `backlog` drains. `null`
+   * (Typst's `None`) means no further region exists — representable here
+   * for testing, though the editor's own paginator always has a next page
+   * available and never actually constructs this case. */
+  last: number | null;
+}
+
+/** Build a `Regions` for the editor's uniform pages: `remaining` is how much
+ * of the CURRENT page is left, `pageHeight` is every page's full height. */
+export function uniformRegions(remaining: number, pageHeight: number): Regions {
+  return { size: remaining, full: pageHeight, backlog: [], last: pageHeight };
+}
+
+/** Typst's `Regions::is_full`: whether the first region is already so full
+ * that a region break is called for. */
+export function isFull(r: Regions): boolean {
+  return fits(0, r.size) && mayProgress(r);
+}
+
+/** Typst's `Regions::may_break`: whether breaking to a following region is
+ * possible at all. */
+export function mayBreak(r: Regions): boolean {
+  return r.backlog.length > 0 || r.last !== null;
+}
+
+/** Typst's `Regions::may_progress`: whether advancing to the next region
+ * could improve a lack-of-space situation. `false` exactly when the next
+ * region would be identical to this one (empty backlog, and `last` repeats
+ * the CURRENT size) — the guard against migrating content forever into
+ * regions that can never fit it. */
+export function mayProgress(r: Regions): boolean {
+  return r.backlog.length > 0 || (r.last !== null && r.size !== r.last);
+}
+
+/** Typst's `Regions::next`: advance to the next region. Pure (returns the
+ * advanced copy) rather than mutating in place — callers evaluate a
+ * hypothetical next region far more often than they commit to one. */
+export function regionsNext(r: Regions): Regions {
+  if (r.backlog.length > 0) {
+    const [head, ...rest] = r.backlog;
+    return { ...r, size: head, full: head, backlog: rest };
+  }
+  if (r.last !== null) return { ...r, size: r.last, full: r.last };
+  return r;
+}
+
+// ---------------------------------------------------------------------------
+// Spacing collapse — ported from Typst's flow distributor
+// (`typst-layout/src/flow/distribute.rs`::{rel, keep_spacing, trim_spacing,
+// weak_spacing}) over the weakness tiers its collector assigns
+// (`typst-layout/src/flow/collect.rs`): explicit `#v()` = 0 (1 if `weak:
+// true`), explicit block `above`/`below` = 3, auto block spacing (inherits
+// `par.spacing`) = 4, a paragraph's own leading between lines = 5. Weakness
+// 0 is "strong": always kept, never collapsed against, and transparent to
+// every scan below (a strong item never blocks a weak one from finding what
+// lies further back). Every weakness >= 1 is "weak": subject to collapse —
+// dropped entirely if only strong spacing (or nothing) precedes it in the
+// current region (region top), replaced-in-place by (or dropped in favor
+// of) an adjacent weak item per the dominance rule below, and trimmed if it
+// ends up trailing at the region's bottom.
+//
+// The port is restricted to the two item kinds the editor's flat top-level
+// block list actually produces: spacing (`Item::Abs`) and real content
+// (`Item::Frame`, or an `Item::Fr` carrying a block — folded here into one
+// "content" marker, since the editor's schema exposes neither introspection
+// tags, floats/placed elements, nor bare fractional spacing at the top
+// level that `distribute.rs` also has to handle).
+
+export const SPACING_WEAKNESS = {
+  /** Explicit `#v(amount)` — never collapses. Unused by this editor's
+   * top-level block schema (no user-facing strong-`#v` construct); kept for
+   * parity with Typst's own tier numbering and for tests. */
+  explicit: 0,
+  /** Explicit `#v(amount, weak: true)` — the weakest weak tier: any
+   * competing weak item at 3/4/5 dominates it outright. Unused by this
+   * editor's schema; kept for the same reason as `explicit`. */
+  explicitWeak: 1,
+  /** Explicit block `above`/`below`: headings (via the exporter's show
+   * rule, `typ-serializer.ts`'s `headingBlockSpacingEm`/
+   * `equationBlockSpacingEm`) and `#quote(block: true)`'s own built-in
+   * default (`vendor/typst`'s `QuoteElem` show-set — 2.4em/1.8em, which
+   * this editor's exporter never overrides). */
+  blockExplicit: 3,
+  /** Auto block spacing — falls back to `par.spacing`
+   * (`typ-serializer.ts`'s `parSpacingEm`): plain paragraphs, lists, plain
+   * code blocks, raw-Typst islands, figures, and tables all get this on
+   * both sides (Auto is resolved independently for `above` and `below`). */
+  blockAuto: 4,
+  /** Leading between a paragraph's own lines. */
+  parLeading: 5,
+} as const;
+
+export type FlowItem =
+  | { kind: 'spacing'; amount: number; weakness: number }
+  | { kind: 'content' };
+
+/**
+ * Typst's `Distributor::keep_spacing`: scanning backward from the end of
+ * `items`, find the first weak spacing item — skipping over strong spacing,
+ * which is transparent to the scan — and decide the new candidate's fate:
+ *
+ * - A `content` marker is the nearest thing found (no pending weak spacing
+ *   to compete with): the candidate stands right after real content and
+ *   should be pushed as a normal new item. Returns `true`.
+ * - A pending weak spacing item is found: the candidate REPLACES it in
+ *   place (mutating `items`, and adjusting `regions.size` by the delta —
+ *   Typst's `self.regions.size.y -= amount - prev_amount`) when it is at
+ *   least as strong (numerically <=) AND either strictly stronger or
+ *   larger in amount; otherwise the pending item is left untouched. Either
+ *   way the candidate itself is never separately appended — callers must
+ *   not also push it. Returns `false`.
+ * - Nothing is found before the start of `items` (region top: no content,
+ *   no pending spacing precedes it at all): region-top drop. Returns
+ *   `false`.
+ */
+export function keepSpacing(regions: Regions, items: FlowItem[], amount: number, weakness: number): boolean {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.kind === 'spacing' && item.weakness >= 1) {
+      if (weakness <= item.weakness && (weakness < item.weakness || amount > item.amount)) {
+        regions.size -= amount - item.amount;
+        items[i] = { kind: 'spacing', amount, weakness };
+      }
+      return false;
+    }
+    if (item.kind === 'content') return true;
+    // Strong spacing (weakness 0) is transparent to the scan: keep looking.
+  }
+  return false;
+}
+
+/**
+ * Typst's `Distributor::rel`: push relative spacing, honoring the collapse
+ * rule for weak items (`weakness > 0`) via `keepSpacing`, and charging the
+ * kept amount against `regions.size` — the region-scoped "how much room is
+ * left" this spacing item actually consumes, ready for the immediately
+ * following content's `fits` check to compare against (Typst charges the
+ * gap before testing whether the content after it fits — see this module's
+ * top-of-file doc comment on the spacing-collapse port). Strong spacing
+ * (`weakness === 0`) is always pushed and charged unconditionally. Mutates
+ * both `items` and `regions` in place, mirroring the Rust.
+ */
+export function pushSpacing(regions: Regions, items: FlowItem[], amount: number, weakness: number): void {
+  if (weakness > 0 && !keepSpacing(regions, items, amount, weakness)) return;
+  regions.size -= amount;
+  items.push({ kind: 'spacing', amount, weakness });
+}
+
+/**
+ * Typst's `Distributor::trim_spacing`: remove ONE trailing weak spacing
+ * item from the end of `items` (scanning back past strong spacing, again
+ * transparent to the scan), giving its amount back to `regions.size` and
+ * returning the amount removed (0 if none — including when a `content`
+ * marker is the last non-strong thing found, meaning nothing trails).
+ * Mirrors the Rust's `break` semantics: the scan stops at the first
+ * weak-spacing-or-content boundary, so at most one item is ever removed
+ * per call.
+ */
+export function trimSpacing(regions: Regions, items: FlowItem[]): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.kind === 'spacing' && item.weakness >= 1) {
+      regions.size += item.amount;
+      items.splice(i, 1);
+      return item.amount;
+    }
+    if (item.kind === 'content') return 0;
+  }
+  return 0;
+}
+
+/** Typst's `Distributor::weak_spacing`: peek the amount of trailing weak
+ * spacing without removing it (0 if none). */
+export function peekWeakSpacing(items: readonly FlowItem[]): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.kind === 'spacing' && item.weakness >= 1) return item.amount;
+    if (item.kind === 'content') return 0;
+  }
+  return 0;
+}
+
+/**
+ * Page-top drop for the top-level block kinds whose own CSS encodes their
+ * Auto (weakness-4) "above" spacing as `padding-top` on the block's own box
+ * rather than as a calibrated ascent formula the way paragraphs/headings/
+ * lines get via `pageTopAdjustEm` (`typ-serializer.ts`): blockquote
+ * (`#quote(block: true)`, 0.66em), a plain (non-`typst-raw`) code block
+ * (`.ProseMirror pre`, 0.8em), and a figure (`.ts-figure`, 0.4em). Lists and
+ * tables paint zero padding-top already (their CSS puts spacing entirely in
+ * the PREVIOUS sibling's margin-bottom), so they need no entry here — there
+ * is nothing to drop.
+ *
+ * Every weakness this editor's schema assigns to a block's own "above" item
+ * is >= 1 (weak, `SPACING_WEAKNESS`), so `keepSpacing`/`pushSpacing` drop it
+ * UNCONDITIONALLY the moment it becomes the very first thing in a fresh
+ * region (`pushSpacing([], amount, weakness)` always returns without
+ * appending — the scan in `keepSpacing` finds nothing and falls through to
+ * `return false`). That drop is certain regardless of amount; only the
+ * "how much of the block's own box is really the above-spacing that
+ * vanished" side is a per-kind approximation (the padding-top figure,
+ * treating the block's own visible first ink as already sitting flush with
+ * its padding boundary — the same zeroth-order assumption the "atomic"
+ * default already makes for zero-padding kinds like tables and lists).
+ */
+export const CONTAINER_PAGE_TOP_PADDING_EM: Readonly<Record<string, number>> = {
+  blockquote: 0.66,
+  code_block: 0.8,
+  figure: 0.4,
+};
+
+/** The page-top spacing drop (body em) for a container `kind`, or 0 for a
+ * kind not in `CONTAINER_PAGE_TOP_PADDING_EM` (nothing to drop). `isRaw`
+ * must be `true` for a `code_block` with `params === 'typst-raw'`: that
+ * variant paints via `.ts-raw` (margin-bottom only, no padding-top), not
+ * `.ProseMirror pre` — the drop does not apply to it. */
+export function containerPageTopDropEm(kind: string, isRaw = false): number {
+  if (kind === 'code_block' && isRaw) return 0;
+  return CONTAINER_PAGE_TOP_PADDING_EM[kind] ?? 0;
+}
