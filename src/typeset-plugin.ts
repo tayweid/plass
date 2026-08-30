@@ -447,6 +447,9 @@ class TypesetView {
   /** Which source produced the last pagination (diagnostics). */
   private pagPath: 'exact' | 'held' | 'fallback' = 'exact';
   private pagLog: string[] = [];
+  /** Total pagLog pushes ever. The log itself is a 40-entry ring, so length
+   * deltas stop working once it fills; pollers must diff THIS counter. */
+  private pagLogTotal = 0;
   private pagWhy = '';
   private forcedAuditor: ForcedLayoutAuditor | null = null;
   private lineDecorationDispatches = 0;
@@ -629,6 +632,7 @@ class TypesetView {
           : null;
       };
       (w as unknown as { __pagLog: () => string[] }).__pagLog = () => this.pagLog;
+      (w as unknown as { __pagCount: () => number }).__pagCount = () => this.pagLogTotal;
       w.__breakSig = () => {
         const st = typesetKey.getState(this.view.state);
         if (!st) return '';
@@ -1619,6 +1623,7 @@ class TypesetView {
     const { spacers, count } = this.paginate(snapshot);
     const paginationMs = performance.now() - paginationStart;
     this.pagLog.push(this.pagPath + '[' + this.pagWhy + ']:' + spacers.map((sp) => `${sp.pos}@${Math.round(sp.height)}`).join(','));
+    this.pagLogTotal++;
     if (this.pagLog.length > 40) this.pagLog.shift();
     if (spacers.length || held.lineMap.size || held.blocks.length) {
       // A computed spacer that matches an installed one (same position and
