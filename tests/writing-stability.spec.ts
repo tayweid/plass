@@ -25,6 +25,7 @@ declare global {
   interface Window {
     view: import('prosemirror-view').EditorView;
     __pagLog: () => string[];
+    __pagCount: () => number;
     __pageOracle: unknown;
     __suffixPaginationStats: (reset?: boolean) => SuffixPaginationStats;
   }
@@ -37,16 +38,22 @@ function prefixSignature(signature: string, beforePos: number): string[] {
     .filter((entry) => Number(entry.slice(0, entry.indexOf('@'))) < beforePos);
 }
 
+/** `logStart` is a `__pagCount()` snapshot, NOT a `__pagLog().length` one:
+ * the log is a 40-entry ring, so length deltas freeze once it fills and a
+ * long soak would wait forever on entries that were pushed (and shifted)
+ * just fine. The monotone push counter says how many tail entries are new. */
 async function waitForTerminalPagination(page: Page, logStart: number) {
   await expect
     .poll(
       () =>
-        page.evaluate((start) =>
-          window
+        page.evaluate((start) => {
+          const fresh = window.__pagCount() - start;
+          if (fresh <= 0) return false;
+          return window
             .__pagLog()
-            .slice(start)
-            .some((entry) => entry.startsWith('exact[') || entry.includes('[entry=fail')),
-        logStart),
+            .slice(-Math.min(fresh, 40))
+            .some((entry) => entry.startsWith('exact[') || entry.includes('[entry=fail'));
+        }, logStart),
       { timeout: 30_000, intervals: [200, 400, 800] },
     )
     .toBe(true);
@@ -85,7 +92,7 @@ test('a late edit in a 40–50-page document recomputes only a stable suffix', a
     };
   });
 
-  const initialLogLength = await page.evaluate(() => window.__pagLog().length);
+  const initialLogLength = await page.evaluate(() => window.__pagCount());
   await page.evaluate(
     (count) => {
       const { state } = window.view;
@@ -136,7 +143,7 @@ test('a late edit in a 40–50-page document recomputes only a stable suffix', a
   });
 
   await page.evaluate(() => window.__suffixPaginationStats(true));
-  const editLogLength = await page.evaluate(() => window.__pagLog().length);
+  const editLogLength = await page.evaluate(() => window.__pagCount());
   await page.keyboard.type('Z');
 
   await expect
