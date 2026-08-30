@@ -157,6 +157,14 @@ Typst, which the current local rule never allows). The CSS separator
 (`.fn-body.fn-first::before`) is re-derived from the same em values so
 paint and reservation cannot drift.
 
+Still unported, and the dominant residual by measurement: entry SPILL
+(`flow/compose.rs::footnote_spill` — one entry's body split across pages,
+only its first fragment reserving on the marker's page). The local ledger
+charges every entry's full height to one page; a Phase 0 soak on a
+10-footnote/8-page fixture showed 11/12 divergences with the local pass
+ending pages roughly one whole entry early wherever a footnote sits
+upstream — the signature of whole-entry charging where Typst spilled.
+
 ## Phase 5 — breakable blocks, figures, oversize
 
 - Blocks: Typst's atomicity map (`Child::Single` iff `breakable: false` or

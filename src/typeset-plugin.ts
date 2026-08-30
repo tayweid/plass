@@ -41,7 +41,7 @@ import { loadPrimitives, primitives } from './layout/primitives';
 import type { PageOracle, PageOracleEntry } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
-import { footnoteEntryCost, footnoteHeadReservePx, footnotePositions, lineNeeds } from './layout/flow-rules';
+import { footnoteEntryCost, footnoteHeadReservePx, footnotePositions, lineNeeds, lineNeedSpans } from './layout/flow-rules';
 import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
 import { eqKey } from './equations';
@@ -2811,6 +2811,11 @@ class TypesetView {
       const heights = new Array<number>(n).fill(extentPx);
       const isEmptyLine = (i: number) => entry.lines[i].to <= entry.lines[i].from;
       const needs = lineNeeds(heights, leadingPx, { isEmpty: isEmptyLine });
+      // The last line covered by needs[i]'s pairing (i itself when line i
+      // participates in no pairing) — lets the post-insertion recheck below
+      // peek footnotes across a protected pair's whole span, not just line
+      // k's own line (see the stage 2 comment further down).
+      const spans = lineNeedSpans(n, { isEmpty: isEmptyLine });
 
       // Index of the first line on the current page (the orphan need only
       // ever applies at the paragraph's absolute start; the widow need
@@ -2818,48 +2823,111 @@ class TypesetView {
       // fall out of indexing `needs[]` by absolute line index, unchanged).
       let segStart = 0;
       for (let k = 0; k < n; k++) {
-        // Typst decides BEFORE placement: check the line's own height AND
-        // its `need` (which, for a protected line, covers its partner too)
-        // against the region that remains. At most one retry per line — a
-        // granted retry always lands on a page already verified to fit, so
-        // this can never loop.
-        for (let attempt = 0; ; attempt++) {
-          const y = lineTops[k].y;
-          const lineEnd = k + 1 < n ? base + entry.lines[k + 1].from : endPos;
-          const pfH = peekFnH(lineEnd);
-          const bottom = bottomFor(pfH);
-          const ownFits = y + shift + heights[k] <= bottom + 0.5;
-          const needFits = y + shift + needs[k] <= bottom + 0.5;
-          if (ownFits && needFits) {
-            pageFnH += takeFnH(lineEnd);
-            break;
+        const y = lineTops[k].y;
+        const lineEnd = k + 1 < n ? base + entry.lines[k + 1].from : endPos;
+        const spanEnd = spans[k] + 1 < n ? base + entry.lines[spans[k] + 1].from : endPos;
+        // Typst's own decision is two separate checks, not one (distribute.rs:226-248):
+        //
+        // Stage 1 (pre-insertion) runs BEFORE this line's footnotes are
+        // reserved at all — only entries already consumed earlier on this
+        // page count. If the line (or its need span) doesn't fit even
+        // ignoring its own notes, that's decisive: relocate or give up.
+        //
+        // Stage 2 (post-insertion) only runs once stage 1 passes. It
+        // mirrors the relayout Typst performs after inserting the frame's
+        // footnote entries into the region (compose.rs:165-216): now the
+        // line's own notes are reserved too, and the check reruns. If it
+        // still fails, Typst has already inserted those entries into this
+        // region (compose.rs:511/681/424 record them as skips so they
+        // don't repeat) — they stay behind on this page even though the
+        // line(s) they annotate migrate to a fresh one, provided that fresh
+        // page's RAW height (never insertion-reduced: regions.rs:133-138)
+        // can hold the need. `takeFnH(spanEnd)` below claims the whole
+        // span's entries up front, matching that trace: whichever of the
+        // pair reaches stage 2's strand branch first drags the partner's
+        // notes down with it, so the partner's own turn through this loop
+        // finds nothing left to peek or take.
+        //
+        // `traveled`/`stranded` bound each line to at most one relocation
+        // of each kind — a granted relocation always lands on a page
+        // already verified to fit, so this can never loop.
+        let traveled = false;
+        let stranded = false;
+        loop: for (;;) {
+          // STAGE 1 — pre-insertion: reservation only from footnotes
+          // already on the page (pageFnH), none from this line yet.
+          const bottomPre = bottomFor(0);
+          const ownPre = y + shift + heights[k] <= bottomPre + 0.5;
+          const needPre = y + shift + needs[k] <= bottomPre + 0.5;
+          if (!ownPre || !needPre) {
+            // Whichever quantity actually failed decides whether a fresh
+            // page would help: own height failing means the line itself
+            // needs a clean start; need failing (while own height fits)
+            // means it's the protected partner that doesn't fit here.
+            const trigger = ownPre ? needs[k] : heights[k];
+            if (traveled || stranded || trigger > contentH + 0.5) {
+              // Already relocated once (of either kind), or even an empty
+              // fresh page can't satisfy this (oversize): give up
+              // relocating and let it overflow, consuming its own notes.
+              pageFnH += takeFnH(lineEnd);
+              break loop;
+            }
+            traveled = true;
+            if (k === 0 && segStart === 0) {
+              // The paragraph's absolute start doesn't fit (alone, or with
+              // the orphan-protected partner it needs): the whole
+              // paragraph moves to the next page, sticky heading and all.
+              breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
+            } else {
+              // Break exactly before line k: this defers it — and, when
+              // `need` covers a partner beyond k (the widow pair), that
+              // partner too — to a fresh page. No retroactive pull-back to
+              // k-1 is needed: `need` already grouped the pair before
+              // either line's placement was decided.
+              breakBefore(lineTops[k].pos, lineTops[k].y, 'line');
+              segStart = k;
+            }
+            continue loop;
           }
-          // Whichever quantity actually failed decides whether a fresh page
-          // would help: own height failing means the line itself needs a
-          // clean start; need failing (while own height fits) means it's
-          // the protected partner that doesn't fit here.
-          const trigger = ownFits ? needs[k] : heights[k];
-          if (attempt > 0 || trigger > contentH + 0.5) {
-            // Already retried once, or even an empty fresh page can't
-            // satisfy this (oversize): give up relocating and let it
-            // overflow rather than break at its own start forever.
+          // STAGE 2 — post-insertion recheck: the relayout Typst performs
+          // once this need span's entries are inserted into the region.
+          const bottomPost = bottomFor(peekFnH(spanEnd));
+          const ownPost = y + shift + heights[k] <= bottomPost + 0.5;
+          const needPost = y + shift + needs[k] <= bottomPost + 0.5;
+          if (ownPost && needPost) {
+            // Place; own notes (the partner's too, once reached) are
+            // consumed.
             pageFnH += takeFnH(lineEnd);
-            break;
+            break loop;
           }
+          const triggerPost = ownPost ? needs[k] : heights[k];
+          if (stranded || (ownPost && triggerPost > contentH + 0.5)) {
+            // The need can never fit any raw page (Typst places the line,
+            // splitting the pair — distribute.rs:237-245's condition goes
+            // false and falls through to frame()), or this line already
+            // stranded once: place here, consuming its own notes.
+            pageFnH += takeFnH(lineEnd);
+            break loop;
+          }
+          // Typst strands the span's entries on THIS page (they were
+          // inserted; the region finishes with those insertions as skips)
+          // and migrates the line(s) to a fresh, raw next page:
+          // ownPost failing finishes unconditionally (may_progress,
+          // distribute.rs:229); needPost failing (own height still fits)
+          // requires the raw next page to fit the need, already checked
+          // via triggerPost above.
+          stranded = true;
+          pageFnH += takeFnH(spanEnd); // before the break — breakBefore resets pageFnH
           if (k === 0 && segStart === 0) {
-            // The paragraph's absolute start doesn't fit (alone, or with
-            // the orphan-protected partner it needs): the whole paragraph
-            // moves to the next page, sticky heading and all.
+            // A strand at the paragraph's absolute start is still a region
+            // finish: Typst's sticky restore migrates a heading run sitting
+            // directly above along with the paragraph (the entries stay).
             breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
           } else {
-            // Break exactly before line k: this defers it — and, when
-            // `need` covers a partner beyond k (the widow pair), that
-            // partner too — to a fresh page. No retroactive pull-back to
-            // k-1 is needed: `need` already grouped the pair before either
-            // line's placement was decided.
             breakBefore(lineTops[k].pos, lineTops[k].y, 'line');
             segStart = k;
           }
+          continue loop;
         }
       }
     };

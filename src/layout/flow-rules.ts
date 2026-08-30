@@ -138,6 +138,21 @@ export interface LineNeedsOptions {
   preventWidows?: boolean;
 }
 
+/** Shared pairing-activation logic for `lineNeeds`/`lineNeedSpans`, kept in
+ *  one place so the two functions' notions of "which lines are grouped"
+ *  cannot drift apart. */
+function pairingActivation(len: number, opts: LineNeedsOptions) {
+  const isEmpty = opts.isEmpty ?? (() => false);
+  const preventOrphans = opts.preventOrphans ?? true;
+  const preventWidows = opts.preventWidows ?? true;
+
+  const orphanActive = preventOrphans && len >= 2 && !isEmpty(1);
+  const widowActive = preventWidows && len >= 2 && !isEmpty(len - 2);
+  const preventAll = len === 3 && orphanActive && widowActive;
+
+  return { orphanActive, widowActive, preventAll };
+}
+
 /**
  * Per-line `need` for a paragraph's laid-out lines, mirroring
  * `Collector::lines` exactly. `heights` are each line's own frame height
@@ -152,13 +167,7 @@ export function lineNeeds(
   opts: LineNeedsOptions = {},
 ): number[] {
   const len = heights.length;
-  const isEmpty = opts.isEmpty ?? (() => false);
-  const preventOrphans = opts.preventOrphans ?? true;
-  const preventWidows = opts.preventWidows ?? true;
-
-  const orphanActive = preventOrphans && len >= 2 && !isEmpty(1);
-  const widowActive = preventWidows && len >= 2 && !isEmpty(len - 2);
-  const preventAll = len === 3 && orphanActive && widowActive;
+  const { orphanActive, widowActive, preventAll } = pairingActivation(len, opts);
 
   const h = (i: number) => heights[i] ?? 0;
 
@@ -167,5 +176,27 @@ export function lineNeeds(
     if (orphanActive && i === 0) return h(0) + leading + h(1);
     if (widowActive && i >= 2 && i + 2 === len) return h(len - 2) + leading + h(len - 1);
     return height;
+  });
+}
+
+/**
+ * For each line i, the index of the LAST line covered by `lineNeeds`'
+ * need span at i — i.e. how far the pairing `needs[i]` grouped forward.
+ * Mirrors the same `Collector::lines` grouping `lineNeeds` computes, but
+ * returns the span's end index instead of a height, so callers that must
+ * reason about which lines a `need` check actually covers (not just how
+ * tall it is) don't have to re-derive the grouping from heights.
+ *
+ * `needs[i] > heights[i]` exactly when `spans[i] > i` — the two functions
+ * agree on every index by construction (`pairingActivation` is shared).
+ */
+export function lineNeedSpans(count: number, opts: LineNeedsOptions = {}): number[] {
+  const { orphanActive, widowActive, preventAll } = pairingActivation(count, opts);
+
+  return Array.from({ length: count }, (_, i) => {
+    if (preventAll && i === 0) return count - 1;
+    if (orphanActive && i === 0) return 1;
+    if (widowActive && i >= 2 && i + 2 === count) return count - 1;
+    return i;
   });
 }

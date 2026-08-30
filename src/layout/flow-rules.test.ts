@@ -8,6 +8,8 @@ import {
   footnotePositions,
   footnoteSeparatorHeightPx,
   lineNeeds,
+  lineNeedSpans,
+  type LineNeedsOptions,
 } from './flow-rules';
 
 const F = 16.666666666666668; // bodyPx at the app default (12.5pt @ 96dpi)
@@ -172,6 +174,93 @@ const LEAD = 6; // an arbitrary leading, distinct from any height below
     heights,
   );
   console.log('  ok  both costs disabled: needs equal own heights (opt-out honored)');
+}
+
+// --- lineNeedSpans ------------------------------------------------------
+// Same scenarios as the lineNeeds suite above, checking the span's END
+// INDEX instead of the need's height.
+
+{
+  // Single line: no pairing possible either direction.
+  assert.deepEqual(lineNeedSpans(1), [0]);
+  console.log('  ok  1-line paragraph: span is just the line itself');
+}
+
+{
+  // 2-line paragraph, both non-empty: orphan pairs [0,1]; line 1 spans only
+  // itself.
+  assert.deepEqual(lineNeedSpans(2), [1, 1]);
+  console.log('  ok  2-line paragraph: orphan span covers both lines');
+}
+
+{
+  // 2-line paragraph, line 1 empty: no partner, no pairing.
+  assert.deepEqual(lineNeedSpans(2, { isEmpty: (i) => i === 1 }), [0, 1]);
+  console.log('  ok  2-line paragraph, empty line 1: orphan span disabled');
+}
+
+{
+  // 3-line paragraph, both guards active: prevent_all — line 0's span
+  // covers all three lines.
+  assert.deepEqual(lineNeedSpans(3), [2, 1, 2]);
+  console.log('  ok  3-line paragraph: prevent_all span covers all three lines');
+}
+
+{
+  // 3-line paragraph, middle line empty: both guards disabled.
+  assert.deepEqual(lineNeedSpans(3, { isEmpty: (i) => i === 1 }), [0, 1, 2]);
+  console.log('  ok  3-line paragraph, empty middle line: prevent_all span disabled');
+}
+
+{
+  // 4-line paragraph, all non-empty: orphan spans [0,1], widow spans [2,3]
+  // independently.
+  assert.deepEqual(lineNeedSpans(4), [1, 1, 3, 3]);
+  console.log('  ok  4-line paragraph: orphan and widow spans are independent pairs');
+}
+
+{
+  // 4-line paragraph, line 1 (orphan partner) empty: only orphan disabled.
+  assert.deepEqual(lineNeedSpans(4, { isEmpty: (i) => i === 1 }), [0, 1, 3, 3]);
+  console.log('  ok  4-line paragraph, empty line 1: orphan span disabled, widow intact');
+}
+
+{
+  // 4-line paragraph, line 2 (widow partner) empty: only widow disabled.
+  assert.deepEqual(lineNeedSpans(4, { isEmpty: (i) => i === 2 }), [1, 1, 2, 3]);
+  console.log('  ok  4-line paragraph, empty line 2: widow span disabled, orphan intact');
+}
+
+{
+  // preventOrphans/preventWidows opt-outs disable spans exactly like they
+  // disable needs.
+  assert.deepEqual(lineNeedSpans(3, { preventOrphans: false, preventWidows: false }), [0, 1, 2]);
+  console.log('  ok  both costs disabled: spans equal own index (opt-out honored)');
+}
+
+{
+  // Agreement test: for every scenario above, `needs[i] > heights[i]`
+  // exactly when `spans[i] > i` — the two functions must never disagree on
+  // which lines are grouped.
+  const scenarios: Array<{ heights: number[]; opts?: LineNeedsOptions }> = [
+    { heights: [10] },
+    { heights: [10, 12] },
+    { heights: [10, 12], opts: { isEmpty: (i) => i === 1 } },
+    { heights: [10, 12, 14] },
+    { heights: [10, 12, 14], opts: { isEmpty: (i) => i === 1 } },
+    { heights: [10, 12, 14, 16] },
+    { heights: [10, 12, 14, 16], opts: { isEmpty: (i) => i === 1 } },
+    { heights: [10, 12, 14, 16], opts: { isEmpty: (i) => i === 2 } },
+    { heights: [10, 12, 14], opts: { preventOrphans: false, preventWidows: false } },
+  ];
+  for (const { heights, opts } of scenarios) {
+    const needs = lineNeeds(heights, LEAD, opts);
+    const spans = lineNeedSpans(heights.length, opts);
+    for (let i = 0; i < heights.length; i++) {
+      assert.equal(needs[i] > heights[i], spans[i] > i, `mismatch at i=${i} for heights=${heights}`);
+    }
+  }
+  console.log('  ok  needs[i] > heights[i] exactly when spans[i] > i, across all scenarios');
 }
 
 console.log('all flow-rules tests passed');
