@@ -2619,7 +2619,13 @@ class TypesetView {
       mismatchPage: null,
       mismatchDelta: null,
     };
-    if (!suffixPlan.reason.endsWith('-unchanged') || this.suffixPaginationStats.compared === 0) {
+    // The same re-settle must also preserve the last suffix pass's
+    // diagnostics: an eligible pass is the only writer of the position
+    // fields, and an unchanged document keeps them true. `eligible`, not
+    // `compared`, witnesses that pass — a promoted install defers its
+    // comparison to the sampled idle verification, so `compared` may still
+    // be zero while the diagnostics describe the live geometry.
+    if (!suffixPlan.reason.endsWith('-unchanged') || this.suffixPaginationStats.eligible === 0) {
       this.suffixPaginationStats.lastReason = suffixPlan.reason;
       this.suffixPaginationStats.lastDifference = null;
       this.suffixPaginationStats.lastStartPos = null;
