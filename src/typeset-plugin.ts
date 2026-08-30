@@ -41,7 +41,7 @@ import { loadPrimitives, primitives } from './layout/primitives';
 import type { PageOracle, PageOracleEntry } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
-import { footnoteEntryCost, footnoteHeadReservePx, footnotePositions } from './layout/flow-rules';
+import { footnoteEntryCost, footnoteHeadReservePx, footnotePositions, lineNeeds } from './layout/flow-rules';
 import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
 import { eqKey } from './equations';
@@ -59,7 +59,7 @@ import {
 import { isFlexibleAtom } from './inline-raw';
 import { parseTypstSvg } from './safe-svg';
 import { recordLayoutPerf } from './layout/perf';
-import { COMMON_PORT_KEYS, effectiveFont } from './font-registry';
+import { COMMON_PORT_KEYS, effectiveFont, parityMetrics } from './font-registry';
 import {
   appendLineDecorations,
   blockSpacerDecoration,
@@ -2797,51 +2797,70 @@ class TypesetView {
       });
 
       const n = lineTops.length;
-      // Index of the first line on the current page (for orphan/widow rules
-      // across multi-page paragraphs).
+      // Widow/orphan "need" (src/layout/flow-rules.ts, ported from Typst's
+      // Collector::lines). Typst lays out every line of one paragraph at
+      // the same font/size, so every line's own frame height is the SAME
+      // calibrated constant the exporter tells Typst to use for this body
+      // text (`m.extent` — typ-serializer.ts's parityRules), and `leading`
+      // is the matching `#set par(leading: ...)` value: both in the same px
+      // unit as the fit-test geometry below, so `need` composes with it
+      // exactly.
+      const m = parityMetrics(s.font);
+      const extentPx = m.extent * F;
+      const leadingPx = Math.max(0, (s.lineHeight - m.extent) * F);
+      const heights = new Array<number>(n).fill(extentPx);
+      const isEmptyLine = (i: number) => entry.lines[i].to <= entry.lines[i].from;
+      const needs = lineNeeds(heights, leadingPx, { isEmpty: isEmptyLine });
+
+      // Index of the first line on the current page (the orphan need only
+      // ever applies at the paragraph's absolute start; the widow need
+      // still applies to the final pair on a later continuation page — both
+      // fall out of indexing `needs[]` by absolute line index, unchanged).
       let segStart = 0;
       for (let k = 0; k < n; k++) {
-        const y = lineTops[k].y;
-        const h = k + 1 < n ? lineTops[k + 1].y - y : yTop + r.height - y;
-        const lineEnd = k + 1 < n ? base + entry.lines[k + 1].from : endPos;
-        const ufH = takeFnH(lineEnd);
-        if (y + shift + h <= bottomFor(ufH) + 0.5) {
-          pageFnH += ufH;
-          continue;
-        }
-
-        if (k === 0) {
-          // First line doesn't fit: the paragraph starts on the next page.
-          breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
-          pageFnH += ufH;
-          continue;
-        }
-        // A line already at a page top that still overflows is taller than
-        // the page — let it overflow rather than breaking at its own start.
-        if (k === segStart) {
-          pageFnH += ufH;
-          continue;
-        }
-
-        let kb = k;
-        // Widow control: never strand the paragraph's last line alone at the
-        // top of a page — break one line earlier so two lines move together.
-        if (n - kb === 1 && kb - 1 > segStart) kb = k - 1;
-        // Orphan control: never leave fewer than two lines at the bottom of
-        // the page where the paragraph starts — move the whole paragraph
-        // instead (unless it is taller than a page and must split somewhere).
-        if (segStart === 0 && kb < 2) {
-          if (r.height <= contentH) {
-            breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
-            pageFnH += ufH;
-            continue;
+        // Typst decides BEFORE placement: check the line's own height AND
+        // its `need` (which, for a protected line, covers its partner too)
+        // against the region that remains. At most one retry per line — a
+        // granted retry always lands on a page already verified to fit, so
+        // this can never loop.
+        for (let attempt = 0; ; attempt++) {
+          const y = lineTops[k].y;
+          const lineEnd = k + 1 < n ? base + entry.lines[k + 1].from : endPos;
+          const pfH = peekFnH(lineEnd);
+          const bottom = bottomFor(pfH);
+          const ownFits = y + shift + heights[k] <= bottom + 0.5;
+          const needFits = y + shift + needs[k] <= bottom + 0.5;
+          if (ownFits && needFits) {
+            pageFnH += takeFnH(lineEnd);
+            break;
           }
-          kb = Math.max(kb, 1);
+          // Whichever quantity actually failed decides whether a fresh page
+          // would help: own height failing means the line itself needs a
+          // clean start; need failing (while own height fits) means it's
+          // the protected partner that doesn't fit here.
+          const trigger = ownFits ? needs[k] : heights[k];
+          if (attempt > 0 || trigger > contentH + 0.5) {
+            // Already retried once, or even an empty fresh page can't
+            // satisfy this (oversize): give up relocating and let it
+            // overflow rather than break at its own start forever.
+            pageFnH += takeFnH(lineEnd);
+            break;
+          }
+          if (k === 0 && segStart === 0) {
+            // The paragraph's absolute start doesn't fit (alone, or with
+            // the orphan-protected partner it needs): the whole paragraph
+            // moves to the next page, sticky heading and all.
+            breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
+          } else {
+            // Break exactly before line k: this defers it — and, when
+            // `need` covers a partner beyond k (the widow pair), that
+            // partner too — to a fresh page. No retroactive pull-back to
+            // k-1 is needed: `need` already grouped the pair before either
+            // line's placement was decided.
+            breakBefore(lineTops[k].pos, lineTops[k].y, 'line');
+            segStart = k;
+          }
         }
-
-        breakBefore(lineTops[kb].pos, lineTops[kb].y, 'line');
-        segStart = kb;
-        pageFnH += ufH;
       }
     };
 
