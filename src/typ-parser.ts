@@ -13,6 +13,7 @@ import type { Mark, Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
 import { unwrapAligned } from './math-src';
 import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings } from './settings';
+import { trimSpaceBeforeMarker } from './collapse-spaces';
 import { parseBibTeX } from './bibtex';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 
@@ -1206,6 +1207,7 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
       const end = matchBracket(src, open);
       if (end > 0) {
         flush();
+        trimSpaceBeforeMarker(out);
         out.push(schema.nodes.footnote.create(null, parseInline(src.slice(open + 1, end))));
         i = end + 1;
         continue;

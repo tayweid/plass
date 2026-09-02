@@ -126,6 +126,25 @@ check('typst island', (() => {
 
 // round trip: md -> doc -> md -> doc -> md must be stable
 const md1 = docToMd(doc);
+{
+  // A markdown space before an inline footnote never prints (Typst's marker
+  // swallows it), so import drops it and the round-trip stays stable.
+  const { doc: d } = mdToDoc('Word ^[inline note] after.\n');
+  let para: typeof d | null = null;
+  d.descendants((n) => {
+    if (!para && n.type.name === 'paragraph') para = n;
+    return !para;
+  });
+  const p = para!;
+  check(
+    'import drops the space before a footnote marker',
+    p.child(0).text === 'Word' && p.child(1).type.name === 'footnote' && p.child(2).text === ' after.',
+    JSON.stringify(p.toJSON()),
+  );
+  const again = mdToDoc(docToMd(d)).doc;
+  check('footnote-glued paragraph round-trips', docToMd(again) === docToMd(d), docToMd(d));
+}
+
 const second = mdToDoc(md1);
 const md2 = docToMd(second.doc);
 if (md1 !== md2) {

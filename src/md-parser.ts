@@ -22,6 +22,7 @@ import type { Node as PMNode, Mark } from 'prosemirror-model';
 import { schema } from './schema';
 import { DEFAULT_SETTINGS, type DocSettings } from './settings';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
+import { trimSpaceBeforeMarker } from './collapse-spaces';
 
 export interface MdImport {
   doc: PMNode;
@@ -244,6 +245,7 @@ export function mdToDoc(src: string): MdImport {
         }
         case 'footnote_ref': {
           const body = footnoteDefs.get(t.meta?.id ?? -1) ?? [];
+          trimSpaceBeforeMarker(out);
           out.push(schema.nodes.footnote.create(null, body));
           break;
         }

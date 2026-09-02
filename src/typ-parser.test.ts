@@ -160,6 +160,22 @@ function firstDiff(a: string, b: string): string {
   check('strike export is idempotent', out === again, firstDiff(out, again));
 }
 
+// --- 7a. a source space before #footnote never prints, so import drops it ---
+{
+  const { doc } = typToDoc('Word #footnote[n] after.\n');
+  let para: ReturnType<typeof doc.child> | null = null;
+  doc.descendants((n) => {
+    if (!para && n.type.name === 'paragraph') para = n;
+    return !para;
+  });
+  const p = para!;
+  check(
+    'import drops the space before a footnote marker',
+    p.child(0).text === 'Word' && p.child(1).type.name === 'footnote' && p.child(2).text === ' after.',
+    JSON.stringify(p.toJSON()),
+  );
+}
+
 // --- 7. footnotes round-trip and import ---
 {
   const src = 'A claim#footnote[See *Smith 2020*, ch. 3 — and $x^2$ holds.] with a note.\n';

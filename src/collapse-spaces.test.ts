@@ -91,6 +91,37 @@ console.log('collapse-spaces:');
   check('merge across blocks collapses', after.doc.firstChild!.textContent === 'a b', JSON.stringify(after.doc.firstChild!.textContent));
 }
 
+{
+  // A footnote marker swallows the space typed before it (Typst's footnote
+  // show rule prefixes the superscript with a weak zero-width hole), so the
+  // document drops that space the moment the footnote is inserted.
+  const fn = () => schema.nodes.footnote.create(null, schema.text('n'));
+  const s = state(p('word '));
+  const after = s.apply(s.tr.insert(6, fn()));
+  const para = after.doc.firstChild!;
+  check(
+    'space before a footnote marker is dropped',
+    para.child(0).text === 'word' && para.child(1).type.name === 'footnote',
+    JSON.stringify(para.toJSON()),
+  );
+  const s2 = state(p('word\u00a0'));
+  const after2 = s2.apply(s2.tr.insert(6, fn()));
+  check('nbsp before a footnote marker survives', after2.doc.firstChild!.child(0).text === 'word\u00a0', JSON.stringify(after2.doc.firstChild!.toJSON()));
+  const s3 = state(p('word  '));
+  const after3 = s3.apply(s3.tr.insert(7, fn()));
+  check('space run before a footnote marker goes whole', after3.doc.firstChild!.child(0).text === 'word', JSON.stringify(after3.doc.firstChild!.toJSON()));
+  const s4 = state(p(' '));
+  const after4 = s4.apply(s4.tr.insert(2, fn()));
+  check(
+    'a text node that was only the space is removed',
+    after4.doc.firstChild!.childCount === 1 && after4.doc.firstChild!.child(0).type.name === 'footnote',
+    JSON.stringify(after4.doc.firstChild!.toJSON()),
+  );
+  const s5 = state(p('word '), p('x'));
+  const after5 = s5.apply(s5.tr.insertText('!', 8));
+  check('space before nothing in particular is kept', after5.doc.firstChild!.textContent === 'word ', JSON.stringify(after5.doc.firstChild!.textContent));
+}
+
 if (failures) {
   console.error(`${failures} failure(s)`);
   process.exit(1);

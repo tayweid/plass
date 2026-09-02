@@ -13,6 +13,39 @@ import type { Mark, Node as PMNode } from 'prosemirror-model';
  * text (code blocks and code-marked text keep their spaces — raw preserves
  * them in Typst too). Non-breaking spaces are meaningful and untouched.
  */
+/**
+ * The trailing space run a footnote marker swallows. Typst's footnote show
+ * rule prefixes the superscript with `HElem::hole()` — zero-width weak
+ * spacing that "eats surrounding spaces" (typst-layout rules.rs
+ * FOOTNOTE_RULE; layout/spacing.rs) — so a markup space right before the
+ * marker never prints, and the document must not hold it either or the
+ * browser paints a space every width model (rightly) refuses to charge: the
+ * marker line overflows its measure and soft-wraps into an extra line box.
+ * A pure-nbsp run is a glyph, not markup space, and survives; a run holding
+ * any plain space is a browser artifact (see the collapse rule) and goes
+ * whole. Returns the number of trailing characters to drop.
+ */
+function swallowedByMarker(text: string): number {
+  const m = /[ \u00a0]+$/.exec(text);
+  return m && m[0].includes(' ') ? m[0].length : 0;
+}
+
+/**
+ * Importer counterpart of the edit-time rule: call right before appending a
+ * footnote node to `out`. Drops the space run the marker would swallow from
+ * the preceding text node, removing that node if nothing is left.
+ */
+export function trimSpaceBeforeMarker(out: PMNode[]): void {
+  const last = out[out.length - 1];
+  if (!last?.isText || !last.text) return;
+  if (last.marks.some((m) => m.type.name === 'code')) return;
+  const n = swallowedByMarker(last.text);
+  if (!n) return;
+  const kept = last.text.slice(0, -n);
+  if (kept) out[out.length - 1] = last.type.schema.text(kept, last.marks);
+  else out.pop();
+}
+
 export function collapseSpaces(): Plugin {
   return new Plugin({
     appendTransaction(trs, _old, state) {
@@ -39,10 +72,22 @@ export function collapseSpaces(): Plugin {
       if (!ranges.length) return null;
       const swaps: Array<[number, number, string, readonly Mark[]]> = [];
       const scanBlock = (node: PMNode, pos: number) => {
-        node.forEach((child, offset) => {
+        node.forEach((child, offset, index) => {
           if (!child.isText || !child.text) return;
           if (child.marks.some((m) => m.type.name === 'code')) return;
-          const text = child.text;
+          let text = child.text;
+          // A space run right before a footnote marker is deleted outright
+          // (see swallowedByMarker). The scans below then run on the text
+          // without that run, so no other swap can overlap the deletion.
+          const next = index + 1 < node.childCount ? node.child(index + 1) : null;
+          if (next?.type.name === 'footnote') {
+            const n = swallowedByMarker(text);
+            if (n) {
+              const base = pos + 1 + offset + text.length - n;
+              swaps.push([base, base + n, '', child.marks]);
+              text = text.slice(0, -n);
+            }
+          }
           // Whitespace runs collapse to ONE plain space — including runs
           // the browser polluted with non-breaking spaces (contenteditable
           // substitutes U+00A0 when spaces are typed adjacently, and the
@@ -87,7 +132,8 @@ export function collapseSpaces(): Plugin {
       // Descending order keeps earlier positions valid; marks carry over so
       // a normalized character inside bold/italic text stays styled.
       for (const [from, to, text, marks] of swaps.sort((a, b) => b[0] - a[0])) {
-        tr.replaceWith(from, to, state.schema.text(text, marks));
+        if (text) tr.replaceWith(from, to, state.schema.text(text, marks));
+        else tr.delete(from, to);
       }
       return tr;
     },
