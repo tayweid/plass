@@ -43,11 +43,14 @@ import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } fr
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
 import {
   containerPageTopDropEm,
+  footnoteEmptyFrameAction,
   footnoteEntryCost,
+  footnoteEntryFit,
   footnoteHeadReservePx,
   footnotePositions,
   lineNeeds,
-  lineNeedSpans,
+  settleFootnoteCarry,
+  type FootnoteCarryItem,
 } from './layout/flow-rules';
 import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
@@ -1267,6 +1270,56 @@ class TypesetView {
     }));
   }
 
+  /**
+   * Footnote SPILL vs. the suffix seed. A seeded pass assumes the boundary
+   * page starts with an empty footnote carry: every entry whose marker sits
+   * in the prefix was fully placed above the boundary. With spill ported
+   * (PAGE-PORT.md Phase 4, flow/compose.rs `footnote_spill`) that assumption
+   * can be false — a prefix entry that only partly fit beside its marker
+   * carries onto the seed page and reserves space there.
+   *
+   * The v1 choice is to DECLINE eligibility rather than replay the carry:
+   * reconstructing it would mean re-deciding the prefix's footnote fits from
+   * painted geometry, which is exactly the work the seed exists to skip, and
+   * a wrong reconstruction would install wrong pages. Declining only costs a
+   * full pass.
+   *
+   * Conservative test: a spilling entry can reach at most
+   * `1 + ceil(height / usable page)` pages, so any footnote marker inside
+   * that many pages above the boundary makes the seed ineligible. For
+   * ordinary (sub-page) entries that is exactly "a marker on the last prefix
+   * page". Documents whose prefix has no footnotes at all are unaffected.
+   */
+  private footnoteCarryCrossesSeed(
+    seed: SuffixPaginationSeed,
+    snapshot: PaginationGeometrySnapshot,
+  ): boolean {
+    const doc = this.view.state.doc;
+    const positions: number[] = [];
+    let maxHeight = 0;
+    doc.descendants((node, pos) => {
+      if (pos >= seed.startPos) return false;
+      if (node.type.name !== 'footnote') return true;
+      const dom = this.view.nodeDOM(pos);
+      const body = dom instanceof HTMLElement ? dom.querySelector<HTMLElement>('.fn-body') : null;
+      positions.push(pos);
+      maxHeight = Math.max(maxHeight, body ? body.offsetHeight : 0);
+      return false;
+    });
+    if (positions.length === 0) return false;
+    const F = snapshot.bodyPx;
+    const usable = Math.max(
+      1,
+      snapshot.contentHeight - footnoteHeadReservePx(F) - footnoteEntryCost(0, F),
+    );
+    const maxSpanPages = 1 + Math.ceil(maxHeight / usable);
+    // prefixMarkers[i] starts page i + 1; the seed page is prefixMarkers.length.
+    const cutoffPage = seed.page - maxSpanPages + 1;
+    const cutoffPos =
+      cutoffPage <= 0 ? 0 : (seed.prefixMarkers[cutoffPage - 1]?.pos ?? 0);
+    return positions.some((pos) => pos >= cutoffPos);
+  }
+
   private planPaginationSuffix(snapshot: PaginationGeometrySnapshot): PaginationSuffixPlan {
     // Session policy first: a tripped kill-switch (first verified mismatch)
     // or the forced-full measurement mode runs every pass full.
@@ -1294,9 +1347,16 @@ class TypesetView {
         basisEpoch: this.exactPageBasisEpoch,
         currentEpoch: this.paginationGeometryEpoch,
       });
-      if (decision.kind === 'seed') return { kind: 'seed', source: 'exact', seed: decision.seed };
-      if (decision.kind === 'none') return { kind: 'none', reason: 'exact-unchanged' };
-      exactReason = `exact-${decision.reason}`;
+      if (decision.kind === 'seed') {
+        if (!this.footnoteCarryCrossesSeed(decision.seed, snapshot)) {
+          return { kind: 'seed', source: 'exact', seed: decision.seed };
+        }
+        exactReason = 'exact-footnote-spill';
+      } else if (decision.kind === 'none') {
+        return { kind: 'none', reason: 'exact-unchanged' };
+      } else {
+        exactReason = `exact-${decision.reason}`;
+      }
     }
 
     // The fallback basis: page starts the local engine itself installed last
@@ -1316,7 +1376,10 @@ class TypesetView {
         currentEpoch: this.paginationGeometryEpoch,
       });
       if (decision.kind === 'seed') {
-        return { kind: 'seed', source: 'fallback', seed: decision.seed };
+        if (!this.footnoteCarryCrossesSeed(decision.seed, snapshot)) {
+          return { kind: 'seed', source: 'fallback', seed: decision.seed };
+        }
+        return { kind: 'none', reason: 'fallback-footnote-spill' };
       }
       return {
         kind: 'none',
@@ -2599,40 +2662,36 @@ class TypesetView {
     // needed below too, for the footnote ledger's em-derived gap/clearance.
     const F = snapshot.bodyPx;
 
-    // Footnote bodies, in document order, consumed as units are placed.
-    const fnList: Array<{ pos: number; height: number }> = [];
+    // Footnote bodies, in document order, consumed as units are placed. The
+    // entry's own line height is measured here (same spirit as offsetHeight —
+    // DOM-measured, never derived) so a spilled fragment can be quantized to
+    // whole lines the way Typst's text layout produces them; a 'normal' or
+    // unparseable computed line-height yields 0, which the split function
+    // reads as "plain pixel clamp".
+    const fnList: Array<{ pos: number; height: number; lineHeight: number }> = [];
     view.state.doc.descendants((node, pos) => {
       if (node.type.name !== 'footnote') return true;
       const dom = view.nodeDOM(pos);
       const body = dom instanceof HTMLElement ? dom.querySelector<HTMLElement>('.fn-body') : null;
-      fnList.push({ pos, height: body ? body.offsetHeight : 0 });
+      const lineHeight = body ? parseFloat(getComputedStyle(body).lineHeight) : NaN;
+      fnList.push({
+        pos,
+        height: body ? body.offsetHeight : 0,
+        lineHeight: Number.isFinite(lineHeight) ? lineHeight : 0,
+      });
       return false;
     });
     let fnIdx = 0;
     // A seed restarts at a top-level page start: every block before it has
     // been fully placed, so its footnotes belong to earlier pages — exactly
     // the state the full pass reaches when it consumes footnotes per placed
-    // unit and resets the page reservation at the seed's break.
+    // unit and resets the page reservation at the seed's break. Under SPILL
+    // that is only true when no prefix entry is still spilling across the
+    // boundary; `planPaginationSuffix` declines eligibility in that case
+    // (see `footnoteCarryCrossesSeed`), so the carry pool starts empty here.
     if (seed) {
       while (fnIdx < fnList.length && fnList[fnIdx].pos < seed.startPos) fnIdx++;
     }
-    // Per-entry ledger term (gap + height, Typst's `push_footnote`): a peek
-    // doesn't commit fnIdx, a take does — both charge the identical
-    // per-entry cost, so the fit test can never diverge from what's
-    // actually consumed.
-    const peekFnH = (endPos: number) => {
-      let h = 0;
-      for (let j = fnIdx; j < fnList.length && fnList[j].pos < endPos; j++) h += footnoteEntryCost(fnList[j].height, F);
-      return h;
-    };
-    const takeFnH = (endPos: number) => {
-      let h = 0;
-      while (fnIdx < fnList.length && fnList[fnIdx].pos < endPos) {
-        h += footnoteEntryCost(fnList[fnIdx].height, F);
-        fnIdx++;
-      }
-      return h;
-    };
 
     const spacers: Spacer[] = seed ? seed.prefixSpacers.map((spacer) => ({ ...spacer })) : [];
     const anchors: Array<{ pos: number; page: number; kind: Spacer['kind'] }> = [];
@@ -2640,14 +2699,120 @@ class TypesetView {
     let page = seed?.page ?? 0;
     let pageFnH = 0;
     let visitedUnits = 0;
-    // pageFnH (+ any peeked extraFnH) is the running sum of per-entry costs
-    // (footnoteEntryCost) for every footnote consumed so far on this page;
-    // the once-per-page clearance+separator head reservation is added on
-    // top exactly when that running sum is nonzero — the same decomposition
-    // `footnoteAreaHeight` uses, so this and `placeFootnotes` can't drift.
-    const bottomFor = (extraFnH: number) => {
+    // Footnote content owed to later pages: entries whose first fragment was
+    // committed at the marker (Typst's `footnote_spill`) and entries that
+    // could not start at all (its `footnote_queue`). One ordered pool, since
+    // Typst drains them in exactly this order and, while either is
+    // outstanding, every further footnote on the page queues behind them
+    // (flow/compose.rs:431-434).
+    let fnCarry: FootnoteCarryItem[] = [];
+    // pageFnH is the running sum of per-entry costs (footnoteEntryCost over
+    // the fragment COMMITTED on this page, not the entry's full height) for
+    // every footnote placed so far on this page; the once-per-page
+    // clearance+separator head reservation is added on top exactly when that
+    // running sum is nonzero — the same decomposition `footnoteAreaHeight`
+    // uses, so this and `placeFootnotes` can't drift.
+    //
+    // Fit tests read the ALREADY-COMMITTED area only; a unit's own entries
+    // are charged after it is placed. That is the single-pass equivalent of
+    // Typst's whole-column relayout against a shrunken pod: content above
+    // the marker keeps its spot, and the committed charge lowers the bottom
+    // for everything after it (flow/compose.rs `Stop::Relayout` +
+    // `column_insertions.height()`, compose.rs:181).
+    //
+    // `extraFnH` is the fast paths' conservative peek: charging a block's
+    // uncommitted entries WHOLE (`peekFnH`) upper-bounds what commitment
+    // can charge this page (a fragment never exceeds its entry; a queued
+    // entry charges nothing), so a block that fits with that charge fits
+    // after Typst's relayout too, and can be committed without the per-line
+    // walk. A block that fails it falls through to the exact walk.
+    const bottomFor = (extraFnH = 0) => {
       const total = pageFnH + extraFnH;
       return page * (size.h + PAGE_GAP) + size.h - marginBottom - (total > 0 ? total + footnoteHeadReservePx(F) : 0);
+    };
+    const peekFnH = (endPos: number) => {
+      let h = 0;
+      for (let j = fnIdx; j < fnList.length && fnList[j].pos < endPos; j++) h += footnoteEntryCost(fnList[j].height, F);
+      return h;
+    };
+    // The position of the block (or line) that starts the current page —
+    // Typst's `regions.may_progress()` is false exactly for the first frame
+    // of a page with no insertions (`size.y == last`, regions.rs:133-138):
+    // the pod is still the full region, so moving the frame can't help.
+    let pageStartPos = seed?.startPos ?? 0;
+    // Typst's `flow_need`: the in-flow content that holds the marker. For an
+    // UNBREAKABLE frame — every paragraph line included (distribute.rs:247)
+    // — it is the frame's full height, so the pod starts at the frame's
+    // bottom; for a BREAKABLE one (a list/quote block) it is the marker's y
+    // within the frame (flow/compose.rs:379-386), approximated here by the
+    // marker's line top.
+    // A commit site passes the absolute (shifted) y where the entry's pod
+    // begins, or null when no geometry is available — then the entry is
+    // charged in full, exactly as this ledger did before the spill port.
+    type FlowNeedBottom = (fnPos: number) => number | null;
+    /** Commit every footnote entry whose marker precedes `endPos`, charging
+     *  this page for the fragment that fits and carrying the rest. Mirrors
+     *  `Composer::footnote` per entry, including its sequential shrinking of
+     *  `regions.size.y` (each entry sees the previous entry's charge). */
+    const commitFootnotes = (endPos: number, needBottom: FlowNeedBottom) => {
+      while (fnIdx < fnList.length && fnList[fnIdx].pos < endPos) {
+        const item = fnList[fnIdx++];
+        const carried: FootnoteCarryItem = { heightPx: item.height, lineHeightPx: item.lineHeight };
+        // A spill or queue is outstanding: order must not be disrupted, so
+        // this entry queues whole (charging this page nothing).
+        if (fnCarry.length > 0) {
+          fnCarry.push(carried);
+          continue;
+        }
+        const podStart = needBottom(item.pos);
+        const avail = podStart === null ? Number.POSITIVE_INFINITY : bottomFor() - podStart;
+        const fit = footnoteEntryFit(item.height, avail, pageFnH > 0, F, {
+          lineHeightPx: item.lineHeight,
+        });
+        if (fit.empty) {
+          // Nothing fit. Migration (moving the whole origin frame) is decided
+          // by the caller BEFORE placement — see `footnoteMigrates`; here the
+          // remaining outcomes both amount to carrying the entry whole.
+          fnCarry.push(carried);
+          continue;
+        }
+        if (fit.remainder > 0) {
+          fnCarry.push({ heightPx: fit.remainder, lineHeightPx: item.lineHeight });
+        }
+        pageFnH += footnoteEntryCost(fit.fragment, F);
+      }
+    };
+    /** Typst's migration rule (flow/compose.rs:494-496): the FIRST footnote
+     *  of an UNBREAKABLE frame whose entry cannot take any space moves the
+     *  whole frame to the next region, when progress is possible. `podStart`
+     *  is the frame's bottom, `flowNeed` its height. `atPageTop` says the
+     *  frame is the first thing on this page: `regions.may_progress()`
+     *  (regions.rs:133-138) is false exactly then AND when nothing has been
+     *  inserted on the page — with a settled carry the pod is already
+     *  smaller than the full region, so Typst may (and does) migrate even a
+     *  page's first frame. Position identity, not px: the page-top ink
+     *  adjustment (`adjFor`) would otherwise read as consumed space. */
+    const footnoteMigrates = (endPos: number, podStart: number, flowNeed: number, atPageTop: boolean): boolean => {
+      if (fnCarry.length > 0) return false;
+      const first = fnList[fnIdx];
+      if (!first || first.pos >= endPos) return false;
+      const fit = footnoteEntryFit(first.height, bottomFor() - podStart, pageFnH > 0, F, {
+        lineHeightPx: first.lineHeight,
+      });
+      if (!fit.empty) return false;
+      const mayProgressNow = !atPageTop || pageFnH > 0;
+      return footnoteEmptyFrameAction(true, mayProgressNow, flowNeed) === 'migrate';
+    };
+    /** Every page advance resets the page's footnote area and settles the
+     *  carried pool onto the new page FIRST, before any of its own content or
+     *  footnotes (`Composer::column`, flow/compose.rs ~167-198). Centralized
+     *  so no page-advance site can forget it. */
+    const startPageFootnotes = () => {
+      pageFnH = 0;
+      if (fnCarry.length === 0) return;
+      const settled = settleFootnoteCarry(fnCarry, contentH, F);
+      fnCarry = settled.carry;
+      for (const fragment of settled.placed) pageFnH += footnoteEntryCost(fragment, F);
     };
     // The same page-top ink adjustment paginateForced applies: fallback
     // pagination must land units at identical offsets, or an oracle miss
@@ -2681,7 +2846,8 @@ class TypesetView {
       const delta = (page + 1) * (size.h + PAGE_GAP) + marginTop + adjFor(pos, kind) - (y + shift);
       page++;
       anchors.push({ pos, page, kind });
-      pageFnH = 0;
+      pageStartPos = pos;
+      startPageFootnotes();
       if (delta > 0) {
         spacers.push({ pos, height: delta, kind });
         shift += delta;
@@ -2691,6 +2857,16 @@ class TypesetView {
     const rectOf = (pos: number): DOMRect | null => {
       const el = view.nodeDOM(pos);
       return el instanceof HTMLElement ? el.getBoundingClientRect() : null;
+    };
+
+    /** Flow need for a BREAKABLE frame: the top of the line the marker sits
+     *  on, measured the way the paragraph splitter measures its line tops
+     *  (caret box, backed off by half-leading when the enclosing block's line
+     *  height is known). */
+    const markerLineTop = (fnPos: number, blockEl: HTMLElement | null): number => {
+      const c = view.coordsAtPos(fnPos);
+      const lineH = blockEl ? this.blockLineHeight(blockEl) : 0;
+      return stackY(c.top, fnPos) - Math.max(0, (lineH - (c.bottom - c.top)) / 2);
     };
 
     // Sticky anchor: a heading immediately above the current block — a break
@@ -2723,28 +2899,58 @@ class TypesetView {
       const endPos = pos + node.nodeSize;
       const r = rectOf(pos);
       if (!r || r.height === 0) {
-        pageFnH += takeFnH(endPos);
+        // No geometry (unrendered/zero-height): charge the entries in full,
+        // exactly as this ledger did before the spill port.
+        commitFootnotes(endPos, () => null);
         return;
       }
       const y = stackY(r.top, pos);
-      const ufH = takeFnH(endPos);
-      if (y + shift + r.height > bottomFor(ufH) + 0.5 && r.height <= contentH) {
+      if (y + shift + r.height > bottomFor() + 0.5 && r.height <= contentH) {
         breakStart(owner?.pos ?? pos, owner?.y ?? y);
+      } else if (
+        r.height <= contentH &&
+        footnoteMigrates(endPos, y + shift + r.height, r.height, (owner?.pos ?? pos) === pageStartPos)
+      ) {
+        // The unit is unbreakable and its first entry cannot start here:
+        // Typst migrates the whole origin frame rather than break the
+        // marker/entry invariant. A heading directly above does NOT come
+        // along: `Distributor::frame` drops the sticky snapshot for this
+        // non-sticky frame (distribute.rs:367) before `footnotes()` raises
+        // the finish (:372-378), so `finalize` has nothing to restore —
+        // hence breakBefore, not breakStart.
+        breakBefore(owner?.pos ?? pos, owner?.y ?? y, 'block');
       }
-      pageFnH += ufH;
+      // Unbreakable frame: flow need is the frame's FULL height, so the
+      // entry's pod begins at the unit's bottom (flow/compose.rs:385, :450).
+      commitFootnotes(endPos, () => y + shift + r.height);
     };
 
     const paragraph = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
       const endPos = pos + node.nodeSize;
       const r = rectOf(pos);
       if (!r) {
-        pageFnH += takeFnH(endPos);
+        commitFootnotes(endPos, () => null);
         return;
       }
       const yTop = stackY(r.top, pos);
-      // Whole-paragraph fast path: fits together with its footnotes.
+      // Every line of one paragraph has the SAME frame height to Typst: the
+      // calibrated constant the exporter tells Typst to use for this body
+      // text (`m.extent` — typ-serializer.ts's parityRules), in the px unit
+      // of the fit-test geometry.
+      const m = parityMetrics(s.font);
+      const extentPx = m.extent * F;
+      // Whole-paragraph fast path: the paragraph fits even with every one of
+      // its entries charged whole (the conservative peek — see `bottomFor`),
+      // so no line of it can finish the region at either stage below. Its
+      // entries are then committed exactly as the per-line walk would: each
+      // against the space below its own marker line's bottom (an unbreakable
+      // line frame's flow need, distribute.rs:247 + compose.rs:385), spilling
+      // onto following pages as needed.
       if (yTop + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
-        pageFnH += takeFnH(endPos);
+        const blockEl = view.nodeDOM(pos);
+        commitFootnotes(endPos, (fnPos) =>
+          markerLineTop(fnPos, blockEl instanceof HTMLElement ? blockEl : null) + extentPx + shift,
+        );
         return;
       }
       const entry = this.cache.get(node);
@@ -2762,25 +2968,13 @@ class TypesetView {
 
       const n = lineTops.length;
       // Widow/orphan "need" (src/layout/flow-rules.ts, ported from Typst's
-      // Collector::lines). Typst lays out every line of one paragraph at
-      // the same font/size, so every line's own frame height is the SAME
-      // calibrated constant the exporter tells Typst to use for this body
-      // text (`m.extent` — typ-serializer.ts's parityRules), and `leading`
-      // is the matching `#set par(leading: ...)` value: both in the same px
-      // unit as the fit-test geometry below, so `need` composes with it
-      // exactly.
-      const m = parityMetrics(s.font);
-      const extentPx = m.extent * F;
+      // Collector::lines): every line's own frame height is `extentPx`, and
+      // `leading` is the matching `#set par(leading: ...)` value in the same
+      // px unit, so `need` composes with the geometry below exactly.
       const leadingPx = Math.max(0, (s.lineHeight - m.extent) * F);
       const heights = new Array<number>(n).fill(extentPx);
       const isEmptyLine = (i: number) => entry.lines[i].to <= entry.lines[i].from;
       const needs = lineNeeds(heights, leadingPx, { isEmpty: isEmptyLine });
-      // The last line covered by needs[i]'s pairing (i itself when line i
-      // participates in no pairing) — lets the post-insertion recheck below
-      // peek footnotes across a protected pair's whole span, not just line
-      // k's own line (see the stage 2 comment further down).
-      const spans = lineNeedSpans(n, { isEmpty: isEmptyLine });
-
       // Index of the first line on the current page (the orphan need only
       // ever applies at the paragraph's absolute start; the widow need
       // still applies to the final pair on a later continuation page — both
@@ -2789,38 +2983,62 @@ class TypesetView {
       for (let k = 0; k < n; k++) {
         const y = lineTops[k].y;
         const lineEnd = k + 1 < n ? base + entry.lines[k + 1].from : endPos;
-        const spanEnd = spans[k] + 1 < n ? base + entry.lines[spans[k] + 1].from : endPos;
-        // Typst's own decision is two separate checks, not one (distribute.rs:226-248):
+        // A paragraph line is an UNBREAKABLE frame to Typst (distribute.rs:
+        // 247 `frame(.., breakable: false)`), so its entries' pod starts at
+        // the line frame's BOTTOM: `flow_need = frame.height()`
+        // (distribute.rs:372-378; compose.rs:385 keeps it for unbreakable
+        // frames; compose.rs:450 subtracts it from the pod).
+        // Evaluated lazily — `shift` moves whenever a break is inserted.
+        const lineBottom = () => y + shift + heights[k];
+        // One line's trip through Typst's flow, in Typst's order:
         //
-        // Stage 1 (pre-insertion) runs BEFORE this line's footnotes are
-        // reserved at all — only entries already consumed earlier on this
-        // page count. If the line (or its need span) doesn't fit even
-        // ignoring its own notes, that's decisive: relocate or give up.
+        // STAGE 1 — pre-insertion (distribute.rs:226-248): own height and
+        // `need` against the region as it stands, i.e. reduced only by the
+        // entries ALREADY inserted on this page (compose.rs:180-181 shrinks
+        // the pod by `column_insertions.height()`); this line's own notes
+        // are not reserved yet. A failure is decisive: finish the region
+        // when a RAW fresh page (regions.rs:133-138 — backlog/last are never
+        // insertion-reduced) can hold the trigger, else place and overflow.
         //
-        // Stage 2 (post-insertion) only runs once stage 1 passes. It
-        // mirrors the relayout Typst performs after inserting the frame's
-        // footnote entries into the region (compose.rs:165-216): now the
-        // line's own notes are reserved too, and the check reruns. If it
-        // still fails, Typst has already inserted those entries into this
-        // region (compose.rs:511/681/424 record them as skips so they
-        // don't repeat) — they stay behind on this page even though the
-        // line(s) they annotate migrate to a fresh one, provided that fresh
-        // page's RAW height (never insertion-reduced: regions.rs:133-138)
-        // can hold the need. `takeFnH(spanEnd)` below claims the whole
-        // span's entries up front, matching that trace: whichever of the
-        // pair reaches stage 2's strand branch first drags the partner's
-        // notes down with it, so the partner's own turn through this loop
-        // finds nothing left to peek or take.
+        // MIGRATION (compose.rs:493-497): the line's FIRST note is laid into
+        // the space below the line's bottom; if none of it fits and the
+        // region may progress, the line finishes the region with NOTHING
+        // inserted, so marker and entry share the next page. No sticky
+        // restore here: `Distributor::frame` clears the sticky snapshot for
+        // a non-sticky frame BEFORE it calls `footnotes()`
+        // (distribute.rs:367, then :372-378), so a heading directly above
+        // stays behind.
         //
-        // `traveled`/`stranded` bound each line to at most one relocation
-        // of each kind — a granted relocation always lands on a page
-        // already verified to fit, so this can never loop.
+        // INSERTION (compose.rs:414-539): each note's first fragment is
+        // inserted below the line (`push_footnote`, its location recorded as
+        // a skip), the remainder spills onto following pages — that is
+        // `commitFootnotes`, which also queues whole behind an outstanding
+        // spill/queue (compose.rs:431-434).
+        //
+        // STAGE 2 — post-insertion: Typst relayouts the column from its
+        // region-start checkpoint against the shrunken pod (compose.rs:
+        // 165-216) and re-runs stage 1 for every line. Because the pod is
+        // `remaining − line height − separator − gap` (compose.rs:448-450),
+        // a line's own fragment never reaches above its own bottom, so only
+        // the NEED check can newly fail: the fragment ate the protected
+        // partner's room. Then the region finishes with the inserted entries
+        // left behind (skips: compose.rs:511, `work.extend_skips` at :681)
+        // and the pair migrates to a raw fresh page, provided that page fits
+        // the need — legitimately a body-empty page holding one entry. The
+        // partner's OWN entries can never strand the pair: they sit below
+        // the partner's bottom, which is exactly where the need ends. That
+        // is why nothing here peeks or takes across the need span.
+        //
+        // `traveled`/`migrated`/`stranded` bound each line to one relocation
+        // of each kind, so this can never loop; the oversize give-up stays
+        // raw (Phase 5 scope).
         let traveled = false;
+        let migrated = false;
         let stranded = false;
         loop: for (;;) {
-          // STAGE 1 — pre-insertion: reservation only from footnotes
-          // already on the page (pageFnH), none from this line yet.
-          const bottomPre = bottomFor(0);
+          // STAGE 1 — pre-insertion: reservation only from entries already
+          // committed on this page (pageFnH), none from this line yet.
+          const bottomPre = bottomFor();
           const ownPre = y + shift + heights[k] <= bottomPre + 0.5;
           const needPre = y + shift + needs[k] <= bottomPre + 0.5;
           if (!ownPre || !needPre) {
@@ -2829,18 +3047,21 @@ class TypesetView {
             // needs a clean start; need failing (while own height fits)
             // means it's the protected partner that doesn't fit here.
             const trigger = ownPre ? needs[k] : heights[k];
-            if (traveled || stranded || trigger > contentH + 0.5) {
-              // Already relocated once (of either kind), or even an empty
+            if (traveled || migrated || stranded || trigger > contentH + 0.5) {
+              // Already relocated once (of any kind), or even an empty
               // fresh page can't satisfy this (oversize): give up
-              // relocating and let it overflow, consuming its own notes.
-              pageFnH += takeFnH(lineEnd);
+              // relocating and let it overflow, inserting its own notes
+              // below it (a negative pod queues them whole).
+              commitFootnotes(lineEnd, lineBottom);
               break loop;
             }
             traveled = true;
             if (k === 0 && segStart === 0) {
               // The paragraph's absolute start doesn't fit (alone, or with
-              // the orphan-protected partner it needs): the whole
-              // paragraph moves to the next page, sticky heading and all.
+              // the orphan-protected partner it needs): the whole paragraph
+              // moves to the next page, sticky heading and all — `line()`
+              // fails before `frame()` ever clears the sticky snapshot, and
+              // `finalize` restores it (distribute.rs:453-457).
               breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
             } else {
               // Break exactly before line k: this defers it — and, when
@@ -2853,39 +3074,45 @@ class TypesetView {
             }
             continue loop;
           }
+          // MIGRATION — the first note's first frame would be empty here.
+          if (!migrated && footnoteMigrates(lineEnd, lineBottom(), heights[k], lineTops[k].pos === pageStartPos)) {
+            migrated = true;
+            if (k === 0 && segStart === 0) {
+              // Whole paragraph onward, heading left behind (see above):
+              // deliberately not `breakStart`, which would carry `sticky`.
+              breakBefore(owner?.pos ?? pos, owner?.y ?? yTop, 'block');
+            } else {
+              breakBefore(lineTops[k].pos, lineTops[k].y, 'line');
+              segStart = k;
+            }
+            continue loop;
+          }
+          // INSERTION — this line's entries, below its bottom.
+          commitFootnotes(lineEnd, lineBottom);
           // STAGE 2 — post-insertion recheck: the relayout Typst performs
-          // once this need span's entries are inserted into the region.
-          const bottomPost = bottomFor(peekFnH(spanEnd));
+          // once the entries are in the region. Own height is re-checked
+          // for robustness only; the pod arithmetic guarantees it.
+          const bottomPost = bottomFor();
           const ownPost = y + shift + heights[k] <= bottomPost + 0.5;
           const needPost = y + shift + needs[k] <= bottomPost + 0.5;
-          if (ownPost && needPost) {
-            // Place; own notes (the partner's too, once reached) are
-            // consumed.
-            pageFnH += takeFnH(lineEnd);
-            break loop;
-          }
+          if (ownPost && needPost) break loop;
           const triggerPost = ownPost ? needs[k] : heights[k];
           if (stranded || (ownPost && triggerPost > contentH + 0.5)) {
             // The need can never fit any raw page (Typst places the line,
             // splitting the pair — distribute.rs:237-245's condition goes
             // false and falls through to frame()), or this line already
-            // stranded once: place here, consuming its own notes.
-            pageFnH += takeFnH(lineEnd);
+            // stranded once: it stays here, above its own entries.
             break loop;
           }
-          // Typst strands the span's entries on THIS page (they were
-          // inserted; the region finishes with those insertions as skips)
-          // and migrates the line(s) to a fresh, raw next page:
-          // ownPost failing finishes unconditionally (may_progress,
-          // distribute.rs:229); needPost failing (own height still fits)
-          // requires the raw next page to fit the need, already checked
-          // via triggerPost above.
+          // Strand: the entries stay committed on THIS page (breakBefore
+          // resets pageFnH only after they were charged) while the line —
+          // and its protected partner — migrate to a raw fresh page.
           stranded = true;
-          pageFnH += takeFnH(spanEnd); // before the break — breakBefore resets pageFnH
           if (k === 0 && segStart === 0) {
-            // A strand at the paragraph's absolute start is still a region
-            // finish: Typst's sticky restore migrates a heading run sitting
-            // directly above along with the paragraph (the entries stay).
+            // A strand at the paragraph's absolute start is a region finish
+            // from `line()`, before `frame()`: the sticky restore migrates a
+            // heading run sitting directly above along with the paragraph
+            // (the entries stay).
             breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
           } else {
             breakBefore(lineTops[k].pos, lineTops[k].y, 'line');
@@ -2901,11 +3128,17 @@ class TypesetView {
       const endPos = pos + node.nodeSize;
       const r = rectOf(pos);
       if (!r) {
-        pageFnH += takeFnH(endPos);
+        commitFootnotes(endPos, () => null);
         return;
       }
+      // A container is a breakable frame: each entry's flow need is its own
+      // marker line, not the container's height. Both fast paths here use
+      // the conservative whole-entry peek (see `bottomFor`) — a container
+      // that fits with its entries charged whole fits after the relayout its
+      // commitment implies; otherwise the per-child walk decides.
+      const markerNeed = (fnPos: number) => markerLineTop(fnPos, null) + shift;
       if (stackY(r.top, pos) + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
-        pageFnH += takeFnH(endPos);
+        commitFootnotes(endPos, markerNeed);
         return;
       }
       // Breaks found below are inside the container, so a heading sitting
@@ -2916,12 +3149,12 @@ class TypesetView {
         const childEnd = childPos + child.nodeSize;
         const cr = rectOf(childPos);
         if (!cr || cr.height === 0) {
-          pageFnH += takeFnH(childEnd);
+          commitFootnotes(childEnd, () => null);
           return;
         }
         const y = stackY(cr.top, childPos);
         if (y + shift + cr.height <= bottomFor(peekFnH(childEnd)) + 0.5) {
-          pageFnH += takeFnH(childEnd);
+          commitFootnotes(childEnd, markerNeed);
           return;
         }
         // The child overflows. A list item is NOT an atom: Typst breaks the
@@ -2942,9 +3175,11 @@ class TypesetView {
         } else {
           splitBlock(childPos, child);
         }
-        pageFnH += takeFnH(childEnd);
+        // Anything the recursion did not consume (a child kind that returned
+        // early without geometry) is charged in full, as before.
+        commitFootnotes(childEnd, () => null);
       });
-      pageFnH += takeFnH(endPos);
+      commitFootnotes(endPos, () => null);
     };
 
     /** Page-break one block wherever it sits — top level or nested in a
@@ -2973,7 +3208,7 @@ class TypesetView {
         case 'numbering_restart': {
           const r = rectOf(offset);
           if (r) breakBefore(offset + node.nodeSize, stackY(r.bottom, offset), 'block');
-          pageFnH += takeFnH(offset + node.nodeSize);
+          commitFootnotes(offset + node.nodeSize, () => null);
           break;
         }
         case 'paragraph':
@@ -3137,6 +3372,15 @@ class TypesetView {
    * Position footnote bodies at the bottom of the page their marker landed
    * on (final geometry, after spacers). Presentation-only DOM styling; the
    * node views ignore these attribute mutations.
+   *
+   * KNOWN RESIDUE (footnote spill, PAGE-PORT.md Phase 4): the fallback
+   * paginator's ledger now models Typst's entry SPILL — an entry that cannot
+   * fit beside its marker charges only its first fragment to the marker's
+   * page and carries the rest onto following pages. Painting is NOT split:
+   * every `.fn-body` is still painted whole, grouped by its marker's page,
+   * so on a page where an entry spilled the painted stack is taller than the
+   * reserved area and rises above it. Page STARTS (the parity target) are
+   * correct; the visual is not, until split painting lands.
    */
   private placeFootnotes(count: number) {
     const view = this.view;

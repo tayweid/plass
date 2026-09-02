@@ -98,6 +98,182 @@ export function footnotePositions(
 }
 
 // ---------------------------------------------------------------------------
+// Footnote entry SPILL — ported from Typst's `Composer::footnote`,
+// `Composer::footnote_spill` and `Composer::column`
+// (typst-layout/src/flow/compose.rs, ~415-539, ~542-563, ~167-198).
+//
+// Typst never charges a footnote entry's whole height to the marker's page.
+// It lays the entry into a POD sized to what is left of the region, keeps
+// only the FIRST resulting frame there, and spills the remaining frames onto
+// following pages, one frame per page (compose.rs ~529-532: `self
+// .footnote_spill = Some(iter)`; ~542-563 consumes exactly one frame per
+// column and re-spills the rest). A page carrying a spill charges a fresh
+// separator (`push_footnote_separator`) unconditionally, then `gap +
+// frame.height()` for the placed frame — the same `push_footnote` arithmetic
+// `footnoteEntryCost` already models.
+//
+// Ordering rules that fall out of the Rust and are mirrored below:
+//   - Spill is processed FIRST on the next column, before that page's own
+//     content (`Composer::column`, ~171-173), and before any queued entry
+//     (`column_contents`, ~228-230).
+//   - While a spill or a queue is outstanding, every further footnote on the
+//     page is queued rather than placed (`Composer::footnote`, ~437-441:
+//     "we don't want to disrupt the order") — so at most ONE partial
+//     placement happens per page, and everything after it carries.
+
+/** One carried piece of footnote content: either an entry that could not be
+ * placed at its marker at all (Typst's `footnote_queue`) or the unplaced
+ * remainder of an entry whose first fragment was committed (Typst's
+ * `footnote_spill`). Both live in one ordered pool here because Typst
+ * processes them in exactly that order and both charge identically. */
+export interface FootnoteCarryItem {
+  /** Remaining un-placed height of the entry (px). */
+  readonly heightPx: number;
+  /** The entry's own line height (px), used to quantize a partial fragment
+   * to whole lines. Omitted/0: fragments fall back to a plain pixel clamp. */
+  readonly lineHeightPx?: number;
+}
+
+export interface FootnoteFitResult {
+  /** Height committed to the current page (Typst's `first.height()`). */
+  readonly fragment: number;
+  /** Height carried to following pages (Typst's `footnote_spill`). */
+  readonly remainder: number;
+  /** Typst's `first.is_empty() && exist_non_empty_frame`: no content at all
+   * fit in the pod although the entry has content. This is the ONLY state in
+   * which the migrate/queue decision (`footnoteEmptyFrameAction`) runs. */
+  readonly empty: boolean;
+}
+
+/**
+ * Split one footnote entry against the space its marker's page has left,
+ * mirroring `Composer::footnote`'s pod arithmetic (compose.rs ~466-475):
+ *
+ *     pod.size.y = regions.size.y - flow_need - separator_need - gap
+ *
+ * `availablePx` is `regions.size.y - flow_need`: the region height that
+ * remains BELOW the in-flow content holding the marker — the full frame
+ * height for an unbreakable frame, the marker's own y within the frame for a
+ * breakable one (compose.rs ~381-386). `pageHasFootnotes` mirrors
+ * `area.footnotes.is_empty()`: the clearance+separator head is charged only
+ * by the page's first entry.
+ *
+ * Typst lays the entry out as text, so a partial fragment always contains a
+ * whole number of lines; `lineHeightPx` reproduces that quantization from
+ * the entry's measured line height. Without it (unknown/`normal` line
+ * height) the fragment is a plain pixel clamp — never taller than the pod,
+ * so the ledger can still not over-commit.
+ */
+export function footnoteEntryFit(
+  entryHeightPx: number,
+  availablePx: number,
+  pageHasFootnotes: boolean,
+  bodyPx: number,
+  opts: { lineHeightPx?: number } = {},
+): FootnoteFitResult {
+  const separatorNeed = pageHasFootnotes ? 0 : footnoteHeadReservePx(bodyPx);
+  const pod = availablePx - separatorNeed - FOOTNOTE_GAP_EM * bodyPx;
+  if (fits(pod, entryHeightPx)) return { fragment: entryHeightPx, remainder: 0, empty: false };
+
+  const lineHeightPx = opts.lineHeightPx;
+  let fragment: number;
+  if (typeof lineHeightPx === 'number' && Number.isFinite(lineHeightPx) && lineHeightPx > 0) {
+    const lines = Math.floor((pod + ABS_EPS) / lineHeightPx);
+    fragment = Math.min(entryHeightPx, Math.max(0, lines) * lineHeightPx);
+  } else {
+    fragment = Math.max(0, Math.min(entryHeightPx, pod));
+  }
+  const remainder = Math.max(0, entryHeightPx - fragment);
+  // `exist_non_empty_frame` is true exactly when the entry has any content
+  // at all: a zero-height entry produces only empty frames, so Typst falls
+  // through to committing it (no queue, no migration) even in no space.
+  return { fragment, remainder, empty: fragment <= 0 && entryHeightPx > 0 };
+}
+
+/** What Typst does with an entry whose FIRST frame came back empty
+ * (`Composer::footnote`, compose.rs ~493-501). `migratable` is true only for
+ * the first footnote of an UNBREAKABLE frame (compose.rs ~370-372, ~399:
+ * `migratable = migratable && !breakable`, then cleared after the first
+ * note); `mayProgress` is `regions.may_progress()` (this module's
+ * `mayProgress`), the guard against migrating forever; `flowNeed` is the
+ * same flow need that shrank the pod — a non-zero one means queueing can
+ * still help, because the next page charges no flow need. */
+export type FootnoteEmptyFrameAction = 'migrate' | 'queue' | 'place';
+
+export function footnoteEmptyFrameAction(
+  migratable: boolean,
+  mayProgressNow: boolean,
+  flowNeed: number,
+): FootnoteEmptyFrameAction {
+  if (migratable && mayProgressNow) return 'migrate';
+  if (mayProgressNow || flowNeed !== 0) return 'queue';
+  // Terminal case: neither moving the frame nor deferring the entry can free
+  // any space, so Typst lays it out anyway and lets it overflow rather than
+  // loop forever.
+  return 'place';
+}
+
+export interface FootnoteCarrySettlement {
+  /** Fragment heights committed on this page, in order. Each costs
+   * `footnoteEntryCost(fragment, bodyPx)`; the once-per-page head reserve is
+   * added by the caller exactly when that sum is non-zero — the same
+   * decomposition `footnoteAreaHeight` uses. */
+  readonly placed: number[];
+  /** The pool still owed to later pages. Non-empty means this page is
+   * "blocked": every footnote marker it carries queues instead of placing. */
+  readonly carry: FootnoteCarryItem[];
+}
+
+/**
+ * Settle the carried pool at the top of a fresh page, mirroring
+ * `Composer::column` (compose.rs ~167-198) + `Composer::footnote_spill`
+ * (~542-563) + `column_contents`' queue drain (~228-230):
+ *
+ *  - The active spill goes first and unconditionally charges a separator.
+ *  - Exactly ONE frame of the spill is consumed per page; a leftover
+ *    re-spills and blocks everything behind it.
+ *  - Queued entries are then laid out with flow need ZERO (compose.rs ~229:
+ *    `self.footnote(note, &mut regions.clone(), Abs::zero(), false)`), so
+ *    each takes as much of the page as remains; the first one that cannot
+ *    take all of it makes this page's last placement.
+ *
+ * `contentPx` is the page's full content height. Deviation from the Rust,
+ * deliberately: Typst's spill frames were sized by the ORIGINAL pod, whose
+ * later regions are full-height, so a spill frame can be taller than the
+ * separator+gap leave room for and simply overflows. Here every fragment is
+ * re-fitted against `contentPx - head - gap`, which clamps the reservation
+ * to the page — the ledger must never hand the flow a negative content area.
+ */
+export function settleFootnoteCarry(
+  carry: readonly FootnoteCarryItem[],
+  contentPx: number,
+  bodyPx: number,
+): FootnoteCarrySettlement {
+  if (carry.length === 0) return { placed: [], carry: [] };
+  const placed: number[] = [];
+  const rest = carry.slice();
+  // The carrying page always pays the separator head once, up front.
+  let used = footnoteHeadReservePx(bodyPx);
+  while (rest.length > 0) {
+    const item = rest[0];
+    const fit = footnoteEntryFit(item.heightPx, contentPx - used, true, bodyPx, {
+      lineHeightPx: item.lineHeightPx,
+    });
+    // Nothing at all fits: the whole item (and everything behind it) waits.
+    if (fit.empty) break;
+    placed.push(fit.fragment);
+    used += footnoteEntryCost(fit.fragment, bodyPx);
+    rest.shift();
+    if (fit.remainder > 0) {
+      // One frame per page: the remainder re-spills and blocks the rest.
+      rest.unshift({ heightPx: fit.remainder, lineHeightPx: item.lineHeightPx });
+      break;
+    }
+  }
+  return { placed, carry: rest };
+}
+
+// ---------------------------------------------------------------------------
 // Widow/orphan "need" — ported from Typst's `Collector::lines`
 // (typst-layout/src/flow/collect.rs, ~196-238) and consumed the same way
 // `flow/distribute.rs::Distributor::line` does: a line's `need` is checked
