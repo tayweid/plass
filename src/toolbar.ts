@@ -500,21 +500,21 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     div.className = 'tb-div';
     docPod.appendChild(div);
     flyout(docPod, icon('download'), 'Export — PDF, .typ, .tex', [
-      { glyph: icon('filedown'), label: '.typ', title: 'Download a .typ copy', run: () => fm.exportCopy() },
+      { glyph: icon('filedown'), label: '.typ', title: 'Export a .typ copy', run: () => void fm.exportCopy() },
       {
         glyph: icon('download'),
         label: 'PDF',
         title: 'Export PDF via Typst',
         run: () => {
           void import('./pdf').then(({ exportPdf }) =>
-            exportPdf(fm.currentDoc(), fm.name, (m) => fm.notify(m)),
+            exportPdf(fm.currentDoc(), fm.name, (m) => fm.notify(m), (name, blob) => fm.saveBeside(name, blob)),
           );
         },
       },
       {
         glyph: icon('filedown'),
         label: '.tex',
-        title: 'Download a .tex copy (vanilla LaTeX for journals)',
+        title: 'Export a .tex copy (vanilla LaTeX for journals)',
         run: () => fm.exportTexCopy(),
       },
     ]);

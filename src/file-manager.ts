@@ -707,17 +707,42 @@ export class FileManager {
     return this.hooks.getDoc();
   }
 
-  /** Plain download of the current document (works everywhere). */
+  /** Put an exported file (PDF etc.) next to the document. In folder mode
+   *  it is written straight into the project folder; a file opened without
+   *  its folder (Finder launch) gets a save dialog that opens in that file's
+   *  own folder; with no filesystem APIs it downloads. Resolves to the
+   *  destination for the toast, or null when the user cancelled the dialog. */
+  async saveBeside(fileName: string, blob: Blob): Promise<string | null> {
+    if (this.dir && (await this.writeAsset(fileName, blob))) {
+      return `${this.dir.name}/${fileName}`;
+    }
+    if (this.handle && typeof window.showSaveFilePicker === 'function') {
+      try {
+        const target = await window.showSaveFilePicker({ suggestedName: fileName, startIn: this.handle });
+        const w = await target.createWritable();
+        await w.write(blob);
+        await w.close();
+        return target.name;
+      } catch (e) {
+        if ((e as DOMException)?.name === 'AbortError') return null;
+        console.warn('saveBeside picker failed', e);
+      }
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    return fileName;
+  }
+
+  /** A .tex copy beside the document (vanilla LaTeX for journals). */
   exportTexCopy() {
-    void import('./tex-serializer').then(({ docToTex }) => {
+    void import('./tex-serializer').then(async ({ docToTex }) => {
       const text = docToTex(this.hooks.getDoc());
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `${this.name}.tex`;
-      a.click();
-      URL.revokeObjectURL(a.href);
-      this.hooks.message(`Downloaded ${a.download} — vanilla LaTeX for journal submission`);
+      const where = await this.saveBeside(`${this.name}.tex`, blob);
+      if (where !== null) this.hooks.message(`Exported ${where} — vanilla LaTeX for journal submission`);
     });
   }
 
@@ -736,8 +761,19 @@ export class FileManager {
     this.hooks.message(`Downloaded ${a.download}`);
   }
 
-  exportCopy() {
-    void this.downloadCopy('.typ');
+  /** A .typ copy beside the document. When the document already IS that
+   *  file (a .typ in its folder) this is a save, not a second writer racing
+   *  the autosave poller on the same path. */
+  async exportCopy() {
+    const fileName = `${this.name}.typ`;
+    if (this.dir && this.handle?.name === fileName) {
+      await this.save();
+      return;
+    }
+    const text = await this.serialize(fileName);
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const where = await this.saveBeside(fileName, blob);
+    if (where !== null) this.hooks.message(`Exported ${where}`);
   }
 
   /** Reconnect this tab's own restored editor snapshot to its file without
