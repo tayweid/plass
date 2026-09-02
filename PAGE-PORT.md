@@ -5,12 +5,67 @@
 - Phase 0 (parity telemetry): **landed** 9defb17. Soak at c316f99: 96
   predictions, 1 agreement; byCause page-top-adjust 30, widow-orphan 28,
   spacing 15, footnote 12, sticky 10.
-- Phase 4 (footnote arithmetic): **landed** 7b55335 (migration rule still
-  deferred). Known interaction gap with Phase 2's fresh-page need check —
-  chipped as its own task.
+- Phase 4 (footnote arithmetic): **landed** 7b55335. Entry SPILL +
+  migration ported on top (`footnoteEntryFit`/`settleFootnoteCarry`/
+  `footnoteEmptyFrameAction` in flow-rules.ts): the ledger charges only the
+  fragment that fits beside the marker and carries the rest onto following
+  pages, one frame per page. Ledger only — `placeFootnotes` still paints
+  every `.fn-body` whole on its marker's page, so a spilled entry paints
+  above its reserved area (page starts are the parity target; split painting
+  is the follow-up). Suffix seeds decline while a prefix entry could still
+  be carrying across the boundary (`footnoteCarryCrossesSeed`). The
+  interaction with Phase 2's fresh-page need check is unified into one
+  per-line cycle in the paragraph closure, in Typst's order: stage 1
+  pre-insertion fit (distribute.rs:226-248, against the page's already
+  committed entries only); footnote MIGRATION when the line's first entry
+  can't start below it (compose.rs:494-496 — no sticky restore, since
+  `Distributor::frame` drops the snapshot at distribute.rs:367 before
+  :372 raises the finish); INSERTION of the line's entries against the
+  space below the line's BOTTOM (a line is an unbreakable frame,
+  distribute.rs:247, so `flow_need = frame.height()`, compose.rs:385/450),
+  first fragment charged and the rest carried; stage 2 recheck after that
+  charge (the relayout, compose.rs:165-216). Because the pod arithmetic
+  keeps a fragment below its own line, only the widow/orphan NEED can newly
+  fail at stage 2 — then the entries strand on the page and the pair
+  migrates to a raw fresh page (regions.rs:133-138). The partner's entries
+  are never stranded (they sit below the partner, where the need ends), so
+  there is no cross-span peek/take. Fast paths (whole paragraph, container,
+  container child) keep a conservative whole-entry peek as their sufficient
+  condition and fall through to the exact walk otherwise.
+- **Filed vertical-parity bug (not a rule bug): the phantom space before a
+  footnote marker.** Measured 2026-08-29 on the footnote soak corpus (seed
+  424242). The whole layout stack models Typst's gluing — a source space
+  immediately before a footnote marker is dropped from the width model
+  (`paragraph.ts` `plan.glueLeft`, `forced-layout.ts`'s
+  `trimTrailingSpaces()` on footnote, `typst-oracle.ts`'s
+  `spaceBefore: false`), because Typst renders `word1`, not `word 1`. The
+  DOM still **paints** that space: it is an ordinary character in the
+  paragraph's text node, and nothing hides it. Consequence, measured at
+  body 16.6667px / measure 576px: the model computes the marker line's
+  natural width 5.563px (one space) short, justification hands that slack
+  back to the line's other spaces, and the painted line comes out
+  `space + wordSpacing` = 6.05–6.27px wider than the `measure − eps`
+  (574.5px) target — 580.55px / 580.77px against a 576px measure. The
+  browser soft-wraps the forced line, so **every footnote-bearing paragraph
+  renders one line box (25px) taller than its oracle line count**, plus
+  0.547px of superscript overhang. The paginator then reads that inflated
+  DOM height and breaks a page early. Root-cause probe:
+  `tests/_probe-fn-ledger.spec.ts` (untracked). Cost, measured by
+  temporarily charging the painted space in the two width models and
+  re-running the soak: 12 predictions, **0 → 4 agreements**, byCause
+  footnote **11 → 1** (the residue re-buckets to widow-orphan 1 → 7, the
+  separate Phase 2 boundary issue). The fix belongs in the renderer (stop
+  painting the space, so the DOM matches Typst) or in the justification
+  width model (charge what is painted) — **not** in `runFallbackPass`,
+  which is correctly consuming DOM heights. Footnote reservation arithmetic
+  (head reserve, gap, entry cost, spill) was exonerated: the ledger's page-1
+  numbers reproduce Typst's break exactly once the paragraph height is right.
 - Phase 2 (widow/orphan need): **landed** 9a2b21b. Plain-prose agreement
   6/25 → 19/25; most "page-top-adjust" disagreements were downstream of
-  the old retro-pull heuristic.
+  the old retro-pull heuristic. The footnote interaction (a73a0fc's
+  two-stage fit) now lives in the unified cycle described under Phase 4;
+  `lineNeedSpans` stays in flow-rules.ts as a tested mirror but the
+  paginator no longer consumes it.
 - Phase 1 (Regions + spacing collapse): **landed** cbd4410 (fit-test and
   container page-top scope; painted CSS untouched). Residual plain-prose
   spacing disagreement traced to pageTopAdjustEm rounding → Phase 6.
