@@ -4,6 +4,7 @@ import './style.css';
 import { EditorState } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { history } from 'prosemirror-history';
+import { tableEditing } from 'prosemirror-tables';
 import { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
@@ -12,7 +13,7 @@ import { typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugi
 import { MathView } from './math';
 import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
-import { TablePreviewView } from './table-preview';
+import { structuredTablePlugin } from './table-editor';
 import { equationsPlugin } from './equations';
 import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
@@ -132,6 +133,11 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       collapseSpaces(),
       copyTextWithoutItsBlock(),
       typesetPlugin({ onStats, onPages: renderPages }),
+      // Native cell selection, rectangular copy/paste, and structural table
+      // invariants. Keep this last so its broad arrow/mouse handlers only run
+      // after more specific editor behavior has had a chance.
+      structuredTablePlugin(),
+      tableEditing(),
     ],
   });
 }
@@ -257,7 +263,6 @@ const view = new EditorView(editorEl, {
     figure: (node, v, getPos) => new FigureView(node, v, getPos),
     footnote: (node) => new FootnoteView(node),
     bibliography: (node, v) => new BibliographyView(node, v),
-    table: (node, v, getPos) => new TablePreviewView(node, v, getPos),
     code_block: (node, v, getPos) => new CodeBlockView(node, v, getPos),
     typst_inline: (node, v, getPos) => new TypstInlineView(node, v, getPos),
   },
@@ -474,10 +479,42 @@ view.focus();
 declare global {
   interface Window {
     view: EditorView;
+    __nativeTableProofGeometry: () => Promise<{ widthPt: number; heightPt: number }>;
   }
 }
 if (import.meta.env.DEV) {
   window.view = view;
+  window.__nativeTableProofGeometry = async () => {
+    const [{ compileDocSvg }, { parseTypstSvg }] = await Promise.all([
+      import('./pdf'),
+      import('./safe-svg'),
+    ]);
+    const svg = await compileDocSvg(view.state.doc);
+    if (!svg) throw new Error('Typst did not return default-table proof geometry');
+    const parsed = parseTypstSvg(svg);
+    const horizontalRules = [...parsed.querySelectorAll('.typst-shape')]
+      .map((element) => {
+        const length = Number(/^M 0 0 L ([\d.]+) 0$/.exec(element.getAttribute('d') ?? '')?.[1]);
+        let localY = Number.NaN;
+        for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+          const translated = /^translate\(([-\d.]+),([-\d.]+)\)$/.exec(parent.getAttribute('transform') ?? '');
+          if (translated && Math.abs(Number(translated[1])) < 2) {
+            localY = Number(translated[2]);
+            break;
+          }
+        }
+        return { length, localY };
+      })
+      .filter((rule) => Number.isFinite(rule.length) && Number.isFinite(rule.localY));
+    const widthPt = Math.max(...horizontalRules.map((rule) => rule.length));
+    const heightPt =
+      Math.max(...horizontalRules.map((rule) => rule.localY)) -
+      Math.min(...horizontalRules.map((rule) => rule.localY));
+    if (!Number.isFinite(widthPt) || !Number.isFinite(heightPt)) {
+      throw new Error('Typst table rules were not measurable');
+    }
+    return { widthPt, heightPt };
+  };
   // Test hooks: adopt a directory handle (e.g. OPFS) as the project folder,
   // and run the app-instance embedded-figure migration (dynamic imports in a
   // test page can hit a second module instance under vite HMR).

@@ -12,7 +12,6 @@ declare global {
     __paginationSnapshotStats: (reset?: boolean) => {
       captures: number;
       spacerScans: number;
-      tableScans: number;
       heightQueries: number;
     };
   }
@@ -170,7 +169,6 @@ test('shrinking to one page removes every held page spacer', async ({ page }) =>
   await page.waitForTimeout(1_200);
   const paginationStats = await page.evaluate(() => window.__paginationSnapshotStats());
   expect(paginationStats.spacerScans).toBe(paginationStats.captures);
-  expect(paginationStats.tableScans).toBe(paginationStats.captures);
   expect(paginationStats.heightQueries).toBeGreaterThan(0);
 
   await page.evaluate(() => {

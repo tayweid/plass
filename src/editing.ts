@@ -15,6 +15,7 @@ import { baseKeymap, chainCommands, exitCode, setBlockType, toggleMark, wrapIn }
 import { closeHistory, redo, undo } from 'prosemirror-history';
 import { ReplaceStep } from 'prosemirror-transform';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
+import { goToNextCell } from 'prosemirror-tables';
 import { Slice, type MarkType } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
 import { schema } from './schema';
@@ -262,7 +263,7 @@ export function buildKeymap(): Plugin {
     'ArrowDown': verticalCaret(1),
     'Mod-Alt-t': (_state, dispatch, view) => {
       if (dispatch && view) {
-        void import('./table-editor').then(({ insertTableWithEditor }) => insertTableWithEditor(view));
+        void import('./table-editor').then(({ insertStructuredTable }) => insertStructuredTable(view));
       }
       return true;
     },
@@ -271,8 +272,12 @@ export function buildKeymap(): Plugin {
       if (dispatch && view) pickAndInsertFigure(view);
       return true;
     },
-    'Tab': sinkListItem(schema.nodes.list_item),
-    'Shift-Tab': liftListItem(schema.nodes.list_item),
+    // In a table, Tab is spreadsheet navigation. Outside one it keeps the
+    // existing list-indent behavior. The final cell deliberately falls
+    // through instead of manufacturing an implicit row; structure changes
+    // stay visible in the contextual table controls.
+    'Tab': chainCommands(goToNextCell(1), sinkListItem(schema.nodes.list_item)),
+    'Shift-Tab': chainCommands(goToNextCell(-1), liftListItem(schema.nodes.list_item)),
     'Shift-Enter': chainCommands(exitCode, (state, dispatch) => {
       if (dispatch) {
         dispatch(state.tr.replaceSelectionWith(schema.nodes.hard_break.create()).scrollIntoView());

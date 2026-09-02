@@ -29,11 +29,12 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
    - *Merges + shape ops together* — column/row insert/delete that
      understands spans (occupancy grid) instead of disabling while merges
      exist.
-   - *Rich cells in the card* — editing math/references inside cells
-     (currently preserved but read-only-ish). Possibly a per-cell "edit as
-     math" affordance.
+   - *Rich cells* — tables are now native editable trees (no modal card);
+     math/references inside cells serialize losslessly but the in-cell
+     editing affordances (e.g. "edit as math") are still to be built.
    - Per-selection cell fills (the fill presets ship; individual cells are
-     still open). Complex-table stress testing and split-interaction polish.
+     still open). Complex-table stress testing, and mid-table page breaks
+     (PAGE-PORT Phase 7 — tables are atomic on the page until then).
 4. **Citations** (see the worked plan below — the largest planned feature).
 5. **Paragraph typography odds and ends** — hyphenation language selection,
    per-document justification toggle, heading font pairing (sans headings

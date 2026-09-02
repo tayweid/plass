@@ -20,8 +20,10 @@
   (typst-oracle.ts ~482–502) — not yet reproduced in isolation.
 - Next up: Phase 3 (sticky), Phase 6 (retire pageTopAdjustEm — now the
   dominant residual), Phase 4's migration rule, Phase 7 below.
-- Native-tables port: handed off to Codex — see HANDOFF-TABLES.md
-  (branch `codex/native-tables-port`, atomic tables; review before merge).
+- Native-tables port: **done** on `codex/native-tables-port` (5788e87) —
+  see HANDOFF-TABLES-REPORT.md. Tables are native ProseMirror trees and
+  land atomic; `table-split.ts` and the mini-compile split path are gone.
+  Phase 7 below is unblocked once that branch reaches `main`.
 
 Goal: the local paginator's page decisions become identical to Typst's for
 supported content, the same way the line-break port (PORT.md) made local line
@@ -263,7 +265,7 @@ editable table node; the break is decorations:
 ## Non-goals
 
 Multi-column layout, floats, parity/two-sided pages, footnote-in-footnote,
-per-region block relayout (`MultiChild` semantics beyond the existing
-table-split delegation), and any change to `.typ` serialization or to what
-Typst itself computes. Tables stay delegated to the Typst mini-compile
-(`table-split.ts`) — that path is already exact by construction.
+per-region block relayout (`MultiChild` semantics beyond Phase 7's
+row-level table breaks), and any change to `.typ` serialization or to what
+Typst itself computes. Tables are atomic until Phase 7: a compiled page
+start inside one declines the exact map rather than being mirrored.

@@ -3,7 +3,6 @@ import { PageOracle, type PageOracleEntry } from './page-oracle';
 import { TypstOracle, type ParagraphSpec } from './typst-oracle';
 import { DEFAULT_SETTINGS } from '../settings';
 import type { Node as PMNode } from 'prosemirror-model';
-import { TableSplitPendingViews } from '../table-split';
 
 function check(label: string, condition: boolean) {
   if (!condition) throw new Error(`FAIL: ${label}`);
@@ -159,24 +158,8 @@ async function checkDestroyGeneration() {
   );
 }
 
-function checkTableSplitWaiters() {
-  const pending = new TableSplitPendingViews<object>();
-  const first = {};
-  const second = {};
-  pending.add('shared', first);
-  pending.add('shared', first);
-  pending.add('shared', second);
-  const waiting = pending.take('shared');
-  check('shared table compile wakes each waiting editor exactly once', waiting.size === 2 && waiting.has(first) && waiting.has(second));
-  check('taking table waiters consumes the pending key', pending.take('shared').size === 0);
-  pending.add('stale', first);
-  pending.clear();
-  check('table cache clear discards stale pending editors', pending.take('stale').size === 0);
-}
-
 await checkParagraphGeneration();
 await checkPageGeneration();
 await checkDestroyGeneration();
-checkTableSplitWaiters();
 
 console.log('\nall oracle lifecycle tests passed');

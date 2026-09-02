@@ -19,6 +19,8 @@ interface Window {
   showSaveFilePicker?: (opts?: {
     suggestedName?: string;
     types?: FilePickerType[];
+    // A handle here opens the dialog where that file or folder lives.
+    startIn?: FileSystemHandle;
   }) => Promise<FileSystemFileHandle>;
 }
 

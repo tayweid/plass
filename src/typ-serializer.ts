@@ -6,7 +6,7 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import { normalizeSettings, parseMathMacros, type DocSettings } from './settings';
 import { wrapAligned } from './math-src';
-import { isPortableCitationKey } from './bibtex';
+import { isPortableCitationKey, parseBibTeX } from './bibtex';
 import { effectiveFont, parityMetrics } from './font-registry';
 
 export interface TypExportOptions {
@@ -132,15 +132,16 @@ export function parityRules(s: DocSettings): string {
   // Display math: the editor shows Typst's own ink inside 0.5em padding.
   const { above: eqAbove, below: eqBelow } = equationBlockSpacingEm(s);
   out += `#show math.equation.where(block: true): set block(above: ${pt(eqAbove)}, below: ${pt(eqBelow)})\n`;
-  // Tables break across pages Typst-natively (repeated table.header rows
-  // and all): the editor mirrors the split via the paged mini-compile in
-  // table-split.ts, and the page oracle represents mid-table page starts.
+  // Tables remain continuous structured editor content. Typst may break them
+  // natively with repeated table.header rows; local pagination falls back to
+  // atomic placement when it cannot certify a split (there is no split preview).
   return out;
 }
 
 let exportOpts: TypExportOptions = {};
 let eqLabels = new Set<string>();
 let docBib: { name: string; content: string } | null = null;
+let docBibKeys = new Set<string>();
 let docMacros: Record<string, string> = {};
 
 /** Expand math macros so exported LaTeX compiles anywhere. */
@@ -185,16 +186,36 @@ export function escapeTyp(text: string): string {
   return text.replace(/[\\#$*_`@<>[\]~]/g, (c) => '\\' + c).replace(/\u00a0/g, '~');
 }
 
-function inlineToTyp(node: PMNode): string {
+/** Table cells are serialized through a deliberately narrower path. A Typst
+ * comment opener is executable even inside a content block, so keep it inert
+ * without changing the established encoding of ordinary document prose. */
+function escapeTableCellText(text: string): string {
+  return escapeTyp(text).replace(/\/\//g, '\\/\\/');
+}
+
+function portableTableLabel(label: unknown): string {
+  const value = String(label ?? '');
+  if (!value) return '';
+  if (!isPortableCitationKey(value)) {
+    throw new Error(`Cannot export table: reference label ${JSON.stringify(value)} is not portable Typst syntax`);
+  }
+  return ` <${value}>`;
+}
+
+function inlineToTyp(node: PMNode, tableCell = false): string {
   let out = '';
   node.forEach((child) => {
     if (child.isText && child.text) {
       const marks = new Set(child.marks.map((m) => m.type.name));
       if (marks.has('code')) {
-        out += '`' + child.text + '`';
+        // Typst has no variable-length inline raw fence. Use its string form
+        // for certified table cells when a literal backtick would close `...`.
+        out += tableCell && child.text.includes('`')
+          ? `#raw(${JSON.stringify(child.text)}, block: false)`
+          : '`' + child.text + '`';
         return;
       }
-      let t = escapeTyp(child.text);
+      let t = tableCell ? escapeTableCellText(child.text) : escapeTyp(child.text);
       if (marks.has('strong')) t = `*${t}*`;
       if (marks.has('em')) t = `_${t}_`;
       if (marks.has('strike')) t = `#strike[${t}]`;
@@ -203,7 +224,10 @@ function inlineToTyp(node: PMNode): string {
       // Raw Typst: the source IS the export.
       out += child.attrs.src;
     } else if (child.type.name === 'math_inline') {
-      out += `#mi(\`${expandMacros(child.attrs.src)}\`)`;
+      const source = expandMacros(child.attrs.src);
+      out += tableCell
+        ? `#mi(raw(${JSON.stringify(source)}, block: false))`
+        : `#mi(\`${source}\`)`;
     } else if (child.type.name === 'eq_ref') {
       // Equation refs render as "(1)" to match the editor (Typst's default
       // would be "Equation 1"); figure refs keep "Figure 1".
@@ -226,6 +250,89 @@ function inlineToTyp(node: PMNode): string {
     }
   });
   return out;
+}
+
+const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code']);
+const TABLE_CELL_INLINE = new Set([
+  'text',
+  'hard_break',
+  'math_inline',
+  'eq_ref',
+  'citation',
+]);
+
+/**
+ * Serialize only the table-cell subset that the importer can reconstruct
+ * without guessing. The schema permits arbitrary blocks; an explicit failure
+ * leaves the ProseMirror document untouched instead of silently dropping them.
+ */
+function tableCellContentToTyp(cell: PMNode, row: number, column: number): string {
+  const where = `table cell ${row + 1}:${column + 1}`;
+  const paragraphs: string[] = [];
+  cell.forEach((block) => {
+    if (block.type.name !== 'paragraph') {
+      throw new Error(`Cannot export ${where}: unsupported ${block.type.name} block; content was not discarded`);
+    }
+    if (block.attrs.keep || block.attrs.align) {
+      throw new Error(`Cannot export ${where}: paragraph layout attributes are not supported inside table cells`);
+    }
+    block.descendants((child) => {
+      if (!TABLE_CELL_INLINE.has(child.type.name)) {
+        throw new Error(`Cannot export ${where}: unsupported inline ${child.type.name}; content was not discarded`);
+      }
+      const markNames = child.marks.map((mark) => mark.type.name);
+      const unsupported = markNames.find((name) => !TABLE_CELL_MARKS.has(name));
+      if (unsupported) {
+        throw new Error(`Cannot export ${where}: unsupported ${unsupported} mark; content was not discarded`);
+      }
+      if (!child.isText && markNames.length) {
+        throw new Error(`Cannot export ${where}: marks on ${child.type.name} are not supported`);
+      }
+      if (markNames.includes('code') && markNames.length > 1) {
+        throw new Error(`Cannot export ${where}: code combined with another mark is not supported`);
+      }
+      const inlineSource = child.isText
+        ? (child.text ?? '')
+        : child.type.name === 'math_inline'
+          ? (child.attrs.src as string)
+          : '';
+      if (/[\r\n]/.test(inlineSource)) {
+        throw new Error(`Cannot export ${where}: multiline inline content is not supported`);
+      }
+      if (child.type.name === 'citation') {
+        const key = child.attrs.key as string;
+        if (!isPortableCitationKey(key) || !docBibKeys.has(key)) {
+          throw new Error(`Cannot export ${where}: citation ${JSON.stringify(key)} has no portable bibliography entry`);
+        }
+      }
+      if (child.type.name === 'eq_ref') {
+        const label = child.attrs.label as string;
+        if (!isPortableCitationKey(label)) {
+          throw new Error(`Cannot export ${where}: reference label ${JSON.stringify(label)} is not portable Typst syntax`);
+        }
+        if (unnumberedEqLabels.has(label)) {
+          throw new Error(`Cannot export ${where}: a reference to an unnumbered equation is not lossless`);
+        }
+      }
+      return true;
+    });
+    let body = inlineToTyp(block, true);
+    // In a Typst content block these prefixes otherwise acquire block syntax.
+    body = body.replace(/(^|\n)([=+\-])/g, '$1\\$2');
+    if (/\n[ \t]*\n/.test(body)) {
+      throw new Error(`Cannot export ${where}: an inline source contains a blank line`);
+    }
+    paragraphs.push(body);
+  });
+  if (paragraphs.length === 1 && !paragraphs[0]) return '';
+  return paragraphs
+    .map((body) => body || '// typeset:empty-table-paragraph\n~')
+    .join('\n\n');
+}
+
+function tableCellBrackets(content: string): string {
+  if (!content.includes('\n')) return `[${content}]`;
+  return `[\n${content.split('\n').map((line) => `    ${line}`).join('\n')}\n  ]`;
 }
 
 function blocksToTyp(parent: PMNode, indent: string): string {
@@ -360,14 +467,11 @@ function blockToTyp(node: PMNode, indent = ''): string {
         let col = 0;
         row.forEach((cell, _cellOffset, cellIndex) => {
           if (cell.type.name !== 'table_header') allHeader = false;
-          const parts: string[] = [];
-          cell.forEach((block) => {
-            if (block.isTextblock) parts.push(inlineToTyp(block));
-          });
-          let content = parts.join(' ').trim();
+          let content = tableCellContentToTyp(cell, rowIndex, cellIndex);
           if (exportOpts.cellLinks) {
             content = `#link("cell://${rowIndex}-${cellIndex}")[${content || '#h(1em)'}]`;
           }
+          const body = tableCellBrackets(content);
           const colspan = (cell.attrs.colspan as number) ?? 1;
           const rowspan = (cell.attrs.rowspan as number) ?? 1;
           const align = cell.attrs.align as string | null;
@@ -388,7 +492,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
               const args = [`colspan: 2`];
               if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
               args.push(`align: ${isHeader ? 'center' : 'right'}`);
-              cells.push(`table.cell(${args.join(', ')})[${content}]`);
+              cells.push(`table.cell(${args.join(', ')})${body}`);
             }
             col += colspan;
             return;
@@ -399,7 +503,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
           if (emitSpan > 1) args.push(`colspan: ${emitSpan}`);
           if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
           if (align && align !== colAligns[col]) args.push(`align: ${align}`);
-          cells.push(args.length ? `table.cell(${args.join(', ')})[${content}]` : `[${content}]`);
+          cells.push(args.length ? `table.cell(${args.join(', ')})${body}` : body);
           col += colspan;
         });
         if (allHeader) hasHeader = true;
@@ -485,9 +589,9 @@ function blockToTyp(node: PMNode, indent = ''): string {
       const tLabel = (node.attrs.label as string) || '';
       if (caption || tLabel) {
         // A captioned table is a figure: numbered "Table N", referenceable.
-        const cap = caption ? `,\n  caption: [${escapeTyp(caption)}]` : '';
+        const cap = caption ? `,\n  caption: [${escapeTableCellText(caption)}]` : '';
         const kind = fontSize ? ',\n  kind: table' : '';
-        const lab = tLabel ? ` <${tLabel}>` : '';
+        const lab = portableTableLabel(tLabel);
         return indent + directive + `#figure(\n${tableCall.split('\n').map((l) => '  ' + l).join('\n')}${cap}${kind},\n)${lab}\n\n`;
       }
       return indent + directive + `#align(center, ${tableCall})\n\n`;
@@ -529,6 +633,7 @@ let unnumberedEqLabels = new Set<string>();
 export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
   exportOpts = opts;
   docBib = (doc.attrs?.bib as { name: string; content: string } | null) ?? null;
+  docBibKeys = new Set(docBib ? parseBibTeX(docBib.content).map((entry) => entry.key) : []);
   eqLabels = new Set();
   unnumberedEqLabels = new Set();
   doc.descendants((n) => {

@@ -266,7 +266,26 @@ export function compileTyp(src: string, onMsg: (m: string) => void = () => {}): 
   );
 }
 
-export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string) => void): Promise<void> {
+/** Where an exported file ends up. Resolves to a description of the
+ *  destination for the toast, or null when the user cancelled. */
+export type ExportSink = (fileName: string, blob: Blob) => Promise<string | null>;
+
+/** Default sink: a plain browser download. */
+export const downloadSink: ExportSink = async (fileName, blob) => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  return fileName;
+};
+
+export async function exportPdf(
+  doc: PMNode,
+  baseName: string,
+  onMsg: (m: string) => void,
+  sink: ExportSink = downloadSink,
+): Promise<void> {
   // Export is an explicit user action, so it may make one fresh attempt after
   // a background timeout. Another timeout reopens the circuit immediately.
   resetCompilerCircuit();
@@ -286,13 +305,14 @@ export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string
     );
 
     const blob = new Blob([data.buffer as ArrayBuffer], { type: 'application/pdf' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${baseName}.pdf`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    const fileName = `${baseName}.pdf`;
+    const where = await sink(fileName, blob);
+    if (where === null) {
+      onMsg('PDF export cancelled');
+      return;
+    }
     onMsg(
-      `Exported ${a.download} in ${((performance.now() - t0) / 1000).toFixed(1)}s` +
+      `Exported ${where} in ${((performance.now() - t0) / 1000).toFixed(1)}s` +
         (missing ? ` — ${missing} missing image(s) exported as placeholders` : '') +
         (blockedRemote
           ? ` — ${blockedRemote} remote image(s) blocked; use the image’s Load action before exporting to include them`
