@@ -8,9 +8,10 @@ write the same on-rails document, not a way around the rails (README, "Typst
 on rails"): Typst the page view cannot show still arrives as a visible raw
 island, and the source view promises nothing about how it prints.
 
-Status: step 1 landed — toggle (title-pill button, `Mod-/`), lazy CodeMirror,
-serialize-on-enter / single-transaction parse-on-exit, verbatim `getText`
-saves, per-tab session restore. Steps 2–3 next.
+Status: steps 1–2 landed — toggle (title-pill button, `Mod-/`), lazy
+CodeMirror, serialize-on-enter / single-transaction parse-on-exit, verbatim
+`getText` saves, per-tab session restore; the sheet, measure and fonts, the
+rails highlighter for both languages, resting toolbar, print rule. Step 3 next.
 
 ## What already exists
 

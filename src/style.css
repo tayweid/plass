@@ -811,16 +811,130 @@ body {
   display: none;
 }
 
+/* One quiet sheet the width of the page column: no page boxes, no
+   numbers. The text column sits at a fixed measure under generous air. */
 #source {
+  --source-raw: color-mix(in srgb, var(--ink) 78%, var(--accent));
+  --source-tint: color-mix(in srgb, var(--accent) 7%, transparent);
   position: relative;
   z-index: 1;
-  min-height: 60vh;
+  min-height: calc(100vh - 152px);
   background: var(--sheet);
   color: var(--ink);
   border-radius: 4px;
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.45),
     0 18px 50px rgba(0, 0, 0, 0.4);
+}
+
+#source .cm-editor {
+  font: 15.5px/1.6 var(--mono);
+  color: var(--ink);
+  padding: 88px 0 45vh;
+}
+
+#source .cm-editor.cm-focused {
+  outline: none;
+}
+
+/* The page column scrolls; the editor grows with its text. */
+#source .cm-scroller {
+  font-family: inherit;
+  line-height: inherit;
+  overflow: visible;
+}
+
+#source .cm-content {
+  max-width: 68ch;
+  margin: 0 auto;
+  padding: 0 28px;
+  caret-color: var(--ink);
+}
+
+#source .cm-line {
+  padding: 0;
+}
+
+#source .cm-cursor,
+#source .cm-dropCursor {
+  border-left: 1.5px solid var(--ink);
+}
+
+#source .cm-selectionBackground,
+#source .cm-content ::selection {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+#source .cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+#source .cm-selectionMatch {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+#source .cm-searchMatch {
+  background: color-mix(in srgb, #d9a441 35%, transparent);
+}
+
+#source .cm-searchMatch.cm-searchMatch-selected {
+  background: color-mix(in srgb, #d9a441 65%, transparent);
+}
+
+/* Find/replace rides the top of the sheet in the chrome's own voice. */
+#source .cm-panels {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--chrome);
+  color: var(--ink);
+  border-bottom: 1px solid var(--chrome-border);
+  font: 12px var(--sans);
+  border-radius: 4px 4px 0 0;
+}
+
+#source .cm-panel.cm-search {
+  padding: 8px 12px;
+}
+
+#source .cm-panel input,
+#source .cm-panel button {
+  font: 12px var(--sans);
+}
+
+/* The tools pill rests while the text is the truth: its buttons act on the
+   ProseMirror document, which is not being edited. */
+.tb-tools.tb-resting .tb-btn {
+  opacity: 0.22;
+  cursor: default;
+}
+
+#toolbar:hover .tb-tools.tb-resting .tb-btn {
+  opacity: 0.22;
+}
+
+.tb-tools.tb-resting .tb-btn:hover {
+  background: transparent;
+  color: rgba(235, 233, 228, 0.6);
+}
+
+.tb-tools.tb-resting .tb-btn:hover .ico,
+.tb-tools.tb-resting .tb-btn:hover svg {
+  transform: none;
+}
+
+.tb-tools.tb-resting .tb-flyout-wrap:hover .tb-flyout,
+.tb-tools.tb-resting .tb-flyout-wrap:focus-within .tb-flyout,
+.tb-tools.tb-resting .tb-btn:hover .lbl {
+  opacity: 0;
+  visibility: hidden;
+}
+
+/* The pressed toggle: lit, on the dark title pill. */
+.doc-title .tb-source[aria-pressed='true'] {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+  opacity: 1;
 }
 
 /* ---------- document typography (driven by document settings) ---------- */
@@ -2333,6 +2447,22 @@ body {
 
   #editor {
     padding: 0;
+  }
+
+  /* Source mode prints the text column as-is (SOURCE-VIEW.md, "Look"). */
+  #source {
+    min-height: 0;
+    background: none;
+    box-shadow: none;
+    border-radius: 0;
+  }
+
+  #source .cm-editor {
+    padding: 0;
+  }
+
+  #source .cm-panels {
+    display: none;
   }
 
   /* Keep the oracle's line breaks but drop the screen page gaps — the

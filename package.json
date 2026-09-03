@@ -29,7 +29,7 @@
     "verify:sidecar": "node --import tsx scripts/verify-sidecar.ts",
     "verify:production": "node --import tsx scripts/verify-production.ts",
     "preview": "vite preview",
-    "test": "tsx src/transaction-impact.test.ts && tsx src/layout/knuth-plass.test.ts && tsx src/layout/block-layout.test.ts && tsx src/layout/line-decorations.test.ts && tsx src/layout/forced-layout.test.ts && tsx src/layout/flow-rules.test.ts && tsx src/layout/pagination-snapshot.test.ts && tsx src/layout/pagination-suffix.test.ts && tsx src/layout/pagination-suffix-control.test.ts && tsx src/layout/layout-scheduler.test.ts && tsx src/layout/oracle-coordinator.test.ts && tsx src/layout/page-parity.test.ts && tsx src/layout/typst-oracle.test.ts && tsx src/layout/page-oracle.test.ts && tsx src/layout/table-rows.test.ts && tsx src/table-integrity.test.ts && tsx src/native-table.test.ts && tsx src/typ-parser.test.ts && tsx src/md-round.test.ts && tsx src/collapse-spaces.test.ts && tsx src/security.test.ts && tsx src/font-registry.test.ts",
+    "test": "tsx src/transaction-impact.test.ts && tsx src/layout/knuth-plass.test.ts && tsx src/layout/block-layout.test.ts && tsx src/layout/line-decorations.test.ts && tsx src/layout/forced-layout.test.ts && tsx src/layout/flow-rules.test.ts && tsx src/layout/pagination-snapshot.test.ts && tsx src/layout/pagination-suffix.test.ts && tsx src/layout/pagination-suffix-control.test.ts && tsx src/layout/layout-scheduler.test.ts && tsx src/layout/oracle-coordinator.test.ts && tsx src/layout/page-parity.test.ts && tsx src/layout/typst-oracle.test.ts && tsx src/layout/page-oracle.test.ts && tsx src/layout/table-rows.test.ts && tsx src/table-integrity.test.ts && tsx src/native-table.test.ts && tsx src/typ-parser.test.ts && tsx src/md-round.test.ts && tsx src/source-typst-mode.test.ts && tsx src/collapse-spaces.test.ts && tsx src/security.test.ts && tsx src/font-registry.test.ts",
     "test:layout": "tsx src/layout/port/port-smoke.test.ts && tsx src/layout/port/shape-cache.test.ts && tsx src/layout/port/incremental-linebreak.test.ts && tsx src/layout/font-certification.test.ts",
     "test:browser": "playwright test",
     "sidecar": "node --import tsx scripts/build-sidecar.ts"
@@ -42,6 +42,7 @@
     "@codemirror/state": "^6.7.2",
     "@codemirror/view": "^6.43.10",
     "@lezer/highlight": "^1.2.3",
+    "@lezer/markdown": "^1.7.2",
     "@myriaddreamin/typst-ts-renderer": "0.7.0",
     "@myriaddreamin/typst-ts-web-compiler": "0.7.0",
     "@myriaddreamin/typst.ts": "0.7.0",

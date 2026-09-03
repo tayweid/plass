@@ -52,6 +52,23 @@ async function loadDemo(page: Page): Promise<void> {
 }
 
 const docJson = (page: Page) => page.evaluate(() => JSON.stringify(window.view.state.doc.toJSON()));
+
+/** Where two document JSONs first differ, by top-level block — a readable
+ *  failure instead of two 30 KB strings. */
+function firstDifference(a: string, b: string): string | null {
+  if (a === b) return null;
+  const A = JSON.parse(a) as { attrs: unknown; content: unknown[] };
+  const B = JSON.parse(b) as { attrs: unknown; content: unknown[] };
+  if (JSON.stringify(A.attrs) !== JSON.stringify(B.attrs)) {
+    return `attrs: ${JSON.stringify(A.attrs)} vs ${JSON.stringify(B.attrs)}`;
+  }
+  for (let i = 0; i < Math.max(A.content.length, B.content.length); i++) {
+    const x = JSON.stringify(A.content[i]);
+    const y = JSON.stringify(B.content[i]);
+    if (x !== y) return `block ${i}: ${x?.slice(0, 400)} vs ${y?.slice(0, 400)}`;
+  }
+  return 'differs outside blocks and attrs';
+}
 const enter = (page: Page) => page.evaluate(() => window.__sourceView.enter());
 const exit = (page: Page) => page.evaluate(() => window.__sourceView.exit());
 const sourceText = (page: Page) => page.evaluate(() => window.__sourceView.text());
@@ -87,7 +104,7 @@ test('toggling in and out of the source leaves the demo document identical', asy
   expect(await exit(page)).toBe(true);
   await expect(page.locator('#source')).toHaveCount(0);
   await expect(page.locator('#editor')).toBeVisible();
-  expect(await docJson(page)).toBe(before);
+  expect(firstDifference(before, await docJson(page))).toBeNull();
   // An untouched round trip installs nothing: still clean.
   expect(await page.evaluate(() => window.__fm.dirty)).toBe(false);
 });
