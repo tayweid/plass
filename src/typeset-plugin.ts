@@ -355,6 +355,23 @@ export function invalidatePageLayout(view: EditorView) {
   tv.requestRun();
 }
 
+/**
+ * Put the page machinery to sleep while the editor is mounted but hidden
+ * (SOURCE-VIEW.md, decision 6: the source view hides `#editor`/`#pages`).
+ * Suspended, no pass measures the DOM, nothing dispatches, and no compile
+ * launches; a hidden editor measures zero heights, and a snapshot taken
+ * from it would poison pagination. Resuming runs exactly one full settled
+ * pass — the same pass a freshly opened document gets — which re-requests
+ * every oracle answer it lacks.
+ */
+export function setLayoutSuspended(view: EditorView, suspended: boolean) {
+  viewRegistry.get(view)?.setSuspended(suspended);
+}
+
+export function isLayoutSuspended(view: EditorView): boolean {
+  return viewRegistry.get(view)?.isSuspended() ?? false;
+}
+
 export function typesetPlugin(
   opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo) => void } = {},
 ) {
@@ -522,6 +539,11 @@ class TypesetView {
     { epoch: number; parent: Node | null; value: number }
   >();
   private destroyed = false;
+  /** Asleep behind a hidden editor (setLayoutSuspended). The scheduler and
+   * oracles hold the real gates; this mirror lets the two direct entry
+   * points (liveRun/run) and the suffix-verification deferral — which
+   * bypass the scheduler — refuse to touch the DOM. */
+  private suspended = false;
 
   constructor(
     private view: EditorView,
@@ -639,6 +661,12 @@ class TypesetView {
       };
       (w as unknown as { __pagLog: () => string[] }).__pagLog = () => this.pagLog;
       (w as unknown as { __pagCount: () => number }).__pagCount = () => this.pagLogTotal;
+      (w as unknown as { __layoutSuspend: (suspended: boolean) => boolean }).__layoutSuspend = (
+        suspended: boolean,
+      ) => {
+        this.setSuspended(suspended);
+        return this.suspended;
+      };
       w.__breakSig = () => {
         const st = typesetKey.getState(this.view.state);
         if (!st) return '';
@@ -795,7 +823,7 @@ class TypesetView {
    * breaks in the same paint as the keystroke. LayoutScheduler owns the
    * microtask. */
   private liveRun() {
-    if (this.destroyed) return;
+    if (this.destroyed || this.suspended) return;
     const perfStart = performance.now();
     const state = this.view.state;
     const prev = this.lastLiveDoc;
@@ -1193,6 +1221,45 @@ class TypesetView {
 
   requestRun() {
     this.scheduler?.scheduleSettled();
+  }
+
+  isSuspended(): boolean {
+    return this.suspended;
+  }
+
+  /**
+   * Sleep or wake with the editor's visibility (setLayoutSuspended).
+   *
+   * Sleeping cancels every pending pass and compile launch and drops the
+   * sampled suffix-verification ticket (its geometry premise cannot be
+   * re-measured behind a hidden editor). In-flight compiles finish into the
+   * oracle caches; their publication reaches the sleeping scheduler and
+   * installs nothing.
+   *
+   * Waking discards every DOM-derived basis — geometry epoch, per-element
+   * reads, the exact and fallback page bases — so the single settled pass
+   * the scheduler runs is a full one from fresh measurements, not a suffix
+   * repagination seeded from pre-sleep pixels (fonts and widths may have
+   * changed while hidden). Oracle caches persist: an unchanged document
+   * lands back on its exact answer in that one pass.
+   */
+  setSuspended(suspended: boolean) {
+    if (this.destroyed || suspended === this.suspended) return;
+    this.suspended = suspended;
+    if (suspended) {
+      this.scheduler.suspend();
+      this.oracles.suspend();
+      this.pendingSuffixVerification = null;
+      return;
+    }
+    this.oracles.resume();
+    this.paginationGeometryEpoch++;
+    this.invalidateDomGeometry();
+    this.clearExactPageBasis();
+    this.clearFallbackPageBasis();
+    this.lastDecoSig = '';
+    this.lastDecoSigSource = null;
+    this.scheduler.resume();
   }
 
   /** The page spacers currently in the document, read back from the live
@@ -1638,7 +1705,7 @@ class TypesetView {
   }
 
   private run() {
-    if (this.destroyed) return;
+    if (this.destroyed || this.suspended) return;
     this.lastLiveDoc = this.view.state.doc;
 
     const t0 = performance.now();
@@ -1742,7 +1809,7 @@ class TypesetView {
         this.suffixVerifyScheduled = false;
         const ticket = this.pendingSuffixVerification;
         this.pendingSuffixVerification = null;
-        if (ticket && !this.destroyed) this.runSuffixVerification(ticket);
+        if (ticket && !this.destroyed && !this.suspended) this.runSuffixVerification(ticket);
       }, 0);
     });
   }
