@@ -312,25 +312,95 @@ const listAnchorInside = planSuffixPagination(
 assert.deepEqual(listAnchorInside, { kind: 'reject', reason: 'anchor-boundary' });
 console.log('  ok  list-internal page starts validate as prefix gaps but never anchor');
 
-// Tables stay on the whole-document path: a table crossing a page bottom
-// launches a mini-compile with staged effects the shadow cannot replay.
+// Tables (PAGE-PORT.md Phase 7): the fallback paginator breaks them between
+// rows from painted `<tr>` heights, a pure walk both passes reproduce, so a
+// table document is eligible. A row start is stored as the table's boundary
+// plus the row index and validates against a 'row' spacer before that row;
+// like a mid-line start it never anchors the seed.
 const tableCell = (text: string) => schema.nodes.table_cell.create(null, [paragraph(text)]);
 const tableRow = (text: string) => schema.nodes.table_row.create(null, [tableCell(text)]);
+const tableNode = schema.nodes.table.create(null, [tableRow('row one'), tableRow('row two'), tableRow('row three')]);
 const tableBasis = schema.nodes.doc.create(null, [
   paragraph('first page words'),
-  schema.nodes.table.create(null, [tableRow('table words')]),
+  tableNode,
   paragraph('last original words'),
 ]);
 const tableCurrent = schema.nodes.doc.create(null, [
   paragraph('first page words'),
-  schema.nodes.table.create(null, [tableRow('table words')]),
+  tableNode,
   paragraph('last revised words'),
 ]);
-assert.deepEqual(
-  planSuffixPagination(input(tableBasis, tableCurrent, [], [])),
-  { kind: 'reject', reason: 'table' },
+const [, tablePos, tableAfterPos] = positions(tableCurrent);
+const row2Pos = tablePos + 1 + tableNode.child(0).nodeSize + tableNode.child(1).nodeSize;
+const tableSeed = planSuffixPagination(
+  input(
+    tableBasis,
+    tableCurrent,
+    [
+      { pos: tablePos, line: 0, unit: 'table', page: 1 },
+      { pos: tablePos, line: 2, unit: 'table', page: 2 },
+      { pos: tableAfterPos, line: 0, unit: 'paragraph', page: 3 },
+    ],
+    [
+      { pos: tablePos, height: 100, kind: 'block' },
+      { pos: row2Pos, height: 300, kind: 'row', hdr: 25 },
+      { pos: tableAfterPos, height: 120, kind: 'block' },
+    ],
+  ),
 );
-console.log('  ok  tables retain full pagination');
+assert.equal(tableSeed.kind, 'seed');
+if (tableSeed.kind !== 'seed') throw new Error('expected table seed');
+assert.equal(tableSeed.seed.startPos, tableAfterPos);
+assert.equal(tableSeed.seed.page, 3);
+assert.equal(tableSeed.seed.shift, 520);
+console.log('  ok  a row start validates as a prefix gap of a table document');
+
+const tableRowAnchor = planSuffixPagination(
+  input(
+    tableBasis,
+    schema.nodes.doc.create(null, [paragraph('first page words'), tableNode, paragraph('last revised words')]),
+    [
+      { pos: tablePos, line: 0, unit: 'table', page: 1 },
+      { pos: tablePos, line: 2, unit: 'table', page: 2 },
+    ],
+    [
+      { pos: tablePos, height: 100, kind: 'block' },
+      { pos: row2Pos, height: 300, kind: 'row', hdr: 25 },
+    ],
+  ),
+);
+assert.equal(tableRowAnchor.kind, 'seed');
+if (tableRowAnchor.kind !== 'seed') throw new Error('expected table-start seed');
+assert.equal(tableRowAnchor.seed.startPos, tablePos);
+assert.equal(tableRowAnchor.seed.page, 1);
+console.log('  ok  a row start never anchors: the seed backs up to the table start');
+
+assert.deepEqual(
+  planSuffixPagination(
+    input(
+      tableBasis,
+      tableCurrent,
+      [
+        { pos: tablePos, line: 0, unit: 'table', page: 1 },
+        { pos: tablePos, line: 2, unit: 'table', page: 2 },
+        { pos: tableAfterPos, line: 0, unit: 'paragraph', page: 3 },
+      ],
+      [
+        { pos: tablePos, height: 100, kind: 'block' },
+        { pos: row2Pos + 1, height: 300, kind: 'row' },
+        { pos: tableAfterPos, height: 120, kind: 'block' },
+      ],
+    ),
+  ),
+  { kind: 'reject', reason: 'prefix-spacer-mismatch' },
+);
+assert.deepEqual(
+  planSuffixPagination(
+    input(tableBasis, tableCurrent, [{ pos: tablePos, line: 2, unit: 'paragraph', page: 1 }], [{ pos: row2Pos, height: 300, kind: 'row' }]),
+  ),
+  { kind: 'reject', reason: 'invalid-marker' },
+);
+console.log('  ok  a row spacer off its row, or a split marker of the wrong unit, rejects');
 
 // Document attributes carry settings and the bibliography: a change there
 // invalidates every stored page start.

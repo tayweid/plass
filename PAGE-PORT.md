@@ -160,8 +160,13 @@
   sits under). Grid tables keep their collapsed cell strokes and the header
   copy paints its own; the widget adds no height beyond gap + header copy
   (asserted). Rowspan across the boundary, figure tables and sub-headers
-  decline exact and stay atomic (tests). Remaining: step 5 (suffix seeding
-  + parity telemetry relaxation).
+  decline exact and stay atomic (tests). Step 5 landed: tables are
+  eligible for suffix seeding (the row walk is a pure function of painted
+  `<tr>` heights, so a seeded and a full pass agree exactly, like
+  paragraph lines) — a row start `{table, line: r}` validates against its
+  `row` spacer inside the table and, like a mid-line start, never anchors
+  the seed; the PageParity shadow no longer skips table documents
+  (`skipped.tables` stays in the stats shape, always 0).
 
 Goal: the local paginator's page decisions become identical to Typst's for
 supported content, the same way the line-break port (PORT.md) made local line

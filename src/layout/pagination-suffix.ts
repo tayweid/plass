@@ -58,7 +58,6 @@ export interface SuffixPaginationSeed {
 export type SuffixPaginationRejectReason =
   | 'epoch-changed'
   | 'doc-attrs'
-  | 'table'
   | 'ineligible-block'
   | 'special-inline'
   | 'invalid-marker'
@@ -89,12 +88,12 @@ function topLevelBlocks(doc: PMNode): TopLevelBlock[] {
 
 /** Block node types the fallback paginator handles deterministically from the
  * painted DOM alone: paragraphs split at cached line boundaries, lists and
- * blockquotes break between (and inside) children, and everything else moves
- * whole. Both the seeded and the full pass read the same DOM at the same
- * instant, so async heights (figures, committed math, bibliographies) cannot
- * diverge between them. Tables are excluded: a table crossing a page bottom
- * launches a Typst mini-compile and stages table effects, which a seeded or
- * comparison pass cannot replay side-effect-free. */
+ * blockquotes break between (and inside) children, tables break between
+ * rows from their painted `<tr>` heights (PAGE-PORT.md Phase 7 — one pure
+ * walk over DOM measurements, no compile and no staged effects), and
+ * everything else moves whole. Both the seeded and the full pass read the
+ * same DOM at the same instant, so async heights (figures, committed math,
+ * bibliographies) cannot diverge between them. */
 const ELIGIBLE_BLOCK_TYPES = new Set([
   'paragraph',
   'heading',
@@ -113,6 +112,10 @@ const ELIGIBLE_BLOCK_TYPES = new Set([
   'doc_date',
   'abstract',
   'bibliography',
+  'table',
+  'table_row',
+  'table_cell',
+  'table_header',
 ]);
 
 /** Inline content the paginator never treats specially: it only ever measures
@@ -142,10 +145,6 @@ function contentIneligibility(doc: PMNode): SuffixPaginationRejectReason | null 
         return false;
       }
       return true;
-    }
-    if (node.type.name === 'table') {
-      reason = 'table';
-      return false;
     }
     if (!ELIGIBLE_BLOCK_TYPES.has(node.type.name)) {
       reason = 'ineligible-block';
@@ -246,9 +245,11 @@ export function planSuffixPagination(input: SuffixPaginationInput): SuffixPagina
     if (marker.pos < previousPos || (marker.pos === previousPos && marker.line <= previousLine)) {
       return reject('marker-order');
     }
-    // `line: 0` is a block start and `line > 0` a split inside a block; the
-    // 'line' unit must agree or the marker's provenance is untrustworthy.
-    if ((marker.line === 0) === (marker.unit === 'line')) return reject('invalid-marker');
+    // `line: 0` is a block start and `line > 0` a split inside a block — a
+    // paragraph line ('line') or a table row ('table', Phase 7); the unit
+    // must agree or the marker's provenance is untrustworthy.
+    const splitUnit = marker.unit === 'line' || marker.unit === 'table';
+    if (marker.line === 0 ? marker.unit === 'line' : !splitUnit) return reject('invalid-marker');
     previousPos = marker.pos;
     previousLine = marker.line;
     scanEnd = index;
@@ -293,7 +294,9 @@ export function planSuffixPagination(input: SuffixPaginationInput): SuffixPagina
   // marker shares its exact position with a block spacer and must sit at a
   // block boundary (top-level, or a child boundary inside a container). A
   // mid-block marker retains its textblock's boundary while its line spacer
-  // lies strictly inside that same textblock.
+  // lies strictly inside that same textblock; a table-row marker retains
+  // the table's boundary while its row spacer sits before row `line` of
+  // that same table.
   for (let index = 0; index < prefixMarkers.length; index++) {
     const marker = prefixMarkers[index];
     const spacer = prefix[index];
@@ -303,6 +306,15 @@ export function planSuffixPagination(input: SuffixPaginationInput): SuffixPagina
       if (spacer.kind !== 'block' || spacer.pos !== marker.pos) {
         return reject('prefix-spacer-mismatch');
       }
+    } else if (marker.unit === 'table') {
+      if (target.type.name !== 'table' || spacer.kind !== 'row' || marker.line >= target.childCount) {
+        return reject('prefix-spacer-mismatch');
+      }
+      let rowPos = -1;
+      target.forEach((_row, offset, index) => {
+        if (index === marker.line) rowPos = marker.pos + 1 + offset;
+      });
+      if (spacer.pos !== rowPos) return reject('prefix-spacer-mismatch');
     } else if (
       !target.isTextblock ||
       spacer.kind !== 'line' ||

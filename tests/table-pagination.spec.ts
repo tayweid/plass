@@ -6,6 +6,22 @@ declare global {
     __pagLog: () => string[];
     __pagCount: () => number;
     __pageOracle: unknown;
+    __suffixPaginationStats: (reset?: boolean) => {
+      attempts: number;
+      eligible: number;
+      mismatches: number;
+      bySource: { exact: { eligible: number }; fallback: { eligible: number } };
+      lastAnchorPos: number | null;
+      lastStartPos: number | null;
+      reasons: Record<string, number>;
+    };
+    __pageParityStats: (reset?: boolean) => {
+      predictions: number;
+      agreements: number;
+      disagreements: number;
+      skipped: { tables: number; tooLarge: number };
+      last: unknown;
+    };
   }
 }
 
@@ -21,6 +37,8 @@ interface TableOptions {
    * two rows — a merged cell across the boundary below it. */
   rowspanAt?: number;
   caption?: string;
+  /** Append a forced page break and two paragraphs after the table. */
+  trailingPage?: boolean;
 }
 
 async function installDoc(page: Page, opts: TableOptions, navigate = true): Promise<number> {
@@ -53,6 +71,13 @@ async function installDoc(page: Page, opts: TableOptions, navigate = true): Prom
       paragraph('An introductory paragraph sits above the table.'),
       table,
       paragraph('A closing paragraph follows the table.'),
+      ...(o.trailingPage
+        ? [
+            s.nodes.page_break.create(),
+            paragraph('The first paragraph of the last page.'),
+            paragraph('The second paragraph of the last page, which is edited.'),
+          ]
+        : []),
     ]);
     const logStart = window.__pagCount();
     window.view.dispatch(
@@ -291,4 +316,68 @@ test('a captioned table is a figure and stays whole', async ({ page }) => {
     return boxes.some((b) => table.top >= b.top - 1 && table.bottom <= b.bottom + 1);
   });
   expect(inOne).toBe(true);
+});
+
+test('a split table seeds suffix pagination and agrees with Typst in the parity shadow', async ({ page }) => {
+  test.setTimeout(120_000);
+  const logStart = await installDoc(page, { rows: 40, trailingPage: true });
+  await expectPagination(page, logStart, 'exact[');
+  expect((await readBreak(page)).widget).not.toBeNull();
+
+  // The DEV parity shadow samples table documents now (Phase 7 step 5) and
+  // the local row walk lands on Typst's own row boundary.
+  const parity = await page.evaluate(() => window.__pageParityStats());
+  expect(parity.skipped.tables).toBe(0);
+  expect(parity.predictions).toBeGreaterThanOrEqual(1);
+  expect(parity.disagreements).toBe(0);
+
+  // Editing on the last page (a block-level page start after the table
+  // anchors the seed) restarts local pagination there: the prefix —
+  // including the table's row spacer — is validated and kept, not
+  // recomputed. The page oracle is switched off for later revisions so the
+  // edit ends up on the local path (the held path maps the settled starts
+  // through the first few edits, then abandons the failing revisions).
+  const before = await page.evaluate(() => {
+    const oracle = window.__pageOracle as unknown as {
+      request: (sig: string) => void;
+      results: Map<string, { status: string; reason: string }>;
+    };
+    oracle.request = (sig: string) => {
+      oracle.results.set(sig, { status: 'fail', reason: 'test: page oracle disabled' });
+    };
+    const { state } = window.view;
+    const last = state.doc.child(state.doc.childCount - 1);
+    if (last.type.name !== 'paragraph') throw new Error('fixture changed shape');
+    const end = state.doc.content.size - 1;
+    const Sel = state.selection.constructor as unknown as { create: (doc: typeof state.doc, pos: number) => typeof state.selection };
+    window.view.dispatch(state.tr.setSelection(Sel.create(state.doc, end)));
+    window.view.focus();
+    window.__suffixPaginationStats(true);
+    return { signature: window.__pagLog().at(-1)?.split(':').slice(1).join(':') ?? '', count: window.__pagCount() };
+  });
+  // Slow keystrokes: each settles into its own (failed) revision, so the
+  // held path gives up after its failure streak and the local pass runs.
+  await page.keyboard.type(' Typed here.', { delay: 500 });
+  await expect
+    .poll(() => page.evaluate(() => window.__suffixPaginationStats().eligible), { timeout: 20_000 })
+    .toBeGreaterThanOrEqual(1);
+  await expectPagination(page, before.count, 'fallback[');
+  const stats = await page.evaluate(() => window.__suffixPaginationStats());
+  expect(stats.mismatches).toBe(0);
+  expect(stats.bySource.exact.eligible).toBeGreaterThanOrEqual(1);
+  expect(stats.reasons['exact-ineligible-block'] ?? 0).toBe(0);
+  const tablePos = await page.evaluate(() => {
+    let pos = 0;
+    window.view.state.doc.forEach((node, offset) => {
+      if (node.type.name === 'table') pos = offset;
+    });
+    return pos;
+  });
+  expect(stats.lastAnchorPos).not.toBeNull();
+  expect(stats.lastAnchorPos!).toBeGreaterThan(tablePos);
+  // The prefix (the row break inside the table, the forced page break)
+  // is byte-identical to the settled exact pagination.
+  const after = await page.evaluate(() => window.__pagLog().at(-1)?.split(':').slice(1).join(':') ?? '');
+  expect(after).toBe(before.signature);
+  expect((await readBreak(page)).widget).not.toBeNull();
 });

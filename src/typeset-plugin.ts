@@ -2327,9 +2327,8 @@ class TypesetView {
    *      installs directly and the local paginator never runs, so run it
    *      once per settled exact publication as a PREDICTION-ONLY pass
    *      purely to feed the same telemetry. Never installs its result: no
-   *      spacers or dispatches reach the document. Skipped for table documents
-   *      (kept aligned with suffix-seeding eligibility) and documents over ~50
-   *      pages, to bound or defer the shadow work. */
+   *      spacers or dispatches reach the document. Skipped for documents
+   *      over ~50 pages, to bound the shadow work. */
   private observeExactPageAnswer(
     sig: string,
     snapshot: PaginationGeometrySnapshot,
@@ -2354,22 +2353,10 @@ class TypesetView {
       this.pageParityStats.skipped.tooLarge++;
       return;
     }
-    // Preserve the existing telemetry fence for table documents. Tables are
-    // still ineligible for suffix seeding, so parity sampling stays aligned
-    // with that contract until the follow-up relaxation happens as one change.
-    let hasTable = false;
-    this.view.state.doc.descendants((node) => {
-      if (hasTable) return false;
-      if (node.type.name === 'table') {
-        hasTable = true;
-        return false;
-      }
-      return true;
-    });
-    if (hasTable) {
-      this.pageParityStats.skipped.tables++;
-      return;
-    }
+    // Table documents are sampled like any other (PAGE-PORT.md Phase 7):
+    // the local pass breaks tables between rows from painted heights, and
+    // its row starts diff against Typst's in the same {table, row}
+    // vocabulary. `skipped.tables` stays in the stats shape, now always 0.
     // Prediction-only: the return value is diffed and discarded.
     const shadow = this.runFallbackPass(snapshot);
     this.recordPageParity(this.anchorsToPageStartEntries(shadow.anchors), exactEntries);
