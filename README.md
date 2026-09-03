@@ -78,6 +78,39 @@ handles footnote reservations and widow/orphan rules. This is a scoped,
 fail-closed agreement rather than a claim that every arbitrary Typst document
 or every browser raster detail is identical.
 
+## Typst on rails
+
+Plass is not a Typst editor. It is a writing surface whose documents happen to
+be plain Typst files, and it deliberately supports a fixed set of things
+rather than the whole language. That is what makes the fidelity contract
+above possible: the editor can only show live, exactly, what it can mirror,
+and arbitrary Typst can lay out in ways no browser surface can follow.
+Everything Plass supports therefore falls into one of three tiers, and the
+tier is always visible to the writer.
+
+- **On rails.** Headings, paragraphs, lists, math, figures, footnotes,
+  tables, citations, and the document settings the toolbar exposes. These
+  are edited directly in the page, laid out live by the local mirror, and
+  verified by the compiler. What you see is what prints.
+- **Tolerated.** Typst that arrives in a file and that Plass does not
+  model is preserved verbatim as a raw island: a clearly marked source
+  block that is never rendered live, never altered, and passed straight
+  through to the PDF. It can be read, moved, or deleted, and it carries no
+  layout guarantee. This is how files survive round trips through other
+  tools; it is not an authoring path.
+- **Off.** Multi-column layout, floats, custom show and set rules, and
+  hand-written layout code are declined on purpose. They are not queued
+  features; adding one means adding a rail, with its local mirror and its
+  oracle verification, one at a time.
+
+Two consequences follow. Styling is offered as presets the layout engine
+has been verified on, not as free parameters. And the source view, when it
+arrives, is a second editor for the same rails, not a way around them: a
+plain-text surface in the spirit of iA Writer for simpler files, editing
+the same headings, lists, math, and notes as text. It does not admit
+constructs the page view cannot show. A document that needs more than the
+rails can always be finished in Typst itself, because the file is Typst.
+
 ## What works today
 
 - **Oracle layout** (spec §1.3): the document lives in the DOM — native
