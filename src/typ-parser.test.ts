@@ -160,6 +160,27 @@ function firstDiff(a: string, b: string): string {
   check('strike export is idempotent', out === again, firstDiff(out, again));
 }
 
+// --- 6b. block offsets: where each top-level block starts in the text ---
+{
+  const doc = demoDoc();
+  const offsets: number[] = [];
+  const typ = docToTyp(doc, { offsets });
+  check('offsets do not change the output', typ === docToTyp(doc));
+  check('one offset per top-level block', offsets.length === doc.childCount, `${offsets.length} vs ${doc.childCount}`);
+  check('offsets are non-decreasing', offsets.every((o, i) => i === 0 || o >= offsets[i - 1]));
+  let mismatches = '';
+  doc.forEach((node, _o, i) => {
+    const at = typ.slice(offsets[i], offsets[i] + 40);
+    // Every block starts on its own line; a heading's line starts with its
+    // markers. (A paragraph may start with inline markup, so only the line
+    // boundary is checked for it.)
+    const lineStart = offsets[i] === 0 || typ[offsets[i] - 1] === '\n';
+    const want = node.type.name === 'heading' ? '='.repeat(node.attrs.level as number) + ' ' : '';
+    if (!lineStart || !at.startsWith(want)) mismatches += `\n  block ${i} ${node.type.name}: ${JSON.stringify(at)}`;
+  });
+  check('each offset lands at a line start, headings on their markers', mismatches === '', mismatches);
+}
+
 // --- 7a. a source space before #footnote never prints, so import drops it ---
 {
   const { doc } = typToDoc('Word #footnote[n] after.\n');

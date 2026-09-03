@@ -10,6 +10,11 @@ import { isPortableCitationKey, parseBibTeX } from './bibtex';
 import { effectiveFont, parityMetrics } from './font-registry';
 
 export interface TypExportOptions {
+  /** When given, receives the text offset at which each top-level block's
+   *  serialization begins (index = position of the block in `doc`). The
+   *  source view maps a caret between the document and its text by block;
+   *  nothing finer is promised (SOURCE-VIEW.md, decision 5). */
+  offsets?: number[];
   /** Rewrite image sources (e.g. data: URLs to VFS paths for compilation). */
   resolveImage?: (src: string) => string;
   /** Extra font families appended to #set text(font: …) as fallbacks. */
@@ -683,7 +688,12 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     if (s.mathMacros.trim()) out += `// typeset:math-macros ${JSON.stringify(s.mathMacros)}\n`;
     if (containsMath(doc)) out += '#import "@preview/mitex:0.2.5": mi, mitex\n';
     out += '\n';
-    out += blocksToTyp(doc, '');
+    const offsets = opts.offsets;
+    if (offsets) offsets.length = 0;
+    doc.forEach((node) => {
+      offsets?.push(out.length);
+      out += blockToTyp(node, '');
+    });
     return out.trimEnd() + '\n';
   } finally {
     exportOpts = {};

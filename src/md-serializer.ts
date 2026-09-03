@@ -17,9 +17,16 @@
 import type { Node as PMNode, Mark } from 'prosemirror-model';
 import { DEFAULT_SETTINGS, type DocSettings } from './settings';
 
-export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): string {
+/** Serialize to Markdown. `offsets`, when given, receives the text offset
+ *  at which each top-level block's serialization begins (index = position
+ *  of the block in `doc`); blocks that produce no Markdown of their own
+ *  (title/author/date live in the frontmatter) get the offset of whatever
+ *  follows them. Block-level caret mapping for the source view
+ *  (SOURCE-VIEW.md, decision 5). */
+export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offsets?: number[]): string {
   const out: string[] = [];
   const footnotes: string[] = [];
+  let frontmatterLength = 0;
 
   // ---------- frontmatter ----------
   {
@@ -36,6 +43,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
       warn('document settings (page, font, numbering) are not stored in Markdown — save as .typ to keep them');
     }
     if (fm.length) out.push(`---\n${fm.join('\n')}\n---`);
+    frontmatterLength = out.length ? out[0].length : 0;
   }
 
   const esc = (text: string): string =>
@@ -199,10 +207,31 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}): stri
     }
   };
 
+  // Chunks join with a blank line between them; a block's offset is where
+  // its chunk starts in that joined text — counted the same way the final
+  // join lays it out, so the two cannot drift.
+  const blockChunks: string[] = [];
   doc.forEach((node) => {
     const text = block(node);
+    blockChunks.push(text);
     if (text) out.push(text);
   });
+  if (offsets) {
+    offsets.length = 0;
+    // Replay the join: the frontmatter chunk (if any) comes first and
+    // belongs to no block; every emitted chunk after the first is preceded
+    // by the two-character separator.
+    let pos = frontmatterLength;
+    let emitted = frontmatterLength > 0;
+    for (const chunk of blockChunks) {
+      const start = emitted ? pos + 2 : pos;
+      offsets.push(start);
+      if (chunk) {
+        pos = start + chunk.length;
+        emitted = true;
+      }
+    }
+  }
 
   if (footnotes.length) {
     out.push(footnotes.map((f, i) => `[^${i + 1}]: ${f}`).join('\n'));

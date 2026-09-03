@@ -145,6 +145,30 @@ const md1 = docToMd(doc);
   check('footnote-glued paragraph round-trips', docToMd(again) === docToMd(d), docToMd(d));
 }
 
+{
+  // Block offsets: where each top-level block starts in the Markdown text,
+  // frontmatter excluded; blocks with no Markdown of their own point at
+  // what follows them.
+  const { doc: d } = mdToDoc(SRC);
+  const offsets: number[] = [];
+  const md = docToMd(d, () => {}, offsets);
+  check('md offsets do not change the output', md === docToMd(d));
+  check('one md offset per top-level block', offsets.length === d.childCount, `${offsets.length} vs ${d.childCount}`);
+  check('md offsets are non-decreasing', offsets.every((o, i) => i === 0 || o >= offsets[i - 1]));
+  let mismatches = '';
+  d.forEach((node, _o, i) => {
+    const at = md.slice(offsets[i], offsets[i] + 40);
+    const want =
+      node.type.name === 'heading'
+        ? '#'.repeat(node.attrs.level as number) + ' '
+        : node.type.name === 'paragraph'
+          ? node.textContent.slice(0, 6)
+          : null;
+    if (want !== null && !at.startsWith(want)) mismatches += `\n  block ${i} ${node.type.name}: ${JSON.stringify(at)} !~ ${JSON.stringify(want)}`;
+  });
+  check('each md heading/paragraph offset lands on its own markup', mismatches === '', mismatches);
+}
+
 const second = mdToDoc(md1);
 const md2 = docToMd(second.doc);
 if (md1 !== md2) {

@@ -8,7 +8,8 @@ write the same on-rails document, not a way around the rails (README, "Typst
 on rails"): Typst the page view cannot show still arrives as a visible raw
 island, and the source view promises nothing about how it prints.
 
-Status: plan only. Nothing implemented.
+Status: step 0 in progress — serializer block offsets landed; suspend flag
+under way; highlighter decided (hand-written rails mode).
 
 ## What already exists
 
@@ -55,12 +56,14 @@ either serializer, or a code editor dependency.
    undo only and would be thrown away. Cost: `@codemirror/state`, `view`,
    `language`, `commands`, `search`, `lang-markdown` — on the order of
    150–200 KB minified, loaded lazily via dynamic `import()` on first
-   toggle so page-mode users pay nothing. Typst highlighting: evaluate
-   `codemirror-lang-typst` (Lezer grammar, 0.6.0); if it is heavy or wrong
-   on our output, write a small `StreamLanguage` covering only the rails
-   (`=` headings, `-`/`+` items, `$…$`, `#name[`/`#name(`, `//` comments,
-   raw fences, `@key`). Off-rails constructs render as plain text — the
-   highlighter, like the editor, only knows the rails.
+   toggle so page-mode users pay nothing. Typst highlighting: a small
+   `StreamLanguage` covering only the rails (`=` headings, `-`/`+` items,
+   `$…$`, `#name[`/`#name(`, `//` comments, raw fences, `@key`). Off-rails
+   constructs render as plain text — the highlighter, like the editor, only
+   knows the rails. (`codemirror-lang-typst` was evaluated in step 0 and
+   rejected: it is not a Lezer grammar but a 1.2 MB WASM build of Typst's
+   own parser, pulling in lint and autocomplete, and it knows all of Typst
+   — the opposite of the rails.)
 5. **Coarse caret mapping in v1, by top-level block.** Both serializers
    iterate top-level blocks; record each block's starting text offset in a
    side array (`docToTyp(doc, { offsets })`). Entering: caret block index →
