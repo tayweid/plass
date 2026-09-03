@@ -101,6 +101,9 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
 ## Standing backlog
 
 - Raw-Typst-island compiled previews (same pattern as tables/math/bib).
+- **Source view** — moved up; planned in SOURCE-VIEW.md as a second
+  editor for the same rails in the spirit of iA Writer (not an escape
+  hatch). The original sketch follows for history.
 - **Source view toggle** — a toolbar button switching between the WYSIWYG
   view and the document's plain-text source (its on-disk format: .typ or
   .md, which `file-manager`'s text method already produces). Both directions
