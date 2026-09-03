@@ -33,8 +33,11 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      math/references inside cells serialize losslessly but the in-cell
      editing affordances (e.g. "edit as math") are still to be built.
    - Per-selection cell fills (the fill presets ship; individual cells are
-     still open). Complex-table stress testing, and mid-table page breaks
-     (PAGE-PORT Phase 7 — tables are atomic on the page until then).
+     still open). Complex-table stress testing. Mid-table page breaks
+     ship (PAGE-PORT Phase 7): a table breaks between rows with the
+     header repeated, as Typst lays it; a rowspan across the break, a
+     tall cell split by Typst, or a captioned (figure) table still places
+     the table whole.
 4. **Citations** (see the worked plan below — the largest planned feature).
 5. **Paragraph typography odds and ends** — hyphenation language selection,
    per-document justification toggle, heading font pairing (sans headings

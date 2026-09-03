@@ -1495,21 +1495,89 @@ body {
 /* A page break inside a table (PAGE-PORT.md Phase 7): a widget row between
    two real rows. Its cells stack an exact-height gap and a copy of the
    repeating header sized to the real header row; nothing else here may add
-   layout height — rules are pseudo-elements. */
+   layout height — every rule below is an absolutely positioned
+   pseudo-element (paint only), mirroring what Typst's grid strokes at a
+   region boundary (grid/layouter.rs render_fills_strokes): the table's
+   bottom rule closes the interrupted page, and the continuation page opens
+   with the top rule, the repeated header, and the rule under it. */
 .ProseMirror table tr.ts-table-break > td {
   padding: 0 5pt;
   border: none;
   vertical-align: top;
+  position: relative;
 }
 
 .ts-table-gap,
 .ts-table-hdr {
   display: block;
+  position: relative;
+}
+
+.ts-table-hdr {
   overflow: hidden;
 }
 
 .ts-table-hdr p {
   margin: 0;
+}
+
+/* Rules span each cell's padding box (cells abut under border-collapse),
+   so they read as one continuous line across the table. */
+.ProseMirror table tr.ts-table-break > td::before,
+.ProseMirror table tr.ts-table-break > td::after,
+.ProseMirror table tr.ts-table-break .ts-table-gap::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+
+.ProseMirror table tr.ts-table-break .ts-table-gap::after {
+  left: -5pt;
+  right: -5pt;
+}
+
+/* booktabs: the closing rule at the interrupted page's bottom (the table's
+   own bottom rule, 0.08em) and the opening rule at the top of the next page
+   (its top rule), then the header rule under the repeated header — only when
+   the repeated row is the row the exporter's midrule sits under. */
+.ProseMirror table.ts-table-booktabs tr.ts-table-break > td::before {
+  top: 0;
+  border-top: 0.08em solid var(--ink);
+}
+
+.ProseMirror table.ts-table-booktabs tr.ts-table-break .ts-table-gap::after {
+  bottom: 0;
+  border-bottom: 0.08em solid var(--ink);
+}
+
+.ProseMirror table.ts-table-booktabs tr.ts-table-break-midrule > td::after {
+  bottom: 0;
+  border-bottom: 0.05em solid var(--ink);
+}
+
+/* grid: the real rows' collapsed cell strokes already close and open the
+   pages; only the header copy needs its cell strokes, painted inside its
+   fixed box so nothing grows. */
+.ProseMirror table.ts-table-grid tr.ts-table-break .ts-table-hdr {
+  box-shadow:
+    inset 1pt 0 0 0 var(--ink),
+    inset 0 1pt 0 0 var(--ink),
+    inset 0 -1pt 0 0 var(--ink);
+}
+
+.ProseMirror table.ts-table-grid tr.ts-table-break > td:last-child .ts-table-hdr {
+  box-shadow:
+    inset 1pt 0 0 0 var(--ink),
+    inset -1pt 0 0 0 var(--ink),
+    inset 0 1pt 0 0 var(--ink),
+    inset 0 -1pt 0 0 var(--ink);
+}
+
+/* The header copy is presentation: no cell hover/selection affordances. */
+.ProseMirror table tr.ts-table-break > td:hover {
+  background-color: transparent;
 }
 
 /* prosemirror-tables cell-selection highlight */

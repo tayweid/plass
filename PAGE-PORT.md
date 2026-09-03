@@ -148,7 +148,20 @@
   `exact[` with the break between consecutive rows, the header copy at
   page 2's content top (0px) and the next row directly under it (0px);
   a rowspan across Typst's own break row stays atomic; cell edits on both
-  pages keep one table node and return to exact.
+  pages keep one table node and return to exact. Step 3 (presentation) +
+  step 4 (fail open) landed: the widget row paints, as pseudo-elements
+  only, the table's closing rule at the interrupted page's bottom and the
+  opening rule + header rule on the continuation page — what
+  `render_fills_strokes` strokes at a region boundary (the bottom-border
+  hline index is chained after every region's rows, layouter.rs:600-604;
+  top-border hlines take priority at a region top, :674-680; the header's
+  own hlines repeat under the repeated header, :634-645, so the midrule
+  copy appears only when the repeated row is the row the exporter's midrule
+  sits under). Grid tables keep their collapsed cell strokes and the header
+  copy paints its own; the widget adds no height beyond gap + header copy
+  (asserted). Rowspan across the boundary, figure tables and sub-headers
+  decline exact and stay atomic (tests). Remaining: step 5 (suffix seeding
+  + parity telemetry relaxation).
 
 Goal: the local paginator's page decisions become identical to Typst's for
 supported content, the same way the line-break port (PORT.md) made local line
@@ -406,5 +419,7 @@ cell box model charges exactly `10pt + extent·em` per first line.
 Multi-column layout, floats, parity/two-sided pages, footnote-in-footnote,
 per-region block relayout (`MultiChild` semantics beyond Phase 7's
 row-level table breaks), and any change to `.typ` serialization or to what
-Typst itself computes. Tables are atomic until Phase 7: a compiled page
-start inside one declines the exact map rather than being mirrored.
+Typst itself computes. Inside tables, Typst's own splits of a rowspan
+(grid/rowspans.rs) and of a tall cell across regions (`layout_multi_row`)
+are not mirrored: the oracle fails closed on such a page start and the
+table is placed atomically, exactly as before Phase 7.

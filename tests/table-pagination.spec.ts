@@ -135,6 +135,37 @@ test('a 40-row table crossing a page boundary paginates exactly, breaking betwee
   expect(Math.abs(w.hdrTopFromContent)).toBeLessThan(1.5);
   expect(Math.abs(w.nextRowBelowHdr)).toBeLessThan(1.5);
 
+  // Presentation (Phase 7 step 3): the widget row paints the table's
+  // closing rule at the page bottom, the opening rule and the header rule
+  // on the new page — as pseudo-elements only — and its layout height is
+  // exactly the spacer it stands for (gap + header copy).
+  const paint = await page.evaluate(() => {
+    const widget = document.querySelector<HTMLElement>('.ProseMirror table tr.ts-table-break')!;
+    const td = widget.querySelector<HTMLElement>('td')!;
+    const gap = widget.querySelector<HTMLElement>('.ts-table-gap')!;
+    const hdr = widget.querySelector<HTMLElement>('.ts-table-hdr')!;
+    const width = (el: Element, pseudo: string, side: 'borderTopWidth' | 'borderBottomWidth') =>
+      parseFloat(getComputedStyle(el, pseudo)[side]);
+    const requested = Number(/^pgr:\d+:(\d+):(\d+)$/.exec(widget.dataset.tsGapKey ?? '')?.[1] ?? NaN);
+    return {
+      classes: [...widget.classList],
+      closingRule: width(td, '::before', 'borderTopWidth'),
+      openingRule: width(gap, '::after', 'borderBottomWidth'),
+      headerRule: width(td, '::after', 'borderBottomWidth'),
+      requested,
+      painted: widget.getBoundingClientRect().height,
+      gapPlusHeader: gap.getBoundingClientRect().height + hdr.getBoundingClientRect().height,
+      cellPaddingBlock: [getComputedStyle(td).paddingTop, getComputedStyle(td).paddingBottom],
+    };
+  });
+  expect(paint.classes).toEqual(expect.arrayContaining(['ts-pagegap', 'ts-table-break', 'ts-table-break-header', 'ts-table-break-midrule']));
+  expect(paint.closingRule).toBeGreaterThan(0.5);
+  expect(paint.openingRule).toBeGreaterThan(0.5);
+  expect(paint.headerRule).toBeGreaterThan(0.5);
+  expect(paint.cellPaddingBlock).toEqual(['0px', '0px']);
+  expect(Math.abs(paint.painted - paint.requested)).toBeLessThan(1);
+  expect(Math.abs(paint.painted - paint.gapPlusHeader)).toBeLessThan(1);
+
   // The exact page start Typst reported is the same row boundary.
   const oracleRow = await page.evaluate(() => {
     const oracle = window.__pageOracle as { results?: Map<string, { status: string; pageStarts?: Array<{ unit: string; line: number }> }> };
