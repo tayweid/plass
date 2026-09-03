@@ -11,6 +11,7 @@
 // lazily on the first toggle.
 
 import type { Node as PMNode } from 'prosemirror-model';
+import { Selection } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { closeHistory } from 'prosemirror-history';
 import { docToTyp } from './typ-serializer';
@@ -91,9 +92,65 @@ interface Active {
   offsets: number[];
   /** The page column's painted height before the sheet replaced it. */
   stackHeight: string;
+  /** Islands the document had on entry, so the exit toast counts only
+   *  what the source round trip produced. */
+  islands: { blocks: number; inline: number };
 }
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/** Raw-Typst islands in a document: blocks and inline spans the page view
+ *  keeps verbatim because it cannot show them. */
+function countIslands(doc: PMNode): { blocks: number; inline: number } {
+  let blocks = 0;
+  let inline = 0;
+  doc.descendants((n) => {
+    if (n.type.name === 'code_block' && n.attrs.params === 'typst-raw') blocks++;
+    else if (n.type.name === 'typst_inline') inline++;
+    return true;
+  });
+  return { blocks, inline };
+}
+
+/** The toast for islands the source round trip produced (decision 8). */
+function islandNotice(before: { blocks: number; inline: number }, after: { blocks: number; inline: number }): string | null {
+  const blocks = Math.max(0, after.blocks - before.blocks);
+  const inline = Math.max(0, after.inline - before.inline);
+  const parts: string[] = [];
+  if (blocks) parts.push(`${blocks} block${blocks === 1 ? '' : 's'}`);
+  if (inline) parts.push(`${inline} inline span${inline === 1 ? '' : 's'}`);
+  return parts.length ? `${parts.join(' and ')} kept as raw Typst` : null;
+}
+
+/** Which top-level block a caret in the typed text sits in (decision 5).
+ *  The parsers report no source positions, so the block starts of the
+ *  parsed document's own re-serialization are anchored into the typed
+ *  text by each block's first line: exact while the text is the
+ *  serializer's, and at worst a block early where a block's prose was
+ *  re-normalized (its anchor then fails and the previous one stands). */
+function caretBlock(typed: string, normalized: string, offsets: number[], caret: number): number {
+  let best = 0;
+  let from = 0;
+  for (let i = 0; i < offsets.length; i++) {
+    const end = i + 1 < offsets.length ? offsets[i + 1] : normalized.length;
+    if (end <= offsets[i]) continue; // emits nothing (Markdown front matter)
+    const key = normalized.slice(offsets[i], end).split('\n')[0].trimEnd().slice(0, 48);
+    if (!key.trim()) continue;
+    const at = typed.indexOf(key, from);
+    if (at < 0) continue;
+    if (at > caret) break;
+    best = i;
+    from = at + key.length;
+  }
+  return best;
+}
+
+/** The document position at the start of top-level block `index`. */
+function blockStart(doc: PMNode, index: number): number {
+  let pos = 0;
+  for (let i = 0; i < Math.min(index, doc.childCount); i++) pos += doc.child(i).nodeSize;
+  return pos;
+}
 
 export function createSourceView(hooks: SourceViewHooks): SourceView {
   const { view, stack } = hooks;
@@ -111,12 +168,13 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
   };
 
   /** The document in its file format, with block offsets. Markdown's
-   *  lossy-save notices surface once here, as they do on save. */
-  const serialize = (doc: PMNode, format: SourceFormat, offsets: number[]): string => {
+   *  lossy-save notices surface once here, as they do on save — unless
+   *  `quiet` (the exit-side mapping serialization, which nobody sees). */
+  const serialize = (doc: PMNode, format: SourceFormat, offsets: number[], quiet = false): string => {
     if (format === '.md') {
       const warned = new Set<string>();
       const text = md!.docToMd(doc, (m) => warned.add(m), offsets);
-      for (const m of warned) hooks.message(m);
+      if (!quiet) for (const m of warned) hooks.message(m);
       return text;
     }
     return docToTyp(doc, { offsets });
@@ -157,6 +215,12 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
     const offsets: number[] = [];
     // Serialize AFTER the imports: the document may have changed meanwhile.
     const initial = text ?? serialize(view.state.doc, format, offsets);
+    const islands = countIslands(view.state.doc);
+    // The caret's top-level block, carried over by block (decision 5) —
+    // only when the text is this document's serialization (not a
+    // restored session, whose offsets are unknown).
+    const caretOffset =
+      text === null && offsets.length ? offsets[Math.min(view.state.selection.$from.index(0), offsets.length - 1)] : -1;
     // Sleep first, then hide: no pass may measure the editor once hidden.
     setLayoutSuspended(view, true);
     stack.classList.add('source-mode');
@@ -174,11 +238,12 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
         hooks.onChange();
       },
     });
-    active = { editor, host, format, offsets, stackHeight };
+    active = { editor, host, format, offsets, stackHeight, islands };
     persistSession();
     rememberMode(format, 'source');
     hooks.onMode(true);
     editor.focus();
+    if (caretOffset >= 0) editor.setCaret(caretOffset);
   };
 
   const enter = async (): Promise<boolean> => {
@@ -196,8 +261,9 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
     if (!active || busy) return active === null;
     busy = true;
     try {
-      const { editor, host, format, stackHeight } = active;
+      const { editor, host, format, stackHeight, islands } = active;
       const text = editor.text();
+      const caret = editor.caret();
       let doc: PMNode;
       try {
         doc = parse(text, format);
@@ -206,6 +272,11 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
         hooks.message(`Could not read the source — ${e instanceof Error ? e.message : String(e)}`);
         return false;
       }
+      // The caret's block, found through the parsed document's own
+      // serialization (see caretBlock); its start is the page position.
+      const newOffsets: number[] = [];
+      const normalized = serialize(doc, format, newOffsets, true);
+      const target = blockStart(doc, caretBlock(text, normalized, newOffsets, caret));
       editor.destroy();
       host.remove();
       active = null;
@@ -218,16 +289,29 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
       // the wake-up pass below is then the only pass, and it sees the new
       // document. An unchanged document installs nothing — no history
       // entry, no dirty flag, no re-normalization.
-      if (!doc.eq(view.state.doc)) {
-        let tr = view.state.tr.replaceWith(0, view.state.doc.content.size, doc.content);
+      const changed = !doc.eq(view.state.doc);
+      let tr = view.state.tr;
+      if (changed) {
+        tr = tr.replaceWith(0, view.state.doc.content.size, doc.content);
         for (const name of Object.keys(doc.attrs)) {
           if (doc.attrs[name] !== view.state.doc.attrs[name]) tr = tr.setDocAttribute(name, doc.attrs[name]);
         }
-        view.dispatch(closeHistory(tr));
+        closeHistory(tr);
       }
+      tr = tr.setSelection(Selection.near(tr.doc.resolve(Math.min(target + 1, tr.doc.content.size)), 1)).scrollIntoView();
+      view.dispatch(tr);
       setLayoutSuspended(view, false);
       hooks.onMode(false);
       view.focus();
+      // The wake-up pass (next frame) re-imposes page gaps under the caret;
+      // scroll follows the caret once they are in place.
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (!active && !view.isDestroyed) view.dispatch(view.state.tr.scrollIntoView());
+        }),
+      );
+      const notice = changed ? islandNotice(islands, countIslands(doc)) : null;
+      if (notice) hooks.message(notice);
       return true;
     } finally {
       busy = false;

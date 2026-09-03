@@ -280,3 +280,148 @@ test('the layout sleeps in the source and wakes into exact pagination', async ({
     .toBe(true);
   expect((await page.evaluate(() => window.__layoutDispatchStats())).lines).toBeGreaterThan(0);
 });
+
+// ---------- step 3: mapping and feedback ----------
+
+/** Index of the first top-level block whose text is `text`. */
+const blockIndex = (page: Page, text: string) =>
+  page.evaluate((text) => {
+    const { doc } = window.view.state;
+    for (let i = 0; i < doc.childCount; i++) if (doc.child(i).textContent === text) return i;
+    return -1;
+  }, text);
+
+test('entering carries the caret to its block and scrolls there', async ({ page }) => {
+  await loadDemo(page);
+  const index = await blockIndex(page, 'How it works');
+  expect(index).toBeGreaterThan(5);
+  await page.evaluate((index) => {
+    const { state } = window.view;
+    let pos = 0;
+    for (let i = 0; i < index; i++) pos += state.doc.child(i).nodeSize;
+    window.view.dispatch(state.tr.setSelection(state.selection.constructor.near(state.doc.resolve(pos + 1))));
+  }, index);
+  await enter(page);
+  const at = await page.evaluate(() => {
+    const sv = window.__sourceView;
+    return sv.text()!.slice(sv.caret(), sv.caret() + 15);
+  });
+  expect(at).toBe('== How it works');
+  // Scroll follows the caret: the caret line is in the viewport, well
+  // below the top of the sheet.
+  await expect.poll(() => page.evaluate(() => document.getElementById('scroll')!.scrollTop)).toBeGreaterThan(200);
+  const caretBox = await page.locator('#source .cm-cursor').first().boundingBox();
+  expect(caretBox).not.toBeNull();
+  expect(caretBox!.y).toBeGreaterThan(0);
+  expect(caretBox!.y).toBeLessThan(page.viewportSize()!.height);
+});
+
+/** Whether the page caret sits inside the viewport. */
+const caretOnScreen = (page: Page) =>
+  page.evaluate(() => {
+    const c = window.view.coordsAtPos(window.view.state.selection.from);
+    return c.top >= 0 && c.bottom <= window.innerHeight;
+  });
+
+test('leaving puts the page caret in the block the text caret was in', async ({ page }) => {
+  await loadDemo(page);
+  await enter(page);
+  // Untouched text: the mapping is exact.
+  await page.evaluate(() => {
+    const sv = window.__sourceView;
+    sv.setCaret(sv.text()!.indexOf('== Tables') + 5);
+  });
+  await exit(page);
+  expect(await page.evaluate(() => window.view.state.selection.$from.parent.textContent)).toBe('Tables');
+  await expect.poll(() => caretOnScreen(page)).toBe(true);
+  expect(await page.evaluate(() => document.getElementById('scroll')!.scrollTop)).toBeGreaterThan(200);
+
+  // Edited text: an earlier paragraph rewritten and a block added before
+  // the caret still land it in the right block.
+  await enter(page);
+  await page.evaluate(() => {
+    const sv = window.__sourceView;
+    const text = sv.text()!
+      .replace('== Why this exists', '== Why  this   exists\n\nAn inserted paragraph with a -- dash.')
+      .replace('== Figures', '== Figures, renamed');
+    sv.setText(text);
+    sv.setCaret(text.indexOf('== How it works') + 3);
+  });
+  await exit(page);
+  expect(await page.evaluate(() => window.view.state.selection.$from.parent.textContent)).toBe('How it works');
+  await expect.poll(() => caretOnScreen(page)).toBe(true);
+});
+
+test('an off-rails #let typed in the source returns as one raw island, announced', async ({ page }) => {
+  await loadDemo(page);
+  const islandsBefore = await page.evaluate(() => document.querySelectorAll('.ProseMirror pre').length);
+  await enter(page);
+  await page.evaluate(() => {
+    const sv = window.__sourceView;
+    sv.setText(sv.text()!.trimEnd() + '\n\n#let x = 1\n');
+  });
+  const toast = page.locator('#toast');
+  await exit(page);
+  await expect(toast).toHaveText('1 block kept as raw Typst');
+  const islands = await page.evaluate(() => {
+    let n = 0;
+    window.view.state.doc.descendants((node) => {
+      if (node.type.name === 'code_block' && node.attrs.params === 'typst-raw') n++;
+      return true;
+    });
+    return n;
+  });
+  expect(islands).toBe(1);
+  expect(await page.locator('.ProseMirror pre').count()).toBe(islandsBefore + 1);
+  // Leaving again with nothing new says nothing.
+  await page.evaluate(() => (document.getElementById('toast')!.textContent = ''));
+  await enter(page);
+  await exit(page);
+  await page.waitForTimeout(300);
+  await expect(toast).toHaveText('');
+});
+
+test('PDF export from the source runs on the parsed text', async ({ page }) => {
+  await boot(page);
+  let downloads = 0;
+  page.on('download', () => downloads++);
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    window.__fm.dir = await root.getDirectoryHandle('source-export', { create: true });
+  });
+  await enter(page);
+  await page.evaluate(() => {
+    const sv = window.__sourceView;
+    sv.setText(sv.text()!.trimEnd() + '\n\n= Written in the source\n\nA paragraph the page view never saw.\n');
+  });
+  const result = await page.evaluate(async () => {
+    const toast = document.getElementById('toast')!;
+    const messages: string[] = [];
+    const observer = new MutationObserver(() => messages.push(toast.textContent ?? ''));
+    observer.observe(toast, { childList: true, characterData: true, subtree: true });
+    (document.querySelector('[title="Export — PDF, .typ, .tex"]') as HTMLElement).click();
+    (document.querySelector('[title="Export PDF via Typst"]') as HTMLElement).click();
+    const deadline = Date.now() + 25_000;
+    while (Date.now() < deadline && !messages.some((m) => m.startsWith('Exported '))) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    observer.disconnect();
+    let header = '';
+    let size = 0;
+    try {
+      const h = await window.__fm.dir!.getFileHandle(`${window.__fm.name}.pdf`);
+      const bytes = new Uint8Array(await (await h.getFile()).arrayBuffer());
+      header = new TextDecoder().decode(bytes.slice(0, 5));
+      size = bytes.length;
+    } catch {
+      /* missing — asserted below */
+    }
+    return { messages, header, size, stillSource: window.__sourceView.isActive() };
+  });
+  expect(result.header).toBe('%PDF-');
+  expect(result.size).toBeGreaterThan(1_000);
+  expect(result.stillSource).toBe(true);
+  expect(downloads).toBe(0);
+  // The page document itself was never touched by the export.
+  expect(await page.evaluate(() => window.view.state.doc.textContent)).not.toContain('Written in the source');
+});

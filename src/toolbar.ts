@@ -130,6 +130,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   let currentPod!: HTMLElement;
   let toolsPill: HTMLElement | null = null;
   let sourceBtn!: HTMLButtonElement;
+  const docTools: HTMLButtonElement[] = [];
   const pod = () => {
     currentPod = document.createElement('div');
     currentPod.className = 'tb-pod';
@@ -516,6 +517,9 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
         run: () => showHelp(fm),
       },
     ]);
+    for (const b of docPod.querySelectorAll<HTMLButtonElement>('[title="Edit bibliography"], [title="Document settings"]')) {
+      docTools.push(b);
+    }
     const div = document.createElement('span');
     div.className = 'tb-div';
     docPod.appendChild(div);
@@ -564,6 +568,12 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       // truth while the source is open.
       toolsPill?.classList.toggle('tb-resting', active);
       for (const b of toolsPill?.querySelectorAll<HTMLButtonElement>('button') ?? []) b.disabled = active;
+      // So do the bibliography and settings editors; help and export stay
+      // (export parses the text on demand, decision 9).
+      for (const b of docTools) {
+        b.disabled = active;
+        b.classList.toggle('tb-resting-btn', active);
+      }
     },
     setFile(name, dirty) {
       const unsaved = !fm.saved || dirty;

@@ -930,6 +930,11 @@ body {
   visibility: hidden;
 }
 
+.tb-btn.tb-resting-btn {
+  opacity: 0.22;
+  pointer-events: none;
+}
+
 /* The pressed toggle: lit, on the dark title pill. */
 .doc-title .tb-source[aria-pressed='true'] {
   color: #fff;
