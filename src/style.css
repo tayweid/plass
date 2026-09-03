@@ -801,6 +801,28 @@ body {
   padding: var(--page-margin-top, 1.25in) var(--page-margin-right, 1.25in) 0 var(--page-margin-left, 1.25in);
 }
 
+/* ---------- source view (SOURCE-VIEW.md) ---------- */
+
+/* The text is the truth: the editor and its page boxes hide behind the
+   sheet (the layout plugin sleeps meanwhile — a hidden editor measures
+   nothing). Page-view rules above are untouched. */
+#stack.source-mode > #editor,
+#stack.source-mode > #pages {
+  display: none;
+}
+
+#source {
+  position: relative;
+  z-index: 1;
+  min-height: 60vh;
+  background: var(--sheet);
+  color: var(--ink);
+  border-radius: 4px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 18px 50px rgba(0, 0, 0, 0.4);
+}
+
 /* ---------- document typography (driven by document settings) ---------- */
 
 .ProseMirror ::selection,

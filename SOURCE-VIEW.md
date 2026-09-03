@@ -8,8 +8,9 @@ write the same on-rails document, not a way around the rails (README, "Typst
 on rails"): Typst the page view cannot show still arrives as a visible raw
 island, and the source view promises nothing about how it prints.
 
-Status: step 0 in progress — serializer block offsets landed; suspend flag
-under way; highlighter decided (hand-written rails mode).
+Status: step 1 landed — toggle (title-pill button, `Mod-/`), lazy CodeMirror,
+serialize-on-enter / single-transaction parse-on-exit, verbatim `getText`
+saves, per-tab session restore. Steps 2–3 next.
 
 ## What already exists
 

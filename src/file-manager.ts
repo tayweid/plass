@@ -31,6 +31,11 @@ export interface FileHooks {
   onProjectKept?: () => void;
   /** Whether boot restored this tab's own crash/reload session. */
   hasSessionDoc?: () => boolean;
+  /** The document's text as the writer typed it, when a source view is
+   *  open in `format` — saved verbatim, never re-serialized, until the
+   *  writer returns to the page view (SOURCE-VIEW.md, decision 3). Null
+   *  when the page view is the truth or the source is in the other format. */
+  getText?: (format: '.md' | '.typ') => string | null;
 }
 
 export interface RecentEntry {
@@ -91,7 +96,12 @@ export class FileManager {
    *  renamed to .typ is read back as Typst, and its headings return as raw
    *  islands. Tracked rather than derived from the handle, because fallback
    *  mode has a document and a name but no handle to read it off. */
-  private format: '.md' | '.typ' = '.typ';
+  private fileFormat: '.md' | '.typ' = '.typ';
+
+  /** The format the open document is written in (see `fileFormat`). */
+  get format(): '.md' | '.typ' {
+    return this.fileFormat;
+  }
 
   /** Project folder: relative asset paths resolve inside it. */
   dir: FileSystemDirectoryHandle | null = null;
@@ -229,8 +239,13 @@ export class FileManager {
     return readBoundedText(file, INPUT_LIMITS.documentBytes, file.name);
   }
 
-  /** The on-disk text for the current doc in the handle's format. */
-  private async serialize(fileName: string, doc: PMNode = this.hooks.getDoc()): Promise<string> {
+  /** The on-disk text for the current doc in the handle's format. Text the
+   *  writer is typing in a source view of that format is the document and
+   *  goes out verbatim. */
+  private async serialize(fileName: string, doc?: PMNode): Promise<string> {
+    const typed = this.hooks.getText?.(isMd(fileName) ? '.md' : '.typ');
+    if (typeof typed === 'string') return typed;
+    doc ??= this.hooks.getDoc();
     if (isMd(fileName)) {
       const { docToMd } = await import('./md-serializer');
       const warned = new Set<string>();
@@ -259,8 +274,7 @@ export class FileManager {
     const handle = this.handle;
     if (!handle || (!this.dirty && !force)) return 'noop';
     const revision = this.changeRevision;
-    const doc = this.hooks.getDoc();
-    const text = await this.serialize(handle.name, doc);
+    const text = await this.serialize(handle.name);
     if (handle !== this.handle) return 'stale';
 
     if (!force && this.diskBaseline !== null) {
@@ -351,7 +365,7 @@ export class FileManager {
     this.conflict = false;
     this.changeRevision = 0;
     this.name = name;
-    this.format = '.typ';
+    this.fileFormat = '.typ';
     this.dirty = false;
     this.hooks.setDoc(doc ?? this.hooks.emptyDoc());
     this.hooks.onState();
@@ -414,7 +428,7 @@ export class FileManager {
     this.conflict = false;
     this.changeRevision = 0;
     this.name = file.name.replace(/\.(typ|md)$/i, '');
-    this.format = isMd(file.name) ? '.md' : '.typ';
+    this.fileFormat = isMd(file.name) ? '.md' : '.typ';
     this.dirty = false;
     this.hooks.setDoc(doc);
     this.hooks.onState();
@@ -785,14 +799,14 @@ export class FileManager {
     file: File,
     diskText: string,
   ): Promise<void> {
-    const localText = await this.serialize(file.name, this.hooks.getDoc());
+    const localText = await this.serialize(file.name);
     clearTimeout(this.saveTimer);
     this.handle = handle;
     this.dir = dir;
     this.pendingRestore = null;
     this.diskBaseline = diskText;
     this.name = file.name.replace(/\.(typ|md)$/i, '');
-    this.format = isMd(file.name) ? '.md' : '.typ';
+    this.fileFormat = isMd(file.name) ? '.md' : '.typ';
     this.conflict = localText !== diskText;
     this.dirty = this.conflict;
     this.hooks.onState();
@@ -821,7 +835,7 @@ export class FileManager {
    *  reason — losing access is not losing identity. */
   private adoptFileIdentity(handle: FileSystemFileHandle) {
     this.name = handle.name.replace(/\.(typ|md)$/i, '');
-    this.format = isMd(handle.name) ? '.md' : '.typ';
+    this.fileFormat = isMd(handle.name) ? '.md' : '.typ';
     this.hooks.onState();
   }
 
@@ -978,7 +992,7 @@ export class FileManager {
       this.conflict = false;
       this.changeRevision = 0;
       this.name = file.name.replace(/\.(typ|md)$/i, '');
-      this.format = isMd(file.name) ? '.md' : '.typ';
+      this.fileFormat = isMd(file.name) ? '.md' : '.typ';
       this.dirty = false;
       this.hooks.setDoc(doc);
       this.hooks.onState();

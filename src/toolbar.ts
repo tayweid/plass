@@ -22,6 +22,14 @@ export interface Toolbar {
   update: (state: EditorState) => void;
   stats: (s: TypesetStats) => void;
   setFile: (name: string, dirty: boolean) => void;
+  /** The source view opened or closed: press the toggle, and rest the
+   *  formatting tools while the text is the truth. */
+  setSourceMode: (active: boolean) => void;
+}
+
+export interface ToolbarActions {
+  /** Toggle the source view (SOURCE-VIEW.md). */
+  toggleSource: () => void;
 }
 
 const insertFigureCmd: Command = (state, dispatch, view) => {
@@ -56,7 +64,7 @@ function icon(name: string): string {
   return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 }
 
-export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileManager): Toolbar {
+export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileManager, actions: ToolbarActions): Toolbar {
   const fileLabel = document.createElement('span');
   fileLabel.className = 'tb-file';
   fileLabel.textContent = DEFAULT_DOC_NAME;
@@ -121,6 +129,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   // Two capsules: the title, and one tools pill of pipe-separated groups.
   let currentPod!: HTMLElement;
   let toolsPill: HTMLElement | null = null;
+  let sourceBtn!: HTMLButtonElement;
   const pod = () => {
     currentPod = document.createElement('div');
     currentPod.className = 'tb-pod';
@@ -276,6 +285,17 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
           }),
       },
     ]);
+    // The source toggle rides on the title pill: it is about the document
+    // as a whole (which surface is the truth), not about the text inside.
+    sourceBtn = document.createElement('button');
+    sourceBtn.type = 'button';
+    sourceBtn.className = 'tb-btn tb-source';
+    sourceBtn.title = 'Source view — edit the file as text (⌘/)';
+    sourceBtn.setAttribute('aria-pressed', 'false');
+    sourceBtn.innerHTML = icon('code');
+    sourceBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    sourceBtn.addEventListener('click', () => actions.toggleSource());
+    titleBar.appendChild(sourceBtn);
     container.appendChild(titleBar);
   }
 
@@ -537,6 +557,14 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       blockCycle.refresh(state);
     },
     stats() {},
+    setSourceMode(active) {
+      sourceBtn.setAttribute('aria-pressed', String(active));
+      sourceBtn.classList.toggle('active', active);
+      // The tools pill acts on the ProseMirror document, which is not the
+      // truth while the source is open.
+      toolsPill?.classList.toggle('tb-resting', active);
+      for (const b of toolsPill?.querySelectorAll<HTMLButtonElement>('button') ?? []) b.disabled = active;
+    },
     setFile(name, dirty) {
       const unsaved = !fm.saved || dirty;
       // The save state is the dot beside the name.

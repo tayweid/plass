@@ -24,6 +24,7 @@ import { refAutocomplete } from './ref-autocomplete';
 import { applySettings, formatPageNumber, getSettings } from './settings';
 import { FileManager } from './file-manager';
 import { resetCompilerCircuit } from './compiler-circuit';
+import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
 
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
@@ -63,6 +64,7 @@ function loadDoc(): PMNode {
   // its own work through the session branch below.
   if (new URLSearchParams(location.search).has('new')) {
     sessionStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SOURCE_SESSION_KEY);
     // window.open copies sessionStorage, so the inherited tab id would make
     // this window adopt the opener's file. It gets its own on first use.
     sessionStorage.removeItem(TAB_ID_KEY);
@@ -297,25 +299,45 @@ const view = new EditorView(editorEl, {
 window.addEventListener('pagehide', () => {
   clearTimeout(saveTimer);
   persistSession(view);
+  sourceView.persist();
 });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     clearTimeout(saveTimer);
     persistSession(view);
+    sourceView.persist();
   }
 });
 
+// The source view (SOURCE-VIEW.md): the text is the truth while it is open.
+const sourceView = createSourceView({
+  view,
+  stack: stackEl,
+  format: () => fileManager.format,
+  onChange() {
+    fileManager.noteChange();
+    updateStatus();
+  },
+  onMode(active) {
+    toolbar?.setSourceMode(active);
+    updateStatus();
+  },
+  message: showMessage,
+});
+
 const fileManager = new FileManager({
-  getDoc: () => view.state.doc,
+  getDoc: () => sourceView.currentDoc(),
+  getText: (format) => sourceView.textFor(format),
   emptyDoc: () => schema.nodes.doc.create(null, [schema.nodes.paragraph.create()]),
   setDoc(doc) {
     resetCompilerCircuit();
     view.updateState(makeState(doc, onStats));
+    sourceView.afterSetDoc();
     applySettings(view.state);
     toolbar?.update(view.state);
     updateStatus();
     scheduleSave(view);
-    view.focus();
+    sourceView.focus();
   },
   onState() {
     toolbar?.setFile(fileManager.name, fileManager.dirty);
@@ -329,7 +351,7 @@ const fileManager = new FileManager({
   hasSessionDoc: () => restoredSessionDoc,
 });
 
-toolbar = buildToolbar(toolbarEl, view, fileManager);
+toolbar = buildToolbar(toolbarEl, view, fileManager, { toggleSource: () => void sourceView.toggle() });
 setFigureFileManager(fileManager);
 const stopAssetWatch = startAssetWatch(view);
 import.meta.hot?.dispose(() => {
@@ -416,10 +438,21 @@ window.addEventListener(
     } else if (key === 'o' && !e.shiftKey) {
       e.preventDefault();
       void fileManager.open();
+    } else if (key === '/' && !e.shiftKey && !e.altKey) {
+      // The source toggle, from either editor. Capture phase, stopped here:
+      // CodeMirror must not see it. (SOURCE-VIEW.md proposed ⌘⇧M with ⌘/
+      // as the fallback if it collided; ⌘⇧M is display math.)
+      e.preventDefault();
+      e.stopPropagation();
+      void sourceView.toggle();
     }
   },
   { capture: true },
 );
+
+// A reloaded tab that was writing in the source lands back in it, its text
+// unparsed (SOURCE-VIEW.md, decision 7).
+void sourceView.restore();
 
 /** Touch every math node (same attrs) so node views re-render with new macros. */
 function refreshMathNodes() {
@@ -462,10 +495,9 @@ function showMessage(text: string, action?: { label: string; run: () => void }) 
 }
 
 function updateStatus() {
-  const words = view.state.doc.textBetween(0, view.state.doc.content.size, ' ', ' ')
-    .split(/\s+/)
-    .filter(Boolean).length;
-  const pages = pageCount ? `${pageCount} p · ` : '';
+  const words = sourceView.wordCount();
+  // The source view has no pages: the count is a page-view fact.
+  const pages = pageCount && !sourceView.isActive() ? `${pageCount} p · ` : '';
   hudEl.textContent = `${pages}${words} words`;
   hudEl.title = lastStats ? `layout oracle: ${lastStats.ms.toFixed(1)} ms for ${lastStats.lines} lines` : '';
 }
@@ -521,6 +553,10 @@ if (import.meta.env.DEV) {
   (window as unknown as { __fm: FileManager }).__fm = fileManager;
   (window as unknown as { __migrateEmbedded: () => Promise<void> }).__migrateEmbedded = () =>
     migrateEmbeddedFigures(view);
+  // The source view (tests/source-view.spec.ts) and the demo document it
+  // round-trips, through the app's own instances.
+  (window as unknown as { __sourceView: typeof sourceView }).__sourceView = sourceView;
+  (window as unknown as { __loadDemo: () => void }).__loadDemo = () => fileManager.newDoc(demoDoc(), 'Demo');
   // Compiler worker counters (tests/layout-suspend.spec.ts proves a
   // suspended editor posts no compiler task). The dynamic import resolves
   // to the app's own module instance under vite's dev server, so the

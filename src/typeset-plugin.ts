@@ -364,13 +364,11 @@ export function invalidatePageLayout(view: EditorView) {
  * pass — the same pass a freshly opened document gets — which re-requests
  * every oracle answer it lacks.
  */
-// Not exported yet: the source view (SOURCE-VIEW.md step 1) is the first
-// caller outside this module; until then the DEV hook below is the only one.
-function setLayoutSuspended(view: EditorView, suspended: boolean) {
+export function setLayoutSuspended(view: EditorView, suspended: boolean) {
   viewRegistry.get(view)?.setSuspended(suspended);
 }
 
-function isLayoutSuspended(view: EditorView): boolean {
+export function isLayoutSuspended(view: EditorView): boolean {
   return viewRegistry.get(view)?.isSuspended() ?? false;
 }
 
