@@ -139,6 +139,11 @@ export function planTableRowBreaks(
   rows: readonly MeasuredRow[],
   avail: number,
   capacity: (continuation: number) => number,
+  /** Typst's `regions.may_progress()` where the table starts: false for
+   * the first frame of a page with nothing inserted, when moving the whole
+   * table cannot help (flow/distribute.rs:288) — its first rows are then
+   * placed to overflow instead of finishing the region. */
+  mayProgressAtStart = true,
   tolerance = 0.5,
 ): TableRowPlan {
   const breaks: TableRowBreak[] = [];
@@ -163,6 +168,13 @@ export function planTableRowBreaks(
     // placed without a snapshot: repeated.rs:79-90).
     if (rep !== null && i === rep + 1 && brokeBefore !== rep) at = rep;
     if (model.spannedBoundaries.has(at)) return { kind: 'atomic', row: at };
+    if (at === 0 && !mayProgressAtStart) {
+      // Nothing above to give back: place the first rows and let them
+      // overflow (the oversize case at a page top), then keep walking.
+      brokeBefore = 0;
+      i = -1;
+      continue;
+    }
     // The repeating header exists on continuation regions only once it has
     // been flushed by a placed content row (repeated.rs `flush_orphans`
     // after `layout_row`); a break inside the header run repeats nothing.

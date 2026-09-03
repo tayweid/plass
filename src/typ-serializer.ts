@@ -132,9 +132,11 @@ export function parityRules(s: DocSettings): string {
   // Display math: the editor shows Typst's own ink inside 0.5em padding.
   const { above: eqAbove, below: eqBelow } = equationBlockSpacingEm(s);
   out += `#show math.equation.where(block: true): set block(above: ${pt(eqAbove)}, below: ${pt(eqBelow)})\n`;
-  // Tables remain continuous structured editor content. Typst may break them
-  // natively with repeated table.header rows; local pagination falls back to
-  // atomic placement when it cannot certify a split (there is no split preview).
+  // Tables remain continuous structured editor content. Typst breaks them
+  // between rows with the repeating table.header row laid at the top of each
+  // continuation page; the editor mirrors that as a row-boundary widget
+  // (PAGE-PORT.md Phase 7) and places a table atomically only when it
+  // cannot certify the split.
   return out;
 }
 

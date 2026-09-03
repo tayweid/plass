@@ -153,6 +153,16 @@ const model = (opts: { rowCount: number; headerRun?: number; spanned?: number[] 
 }
 
 {
+  // At a page top with nothing inserted, `may_progress` is false: an
+  // oversize first row is placed to overflow rather than finishing the
+  // region for an empty page (flow/distribute.rs:288).
+  const plan = planTableRowBreaks(model({ rowCount: 3 }), rows([500, 25, 25]), 400, () => 400, false);
+  check('no progress at the start: overflow, then break normally', plan.kind === 'rows' && plan.breaks.length === 1 && plan.breaks[0].kind === 'row' && plan.breaks[0].row === 1);
+  const moved = planTableRowBreaks(model({ rowCount: 3 }), rows([500, 25, 25]), 400, () => 600, true);
+  check('with progress the same table moves whole', moved.kind === 'rows' && moved.breaks.length === 1 && moved.breaks[0].kind === 'start');
+}
+
+{
   // Per-page capacity callback receives the continuation ordinal.
   const seen: number[] = [];
   planTableRowBreaks(model({ rowCount: 6 }), rows(new Array(6).fill(10)), 20, (k) => {

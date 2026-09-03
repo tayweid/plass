@@ -19,7 +19,8 @@ export interface SuffixPageMarker {
 export interface SuffixPageSpacer {
   readonly pos: number;
   readonly height: number;
-  readonly kind: 'line' | 'block';
+  readonly kind: 'line' | 'block' | 'row';
+  readonly hdr?: number;
 }
 
 export interface SuffixPaginationInput {
@@ -174,7 +175,7 @@ function spacerIsValid(spacer: SuffixPageSpacer): boolean {
     spacer.pos >= 0 &&
     Number.isFinite(spacer.height) &&
     spacer.height > 0 &&
-    (spacer.kind === 'line' || spacer.kind === 'block')
+    (spacer.kind === 'line' || spacer.kind === 'block' || spacer.kind === 'row')
   );
 }
 

@@ -134,8 +134,21 @@
   and fail closed on a split inside a row, a missing/mismatched header, an
   all-empty row, a captioned (figure, unbreakable) table or a sub-header.
   A page start inside a table is now `{pos: table, line: ROW, unit:
-  'table'}`; `paginateForced` still declines it until step 2/3 install a
-  row-boundary spacer. Row model: src/layout/table-rows.ts.
+  'table'}`. Step 2 (local paginator + install) landed: `paginateForced`
+  installs a row start as a `row` spacer — a widget `<tr>` between the two
+  real rows (table-break-widget.ts: exact-height gap + a non-editable copy
+  of the repeating header sized to the real header row), declining and
+  withdrawing retained markers for anything the widget cannot mirror (a
+  rowspan across the boundary, a figure table, a stale row index). The
+  fallback pass's table branch measures `<tr>` heights and replays
+  `planTableRowBreaks` (table-rows.ts: region-full finish, header orphan
+  prevention, repeated-header reservation per continuation page, rowspan
+  crossing → atomic) through the shared `breakStart`/`breakBefore`
+  primitives. tests/table-pagination.spec.ts: a 40-row table reaches
+  `exact[` with the break between consecutive rows, the header copy at
+  page 2's content top (0px) and the next row directly under it (0px);
+  a rowspan across Typst's own break row stays atomic; cell edits on both
+  pages keep one table node and return to exact.
 
 Goal: the local paginator's page decisions become identical to Typst's for
 supported content, the same way the line-break port (PORT.md) made local line

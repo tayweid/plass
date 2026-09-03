@@ -477,7 +477,7 @@ test('focused caption and label fields stay synchronized through undo and redo',
   expect(await page.evaluate(() => window.view.state.doc.child(0).attrs.label)).toBe('tab:undoable');
 });
 
-test('tables keep exact pagination when they fit and use stable atomic fallback when they cross a page', async ({ page }) => {
+test('tables keep exact pagination when they fit and break between rows when they cross a page', async ({ page }) => {
   test.setTimeout(90_000);
 
   const fitLogStart = await installPaginationTable(page, 4);
@@ -490,6 +490,7 @@ test('tables keep exact pagination when they fit and use stable atomic fallback 
       { timeout: 30_000, intervals: [500, 1_000, 2_000] },
     )
     .toBe(true);
+  expect(await page.evaluate(() => document.querySelectorAll('.ProseMirror table tr.ts-table-break').length)).toBe(0);
 
   const consoleIssues: string[] = [];
   const pageErrors: string[] = [];
@@ -500,9 +501,10 @@ test('tables keep exact pagination when they fit and use stable atomic fallback 
   });
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
-  // Keep the same app instance and exact basis from the fitting table. This
-  // is the regression: a later mid-table oracle answer must clear that basis
-  // instead of letting the held path resurrect its old markers.
+  // Keep the same app instance and exact basis from the fitting table. A
+  // later mid-table oracle answer (PAGE-PORT.md Phase 7) is installed as a
+  // row-boundary widget inside the one editable table node — the retained
+  // basis from the fitting table must neither block nor resurrect it.
   const crossingLogStart = await installPaginationTable(page, 45, false);
   await expect
     .poll(
@@ -519,7 +521,7 @@ test('tables keep exact pagination when they fit and use stable atomic fallback 
     .poll(
       () => page.evaluate((start) => {
         if (window.__pagCount() <= start) return false;
-        return window.__pagLog().at(-1)?.startsWith('fallback[') ?? false;
+        return window.__pagLog().at(-1)?.startsWith('exact[') ?? false;
       }, crossingLogStart),
       { timeout: 15_000, intervals: [250, 500, 1_000] },
     )
@@ -531,17 +533,24 @@ test('tables keep exact pagination when they fit and use stable atomic fallback 
         const read = () => ({
           count: window.__pagCount(),
           entry: window.__pagLog().at(-1) ?? '',
+          tables: window.view.state.doc.childCount,
+          breaks: document.querySelectorAll('.ProseMirror table tr.ts-table-break').length,
           table: (() => {
             const rect = document.querySelector('.ProseMirror table')?.getBoundingClientRect();
             return rect ? [rect.top, rect.left, rect.width, rect.height].map((value) => value.toFixed(2)) : [];
           })(),
           gaps: [...document.querySelectorAll<HTMLElement>('.ts-pagegap')]
-            .map((gap) => `${gap.dataset.tsGapKey ?? ''}:${gap.style.height}`),
+            .map((gap) => `${gap.dataset.tsGapKey ?? ''}:${gap.getBoundingClientRect().height.toFixed(1)}`),
         });
         const before = read();
         await new Promise((resolve) => window.setTimeout(resolve, 600));
         const after = read();
-        return JSON.stringify(before) === JSON.stringify(after) && after.entry.startsWith('fallback[');
+        return (
+          JSON.stringify(before) === JSON.stringify(after) &&
+          after.entry.startsWith('exact[') &&
+          after.tables === 1 &&
+          after.breaks === 1
+        );
       }),
       { timeout: 15_000, intervals: [250, 500, 1_000] },
     )

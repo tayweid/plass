@@ -1492,6 +1492,26 @@ body {
   background-color: color-mix(in srgb, var(--accent) 4%, transparent);
 }
 
+/* A page break inside a table (PAGE-PORT.md Phase 7): a widget row between
+   two real rows. Its cells stack an exact-height gap and a copy of the
+   repeating header sized to the real header row; nothing else here may add
+   layout height — rules are pseudo-elements. */
+.ProseMirror table tr.ts-table-break > td {
+  padding: 0 5pt;
+  border: none;
+  vertical-align: top;
+}
+
+.ts-table-gap,
+.ts-table-hdr {
+  display: block;
+  overflow: hidden;
+}
+
+.ts-table-hdr p {
+  margin: 0;
+}
+
 /* prosemirror-tables cell-selection highlight */
 .ProseMirror .selectedCell::after {
   content: '';
@@ -2229,6 +2249,12 @@ body {
      browser paginates via @page (from the dynamic #page-style element). */
   .ts-pagegap {
     height: 0 !important;
+  }
+
+  /* The browser paginates tables itself in print; the screen-only widget
+     row (gap + header copy) must not print. */
+  tr.ts-table-break {
+    display: none !important;
   }
 
   /* Screen footnote positions are meaningless in print flow; show bodies as

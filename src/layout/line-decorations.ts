@@ -6,6 +6,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { Decoration, type DecorationSet } from 'prosemirror-view';
 import type { LineLayout } from './paragraph';
 import { applyFill } from '../inline-raw';
+import { tableBreakWidget } from './table-break-widget';
 
 /** Semantic roles owned by the typesetting layer. These tags are deliberately
  * independent of widget keys: callers can select layout decorations without
@@ -16,7 +17,8 @@ export type TypesetDecorationKind =
   | 'hyphen-break'
   | 'no-spell'
   | 'line-page-gap'
-  | 'block-page-gap';
+  | 'block-page-gap'
+  | 'row-page-gap';
 
 export interface TypesetDecorationSpec {
   tsKind: TypesetDecorationKind;
@@ -24,6 +26,8 @@ export interface TypesetDecorationSpec {
   sig?: string;
   h?: number;
   hy?: boolean;
+  /** row-page-gap: the repeated table header's share of `h` (px). */
+  hdr?: number;
 }
 
 /** A current, mapped ProseMirror node range. Ownership is range-based rather
@@ -62,7 +66,9 @@ function typesetKind(spec: unknown): TypesetDecorationKind | null {
   if (!spec || typeof spec !== 'object') return null;
   const kind = (spec as { tsKind?: unknown }).tsKind;
   return typeof kind === 'string' &&
-    (BLOCK_DECORATION_KINDS.has(kind as TypesetDecorationKind) || kind === 'block-page-gap')
+    (BLOCK_DECORATION_KINDS.has(kind as TypesetDecorationKind) ||
+      kind === 'block-page-gap' ||
+      kind === 'row-page-gap')
     ? (kind as TypesetDecorationKind)
     : null;
 }
@@ -75,7 +81,12 @@ function isBlockDecorationSpec(spec: unknown): boolean {
 export interface Spacer {
   pos: number;
   height: number;
-  kind: 'line' | 'block';
+  /** `line`: inside a paragraph at a line boundary; `block`: before a
+   * block; `row`: inside a native table before a row (PAGE-PORT.md Phase
+   * 7) — its widget also carries the repeated header copy. */
+  kind: 'line' | 'block' | 'row';
+  /** `row` only: the repeated header's height, included in `height`. */
+  hdr?: number;
 }
 
 /** The two DOM halves of a hyphenated word read as separate words to the
@@ -165,6 +176,28 @@ export function blockSpacerDecoration(spacer: Spacer): Decoration {
     h: spacer.height,
     tsKind: 'block-page-gap',
   });
+}
+
+/**
+ * A page break between two rows of a native table: a widget `<tr>` holding
+ * the gap plus the repeated header copy (table-break-widget.ts). `pos` is
+ * the position before the row that starts the next page; `height` is the
+ * whole insertion, `hdr` the header copy's share of it.
+ */
+export function rowSpacerDecoration(spacer: Spacer): Decoration {
+  const hdr = spacer.hdr ?? 0;
+  const key = `pgr:${spacer.pos}:${Math.round(spacer.height)}:${Math.round(hdr)}`;
+  return Decoration.widget(
+    spacer.pos,
+    (view) => tableBreakWidget(view, { pos: spacer.pos, height: spacer.height, hdr, key }),
+    {
+      side: -1,
+      key,
+      h: spacer.height,
+      hdr,
+      tsKind: 'row-page-gap',
+    },
+  );
 }
 
 export type LineSpacerResolver = (line: LineLayout, pos: number) => Spacer | undefined;
@@ -282,6 +315,9 @@ function semanticEntry(decoration: Decoration, relativeTo: number): DecorationSe
       break;
     case 'block-page-gap':
       identity = String(spec?.h ?? '');
+      break;
+    case 'row-page-gap':
+      identity = `${spec?.h ?? ''}:${spec?.hdr ?? ''}`;
       break;
     case 'word-spacing':
     case 'no-spell':

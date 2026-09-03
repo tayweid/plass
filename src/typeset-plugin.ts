@@ -74,9 +74,17 @@ import {
   pageGapWidget,
   pageSpacerDecoration,
   rebuildDecorationsOwnedByBlock,
+  rowSpacerDecoration,
   type Spacer,
   type TypesetDecorationSpec,
 } from './layout/line-decorations';
+import {
+  planTableRowBreaks,
+  tableRowModel,
+  tableRowStartIsRepresentable,
+  type MeasuredRow,
+  type TableRowModel,
+} from './layout/table-rows';
 import {
   BlockLayoutCache,
   blockLayoutSettingsKey,
@@ -386,7 +394,7 @@ export function typesetPlugin(
           }
           const isSpacer = (spec: unknown) => {
             const kind = (spec as Partial<TypesetDecorationSpec> | null)?.tsKind;
-            return kind === 'line-page-gap' || kind === 'block-page-gap';
+            return kind === 'line-page-gap' || kind === 'block-page-gap' || kind === 'row-page-gap';
           };
           const scanFrom = Math.max(0, delFrom - 1);
           const scanTo = Math.min(tr.before.content.size, delTo + 1);
@@ -400,8 +408,11 @@ export function typesetPlugin(
             const lost = had.filter((d) => !kept.has((d.spec as { key: string }).key));
             if (lost.length) {
               const revived = lost.map((d) => {
-                const spec = d.spec as { key: string; h: number; hy?: boolean };
+                const spec = d.spec as { key: string; h: number; hy?: boolean; hdr?: number };
                 const pos = Math.min(tr.mapping.map(d.from, -1), tr.doc.content.size);
+                if (spec.key.startsWith('pgr:')) {
+                  return rowSpacerDecoration({ pos, height: spec.h, kind: 'row', hdr: spec.hdr ?? 0 });
+                }
                 return Decoration.widget(pos, () => pageGapWidget(spec.h, !!spec.hy, spec.key), {
                   side: -1,
                   key: spec.key,
@@ -1140,7 +1151,7 @@ class TypesetView {
     // invariant for every later page is untouched once this one absorbs ΔH.
     const isSpacer = (spec: unknown) => {
       const kind = (spec as Partial<TypesetDecorationSpec> | null)?.tsKind;
-      return kind === 'line-page-gap' || kind === 'block-page-gap';
+      return kind === 'line-page-gap' || kind === 'block-page-gap' || kind === 'row-page-gap';
     };
     const following = decos.find(edit.blockTo, state.doc.content.size, isSpacer);
     if (!following.length) return null; // last page: nothing below to protect
@@ -1157,7 +1168,9 @@ class TypesetView {
     const replacement =
       spec.tsKind === 'block-page-gap'
         ? blockSpacerDecoration({ pos: next.from, height: newH, kind: 'block' })
-        : pageSpacerDecoration(next.from, newH, !!spec.hy);
+        : spec.tsKind === 'row-page-gap'
+          ? rowSpacerDecoration({ pos: next.from, height: newH, kind: 'row', hdr: spec.hdr ?? 0 })
+          : pageSpacerDecoration(next.from, newH, !!spec.hy);
     return decos.remove([next]).add(state.doc, [replacement]);
   }
 
@@ -1201,12 +1214,13 @@ class TypesetView {
     const sorted: Array<{ pos: number; height: number }> = [];
     for (const d of set?.find(undefined, undefined, (spec) => {
       const kind = (spec as Partial<TypesetDecorationSpec> | null)?.tsKind;
-      return kind === 'line-page-gap' || kind === 'block-page-gap';
+      return kind === 'line-page-gap' || kind === 'block-page-gap' || kind === 'row-page-gap';
     }) ?? []) {
       const spec = d.spec as Partial<TypesetDecorationSpec>;
       const h = spec.h ?? 0;
       if (!(h > 0)) continue;
       if (spec.tsKind === 'block-page-gap') blocks.push({ pos: d.from, height: h, kind: 'block' });
+      else if (spec.tsKind === 'row-page-gap') blocks.push({ pos: d.from, height: h, kind: 'row', hdr: spec.hdr ?? 0 });
       else lineMap.set(d.from, { pos: d.from, height: h, kind: 'line' });
       // lineMap/blocks retain the requested value so a held or suffix pass
       // can recreate the same decoration. The geometry index alone consumes
@@ -1409,6 +1423,16 @@ class TypesetView {
       const $pos = doc.resolve(anchor.pos);
       const childIndex = $pos.index(0);
       const topPos = $pos.depth === 0 ? anchor.pos : $pos.before(1);
+      if (anchor.kind === 'row') {
+        // A row break inside a top-level table: stored as the table's own
+        // boundary plus the row index (the oracle's vocabulary).
+        if ($pos.depth !== 1 || $pos.parent.type.name !== 'table' || $pos.index() < 1) {
+          markers.length = 0;
+          break;
+        }
+        markers.push({ childIndex, offset: 0, page: anchor.page, line: $pos.index(), unit: 'table' });
+        continue;
+      }
       if (anchor.kind === 'block') {
         // Block page starts sit at a block boundary: top-level, or a child
         // boundary inside a container (list item, blockquote child).
@@ -1651,7 +1675,9 @@ class TypesetView {
       // When everything matches, the dispatch below becomes a signature no-op.
       const effective = spacers.map((sp) => {
         const installed =
-          sp.kind === 'line' ? held.lineMap.get(sp.pos) : held.blocks.find((b) => b.pos === sp.pos);
+          sp.kind === 'line'
+            ? held.lineMap.get(sp.pos)
+            : held.blocks.find((b) => b.pos === sp.pos && b.kind === sp.kind);
         return installed && Math.abs(installed.height - sp.height) < SPACER_REINSTALL_TOLERANCE_PX
           ? { ...sp, height: installed.height }
           : sp;
@@ -2175,7 +2201,7 @@ class TypesetView {
     });
 
     for (const sp of blockSpacers) {
-      decos.push(blockSpacerDecoration(sp));
+      decos.push(sp.kind === 'row' ? rowSpacerDecoration(sp) : blockSpacerDecoration(sp));
     }
 
     const sig = decorationSignature(decos);
@@ -2231,6 +2257,17 @@ class TypesetView {
           unit = 'paragraph';
         }
         return { pos: a.pos, line: 0, unit };
+      }
+      if (a.kind === 'row') {
+        // A row break's `pos` is the position before the row; the oracle's
+        // vocabulary is the table's position plus the row index.
+        try {
+          const $pos = doc.resolve(a.pos);
+          if ($pos.parent.type.name === 'table') return { pos: $pos.before(), line: $pos.index(), unit: 'table' };
+        } catch {
+          /* fall through */
+        }
+        return { pos: a.pos, line: 0, unit: 'table' };
       }
       // kind === 'line': recover the enclosing paragraph's position and the
       // line index within its cached layout.
@@ -2824,6 +2861,10 @@ class TypesetView {
     // visibly shifts the whole page rhythm by the adjustment.
     const adjFor = (pos: number, kind: Spacer['kind']): number => {
       if (kind === 'line') return pageTopAdjustEm(s, 'line') * F;
+      // A table row at a page top has no calibrated ascent adjustment (the
+      // grid places the row frame flush at the region top); the repeated
+      // header's reservation is passed separately by the caller.
+      if (kind === 'row') return 0;
       const n = view.state.doc.nodeAt(pos);
       if (n?.type.name === 'paragraph') return pageTopAdjustEm(s, 'paragraph') * F;
       if (n?.type.name === 'heading') {
@@ -2847,8 +2888,10 @@ class TypesetView {
       }
       return 0;
     };
-    const breakBefore = (pos: number, y: number, kind: Spacer['kind']) => {
-      const delta = (page + 1) * (size.h + PAGE_GAP) + marginTop + adjFor(pos, kind) - (y + shift);
+    /** `hdr` (row breaks only): the repeated table header's height, laid at
+     *  the new page's top ahead of the row, so the row lands below it. */
+    const breakBefore = (pos: number, y: number, kind: Spacer['kind'], hdr = 0) => {
+      const delta = (page + 1) * (size.h + PAGE_GAP) + marginTop + adjFor(pos, kind) + hdr - (y + shift);
       page++;
       anchors.push({ pos, page, kind });
       pageStartPos = pos;
@@ -2859,7 +2902,7 @@ class TypesetView {
       // `regionFinish` below.
       stickyState = freshStickyState();
       if (delta > 0) {
-        spacers.push({ pos, height: delta, kind });
+        spacers.push(kind === 'row' ? { pos, height: delta, kind, hdr } : { pos, height: delta, kind });
         shift += delta;
       }
     };
@@ -3265,6 +3308,87 @@ class TypesetView {
       commitFootnotes(endPos, () => null);
     };
 
+    // ---- PAGE-PORT.md Phase 7: native tables break BETWEEN rows ----------
+    /** A native table is one editable node that Typst's grid layouter breaks
+     *  at row boundaries (never inside a row here — a cell split across
+     *  regions is not mirrored, and the oracle fails closed on it). The pure
+     *  walk lives in src/layout/table-rows.ts with its Typst citations; this
+     *  closure only measures the rows (DOM heights, natural coordinates) and
+     *  replays the plan through the same page-advance primitives every other
+     *  unit uses. A 'row' spacer's widget carries the gap plus the repeated
+     *  header copy (table-break-widget.ts). Fail open: a captioned table (a
+     *  figure), a sub-header, or a rowspan across a boundary the walk would
+     *  break at keeps today's atomic placement. */
+    const table = (pos: number, node: PMNode) => {
+      const endPos = pos + node.nodeSize;
+      const r = rectOf(pos);
+      if (!r || r.height === 0) {
+        commitFootnotes(endPos, () => null);
+        return;
+      }
+      const y = stackY(r.top, pos);
+      // Whole-table fast path (conservative footnote peek, as for atoms):
+      // one non-sticky, non-empty frame that anchors a heading run above.
+      if (y + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
+        stickyFrameAt(false, pos, y);
+        commitFootnotes(endPos, () => y + shift + r.height);
+        return;
+      }
+      const model = tableRowModel(node);
+      if (model.atomicReason) return atomic(pos, node);
+      const rows: MeasuredRow[] = [];
+      for (const off of model.rowOffsets) {
+        const rr = rectOf(pos + off);
+        if (!rr) return atomic(pos, node);
+        rows.push({ top: stackY(rr.top, pos + off) - y, height: rr.height });
+      }
+      // Content capacity of the k-th continuation page: a pure replay of
+      // the footnote-carry settling `startPageFootnotes` performs on each
+      // page advance below, so the plan sees exactly the space the replay
+      // will have (cells hold no footnote markers, so nothing else moves).
+      const capacity = (k: number) => {
+        let carry = fnCarry;
+        let cost = 0;
+        for (let i = 0; i < k; i++) {
+          const settled = settleFootnoteCarry(carry, contentH, F);
+          carry = settled.carry;
+          cost = settled.placed.reduce((sum, fragment) => sum + footnoteEntryCost(fragment, F), 0);
+        }
+        return contentH - (cost > 0 ? cost + footnoteHeadReservePx(F) : 0);
+      };
+      const plan = planTableRowBreaks(model, rows, bottomFor() - (y + shift), capacity, mayProgressAt(pos));
+      if (plan.kind === 'atomic') return atomic(pos, node);
+      let placedFirst = false;
+      for (const brk of plan.breaks) {
+        if (brk.kind === 'start') {
+          // The table's first region frame would be empty: `Distributor::
+          // multi` finishes the region before `frame()` ever runs
+          // (flow/distribute.rs:286-294), so a live sticky checkpoint (a
+          // heading run above) restores and migrates with the table.
+          finishBefore(pos, y, 'block');
+        } else {
+          if (!placedFirst) {
+            // Rows were placed on this page: the table's first frame is a
+            // non-sticky, non-empty frame that anchors any heading run
+            // above (distribute.rs:363-369) before the spill finishes the
+            // region (:300-304) — the heading stays behind.
+            stickyFrameAt(false, pos, y);
+            placedFirst = true;
+          }
+          const rowPos = pos + model.rowOffsets[brk.row];
+          breakBefore(rowPos, y + rows[brk.row].top, 'row', brk.headerHeight);
+          // The continuation is the new page's first frame (`multi_spill`,
+          // :310-330, non-sticky): a fresh distributor sees nothing to
+          // anchor, and this keeps the state honest for what follows.
+          stickyFrameAt(false, rowPos, y + rows[brk.row].top);
+          placedFirst = true;
+        }
+      }
+      if (!placedFirst) stickyFrameAt(false, pos, y);
+      commitFootnotes(endPos, () => null);
+    };
+    // ---- end Phase 7 table branch ----------------------------------------
+
     /** Page-break one block wherever it sits — top level or nested in a
      *  list item or quote. Mirrors the document-level dispatch below. */
     const splitBlock = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
@@ -3277,6 +3401,9 @@ class TypesetView {
         case 'ordered_list':
         case 'blockquote':
           container(pos, node);
+          break;
+        case 'table':
+          table(pos, node);
           break;
         default:
           atomic(pos, node, owner);
@@ -3302,6 +3429,9 @@ class TypesetView {
         case 'ordered_list':
         case 'blockquote':
           container(offset, node);
+          break;
+        case 'table':
+          table(offset, node);
           break;
         default:
           // Headings are sticky by default (heading.rs:294); only top-level
@@ -3368,22 +3498,40 @@ class TypesetView {
     let page = 0;
     for (let psi = 0; psi < pageStarts.length; psi++) {
       const ps = pageStarts[psi];
-      // A native table is one continuous editable structure and cannot accept
-      // a synthetic mid-node spacer. Decline this exact map, withdraw any
-      // retained exact markers for the revision, and let the local paginator
-      // place the table as an atomic unit.
-      if (ps.unit === 'table' && ps.line > 0) {
-        this.pendingPageMarks = DecorationSet.empty;
-        this.lastPageCount = 0;
-        this.clearExactPageBasis();
-        return null;
-      }
-      page++;
       let pos = ps.pos;
       let y: number;
       let kind: Spacer['kind'] = 'block';
       let adjKind: 'paragraph' | 'line' | 'h1' | 'h2' | 'h3' = 'paragraph';
-      if (ps.unit === 'line' && ps.line > 0) {
+      /** Row breaks: the repeated header's height, laid ahead of the row. */
+      let hdr = 0;
+      if (ps.unit === 'table' && ps.line > 0) {
+        // PAGE-PORT.md Phase 7: a compiled page start at a table ROW. It is
+        // re-validated against the live row model and installed as a 'row'
+        // spacer (a widget row between the two real rows: gap + repeated
+        // header copy). Anything the widget cannot mirror — a rowspan across
+        // the boundary, a figure table, a stale row index — declines this
+        // exact map, withdraws any retained exact markers for the revision,
+        // and lets the local paginator place the table; the held path can
+        // then never resurrect them.
+        const node = view.state.doc.nodeAt(ps.pos);
+        const model = node?.type.name === 'table' ? tableRowModel(node) : null;
+        const rowEl =
+          model && tableRowStartIsRepresentable(model, ps.line)
+            ? view.nodeDOM(ps.pos + model.rowOffsets[ps.line])
+            : null;
+        if (!model || !(rowEl instanceof HTMLElement)) {
+          this.pendingPageMarks = DecorationSet.empty;
+          this.lastPageCount = 0;
+          this.clearExactPageBasis();
+          return null;
+        }
+        page++;
+        pos = ps.pos + model.rowOffsets[ps.line];
+        y = natural(rowEl.getBoundingClientRect().top, pos);
+        kind = 'row';
+        hdr = this.repeatedHeaderHeight(ps.pos, model, ps.line);
+      } else if (ps.unit === 'line' && ps.line > 0) {
+        page++;
         const node = view.state.doc.nodeAt(ps.pos);
         const entry = node ? this.cache.get(node) : undefined;
         if (!node || !entry || ps.line >= entry.lines.length) return null;
@@ -3397,6 +3545,7 @@ class TypesetView {
         kind = 'line';
         adjKind = 'line';
       } else {
+        page++;
         const el = view.nodeDOM(ps.pos);
         if (!(el instanceof HTMLElement)) return null;
         y = natural(el.getBoundingClientRect().top, ps.pos);
@@ -3406,7 +3555,7 @@ class TypesetView {
       const adj = ps.unit === 'paragraph' || ps.unit === 'line' || ps.unit.startsWith('h')
         ? pageTopAdjustEm(s, adjKind) * F
         : 0;
-      const delta = page * (size.h + PAGE_GAP) + marginTop + adj - (y + shift);
+      const delta = page * (size.h + PAGE_GAP) + marginTop + adj + hdr - (y + shift);
       if (stale && delta > 0) {
         // Content above SHRANK (deleted lines): holding this start would
         // manufacture empty space. Steady state recreates each existing
@@ -3419,7 +3568,7 @@ class TypesetView {
         if (delta - prevH > 3 * lineH + 80) return null;
       }
       if (delta > 0) {
-        spacers.push({ pos, height: delta, kind });
+        spacers.push(kind === 'row' ? { pos, height: delta, kind, hdr } : { pos, height: delta, kind });
         shift += delta;
       } else if (delta < -2) {
         // Content has outgrown this break (edits added lines above it):
@@ -3446,6 +3595,17 @@ class TypesetView {
       }
     }
     return { spacers, count };
+  }
+
+  /** The height the repeating header row adds at the top of a continuation
+   *  page that starts at `row` of the table at `tablePos` — the real header
+   *  row's DOM height (the widget copy is sized to it), or 0 when nothing
+   *  repeats there (no header run, or a break inside the header run before
+   *  the repeating header was ever flushed: table-rows.ts). */
+  private repeatedHeaderHeight(tablePos: number, model: TableRowModel, row: number): number {
+    if (model.repeatRow === null || row <= model.repeatRow) return 0;
+    const el = this.view.nodeDOM(tablePos + model.rowOffsets[model.repeatRow]);
+    return el instanceof HTMLElement ? el.getBoundingClientRect().height : 0;
   }
 
   /**
