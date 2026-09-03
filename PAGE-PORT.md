@@ -1,7 +1,53 @@
 # PAGE-PORT: porting Typst's page breaker
 
-## Status (2026-08-30)
+## Status (2026-09-02)
 
+- Phase 3 (sticky blocks): **landed** (this commit). The sticky-heading
+  pointer in `runFallbackPass` is replaced by Typst's snapshot/restore
+  (`freshStickyState`/`stickyFrame`/`stickyFinish`/
+  `stickyRelayoutCheckpoint` in flow-rules.ts, mirroring distribute.rs
+  :340-369 and :445-458): a run of consecutive top-level headings takes one
+  checkpoint at its first block, only when `may_progress()` holds there —
+  by position identity (`mayProgressAt`: not the page's first frame, or
+  footnote insertions already shrank the page), never by px, so the
+  page-top ink adjustment cannot masquerade as consumed space; a run that
+  starts a page is disabled for all its blocks (the infinite-loop guard the
+  pointer lacked — it used to re-migrate a page-top heading into a blank
+  page). A non-sticky non-empty frame anchors the run (a placed line, an
+  atomic block, a container or container child that fits, the first child of
+  a container that breaks inside); a non-forced region finish while the run
+  is un-anchored restores the checkpoint, so the WHOLE run migrates — the
+  old prefix-replay approximation is now the rule, and a container whose
+  first child cannot start on the page migrates with the heading
+  (`Distributor::multi`'s empty-first-frame finish, :286-294), which the
+  pointer never did. Forced breaks (`page_break`) restore nothing. Every
+  page break resets the state (a fresh distributor per region, :14-21):
+  the suffix paginator's seed therefore starts from the same fresh state
+  the full pass has at that page start, and the old prefix replay is gone
+  (no seed-shape change). Footnote interaction kept in Typst's order:
+  the sticky step runs before `footnotes()` (:372), so a footnote
+  migration from a non-sticky frame leaves the heading behind while one
+  from a heading restores its run; a strand at a paragraph's start is a
+  finish inside the RELAYOUT (compose.rs:165-216), whose fresh distributor
+  re-checkpoints the run with progress now possible even at the page top —
+  `stickyRelayoutCheckpoint`. Fit-failure relocations are now guarded by
+  `may_progress` the way Typst's are (the `traveled` flag became a
+  3-relocation budget: restore-migrate, then break alone when the run at
+  the new page top leaves too little room, plus one safety margin), which
+  also aligns the oversize case with Phase 5's note: a too-tall unbreakable
+  block moves to a fresh page from anywhere else and overflows only there.
+  Soak (same harness and seed as Phase 4, 25 edits): footnote corpus 12
+  predictions, agreements 5 → 5, byCause before spacing
+  2 / widow-orphan 4 / footnote 1 / sticky 0, after identical;
+  a new heading-heavy corpus (H2 before every third paragraph, an H1+H2
+  run before every ninth, 12 pages): 12 predictions, agreements 3 →
+  3, byCause before spacing 9 / sticky 0, after
+  identical — the residue is a same-paragraph line-vs-block
+  unit mismatch two lines above the page bottom (local breaks at line 2,
+  Typst moves the paragraph whole), a Phase 2/6 height question, not a
+  heading migration. Regression: tests/sticky-pagination.spec.ts (heading
+  migrates with its paragraph; two headings migrate together; a run at a
+  page top stays and does not loop).
 - Phase 0 (parity telemetry): **landed** 9defb17. Soak at c316f99: 96
   predictions, 1 agreement; byCause page-top-adjust 30, widow-orphan 28,
   spacing 15, footnote 12, sticky 10.
@@ -73,8 +119,9 @@
   footnote glue), 9d35355 (opaque-block resync vs list markers). Known
   open oracle family: inline math butted against a known token
   (typst-oracle.ts ~482–502) — not yet reproduced in isolation.
-- Next up: Phase 3 (sticky), Phase 6 (retire pageTopAdjustEm — now the
-  dominant residual), Phase 4's migration rule, Phase 7 below.
+- Next up: Phase 6 (retire pageTopAdjustEm — now the dominant residual,
+  with the same-paragraph line-vs-block unit mismatch the heading soak
+  shows), Phase 5's breakable blocks, Phase 7 below.
 - Native-tables port: **done** on `codex/native-tables-port` (5788e87) —
   see HANDOFF-TABLES-REPORT.md. Tables are native ProseMirror trees and
   land atomic; `table-split.ts` and the mini-compile split path are gone.

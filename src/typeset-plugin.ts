@@ -48,9 +48,14 @@ import {
   footnoteEntryFit,
   footnoteHeadReservePx,
   footnotePositions,
+  freshStickyState,
   lineNeeds,
   settleFootnoteCarry,
+  stickyFinish,
+  stickyFrame,
+  stickyRelayoutCheckpoint,
   type FootnoteCarryItem,
+  type StickyState,
 } from './layout/flow-rules';
 import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
@@ -2848,11 +2853,23 @@ class TypesetView {
       anchors.push({ pos, page, kind });
       pageStartPos = pos;
       startPageFootnotes();
+      // Every region gets a fresh distributor (distribute.rs:14-21): the
+      // sticky checkpoint and the run's stickable verdict never cross a
+      // page break. A migrated run re-enters at the new page top through
+      // `regionFinish` below.
+      stickyState = freshStickyState();
       if (delta > 0) {
         spacers.push({ pos, height: delta, kind });
         shift += delta;
       }
     };
+    /** Typst's `regions.may_progress()` (regions.rs:109-111) for the frame
+     *  starting at `pos`, by position identity rather than px: it is false
+     *  exactly for the first frame of a page (`size.y == last`) unless
+     *  footnote insertions already shrank the page (`pageFnH > 0`); the
+     *  page-top ink adjustment (`adjFor`) would otherwise read as consumed
+     *  space. */
+    const mayProgressAt = (pos: number) => pos !== pageStartPos || pageFnH > 0;
 
     const rectOf = (pos: number): DOMRect | null => {
       const el = view.nodeDOM(pos);
@@ -2869,33 +2886,54 @@ class TypesetView {
       return stackY(c.top, fnPos) - Math.max(0, (lineH - (c.bottom - c.top)) / 2);
     };
 
-    // Sticky anchor: a heading immediately above the current block — a break
-    // at the block's start must carry the heading along (Typst headings are
-    // sticky by default; the oracle already does this, the fallback must too).
-    let sticky: { pos: number; y: number } | null = null;
-    // A seeded pass must enter its first block with the same sticky state
-    // the full pass has there: replay the heading/reset updates the skipped
-    // prefix would have applied (only a heading run directly above the seed
-    // boundary survives them).
-    if (seed) {
-      view.state.doc.forEach((node, offset) => {
-        if (offset >= seed.startPos) return;
-        if (node.type.name === 'heading') {
-          const hr = rectOf(offset);
-          sticky = sticky ?? (hr ? { pos: offset, y: stackY(hr.top, offset) } : null);
-        } else {
-          sticky = null;
-        }
-      });
-    }
-    const breakStart = (pos: number, y: number) => {
-      const a = sticky ?? { pos, y };
-      breakBefore(a.pos, a.y, 'block');
+    // Sticky blocks (src/layout/flow-rules.ts, ported from Typst's
+    // `Distributor::frame`/`finalize`, distribute.rs:340-369 and :445-458):
+    // a run of consecutive headings takes a checkpoint at its first block —
+    // when `regions.may_progress()` holds there — and a page that ends
+    // before a non-sticky frame anchors the run restores it, so the WHOLE
+    // run migrates with the block that ended the page. Headings are sticky
+    // by default (typst-library heading.rs:294); top-level headings are the
+    // only sticky kind this schema produces. The state is per page (a fresh
+    // distributor per region, distribute.rs:14-21), so a seeded pass — which
+    // restarts at a page start — begins from the same fresh state the full
+    // pass has there; nothing of the prefix needs replaying.
+    type StickyCheckpoint = { pos: number; y: number };
+    let stickyState: StickyState<StickyCheckpoint> = freshStickyState();
+    /** `Distributor::frame`'s sticky step for a frame placed on this page,
+     *  called BEFORE its footnotes are handled (distribute.rs:340-369, then
+     *  :372). `pos` is the frame's page-top identity (the list item for an
+     *  item's first block), `y` its natural top. */
+    const stickyFrameAt = (isSticky: boolean, pos: number, y: number, empty = false) => {
+      stickyFrame(stickyState, isSticky, empty, mayProgressAt(pos), () => ({ pos, y }));
     };
+    /** A non-forced region finish (`Stop::Finish(false)` → `finalize`,
+     *  distribute.rs:448-457) raised at the frame starting at `pos`: break
+     *  before `restored` — the sticky run's first block — when a checkpoint
+     *  is live, else before the frame itself. The migrated run is then the
+     *  new page's first frame: a fresh distributor re-runs `frame()` for it
+     *  (its verdict now taken at the page top, i.e. disabled unless carried
+     *  footnotes shrank the page), so the same run cannot migrate twice. */
+    const regionFinish = (restored: StickyCheckpoint | null, pos: number, y: number, kind: Spacer['kind']) => {
+      const a = restored ?? { pos, y };
+      breakBefore(a.pos, a.y, restored ? 'block' : kind);
+      if (restored) stickyFrameAt(true, restored.pos, restored.y);
+    };
+    const finishBefore = (pos: number, y: number, kind: Spacer['kind']) => {
+      regionFinish(stickyFinish(stickyState, false), pos, y, kind);
+    };
+    /** Bound on how often one frame/line may finish a region before it is
+     *  placed regardless. Typst needs none — `may_progress` and a draining
+     *  footnote carry bound its loop — but this ledger's carry settlement can
+     *  stall on an entry taller than a page, so the guard stays. Two
+     *  relocations are legitimate (a restored run migrates the frame, then
+     *  the run at the new page top leaves it too little room and it breaks
+     *  once more, alone); the third is the safety margin. */
+    const MAX_RELOCATIONS = 3;
 
     /** `owner` is the enclosing list item, when this block is the first
-     *  thing inside one: moving the block whole must move the bullet too. */
-    const atomic = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
+     *  thing inside one: moving the block whole must move the bullet too.
+     *  `isSticky`: a top-level heading (Typst's `single.sticky`). */
+    const atomic = (pos: number, node: PMNode, owner?: { pos: number; y: number }, isSticky = false) => {
       const endPos = pos + node.nodeSize;
       const r = rectOf(pos);
       if (!r || r.height === 0) {
@@ -2905,20 +2943,31 @@ class TypesetView {
         return;
       }
       const y = stackY(r.top, pos);
-      if (y + shift + r.height > bottomFor() + 0.5 && r.height <= contentH) {
-        breakStart(owner?.pos ?? pos, owner?.y ?? y);
-      } else if (
-        r.height <= contentH &&
-        footnoteMigrates(endPos, y + shift + r.height, r.height, (owner?.pos ?? pos) === pageStartPos)
-      ) {
+      const framePos = owner?.pos ?? pos;
+      const frameY = owner?.y ?? y;
+      // `Distributor::single` (distribute.rs:269-271): the block doesn't fit
+      // and a following region may improve things → finish the region
+      // (restoring a live sticky checkpoint). At a page top with nothing
+      // inserted `may_progress` is false and the block is placed to
+      // overflow — an oversize block therefore first moves to a fresh page
+      // (from anywhere else, progress is possible) and overflows there.
+      let relocations = 0;
+      while (y + shift + r.height > bottomFor() + 0.5 && mayProgressAt(framePos) && relocations < MAX_RELOCATIONS) {
+        relocations++;
+        finishBefore(framePos, frameY, 'block');
+      }
+      // `frame()` (distribute.rs:340-369): a heading starts or continues a
+      // sticky run; any other block anchors one.
+      stickyFrameAt(isSticky, framePos, frameY);
+      if (footnoteMigrates(endPos, y + shift + r.height, r.height, !mayProgressAt(framePos))) {
         // The unit is unbreakable and its first entry cannot start here:
         // Typst migrates the whole origin frame rather than break the
-        // marker/entry invariant. A heading directly above does NOT come
-        // along: `Distributor::frame` drops the sticky snapshot for this
-        // non-sticky frame (distribute.rs:367) before `footnotes()` raises
-        // the finish (:372-378), so `finalize` has nothing to restore —
-        // hence breakBefore, not breakStart.
-        breakBefore(owner?.pos ?? pos, owner?.y ?? y, 'block');
+        // marker/entry invariant (`footnotes()` raises the finish at
+        // :372-378, after the sticky step). For a non-sticky block the
+        // snapshot was just dropped (:367), so a heading directly above
+        // stays behind; for a heading — a sticky frame — the run's
+        // checkpoint is live and `finalize` restores it (:455-457).
+        finishBefore(framePos, frameY, 'block');
       }
       // Unbreakable frame: flow need is the frame's FULL height, so the
       // entry's pod begins at the unit's bottom (flow/compose.rs:385, :450).
@@ -2947,6 +2996,9 @@ class TypesetView {
       // line frame's flow need, distribute.rs:247 + compose.rs:385), spilling
       // onto following pages as needed.
       if (yTop + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
+        // Its first line is a non-sticky frame: it anchors any heading run
+        // above (distribute.rs:363-369).
+        stickyFrameAt(false, owner?.pos ?? pos, owner?.y ?? yTop);
         const blockEl = view.nodeDOM(pos);
         commitFootnotes(endPos, (fnPos) =>
           markerLineTop(fnPos, blockEl instanceof HTMLElement ? blockEl : null) + extentPx + shift,
@@ -3029,12 +3081,17 @@ class TypesetView {
         // the partner's bottom, which is exactly where the need ends. That
         // is why nothing here peeks or takes across the need span.
         //
-        // `traveled`/`migrated`/`stranded` bound each line to one relocation
-        // of each kind, so this can never loop; the oversize give-up stays
-        // raw (Phase 5 scope).
-        let traveled = false;
+        // `relocations`/`migrated`/`stranded` bound each line's relocations
+        // (see MAX_RELOCATIONS; one migration, one strand), so this can
+        // never loop; the oversize give-up stays raw (Phase 5 scope).
+        let relocations = 0;
         let migrated = false;
         let stranded = false;
+        // The line frame's page-top identity for `may_progress`: a block
+        // break lands on the paragraph (or its owning list item), a line
+        // break on the line itself.
+        const framePos = k === 0 ? (owner?.pos ?? pos) : lineTops[k].pos;
+        const frameY = k === 0 ? (owner?.y ?? yTop) : lineTops[k].y;
         loop: for (;;) {
           // STAGE 1 — pre-insertion: reservation only from entries already
           // committed on this page (pageFnH), none from this line yet.
@@ -3042,47 +3099,57 @@ class TypesetView {
           const ownPre = y + shift + heights[k] <= bottomPre + 0.5;
           const needPre = y + shift + needs[k] <= bottomPre + 0.5;
           if (!ownPre || !needPre) {
-            // Whichever quantity actually failed decides whether a fresh
-            // page would help: own height failing means the line itself
-            // needs a clean start; need failing (while own height fits)
-            // means it's the protected partner that doesn't fit here.
-            const trigger = ownPre ? needs[k] : heights[k];
-            if (traveled || migrated || stranded || trigger > contentH + 0.5) {
-              // Already relocated once (of any kind), or even an empty
-              // fresh page can't satisfy this (oversize): give up
-              // relocating and let it overflow, inserting its own notes
-              // below it (a negative pod queues them whole).
+            // `Distributor::line` (distribute.rs:226-245): own height
+            // failing finishes the region iff `may_progress()`; need failing
+            // (own height fits) finishes iff the NEXT raw region fits the
+            // need. Pages are uniform, so when progress is impossible the
+            // next region is this one and neither test can pass.
+            const finish = mayProgressAt(framePos) && (!ownPre || needs[k] <= contentH + 0.5);
+            if (!finish || migrated || stranded || relocations >= MAX_RELOCATIONS) {
+              // Typst places the line and lets it overflow (a fresh page
+              // can't help: at the page top, or oversize), or this ledger's
+              // relocation budget is spent: insert its own notes below it
+              // (a negative pod queues them whole).
               commitFootnotes(lineEnd, lineBottom);
               break loop;
             }
-            traveled = true;
+            relocations++;
             if (k === 0 && segStart === 0) {
               // The paragraph's absolute start doesn't fit (alone, or with
               // the orphan-protected partner it needs): the whole paragraph
-              // moves to the next page, sticky heading and all — `line()`
-              // fails before `frame()` ever clears the sticky snapshot, and
-              // `finalize` restores it (distribute.rs:453-457).
-              breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
+              // moves to the next page, sticky heading run and all —
+              // `line()` fails before `frame()` ever clears the sticky
+              // snapshot, and `finalize` restores it (distribute.rs:453-457).
+              finishBefore(framePos, frameY, 'block');
             } else {
               // Break exactly before line k: this defers it — and, when
               // `need` covers a partner beyond k (the widow pair), that
               // partner too — to a fresh page. No retroactive pull-back to
               // k-1 is needed: `need` already grouped the pair before
-              // either line's placement was decided.
-              breakBefore(lineTops[k].pos, lineTops[k].y, 'line');
+              // either line's placement was decided. No checkpoint can be
+              // live here (line 0 anchored it), so this never restores.
+              finishBefore(framePos, frameY, 'line');
               segStart = k;
             }
             continue loop;
           }
+          // `frame()` (distribute.rs:363-369): a non-empty line anchors the
+          // heading run above — BEFORE its footnotes are handled (:372).
+          // The footnote relayout (compose.rs:165-216) re-runs the region
+          // and would checkpoint that run afresh; remember it for STAGE 2.
+          const relayoutRestore = stickyRelayoutCheckpoint(stickyState);
+          stickyFrameAt(false, framePos, frameY, isEmptyLine(k));
           // MIGRATION — the first note's first frame would be empty here.
-          if (!migrated && footnoteMigrates(lineEnd, lineBottom(), heights[k], lineTops[k].pos === pageStartPos)) {
+          if (!migrated && footnoteMigrates(lineEnd, lineBottom(), heights[k], !mayProgressAt(framePos))) {
             migrated = true;
+            // Whole paragraph (or line k) onward, heading left behind: the
+            // sticky snapshot was dropped for this non-sticky frame before
+            // `footnotes()` raised the finish, so `finishBefore` has nothing
+            // to restore — but a snapshot may be live for an empty line 0.
             if (k === 0 && segStart === 0) {
-              // Whole paragraph onward, heading left behind (see above):
-              // deliberately not `breakStart`, which would carry `sticky`.
-              breakBefore(owner?.pos ?? pos, owner?.y ?? yTop, 'block');
+              finishBefore(framePos, frameY, 'block');
             } else {
-              breakBefore(lineTops[k].pos, lineTops[k].y, 'line');
+              finishBefore(framePos, frameY, 'line');
               segStart = k;
             }
             continue loop;
@@ -3110,12 +3177,14 @@ class TypesetView {
           stranded = true;
           if (k === 0 && segStart === 0) {
             // A strand at the paragraph's absolute start is a region finish
-            // from `line()`, before `frame()`: the sticky restore migrates a
-            // heading run sitting directly above along with the paragraph
-            // (the entries stay).
-            breakStart(owner?.pos ?? pos, owner?.y ?? yTop);
+            // from `line()` in the RELAYOUT, before `frame()`: the fresh
+            // distributor checkpointed the heading run sitting directly
+            // above (with progress now possible — the insertions shrank the
+            // pod — even when the run sits at the page top), so the run
+            // migrates along with the paragraph (the entries stay).
+            regionFinish(relayoutRestore, framePos, frameY, 'block');
           } else {
-            breakBefore(lineTops[k].pos, lineTops[k].y, 'line');
+            regionFinish(null, framePos, frameY, 'line');
             segStart = k;
           }
           continue loop;
@@ -3137,13 +3206,23 @@ class TypesetView {
       // that fits with its entries charged whole fits after the relayout its
       // commitment implies; otherwise the per-child walk decides.
       const markerNeed = (fnPos: number) => markerLineTop(fnPos, null) + shift;
-      if (stackY(r.top, pos) + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
+      const yTop = stackY(r.top, pos);
+      if (yTop + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
+        // The container's (only) frame is non-sticky and non-empty: it
+        // anchors a heading run above (distribute.rs:363-369).
+        stickyFrameAt(false, pos, yTop);
         commitFootnotes(endPos, markerNeed);
         return;
       }
-      // Breaks found below are inside the container, so a heading sitting
-      // above it is no longer the thing being pushed onto the next page.
-      sticky = null;
+      // A container is a breakable block (`Distributor::multi`,
+      // distribute.rs:277-307). Its first frame is empty exactly when the
+      // FIRST child cannot start on this page — then the whole child
+      // finishes the region (:286-294) and a heading run above restores
+      // with it. Once any child (or any line of one) is placed, that frame
+      // anchored the run, and every later break inside the container leaves
+      // the heading behind. The per-child walk below reproduces this
+      // through the same `stickyFrameAt`/`finishBefore` calls the top-level
+      // blocks make: no state reset is needed here.
       node.forEach((child, offset) => {
         const childPos = pos + 1 + offset;
         const childEnd = childPos + child.nodeSize;
@@ -3154,6 +3233,10 @@ class TypesetView {
         }
         const y = stackY(cr.top, childPos);
         if (y + shift + cr.height <= bottomFor(peekFnH(childEnd)) + 0.5) {
+          // A child placed whole is a non-empty frame of the container: it
+          // anchors a heading run above, so a later child's break stays
+          // inside the container (distribute.rs:363-369).
+          stickyFrameAt(false, childPos, y);
           commitFootnotes(childEnd, markerNeed);
           return;
         }
@@ -3221,14 +3304,11 @@ class TypesetView {
           container(offset, node);
           break;
         default:
-          atomic(offset, node);
+          // Headings are sticky by default (heading.rs:294); only top-level
+          // ones are modeled — a heading nested in a list item or quote
+          // lives in a nested flow and fails open as an ordinary block.
+          atomic(offset, node, undefined, node.type.name === 'heading');
           break;
-      }
-      if (node.type.name === 'heading') {
-        const hr = rectOf(offset);
-        sticky = sticky ?? (hr ? { pos: offset, y: stackY(hr.top, offset) } : null);
-      } else {
-        sticky = null;
       }
     });
 

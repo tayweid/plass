@@ -26,6 +26,10 @@ import {
   containerPageTopDropEm,
   lineNeedSpans,
   type LineNeedsOptions,
+  freshStickyState,
+  stickyFrame,
+  stickyFinish,
+  stickyRelayoutCheckpoint,
 } from './flow-rules';
 
 const F = 16.666666666666668; // bodyPx at the app default (12.5pt @ 96dpi)
@@ -697,6 +701,139 @@ function content(): FlowItem {
     }
   }
   console.log('  ok  needs[i] > heights[i] exactly when spans[i] > i, across all scenarios');
+}
+
+// --- Sticky blocks: snapshot/restore (distribute.rs:340-369, :445-458) -----
+
+// Each scenario drives the state the way `Distributor::frame` would for a
+// sequence of in-flow frames; the checkpoint payload is the frame's label
+// (Typst snapshots the work list — the paginator only needs the run's first
+// block). `mayProgress` follows regions.rs:109-111 for uniform pages: false
+// exactly at a region's top with nothing inserted.
+
+{
+  const s = freshStickyState<string>();
+  assert.equal(s.checkpoint, null);
+  assert.equal(s.stickable, null);
+  assert.equal(stickyFinish(s, false), null);
+  console.log('  ok  fresh distributor: no checkpoint, undecided run, nothing to restore');
+}
+
+{
+  // [P, H, P2]: H (not at region top) starts a run with a checkpoint; the
+  // region ends at P2's fit check (before its frame()) → restore to H.
+  const s = freshStickyState<string>();
+  stickyFrame(s, false, false, false, () => 'P');
+  assert.equal(s.checkpoint, null);
+  stickyFrame(s, true, false, true, () => 'H');
+  assert.equal(s.checkpoint, 'H');
+  assert.equal(s.stickable, true);
+  assert.equal(stickyFinish(s, false), 'H');
+  assert.equal(s.checkpoint, null, 'take(): the checkpoint is consumed');
+  console.log('  ok  a heading that would end the region migrates with the block after it');
+}
+
+{
+  // [H1, H2, P]: consecutive sticky blocks are ONE run — the checkpoint is
+  // taken at H1 and H2 does not retake it (`self.sticky.is_none()` guard,
+  // :358), so a finish at P rolls back to H1: both headings migrate.
+  const s = freshStickyState<string>();
+  stickyFrame(s, false, false, false, () => 'P0');
+  stickyFrame(s, true, false, true, () => 'H1');
+  stickyFrame(s, true, false, true, () => 'H2');
+  assert.equal(s.checkpoint, 'H1');
+  assert.equal(stickyFinish(s, false), 'H1');
+  console.log('  ok  two consecutive headings migrate together (checkpoint at the first)');
+}
+
+{
+  // [H@top, P]: the run starts where `may_progress()` is false (region top,
+  // nothing inserted): `stickable = Some(false)`, no checkpoint (:48-55) —
+  // migrating would only lead back to the top of the next region.
+  const s = freshStickyState<string>();
+  stickyFrame(s, true, false, false, () => 'H');
+  assert.equal(s.checkpoint, null);
+  assert.equal(s.stickable, false);
+  assert.equal(stickyFinish(s, false), null);
+  console.log('  ok  a heading already at the region top does not migrate (no checkpoint)');
+}
+
+{
+  // [H1@top, H2, P]: the verdict is per RUN, decided by its first block —
+  // H2 could progress on its own, yet `stickable` stays `Some(false)` (:64
+  // "all sticky blocks of the group are also disabled").
+  const s = freshStickyState<string>();
+  stickyFrame(s, true, false, false, () => 'H1');
+  stickyFrame(s, true, false, true, () => 'H2');
+  assert.equal(s.checkpoint, null);
+  assert.equal(s.stickable, false);
+  assert.equal(stickyFinish(s, false), null);
+  console.log('  ok  a run that began at the region top stays disabled for its later blocks');
+}
+
+{
+  // [H, P, H2, P2]: P anchors the first run (checkpoint AND verdict reset,
+  // :363-369); H2 starts a fresh run with its own verdict and checkpoint.
+  const s = freshStickyState<string>();
+  stickyFrame(s, true, false, false, () => 'H'); // top: disabled
+  stickyFrame(s, false, false, true, () => 'P');
+  assert.equal(s.stickable, null);
+  stickyFrame(s, true, false, true, () => 'H2');
+  assert.equal(s.checkpoint, 'H2');
+  stickyFrame(s, false, false, true, () => 'P2');
+  assert.equal(s.checkpoint, null);
+  assert.equal(stickyFinish(s, false), null);
+  console.log('  ok  a non-sticky frame anchors the run; the next run is judged afresh');
+}
+
+{
+  // An EMPTY non-sticky frame (a blank line) does not anchor: `else if
+  // !frame.is_empty()` (:363).
+  const s = freshStickyState<string>();
+  stickyFrame(s, true, false, true, () => 'H');
+  stickyFrame(s, false, true, true, () => 'blank');
+  assert.equal(s.checkpoint, 'H');
+  assert.equal(stickyFinish(s, false), 'H');
+  console.log('  ok  an empty frame after a heading leaves the checkpoint in place');
+}
+
+{
+  // A FORCED finish (explicit page break, Finish(true)) restores nothing
+  // (:445-447): a heading directly before `#pagebreak()` stays where it is.
+  const s = freshStickyState<string>();
+  stickyFrame(s, true, false, true, () => 'H');
+  assert.equal(stickyFinish(s, true), null);
+  console.log('  ok  a forced break never migrates the heading run');
+}
+
+{
+  // The infinite-loop guard end to end: [P, H, P2] on page 1 restores to H;
+  // page 2 is a FRESH distributor (:14-21) where H is at the top, so a
+  // second finish at P2 restores nothing — P2 breaks alone, H stays.
+  let s = freshStickyState<string>();
+  stickyFrame(s, false, false, false, () => 'P');
+  stickyFrame(s, true, false, true, () => 'H');
+  assert.equal(stickyFinish(s, false), 'H');
+  s = freshStickyState<string>();
+  stickyFrame(s, true, false, false, () => 'H');
+  assert.equal(s.stickable, false);
+  assert.equal(stickyFinish(s, false), null);
+  console.log('  ok  a migrated run cannot migrate again from the new region top');
+}
+
+{
+  // Footnote relayout (compose.rs:165-216): the region is re-run against a
+  // pod reduced by the inserted entries, so `may_progress()` is true even at
+  // the top — the fresh distributor checkpoints the run's first block
+  // regardless of the original verdict. Read before the frame anchors it.
+  const s = freshStickyState<string>();
+  stickyFrame(s, true, false, false, () => 'H1'); // top: disabled
+  stickyFrame(s, true, false, true, () => 'H2');
+  assert.equal(s.checkpoint, null);
+  assert.equal(stickyRelayoutCheckpoint(s), 'H1');
+  stickyFrame(s, false, false, true, () => 'P');
+  assert.equal(stickyRelayoutCheckpoint(s), null);
+  console.log('  ok  a footnote relayout re-checkpoints the run at its first block');
 }
 
 console.log('all flow-rules tests passed');

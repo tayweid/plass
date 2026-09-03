@@ -639,3 +639,137 @@ export function lineNeedSpans(count: number, opts: LineNeedsOptions = {}): numbe
     return i;
   });
 }
+
+// ---------------------------------------------------------------------------
+// Sticky blocks — ported from Typst's flow distributor
+// (`typst-layout/src/flow/distribute.rs`: the `sticky`/`stickable` fields at
+// :42-64, the checkpoint logic in `Distributor::frame` at :340-369, and the
+// restore in `Distributor::finalize` at :445-458). Headings are sticky by
+// default through their show-set rule (`typst-library/src/model/heading.rs:
+// 294`, `BlockElem::sticky = true`); nothing else in this editor's schema is,
+// so the paginator hard-wires heading kinds until a user-facing flag exists.
+//
+// The mechanism, in Typst's words: a sticky block "should not be the last
+// thing on a page". When a run of consecutive sticky blocks begins, the
+// distributor takes a CHECKPOINT of its work — but only if `regions
+// .may_progress()`: a run that starts at the very top of a region cannot be
+// helped by migrating (it would land at the top of the next region, which is
+// the same situation — the infinite-loop guard at :48-63). The verdict is
+// taken once per run (`stickable.get_or_insert_with`, :359): every later
+// block of the same run inherits it, and a `Some(false)` run stays disabled
+// until a non-sticky frame resets it. A non-sticky NON-EMPTY frame anchors
+// the run: the snapshot and the verdict are both forgotten (:363-369) — an
+// empty frame changes nothing. When the region then ends before the run was
+// anchored (any non-forced `Stop::Finish`, :448-457), `finalize` restores
+// the checkpoint: the whole run — not just its last block — migrates to the
+// next region along with whatever finished it. A FORCED finish (an explicit
+// page break, `Child::Break` → `Stop::Finish(true)`) restores nothing
+// (:445-447).
+//
+// One more consequence, from the composer rather than the distributor: a
+// footnote insertion RELAYOUTS the region from scratch against a pod
+// shrunken by the inserted entries (`flow/compose.rs:165-216`). The fresh
+// distributor sees the same sticky run again — now with `may_progress()`
+// true, since the insertions made `size.y != last` — so its checkpoint sits
+// at the run's first block regardless of the earlier verdict. The paginator
+// models that relayout's second look as `stickyRelayoutCheckpoint` below.
+//
+// The state is generic over the checkpoint payload: Typst snapshots the
+// whole work list (:565-571); the paginator only needs to know WHERE to
+// break (the run's first block and its natural y).
+
+export interface StickyState<C> {
+  /** `Distributor::sticky` (:44): the checkpoint to restore should the
+   * region end while the current sticky run is still un-anchored. */
+  checkpoint: C | null;
+  /** `Distributor::stickable` (:64): `null` outside a sticky run; the
+   * once-per-run verdict (`may_progress()` at the run's first block) while
+   * inside one. */
+  stickable: boolean | null;
+  /** The current run's first sticky frame, kept even when the verdict was
+   * `false` — what the footnote relayout's fresh distributor would checkpoint
+   * (see `stickyRelayoutCheckpoint`). `null` outside a run. Not a Typst
+   * field: the Rust re-derives it by re-running the region. */
+  runStart: C | null;
+}
+
+/** A fresh distributor's sticky state (distribute.rs:19-20). Typst creates
+ * one distributor per region (:14-30), so the state never survives a page
+ * break: every page starts here, and the suffix paginator's seed — which
+ * restarts at a page start — needs no replay of the prefix's headings. */
+export function freshStickyState<C>(): StickyState<C> {
+  return { checkpoint: null, stickable: null, runStart: null };
+}
+
+/**
+ * `Distributor::frame`'s sticky bookkeeping (distribute.rs:340-369), run for
+ * every in-flow frame (a paragraph line, an unbreakable block, a breakable
+ * block's first frame) BEFORE that frame's footnotes are handled (:372) and
+ * before it is charged against the region (:381).
+ *
+ * - `sticky` with no checkpoint yet: decide `stickable` for the run if it is
+ *   undecided (`mayProgressNow`, the run's first block), and take
+ *   `snapshot()` when the verdict is true. A run that began with a `false`
+ *   verdict never checkpoints, even once later blocks could progress.
+ * - non-sticky and non-empty: forget the checkpoint and the verdict (and the
+ *   run start) — the run is anchored to this frame.
+ * - non-sticky and EMPTY (`frame.is_empty()`, e.g. a blank line): nothing.
+ *
+ * Mutates `state` in place, mirroring the Rust.
+ */
+export function stickyFrame<C>(
+  state: StickyState<C>,
+  sticky: boolean,
+  empty: boolean,
+  mayProgressNow: boolean,
+  snapshot: () => C,
+): void {
+  if (sticky) {
+    if (state.checkpoint === null) {
+      if (state.stickable === null) {
+        // `get_or_insert_with(|| self.regions.may_progress())` (:359): the
+        // run's first block decides for the whole run.
+        state.stickable = mayProgressNow;
+        state.runStart = snapshot();
+      }
+      if (state.stickable) state.checkpoint = state.runStart;
+    }
+    return;
+  }
+  if (!empty) {
+    state.checkpoint = null;
+    state.stickable = null;
+    state.runStart = null;
+  }
+}
+
+/**
+ * `Distributor::finalize`'s restore decision (distribute.rs:445-458) for a
+ * region that just ended: returns the checkpoint the region must be rolled
+ * back to — the sticky run's first block, meaning "break BEFORE it, so the
+ * run migrates with the frame that ended the region" — or `null` when the
+ * region simply ends where it ended. Takes the checkpoint (`self.sticky
+ * .take()`, :455), like the Rust. A `forced` finish (an explicit page
+ * break) never restores (:445-447).
+ */
+export function stickyFinish<C>(state: StickyState<C>, forced: boolean): C | null {
+  if (forced) return null;
+  const checkpoint = state.checkpoint;
+  state.checkpoint = null;
+  return checkpoint;
+}
+
+/**
+ * What a footnote-insertion RELAYOUT of the current region would checkpoint
+ * at this point (`flow/compose.rs:165-216` re-runs `distribute` from the
+ * region's start with `regions.size.y` reduced by the inserted entries, so
+ * `may_progress()` is true for every block, including one at the very top):
+ * the current run's first block, if the frame about to be placed follows an
+ * un-anchored sticky run; `null` otherwise. Read this BEFORE calling
+ * `stickyFrame` for the (non-sticky) frame whose entries were inserted — that
+ * call anchors the run, but the relayout looks at the region as it stood
+ * before the frame was placed.
+ */
+export function stickyRelayoutCheckpoint<C>(state: StickyState<C>): C | null {
+  return state.runStart;
+}
