@@ -17,6 +17,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { buildSpec, matchParagraph, type AtomResolver, type SvgLine, type ParagraphSpec } from './typst-oracle';
 import { formatPageNumber, pageSize, type DocSettings } from '../settings';
 import { parseTypstSvg } from '../safe-svg';
+import { tableRowModel, type TableRowModel } from './table-rows';
 
 export interface PageStart {
   /** Document position of the block that begins the page. */
@@ -36,11 +37,16 @@ export interface PageOracleEntry {
 }
 
 export interface Unit {
-  kind: 'exact' | 'opaque';
+  /** `table`: a breakable native table matched ROW by row (PAGE-PORT.md
+   * Phase 7) — `rows` holds one merged spec per row, `model` the header/
+   * rowspan structure the exporter hands Typst. */
+  kind: 'exact' | 'opaque' | 'table';
   pos: number;
   type: string;
   level?: number;
   spec?: ParagraphSpec;
+  rows?: ParagraphSpec[];
+  model?: TableRowModel;
   /** exact list-item paragraphs may carry a marker glued onto their first
    * line: `true` for a bullet/quote marker glyph (stripped by the generic
    * MARKER pattern below) or the exact literal text Typst renders for an
@@ -225,12 +231,63 @@ export function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
           push(child, childPos);
         }
       });
+    } else if (node.type.name === 'table') {
+      units.push(buildTableUnit(node, pos, resolveAtom));
     } else {
       units.push({ kind: 'opaque', pos, type: node.type.name });
     }
   };
   doc.forEach((node, offset) => push(node, offset));
   return units;
+}
+
+/**
+ * A breakable table's row specs: every row is matched like one paragraph
+ * whose tokens are the row's cells in reading order. Typst's text layer
+ * emits one run per cell; runs sharing a baseline merge into one extracted
+ * line with NO separator ("Alpha 11.5n1" for cells "Alpha 1" | "1.5" | "n1"),
+ * so the first token of every cell and cell paragraph is glued
+ * (`spaceBefore: false`). A cell's second paragraph starts its own line,
+ * where the matcher trims leading space anyway.
+ *
+ * Fail closed to an opaque unit (today's atomic behaviour) whenever any row
+ * cannot be predicted exactly: an unrepresentable atom, or a row without a
+ * single known token (an all-empty row emits no text at all, so its page
+ * could never be observed).
+ */
+export function buildTableUnit(node: PMNode, pos: number, resolveAtom: AtomResolver): Unit {
+  const model = tableRowModel(node);
+  const opaque: Unit = { kind: 'opaque', pos, type: 'table' };
+  if (model.atomicReason) return opaque;
+  const rows: ParagraphSpec[] = [];
+  let failed = false;
+  node.forEach((row) => {
+    if (failed) return;
+    const tokens: ParagraphSpec['tokens'] = [];
+    let hasMath = false;
+    row.forEach((cell) => {
+      if (failed) return;
+      cell.forEach((block) => {
+        if (failed) return;
+        if (block.type.name !== 'paragraph') {
+          failed = true;
+          return;
+        }
+        if (!block.content.size) return;
+        const spec = buildSpec(block, resolveAtom);
+        if (!spec) {
+          failed = true;
+          return;
+        }
+        hasMath ||= spec.hasMath;
+        spec.tokens.forEach((t, i) => tokens.push(i === 0 ? { ...t, spaceBefore: false } : t));
+      });
+    });
+    if (!tokens.some((t) => t.text !== undefined)) failed = true;
+    rows.push({ key: '', src: '', tokens, hasMath });
+  });
+  if (failed) return opaque;
+  return { kind: 'table', pos, type: 'table', rows, model };
 }
 
 const MARKER = /^[•‣–\-*]?\s*|^\d+[.)]\s*/;
@@ -352,7 +409,17 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
 
   const units = buildUnits(doc, resolveAtom);
   const lines = stripFootnoteLines(all, footnoteHeads(doc));
+  const matched = matchPageStarts(units, lines);
+  return matched.status === 'ok' ? { ...matched, pageCount } : matched;
+}
 
+/**
+ * Walk the document's units against the per-page text lines and record
+ * the (block, line-or-row) that starts every page. Pure: exported so the
+ * matcher's unit rules (paragraph lines, opaque resync, table rows) are
+ * testable without a compiled SVG.
+ */
+export function matchPageStarts(units: Unit[], lines: PagedLine[]): PageOracleEntry {
   const pageStarts: PageStart[] = [];
   let cursor = 0;
   let lastPage = 0;
@@ -382,12 +449,31 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
   const anchorFor = (idx: number): Anchor | null => {
     for (let j = idx; j < units.length; j++) {
       const u = units[j];
-      if (u.kind === 'exact' && u.spec) {
-        const words = u.spec.tokens.filter((t) => t.text).slice(0, 2);
-        if (words.length) return { text: words.map((t) => t.text).join(' '), marker: u.marker };
+      const spec = u.kind === 'exact' ? u.spec : u.kind === 'table' ? u.rows?.[0] : undefined;
+      if (spec) {
+        const words = spec.tokens.filter((t) => t.text).slice(0, 2);
+        if (words.length) {
+          // A row's cells merge without a separator in the text layer.
+          const joiner = u.kind === 'table' && words[1] && !words[1].spaceBefore ? '' : ' ';
+          return { text: words.map((t) => t.text).join(joiner), marker: u.marker };
+        }
       }
     }
     return null;
+  };
+
+  /** Match one table row (or its repeated header) starting at `cursor`;
+   * every line it consumes must sit on one page — a row split across pages
+   * is a cell split (Typst's `layout_multi_row`), which the editor does not
+   * mirror, so the whole answer fails closed. Returns the next cursor. */
+  const matchRow = (unit: Unit, r: number, cursor: number, what: string): number | { fail: string } => {
+    const res = matchParagraph(unit.rows![r], lines.slice(cursor), 0);
+    if (res.status !== 'ok') return { fail: `unit@${unit.pos} (table ${what} ${r}): ${res.entry.reason}` };
+    const page = lines[cursor].page;
+    for (let k = 1; k < res.next; k++) {
+      if (lines[cursor + k].page !== page) return { fail: `page splits inside table row @${unit.pos} row ${r}` };
+    }
+    return cursor + res.next;
   };
 
   for (let ui = 0; ui < units.length; ui++) {
@@ -406,6 +492,31 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
       }
       for (let k = 0; k < res.next; k++) notePage(cursor + k, unit, k);
       cursor += res.next;
+    } else if (unit.kind === 'table' && unit.rows && unit.model) {
+      // Row-level matching (PAGE-PORT.md Phase 7): a page that begins at
+      // row r is recorded as {table pos, line: r}. On a continuation page
+      // Typst lays the repeating header first (repeated.rs
+      // `layout_active_headers`), so its exact text is expected — and
+      // required — ahead of row r there.
+      const rep = unit.model.repeatRow;
+      for (let r = 0; r < unit.rows.length; r++) {
+        if (cursor >= lines.length) return { status: 'fail', reason: `unit@${unit.pos} (table): ran out of lines at row ${r}` };
+        const page = lines[cursor].page;
+        if (page > lastPage) {
+          if (r > 0 && rep !== null && r > rep) {
+            const next = matchRow(unit, rep, cursor, 'repeated header before row');
+            if (typeof next !== 'number') return { status: 'fail', reason: next.fail };
+            cursor = next;
+          }
+          while (lastPage < page) {
+            lastPage++;
+            pageStarts.push({ pos: unit.pos, line: r, unit: 'table' });
+          }
+        }
+        const next = matchRow(unit, r, cursor, 'row');
+        if (typeof next !== 'number') return { status: 'fail', reason: next.fail };
+        cursor = next;
+      }
     } else {
       // Opaque block: consume lines until the next exact unit's anchor.
       const anchor = anchorFor(ui + 1);
@@ -424,14 +535,16 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
     }
   }
 
-  // Mid-opaque page splits can't be represented (editor blocks are atomic)
-  // — except tables, whose node view renders Typst's own split fragments
-  // (typeset-plugin's forced paginator verifies the break count agrees).
+  // Mid-opaque page splits can't be represented (editor blocks are atomic).
+  // A 'table' start with line > 0 is a ROW start from the table branch
+  // above (a breakable table is never opaque); typeset-plugin's forced
+  // paginator re-validates it against the live row model before installing
+  // a row-boundary spacer, declining anything it cannot mirror.
   for (const ps of pageStarts) {
     if (ps.line > 0 && ps.unit !== 'line' && ps.unit !== 'table') {
       return { status: 'fail', reason: `page splits inside atomic block @${ps.pos} (${ps.unit})` };
     }
   }
 
-  return { status: 'ok', pageStarts, pageCount };
+  return { status: 'ok', pageStarts };
 }

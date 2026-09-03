@@ -125,7 +125,17 @@
 - Native-tables port: **done** on `codex/native-tables-port` (5788e87) —
   see HANDOFF-TABLES-REPORT.md. Tables are native ProseMirror trees and
   land atomic; `table-split.ts` and the mini-compile split path are gone.
-  Phase 7 below is unblocked once that branch reaches `main`.
+- Phase 7 (table row breaks): **in progress** on `claude/page-port-phase7`.
+  Step 1 (oracle row matching) landed: `buildTableUnit`/`matchPageStarts`
+  in page-oracle.ts match a breakable table row by row against the
+  compiled text layer (cells merge with no separator on one baseline —
+  `Alpha 1` | `1.5` | `n1` extracts as `Alpha 11.5n1`), require the
+  repeating header's exact text at the top of every continuation page,
+  and fail closed on a split inside a row, a missing/mismatched header, an
+  all-empty row, a captioned (figure, unbreakable) table or a sub-header.
+  A page start inside a table is now `{pos: table, line: ROW, unit:
+  'table'}`; `paginateForced` still declines it until step 2/3 install a
+  row-boundary spacer. Row model: src/layout/table-rows.ts.
 
 Goal: the local paginator's page decisions become identical to Typst's for
 supported content, the same way the line-break port (PORT.md) made local line
@@ -345,6 +355,20 @@ Native tables land atomic: a compiled page start inside a table declines
 the exact page map. This phase restores mid-table page breaks as pure
 presentation, the same trick paragraphs use — the document keeps one
 editable table node; the break is decorations:
+
+Measured before step 1 (probe on a 40-row booktabs table, letter/NCM 12.5pt):
+`#align(center, table(..))` and `#text(size: .., table(..))` both break
+between rows; `#figure(table(..))` (any caption/label) never does
+(figure.rs:412, `breakable: false`). Only the LAST of consecutive
+`table.header` rows repeats (resolve.rs:1834-1843 marks the earlier ones
+short-lived); the repeated header sits at the very top of the continuation
+region, followed by the row Typst broke before. Vertical-parity note, filed
+here rather than fixed: a single-line cell row is 18.54pt in Typst
+(2×5pt inset + cap-height extent at 12.5pt) = 24.72px, while the editor row
+is the 25px line box — +0.283px per row, constant per line count (a 3-line
+cell row measured 74.72 vs 75px). Over 28 rows that is 7.9px; local
+decisions can differ from Typst's by one row at a knife edge until the
+cell box model charges exactly `10pt + extent·em` per first line.
 
 1. Oracle: accept page starts inside tables by matching row text against
    the compiled SVG lines (a new row-level unit in the matcher, built like
