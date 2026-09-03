@@ -364,11 +364,13 @@ export function invalidatePageLayout(view: EditorView) {
  * pass — the same pass a freshly opened document gets — which re-requests
  * every oracle answer it lacks.
  */
-export function setLayoutSuspended(view: EditorView, suspended: boolean) {
+// Not exported yet: the source view (SOURCE-VIEW.md step 1) is the first
+// caller outside this module; until then the DEV hook below is the only one.
+function setLayoutSuspended(view: EditorView, suspended: boolean) {
   viewRegistry.get(view)?.setSuspended(suspended);
 }
 
-export function isLayoutSuspended(view: EditorView): boolean {
+function isLayoutSuspended(view: EditorView): boolean {
   return viewRegistry.get(view)?.isSuspended() ?? false;
 }
 
@@ -664,8 +666,8 @@ class TypesetView {
       (w as unknown as { __layoutSuspend: (suspended: boolean) => boolean }).__layoutSuspend = (
         suspended: boolean,
       ) => {
-        this.setSuspended(suspended);
-        return this.suspended;
+        setLayoutSuspended(this.view, suspended);
+        return isLayoutSuspended(this.view);
       };
       w.__breakSig = () => {
         const st = typesetKey.getState(this.view.state);
