@@ -425,3 +425,72 @@ test('PDF export from the source runs on the parsed text', async ({ page }) => {
   // The page document itself was never touched by the export.
   expect(await page.evaluate(() => window.view.state.doc.textContent)).not.toContain('Written in the source');
 });
+
+// ---------- step 3b: the folded preamble ----------
+
+test('a .typ source opens with the generated preamble folded and the caret on the body', async ({ page }) => {
+  await loadDemo(page);
+  await enter(page);
+  const fold = page.locator('#source .source-preamble-fold');
+  await expect(fold).toBeVisible();
+  await expect(fold).toContainText(/⚙ Document settings · \d+ lines/);
+  // The folded text is not rendered; the first line after the fold is the body's first line.
+  const lines = await page.locator('#source .cm-line').allTextContents();
+  expect(lines[0]).toMatch(/Document settings/);
+  expect(lines.some((l) => l.includes('#set page'))).toBe(false);
+  expect(lines.slice(1).find((l) => l.trim() !== '')).toBe('= Plass');
+  const caret = await page.evaluate(() => ({ at: window.__sourceView.caret(), body: window.__sourceView.text()!.indexOf('= Plass') }));
+  expect(caret.at).toBe(caret.body);
+  // The fold is presentation: the text still carries the preamble.
+  expect(await sourceText(page)).toMatch(/^\/\/ Exported from Plass\n#set page/);
+
+  // Click expands to the real, editable lines with a fold affordance above.
+  await fold.click();
+  await expect(page.locator('#source .source-preamble-fold')).toHaveCount(0);
+  await expect(page.locator('#source .cm-line', { hasText: '#set page' })).toBeVisible();
+  const bar = page.locator('#source .source-preamble-fold-btn');
+  await expect(bar).toBeVisible();
+  await bar.click();
+  await expect(page.locator('#source .source-preamble-fold')).toBeVisible();
+  await expect(page.locator('#source .cm-line', { hasText: '#set page' })).toHaveCount(0);
+});
+
+test('a Markdown source has no preamble fold', async ({ page }) => {
+  await boot(page);
+  await openSeeded(page, 'Notes.md', '---\ntitle: "Notes"\n---\n\n# Notes\n\nBody.\n');
+  await enter(page);
+  await expect(page.locator('#source .cm-content')).toBeVisible();
+  await expect(page.locator('#source .source-preamble-fold')).toHaveCount(0);
+  await expect(page.locator('#source .source-preamble-bar')).toHaveCount(0);
+});
+
+test('a settings edit in the unfolded preamble applies on exit', async ({ page }) => {
+  await loadDemo(page);
+  expect(await page.evaluate(() => window.view.state.doc.attrs.settings.marginTop)).toBe(1.25);
+  await enter(page);
+  await page.locator('#source .source-preamble-fold').click();
+  await page.evaluate(() => {
+    const sv = window.__sourceView;
+    sv.setText(sv.text()!.replace('margin: 1.25in', 'margin: 1in'));
+  });
+  await exit(page);
+  const settings = await page.evaluate(() => window.view.state.doc.attrs.settings);
+  expect(settings.marginTop).toBe(1);
+  expect(settings.marginLeft).toBe(1);
+  // The body came through untouched.
+  expect(await page.evaluate(() => window.view.state.doc.firstChild!.textContent)).toBe('Plass');
+});
+
+test('autosave writes the folded preamble too', async ({ page }) => {
+  await boot(page);
+  await openSeeded(page, 'Paper.typ', '= Paper\n\nBody text.\n');
+  await enter(page);
+  await expect(page.locator('#source .source-preamble-fold')).toBeVisible();
+  await page.locator('#source .cm-content').click();
+  await page.keyboard.press('ControlOrMeta+End');
+  await page.keyboard.type('\nMore  body.');
+  await expect.poll(() => onDisk(page), { timeout: 5_000 }).toContain('More  body.');
+  const disk = await onDisk(page);
+  expect(disk).toBe(await sourceText(page));
+  expect(disk).toMatch(/^\/\/ Exported from Plass\n#set page/);
+});

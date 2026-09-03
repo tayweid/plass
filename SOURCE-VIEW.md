@@ -103,6 +103,12 @@ either serializer, or a code editor dependency.
 - Markup dimmed to `--ink-soft`: heading markers, list markers, emphasis
   delimiters, `#`, brackets. Heading lines bold. Math and raw fences in a
   faint tint. Links and `@` references in `--accent`.
+- The generated `.typ` preamble (`// Exported from Plass`, `#set page…`,
+  the parity `#show` rules, `#import`) opens folded behind one quiet line
+  (`⚙ Document settings · 24 lines`, click or Enter to expand, "fold" to
+  refold). It is still the file — saved verbatim, editable once unfolded,
+  and settings edits there apply on exit like a file open. Markdown front
+  matter is left alone; the fold is not persisted.
 - Toolbar: the title pill and file/export pods stay; formatting buttons
   either disable or (v2) insert markup. Status line keeps the word count,
   drops the page count.

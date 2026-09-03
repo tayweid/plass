@@ -145,6 +145,22 @@ function caretBlock(typed: string, normalized: string, offsets: number[], caret:
   return best;
 }
 
+const PREAMBLE_HEAD = '// Exported from Plass';
+
+/** End of the generated `.typ` preamble — everything before the first
+ *  block (`offsets[0]`), minus its trailing blank line so the body keeps
+ *  its air. Only the serializer's own shape folds; anything else (a
+ *  hand-written file, Markdown front matter) is left alone. A restored
+ *  session has no offsets: the preamble then runs to its first blank line,
+ *  which is where the serializer puts the body. */
+function preambleEnd(text: string, format: SourceFormat, offsets: number[] | null): number {
+  if (format !== '.typ' || !text.startsWith(PREAMBLE_HEAD)) return 0;
+  let to = offsets?.length ? offsets[0] : text.indexOf('\n\n');
+  if (to <= 0) return 0;
+  while (to > 0 && text.charAt(to - 1) === '\n') to--;
+  return to;
+}
+
 /** The document position at the start of top-level block `index`. */
 function blockStart(doc: PMNode, index: number): number {
   let pos = 0;
@@ -232,6 +248,7 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
     const editor = mountSourceEditor(host, {
       text: initial,
       format,
+      preambleEnd: preambleEnd(initial, format, text === null ? offsets : null),
       onChange() {
         clearTimeout(persistTimer);
         persistTimer = window.setTimeout(persistSession, 400);
