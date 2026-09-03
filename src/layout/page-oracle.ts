@@ -68,6 +68,11 @@ export class PageOracle {
   private timer = 0;
   private inflight = false;
   private disposed = false;
+  /** Asleep with the hidden editor (SOURCE-VIEW.md, decision 6): no compile
+   * launches. An in-flight compile finishes and caches its answer (the
+   * analysis measures Typst's own SVG, never the editor), but its
+   * publication reaches a sleeping scheduler and installs nothing. */
+  private suspended = false;
   /** Identifies the latest requested page layout. Page compiles cannot be
    * cancelled once running, so older completions must not publish. */
   private generation = 0;
@@ -85,7 +90,7 @@ export class PageOracle {
   }
 
   request(sig: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver) {
-    if (this.disposed || this.results.has(sig) || this.pendingSig === sig) return;
+    if (this.disposed || this.suspended || this.results.has(sig) || this.pendingSig === sig) return;
     this.generation++;
     this.pendingSig = sig;
     this.payload = { doc, settings, resolveAtom };
@@ -114,8 +119,23 @@ export class PageOracle {
     this.payload = null;
   }
 
+  /** Stop launching compiles. The pending request is dropped (the pass that
+   * follows resume() re-requests the current document); results stay. */
+  suspend() {
+    if (this.disposed || this.suspended) return;
+    this.suspended = true;
+    clearTimeout(this.timer);
+    this.timer = 0;
+    this.pendingSig = null;
+    this.payload = null;
+  }
+
+  resume() {
+    this.suspended = false;
+  }
+
   private async flush() {
-    if (this.disposed || this.inflight || !this.pendingSig || !this.payload) return;
+    if (this.disposed || this.suspended || this.inflight || !this.pendingSig || !this.payload) return;
     const generation = this.generation;
     const sig = this.pendingSig;
     const { doc, settings, resolveAtom } = this.payload;
@@ -145,7 +165,7 @@ export class PageOracle {
         this.payload = null;
       }
       // A newer request may have arrived while compiling.
-      if (!this.disposed && this.pendingSig) {
+      if (!this.disposed && !this.suspended && this.pendingSig) {
         clearTimeout(this.timer);
         this.timer = window.setTimeout(() => void this.flush(), 60);
       }

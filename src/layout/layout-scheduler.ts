@@ -8,7 +8,10 @@
  * - full layout waits 250 ms after the latest edit;
  * - unrelated full-layout requests are suppressed during that edit window;
  * - full layout otherwise coalesces into one animation frame;
- * - meaningful width and font changes request a fresh full layout.
+ * - meaningful width and font changes request a fresh full layout;
+ * - while suspended (the editor is mounted but hidden — SOURCE-VIEW.md,
+ *   decision 6) nothing runs: pending work is cancelled, new requests are
+ *   dropped, and resume schedules exactly one settled pass.
  */
 
 export const EDIT_SETTLE_DELAY_MS = 250;
@@ -75,6 +78,7 @@ export class LayoutScheduler {
   private stopResize: (() => void) | null = null;
   private stopFontEvents: (() => void) | null = null;
   private destroyed = false;
+  private suspended = false;
 
   constructor(
     private readonly widthTarget: HTMLElement,
@@ -100,12 +104,45 @@ export class LayoutScheduler {
 
   /** Coalesce exact changed-block layout into the next microtask. */
   scheduleLive(): void {
-    if (this.destroyed || this.liveQueued) return;
+    if (this.destroyed || this.suspended || this.liveQueued) return;
     this.liveQueued = true;
     this.environment.queueMicrotask(() => {
       this.liveQueued = false;
-      if (!this.destroyed) this.callbacks.runLive();
+      if (!this.destroyed && !this.suspended) this.callbacks.runLive();
     });
+  }
+
+  /** Whether the view is asleep: no pass may measure or dispatch. */
+  isSuspended(): boolean {
+    return this.suspended;
+  }
+
+  /**
+   * Put layout to sleep (the editor stays mounted but is hidden). Every
+   * pending pass is cancelled and every request until resume() is dropped:
+   * a hidden editor measures zero heights, and the one pass resume() runs
+   * covers whatever changed meanwhile. Resize and font events keep their
+   * bookkeeping (metrics still invalidate) but schedule nothing.
+   */
+  suspend(): void {
+    if (this.destroyed || this.suspended) return;
+    this.suspended = true;
+    if (this.editTimer !== null) {
+      this.environment.clearTimeout(this.editTimer);
+      this.editTimer = null;
+    }
+    if (this.settledFrame !== null) {
+      this.environment.cancelAnimationFrame(this.settledFrame);
+      this.settledFrame = null;
+    }
+  }
+
+  /** Wake up: one settled pass, exactly as a freshly constructed scheduler
+   * runs one. Live (changed-block) work is subsumed by that full pass. */
+  resume(): void {
+    if (this.destroyed || !this.suspended) return;
+    this.suspended = false;
+    this.scheduleSettled();
   }
 
   /** Whether an edit's quiet period is still pending (the user is mid-burst). */
@@ -115,7 +152,7 @@ export class LayoutScheduler {
 
   /** Restart the quiet-period timer following a document edit. */
   scheduleAfterEdit(): void {
-    if (this.destroyed) return;
+    if (this.destroyed || this.suspended) return;
     if (this.editTimer !== null) this.environment.clearTimeout(this.editTimer);
     this.editTimer = this.environment.setTimeout(() => {
       this.editTimer = null;
@@ -128,10 +165,10 @@ export class LayoutScheduler {
    * into scheduleAfterEdit's eventual settle; otherwise they share one rAF.
    */
   scheduleSettled(): void {
-    if (this.destroyed || this.editTimer !== null || this.settledFrame !== null) return;
+    if (this.destroyed || this.suspended || this.editTimer !== null || this.settledFrame !== null) return;
     this.settledFrame = this.environment.requestAnimationFrame(() => {
       this.settledFrame = null;
-      if (!this.destroyed) this.callbacks.runSettled();
+      if (!this.destroyed && !this.suspended) this.callbacks.runSettled();
     });
   }
 
@@ -156,7 +193,9 @@ export class LayoutScheduler {
   }
 
   private onResize = () => {
-    if (this.destroyed) return;
+    // A hidden editor reports width 0; accepting it would make the reveal
+    // look like a resize and queue a second pass behind resume()'s.
+    if (this.destroyed || this.suspended) return;
     const width = this.widthTarget.clientWidth;
     if (Math.abs(width - this.lastWidth) > RESIZE_THRESHOLD_PX) {
       this.lastWidth = width;

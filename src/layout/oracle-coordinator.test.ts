@@ -158,8 +158,79 @@ async function checkDestroyGeneration() {
   );
 }
 
+async function checkSuspend() {
+  // Paragraph oracle: a request queued before sleep never launches, a
+  // request made while asleep is dropped, and a compile already in flight
+  // finishes into the cache (its answer is keyed by spec and measure, not
+  // by editor geometry) — publication is the sleeping scheduler's problem.
+  let compiles = 0;
+  let notifications = 0;
+  const paragraph = new TypstOracle(
+    () => notifications++,
+    [],
+    () => {
+      compiles++;
+      return Promise.resolve(null);
+    },
+  );
+  const spec: ParagraphSpec = { key: 'sleep', src: 'sleep', tokens: [], hasMath: false };
+  paragraph.request('queued', spec, 400, DEFAULT_SETTINGS);
+  paragraph.suspend();
+  await (paragraph as unknown as { flush(): Promise<void> }).flush();
+  paragraph.request('asleep', spec, 400, DEFAULT_SETTINGS);
+  await (paragraph as unknown as { flush(): Promise<void> }).flush();
+  check(
+    'paragraph oracle launches nothing while suspended',
+    compiles === 0 && paragraph.queue.size === 0 && !paragraph.get('queued') && !paragraph.get('asleep'),
+  );
+  paragraph.resume();
+  paragraph.request('awake', spec, 400, DEFAULT_SETTINGS);
+  await (paragraph as unknown as { flush(): Promise<void> }).flush();
+  check('paragraph oracle compiles again after resume', compiles === 1 && paragraph.get('awake')?.status === 'fail');
+  paragraph.destroy();
+
+  const inflight = deferred<string | null>();
+  let inflightNotifications = 0;
+  const busy = new TypstOracle(() => inflightNotifications++, [], () => inflight.promise);
+  busy.request('inflight', spec, 400, DEFAULT_SETTINGS);
+  busy.request('later', { ...spec, key: 'later', src: 'later' }, 900, DEFAULT_SETTINGS);
+  const busyFlush = (busy as unknown as { flush(): Promise<void> }).flush();
+  busy.suspend();
+  inflight.resolve(null);
+  await busyFlush;
+  check(
+    'in-flight paragraph compile finishes into the cache without re-arming',
+    busy.get('inflight')?.status === 'fail' && busy.queue.size === 0 && !busy.inflight && inflightNotifications === 1,
+  );
+  busy.destroy();
+
+  // Page oracle: the pending request is dropped at sleep, requests while
+  // asleep are refused, and the resumed pass's request compiles normally.
+  let pageCompiles = 0;
+  const page = new PageOracle(
+    () => {},
+    () => {
+      pageCompiles++;
+      return Promise.resolve(null);
+    },
+  );
+  const doc = {} as PMNode;
+  page.request('pending', doc, DEFAULT_SETTINGS, () => null);
+  page.suspend();
+  await (page as unknown as { flush(): Promise<void> }).flush();
+  page.request('asleep', doc, DEFAULT_SETTINGS, () => null);
+  await (page as unknown as { flush(): Promise<void> }).flush();
+  check('page oracle launches nothing while suspended', pageCompiles === 0 && !page.get('pending') && !page.get('asleep'));
+  page.resume();
+  page.request('awake', doc, DEFAULT_SETTINGS, () => null);
+  await (page as unknown as { flush(): Promise<void> }).flush();
+  check('page oracle compiles again after resume', pageCompiles === 1 && page.get('awake')?.status === 'fail');
+  page.destroy();
+}
+
 await checkParagraphGeneration();
 await checkPageGeneration();
 await checkDestroyGeneration();
+await checkSuspend();
 
 console.log('\nall oracle lifecycle tests passed');

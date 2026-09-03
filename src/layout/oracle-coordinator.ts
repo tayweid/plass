@@ -113,6 +113,18 @@ export class OracleCoordinator {
     this.page.clear();
   }
 
+  /** Sleep with the hidden editor: no compile launches until resume().
+   * Caches persist, so the resumed pass reuses every published answer. */
+  suspend() {
+    this.paragraph.suspend();
+    this.page.suspend();
+  }
+
+  resume() {
+    this.paragraph.resume();
+    this.page.resume();
+  }
+
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;

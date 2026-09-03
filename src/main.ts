@@ -521,4 +521,10 @@ if (import.meta.env.DEV) {
   (window as unknown as { __fm: FileManager }).__fm = fileManager;
   (window as unknown as { __migrateEmbedded: () => Promise<void> }).__migrateEmbedded = () =>
     migrateEmbeddedFigures(view);
+  // Compiler worker counters (tests/layout-suspend.spec.ts proves a
+  // suspended editor posts no compiler task). The dynamic import resolves
+  // to the app's own module instance under vite's dev server, so the
+  // counters are the live ones.
+  (window as unknown as { __compilerLifecycleStats: () => Promise<unknown> }).__compilerLifecycleStats =
+    async () => (await import('./typst-worker-client')).testCompilerLifecycleStats();
 }

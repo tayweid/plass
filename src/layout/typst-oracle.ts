@@ -186,6 +186,11 @@ export class TypstOracle {
   private timer = 0;
   inflight = false;
   disposed = false;
+  /** Asleep with the hidden editor (SOURCE-VIEW.md, decision 6): no compile
+   * launches. A compile already in flight finishes and its answer is
+   * cached — the cache is keyed by spec and measure, never by the editor's
+   * current geometry — but nothing is re-flushed until resume(). */
+  private suspended = false;
   private settings: DocSettings | null = null;
   /** Invalidates completions that were already compiling when clear() or
    * destroy() was called. The underlying compiler task cannot be cancelled,
@@ -221,7 +226,7 @@ export class TypstOracle {
     indented = false,
     blockId?: string,
   ) {
-    if (this.disposed || this.results.has(key) || this.queue.has(key)) return;
+    if (this.disposed || this.suspended || this.results.has(key) || this.queue.has(key)) return;
     if (blockId) {
       // A newer spec for the same block supersedes an older one: the old
       // text can never be verified against the document again. Drop it from
@@ -261,8 +266,25 @@ export class TypstOracle {
     this.settings = null;
   }
 
+  /** Stop launching compiles. Queued requests are dropped (the pass that
+   * follows resume() re-requests whatever it still needs); published
+   * results stay. */
+  suspend() {
+    if (this.disposed || this.suspended) return;
+    this.suspended = true;
+    clearTimeout(this.timer);
+    this.timer = 0;
+    this.queue.clear();
+  }
+
+  /** Accept requests again. Nothing is queued, so nothing launches until
+   * the resumed settled pass asks. */
+  resume() {
+    this.suspended = false;
+  }
+
   private async flush() {
-    if (this.disposed || this.inflight || !this.queue.size || !this.settings) return;
+    if (this.disposed || this.suspended || this.inflight || !this.queue.size || !this.settings) return;
     // Never launch a compile mid-burst: the next keystroke would invalidate
     // it. Requests keep coalescing into the queue; the flush retries once
     // the edit-settle window can have elapsed.
@@ -385,7 +407,7 @@ export class TypstOracle {
       for (const [key] of batch) this.results.set(key, { status: 'fail', reason: String(e).slice(0, 120) });
     } finally {
       this.inflight = false;
-      if (!this.disposed && this.queue.size) {
+      if (!this.disposed && !this.suspended && this.queue.size) {
         clearTimeout(this.timer);
         this.timer = window.setTimeout(() => void this.flush(), 20);
       }
