@@ -612,9 +612,14 @@ export const CONTAINER_PAGE_TOP_PADDING_EM: Readonly<Record<string, number>> = {
  * kind not in `CONTAINER_PAGE_TOP_PADDING_EM` (nothing to drop). `isRaw`
  * must be `true` for a `code_block` with `params === 'typst-raw'`: that
  * variant paints via `.ts-raw` (margin-bottom only, no padding-top), not
- * `.ProseMirror pre` — the drop does not apply to it. */
-export function containerPageTopDropEm(kind: string, isRaw = false): number {
+ * `.ProseMirror pre` — the drop does not apply to it. `variant` is a
+ * blockquote's `kind` attr: the 0.66em entry is `#quote(block: true)`'s
+ * only; the 'solution' kind paints no padding-top. */
+export function containerPageTopDropEm(kind: string, isRaw = false, variant: string | null = null): number {
   if (kind === 'code_block' && isRaw) return 0;
+  // The solution variant paints no padding-top (Auto spacing lives in the
+  // previous sibling's margin-bottom, like a paragraph): nothing to drop.
+  if (kind === 'blockquote' && variant === 'solution') return 0;
   return CONTAINER_PAGE_TOP_PADDING_EM[kind] ?? 0;
 }
 

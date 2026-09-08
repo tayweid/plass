@@ -817,6 +817,71 @@ class TypesetView {
       this.scheduler.scheduleLive();
       this.scheduler.scheduleAfterEdit();
     }
+    // Geometry moved only when the document or the layout decorations did;
+    // selection-only transactions skip the rect reads.
+    if (
+      view.state.doc !== prevState.doc ||
+      typesetKey.getState(view.state)?.decos !== typesetKey.getState(prevState)?.decos
+    ) {
+      this.syncSolutionBars();
+    }
+  }
+
+  /** Screen paint for solution blocks' left rules — a plugin-owned layer
+   * beside `.ProseMirror` (never inside it: a style write on a node's own
+   * element is a DOM mutation ProseMirror observes, and re-reading it from
+   * `update` loops). */
+  private solutionRules: HTMLElement | null = null;
+
+  /**
+   * Paint-only: a solution block's left rule must stop at the last line of
+   * each page and resume at the first line of the next, as Typst's split
+   * block frames do — never run through the page gap. One absolutely
+   * positioned segment per page: the block's extent minus every page
+   * spacer inside it (spacer top = the last line's bottom, spacer bottom =
+   * the next page's first line top). Runs after each layout-bearing view
+   * update (spacer installs and live re-layouts arrive as decoration
+   * transactions; edits move blocks); a document with no solution block
+   * pays one querySelector.
+   */
+  private syncSolutionBars(): void {
+    const dom = this.view.dom;
+    const blocks = dom.querySelectorAll<HTMLElement>('blockquote[data-kind="solution"]');
+    if (!blocks.length) {
+      this.solutionRules?.replaceChildren();
+      return;
+    }
+    const host = dom.parentElement;
+    if (!host) return;
+    if (!this.solutionRules) {
+      this.solutionRules = document.createElement('div');
+      this.solutionRules.className = 'ts-solution-rules';
+      this.solutionRules.setAttribute('aria-hidden', 'true');
+      host.appendChild(this.solutionRules);
+    }
+    const origin = host.getBoundingClientRect();
+    const frag = document.createDocumentFragment();
+    for (const block of blocks) {
+      const r = block.getBoundingClientRect();
+      const cuts: Array<[number, number]> = [];
+      for (const gap of block.querySelectorAll<HTMLElement>('.ts-pagegap')) {
+        const g = gap.getBoundingClientRect();
+        if (g.height > 0) cuts.push([g.top, g.bottom]);
+      }
+      cuts.sort((a, b) => a[0] - b[0]);
+      let y = r.top;
+      for (const [a, b] of [...cuts, [r.bottom, r.bottom] as [number, number]]) {
+        if (a - y > 0.5) {
+          const seg = document.createElement('div');
+          seg.style.top = `${(y - origin.top).toFixed(2)}px`;
+          seg.style.left = `${(r.left - origin.left).toFixed(2)}px`;
+          seg.style.height = `${(a - y).toFixed(2)}px`;
+          frag.appendChild(seg);
+        }
+        y = Math.max(y, b);
+      }
+    }
+    this.solutionRules.replaceChildren(frag);
   }
 
   /** Re-typeset just the edited blocks with authoritative compiled/ported
@@ -1203,6 +1268,8 @@ class TypesetView {
   }
 
   destroy() {
+    this.solutionRules?.remove();
+    this.solutionRules = null;
     this.destroyed = true;
     viewRegistry.delete(this.view);
     this.scheduler.destroy();
@@ -2937,7 +3004,7 @@ class TypesetView {
       // top even though Typst never charges it there.
       if (n) {
         const isRaw = n.type.name === 'code_block' && n.attrs.params === 'typst-raw';
-        const dropEm = containerPageTopDropEm(n.type.name, isRaw);
+        const dropEm = containerPageTopDropEm(n.type.name, isRaw, (n.attrs.kind as string | null) ?? null);
         if (dropEm) return -dropEm * F;
       }
       return 0;

@@ -1076,6 +1076,43 @@ body {
   padding: 0.66em 1em 0;
 }
 
+/* Solution block — the export's #block(stroke: (left: 2pt + red), inset:
+   (left: 1em)) with red text. Vertical box = a plain paragraph run: Auto
+   block spacing above/below (par spacing, so margin-bottom tracks
+   --par-margin like a paragraph) and no vertical inset. The rule is
+   paint-only and lives OUTSIDE the block's box: never a border (a border
+   plus a compensating negative margin leaves a fractional clientWidth
+   that rounds, and the breaker's measure — clientWidth minus padding —
+   would drift a third of a pixel from Typst's inset). On screen the
+   plugin's .ts-solution-rules layer paints one segment per page so the
+   rule stops at each page's last line like Typst's split frames; print
+   uses the ::before below. Typst centers the 2pt stroke on the block
+   edge; the bar sits 1pt either side of it. */
+.ProseMirror blockquote[data-kind='solution'] {
+  --solution-red: #c00000;
+  position: relative;
+  margin: 0 0 var(--par-margin, 0.9em);
+  padding: 0 0 0 1em;
+  color: var(--solution-red);
+}
+
+.ts-solution-rules {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.ts-solution-rules > div {
+  position: absolute;
+  width: 2pt;
+  margin-left: -1pt;
+  background: #c00000;
+}
+
+.ProseMirror blockquote[data-kind='solution'] > :last-child {
+  margin-bottom: 0;
+}
+
 .ProseMirror ul,
 .ProseMirror ol {
   padding-left: 1.6em;
@@ -2509,6 +2546,23 @@ body {
      browser paginates via @page (from the dynamic #page-style element). */
   .ts-pagegap {
     height: 0 !important;
+  }
+
+  /* With the spacers gone the browser breaks pages itself; the screen
+     segments would be misplaced, so the rule prints as a pseudo-element
+     the browser cuts at its own page edges. */
+  .ts-solution-rules {
+    display: none;
+  }
+
+  .ProseMirror blockquote[data-kind='solution']::before {
+    content: '';
+    position: absolute;
+    left: -1pt;
+    top: 0;
+    bottom: 0;
+    width: 2pt;
+    background: var(--solution-red);
   }
 
   /* The browser paginates tables itself in print; the screen-only widget

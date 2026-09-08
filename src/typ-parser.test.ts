@@ -545,6 +545,29 @@ function firstDiff(a: string, b: string): string {
   check('pure nbsp run survives', t('a~~b') === 'a\u00a0\u00a0b', JSON.stringify(t('a~~b')));
 }
 
+// --- 18. solution block: the #block(stroke: (left: …)) preset round-trips as kind 'solution' ---
+{
+  const p = schema.nodes.paragraph;
+  const doc = schema.nodes.doc.create(null, [
+    p.create(null, schema.text('Problem 1. Show that the sum is finite.')),
+    schema.nodes.blockquote.create({ kind: 'solution' }, [
+      p.create(null, schema.text('Bound each term by a geometric series.')),
+      p.create(null, schema.text('The partial sums are therefore Cauchy.')),
+    ]),
+    schema.nodes.blockquote.create(null, [p.create(null, schema.text('A plain quote stays a quote.'))]),
+  ]);
+  const t1 = docToTyp(doc);
+  check('solution exports as a left-stroke block', /#block\(width: 100%, stroke: \(left: 2pt \+ rgb\("#c00000"\)\), inset: \(left: 1em\)\)\[\n  #set text\(fill: rgb\("#c00000"\)\)\n/.test(t1), t1);
+  const { doc: back, warnings } = typToDoc(t1);
+  check('solution imports without warnings', warnings.length === 0, warnings.join('; '));
+  const kinds: Array<string | null> = [];
+  back.forEach((n) => n.type.name === 'blockquote' && kinds.push((n.attrs.kind as string | null) ?? null));
+  check('solution kind survives import', JSON.stringify(kinds) === JSON.stringify(['solution', null]), JSON.stringify(kinds));
+  check('solution keeps both paragraphs', back.child(1).childCount === 2 && back.child(1).child(1).textContent === 'The partial sums are therefore Cauchy.');
+  const t2 = docToTyp(back);
+  check('solution round-trips byte-identically', t1 === t2, firstDiff(t1, t2));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

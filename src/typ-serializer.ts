@@ -56,6 +56,14 @@ export function pageTopAdjustEm(s: DocSettings, unit: 'paragraph' | 'line' | 'h1
 // `shift` is a measured per-level baseline correction (em of body size):
 // Typst places heading baselines slightly lower than the metric model
 // predicts; calibrated against the live editor (NCM defaults).
+/** The solution block's colour — a verified preset, not a free parameter
+ * (`style.css`'s `--solution-red` paints the same value in the editor).
+ * The block is `#block(width: 100%, stroke: (left: 2pt + red), inset:
+ * (left: 1em))` with `#set text(fill: red)` inside: a left inset the CSS
+ * mirrors as padding, no vertical inset, Auto block spacing — so its
+ * vertical box equals a plain paragraph run and needs no calibration. */
+const SOLUTION_COLOR = 'rgb("#c00000")';
+
 const HEADINGS: Array<{ level: number; hs: number; padTop: number; marginBottom: number; shift: number }> = [
   { level: 1, hs: 1.9, padTop: 0.2, marginBottom: 0.5, shift: 0.1932 },
   { level: 2, hs: 1.4, padTop: 1.4, marginBottom: 0.5, shift: 0.1269 },
@@ -391,6 +399,17 @@ function blockToTyp(node: PMNode, indent = ''): string {
         ']\n\n'
       );
     case 'blockquote':
+      if (node.attrs.kind === 'solution') {
+        return (
+          indent +
+          `#block(width: 100%, stroke: (left: 2pt + ${SOLUTION_COLOR}), inset: (left: 1em))[\n` +
+          indent +
+          `  #set text(fill: ${SOLUTION_COLOR})\n\n` +
+          blocksToTyp(node, indent + '  ') +
+          indent +
+          ']\n\n'
+        );
+      }
       return indent + '#quote(block: true)[\n' + blocksToTyp(node, indent + '  ') + indent + ']\n\n';
     case 'code_block':
       // Raw-Typst escape-hatch islands (from import) pass through verbatim.

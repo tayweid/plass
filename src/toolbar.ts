@@ -4,7 +4,7 @@
 // only dropdown is Recents, which is inherently a dynamic list.
 
 import { TextSelection } from 'prosemirror-state';
-import { setBlockType, toggleMark } from 'prosemirror-commands';
+import { lift, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import type { Command, EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { schema } from './schema';
@@ -58,6 +58,9 @@ const ICONS: Record<string, string> = {
   aligncenter: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="6.5" y1="12" x2="17.5" y2="12"/><line x1="5" y1="18" x2="19" y2="18"/>',
   alignright: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="6" y1="18" x2="21" y2="18"/>',
   code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  paragraph: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="15" y2="18"/>',
+  quote: '<line x1="3" y1="4" x2="3" y2="20" stroke-dasharray="2 2"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="16" y2="18"/>',
+  solution: '<line x1="3" y1="4" x2="3" y2="20" stroke-width="3"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="16" y2="18"/>',
 };
 
 function icon(name: string): string {
@@ -455,6 +458,38 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     { glyph: icon('alignleft'), label: 'Left', title: 'Align left (justified body text)', run: () => setAlign(null) },
     { glyph: icon('aligncenter'), label: 'Center', title: 'Center text', run: () => setAlign('center') },
     { glyph: icon('alignright'), label: 'Right', title: 'Align right', run: () => setAlign('right') },
+  ]);
+  // Block kind: plain body, quote (#quote(block: true)), or the solution
+  // preset (left rule, red text). Wrapping and re-kinding both go through
+  // the same blockquote node; "Plain" lifts the selection back out.
+  const setBlockKind = (kind: 'solution' | null) => {
+    const { state } = view;
+    const { $from, $to } = state.selection;
+    const depth = $from.sharedDepth($to.pos);
+    for (let d = depth; d > 0; d--) {
+      const node = $from.node(d);
+      if (node.type === schema.nodes.blockquote) {
+        const pos = $from.before(d);
+        if ((node.attrs.kind ?? null) !== kind) view.dispatch(state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, kind }));
+        view.focus();
+        return;
+      }
+    }
+    wrapIn(schema.nodes.blockquote, { kind })(state, view.dispatch);
+    view.focus();
+  };
+  flyout(currentPod, icon('quote'), 'Block — plain, quote, solution', [
+    {
+      glyph: icon('paragraph'),
+      label: 'Plain',
+      title: 'Plain body text — lift out of the quote or solution block',
+      run: () => {
+        lift(view.state, view.dispatch);
+        view.focus();
+      },
+    },
+    { glyph: icon('quote'), label: 'Quote', title: 'Block quote (⌃>) — or type > at a line start', run: () => setBlockKind(null) },
+    { glyph: icon('solution'), label: 'Solution', title: 'Solution block — red text with a red rule on the left', run: () => setBlockKind('solution') },
   ]);
   barBtn(icon('image'), 'Figure', 'Insert figure (⌘⌥I) — or paste/drop an image', runCmd(insertFigureCmd));
   barBtn(icon('table'), 'Table', 'Insert table (⌘⌥T)', () => insertStructuredTable(view));

@@ -262,6 +262,24 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
       return ['p', attrs, 0];
     },
   })
+  // Quotes carry a kind: null = Typst's #quote(block: true) (plain
+  // indentation); 'solution' = the solution preset (left rule, red text —
+  // a #block with a left stroke and inset on export). Same container, same
+  // pagination model; only the export wrapper and the paint differ.
+  .update('blockquote', {
+    ...base.spec.nodes.get('blockquote')!,
+    attrs: { kind: { default: null } },
+    parseDOM: [
+      {
+        tag: 'blockquote',
+        getAttrs: (el: HTMLElement | string) =>
+          typeof el === 'string' ? { kind: null } : { kind: el.getAttribute('data-kind') || null },
+      },
+    ],
+    toDOM(node) {
+      return node.attrs.kind ? ['blockquote', { 'data-kind': node.attrs.kind as string }, 0] : ['blockquote', 0];
+    },
+  })
   .update('image', {
     ...base.spec.nodes.get('image')!,
     parseDOM: [

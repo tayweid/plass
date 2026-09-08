@@ -158,6 +158,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         return `\`\`\`${lang}\n${node.textContent}\n\`\`\``;
       }
       case 'blockquote': {
+        if (node.attrs.kind === 'solution') warn('solution styling is not stored in Markdown — save as .typ to keep it');
         const inner: string[] = [];
         node.forEach((child) => inner.push(block(child, indent)));
         return inner.join('\n>\n').replace(/^/gm, '> ');

@@ -444,6 +444,26 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
+    // solution block: the exporter's #block(stroke: (left: …), inset: (left:
+    // …))[ … ] wrapper with its leading #set text(fill: …) line — the same
+    // container as a quote, kind 'solution'.
+    // (`rgb("…")` nests one level of parentheses inside the stroke.)
+    if (/^#block\(width: 100%, stroke: \(left: (?:[^()]|\([^()]*\))*\), inset: \(left: [^()]*\)\)\[$/.test(t)) {
+      const body: string[] = [];
+      i++;
+      while (i < n && lines[i].trim() !== ']') body.push(lines[i++].replace(/^  /, ''));
+      i++; // closing bracket
+      if (/^#set text\(fill: (?:[^()]|\([^()]*\))*\)$/.test(body[0]?.trim() ?? '')) {
+        body.shift();
+        while (body.length && !body[0].trim()) body.shift();
+      }
+      const inner = parseBlocks(body, warnings);
+      out.push(
+        schema.nodes.blockquote.create({ kind: 'solution' }, inner.length ? inner : [schema.nodes.paragraph.create()]),
+      );
+      continue;
+    }
+
     // blockquote
     if (t === '#quote(block: true)[') {
       const body: string[] = [];
