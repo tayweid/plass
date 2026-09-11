@@ -21,7 +21,7 @@ declare global {
     __pagLog: () => string[];
     __pagCount: () => number;
     __layoutSuspend: (suspended: boolean) => boolean;
-    __layoutDispatchStats: (reset?: boolean) => { lines: number; pageMarks: number };
+    __layoutDispatchStats: (reset?: boolean) => { lines: number };
     __paginationSnapshotStats: (reset?: boolean) => {
       captures: number;
       spacerScans: number;
@@ -139,7 +139,7 @@ test('a hidden, suspended editor runs no pass, compiles nothing, and resumes int
   const during = await quietCounters(page);
   expect(during.passes).toBe(before.passes);
   expect(during.lastEntry).toBe(before.lastEntry);
-  expect(during.dispatches).toEqual({ lines: 0, pageMarks: 0 });
+  expect(during.dispatches).toEqual({ lines: 0 });
   expect(during.snapshot).toEqual({ captures: 0, spacerScans: 0, heightQueries: 0 });
   expect(during.compilerTasks).toBe(before.compilerTasks);
   // The edit itself landed in the document; only its layout waited.

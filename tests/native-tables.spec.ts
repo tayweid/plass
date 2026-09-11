@@ -6,7 +6,6 @@ declare global {
     view: import('prosemirror-view').EditorView;
     __pagLog: () => string[];
     __pagCount: () => number;
-    __pageOracle: unknown;
     __audit: () => Promise<{ pages: { agree: boolean; typst: Array<{ unit: string; line: number }> } } | null>;
     __nativeTableProofGeometry: () => Promise<{ widthPt: number; heightPt: number }>;
     __tableHotPathProbe?: {
@@ -65,7 +64,7 @@ async function installPaginationTable(
   navigate = true,
 ) {
   if (navigate) await page.goto('/?new=1');
-  await page.waitForFunction(() => !!window.view && !!window.__pagLog && !!window.__pageOracle);
+  await page.waitForFunction(() => !!window.view && !!window.__pagLog);
   return page.evaluate((rows) => {
     const { state } = window.view;
     const s = state.schema;

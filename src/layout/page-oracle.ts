@@ -1,17 +1,12 @@
-// The page-break oracle: Typst decides where pages break; the editor obeys.
-//
-// The full document (the byte-exact export, embedded assets and all)
-// compiles in the background; the multi-page SVG's text-selection layer
-// gives each page's lines. Matching those lines against the document's
-// blocks — exact token matching for paragraphs and headings (the same
-// machinery as the line-break oracle), anchored resync across opaque blocks
-// (equations, figures, tables, raw), footnote-area lines filtered against
-// the known footnote texts — yields the block (and line, for split
-// paragraphs) that starts every page. The editor's paginator then places
-// its page spacers exactly there instead of running its own fit rules.
-//
-// Any mismatch fails the whole result and the editor keeps its own
-// pagination for that document state (graceful, self-healing on edit).
+// The page matcher: how a compiled Typst document's page starts are read
+// back from its multi-page SVG. The text-selection layer gives each page's
+// lines; matching them against the document's units — exact token matching
+// for paragraphs and headings (the paragraph matcher), row by row for
+// tables, anchored resync across opaque blocks (equations, figures, raw),
+// footnote-area lines filtered against the known footnote texts — yields the
+// block (and line, or row) that starts every page. Used by the port audit
+// (auditSvg → src/layout/port-audit.ts) to measure the local paginator
+// against Typst; the editor never installs these answers.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { buildSpec, matchParagraph, type AtomResolver, type SvgLine, type ParagraphSpec } from './typst-oracle';
@@ -59,120 +54,6 @@ export interface Unit {
 
 export interface PagedLine extends SvgLine {
   page: number;
-}
-
-const MAX_RESULTS = 8;
-
-export class PageOracle {
-  private results = new Map<string, PageOracleEntry>();
-  private pendingSig: string | null = null;
-  private timer = 0;
-  private inflight = false;
-  private disposed = false;
-  /** Asleep with the hidden editor (SOURCE-VIEW.md, decision 6): no compile
-   * launches. An in-flight compile finishes and caches its answer (the
-   * analysis measures Typst's own SVG, never the editor), but its
-   * publication reaches a sleeping scheduler and installs nothing. */
-  private suspended = false;
-  /** Identifies the latest requested page layout. Page compiles cannot be
-   * cancelled once running, so older completions must not publish. */
-  private generation = 0;
-
-  constructor(
-    private onResults: (entry: PageOracleEntry) => void,
-    private compileDocSvg: (doc: PMNode) => Promise<string | null> = async (doc) => {
-      const { compileDocSvg } = await import('../pdf');
-      return compileDocSvg(doc);
-    },
-  ) {}
-
-  get(sig: string): PageOracleEntry | undefined {
-    return this.results.get(sig);
-  }
-
-  request(sig: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver) {
-    if (this.disposed || this.suspended || this.results.has(sig) || this.pendingSig === sig) return;
-    this.generation++;
-    this.pendingSig = sig;
-    this.payload = { doc, settings, resolveAtom };
-    clearTimeout(this.timer);
-    this.timer = window.setTimeout(() => void this.flush(), 350);
-  }
-
-  private payload: { doc: PMNode; settings: DocSettings; resolveAtom: AtomResolver } | null = null;
-
-  clear() {
-    this.generation++;
-    clearTimeout(this.timer);
-    this.timer = 0;
-    this.results.clear();
-    this.pendingSig = null;
-    this.payload = null;
-  }
-
-  destroy() {
-    if (this.disposed) return;
-    this.disposed = true;
-    this.generation++;
-    clearTimeout(this.timer);
-    this.timer = 0;
-    this.pendingSig = null;
-    this.payload = null;
-  }
-
-  /** Stop launching compiles. The pending request is dropped (the pass that
-   * follows resume() re-requests the current document); results stay. */
-  suspend() {
-    if (this.disposed || this.suspended) return;
-    this.suspended = true;
-    clearTimeout(this.timer);
-    this.timer = 0;
-    this.pendingSig = null;
-    this.payload = null;
-  }
-
-  resume() {
-    this.suspended = false;
-  }
-
-  private async flush() {
-    if (this.disposed || this.suspended || this.inflight || !this.pendingSig || !this.payload) return;
-    const generation = this.generation;
-    const sig = this.pendingSig;
-    const { doc, settings, resolveAtom } = this.payload;
-    this.inflight = true;
-    let published: PageOracleEntry | undefined;
-    try {
-      if (this.disposed || generation !== this.generation) return;
-      const svg = await this.compileDocSvg(doc);
-      if (this.disposed || generation !== this.generation) return;
-      const entry = svg ? analyze(svg, doc, settings, resolveAtom) : ({ status: 'fail', reason: 'compile failed' } as PageOracleEntry);
-      this.results.set(sig, entry);
-      published = entry;
-      if (this.results.size > MAX_RESULTS) {
-        this.results.delete(this.results.keys().next().value!);
-      }
-    } catch (e) {
-      if (this.disposed || generation !== this.generation) return;
-      console.warn('page oracle failed', e);
-      published = { status: 'fail', reason: String(e).slice(0, 120) };
-      this.results.set(sig, published);
-    } finally {
-      this.inflight = false;
-      // A newer request may use the same signature after clear(). Only the
-      // generation that started this compile may consume its pending state.
-      if (generation === this.generation && this.pendingSig === sig) {
-        this.pendingSig = null;
-        this.payload = null;
-      }
-      // A newer request may have arrived while compiling.
-      if (!this.disposed && !this.suspended && this.pendingSig) {
-        clearTimeout(this.timer);
-        this.timer = window.setTimeout(() => void this.flush(), 60);
-      }
-    }
-    if (!this.disposed && generation === this.generation && published) this.onResults(published);
-  }
 }
 
 /** Per-page tsel lines from the multi-page SVG. The svg renders at an

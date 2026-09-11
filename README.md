@@ -102,7 +102,7 @@ tier is always visible to the writer.
 - **Off.** Multi-column layout, floats, custom show and set rules, and
   hand-written layout code are declined on purpose. They are not queued
   features; adding one means adding a rail, with its local mirror and its
-  oracle verification, one at a time.
+  an audit fixture, one at a time.
 
 Two consequences follow. Styling is offered as presets the layout engine
 has been verified on, not as free parameters. And the source view is a
@@ -121,7 +121,7 @@ rails can always be finished in Typst itself, because the file is Typst.
   within the supported contract.
 - **Real pages**: content flows across painted page boxes (US Letter/A4 from
   document settings) with margins, inter-page gaps, and page numbers.
-  Paragraphs split across page boundaries at oracle-chosen line breaks while
+  Paragraphs split across page boundaries at port-chosen line breaks while
   remaining single editable nodes; lists and blockquotes break between
   children. Widow/orphan control: a paragraph never leaves fewer than two
   lines at the bottom of the page where it starts (it moves whole instead)
@@ -162,7 +162,7 @@ rails can always be finished in Typst itself, because the file is Typst.
   tools, Document, and Export controls own inserts, bibliography/settings,
   help, and downloads. Formatting itself is markdown rules + shortcuts
   (cheat-sheet behind the ? button), and the demo lives there too. A faint
-  corner HUD shows pages · words (hover for oracle timing), while messages
+  corner HUD shows pages · words (hover for layout timing), while messages
   appear as transient toasts. Insert
   shortcuts: ⌘⌥T table, ⌘⌥I figure, ⌘⌥F footnote, ⌘M/⌘⇧M math.
 - **Math**: type `$e^{i\pi}+1=0$` for inline math, `$$` on an empty line for
@@ -170,7 +170,7 @@ rails can always be finished in Typst itself, because the file is Typst.
   the in-app compiler (mitex + New Computer Modern Math) and shown from that
   compiled result, baseline-aligned to the text; KaTeX provides the immediate
   editing preview and the compiled ink replaces it when ready. Click-to-edit
-  popover with live preview. The oracle justifies
+  popover with live preview. The port justifies
   around inline math using the Typst-exact atom width.
 - **Figures**: insert from the toolbar, or paste/drop an image. Editable
   inline captions with a painted "Figure N:" prefix that renumbers live; a
@@ -288,7 +288,7 @@ rails can always be finished in Typst itself, because the file is Typst.
   **math macros** (define `\E = \mathbb{E}` once; live in every KaTeX
   render and expanded to plain LaTeX on export so files compile anywhere;
   persisted via a `// typeset:math-macros` header directive). Settings are
-  document attributes — undoable, autosaved, applied live (the oracle
+  document attributes — undoable, autosaved, applied live (the layout
   re-measures and re-typesets), and exported as Typst `#set` rules. This is
   the WYSIWYG face of a preamble.
 - **Real files** (File controls, ⌘O/⌘S): open and save `.typ` documents on

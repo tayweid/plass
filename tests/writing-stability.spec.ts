@@ -27,7 +27,6 @@ declare global {
     view: import('prosemirror-view').EditorView;
     __pagLog: () => string[];
     __pagCount: () => number;
-    __pageOracle: unknown;
     __suffixPaginationStats: (reset?: boolean) => SuffixPaginationStats;
   }
 }

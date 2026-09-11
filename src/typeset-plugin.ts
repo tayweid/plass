@@ -1,4 +1,4 @@
-// The layout translator (spec §3.5): reads the oracle's line layouts and
+// The layout translator (spec §3.5): reads the port's line layouts and
 // imposes them on the editing surface as ProseMirror decorations.
 //
 //   - an inline decoration per justified line carrying exact word-spacing
@@ -12,16 +12,17 @@
 //
 // Scheduling (spec §3.6): mapped decorations preserve the previous shape
 // during the edit transaction, then an exact port-selected layout replaces
-// only the affected blocks in the same task. The settled pass verifies those
-// decisions against the compiled oracle and only dispatches when semantics
-// differ. Pagination may add a second synchronous update in the same task,
-// after measuring the exact line layout, so no intermediate state paints.
+// only the affected blocks in the same task. The settled pass re-lays the
+// document and only dispatches when semantics differ. Pagination may add a
+// second synchronous update in the same task, after measuring the exact
+// line layout, so no intermediate state paints. One renderer: nothing here
+// compiles; Typst measures the result on demand (the port audit, `audit()`).
 //
 // Pagination model: the document stays one continuous editable flow; page
 // boxes are painted behind it (see #pages in main.ts), and exact-height
 // spacers push content past each page boundary. Between blocks the spacer is
 // an ordinary div; inside a paragraph it is a block-in-inline div sitting at
-// an oracle-chosen line break (the div itself forces the break, so it simply
+// a port-chosen line break (the div itself forces the break, so it simply
 // replaces the <br> widget). Print needs no JS: print CSS zeroes the spacer
 // heights (line breaks survive, gaps vanish) and @page takes over.
 
@@ -35,11 +36,10 @@ import {
   type LayoutOptions,
   type LineLayout,
 } from './layout/paragraph';
-import { buildSpec, type TypstOracle, type AtomResolver, type SpecKind } from './layout/typst-oracle';
+import { buildSpec, type AtomResolver, type SpecKind } from './layout/typst-oracle';
 import { portBreaks, shapedWidthPt } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
 import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdict } from './environment-check';
-import type { PageOracle } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { escapeTyp, expandMacrosWith, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
 import {
@@ -58,7 +58,6 @@ import {
   type FootnoteCarryItem,
   type StickyState,
 } from './layout/flow-rules';
-import { FONT_FALLBACK } from './pdf';
 import { citationLabelMap } from './citations';
 import { eqKey } from './equations';
 import { getInk, inkKey } from './math-ink';
@@ -81,9 +80,7 @@ import {
 import {
   planTableRowBreaks,
   tableRowModel,
-  tableRowStartIsRepresentable,
   type MeasuredRow,
-  type TableRowModel,
 } from './layout/table-rows';
 import {
   BlockLayoutCache,
@@ -107,7 +104,6 @@ import {
   type TypesetStats,
 } from './layout/typeset-state';
 import { LayoutScheduler } from './layout/layout-scheduler';
-import { OracleCoordinator } from './layout/oracle-coordinator';
 import {
   HeightIndex,
   createPaginationSnapshot,
@@ -402,13 +398,10 @@ export function typesetPlugin(
   return new Plugin<TypesetState>({
     key: typesetKey,
     state: {
-      init: () => ({ decos: DecorationSet.empty, pageMarks: DecorationSet.empty }),
+      init: () => ({ decos: DecorationSet.empty }),
       apply(tr, val) {
         const meta = tr.getMeta(typesetKey) as TypesetMeta | undefined;
-        if (meta?.type === 'decos') {
-          return { decos: meta.decos, pageMarks: meta.pageMarks ?? val.pageMarks.map(tr.mapping, tr.doc) };
-        }
-        if (meta?.type === 'pageMarks') return { decos: val.decos, pageMarks: meta.pageMarks };
+        if (meta?.type === 'decos') return { decos: meta.decos };
         if (tr.docChanged) {
           let decos = val.decos.map(tr.mapping, tr.doc);
           // A replace whose boundary coincides with a page spacer widget
@@ -465,7 +458,7 @@ export function typesetPlugin(
               decos = decos.add(tr.doc, revived);
             }
           }
-          return { decos, pageMarks: val.pageMarks.map(tr.mapping, tr.doc) };
+          return { decos };
         }
         return val;
       },
@@ -482,7 +475,6 @@ export function typesetPlugin(
 class TypesetView {
   private cache = new BlockLayoutCache();
   private measurer: Measurer;
-  private oracles: OracleCoordinator;
   private scheduler!: LayoutScheduler;
   /** Signature of the last dispatched decoration set: identical layouts are
    *  never re-dispatched, so no-op runs cause zero paints. */
@@ -492,7 +484,6 @@ class TypesetView {
    *  run (already O(document)) computes it only when it needs the compare. */
   private lastDecoSigSource: DecorationSet | null = null;
   private lastLiveDoc: PMNode | null = null;
-  private pendingPageMarks: DecorationSet | null = null;
   /** Which source produced the last pagination (diagnostics). */
   private pagPath: 'local' = 'local';
   private pagLog: string[] = [];
@@ -520,7 +511,6 @@ class TypesetView {
     if (!verdict.certified && USE_PORT) {
       console.warn('exact layout is off: browser text metrics disagree with the compiler', verdict);
       USE_PORT = false;
-      this.oracles.suspend();
       this.cache.clear();
       this.invalidatePages();
       this.opts.onEnvironment?.(verdict);
@@ -534,7 +524,6 @@ class TypesetView {
   private pagWhy = '';
   private forcedAuditor: ForcedLayoutAuditor | null = null;
   private lineDecorationDispatches = 0;
-  private pageMarkDispatches = 0;
   private paginationSnapshotStats = { captures: 0, spacerScans: 0, heightQueries: 0 };
   private suffixPaginationStats = emptySuffixPaginationStats();
   private suffixControl = new SuffixPaginationControl();
@@ -543,17 +532,6 @@ class TypesetView {
   private paginationPassCounter = 0;
   private pendingSuffixVerification: SuffixVerificationTicket | null = null;
   private suffixVerifyScheduled = false;
-  private exactPageBasisDoc: PMNode | null = null;
-  private exactPageBasisEpoch = -1;
-  private exactPageBasisWidth = 0;
-  /** The exact publication in basis coordinates: Typst's page starts and the
-   * spacer geometry installed for them. Retained across later edits and
-   * fallback repaginations (the clean prefix keeps basis positions valid), so
-   * an edit landing on an exactly paginated document — or on a burst that
-   * began from one — seeds the suffix pass from Typst's settled page
-   * starts instead of a prior local fallback snapshot. */
-  private exactPageBasisMarkers: SuffixPageMarker[] = [];
-  private exactPageBasisSpacers: SuffixPageSpacer[] = [];
   private fallbackPageBasisDoc: PMNode | null = null;
   private fallbackPageBasisEpoch = -1;
   private fallbackPageBasisWidth = 0;
@@ -602,27 +580,15 @@ class TypesetView {
       },
       (e) => console.warn('sidecar primitives failed to load', e),
     );
-    this.oracles = new OracleCoordinator({
-      fontFallback: FONT_FALLBACK,
-      onParagraphResults: () => this.requestRun(),
-      onPageResults: () => this.requestRun(),
-      // Paragraph compiles launch — and their results are parsed/measured —
-      // only outside a typing burst. The scheduler owns the quiet-period
-      // definition (EDIT_SETTLE_DELAY_MS). The scheduler is constructed a
-      // few statements below; until then nothing is editing.
-      isEditing: () => (this.scheduler as LayoutScheduler | undefined)?.isInEditWindow() ?? false,
-    });
     if (import.meta.env.DEV) {
       const w = window as unknown as {
-        __oracle?: TypstOracle;
-        __pageOracle?: PageOracle;
         __breakSig?: () => string;
         __forcedLayoutAudit?: {
           start: () => void;
           snapshot: () => ForcedLayoutAuditReport;
           stop: () => ForcedLayoutAuditReport;
         };
-        __layoutDispatchStats?: (reset?: boolean) => { lines: number; pageMarks: number };
+        __layoutDispatchStats?: (reset?: boolean) => { lines: number };
         __paginationSnapshotStats?: (reset?: boolean) => {
           captures: number;
           spacerScans: number;
@@ -641,8 +607,6 @@ class TypesetView {
           verifyEvery: number;
         };
       };
-      w.__oracle = this.oracles.paragraph;
-      w.__pageOracle = this.oracles.page;
       (w as unknown as { __portAtoms: (pos: number) => unknown }).__portAtoms = (pos) => {
         const node = this.view.state.doc.nodeAt(pos);
         if (!node) return null;
@@ -661,49 +625,6 @@ class TypesetView {
         return shapedWidthPt(text, effectiveFont(st.font).portKeys[style], st.sizePt);
       };
       (w as unknown as { __audit: () => Promise<PortAuditReport | null> }).__audit = () => this.audit();
-      (w as unknown as { __comparePort: () => unknown }).__comparePort = () => {
-        const state = this.view.state;
-        const settings = getSettings(state);
-        const font = effectiveFont(settings.font);
-        const resolveAtom = this.atomResolver();
-        const settingsSig = blockLayoutSettingsKey(settings);
-        const out: unknown[] = [];
-        state.doc.descendants((node, pos) => {
-          if (!node.isTextblock || node.type.name !== 'paragraph') return true;
-          const el = this.view.nodeDOM(pos);
-          if (!(el instanceof HTMLElement)) return false;
-          const cs = getComputedStyle(el);
-          const measure = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-          const spec = buildSpec(node, resolveAtom);
-          if (!spec) return false;
-          const okey = blockOracleKey(
-            settingsSig,
-            paragraphKeyTag(settings, state.doc, pos),
-            measure,
-            spec.key,
-          );
-          const oentry = this.oracles.paragraph.get(okey);
-          const atomWidth = makeAtomWidth(this.view, settings, pos);
-          const indented = settings.parIndent && consecutiveParagraph(state.doc, pos);
-          const port = portBreaks(node, measure, atomWidth, {
-            fontKeys: font.portKeys,
-            monoFontKey: COMMON_PORT_KEYS.mono,
-            sizePt: settings.sizePt,
-            hyphenate: settings.hyphenate,
-            firstLineIndentPx: indented ? 1.5 * this.bodyPx() : undefined,
-            atomWidthPt: this.typstAtomWidthPt(),
-          });
-          const fmt = (b: { at: number; hyphen: boolean }[] | null | undefined) =>
-            b ? b.map((x) => (x.hyphen ? 'hy' : 'br') + x.at).join(',') : String(b);
-          if (oentry?.status === 'ok' && port && fmt(oentry.breaks) !== fmt(port)) {
-            out.push({ pos, text: node.textContent.slice(0, 40), oracle: fmt(oentry.breaks), port: fmt(port) });
-          } else if (oentry && oentry.status !== 'ok') {
-            out.push({ pos, text: node.textContent.slice(0, 40), status: oentry.status, reason: (oentry as { reason?: string }).reason?.slice(0, 200), port: fmt(port) });
-          }
-          return false;
-        });
-        return out;
-      };
       (w as unknown as { __blockAuthority: (pos: number) => unknown }).__blockAuthority = (
         pos: number,
       ) => {
@@ -713,7 +634,6 @@ class TypesetView {
         return entry
           ? {
               authority: entry.authority ?? null,
-              oracle: entry.oracle,
               breakSignature: entry.breakSignature ?? null,
               lines: entry.lines.length,
             }
@@ -755,14 +675,8 @@ class TypesetView {
         stop: () => this.forcedAuditor!.stop(),
       };
       w.__layoutDispatchStats = (reset = false) => {
-        const stats = {
-          lines: this.lineDecorationDispatches,
-          pageMarks: this.pageMarkDispatches,
-        };
-        if (reset) {
-          this.lineDecorationDispatches = 0;
-          this.pageMarkDispatches = 0;
-        }
+        const stats = { lines: this.lineDecorationDispatches };
+        if (reset) this.lineDecorationDispatches = 0;
         return stats;
       };
       w.__paginationSnapshotStats = (reset = false) => {
@@ -822,12 +736,10 @@ class TypesetView {
     this.scheduler = new LayoutScheduler(view.dom, {
       runLive: () => this.liveRun(),
       runSettled: () => this.run(),
-      // Web fonts arriving change every browser metric. The Typst oracles
-      // remain valid because their bundled font inputs did not change.
+      // Web fonts arriving change every browser metric.
       invalidateMetrics: () => {
         this.paginationGeometryEpoch++;
         this.invalidateDomGeometry();
-        this.clearExactPageBasis();
         this.clearFallbackPageBasis();
         this.measurer.invalidate();
         this.cache.clear();
@@ -859,11 +771,9 @@ class TypesetView {
     if (view.state.doc.attrs !== prevState.doc.attrs) {
       this.paginationGeometryEpoch++;
       this.invalidateDomGeometry();
-      this.clearExactPageBasis();
       this.clearFallbackPageBasis();
       this.measurer.invalidate();
       this.cache.clear();
-      this.oracles.clear();
     }
     if (view.state.doc !== prevState.doc) {
       this.scheduler.scheduleLive();
@@ -1091,35 +1001,12 @@ class TypesetView {
       const atomWidth = makeAtomWidth(this.view, settings, b.pos);
       const spec = resolveAtom ? buildSpec(b.node, resolveAtom) : null;
       const okey = spec ? blockOracleKey(settingsSig, keyTag + atomWidthSignature(b.node, atomWidth), measure, spec.key) : null;
-      // Exact-path fast reuse only: the keystroke path never REQUESTS a
-      // compile (it would launch one for nearly every intermediate paragraph
-      // state). The settled pass — which only runs after the edit-settle
-      // quiet period — requests the final spec instead.
-      const oentry = okey ? this.oracles.paragraph.get(okey) : undefined;
-      // The ported Typst breaker: full-paragraph, globally optimal, and
-      // identical to what the oracle will confirm. Plain KP is the
-      // degraded-mode fallback (sidecar not loaded, unmapped content).
+      // The ported Typst breaker: full-paragraph, globally optimal. Plain KP
+      // is the degraded-mode fallback (sidecar not loaded, unmapped content).
       let lines: LineLayout[] | null = null;
       let authority: BlockLayoutAuthority = 'fallback';
       let breakSignature: string | null = null;
       const lineStart = performance.now();
-      if (oentry?.status === 'ok' && oentry.breaks) {
-        lines = this.layoutAuthoritative(
-          b.node,
-          measure,
-          atomWidth,
-          {
-            hyphenate: settings.hyphenate,
-            ...extra,
-            forced: oentry.breaks,
-          },
-          `live@${b.pos}`,
-        );
-        if (lines) {
-          authority = 'compiled';
-          breakSignature = forcedBreakSignature(oentry.breaks);
-        }
-      }
       if (!lines && USE_PORT && primitives()) {
         try {
           const forced = portBreaks(b.node, measure, atomWidth, {
@@ -1165,16 +1052,14 @@ class TypesetView {
           isFill: noFill,
           ...extra,
         });
-        // The fallback's KP-chosen breaks get a real signature: compiled
-        // breaks that later confirm them reuse this entry (agreement is a
-        // no-op on every path, never a rebuild).
+        // The fallback's KP-chosen breaks get a real signature: the port
+        // audit compares it with Typst's like any other.
         if (lines) breakSignature = lineBreakSignature(lines);
       }
       if (!lines) continue;
       this.cache.set(b.node, {
         measure,
         lines,
-        oracle: oentry?.status ?? 'none',
         key: okey,
         indent: extra.firstLineIndent ?? 0,
         scale: extra.scale ?? 1,
@@ -1337,7 +1222,6 @@ class TypesetView {
     this.destroyed = true;
     viewRegistry.delete(this.view);
     this.scheduler.destroy();
-    this.oracles.destroy();
     this.measurer.destroy();
   }
 
@@ -1345,9 +1229,7 @@ class TypesetView {
   invalidatePages() {
     this.paginationGeometryEpoch++;
     this.invalidateDomGeometry();
-    this.clearExactPageBasis();
     this.clearFallbackPageBasis();
-    this.oracles.clearPage();
   }
 
   requestRun() {
@@ -1379,14 +1261,11 @@ class TypesetView {
     this.suspended = suspended;
     if (suspended) {
       this.scheduler.suspend();
-      this.oracles.suspend();
       this.pendingSuffixVerification = null;
       return;
     }
-    this.oracles.resume();
     this.paginationGeometryEpoch++;
     this.invalidateDomGeometry();
-    this.clearExactPageBasis();
     this.clearFallbackPageBasis();
     this.lastDecoSig = '';
     this.lastDecoSigSource = null;
@@ -1543,39 +1422,6 @@ class TypesetView {
     const inactive = this.suffixControl.inactiveReason();
     if (inactive) return { kind: 'none', reason: inactive };
     const currentDoc = this.view.state.doc;
-    let exactReason: string | null = null;
-
-    // The exact basis outlives the 'exact' spacer authority: the settled
-    // state of a healthy document is exact pagination, and the first edit of
-    // a burst hands authority to the fallback engine without moving any page
-    // start above the edit. Markers and spacers are the retained install-time
-    // copies (basis coordinates — valid current positions across the clean
-    // prefix), not the currently painted spacers, which belong to whichever
-    // full fallback pass ran last.
-    if (
-      this.exactPageBasisDoc &&
-      Math.abs(this.exactPageBasisWidth - this.view.dom.clientWidth) <= 0.5
-    ) {
-      const decision = planSuffixPagination({
-        basisDoc: this.exactPageBasisDoc,
-        currentDoc,
-        markers: this.exactPageBasisMarkers,
-        spacers: this.exactPageBasisSpacers,
-        basisEpoch: this.exactPageBasisEpoch,
-        currentEpoch: this.paginationGeometryEpoch,
-      });
-      if (decision.kind === 'seed') {
-        if (!this.footnoteCarryCrossesSeed(decision.seed, snapshot)) {
-          return { kind: 'seed', source: 'exact', seed: decision.seed };
-        }
-        exactReason = 'exact-footnote-spill';
-      } else if (decision.kind === 'none') {
-        return { kind: 'none', reason: 'exact-unchanged' };
-      } else {
-        exactReason = `exact-${decision.reason}`;
-      }
-    }
-
     // The fallback basis: page starts the local engine itself installed last
     // time. Seeding from it holds local-rule output constant above the edit,
     // which the full local pass regenerates identically — so installing the
@@ -1606,7 +1452,7 @@ class TypesetView {
 
     return {
       kind: 'none',
-      reason: exactReason ?? (this.exactPageBasisDoc ? 'exact-width-changed' : 'no-page-basis'),
+      reason: 'no-page-basis',
     };
   }
 
@@ -1686,14 +1532,6 @@ class TypesetView {
    * below the seed boundary leaves every retained start above it valid, and
    * structural damage above the boundary is detected per-attempt by the
    * planner's clean-prefix diff. A newer exact publication overwrites it. */
-  private clearExactPageBasis(): void {
-    this.exactPageBasisDoc = null;
-    this.exactPageBasisEpoch = -1;
-    this.exactPageBasisWidth = 0;
-    this.exactPageBasisMarkers = [];
-    this.exactPageBasisSpacers = [];
-  }
-
   private clearFallbackPageBasis(): void {
     this.fallbackPageBasisDoc = null;
     this.fallbackPageBasisEpoch = -1;
@@ -1933,16 +1771,6 @@ class TypesetView {
       lineLayoutMs += performance.now() - secondLineStart;
     }
 
-    // Single-page runs skip the second dispatch — flush pending markers.
-    if (this.pendingPageMarks) {
-      const set = this.pendingPageMarks;
-      this.pendingPageMarks = null;
-      const tr = this.view.state.tr.setMeta(typesetKey, { type: 'pageMarks', pageMarks: set } satisfies TypesetMeta);
-      tr.setMeta('addToHistory', false);
-      this.pageMarkDispatches++;
-      this.view.dispatch(tr);
-    }
-
     const footnoteStart = performance.now();
     this.placeFootnotes(count);
     const footnoteMs = performance.now() - footnoteStart;
@@ -2017,35 +1845,9 @@ class TypesetView {
     const snapshot = this.capturePaginationSnapshot();
     const runFallback = (seed?: PaginationFallbackSeed) => this.runFallbackPass(snapshot, seed);
     const sourceStats = stats.bySource[ticket.source];
-    let reference: PaginationFallbackResult | null;
-    if (ticket.source === 'exact') {
-      reference = this.exactSuffixReference(snapshot, ticket.seed, runFallback);
-    } else {
-      reference = runFallback();
-      stats.fullRuns++;
-      stats.fullUnits += reference.visitedUnits;
-    }
-    if (!reference) {
-      // The retained exact geometry no longer re-forces cleanly: the
-      // installed result's premise is stale. Not a runner mismatch — the
-      // kill-switch stays untripped — but the display can no longer be
-      // trusted either: drop both bases and repaginate full immediately.
-      sourceStats.referenceBails++;
-      stats.reasons['exact-reference-bail'] = (stats.reasons['exact-reference-bail'] ?? 0) + 1;
-      stats.lastReason = 'exact-reference-bail';
-      stats.lastDifference = null;
-      stats.lastRun = {
-        eligible: true,
-        reason: 'exact-reference-bail',
-        matched: null,
-        mismatchPage: null,
-        mismatchDelta: null,
-      };
-      this.clearExactPageBasis();
-      this.clearFallbackPageBasis();
-      this.run();
-      return;
-    }
+    const reference = runFallback();
+    stats.fullRuns++;
+    stats.fullUnits += reference.visitedUnits;
     stats.sampledVerifications++;
     stats.compared++;
     sourceStats.compared++;
@@ -2273,43 +2075,22 @@ class TypesetView {
       if (node.type.name === 'paragraph' && node.attrs.align) return;
       const atomWidth = makeAtomWidth(this.view, settings, pos);
 
-      // One renderer: nothing compiles while editing, so no compiled breaks
-      // ever arrive here and the port lays out every block. The oracle
-      // lookup stays only until the compiled-authority plumbing is removed.
+      // One renderer: the port lays out every block; the key carries the
+      // resolved atom text and widths so a repaint invalidates the layout.
       const spec = resolveAtom ? buildSpec(node, resolveAtom) : null;
       const okey = spec ? blockOracleKey(settingsSig, keyTag + atomWidthSignature(node, atomWidth), measure, spec.key) : null;
-      const oentry = okey ? this.oracles.paragraph.get(okey) : undefined;
-      const ostatus = oentry?.status ?? 'none';
 
       const indent = extra.firstLineIndent ?? 0;
       const scale = extra.scale ?? 1;
-      const cacheKey: BlockLayoutCacheKey = { measure, oracle: ostatus, key: okey, indent, scale };
-      const compiledBreaks = oentry?.status === 'ok' ? oentry.breaks : undefined;
-      let entry =
-        oentry?.status === 'ok' && !oentry.breaks
-          ? undefined
-          : this.cache.getReusable(node, cacheKey, compiledBreaks);
+      const cacheKey: BlockLayoutCacheKey = { measure, key: okey, indent, scale };
+      let entry = this.cache.getReusable(node, cacheKey);
       if (!entry) {
         let lines: LineLayout[] | null = null;
         let authority: BlockLayoutAuthority = 'fallback';
         let breakSignature: string | null = null;
         const auditId = `${skind.kind}@${pos}`;
-        if (oentry?.status === 'ok' && oentry.breaks) {
-          lines = this.layoutAuthoritative(
-            node,
-            measure,
-            atomWidth,
-            { ...layoutOpts, ...extra, forced: oentry.breaks },
-            auditId,
-          );
-          if (lines) {
-            authority = 'compiled';
-            breakSignature = forcedBreakSignature(oentry.breaks);
-          }
-        }
-        // The ported Typst breaker stands in wherever the compiled oracle
-        // has no answer (pending, failed to match, or its breaks don't
-        // partition) — the port IS the same algorithm, computed locally.
+        // The ported Typst breaker — the same algorithm Typst runs,
+        // computed locally. Plain KP is the degraded-mode fallback.
         if (!lines && USE_PORT && primitives()) {
           try {
             const forced = portBreaks(node, measure, atomWidth, {
@@ -2468,18 +2249,12 @@ class TypesetView {
       this.lastDecoSig = decorationSetDigest(this.lastDecoSigSource);
       this.lastDecoSigSource = null;
     }
-    // Page-start markers are state-only authority and are flushed separately
-    // at the end of run(); they must not reinstall identical line DOM.
     if (sig === this.lastDecoSig) {
       return { paragraphs, lines: lineCount };
     }
     this.lastDecoSig = sig;
     const set = DecorationSet.create(state.doc, decos);
     const meta: TypesetMeta = { type: 'decos', decos: set };
-    if (this.pendingPageMarks) {
-      meta.pageMarks = this.pendingPageMarks;
-      this.pendingPageMarks = null;
-    }
     const tr = state.tr.setMeta(typesetKey, meta);
     tr.setMeta('addToHistory', false);
     this.lineDecorationDispatches++;
@@ -2732,10 +2507,7 @@ class TypesetView {
       // against it would measure prefix-authority differences, not runner
       // bugs. Instead the reference re-forces the exact prefix breaks onto
       // the live document and runs the same seeded suffix below them.
-      const reference =
-        suffixPlan.source === 'exact'
-          ? this.exactSuffixReference(snapshot, suffixPlan.seed, runFallback)
-          : full;
+      const reference = full;
       if (reference) {
         this.suffixPaginationStats.compared++;
         sourceStats.compared++;
@@ -3631,167 +3403,9 @@ class TypesetView {
     return { spacers, count: page + 1, visitedUnits, anchors };
   }
 
-  /** Same-prefix reference pass for an exact-basis seed: re-force the
-   * retained exact page starts of the prefix against the live document (the
-   * routine that installed them), then run the identical seeded suffix below
-   * them. On an unchanged prefix the re-forced gaps equal the stored ones
-   * bit-for-bit, so a comparison difference means retained geometry drifted
-   * or the suffix runner diverged — never that Typst and the local engine
-   * disagree about the prefix. Null when the prefix no longer re-forces
-   * one-gap-per-marker (the seed's premise is stale; tallied as a bail). */
-  private exactSuffixReference(
-    snapshot: PaginationGeometrySnapshot,
-    seed: SuffixPaginationSeed,
-    run: (seed?: PaginationFallbackSeed) => PaginationFallbackResult,
-  ): PaginationFallbackResult | null {
-    const forced = this.paginateForced(
-      snapshot,
-      seed.prefixMarkers.map((marker) => ({ pos: marker.pos, line: marker.line, unit: marker.unit })),
-      seed.page + 1,
-    );
-    if (!forced) return null;
-    if (forced.spacers.length !== seed.prefixSpacers.length) return null;
-    let shift = 0;
-    for (const spacer of forced.spacers) shift += spacer.height;
-    return run({
-      startPos: seed.startPos,
-      page: seed.page,
-      shift,
-      prefixSpacers: forced.spacers.map((spacer) => ({ ...spacer })),
-    });
-  }
 
-  /** Apply Typst's page starts verbatim (with per-unit ink offsets). */
-  private paginateForced(
-    snapshot: PaginationGeometrySnapshot,
-    pageStarts: Array<{ pos: number; line: number; unit: string }>,
-    pageCount: number,
-    /** Mapped-through-edits starts (not a fresh oracle answer): bail when
-     * the hold would leave an implausibly large gap. */
-    stale = false,
-  ): PaginationPassResult | null {
-    const view = this.view;
-    const s = snapshot.settings;
-    const size = snapshot.size;
-    const marginTop = snapshot.marginTop;
-    const F = snapshot.bodyPx;
-    const existing = snapshot.spacers.sorted;
-    const natural = (clientTop: number, pos: number) =>
-      clientTop - snapshot.stackTop - this.heightAbove(snapshot, pos);
 
-    const spacers: Spacer[] = [];
-    let shift = 0;
-    let page = 0;
-    for (let psi = 0; psi < pageStarts.length; psi++) {
-      const ps = pageStarts[psi];
-      let pos = ps.pos;
-      let y: number;
-      let kind: Spacer['kind'] = 'block';
-      let adjKind: 'paragraph' | 'line' | 'h1' | 'h2' | 'h3' = 'paragraph';
-      /** Row breaks: the repeated header's height, laid ahead of the row. */
-      let hdr = 0;
-      if (ps.unit === 'table' && ps.line > 0) {
-        // PAGE-PORT.md Phase 7: a compiled page start at a table ROW. It is
-        // re-validated against the live row model and installed as a 'row'
-        // spacer (a widget row between the two real rows: gap + repeated
-        // header copy). Anything the widget cannot mirror — a rowspan across
-        // the boundary, a figure table, a stale row index — declines this
-        // exact map, withdraws any retained exact markers for the revision,
-        // and lets the local paginator place the table; the held path can
-        // then never resurrect them.
-        const node = view.state.doc.nodeAt(ps.pos);
-        const model = node?.type.name === 'table' ? tableRowModel(node) : null;
-        const rowEl =
-          model && tableRowStartIsRepresentable(model, ps.line)
-            ? view.nodeDOM(ps.pos + model.rowOffsets[ps.line])
-            : null;
-        if (!model || !(rowEl instanceof HTMLElement)) {
-          this.pendingPageMarks = DecorationSet.empty;
-          this.clearExactPageBasis();
-          return null;
-        }
-        page++;
-        pos = ps.pos + model.rowOffsets[ps.line];
-        y = natural(rowEl.getBoundingClientRect().top, pos);
-        kind = 'row';
-        hdr = this.repeatedHeaderHeight(ps.pos, model, ps.line);
-      } else if (ps.unit === 'line' && ps.line > 0) {
-        page++;
-        const node = view.state.doc.nodeAt(ps.pos);
-        const entry = node ? this.cache.get(node) : undefined;
-        if (!node || !entry || ps.line >= entry.lines.length) return null;
-        const base = ps.pos + 1;
-        const el = view.nodeDOM(ps.pos);
-        if (!(el instanceof HTMLElement)) return null;
-        const lineH = this.blockLineHeight(el);
-        const c = view.coordsAtPos(base + entry.lines[ps.line].from);
-        pos = base + entry.lines[ps.line].from;
-        y = natural(c.top, pos) - Math.max(0, (lineH - (c.bottom - c.top)) / 2);
-        kind = 'line';
-        adjKind = 'line';
-      } else {
-        page++;
-        const el = view.nodeDOM(ps.pos);
-        if (!(el instanceof HTMLElement)) return null;
-        y = natural(el.getBoundingClientRect().top, ps.pos);
-        if (ps.unit === 'h1' || ps.unit === 'h2' || ps.unit === 'h3') adjKind = ps.unit;
-        else adjKind = 'paragraph';
-      }
-      const adj = ps.unit === 'paragraph' || ps.unit === 'line' || ps.unit.startsWith('h')
-        ? pageTopAdjustEm(s, adjKind) * F
-        : 0;
-      const delta = page * (size.h + PAGE_GAP) + marginTop + adj + hdr - (y + shift);
-      if (stale && delta > 0) {
-        // Content above SHRANK (deleted lines): holding this start would
-        // manufacture empty space. Steady state recreates each existing
-        // spacer at its own height, so the plausibility test is GROWTH
-        // over the spacer this start had before (matched by ordinal —
-        // page k's start owns the k-th spacer), not the absolute gap:
-        // page gaps are routinely hundreds of px when a block moved whole.
-        const lineH = F * s.lineHeight;
-        const prevH = existing[page - 1]?.height ?? 0;
-        if (delta - prevH > 3 * lineH + 80) return null;
-      }
-      if (delta > 0) {
-        spacers.push(kind === 'row' ? { pos, height: delta, kind, hdr } : { pos, height: delta, kind });
-        shift += delta;
-      } else if (delta < -2) {
-        // Content has outgrown this break (edits added lines above it):
-        // these starts are stale — let live pagination move the break NOW.
-        if (stale) this.pagWhy += ` bail@${pos}Δ${delta.toFixed(0)}`;
-        return null;
-      }
-    }
-    const count = Math.max(pageCount, page + 1);
-    if (stale) {
-      // Held marks must still COVER the document: content past the last
-      // held start that overflows the final page needs a break no mark
-      // describes — holding would break the text but paint no new sheet.
-      // A small dip into the bottom margin is the designed tolerance.
-      const docBottom =
-        view.dom.getBoundingClientRect().bottom -
-        snapshot.stackTop -
-        this.heightAbove(snapshot, Infinity, true) +
-        shift;
-      const lastBottom = count * (size.h + PAGE_GAP) - PAGE_GAP - snapshot.marginBottom;
-      if (docBottom > lastBottom + 2 * F * s.lineHeight) {
-        this.pagWhy += ` bail-overflow(${(docBottom - lastBottom).toFixed(0)}px)`;
-        return null;
-      }
-    }
-    return { spacers, count };
-  }
 
-  /** The height the repeating header row adds at the top of a continuation
-   *  page that starts at `row` of the table at `tablePos` — the real header
-   *  row's DOM height (the widget copy is sized to it), or 0 when nothing
-   *  repeats there (no header run, or a break inside the header run before
-   *  the repeating header was ever flushed: table-rows.ts). */
-  private repeatedHeaderHeight(tablePos: number, model: TableRowModel, row: number): number {
-    if (model.repeatRow === null || row <= model.repeatRow) return 0;
-    const el = this.view.nodeDOM(tablePos + model.rowOffsets[model.repeatRow]);
-    return el instanceof HTMLElement ? el.getBoundingClientRect().height : 0;
-  }
 
   /**
    * Position footnote bodies at the bottom of the page their marker landed

@@ -65,14 +65,5 @@ test('Markdown islands survive the editor and show as code blocks', async ({ pag
       timeout: 30_000,
       intervals: [500, 1_000, 2_000],
     })
-    .toBe(true)
-    .catch(async (e) => {
-      // Why the oracle declined, for the failure report.
-      const why = await page.evaluate(() => ({
-        log: window.__pagLog().slice(-4),
-        oracle: [...((window as unknown as { __pageOracle: { results: Map<string, { status: string; reason?: string }> } }).__pageOracle.results.values())].map((r) => `${r.status}: ${r.reason ?? ''}`),
-      }));
-      console.log('ORACLE:', JSON.stringify(why));
-      throw e;
-    });
+    .toBe(true);
 });

@@ -8,7 +8,7 @@ declare global {
       live: { totalMs: number; changedBlocks?: number } | null;
       settle: { totalMs: number; paragraphs?: number; lines?: number } | null;
     };
-    __layoutDispatchStats: (reset?: boolean) => { lines: number; pageMarks: number };
+    __layoutDispatchStats: (reset?: boolean) => { lines: number };
     __paginationSnapshotStats: (reset?: boolean) => {
       captures: number;
       spacerScans: number;

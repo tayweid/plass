@@ -6,7 +6,6 @@ declare global {
     view: import('prosemirror-view').EditorView;
     __pagLog: () => string[];
     __pagCount: () => number;
-    __pageOracle: unknown;
     __suffixPaginationStats: (reset?: boolean) => {
       attempts: number;
       eligible: number;
@@ -38,7 +37,7 @@ interface TableOptions {
 
 async function installDoc(page: Page, opts: TableOptions, navigate = true): Promise<number> {
   if (navigate) await page.goto('/?new=1');
-  await page.waitForFunction(() => !!window.view && !!window.__pagLog && !!window.__pageOracle);
+  await page.waitForFunction(() => !!window.view && !!window.__pagLog);
   return page.evaluate((o) => {
     const { state } = window.view;
     const s = state.schema;

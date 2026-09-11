@@ -23,13 +23,8 @@ export interface PageInfo {
 
 export interface TypesetState {
   decos: DecorationSet;
-  /** Zero-width markers at the last oracle page starts. ProseMirror maps them
-   * through edits to retain stale-but-stable pagination while Typst compiles. */
-  pageMarks: DecorationSet;
 }
 
-export type TypesetMeta =
-  | { type: 'decos'; decos: DecorationSet; pageMarks?: DecorationSet }
-  | { type: 'pageMarks'; pageMarks: DecorationSet };
+export type TypesetMeta = { type: 'decos'; decos: DecorationSet };
 
 export const typesetKey = new PluginKey<TypesetState>('typeset');

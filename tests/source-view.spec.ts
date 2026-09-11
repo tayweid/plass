@@ -34,7 +34,7 @@ declare global {
     };
     __pagLog: () => string[];
     __pagCount: () => number;
-    __layoutDispatchStats: (reset?: boolean) => { lines: number; pageMarks: number };
+    __layoutDispatchStats: (reset?: boolean) => { lines: number };
     __compilerLifecycleStats: () => Promise<{ tasksPosted: number; active: boolean; queued: number }>;
   }
 }
@@ -264,7 +264,7 @@ test('the layout sleeps in the source and wakes into its pagination', async ({ p
   }));
   expect(during.passes).toBe(before.passes);
   expect(during.log).toBe(before.log);
-  expect(during.dispatches).toEqual({ lines: 0, pageMarks: 0 });
+  expect(during.dispatches).toEqual({ lines: 0 });
 
   await exit(page);
   expect(await page.evaluate(() => window.view.state.doc.lastChild!.textContent)).toBe('Typed while the page view slept.');

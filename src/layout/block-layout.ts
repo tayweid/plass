@@ -11,50 +11,38 @@ import { getInk, inkKey } from '../math-ink';
 import type { DocSettings } from '../settings';
 import type { ForcedBreak, LineLayout } from './paragraph';
 
-export type BlockLayoutOracleState = 'none' | 'ok' | 'fail';
-export type BlockLayoutAuthority = 'compiled' | 'port' | 'fallback';
+export type BlockLayoutAuthority = 'port' | 'fallback';
 
 /** Cached browser line layout for one persistent ProseMirror node. */
 export interface BlockLayoutEntry {
   measure: number;
   lines: LineLayout[];
-  /** State of the compiled Typst oracle when these lines were produced. */
-  oracle: BlockLayoutOracleState;
   /**
-   * Oracle/content key used for the layout. Resolved atom text lives in this
-   * key, so a citation or reference repaint invalidates an otherwise-identical
-   * PM node.
+   * Content key used for the layout. Resolved atom text and widths live in
+   * this key, so a citation, reference, or formula repaint invalidates an
+   * otherwise-identical PM node.
    */
   key: string | null;
   /** Painted prefix and content scale used by captions and footnote bodies. */
   indent: number;
   scale: number;
-  /**
-   * Source of the break decisions. Optional during the staged coordinator
-   * migration; entries without it are never reused against compiled breaks.
-   */
+  /** Source of the break decisions. */
   authority?: BlockLayoutAuthority;
   /**
-   * Semantic break signature of the layout: authoritative compiled/port
-   * breaks, or the KP-chosen breaks of a fallback layout (derived from its
-   * lines). `null`/absent means the breaks are unknown (migration-era entry
-   * or a layout that reported none); such entries are never reused against
-   * compiled breaks.
+   * Semantic break signature of the layout: the port's breaks, or the
+   * KP-chosen breaks of a fallback layout (derived from its lines). `null`/
+   * absent means the breaks are unknown (a layout that reported none). The
+   * port audit compares it with Typst's.
    */
   breakSignature?: string | null;
 }
 
-/** Stable layout inputs, excluding the compiled oracle's transient status. */
-export interface BlockLayoutBaseCacheKey {
+/** The stable layout inputs a cached entry must match to be reused. */
+export interface BlockLayoutCacheKey {
   measure: number;
   key: string | null;
   indent: number;
   scale: number;
-}
-
-/** Legacy strict cache key retained while the coordinator is migrated. */
-export interface BlockLayoutCacheKey extends BlockLayoutBaseCacheKey {
-  oracle: BlockLayoutOracleState;
 }
 
 /**
@@ -82,7 +70,7 @@ export function lineBreakSignature(lines: readonly LineLayout[]): string {
 /** Match stable inputs while deliberately ignoring transient oracle status. */
 export function blockLayoutEntryBaseMatches(
   entry: BlockLayoutEntry,
-  expected: BlockLayoutBaseCacheKey | BlockLayoutCacheKey,
+  expected: BlockLayoutCacheKey,
 ): boolean {
   return !(
     Math.abs(entry.measure - expected.measure) > 0.5 ||
@@ -92,31 +80,9 @@ export function blockLayoutEntryBaseMatches(
   );
 }
 
-/** Preserve the coordinator's legacy strict status matching exactly. */
-export function blockLayoutEntryMatches(entry: BlockLayoutEntry, expected: BlockLayoutCacheKey): boolean {
-  return blockLayoutEntryBaseMatches(entry, expected) && entry.oracle === expected.oracle;
-}
-
-/**
- * Decide whether an entry remains valid for the coordinator's current view.
- *
- * Pending/missing/failed compiled results do not change layout semantics, so
- * stable inputs alone are sufficient. Once compiled breaks are available, an
- * entry is retained only when its semantic break list is identical — which,
- * because the spacing formula is path-independent (see lineWordSpacing),
- * guarantees identical lines whether the entry came from the port, an earlier
- * compile, or the KP fallback. Entries without a signature (migration-era, or
- * a path that reported none) fail closed and are recomputed once.
- */
-export function canReuseBlockLayoutEntry(
-  entry: BlockLayoutEntry,
-  expected: BlockLayoutBaseCacheKey | BlockLayoutCacheKey,
-  compiledBreaks?: readonly ForcedBreak[] | null,
-): boolean {
-  if (!blockLayoutEntryBaseMatches(entry, expected)) return false;
-  if (compiledBreaks == null) return true;
-  if (entry.breakSignature == null) return false;
-  return entry.breakSignature === forcedBreakSignature(compiledBreaks);
+/** Whether an entry remains valid for the current inputs. */
+export function canReuseBlockLayoutEntry(entry: BlockLayoutEntry, expected: BlockLayoutCacheKey): boolean {
+  return blockLayoutEntryBaseMatches(entry, expected);
 }
 
 /** Weak node-identity cache; unchanged PM subtrees remain reusable after edits. */
@@ -127,19 +93,9 @@ export class BlockLayoutCache {
     return this.entries.get(node);
   }
 
-  getMatching(node: PMNode, expected: BlockLayoutCacheKey): BlockLayoutEntry | undefined {
+  getReusable(node: PMNode, expected: BlockLayoutCacheKey): BlockLayoutEntry | undefined {
     const entry = this.entries.get(node);
-    return entry && blockLayoutEntryMatches(entry, expected) ? entry : undefined;
-  }
-
-  /** Status-independent lookup with semantic compiled-break validation. */
-  getReusable(
-    node: PMNode,
-    expected: BlockLayoutBaseCacheKey | BlockLayoutCacheKey,
-    compiledBreaks?: readonly ForcedBreak[] | null,
-  ): BlockLayoutEntry | undefined {
-    const entry = this.entries.get(node);
-    return entry && canReuseBlockLayoutEntry(entry, expected, compiledBreaks) ? entry : undefined;
+    return entry && canReuseBlockLayoutEntry(entry, expected) ? entry : undefined;
   }
 
   set(node: PMNode, entry: BlockLayoutEntry): BlockLayoutEntry {
