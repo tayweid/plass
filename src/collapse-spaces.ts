@@ -4,6 +4,7 @@
 
 import { Plugin } from 'prosemirror-state';
 import type { Mark, Node as PMNode } from 'prosemirror-model';
+import { beforeAfterNode, createQuoteState, smartenText } from './smart-quotes';
 
 /**
  * Typst collapses runs of ordinary spaces to a single space, so a document
@@ -72,9 +73,23 @@ export function collapseSpaces(): Plugin {
       if (!ranges.length) return null;
       const swaps: Array<[number, number, string, readonly Mark[]]> = [];
       const scanBlock = (node: PMNode, pos: number) => {
+        // Smart quotes are decided per paragraph, looking back over every
+        // inline node (smart-quotes.ts mirrors Typst's quoter).
+        const quotes = createQuoteState();
+        let before: string | null = null;
         node.forEach((child, offset, index) => {
-          if (!child.isText || !child.text) return;
-          if (child.marks.some((m) => m.type.name === 'code')) return;
+          if (!child.isText || !child.text || child.marks.some((m) => m.type.name === 'code')) {
+            before = beforeAfterNode(child, before);
+            return;
+          }
+          {
+            const r = smartenText(child.text, quotes, before);
+            before = r.before;
+            for (const swap of r.swaps) {
+              const base = pos + 1 + offset + swap.index;
+              swaps.push([base, base + 1, swap.glyph, child.marks]);
+            }
+          }
           let text = child.text;
           // A space run right before a footnote marker is deleted outright
           // (see swallowedByMarker). The scans below then run on the text

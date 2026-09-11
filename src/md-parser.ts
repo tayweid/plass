@@ -29,6 +29,7 @@ import { schema } from './schema';
 import { DEFAULT_SETTINGS, type DocSettings } from './settings';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 import { trimSpaceBeforeMarker } from './collapse-spaces';
+import { smartenInline } from './smart-quotes';
 
 export interface MdImport {
   doc: PMNode;
@@ -278,7 +279,9 @@ export function mdToDoc(src: string): MdImport {
           if (t.content) out.push(...textWithRefs(t.content, marks));
       }
     }
-    return out;
+    // Typst prints every straight quote in prose as a smart quote; the
+    // document holds that glyph (smart-quotes.ts).
+    return smartenInline(out);
   }
 
   /** Consume tokens from `i` until the matching close token; returns blocks. */

@@ -21,14 +21,12 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      document full of comment islands keeps exact page starts; a page
      break *inside* a wrapped island still moves it whole (PAGE-PORT
      Phase 5, breakable blocks).
-   - **Open, top: straight quotes.** Typst prints `'`/`"` as smart quotes;
-     the document holds them straight. The oracle's text matcher rejects
-     every paragraph with an apostrophe (`expected 'shouldn't' got
-     'shouldn’t'`), so those paragraphs never get compiled verification and
-     the page map declines. Same doctrine as dashes: the normalizer and
-     importers should hold the printed glyph (mirror Typst's `smartquote`
-     rules for open/close), or the export disables `smartquote` — decide,
-     then do it once for `.typ` and `.md` alike.
+   - Done 2026-09-11: smart quotes. `src/smart-quotes.ts` ports Typst's
+     quoter (open/close/apostrophe/prime, per paragraph, looking back over
+     inline nodes); the importers and the edit-time normalizer hold the
+     printed glyph, and a straight quote in the document exports escaped
+     (`\"`) so it prints straight. Apostrophe paragraphs now get compiled
+     verification. English quote set only (no language setting yet).
    - Open, smaller: h4–h6 demote to h3 (level lost on save); inline HTML
      stays visible text and is dash-normalized (an inline hidden island
      would fix it); an image's `"title"` is dropped; multi-paragraph
@@ -127,12 +125,7 @@ The documents being written in Plass today are Markdown course notes, so
 the push is ordered by what those files hit, not by feature size:
 
 1. **Markdown fidelity to the finish**, in this order:
-   a. *Smart quotes.* Decide the mechanism (mirror Typst's `smartquote`
-      open/close rules in the normalizer and importers, so the document
-      holds the printed glyph like it does for dashes; or disable
-      `smartquote` in the export and print straight). Whichever, one rule
-      for `.typ` and `.md`. Exit: apostrophe paragraphs in the course notes
-      get compiled verification (`exact[` in `__pagLog`).
+   a. ~~Smart quotes~~ — done (Dogfood, above).
    b. *Hard-wrapped paragraphs.* Either re-wrap on save at a fixed measure
       so files stay diff-friendly, or accept the one-time reflow and say
       so once per file. Decide; the corpus says this is the most common

@@ -122,6 +122,27 @@ console.log('collapse-spaces:');
   check('space before nothing in particular is kept', after5.doc.firstChild!.textContent === 'word ', JSON.stringify(after5.doc.firstChild!.textContent));
 }
 
+{
+  // Quotes normalize as they are typed, Typst's way: an opening quote,
+  // then the closing one after an already-normalized opening; an
+  // apostrophe inside a word; nothing inside code; pasted prose whole.
+  const s = state(p('He said '));
+  const open = s.apply(s.tr.insertText('"', 9));
+  check('a typed double quote opens', open.doc.firstChild!.textContent === 'He said “', JSON.stringify(open.doc.firstChild!.textContent));
+  const word = open.apply(open.tr.insertText('no', 10));
+  const close = word.apply(word.tr.insertText('"', 12));
+  check('the next typed double quote closes', close.doc.firstChild!.textContent === 'He said “no”', JSON.stringify(close.doc.firstChild!.textContent));
+  const apos = state(p('shouldn'));
+  const a = apos.apply(apos.tr.insertText("'t", 8));
+  check("a typed apostrophe is ’", a.doc.firstChild!.textContent === 'shouldn’t', JSON.stringify(a.doc.firstChild!.textContent));
+  const code = state(p('x = '));
+  const c = code.apply(code.tr.insert(5, schema.text('"s"', [schema.marks.code.create()])));
+  check('quotes inside code stay straight', c.doc.firstChild!.textContent === 'x = "s"', JSON.stringify(c.doc.firstChild!.textContent));
+  const pasted = state(p(''));
+  const pd = pasted.apply(pasted.tr.insertText(`The 5'11" 'quick' fox's "lazy" dog`, 1));
+  check('pasted prose normalizes whole', pd.doc.firstChild!.textContent === 'The 5′11″ ‘quick’ fox’s “lazy” dog', JSON.stringify(pd.doc.firstChild!.textContent));
+}
+
 if (failures) {
   console.error(`${failures} failure(s)`);
   process.exit(1);

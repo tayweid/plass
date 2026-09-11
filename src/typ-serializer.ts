@@ -227,7 +227,10 @@ export function escapeTyp(text: string): string {
   // A literal ~ must escape — Typst reads a bare ~ as a non-breaking
   // space, silently gluing the words around it. A real U+00A0 in the text
   // emits AS Typst's ~, so the printed glue matches the editor's.
-  return text.replace(/[\\#$*_`@<>[\]~]/g, (c) => '\\' + c).replace(/\u00a0/g, '~');
+  // A straight quote escapes too: unescaped, Typst would print it curly,
+  // and the document already holds the curly glyph wherever that is
+  // wanted (smart-quotes.ts) — document text equals printed text.
+  return text.replace(/[\\#$*_`@<>[\]~"']/g, (c) => '\\' + c).replace(/\u00a0/g, '~');
 }
 
 /** Table cells are serialized through a deliberately narrower path. A Typst

@@ -14,6 +14,7 @@ import { schema } from './schema';
 import { unwrapAligned } from './math-src';
 import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings } from './settings';
 import { trimSpaceBeforeMarker } from './collapse-spaces';
+import { beforeAfterNode, createQuoteState, feedGlyph, lastVisible, smartQuote, type QuoteState } from './smart-quotes';
 import { parseBibTeX } from './bibtex';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 
@@ -717,7 +718,7 @@ function parseParagraph(lines: string[]): PMNode[] {
       hardBreak = true;
       text = text.slice(0, -2).trimEnd();
     }
-    scanInline(text, [], out);
+    withFreshQuoter(() => scanInline(text, [], out));
     if (hardBreak) out.push(schema.nodes.hard_break.create());
     else if (idx < lines.length - 1) out.push(schema.text(' '));
   });
@@ -725,9 +726,25 @@ function parseParagraph(lines: string[]): PMNode[] {
 }
 
 export function parseInline(text: string): PMNode[] {
-  const out: PMNode[] = [];
-  scanInline(text, [], out);
-  return out;
+  return withFreshQuoter(() => {
+    const out: PMNode[] = [];
+    scanInline(text, [], out);
+    return out;
+  });
+}
+
+/** Typst decides smart quotes per paragraph (a fresh `SmartQuoter` in
+ *  `collect`); every inline entry point — a block's text, a footnote body,
+ *  a table cell — is one. Nested entries save and restore the outer one. */
+let quoter: QuoteState = createQuoteState();
+function withFreshQuoter<T>(fn: () => T): T {
+  const saved = quoter;
+  quoter = createQuoteState();
+  try {
+    return fn();
+  } finally {
+    quoter = saved;
+  }
 }
 
 interface ParsedCell {
@@ -1180,6 +1197,12 @@ function typstExprLength(src: string, start: number): number {
 function scanInline(src: string, marks: Mark[], out: PMNode[]) {
   let i = 0;
   let buf = '';
+  /** The character Typst's quoter looks back to: the pending text's last
+   *  visible character, else the previous inline node's. */
+  const before = (): string | null => {
+    const prev = out.length ? beforeAfterNode(out[out.length - 1], null) : null;
+    return buf ? lastVisible(buf, prev) : prev;
+  };
   const flush = () => {
     if (buf) {
       // Typst collapses consecutive markup spaces to one; the document
@@ -1223,10 +1246,19 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
       }
     }
     if (ch === '\\' && i + 1 < src.length) {
+      // An escaped quote prints straight; the document holds it straight.
       buf += src[i + 1];
       i += 2;
       continue;
     }
+    // An unescaped quote is Typst's SmartQuote: the document holds the
+    // glyph it prints. Curly glyphs in the source feed the same stack.
+    if (ch === '"' || ch === "'") {
+      buf += smartQuote(quoter, before(), ch === '"');
+      i++;
+      continue;
+    }
+    if (ch === '\u2018' || ch === '\u2019' || ch === '\u201C' || ch === '\u201D') feedGlyph(quoter, ch);
     if (src.startsWith('(#ref(<', i) || src.startsWith('#ref(<', i)) {
       const re = src[i] === '('
         ? /^\(#ref\(<([^>]+)>,\s*supplement:\s*none\)\)/
