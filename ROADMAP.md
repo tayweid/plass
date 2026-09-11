@@ -256,13 +256,12 @@ the push is ordered by what those files hit, not by feature size:
 4. **Citations** — the worked plan below; a design session on library-bib
    storage before code.
 
-Also small and ready: SOURCE-VIEW step 4 (writing niceties). Housekeeping
-before the push: merge the nine Dependabot bumps that touch npm and GitHub
-Actions (each one commit, cleanly based on `main`, gated by `npm run build`
-and the browser suite); leave the four ICU 1.5 → 2.x sidecar bumps alone
-until the sidecar's version-pinned identity is re-verified against them.
+Housekeeping done 2026-09-11 (source-view step 4, the npm and Actions
+Dependabot bumps); the four ICU 1.5 → 2.x sidecar bumps stay parked until
+the sidecar's version-pinned identity is re-verified against them.
 
-Deferred on purpose: PAGE-PORT Phase 6, multiple columns, offline PWA.
+Deferred on purpose: multiple columns, offline PWA. (PAGE-PORT Phase 6 was
+answered from the bottom edge on 2026-09-11 — see "the divergences".)
 
 ## Needs its own design session
 
@@ -277,9 +276,8 @@ Deferred on purpose: PAGE-PORT Phase 6, multiple columns, offline PWA.
 
 ## Standing backlog
 
-- **Source view, step 4** — steps 0–3b shipped (SOURCE-VIEW.md). Left:
-  the writing niceties — focus mode, typewriter scrolling, ⌘B/⌘I wrapping
-  markup, mode memory per format, optionally `.md` opening in source.
+- ~~Source view, step 4~~ — done 2026-09-11 (focus mode, typewriter
+  scrolling, ⌘B/⌘I markup keys, mode memory per format).
 - **Incremental pagination activation for 50+ page documents.** The suffix
   planner and full-versus-suffix comparator exist, and the 40–50-page browser
   fixture requires a late-edit candidate to visit less than 25% of the full
