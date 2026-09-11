@@ -68,9 +68,10 @@ export interface SourceView {
 /** Per-tab: the unparsed text survives a reload (sibling of the
  *  document's own session key in main.ts; same tab lifetime). */
 export const SOURCE_SESSION_KEY = 'typeset-doc-source';
-/** Origin-wide: the last mode used per format. Recorded now; applied when
- *  step 4's "mode memory per format" lands — the default stays the page
- *  view for both (decisions taken, 2026-09-02). */
+/** Origin-wide: the last mode used per format. A document that opens in a
+ *  format last left in the source view opens in the source view; the
+ *  default stays the page view for both formats (decisions taken,
+ *  2026-09-02; applied 2026-09-11). */
 const MODE_MEMORY_KEY = 'typeset-source-mode';
 
 interface SourceSession {
@@ -221,6 +222,15 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
     }
   };
 
+  const rememberedMode = (format: SourceFormat): 'source' | 'page' => {
+    try {
+      const memory = JSON.parse(localStorage.getItem(MODE_MEMORY_KEY) ?? '{}') as Record<string, string>;
+      return memory[format] === 'source' ? 'source' : 'page';
+    } catch {
+      return 'page';
+    }
+  };
+
   const rememberMode = (format: SourceFormat, mode: 'source' | 'page') => {
     try {
       const memory = JSON.parse(localStorage.getItem(MODE_MEMORY_KEY) ?? '{}') as Record<string, string>;
@@ -366,7 +376,12 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
       return text.split(/\s+/).filter(Boolean).length;
     },
     afterSetDoc() {
-      if (!active) return;
+      if (!active) {
+        // Mode memory per format: a document in a format last left in the
+        // source view opens there.
+        if (rememberedMode(hooks.format()) === 'source') void enter();
+        return;
+      }
       // A fresh editor state means a fresh layout plugin, awake and about
       // to measure the hidden editor on its first frame: sleep it now.
       setLayoutSuspended(view, true);

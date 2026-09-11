@@ -137,8 +137,10 @@ either serializer, or a code editor dependency.
    both ways; island toast; export from source mode.
 4. **Writing niceties (1–2 days, optional, any order).** Focus mode (dim all
    but the current paragraph), typewriter scrolling, `Mod-b`/`Mod-i`
-   wrapping markup in source, mode memory per format, a "simpler files"
-   default for `.md` if wanted.
+   wrapping markup in source, ~~mode memory per format~~ (applied
+   2026-09-11: a document opened in a format last left in the source view
+   opens in the source view; `afterSetDoc`), a "simpler files" default
+   for `.md` if wanted.
 5. **The one rule: typed Typst does not run.** Landed 2026-09-11. Islands
    are inert everywhere: `docToTyp` takes `{ islands: 'file' | 'print' }`
    — the file save keeps raw Typst verbatim, the page oracle and the PDF

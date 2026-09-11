@@ -381,6 +381,37 @@ test('an off-rails #let typed in the source returns as one raw island, announced
   await expect(toast).toHaveText('');
 });
 
+test('a format last left in the source view opens in the source view', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!window.__sourceView);
+  // Nothing remembered: a .typ document opens in the page view.
+  await page.evaluate(() => (window as unknown as { __loadDemo: () => void }).__loadDemo());
+  expect(await page.evaluate(() => window.__sourceView.isActive())).toBe(false);
+  // Enter the source and leave the document there; the next .typ opens in it.
+  await enter(page);
+  await page.evaluate(() => (window as unknown as { __loadDemo: () => void }).__loadDemo());
+  expect(await page.evaluate(() => window.__sourceView.isActive())).toBe(true);
+  expect(await page.evaluate(() => localStorage.getItem('typeset-source-mode'))).toContain('"source"');
+  // Leave the source; the memory follows, and the next .typ opens in the page.
+  await exit(page);
+  await page.evaluate(() => (window as unknown as { __loadDemo: () => void }).__loadDemo());
+  expect(await page.evaluate(() => window.__sourceView.isActive())).toBe(false);
+  // The memory is per format: a .typ left in the source does not drag a
+  // .md there.
+  await enter(page);
+  await exit(page);
+  await page.evaluate(() => localStorage.setItem('typeset-source-mode', JSON.stringify({ '.typ': 'source' })));
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const file = await root.getFileHandle(`memory-${Date.now()}.md`, { create: true });
+    const w = await file.createWritable();
+    await w.write('# Notes\n\nBody.\n');
+    await w.close();
+    await (window as unknown as { __fm: { loadHandle(h: FileSystemFileHandle): Promise<boolean> } }).__fm.loadHandle(file);
+  });
+  expect(await page.evaluate(() => window.__sourceView.isActive())).toBe(false);
+});
+
 test('PDF export from the source runs on the parsed text', async ({ page }) => {
   await boot(page);
   let downloads = 0;
