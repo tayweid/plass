@@ -324,6 +324,20 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount,
   check('a loose list exports with Typst blank lines and its own item pitch', /#set list\(spacing: [\d.]+pt\)\n- one\n\n- two\n\n- three\n#set list\(spacing: [\d.]+pt\)\n/.test(typ), typ);
 }
 
+{
+  // A grid rides Markdown as a ```typst fence in the rail's form; the
+  // importer reads it back as the native block, an unknown fence stays raw.
+  const md = 'Intro.\n\n```typst\n#grid(\n  columns: (2fr, 1fr),\n  gutter: 1em,\n  [\n    Left text.\n  ],\n  [\n    Right text.\n  ],\n)\n```\n\nAfter.\n';
+  const { doc } = mdToDoc(md);
+  const kinds: string[] = [];
+  doc.forEach((n) => kinds.push(n.type.name));
+  check('a typst fence holding a grid is native', JSON.stringify(kinds) === JSON.stringify(['paragraph', 'grid', 'paragraph']), JSON.stringify(kinds));
+  check('the grid keeps its shares and cells', JSON.stringify(doc.child(1).attrs.columns) === '[2,1]' && doc.child(1).child(0).child(1).textContent === 'Right text.', JSON.stringify(doc.child(1).toJSON()));
+  check('a grid round-trips byte for byte', docToMd(doc) === md, docToMd(doc));
+  const other = 'Intro.\n\n```typst\n#grid(columns: (auto, 1fr), [a], [b])\n```\n';
+  check('a grid off the rail stays a raw fence', mdToDoc(other).doc.child(1).type.name === 'code_block' && docToMd(mdToDoc(other).doc) === other, docToMd(mdToDoc(other).doc));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

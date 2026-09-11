@@ -226,6 +226,26 @@ export const RUNNING_PAGE_TYP = '#context counter(page).display()';
 export const RUNNING_SECTION_TYP =
   '#context { let hs = query(selector(heading.where(level: 1)).before(here())); if hs.len() > 0 { hs.last().body } }';
 
+/** A leaf block's Typst frame inside its painted box, body em: `above` is
+ *  the slack from the box top down to the frame top, `below` the inset from
+ *  the frame bottom down to the box bottom. Text kinds carry the
+ *  calibrated line-box slack; the kinds with no calibration (figure, table,
+ *  display math, raw islands…) have frame = box. Grid cells (grid-editor.ts)
+ *  normalize every cell to the paragraph's values with these. */
+export function blockFrameSlackEm(node: PMNode, s: DocSettings): { above: number; below: number } {
+  const name = node.type.name;
+  const kind =
+    name === 'paragraph' || name === 'doc_title' || name === 'doc_authors' || name === 'doc_date'
+      ? 'paragraph'
+      : name === 'heading'
+        ? (`h${Math.min(3, (node.attrs.level as number) || 1)}` as 'h1' | 'h2' | 'h3')
+        : name === 'code_block'
+          ? 'code'
+          : null;
+  if (!kind) return { above: 0, below: 0 };
+  return { above: -pageTopAdjustEm(s, kind), below: pageBottomInsetEm(s, kind) };
+}
+
 /** The parity header: set/show rules reproducing editor spacing in Typst. */
 export function parityRules(s: DocSettings): string {
   const m = parityMetrics(s.font);
@@ -236,6 +256,8 @@ export function parityRules(s: DocSettings): string {
   if (s.parIndent) out += `#set par(first-line-indent: 1.5em)\n`;
   out += `#set list(spacing: ${pt(listSpacingEm(s, true))})\n`;
   out += `#set enum(spacing: ${pt(listSpacingEm(s, true))})\n`;
+  // Grid rows are atomic: the editor moves a row whole between pages.
+  out += '#set grid.cell(breakable: false)\n';
   // Levels 4–6 print like level 3 (the editor styles them the same), so
   // the metrics calibrated for three levels hold for six.
   for (let level = 1; level <= 6; level++) {
@@ -619,6 +641,27 @@ function blockToTyp(node: PMNode, indent = ''): string {
       }
       return out + '\n';
     }
+    case 'grid': {
+      // Typst's grid: fraction columns, one gutter, cells row-major as
+      // content blocks (the rail's whole vocabulary — grid-editor.ts).
+      const columns = node.attrs.columns as number[];
+      const gutter = node.attrs.gutter as number;
+      const fr = (c: number) => `${+c.toFixed(3)}fr`;
+      let out = indent + `#grid(\n${indent}  columns: (${columns.map(fr).join(', ')}),\n${indent}  gutter: ${+gutter.toFixed(2)}em,\n`;
+      node.forEach((row) => {
+        row.forEach((cell) => {
+          const body = blocksToTyp(cell, '').trimEnd();
+          // An empty cell (one empty paragraph) is `[]`, not the `~` an
+          // empty paragraph prints as in the flow.
+          if (!body.trim() || (cell.childCount === 1 && cell.firstChild!.type.name === 'paragraph' && !cell.firstChild!.content.size)) {
+            out += indent + '  [],\n';
+            return;
+          }
+          out += indent + '  [\n' + body.split('\n').map((l) => (l.trim() ? indent + '    ' + l : '')).join('\n') + '\n' + indent + '  ],\n';
+        });
+      });
+      return out + indent + ')\n\n';
+    }
     case 'table': {
       // Row-major cell list; header rows via table.header, merges via
       // table.cell(colspan/rowspan), style presets via stroke/hline —
@@ -840,7 +883,24 @@ let emitNumberEquations = true;
 let docCitationStyle: CitationStyle = 'ieee';
 let unnumberedEqLabels = new Set<string>();
 
-export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
+/** One block as Typst, with the document's export state (settings, bib,
+ *  labels) in place — the Markdown serializer's form for a grid. */
+export function blockToTypStandalone(node: PMNode, doc: PMNode): string {
+  beginExport(doc, {});
+  try {
+    const s: DocSettings = normalizeSettings(doc.attrs?.settings as Partial<DocSettings> | null);
+    docMacros = parseMathMacros(s.mathMacros);
+    docSettings = s;
+    emitNumberEquations = s.numberEquations;
+    docCitationStyle = s.citationStyle;
+    return blockToTyp(node, '');
+  } finally {
+    docBib = null;
+    docMacros = {};
+  }
+}
+
+function beginExport(doc: PMNode, opts: TypExportOptions) {
   exportOpts = opts;
   docBib = (doc.attrs?.bib as { name: string; content: string } | null) ?? null;
   docBibKeys = new Set(docBib ? parseBibTeX(docBib.content).map((entry) => entry.key) : []);
@@ -853,6 +913,10 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     }
     return true;
   });
+}
+
+export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
+  beginExport(doc, opts);
   try {
     const s: DocSettings = normalizeSettings(doc.attrs?.settings as Partial<DocSettings> | null);
     docMacros = parseMathMacros(s.mathMacros);

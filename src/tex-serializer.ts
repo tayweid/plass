@@ -283,6 +283,23 @@ function blockToTex(node: PMNode, s: DocSettings): string {
     }
     case 'blockquote':
       return `\\begin{quote}\n${blocksToTex(node, s).trim()}\n\\end{quote}\n\n`;
+    case 'grid': {
+      // Side-by-side minipages at the columns' shares of the line, less a
+      // small gap; rows one after another.
+      const columns = node.attrs.columns as number[];
+      const total = columns.reduce((a, b) => a + b, 0);
+      const gap = 0.03;
+      const width = (c: number) => ((1 - gap * (columns.length - 1)) * c) / total;
+      let out = '';
+      node.forEach((row) => {
+        const parts: string[] = [];
+        row.forEach((cell, _o, i) => {
+          parts.push(`\\begin{minipage}[t]{${width(columns[i] ?? 1).toFixed(3)}\\linewidth}\n${blocksToTex(cell, s).trim()}\n\\end{minipage}`);
+        });
+        out += '\\noindent\n' + parts.join('\\hfill\n') + '\n\n';
+      });
+      return out;
+    }
     case 'code_block': {
       const params = node.attrs.params as string;
       if (params === 'typst-raw' || params === 'md-raw') {

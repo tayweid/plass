@@ -114,6 +114,7 @@ export function typToDoc(src: string): TypImport {
     // Spacing-parity rules (regenerated from settings on export).
     if (
       /^#set (list|enum)\(spacing:/.test(line) ||
+      /^#set grid\.cell\(breakable: false\)$/.test(line) ||
       /^#show heading\.where\(level: \d+\): set (text|block|par)\(/.test(line) ||
       /^#show raw\.where\(block: false\): set text\(/.test(line) ||
       /^#show math\.equation\.where\(block: true\): set block\(/.test(line) ||
@@ -738,6 +739,21 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
+    // A grid in the rail's own form (fraction columns, one gutter, content
+    // cells): native. Any other #grid(…) stays an island below.
+    if (t.startsWith('#grid(')) {
+      let whole = line;
+      const callOpen = whole.indexOf('(');
+      let j = i + 1;
+      while (j < n && matchParen(whole, callOpen) < 0) whole += `\n${lines[j++]}`;
+      const grid = parseGridCall(whole.trim(), warnings);
+      if (grid) {
+        out.push(grid);
+        i = j;
+        continue;
+      }
+    }
+
     // unknown directive / scripting: preserve verbatim as a raw island
     if (t.startsWith('#')) {
       const body: string[] = [lines[i++]];
@@ -867,6 +883,67 @@ function parseRawMathCall(source: string, start: number): ParsedRawMathCall | nu
 }
 
 /** Matching `)` for a Typst call. Content blocks are opaque to parens. */
+/** `#grid(columns: (2fr, 1fr), gutter: 1em, [cell], [cell], …)` as the
+ *  editor's grid node, or null when the call says anything the rail does
+ *  not (auto or fixed columns, differing gutters, grid.cell, named cells).
+ *  Cells are content blocks whose lines are dedented by their common
+ *  indentation and parsed as blocks; rows are filled by the column count. */
+export function parseGridCall(src: string, warnings: string[] = []): PMNode | null {
+  const s = src.trim();
+  if (!s.startsWith('#grid(')) return null;
+  const open = s.indexOf('(');
+  const close = matchParen(s, open);
+  if (close < 0 || s.slice(close + 1).trim() !== '') return null;
+  const args = splitTopArgs(s.slice(open + 1, close)).map((a) => a.trim()).filter(Boolean);
+  let columns: number[] | null = null;
+  let gutter: number | null = null;
+  const cells: string[] = [];
+  const em = (v: string): number | null => {
+    const m = /^([\d.]+)em$/.exec(v.trim());
+    return m ? Number(m[1]) : null;
+  };
+  for (const arg of args) {
+    const named = /^([a-z-]+):\s*([\s\S]*)$/.exec(arg);
+    if (named && !arg.startsWith('[')) {
+      const [, key, value] = named;
+      if (key === 'columns') {
+        const v = value.trim();
+        if (/^\d+$/.test(v)) columns = Array.from({ length: Number(v) }, () => 1);
+        else {
+          const inner = /^\(([^()]*)\)$/.exec(v)?.[1] ?? v;
+          const parts = inner.split(',').map((p) => p.trim()).filter(Boolean);
+          const shares = parts.map((p) => /^([\d.]+)fr$/.exec(p)?.[1]).map((x) => (x ? Number(x) : NaN));
+          if (!shares.length || shares.some((x) => !Number.isFinite(x) || x <= 0)) return null;
+          columns = shares;
+        }
+      } else if (key === 'gutter') {
+        gutter = em(value);
+        if (gutter === null) return null;
+      } else if (key === 'column-gutter' || key === 'row-gutter') {
+        const g = em(value);
+        if (g === null || (gutter !== null && gutter !== g)) return null;
+        gutter = g;
+      } else return null;
+      continue;
+    }
+    if (!(arg.startsWith('[') && arg.endsWith(']') && matchBracket(arg, 0) === arg.length - 1)) return null;
+    cells.push(arg.slice(1, -1));
+  }
+  if (!columns || !cells.length) return null;
+  const cellNodes = cells.map((body) => {
+    const raw = body.replace(/^\n/, '').replace(/\s+$/, '').split('\n');
+    const indent = Math.min(...raw.filter((l) => l.trim()).map((l) => /^ */.exec(l)![0].length), Infinity);
+    const dedented = raw.map((l) => (l.trim() ? l.slice(indent === Infinity ? 0 : indent) : ''));
+    const blocks = dedented.some((l) => l.trim()) ? parseBlocks(dedented, warnings) : [];
+    return schema.nodes.grid_cell.create(null, blocks.length ? blocks : [schema.nodes.paragraph.create()]);
+  });
+  const width = columns.length;
+  while (cellNodes.length % width) cellNodes.push(schema.nodes.grid_cell.create(null, [schema.nodes.paragraph.create()]));
+  const rows: PMNode[] = [];
+  for (let r = 0; r < cellNodes.length; r += width) rows.push(schema.nodes.grid_row.create(null, cellNodes.slice(r, r + width)));
+  return schema.nodes.grid.create({ columns, gutter: gutter ?? 0 }, rows);
+}
+
 function matchParen(src: string, open: number): number {
   let depth = 0;
   for (let i = open; i < src.length; i++) {

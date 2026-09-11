@@ -1683,6 +1683,10 @@ class TypesetView {
     if (!node) return 0;
     const kind = this.unitKindOf(node);
     if (kind) return pageTopAdjustEm(s, kind) * F;
+    // A grid row's cells are normalized to the paragraph's frame slack
+    // (grid-editor.ts), so a row (and the grid, by its first row) lands
+    // like a paragraph.
+    if (node.type.name === 'grid' || node.type.name === 'grid_row') return pageTopAdjustEm(s, 'paragraph') * F;
     if (node.type.name === 'code_block') return pageTopAdjustEm(s, 'code') * F;
     if (node.type.name === 'table') return -tableMarginsEm(s).top * F;
     const dropEm = containerPageTopDropEm(node.type.name, (node.attrs.kind as string | null) ?? null);
@@ -1691,6 +1695,13 @@ class TypesetView {
     const innerKind = first && first !== node ? this.unitKindOf(first) : null;
     const inner = innerKind ? pageTopAdjustEm(s, innerKind) * F : first?.type.name === 'code_block' && first !== node ? pageTopAdjustEm(s, 'code') * F : 0;
     return -dropEm * F + inner;
+  }
+
+  /** The margin-top a later grid row paints (style.css: the gutter less
+   *  the slack the two cell boxes carry), px. */
+  private gridRowGapPx(grid: PMNode, s: DocSettings, F: number): number {
+    const gutter = (grid.attrs.gutter as number) || 0;
+    return (gutter - (s.lineHeight - parityMetrics(s.font).extent)) * F;
   }
 
   /** Align page-1 ink with the PDF: Typst's first baseline sits one
@@ -2830,7 +2841,16 @@ class TypesetView {
       // grid places the row frame flush at the region top); the repeated
       // header's reservation is passed separately by the caller.
       if (kind === 'row') return 0;
-      return this.blockTopAdjustPx(view.state.doc.nodeAt(pos), s, F);
+      const node = view.state.doc.nodeAt(pos);
+      // A later grid row at a page top: Typst drops the gutter above it,
+      // the editor's row keeps its margin-top — take it back, as a table's
+      // block margin is.
+      if (node?.type.name === 'grid_row') {
+        const $row = view.state.doc.resolve(pos);
+        const gap = $row.index() > 0 ? this.gridRowGapPx($row.parent, s, F) : 0;
+        return this.blockTopAdjustPx(node, s, F) - gap;
+      }
+      return this.blockTopAdjustPx(node, s, F);
     };
     /** The Typst frame ends ABOVE the painted box's bottom by this much
      *  (pageBottomInsetEm): the last line's descent and half-leading for
@@ -2841,9 +2861,10 @@ class TypesetView {
     const bottomInsetFor = (pos: number): number => {
       let n = view.state.doc.nodeAt(pos);
       // A container's frame ends where its last descendant block's does.
-      while (n && !n.isTextblock && !n.isAtom && n.type.name !== 'table' && n.type.name !== 'figure' && n.lastChild) n = n.lastChild;
+      while (n && !n.isTextblock && !n.isAtom && n.type.name !== 'table' && n.type.name !== 'figure' && n.type.name !== 'grid_row' && n.lastChild) n = n.lastChild;
       if (!n) return 0;
-      if (n.type.name === 'paragraph') return pageBottomInsetEm(s, 'paragraph') * F;
+      // A grid row's cells end one paragraph inset below their frames.
+      if (n.type.name === 'grid_row' || n.type.name === 'paragraph') return pageBottomInsetEm(s, 'paragraph') * F;
       if (n.type.name === 'code_block') return pageBottomInsetEm(s, 'code') * F;
       if (n.type.name === 'heading') {
         const lv = Math.min(3, (n.attrs.level as number) || 1);
@@ -3355,6 +3376,13 @@ class TypesetView {
     };
     // ---- end Phase 7 table branch ----------------------------------------
 
+    /** A grid breaks between its rows; a row is one unbreakable frame
+     *  (`grid.cell(breakable: false)` on export), fitted like a paragraph
+     *  block since its cells are normalized to the paragraph's slack. */
+    const grid = (pos: number, node: PMNode) => {
+      node.forEach((row, offset) => atomic(pos + 1 + offset, row));
+    };
+
     /** Page-break one block wherever it sits — top level or nested in a
      *  list item or quote. Mirrors the document-level dispatch below. */
     const splitBlock = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
@@ -3367,6 +3395,9 @@ class TypesetView {
         case 'ordered_list':
         case 'blockquote':
           container(pos, node);
+          break;
+        case 'grid':
+          grid(pos, node);
           break;
         case 'table':
           table(pos, node);
@@ -3395,6 +3426,9 @@ class TypesetView {
         case 'ordered_list':
         case 'blockquote':
           container(offset, node);
+          break;
+        case 'grid':
+          grid(offset, node);
           break;
         case 'table':
           table(offset, node);

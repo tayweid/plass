@@ -280,13 +280,23 @@ answered from the bottom edge on 2026-09-11 — see "the divergences".)
 ## Needs its own design session
 
 - ~~Multiple columns~~ — not needed (Taylor, 2026-09-11). What the
-  page-wide `columns: 2` was standing in for are two narrower things,
-  each its own rail when its turn comes:
-  - **A text block beside a figure or table** — one atomic side-by-side
-    block (text | figure), never split across pages; a grid with two
-    cells, not page columns.
-  - **Printing notes on half-sheets** — an output concern (a paper size,
-    or a 2-up imposition at print/export time), not an editing layout.
+  page-wide `columns: 2` was standing in for are two narrower things:
+  - ~~A text block beside a figure or table~~ — done 2026-09-11 as the
+    **grid rail** (Taylor: "it's a grid and anything can go into it, and
+    the split can be changed however is needed"). `src/grid-editor.ts`:
+    rows × fraction columns of any blocks, gutter in em, a docked bar
+    (shares, gutter, add/remove column and row, unwrap), Tab between
+    cells; Typst `#grid` with `grid.cell(breakable: false)`, rows atomic,
+    the grid breaking between rows; Markdown carries it as a ```typst
+    fence the importer recognizes. Cells are normalized to the paragraph's
+    frame (measured margins per cell) so cells of different content align
+    at their frame tops and the paginator fits a row like a paragraph.
+    The audit matches a row cell by cell (every text block exactly, a
+    table by its rows). Fixture `grid.typ`, tests/grid.spec.ts. Not
+    mirrored: `auto` or fixed-length columns, differing row and column
+    gutters, cell spans, fills — a `#grid` saying any of those stays an
+    island.
+  - **Printing notes on half-sheets** — done as the half-letter paper size.
 
 ## Standing backlog
 

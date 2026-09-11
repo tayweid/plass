@@ -70,7 +70,7 @@ export function canonicalStart(doc: PMNode, entry: PageStartEntry): PageStartEnt
   if (entry.line !== 0 || entry.unit !== 'block') return entry;
   let pos = entry.pos;
   let node = doc.nodeAt(pos);
-  while (node && !node.isTextblock && !node.isAtom && node.type.name !== 'table' && node.firstChild) {
+  while (node && !node.isTextblock && !node.isAtom && node.type.name !== 'table' && node.type.name !== 'grid_row' && node.firstChild) {
     pos += 1;
     node = node.firstChild;
   }

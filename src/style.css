@@ -1399,6 +1399,64 @@ body {
   -webkit-user-select: none;
 }
 
+/* ---------- grid (grid-editor.ts) ---------- */
+
+/* Typst's #grid: rows of cells at fraction widths, gutter between columns
+   and rows. The grid's block spacing after is paragraph spacing (the
+   cells' boxes end one paragraph inset below their frames, like a
+   paragraph's); the row gap is the gutter less the slack the two cell
+   boxes carry (frame to frame = gutter). Rows are separate boxes so the
+   paginator can move one whole. */
+.ProseMirror .ts-grid {
+  margin: 0 0 var(--par-margin, 0.9em);
+}
+
+.ProseMirror .ts-grid-row {
+  display: grid;
+  grid-template-columns: var(--grid-cols, 1fr 1fr);
+  column-gap: var(--grid-gutter, 1em);
+  align-items: start;
+}
+
+.ProseMirror .ts-grid-row + .ts-grid-row {
+  margin-top: calc(var(--grid-gutter, 1em) - 2 * var(--half-leading, 0.42em));
+}
+
+.ProseMirror .ts-grid-cell {
+  min-width: 0;
+}
+
+/* A whisper of structure while editing: a dashed edge on the cell the
+   caret is in (outline — no layout cost). Never printed. */
+.ProseMirror .ts-grid-cell:focus-within {
+  outline: 1px dashed rgba(140, 140, 150, 0.45);
+  outline-offset: 3px;
+}
+
+.grid-toolbar .grid-toolbar-name {
+  font: 600 10.5px/1 var(--sans);
+  padding: 0 6px 0 4px;
+  opacity: 0.7;
+}
+
+.grid-toolbar .grid-toolbar-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: 500 10.5px/1 var(--sans);
+  padding: 0 4px;
+}
+
+.grid-toolbar .grid-toolbar-field input {
+  min-height: 23px;
+  font: 500 11px/1 var(--sans);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  border: 1px solid var(--chrome-border);
+  border-radius: 5px;
+  padding: 2px 5px;
+}
+
 /* ---------- figures ---------- */
 
 .ts-figure {

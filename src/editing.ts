@@ -17,6 +17,7 @@ import { ReplaceStep } from 'prosemirror-transform';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
 import { goToNextCell } from 'prosemirror-tables';
 import { enterInTable, exitTableVertically, tabInTable } from './table-editor';
+import { tabInGrid } from './grid-editor';
 import { Slice, type MarkType } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
 import { schema } from './schema';
@@ -297,8 +298,8 @@ export function buildKeymap(): Plugin {
     // In a table, Tab and Enter are spreadsheet navigation (the last cell
     // and the last row grow the table). Outside one they keep the list
     // behavior.
-    'Tab': chainCommands(tabInTable, sinkListItem(schema.nodes.list_item)),
-    'Shift-Tab': chainCommands(goToNextCell(-1), liftListItem(schema.nodes.list_item)),
+    'Tab': chainCommands(tabInTable, tabInGrid(1), sinkListItem(schema.nodes.list_item)),
+    'Shift-Tab': chainCommands(goToNextCell(-1), tabInGrid(-1), liftListItem(schema.nodes.list_item)),
     'Shift-Enter': chainCommands(exitCode, (state, dispatch) => {
       if (dispatch) {
         dispatch(state.tr.replaceSelectionWith(schema.nodes.hard_break.create()).scrollIntoView());

@@ -679,16 +679,77 @@ function firstDiff(a: string, b: string): string {
 
 // --- 20. raw islands: a multi-line call survives a blank line inside it ---
 {
+  // A grid in the rail's form is native (grid-editor.ts): fraction or
+  // counted columns, one gutter, content cells — a blank line inside a
+  // cell is a second paragraph there. Anything else stays an island.
   const src = 'Intro.\n\n#grid(\n  columns: 2,\n  [first para\n\n  second para],\n  [b],\n)\n\nAfter.\n';
   const { doc, warnings } = typToDoc(src);
   const kinds: string[] = [];
   doc.forEach((n) => kinds.push(n.type.name + (n.attrs.params === 'typst-raw' ? ':raw' : '')));
-  check('grid with a blank line inside a cell is one island', JSON.stringify(kinds) === JSON.stringify(['paragraph', 'code_block:raw', 'paragraph']), JSON.stringify(kinds));
-  check('island keeps the whole call', doc.child(1).textContent.endsWith('[b],\n)'), JSON.stringify(doc.child(1).textContent));
-  check('one island warning only', warnings.length === 1, warnings.join('; '));
+  check('a two-column grid is native', JSON.stringify(kinds) === JSON.stringify(['paragraph', 'grid', 'paragraph']), JSON.stringify(kinds));
+  const g = doc.child(1);
+  check('counted columns are equal shares, gutter absent is 0', JSON.stringify(g.attrs) === JSON.stringify({ columns: [1, 1], gutter: 0 }), JSON.stringify(g.attrs));
+  check('a blank line inside a cell is a second paragraph', g.child(0).child(0).childCount === 2 && g.child(0).child(0).child(1).textContent === 'second para' && g.child(0).child(1).textContent === 'b', JSON.stringify(g.toJSON()));
+  check('no warning for a native grid', warnings.length === 0, warnings.join('; '));
   const out = docToTyp(doc);
+  check('the grid exports in the rail form', out.includes('#grid(\n  columns: (1fr, 1fr),\n  gutter: 0em,\n  [\n    first para\n\n    second para\n  ],\n  [\n    b\n  ],\n)\n\nAfter.'), out);
   const again = docToTyp(typToDoc(out).doc);
-  check('multi-line island round-trip is idempotent', out === again, firstDiff(out, again));
+  check('grid round-trip is idempotent', out === again, firstDiff(out, again));
+  {
+    // Off the rail: auto columns → island, whole call kept.
+    const raw = 'Intro.\n\n#grid(\n  columns: (auto, 1fr),\n  [first para\n\n  second para],\n  [b],\n)\n\nAfter.\n';
+    const r = typToDoc(raw);
+    const k: string[] = [];
+    r.doc.forEach((n) => k.push(n.type.name + (n.attrs.params === 'typst-raw' ? ':raw' : '')));
+    check('grid with auto columns is one island', JSON.stringify(k) === JSON.stringify(['paragraph', 'code_block:raw', 'paragraph']), JSON.stringify(k));
+    check('island keeps the whole call', r.doc.child(1).textContent.endsWith('[b],\n)'), JSON.stringify(r.doc.child(1).textContent));
+    check('one island warning only', r.warnings.length === 1, r.warnings.join('; '));
+    const o = docToTyp(r.doc);
+    check('multi-line island round-trip is idempotent', o === docToTyp(typToDoc(o).doc), firstDiff(o, docToTyp(typToDoc(o).doc)));
+  }
+  {
+    // The rail's richer content: three fraction columns, two rows, a list
+    // and a table in cells, a heading in a cell.
+    const rich = [
+      '#grid(',
+      '  columns: (2fr, 1fr, 1fr),',
+      '  gutter: 1.5em,',
+      '  [',
+      '    == Left',
+      '',
+      '    Text on the left.',
+      '',
+      '    - one',
+      '    - two',
+      '  ],',
+      '  [',
+      '    #table(',
+      '      columns: 2,',
+      '      [a], [b],',
+      '    )',
+      '  ],',
+      '  [],',
+      '  [',
+      '    Second row.',
+      '  ],',
+      '  [],',
+      '  [],',
+      ')',
+      '',
+    ].join('\n');
+    const r = typToDoc(rich);
+    const grid = r.doc.child(0);
+    const cellKinds = (row: number) => {
+      const out: string[] = [];
+      grid.child(row).forEach((cell) => out.push(cell.child(0).type.name + (cell.childCount > 1 ? '+' : '')));
+      return out;
+    };
+    check('three columns, two rows', grid.type.name === 'grid' && grid.childCount === 2 && JSON.stringify(grid.attrs.columns) === '[2,1,1]' && grid.attrs.gutter === 1.5, JSON.stringify(grid.attrs) + ' rows ' + grid.childCount);
+    check('cells hold headings, lists, tables, empties', JSON.stringify(cellKinds(0)) === JSON.stringify(['heading+', 'table', 'paragraph']) && JSON.stringify(cellKinds(1)) === JSON.stringify(['paragraph', 'paragraph', 'paragraph']), JSON.stringify([cellKinds(0), cellKinds(1)]));
+    const o = docToTyp(r.doc);
+    check('rich grid round-trips byte for byte', o === docToTyp(typToDoc(o).doc), firstDiff(o, docToTyp(typToDoc(o).doc)));
+    check('rich grid keeps the table native inside the cell', o.includes('  [\n    #align(center, table(\n'), o);
+  }
   // Islands never run: the file keeps the Typst verbatim, the print is a
   // raw block of the same source (Typst on rails).
   const island = schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text('#grid(columns: 2, [a `x`], [b])')]);

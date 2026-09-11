@@ -16,6 +16,7 @@
 
 import type { Node as PMNode, Mark } from 'prosemirror-model';
 import { DEFAULT_SETTINGS, type DocSettings } from './settings';
+import { blockToTypStandalone } from './typ-serializer';
 
 /** Serialize to Markdown. `offsets`, when given, receives the text offset
  *  at which each top-level block's serialization begins (index = position
@@ -234,6 +235,10 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       }
       case 'table':
         return table(node);
+      case 'grid':
+        // Markdown has no grid: the Typst call, in a fence the importer
+        // reads back as the native block.
+        return '```typst\n' + blockToTypStandalone(node, doc).trimEnd() + '\n```';
       case 'horizontal_rule':
         return '---';
       case 'page_break':

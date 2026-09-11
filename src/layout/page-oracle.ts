@@ -50,6 +50,12 @@ export interface Unit {
    * position in its own list, so it is matched and stripped exactly rather
    * than guessed at. */
   marker?: boolean | string;
+  /** A grid row: its cells' blocks as units in reading order (Typst lays
+   * the row cell by cell, each cell's blocks in flow order, so their lines
+   * follow one another in the text layer). Each inner text block is
+   * matched exactly — the port's breaks at the cell's measure are audited
+   * like any paragraph's — and a page can start only AT the row. */
+  inner?: Unit[];
 }
 
 export interface PagedLine extends SvgLine {
@@ -100,7 +106,8 @@ function extractPages(svg: string, yTolPt: number, pageHPt: number): PagedLine[]
 /** Build the document's unit list (blocks in reading order). */
 export function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
   const units: Unit[] = [];
-  const push = (node: PMNode, pos: number, marker: boolean | string = false) => {
+  const push = (node: PMNode, pos: number, marker: boolean | string = false, target: Unit[] = units) => {
+    const units = target;
     if (node.type.name === 'paragraph' && node.attrs.align) {
       // Aligned paragraphs are browser-laid (no line cache): opaque, so a
       // page can start AT them but a split inside one fails to fallback.
@@ -122,7 +129,7 @@ export function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
       // The painted "Abstract" label line is emitted but not stored; an
       // opaque unit lets the matcher resync on the first body paragraph.
       units.push({ kind: 'opaque', pos, type: 'abstract-label' });
-      node.forEach((child, off) => push(child, pos + 1 + off));
+      node.forEach((child, off) => push(child, pos + 1 + off, false, target));
     } else if (node.type.name === 'bullet_list' || node.type.name === 'ordered_list' || node.type.name === 'blockquote') {
       // Ordered markers are deterministic per item: Typst's default enum
       // numbering ("1.", "2.", …) restarts at 1 for every list (including a
@@ -140,13 +147,26 @@ export function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
           const itemMarker: boolean | string = ordered
             ? `${itemIndex}.`
             : node.type.name === 'bullet_list';
-          child.forEach((g, goff) => push(g, childPos + 1 + goff, goff === 0 ? itemMarker : false));
+          child.forEach((g, goff) => push(g, childPos + 1 + goff, goff === 0 ? itemMarker : false, target));
         } else {
-          push(child, childPos);
+          push(child, childPos, false, target);
         }
       });
     } else if (node.type.name === 'table') {
       units.push(buildTableUnit(node, pos, resolveAtom));
+    } else if (node.type.name === 'grid') {
+      // A grid row is opaque (its cells' lines merge in the text layer),
+      // one unit per row so a page can start at any row; the row's first
+      // text block anchors it.
+      node.forEach((row, off) => {
+        const rowPos = pos + 1 + off;
+        const inner: Unit[] = [];
+        row.forEach((cell, coff) => {
+          const cellPos = rowPos + 1 + coff;
+          cell.forEach((block, boff) => push(block, cellPos + 1 + boff, false, inner));
+        });
+        units.push({ kind: 'opaque', pos: rowPos, type: 'grid_row', inner });
+      });
     } else {
       units.push({ kind: 'opaque', pos, type: node.type.name });
     }
@@ -373,10 +393,33 @@ export function matchPageStarts(units: Unit[], lines: PagedLine[], audit?: UnitA
     }
   };
 
+  const firstSpec = (u: Unit): ParagraphSpec | undefined => {
+    if (u.kind === 'exact') return u.spec;
+    if (u.kind === 'table') return u.rows?.[0];
+    for (const inner of u.inner ?? []) {
+      const spec = firstSpec(inner);
+      if (spec) return spec;
+    }
+    return undefined;
+  };
+  const anchorFrom = (list: Unit[], idx: number, fallback: Anchor | null): Anchor | null => {
+    for (let j = idx; j < list.length; j++) {
+      const u = list[j];
+      const spec = firstSpec(u);
+      if (spec) {
+        const words = spec.tokens.filter((t) => t.text).slice(0, 2);
+        if (words.length) {
+          const joiner = u.kind === 'table' && words[1] && !words[1].spaceBefore ? '' : ' ';
+          return { text: words.map((t) => t.text).join(joiner), marker: u.marker };
+        }
+      }
+    }
+    return fallback;
+  };
   const anchorFor = (idx: number): Anchor | null => {
     for (let j = idx; j < units.length; j++) {
       const u = units[j];
-      const spec = u.kind === 'exact' ? u.spec : u.kind === 'table' ? u.rows?.[0] : undefined;
+      const spec = firstSpec(u);
       if (spec) {
         const words = spec.tokens.filter((t) => t.text).slice(0, 2);
         if (words.length) {
@@ -466,6 +509,57 @@ export function matchPageStarts(units: Unit[], lines: PagedLine[], audit?: UnitA
         cursor = next;
       }
       if (audit && !audit.some((a) => a.pos === unit.pos)) audit.push({ pos: unit.pos, type: 'table', status: 'ok' });
+    } else if (unit.inner) {
+      // A grid row: its blocks in reading order, each text block matched
+      // exactly, a table by its rows, anything else consumed up to the
+      // next block's anchor (or the next unit's after the row). Every line
+      // is the ROW's for page starts: a page begins at the row or not at
+      // all (rows are atomic; a split inside fails closed below).
+      const rowStart = cursor;
+      const after = anchorFor(ui + 1);
+      const inner = unit.inner;
+      for (let ii = 0; ii < inner.length && cursor < lines.length; ii++) {
+        const u = inner[ii];
+        const next = anchorFrom(inner, ii + 1, after);
+        const consumeTo = (anchor: Anchor | null, atLeast: number) => {
+          let consumed = 0;
+          while (cursor < lines.length && !(consumed >= atLeast && matchesAnchor(lines[cursor].text, anchor))) {
+            notePage(cursor, unit, cursor - rowStart);
+            cursor++;
+            consumed++;
+          }
+        };
+        if (u.kind === 'exact' && u.spec) {
+          const slice = lines.slice(cursor).map((l, i) => (i === 0 ? { ...l, text: stripListMarker(l.text, u.marker) } : l));
+          const res = matchParagraph(u.spec, slice, 0);
+          if (res.status !== 'ok') {
+            if (!audit) return { status: 'fail', reason: `unit@${u.pos} (${u.type}, in grid row @${unit.pos}): ${res.entry.reason}` };
+            audit.push({ pos: u.pos, type: u.type, status: 'fail', reason: res.entry.reason });
+            consumeTo(next, 1);
+            continue;
+          }
+          audit?.push({ pos: u.pos, type: u.type, status: 'ok', breaks: res.entry.breaks ?? [] });
+          for (let k = 0; k < res.next; k++) notePage(cursor + k, unit, cursor + k - rowStart);
+          cursor += res.next;
+        } else if (u.kind === 'table' && u.rows) {
+          let ok = true;
+          for (let r = 0; r < u.rows.length && cursor < lines.length; r++) {
+            const res = matchParagraph(u.rows[r], lines.slice(cursor), 0);
+            if (res.status !== 'ok') {
+              ok = false;
+              if (!audit) return { status: 'fail', reason: `unit@${u.pos} (table in grid row @${unit.pos}, row ${r}): ${res.entry.reason}` };
+              audit.push({ pos: u.pos, type: 'table', status: 'fail', reason: res.entry.reason });
+              consumeTo(next, 1);
+              break;
+            }
+            for (let k = 0; k < res.next; k++) notePage(cursor + k, unit, cursor + k - rowStart);
+            cursor += res.next;
+          }
+          if (ok) audit?.push({ pos: u.pos, type: 'table', status: 'ok' });
+        } else {
+          consumeTo(next, 0);
+        }
+      }
     } else {
       // Opaque block: consume lines until the next exact unit's anchor.
       const anchor = anchorFor(ui + 1);

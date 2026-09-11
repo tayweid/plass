@@ -31,6 +31,7 @@ import { INPUT_LIMITS, textSizeError } from './input-limits';
 import { trimSpaceBeforeMarker } from './collapse-spaces';
 import { smartenInline } from './smart-quotes';
 import { printedForm } from './collapse-spaces';
+import { parseGridCall } from './typ-parser';
 
 export interface MdImport {
   doc: PMNode;
@@ -360,7 +361,11 @@ export function mdToDoc(src: string): MdImport {
           const lang = t.info.trim().toLowerCase();
           const body = t.content.replace(/\n$/, '');
           if (lang === 'typst') {
-            nodes.push(code_block.create({ params: 'typst-raw' }, body ? [schema.text(body)] : []));
+            // A grid in the rail's own form is native (md-serializer wrote
+            // it); any other Typst is an island.
+            const grid = body.trimStart().startsWith('#grid(') ? parseGridCall(body, warnings) : null;
+            if (grid) nodes.push(grid);
+            else nodes.push(code_block.create({ params: 'typst-raw' }, body ? [schema.text(body)] : []));
           } else if ((lang === 'bibtex' || lang === 'bib') && !bib) {
             const sizeError = textSizeError(body, INPUT_LIMITS.bibliographyBytes, 'Embedded bibliography');
             if (sizeError) {

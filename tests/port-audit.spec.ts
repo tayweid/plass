@@ -257,6 +257,33 @@ FIXTURES.push(
 );
 
 FIXTURES.push({
+  // The grid rail: text beside a table, three fraction columns, and a
+  // three-row grid tall enough to break between rows.
+  name: 'grid.typ',
+  text:
+    TYP_HEAD('paper: "us-letter", margin: 1.25in') +
+    '= Grids\n\n' +
+    FILLER.repeat(3).trimEnd() +
+    '\n\n#grid(\n  columns: (2fr, 1fr),\n  gutter: 1em,\n  [\n    ' +
+    FILLER.repeat(2).trimEnd() +
+    '\n\n    ' +
+    FILLER.repeat(1).trimEnd() +
+    '\n  ],\n  [\n    #table(\n      columns: 2,\n      table.header([Item], [Value]),\n      [Alpha], [1],\n      [Beta], [2],\n      [Gamma], [3],\n    )\n  ],\n)\n\n' +
+    FILLER.repeat(3).trimEnd() +
+    '\n\n#grid(\n  columns: (1fr, 1fr, 1fr),\n  gutter: 1.5em,\n  [\n    == Left\n\n    ' +
+    FILLER.repeat(1).trimEnd() +
+    '\n  ],\n  [\n    - one\n    - two\n    - three\n  ],\n  [\n    ' +
+    FILLER.repeat(1).trimEnd() +
+    '\n  ],\n)\n\n' +
+    Array.from({ length: 4 }, () => FILLER.repeat(4).trimEnd()).join('\n\n') +
+    '\n\n#grid(\n  columns: (1fr, 1fr),\n  gutter: 1em,\n' +
+    Array.from({ length: 6 }, (_, i) => '  [\n    ' + FILLER.repeat(2 + (i % 2)).trimEnd() + '\n  ],').join('\n') +
+    '\n)\n\n' +
+    Array.from({ length: 3 }, () => FILLER.repeat(4).trimEnd()).join('\n\n') +
+    '\n',
+});
+
+FIXTURES.push({
   name: 'table-bare.md',
   text: ['| Item | Value |', '| --- | --- |', ...Array.from({ length: TABLE_ROWS - 1 }, (_, i) => `| Row ${i + 1} | ${i + 1} |`), ''].join('\n'),
 });

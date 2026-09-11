@@ -283,10 +283,64 @@ const withTight = (name: 'bullet_list' | 'ordered_list') => {
   };
 };
 
+/** The grid rail (grid-editor.ts): rows of cells holding any block
+ *  content; `columns` are fraction shares (Typst `fr`), `gutter` is em.
+ *  The grid element carries the CSS variables its rows lay out by. */
+const parseShares = (text: string | null): number[] => {
+  const shares = (text ?? '')
+    .split(/[\s,]+/)
+    .map(Number)
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return shares.length ? shares : [1, 1];
+};
+const gridSpecs: Record<string, NodeSpec> = {
+  grid: {
+    group: 'block',
+    content: 'grid_row+',
+    isolating: true,
+    attrs: { columns: { default: [1, 1] }, gutter: { default: 1 } },
+    parseDOM: [
+      {
+        tag: 'div.ts-grid',
+        getAttrs: (el: HTMLElement | string) =>
+          typeof el === 'string'
+            ? null
+            : { columns: parseShares(el.getAttribute('data-columns')), gutter: Number(el.getAttribute('data-gutter')) || 1 },
+      },
+    ],
+    toDOM(node) {
+      const columns = node.attrs.columns as number[];
+      const gutter = node.attrs.gutter as number;
+      return [
+        'div',
+        {
+          class: 'ts-grid',
+          'data-columns': columns.join(' '),
+          'data-gutter': String(gutter),
+          style: `--grid-cols: ${columns.map((c) => `${c}fr`).join(' ')}; --grid-gutter: ${gutter}em`,
+        },
+        0,
+      ];
+    },
+  },
+  grid_row: {
+    content: 'grid_cell+',
+    parseDOM: [{ tag: 'div.ts-grid-row' }],
+    toDOM: () => ['div', { class: 'ts-grid-row' }, 0],
+  },
+  grid_cell: {
+    content: 'block+',
+    isolating: true,
+    parseDOM: [{ tag: 'div.ts-grid-cell' }],
+    toDOM: () => ['div', { class: 'ts-grid-cell' }, 0],
+  },
+};
+
 const nodes = listNodes
   .update('bullet_list', withTight('bullet_list'))
   .update('ordered_list', withTight('ordered_list'))
   .append(tables)
+  .append(gridSpecs)
   // The rule under a row: '' (the style preset's), 'light', 'heavy', or
   // 'none' (table-rules.ts).
   .update('table_row', {

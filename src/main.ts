@@ -20,6 +20,7 @@ import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { TypstInlineView } from './inline-raw';
+import { GridCellView, gridPlugin } from './grid-editor';
 import { refAutocomplete } from './ref-autocomplete';
 import { applySettings, formatPageNumber, getSettings, runningPageFormat, runningText, type DocSettings } from './settings';
 import { FileManager } from './file-manager';
@@ -135,6 +136,7 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       collapseSpaces(),
       listIndent(),
       copyTextWithoutItsBlock(),
+      gridPlugin(),
       typesetPlugin({ onStats, onPages: renderPages, onEnvironment: (v) => showMessage(describeVerdict(v)) }),
       // Native cell selection, rectangular copy/paste, and structural table
       // invariants. Keep this last so its broad arrow/mouse handlers only run
@@ -300,6 +302,7 @@ const view = new EditorView(editorEl, {
     footnote: (node) => new FootnoteView(node),
     bibliography: (node, v) => new BibliographyView(node, v),
     typst_inline: (node, v, getPos) => new TypstInlineView(node, v, getPos),
+    grid_cell: (node, v) => new GridCellView(node, v),
   },
   attributes: { spellcheck: 'true' },
   handleClick: (v, _pos, event) => footnoteMarkerClick(v, event),
