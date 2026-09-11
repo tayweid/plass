@@ -186,14 +186,6 @@ export function extractLines(svg: string, yTol: number): SvgLine[] {
   return lines;
 }
 
-/** Advance past the next paragraph-sized gap (fallback resync). */
-function skipParagraph(lines: SvgLine[], from: number, paraGap: number): number {
-  for (let i = from + 1; i < lines.length; i++) {
-    if (lines[i].y - lines[i - 1].y > paraGap) return i;
-  }
-  return lines.length;
-}
-
 /**
  * Match a paragraph's tokens against consecutive SVG lines; every line
  * boundary becomes a break. Tokens carry their exact rendered text and

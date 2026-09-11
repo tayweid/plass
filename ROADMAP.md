@@ -297,12 +297,30 @@ answered from the bottom edge on 2026-09-11 — see "the divergences".)
   types immediately, with compiled-oracle features degrading until the
   compiler is available. Pages serves everything `max-age=600`, so a worker
   also decides how an update reaches an already-open app.
-- Custom paper dimensions; footnote per-page vs continuous numbering and
-  separator options — next, quick (Taylor, 2026-09-11). Two-sided
-  inside/outside margins dropped.
-- The oracle-class removal — the last piece of the second renderer
-  (`TypstOracle`, `PageOracle`, the coordinator, the compiled authority
-  branches and page-mark holding state in the plugin).
+- ~~Custom paper dimensions; footnote numbering and separator options~~
+  — done 2026-09-11. Paper: A5, half letter (5.5 × 8.5 in — the notes
+  printed two to a sheet), and a custom width × height in inches, through
+  the settings, the `.typ` export/import (`width:`/`height:` when Typst
+  has no name), the print `@page`, and the LaTeX export. Footnotes: marker
+  numbering `1`, `a`, `i`, or `*` (Typst's patterns; the editor paints and
+  the port measures the same labels), and the rule above the entries
+  (short, full width, none — the reservation follows). Both export and
+  import. Not done: per-page footnote numbering (Typst has no such option
+  either; it would take a counter reset in the page header and the
+  editor's numbering would depend on pagination). Two-sided margins
+  dropped. Testing these found three more port divergences, fixed:
+  a block measure rounded to whole pixels (`clientWidth`; a 5.5in page
+  less 0.6in margins is 412.8px), a continuation line landing half a pixel
+  low at a page top (the caret box's half-leading backed off where Chrome
+  puts none), and a list item or quote at a page top landing by its box
+  instead of its first line's cap top.
+- ~~The oracle-class removal~~ — done 2026-09-11.
+- **Float placement for tables and figures** — assessed 2026-09-11: not
+  easy. Typst's `placement: top/bottom` moves the figure out of the flow
+  to the page edge; mirroring it means painting the figure at the page top
+  while the document keeps it mid-flow, reserving its height there and
+  removing it from where it was typed — a new page-layout mechanism, not
+  a fixture. Stays parked.
 - ~~Environment check for text metrics~~ — done 2026-09-11
   (`src/environment-check.ts`). CI's Linux Chromium hinted the bundled
   fonts and rounded every advance to a whole pixel (225px vs 212.6px for

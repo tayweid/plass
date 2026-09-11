@@ -171,7 +171,7 @@ export const FOOTNOTE_SCALE = 0.85;
 
 export interface PaintedPrefixMeasurements {
   footnoteScale: typeof FOOTNOTE_SCALE;
-  footnoteIndent(number: number): number;
+  footnoteIndent(label: string): number;
   captionIndent(number: number): number;
 }
 
@@ -197,14 +197,10 @@ export function createPaintedPrefixMeasurements(
   const fontStack = cssFontStack(fontName);
   return {
     footnoteScale: FOOTNOTE_SCALE,
-    footnoteIndent(number) {
+    footnoteIndent(label) {
       const footnotePx = FOOTNOTE_SCALE * bodyPx;
       const numberPx = 0.72 * footnotePx;
-      return (
-        0.9 * footnotePx +
-        textWidth(String(number), `${numberPx}px ${fontStack}`) +
-        0.15 * numberPx
-      );
+      return 0.9 * footnotePx + textWidth(label, `${numberPx}px ${fontStack}`) + 0.15 * numberPx;
     },
     captionIndent(number) {
       return textWidth(`Figure ${number}:`, `${bodyPx}px ${fontStack}`) + 0.32 * bodyPx;

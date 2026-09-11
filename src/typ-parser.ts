@@ -12,7 +12,7 @@
 import type { Mark, Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
 import { unwrapAligned } from './math-src';
-import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings } from './settings';
+import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings, FOOTNOTE_NUMBERINGS, type FootnoteNumbering } from './settings';
 import { trimSpaceBeforeMarker } from './collapse-spaces';
 import { beforeAfterNode, createQuoteState, feedGlyph, lastVisible, smartQuote, type QuoteState } from './smart-quotes';
 import { densityFromInsetPt, type TableDensity } from './table-density';
@@ -128,7 +128,24 @@ export function typToDoc(src: string): TypImport {
       const paper = /paper:\s*"([^"]+)"/.exec(m[1])?.[1];
       if (paper) {
         settings.page =
-          ({ 'us-letter': 'letter', a4: 'a4', 'us-legal': 'legal', 'iso-b5': 'b5' } as const)[paper] ?? 'letter';
+          ({ 'us-letter': 'letter', a4: 'a4', 'us-legal': 'legal', 'iso-b5': 'b5', a5: 'a5' } as const)[paper] ?? 'letter';
+      }
+      // An explicit size: half letter by its dimensions, anything else custom.
+      const inches = (key: string): number | null => {
+        const d = new RegExp(`(?:^|[\\s(,])${key}:\\s*([\\d.]+)(in|mm|cm|pt)`).exec(m![1]);
+        if (!d) return null;
+        const v = parseFloat(d[1]);
+        return d[2] === 'in' ? v : d[2] === 'mm' ? v / 25.4 : d[2] === 'cm' ? v / 2.54 : v / 72;
+      };
+      const w = inches('width');
+      const h = inches('height');
+      if (w && h) {
+        if (Math.abs(w - 5.5) < 0.01 && Math.abs(h - 8.5) < 0.01) settings.page = 'half-letter';
+        else {
+          settings.page = 'custom';
+          settings.pageWidthIn = Math.round(w * 100) / 100;
+          settings.pageHeightIn = Math.round(h * 100) / 100;
+        }
       }
       if (/flipped:\s*true/.test(m[1])) settings.landscape = true;
       const marginDict = /margin:\s*\(([^)]*)\)/.exec(m[1])?.[1];
@@ -192,6 +209,20 @@ export function typToDoc(src: string): TypImport {
     if (/^#set heading\(numbering:/.test(line)) {
       sawSet = true;
       settings.numberSections = true;
+      i++;
+      continue;
+    }
+    const fnNum = /^#set footnote\(numbering: "([^"]+)"\)$/.exec(line);
+    if (fnNum) {
+      sawSet = true;
+      if ((FOOTNOTE_NUMBERINGS as readonly string[]).includes(fnNum[1])) settings.footnoteNumbering = fnNum[1] as FootnoteNumbering;
+      i++;
+      continue;
+    }
+    const fnSep = /^#set footnote\.entry\(separator: (.*)\)$/.exec(line);
+    if (fnSep) {
+      sawSet = true;
+      settings.footnoteSeparator = fnSep[1] === 'none' ? 'none' : /length:\s*100%/.test(fnSep[1]) ? 'full' : 'rule';
       i++;
       continue;
     }

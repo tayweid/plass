@@ -4,7 +4,7 @@
 // mitex Typst package, which compiles LaTeX math inside Typst documents.
 
 import type { Node as PMNode } from 'prosemirror-model';
-import { normalizeSettings, parseMathMacros, type DocSettings } from './settings';
+import { normalizeSettings, parseMathMacros, type DocSettings, paperInches } from './settings';
 import { wrapAligned } from './math-src';
 import { isPortableCitationKey, parseBibTeX } from './bibtex';
 import { RAW_FONT, codeBlockMetricsEm, effectiveFont, parityMetrics } from './font-registry';
@@ -825,12 +825,16 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     const s: DocSettings = normalizeSettings(doc.attrs?.settings as Partial<DocSettings> | null);
     docMacros = parseMathMacros(s.mathMacros);
     let out = '// Exported from Plass\n';
-    const paperName = { letter: 'us-letter', a4: 'a4', legal: 'us-legal', b5: 'iso-b5' }[s.page] ?? 'us-letter';
+    // Named papers by Typst's names; half letter and a custom size by their
+    // dimensions (Typst has no name for them).
+    const paperName: Partial<Record<DocSettings['page'], string>> = { letter: 'us-letter', a4: 'a4', legal: 'us-legal', b5: 'iso-b5', a5: 'a5' };
+    const inches = paperInches(s);
+    const paperArg = paperName[s.page] ? `paper: "${paperName[s.page]}"` : `width: ${inches.w}in, height: ${inches.h}in`;
     const uniform = s.marginTop === s.marginRight && s.marginTop === s.marginBottom && s.marginTop === s.marginLeft;
     const marginArg = uniform
       ? `margin: ${s.marginTop}in`
       : `margin: (top: ${s.marginTop}in, right: ${s.marginRight}in, bottom: ${s.marginBottom}in, left: ${s.marginLeft}in)`;
-    const pageArgs = [`paper: "${paperName}"`, marginArg];
+    const pageArgs = [paperArg, marginArg];
     if (s.landscape) pageArgs.push('flipped: true');
     let hasRestart = false;
     doc.forEach((n) => {
@@ -856,6 +860,9 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     docCitationStyle = s.citationStyle;
     if (s.numberEquations) out += '#set math.equation(numbering: "(1)")\n';
     if (s.numberSections) out += '#set heading(numbering: "1.1")\n';
+    if (s.footnoteNumbering !== '1') out += `#set footnote(numbering: "${s.footnoteNumbering}")\n`;
+    if (s.footnoteSeparator === 'none') out += '#set footnote.entry(separator: none)\n';
+    else if (s.footnoteSeparator === 'full') out += '#set footnote.entry(separator: line(length: 100%, stroke: 0.5pt))\n';
     if (s.pageNumStart !== 1) out += `#counter(page).update(${s.pageNumStart})\n`;
     if (s.mathMacros.trim()) out += `// typeset:math-macros ${JSON.stringify(s.mathMacros)}\n`;
     if (containsMath(doc)) out += '#import "@preview/mitex:0.2.5": mi, mitex\n';

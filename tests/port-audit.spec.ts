@@ -154,6 +154,35 @@ FIXTURES.push({
     '',
   ].join('\n'),
 });
+const TYP_HEAD = (page: string, extra = '') =>
+  `#set page(${page})\n#set par(justify: true, leading: 10.215pt, spacing: 21.465pt)\n#set list(spacing: 13.34pt)\n#set enum(spacing: 13.34pt)\n${extra}#set text(font: "New Computer Modern", size: 12.5pt)\n\n`;
+const NOTES = Array.from({ length: 8 }, (_, i) => FILLER.repeat(3).trimEnd() + ` A remark.#footnote[Note ${i + 1}. ${FILLER.repeat(i % 2 ? 2 : 1).trimEnd()}] ` + FILLER.repeat(2).trimEnd()).join('\n\n');
+FIXTURES.push(
+  {
+    // Half letter (notes printed two to a sheet): a custom size whose margins
+    // are not whole pixels, lists at a knife-edge measure, a list item at a
+    // page top.
+    name: 'half-letter.typ',
+    text:
+      TYP_HEAD('width: 5.5in, height: 8.5in, margin: 0.6in') +
+      '= Half sheets\n\n' +
+      Array.from({ length: 14 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') +
+      `\n\n- ${FILLER.repeat(2).trimEnd()}\n- ${FILLER.repeat(1).trimEnd()}\n\n` +
+      Array.from({ length: 6 }, () => FILLER.repeat(4).trimEnd()).join('\n\n') +
+      '\n',
+  },
+  {
+    // Footnote numbering by letters and no separator rule.
+    name: 'footnotes-a.typ',
+    text: TYP_HEAD('paper: "us-letter", margin: 1.25in', '#set footnote(numbering: "a")\n#set footnote.entry(separator: none)\n') + '= Notes\n\n' + NOTES + '\n',
+  },
+  {
+    // Symbol markers and a full-width rule.
+    name: 'footnotes-symbols.typ',
+    text: TYP_HEAD('paper: "us-letter", margin: 1.25in', '#set footnote(numbering: "*")\n#set footnote.entry(separator: line(length: 100%, stroke: 0.5pt))\n') + '= Notes\n\n' + NOTES + '\n',
+  },
+);
+
 FIXTURES.push({
   name: 'table-bare.md',
   text: ['| Item | Value |', '| --- | --- |', ...Array.from({ length: TABLE_ROWS - 1 }, (_, i) => `| Row ${i + 1} | ${i + 1} |`), ''].join('\n'),

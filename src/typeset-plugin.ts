@@ -27,6 +27,7 @@
 // heights (line breaks survive, gaps vanish) and @page takes over.
 
 import { Plugin, type EditorState } from 'prosemirror-state';
+import { footnoteLabel } from './footnotes';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { Measurer } from './layout/measure';
@@ -57,6 +58,7 @@ import {
   stickyRelayoutCheckpoint,
   type FootnoteCarryItem,
   type StickyState,
+  footnoteSeparatorHeightPx,
 } from './layout/flow-rules';
 import { citationLabelMap } from './citations';
 import { eqKey } from './equations';
@@ -130,6 +132,12 @@ import { buildPortAudit, type PortAuditReport } from './layout/port-audit';
 
 /** Islands never flex: nothing in the document takes a line's slack. */
 const noFill = () => false;
+
+/** The footnote separator's reserved height for a document: Typst's 0.5pt
+ * line, or nothing when the setting removes it. */
+function footnoteSeparatorPx(s: DocSettings): number {
+  return s.footnoteSeparator === 'none' ? 0 : footnoteSeparatorHeightPx();
+}
 
 /** Slack allowed when a frame is tested against the page bottom, in px.
  * Typst allows none (`Abs::fits` is exact to 1e-6pt); the browser's layout
@@ -971,7 +979,7 @@ class TypesetView {
         b.kind === 'caption'
           ? { firstLineIndent: prefixes!.captionIndent(number) }
           : b.kind === 'footnote'
-            ? { firstLineIndent: prefixes!.footnoteIndent(number), scale: prefixes!.footnoteScale }
+            ? { firstLineIndent: prefixes!.footnoteIndent(footnoteLabel(number, settings.footnoteNumbering)), scale: prefixes!.footnoteScale }
             : b.kind === 'heading'
               ? { scale: headingScale(level), baseStyle: 'bold' }
               : settings.parIndent && consecutiveParagraph(state.doc, b.pos)
@@ -1406,7 +1414,7 @@ class TypesetView {
     const F = snapshot.bodyPx;
     const usable = Math.max(
       1,
-      snapshot.contentHeight - footnoteHeadReservePx(F) - footnoteEntryCost(0, F),
+      snapshot.contentHeight - footnoteHeadReservePx(F, footnoteSeparatorPx(snapshot.settings)) - footnoteEntryCost(0, F),
     );
     const maxSpanPages = 1 + Math.ceil(maxHeight / usable);
     // prefixMarkers[i] starts page i + 1; the seed page is prefixMarkers.length.
@@ -1619,13 +1627,13 @@ class TypesetView {
     ) {
       return cached.measure;
     }
-    let measure: number;
-    if (padded) {
-      const cs = getComputedStyle(target);
-      measure = target.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-    } else {
-      measure = target.clientWidth;
-    }
+    // The fractional width: clientWidth rounds to whole pixels, and a page
+    // whose margins are not whole pixels (5.5in less 0.6in margins is
+    // 412.8px) would hand the port a measure up to half a pixel off Typst's
+    // — enough to tip a paragraph at a knife edge onto other breaks.
+    const cs = getComputedStyle(target);
+    const box = target.getBoundingClientRect().width - parseFloat(cs.borderLeftWidth || '0') - parseFloat(cs.borderRightWidth || '0');
+    const measure = padded ? box - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) : box;
     this.blockMeasureCache.set(target, {
       epoch: this.domGeometryEpoch,
       parent: target.parentNode,
@@ -1662,19 +1670,36 @@ class TypesetView {
     return null;
   }
 
+  /**
+   * How far below the page's top margin a block's painted box must start
+   * for its Typst frame to begin AT the margin (negative: above it). Text
+   * blocks land their cap top there (`pageTopAdjustEm`); a table drops its
+   * margin-top; a container (list, quote) drops its own painted top
+   * spacing and lands its first text block like a paragraph — Typst starts
+   * a page with the item's or quote's first line at the margin, not with
+   * the container's box.
+   */
+  private blockTopAdjustPx(node: PMNode | null, s: DocSettings, F: number): number {
+    if (!node) return 0;
+    const kind = this.unitKindOf(node);
+    if (kind) return pageTopAdjustEm(s, kind) * F;
+    if (node.type.name === 'code_block') return pageTopAdjustEm(s, 'code') * F;
+    if (node.type.name === 'table') return -tableMarginsEm(s).top * F;
+    const dropEm = containerPageTopDropEm(node.type.name, (node.attrs.kind as string | null) ?? null);
+    let first: PMNode | null = node;
+    while (first && !first.isTextblock && !first.isAtom && first.type.name !== 'table' && first.firstChild) first = first.firstChild;
+    const innerKind = first && first !== node ? this.unitKindOf(first) : null;
+    const inner = innerKind ? pageTopAdjustEm(s, innerKind) * F : first?.type.name === 'code_block' && first !== node ? pageTopAdjustEm(s, 'code') * F : 0;
+    return -dropEm * F + inner;
+  }
+
   /** Align page-1 ink with the PDF: Typst's first baseline sits one
    *  ascender below the margin; CSS line boxes/padding sit lower. */
   private applyTopAdjust() {
     const host = this.view.dom.parentElement;
     if (!host) return;
     const s = getSettings(this.view.state);
-    const first = this.view.state.doc.firstChild;
-    const kind = this.unitKindOf(first);
-    const adj = kind
-      ? pageTopAdjustEm(s, kind) * this.bodyPx()
-      : first?.type.name === 'table'
-        ? -tableMarginsEm(s).top * this.bodyPx()
-        : 0;
+    const adj = this.blockTopAdjustPx(this.view.state.doc.firstChild, s, this.bodyPx());
     host.style.paddingTop = `${(s.marginTop * 96 + adj).toFixed(2)}px`;
   }
 
@@ -1949,7 +1974,7 @@ class TypesetView {
           }
           const n = fnNums.get(child) ?? 1;
           const sup = prim.superscriptHeight(regularKey) || 0.6;
-          return shapeW(String(n), sup * s.sizePt);
+          return shapeW(footnoteLabel(n, s.footnoteNumbering), sup * s.sizePt);
         }
         default:
           return null;
@@ -2038,7 +2063,8 @@ class TypesetView {
           // it — the mark glues to whatever precedes it even when the
           // document itself has a real space there.
           const n = footnoteNums().get(child) ?? 1;
-          return { markup: `#counter(footnote).update(${n - 1});#footnote[.]`, text: String(n), glueLeft: true };
+          const label = footnoteLabel(n, getSettings(this.view.state).footnoteNumbering);
+          return { markup: `#counter(footnote).update(${n - 1});#footnote[.]`, text: label, glueLeft: true };
         }
         default:
           return null;
@@ -2167,7 +2193,7 @@ class TypesetView {
           bMeasure,
           { kind: 'footnote' },
           {
-            firstLineIndent: prefixes.footnoteIndent(fnNo),
+            firstLineIndent: prefixes.footnoteIndent(footnoteLabel(fnNo, settings.footnoteNumbering)),
             scale: prefixes.footnoteScale,
           },
           `fn${fnNo}`,
@@ -2638,6 +2664,7 @@ class TypesetView {
     // the last entry's baseline exactly as Typst's does.
     const fnInsets = footnoteFrameInsetsEm(s);
     const fnLeadingPx = fnInsets.leading * F;
+    const fnSepPx = footnoteSeparatorPx(s);
     const fnList: Array<{ pos: number; height: number; lineHeight: number; leading: number }> = [];
     view.state.doc.descendants((node, pos) => {
       if (node.type.name !== 'footnote') return true;
@@ -2699,7 +2726,7 @@ class TypesetView {
     // walk. A block that fails it falls through to the exact walk.
     const bottomFor = (extraFnH = 0) => {
       const total = pageFnH + extraFnH;
-      return page * (size.h + PAGE_GAP) + size.h - marginBottom - (total > 0 ? total + footnoteHeadReservePx(F) : 0);
+      return page * (size.h + PAGE_GAP) + size.h - marginBottom - (total > 0 ? total + footnoteHeadReservePx(F, fnSepPx) : 0);
     };
     const peekFnH = (endPos: number) => {
       let h = 0;
@@ -2740,6 +2767,7 @@ class TypesetView {
         const fit = footnoteEntryFit(item.height, avail, pageFnH > 0, F, {
           lineHeightPx: item.lineHeight,
           leadingPx: item.leading,
+          separatorPx: fnSepPx,
         });
         if (fit.empty) {
           // Nothing fit. Migration (moving the whole origin frame) is decided
@@ -2771,6 +2799,7 @@ class TypesetView {
       const fit = footnoteEntryFit(first.height, bottomFor() - podStart, pageFnH > 0, F, {
         lineHeightPx: first.lineHeight,
         leadingPx: first.leading,
+        separatorPx: fnSepPx,
       });
       if (!fit.empty) return false;
       const mayProgressNow = !atPageTop || pageFnH > 0;
@@ -2783,7 +2812,7 @@ class TypesetView {
     const startPageFootnotes = () => {
       pageFnH = 0;
       if (fnCarry.length === 0) return;
-      const settled = settleFootnoteCarry(fnCarry, contentH, F);
+      const settled = settleFootnoteCarry(fnCarry, contentH, F, fnSepPx);
       fnCarry = settled.carry;
       for (const fragment of settled.placed) pageFnH += footnoteEntryCost(fragment, F);
     };
@@ -2796,31 +2825,7 @@ class TypesetView {
       // grid places the row frame flush at the region top); the repeated
       // header's reservation is passed separately by the caller.
       if (kind === 'row') return 0;
-      const n = view.state.doc.nodeAt(pos);
-      if (n?.type.name === 'paragraph') return pageTopAdjustEm(s, 'paragraph') * F;
-      if (n?.type.name === 'code_block') return pageTopAdjustEm(s, 'code') * F;
-      if (n?.type.name === 'heading') {
-        const lv = Math.min(3, (n.attrs.level as number) || 1);
-        return pageTopAdjustEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;
-      }
-      // A table's spacing above is its margin-top (tableMarginsEm): weak,
-      // dropped at a page top; the spacer lands the box on the margin.
-      if (n?.type.name === 'table') return -tableMarginsEm(s).top * F;
-      // Every other top-level block's own "above" spacing is weak in
-      // Typst's model (Auto block spacing or `#quote`'s explicit default —
-      // both weakness >= 1, src/layout/flow-rules.ts's SPACING_WEAKNESS),
-      // so it drops unconditionally when the block starts a fresh region
-      // (flow/distribute.rs::keep_spacing's region-top case). Paragraphs,
-      // lines, and headings get a calibrated ascent-based landing spot via
-      // pageTopAdjustEm above; the container kinds below have no such
-      // calibration yet, so this only drops the certain part — the block's
-      // own painted padding-top, which otherwise survives in full at a page
-      // top even though Typst never charges it there.
-      if (n) {
-        const dropEm = containerPageTopDropEm(n.type.name, (n.attrs.kind as string | null) ?? null);
-        if (dropEm) return -dropEm * F;
-      }
-      return 0;
+      return this.blockTopAdjustPx(view.state.doc.nodeAt(pos), s, F);
     };
     /** The Typst frame ends ABOVE the painted box's bottom by this much
      *  (pageBottomInsetEm): the last line's descent and half-leading for
@@ -2877,13 +2882,11 @@ class TypesetView {
     };
 
     /** Flow need for a BREAKABLE frame: the top of the line the marker sits
-     *  on, measured the way the paragraph splitter measures its line tops
-     *  (caret box, backed off by half-leading when the enclosing block's line
-     *  height is known). */
-    const markerLineTop = (fnPos: number, blockEl: HTMLElement | null): number => {
+     *  on. The caret box's top is the line box's top (Chrome lays the
+     *  rounded glyph box flush with it); no half-leading is backed off. */
+    const markerLineTop = (fnPos: number, _blockEl: HTMLElement | null): number => {
       const c = view.coordsAtPos(fnPos);
-      const lineH = blockEl ? this.blockLineHeight(blockEl) : 0;
-      return stackY(c.top, fnPos) - Math.max(0, (lineH - (c.bottom - c.top)) / 2);
+      return stackY(c.top, fnPos);
     };
 
     // Sticky blocks (src/layout/flow-rules.ts, ported from Typst's
@@ -3012,12 +3015,12 @@ class TypesetView {
       const el = view.nodeDOM(pos) as HTMLElement;
       const lineH = this.blockLineHeight(el);
       const base = pos + 1;
-      const lineTops = entry.lines.map((line) => {
-        const c = view.coordsAtPos(base + line.from);
-        // coordsAtPos returns the caret box; back off half-leading to
-        // approximate the line-box top.
-        return { pos: base + line.from, y: stackY(c.top, base + line.from) - Math.max(0, (lineH - (c.bottom - c.top)) / 2) };
-      });
+      // Every line box of a paragraph is exactly one line-height tall (inline
+      // atoms keep the line box — vertical parity), so line k's box top is
+      // the paragraph's top plus k line-heights: exact, and independent of
+      // the caret box, whose height Chrome rounds to whole pixels (a
+      // half-leading backed off from it put every line half a pixel high).
+      const lineTops = entry.lines.map((line, k) => ({ pos: base + line.from, y: yTop + k * lineH }));
 
       const n = lineTops.length;
       // Widow/orphan "need" (src/layout/flow-rules.ts, ported from Typst's
@@ -3308,11 +3311,11 @@ class TypesetView {
         let carry = fnCarry;
         let cost = 0;
         for (let i = 0; i < k; i++) {
-          const settled = settleFootnoteCarry(carry, contentH, F);
+          const settled = settleFootnoteCarry(carry, contentH, F, fnSepPx);
           carry = settled.carry;
           cost = settled.placed.reduce((sum, fragment) => sum + footnoteEntryCost(fragment, F), 0);
         }
-        return contentH - (cost > 0 ? cost + footnoteHeadReservePx(F) : 0);
+        return contentH - (cost > 0 ? cost + footnoteHeadReservePx(F, fnSepPx) : 0);
       };
       const plan = planTableRowBreaks(model, rows, bottomFor() - (y + shift), capacity, mayProgressAt(pos), FIT_TOLERANCE_PX);
       if (plan.kind === 'atomic') return atomic(pos, node);
@@ -3460,6 +3463,7 @@ class TypesetView {
         list.map((f) => f.height),
         F,
         bottomEdge,
+        footnoteSeparatorPx(s),
       );
       list.forEach((f, i) => {
         const y = entryTops[i] - fnInsets.top * F - pmOffset;

@@ -8,7 +8,7 @@
 // styling maps 1:1, including light/heavy rule weights.
 
 import type { Node as PMNode } from 'prosemirror-model';
-import { normalizeSettings, parseMathMacros, type DocSettings } from './settings';
+import { normalizeSettings, parseMathMacros, type DocSettings, paperInches } from './settings';
 
 let macros: Record<string, string> = {};
 let unnumberedEq = new Set<string>();
@@ -316,7 +316,11 @@ export function docToTex(doc: PMNode): string {
   dataUrlNote = false;
 
   const classSize = s.sizePt <= 10.5 ? 10 : s.sizePt <= 11.5 ? 11 : 12;
-  const paper = { letter: 'letterpaper', a4: 'a4paper', legal: 'legalpaper', b5: 'b5paper' }[s.page] ?? 'letterpaper';
+  // Named papers as class options; half letter and a custom size through
+  // geometry's explicit dimensions.
+  const named: Partial<Record<DocSettings['page'], string>> = { letter: 'letterpaper', a4: 'a4paper', legal: 'legalpaper', b5: 'b5paper', a5: 'a5paper' };
+  const inches = paperInches(s);
+  const paper = named[s.page] ?? `paperwidth=${inches.w}in,paperheight=${inches.h}in`;
 
   // Front matter + structure scan.
   let title = '';

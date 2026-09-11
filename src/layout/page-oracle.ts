@@ -245,6 +245,13 @@ export function footnoteHeads(doc: PMNode): string[] {
   return heads;
 }
 
+/** An entry line without its leading marker (a number, letters, roman
+ *  numerals, or Typst's footnote symbols, glued to the body's first word). */
+function stripFootnoteMarker(raw: string): string {
+  const text = raw.replace(/\s+/g, ' ').trim();
+  return text.replace(/^(?:\d+|[a-z]{1,3}|[*†‡§¶‖]+)(?=[A-Za-z0-9“"(])/, '');
+}
+
 /** Remove per-page trailing footnote-area lines (matched against known texts). */
 export function stripFootnoteLines(lines: PagedLine[], heads: string[]): PagedLine[] {
   if (!heads.length) return lines;
@@ -260,14 +267,14 @@ export function stripFootnoteLines(lines: PagedLine[], heads: string[]): PagedLi
     if (hi >= heads.length) break;
     // Find the first line on this page that starts the pending footnote body.
     for (let k = 0; k < idxs.length; k++) {
-      const text = lines[idxs[k]].text.replace(/\s+/g, ' ').trim().replace(/^\d+[.)]?\s*/, '');
+      const text = stripFootnoteMarker(lines[idxs[k]].text);
       if (hi < heads.length && text.startsWith(heads[hi].slice(0, 12))) {
         // Everything from here to the end of the page is footnote area.
         for (let j = k; j < idxs.length; j++) drop.add(idxs[j]);
         // Consume as many queued footnotes as begin in this area.
         hi++;
         for (let j = k + 1; j < idxs.length && hi < heads.length; j++) {
-          const t = lines[idxs[j]].text.replace(/\s+/g, ' ').trim().replace(/^\d+[.)]?\s*/, '');
+          const t = stripFootnoteMarker(lines[idxs[j]].text);
           if (t.startsWith(heads[hi].slice(0, 12))) hi++;
         }
         break;

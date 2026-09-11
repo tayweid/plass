@@ -54,6 +54,24 @@ function firstDiff(a: string, b: string): string {
   check('modified settings re-export', out.includes('paper: "a4"') && out.includes('margin: 1in'));
 }
 
+// --- 3b. paper sizes and footnote options round-trip ---
+{
+  const half = docToTyp(demoDoc()).replace('paper: "us-letter"', 'width: 5.5in, height: 8.5in');
+  const s1 = typToDoc(half).doc.attrs.settings;
+  check('half letter imports by its dimensions', s1.page === 'half-letter');
+  check('half letter re-exports as dimensions', docToTyp(typToDoc(half).doc).includes('width: 5.5in, height: 8.5in'));
+  const custom = docToTyp(demoDoc()).replace('paper: "us-letter"', 'width: 148mm, height: 210mm');
+  const s2 = typToDoc(custom).doc.attrs.settings;
+  check('a metric custom size imports in inches', s2.page === 'custom' && Math.abs(s2.pageWidthIn - 5.83) < 0.01 && Math.abs(s2.pageHeightIn - 8.27) < 0.01);
+  const a5 = docToTyp(demoDoc()).replace('paper: "us-letter"', 'paper: "a5"');
+  check('a5 imports by name', typToDoc(a5).doc.attrs.settings.page === 'a5');
+  const fn = docToTyp(demoDoc()).replace('#set text(', '#set footnote(numbering: "a")\n#set footnote.entry(separator: none)\n#set text(');
+  const s3 = typToDoc(fn).doc.attrs.settings;
+  check('footnote numbering and separator import', s3.footnoteNumbering === 'a' && s3.footnoteSeparator === 'none');
+  const back = docToTyp(typToDoc(fn).doc);
+  check('footnote options re-export', back.includes('#set footnote(numbering: "a")') && back.includes('#set footnote.entry(separator: none)'));
+}
+
 // --- 4. hand-written Typst: pragmatic subset + raw preservation ---
 {
   const src = [

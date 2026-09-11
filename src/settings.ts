@@ -14,7 +14,10 @@ export interface DocSettings {
   font: string;
   sizePt: number;
   lineHeight: number;
-  page: 'letter' | 'a4' | 'legal' | 'b5';
+  page: PaperName;
+  /** Custom paper size, inches (used when `page` is 'custom'). */
+  pageWidthIn: number;
+  pageHeightIn: number;
   landscape: boolean;
   marginTop: number;
   marginRight: number;
@@ -39,13 +42,25 @@ export interface DocSettings {
   /** Citation style: a ported formatter, verified against the compiler
    *  (citation-styles.ts). Exported as `style:` on #bibliography. */
   citationStyle: CitationStyle;
+  /** Footnote marker numbering (Typst's `footnote(numbering:)` patterns). */
+  footnoteNumbering: FootnoteNumbering;
+  /** The rule above the footnotes: Typst's default short line, a full-width
+   *  line, or none (`footnote.entry(separator:)`). */
+  footnoteSeparator: FootnoteSeparator;
 }
+
+export type FootnoteNumbering = '1' | 'a' | 'i' | '*';
+export type FootnoteSeparator = 'rule' | 'full' | 'none';
+export const FOOTNOTE_NUMBERINGS: readonly FootnoteNumbering[] = ['1', 'a', 'i', '*'];
+export const FOOTNOTE_SEPARATORS: readonly FootnoteSeparator[] = ['rule', 'full', 'none'];
 
 export const DEFAULT_SETTINGS: DocSettings = {
   font: DEFAULT_FONT.label,
   sizePt: 12.5,
   lineHeight: 1.5,
   page: 'letter',
+  pageWidthIn: 8.5,
+  pageHeightIn: 11,
   landscape: false,
   marginTop: 1.25,
   marginRight: 1.25,
@@ -63,6 +78,8 @@ export const DEFAULT_SETTINGS: DocSettings = {
   headerAlign: 'right',
   headerFirstPage: false,
   citationStyle: 'ieee',
+  footnoteNumbering: '1',
+  footnoteSeparator: 'rule',
   mathMacros: '',
 };
 
@@ -111,16 +128,31 @@ export function formatPageNumber(s: DocSettings, page: number, total: number): s
 }
 
 /** Page geometry in CSS px (96/in). Shared by CSS vars, the paginator, and chrome. */
-const PAPER: Record<DocSettings['page'], { w: number; h: number }> = {
+export type PaperName = 'letter' | 'a4' | 'legal' | 'b5' | 'a5' | 'half-letter' | 'custom';
+export const PAPER_NAMES: readonly PaperName[] = ['letter', 'a4', 'legal', 'b5', 'a5', 'half-letter', 'custom'];
+
+/** Named papers in CSS px (96/in): Typst's `paper:` names, plus half
+ *  letter (5.5 × 8.5 in — notes printed two to a sheet), which Typst has no
+ *  name for and which exports as an explicit width and height. */
+const PAPER: Record<Exclude<PaperName, 'custom'>, { w: number; h: number }> = {
   letter: { w: 816, h: 1056 },
   a4: { w: 794, h: 1123 },
   legal: { w: 816, h: 1344 },
   b5: { w: 665, h: 945 },
+  a5: { w: 559, h: 794 },
+  'half-letter': { w: 528, h: 816 },
 };
 
-/** Effective page size in px (orientation applied). */
-export function pageSize(s: Pick<DocSettings, 'page' | 'landscape'>): { w: number; h: number } {
+/** The paper's portrait size in inches: a named paper's, or the custom one. */
+export function paperInches(s: Pick<DocSettings, 'page' | 'pageWidthIn' | 'pageHeightIn'>): { w: number; h: number } {
+  if (s.page === 'custom') return { w: s.pageWidthIn, h: s.pageHeightIn };
   const p = PAPER[s.page] ?? PAPER.letter;
+  return { w: p.w / 96, h: p.h / 96 };
+}
+
+/** Effective page size in px (orientation applied). */
+export function pageSize(s: Pick<DocSettings, 'page' | 'landscape' | 'pageWidthIn' | 'pageHeightIn'>): { w: number; h: number } {
+  const p = s.page === 'custom' ? { w: s.pageWidthIn * 96, h: s.pageHeightIn * 96 } : (PAPER[s.page] ?? PAPER.letter);
   return s.landscape ? { w: p.h, h: p.w } : p;
 }
 
@@ -141,7 +173,9 @@ export function normalizeSettings(raw: Partial<DocSettings> | null | undefined):
   }
   if (finite(source.sizePt, 6, 72)) merged.sizePt = source.sizePt;
   if (finite(source.lineHeight, 1, 3)) merged.lineHeight = source.lineHeight;
-  if (oneOf(source.page, ['letter', 'a4', 'legal', 'b5'])) merged.page = source.page;
+  if (oneOf(source.page, PAPER_NAMES)) merged.page = source.page;
+  if (finite(source.pageWidthIn, 2, 30)) merged.pageWidthIn = source.pageWidthIn;
+  if (finite(source.pageHeightIn, 2, 30)) merged.pageHeightIn = source.pageHeightIn;
   if (typeof source.landscape === 'boolean') merged.landscape = source.landscape;
   for (const field of ['marginTop', 'marginRight', 'marginBottom', 'marginLeft'] as const) {
     if (finite(source[field], 0, 3)) merged[field] = source[field];
@@ -151,6 +185,8 @@ export function normalizeSettings(raw: Partial<DocSettings> | null | undefined):
   if (typeof source.numberEquations === 'boolean') merged.numberEquations = source.numberEquations;
   if (typeof source.numberSections === 'boolean') merged.numberSections = source.numberSections;
   if (oneOf(source.citationStyle, ['ieee', 'apa', 'chicago-author-date'])) merged.citationStyle = source.citationStyle;
+  if (oneOf(source.footnoteNumbering, FOOTNOTE_NUMBERINGS)) merged.footnoteNumbering = source.footnoteNumbering;
+  if (oneOf(source.footnoteSeparator, FOOTNOTE_SEPARATORS)) merged.footnoteSeparator = source.footnoteSeparator;
   if (typeof source.pageNumShow === 'boolean') merged.pageNumShow = source.pageNumShow;
   if (oneOf(source.pageNumFormat, ['1', '— 1 —', 'i', '1 / 1'])) merged.pageNumFormat = source.pageNumFormat;
   if (oneOf(source.pageNumAlign, ['left', 'center', 'right'])) merged.pageNumAlign = source.pageNumAlign;
@@ -201,6 +237,8 @@ export function applySettings(state: EditorState) {
   root.setProperty('--half-leading', `${(((s.lineHeight - parityMetrics(s.font).extent) / 2) * bodyPx).toFixed(4)}px`);
   root.setProperty('--code-line', `${(code.lineEm * bodyPx).toFixed(4)}px`);
   root.setProperty('--fn-top-inset', `${(footnoteFrameInsetsEm(s).top * bodyPx).toFixed(4)}px`);
+  root.setProperty('--fn-sep-width', s.footnoteSeparator === 'full' ? '100%' : '30%');
+  root.setProperty('--fn-sep-display', s.footnoteSeparator === 'none' ? 'none' : 'block');
   root.setProperty('--fn-line', `${((parityMetrics(s.font).extent + FN_LEADING_EM) * FN_SCALE * bodyPx).toFixed(4)}px`);
   root.setProperty('--code-pad', `${(code.padTopEm * bodyPx).toFixed(4)}px`);
   root.setProperty('--code-mb', `${(code.marginBottomEm * bodyPx).toFixed(4)}px`);
@@ -219,7 +257,9 @@ export function applySettings(state: EditorState) {
     styleEl.id = 'page-style';
     document.head.appendChild(styleEl);
   }
-  const cssSize = { letter: 'letter', a4: 'A4', legal: 'legal', b5: 'B5' }[s.page] ?? 'letter';
+  const named: Partial<Record<PaperName, string>> = { letter: 'letter', a4: 'A4', legal: 'legal', b5: 'B5', a5: 'A5' };
+  const inches = paperInches(s);
+  const cssSize = named[s.page] ?? `${inches.w}in ${inches.h}in`;
   styleEl.textContent = `@page { size: ${cssSize}${s.landscape ? ' landscape' : ''}; margin: ${s.marginTop}in ${s.marginRight}in ${s.marginBottom}in ${s.marginLeft}in; }`;
 }
 
@@ -384,7 +424,50 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   row('Paragraphs', select([['block', 'Block (spaced)'], ['indent', 'Indented (classic)']] as Array<[string, string]>, s.parIndent ? 'indent' : 'block', (v) => patch({ parIndent: v === 'indent' })));
   row('Line spacing', select([1.3, 1.4, 1.5, 1.65, 1.8].map((n) => [n, String(n)] as [number, string]), s.lineHeight, (v) => patch({ lineHeight: +v })));
   row('Citations', select(CITATION_STYLES as Array<[string, string]>, s.citationStyle, (v) => patch({ citationStyle: v as CitationStyle })));
-  row('Paper', select([['letter', 'US Letter'], ['a4', 'A4'], ['legal', 'US Legal'], ['b5', 'B5']] as Array<[string, string]>, s.page, (v) => patch({ page: v as DocSettings['page'] })));
+  const sizeCluster = document.createElement('span');
+  sizeCluster.className = 'settings-margins';
+  for (const [key, label] of [
+    ['pageWidthIn', 'W'],
+    ['pageHeightIn', 'H'],
+  ] as Array<['pageWidthIn' | 'pageHeightIn', string]>) {
+    const wrap = document.createElement('label');
+    wrap.className = 'settings-margin-field';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.step = '0.05';
+    input.min = '2';
+    input.max = '30';
+    input.value = String(s[key]);
+    input.addEventListener('change', () => {
+      const v = Math.min(30, Math.max(2, parseFloat(input.value) || DEFAULT_SETTINGS[key]));
+      input.value = String(v);
+      patch({ [key]: v } as Partial<DocSettings>);
+    });
+    wrap.append(label, input);
+    sizeCluster.appendChild(wrap);
+  }
+  row(
+    'Paper',
+    select(
+      [
+        ['letter', 'US Letter'],
+        ['a4', 'A4'],
+        ['legal', 'US Legal'],
+        ['b5', 'B5'],
+        ['a5', 'A5'],
+        ['half-letter', 'Half letter (5.5 × 8.5 in)'],
+        ['custom', 'Custom…'],
+      ] as Array<[string, string]>,
+      s.page,
+      (v) => {
+        sizeRow.hidden = v !== 'custom';
+        patch({ page: v as PaperName });
+      },
+    ),
+  );
+  row('Custom size (in)', sizeCluster);
+  const sizeRow = sizeCluster.closest('label') as HTMLElement;
+  sizeRow.hidden = s.page !== 'custom';
   row('Orientation', select([['portrait', 'Portrait'], ['landscape', 'Landscape']] as Array<[string, string]>, s.landscape ? 'landscape' : 'portrait', (v) => patch({ landscape: v === 'landscape' })));
   {
     const cluster = document.createElement('span');
@@ -434,6 +517,22 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
     ),
   );
   row('First page number', select([1, 2, 3, 4, 5, 10, 100].map((n) => [n, String(n)] as [number, string]), s.pageNumStart, (v) => patch({ pageNumStart: +v })));
+  row(
+    'Footnote numbers',
+    select(
+      [['1', '1, 2, 3'], ['a', 'a, b, c'], ['i', 'i, ii, iii'], ['*', '*, †, ‡']] as Array<[string, string]>,
+      s.footnoteNumbering,
+      (v) => patch({ footnoteNumbering: v as FootnoteNumbering }),
+    ),
+  );
+  row(
+    'Footnote rule',
+    select(
+      [['rule', 'Short rule'], ['full', 'Full width'], ['none', 'None']] as Array<[string, string]>,
+      s.footnoteSeparator,
+      (v) => patch({ footnoteSeparator: v as FootnoteSeparator }),
+    ),
+  );
 
   const macrosBtn = document.createElement('button');
   macrosBtn.type = 'button';

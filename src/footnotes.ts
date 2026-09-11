@@ -4,7 +4,43 @@
 // positions the body (style attributes on .fn-body are presentation, not
 // content). Numbering is painted by the numbering plugin.
 
+const FOOTNOTE_SYMBOLS = ['*', '†', '‡', '§', '¶', '‖'];
+
+/** The marker Typst prints for footnote `n` under a numbering pattern
+ *  (`numbering("1" | "a" | "i" | "*", n)`): symbols cycle through six and
+ *  repeat (7 → "**"); letters run a–z then aa, ab, … */
+export function footnoteLabel(n: number, style: FootnoteNumbering): string {
+  if (style === '*') {
+    const sym = FOOTNOTE_SYMBOLS[(n - 1) % 6];
+    return sym.repeat(Math.floor((n - 1) / 6) + 1);
+  }
+  if (style === 'a') {
+    let out = '';
+    let k = n;
+    while (k > 0) {
+      k -= 1;
+      out = String.fromCharCode(97 + (k % 26)) + out;
+      k = Math.floor(k / 26);
+    }
+    return out;
+  }
+  if (style === 'i') {
+    const table: Array<[number, string]> = [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']];
+    let out = '';
+    let k = n;
+    for (const [v, r] of table) {
+      while (k >= v) {
+        out += r;
+        k -= v;
+      }
+    }
+    return out;
+  }
+  return String(n);
+}
+
 import { Plugin, TextSelection, type Command } from 'prosemirror-state';
+import type { FootnoteNumbering } from './settings';
 import type { EditorView, NodeView, ViewMutationRecord } from 'prosemirror-view';
 import type { Node as PMNode, ResolvedPos } from 'prosemirror-model';
 import { InputRule } from 'prosemirror-inputrules';

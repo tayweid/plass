@@ -41,8 +41,8 @@ export function footnoteSeparatorHeightPx(): number {
  * `Insertions::push_footnote_separator` (flow/compose.rs), which is called
  * exactly once per page/region that carries any footnotes.
  */
-export function footnoteHeadReservePx(bodyPx: number): number {
-  return FOOTNOTE_CLEARANCE_EM * bodyPx + footnoteSeparatorHeightPx();
+export function footnoteHeadReservePx(bodyPx: number, separatorPx = footnoteSeparatorHeightPx()): number {
+  return FOOTNOTE_CLEARANCE_EM * bodyPx + separatorPx;
 }
 
 /**
@@ -65,9 +65,9 @@ export function footnoteEntryCost(heightPx: number, bodyPx: number): number {
  * Zero when there are no entries — Typst reserves nothing on a page with no
  * footnotes.
  */
-export function footnoteAreaHeight(heights: readonly number[], bodyPx: number): number {
+export function footnoteAreaHeight(heights: readonly number[], bodyPx: number, separatorPx = footnoteSeparatorHeightPx()): number {
   if (heights.length === 0) return 0;
-  let total = footnoteHeadReservePx(bodyPx);
+  let total = footnoteHeadReservePx(bodyPx, separatorPx);
   for (const h of heights) total += footnoteEntryCost(h, bodyPx);
   return total;
 }
@@ -83,11 +83,12 @@ export function footnotePositions(
   heights: readonly number[],
   bodyPx: number,
   bottomEdgeY: number,
+  separatorPx = footnoteSeparatorHeightPx(),
 ): { separatorTop: number; entryTops: number[] } {
-  const total = footnoteAreaHeight(heights, bodyPx);
+  const total = footnoteAreaHeight(heights, bodyPx, separatorPx);
   let y = bottomEdgeY - total + FOOTNOTE_CLEARANCE_EM * bodyPx;
   const separatorTop = y;
-  y += footnoteSeparatorHeightPx();
+  y += separatorPx;
   const entryTops: number[] = [];
   for (const h of heights) {
     y += FOOTNOTE_GAP_EM * bodyPx;
@@ -172,9 +173,9 @@ export function footnoteEntryFit(
   availablePx: number,
   pageHasFootnotes: boolean,
   bodyPx: number,
-  opts: { lineHeightPx?: number; leadingPx?: number } = {},
+  opts: { lineHeightPx?: number; leadingPx?: number; separatorPx?: number } = {},
 ): FootnoteFitResult {
-  const separatorNeed = pageHasFootnotes ? 0 : footnoteHeadReservePx(bodyPx);
+  const separatorNeed = pageHasFootnotes ? 0 : footnoteHeadReservePx(bodyPx, opts.separatorPx);
   const pod = availablePx - separatorNeed - FOOTNOTE_GAP_EM * bodyPx;
   if (fits(pod, entryHeightPx)) return { fragment: entryHeightPx, remainder: 0, empty: false };
 
@@ -258,17 +259,19 @@ export function settleFootnoteCarry(
   carry: readonly FootnoteCarryItem[],
   contentPx: number,
   bodyPx: number,
+  separatorPx = footnoteSeparatorHeightPx(),
 ): FootnoteCarrySettlement {
   if (carry.length === 0) return { placed: [], carry: [] };
   const placed: number[] = [];
   const rest = carry.slice();
   // The carrying page always pays the separator head once, up front.
-  let used = footnoteHeadReservePx(bodyPx);
+  let used = footnoteHeadReservePx(bodyPx, separatorPx);
   while (rest.length > 0) {
     const item = rest[0];
     const fit = footnoteEntryFit(item.heightPx, contentPx - used, true, bodyPx, {
       lineHeightPx: item.lineHeightPx,
       leadingPx: item.leadingPx,
+      separatorPx,
     });
     // Nothing at all fits: the whole item (and everything behind it) waits.
     if (fit.empty) break;

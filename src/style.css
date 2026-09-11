@@ -1511,7 +1511,8 @@ body {
      top; the separator's bottom is the gap above that frame. */
   top: calc(-0.5pt - var(--doc-size) * 0.5 + var(--fn-top-inset, 0px));
   left: 0;
-  width: 30%;
+  width: var(--fn-sep-width, 30%);
+  display: var(--fn-sep-display, block);
   border-top: 0.5pt solid #1a1a1a;
 }
 

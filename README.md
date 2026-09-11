@@ -278,7 +278,7 @@ rails can always be finished in Typst itself, because the file is Typst.
 - **Document settings** (⚙ in the toolbar): font (New Computer Modern — the
   TeX face — is the sole certified public choice, with the same family and
   styles feeding live layout and PDF export), size, line spacing,
-  paper (US Letter/A4), margins, hyphenation, equation numbering, **section
+  paper (US Letter, A4, Legal, B5, A5, half letter, or a custom size), margins, footnote numbering and rule, hyphenation, equation numbering, **section
   numbering** ("1.2"-style painted on headings; headings then become
   `@sec:` targets in the picker, auto-labeled on first reference and
   exported as `= Title <label>` + `#set heading(numbering: "1.1")`), **page
