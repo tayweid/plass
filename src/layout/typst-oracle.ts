@@ -562,8 +562,13 @@ export function matchParagraph(
     if (more && !brokeWithHyphen) {
       if (ti === lineStartTi) return fail('empty line inside paragraph');
       const prev = tokens[ti - 1];
-      // Hard breaks cut by themselves — no forced break needed.
-      if (prev.kind !== 'hard') breaks.push({ at: prev.end, hyphen: false });
+      // Hard breaks cut by themselves — no forced break needed. The hard
+      // token is consumed at the start of the NEXT line's walk, so at this
+      // boundary it is the token ahead, not the one behind: a break
+      // recorded here would sit on the hard break and the partition would
+      // refuse the whole paragraph (compiled verification lost).
+      const next = tokens[ti];
+      if (prev.kind !== 'hard' && !(next && next.kind === 'hard')) breaks.push({ at: prev.end, hyphen: false });
     }
     li++;
     if (!more) break;

@@ -83,3 +83,26 @@ const footnoteResolver: AtomResolver = (child) => {
   const res = matchParagraph(spec, lines, 0);
   check('without glueLeft the same line is (correctly) rejected, not silently patched over', res.status === 'fail');
 }
+
+{
+  // A hard break ends its line by itself: the compiled break list must not
+  // record a break at the hard token, or the partition refuses the whole
+  // paragraph and compiled verification is lost for it.
+  const node = schema.nodes.paragraph.create(null, [
+    schema.text('Hard break here'),
+    schema.nodes.hard_break.create(),
+    schema.text('after the break the committee reconvened after lunch'),
+  ]);
+  const spec = buildSpec(node, (() => null) as unknown as AtomResolver)!;
+  const lines: SvgLine[] = [
+    { text: 'Hard break here', y: 0 },
+    { text: 'after the break the committee', y: 25 },
+    { text: 'reconvened after lunch', y: 50 },
+  ];
+  const res = matchParagraph(spec, lines, 0);
+  check('hard-break paragraph matches', res.status === 'ok');
+  const breaks = res.status === 'ok' ? res.entry.breaks!.map((b) => b.at) : [];
+  const hardAt = 'Hard break here'.length;
+  check('no compiled break sits on the hard break', !breaks.includes(hardAt) && !breaks.includes(hardAt + 1));
+  check('the soft break after the hard break is recorded', breaks.length === 1 && breaks[0] === hardAt + 1 + 'after the break the committee'.length);
+}

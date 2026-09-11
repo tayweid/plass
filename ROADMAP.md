@@ -256,18 +256,19 @@ Deferred on purpose: PAGE-PORT Phase 6, multiple columns, offline PWA.
   under our control: the layout should measure one probe run against the
   port's shaped width at startup and, on a mismatch, declare the exact
   path uncertified (fall back, say so) rather than lay out wrong lines.
-- **Compiled line-break verification skips hard-break and dash paragraphs.**
-  The compiled oracle's forced breaks fail to partition blocks containing
-  `hard_break` nodes or en/em dashes (`layoutAuthoritative` returns null) and
-  the port stands in — correct output, but those paragraphs never get
-  compiled verification. Surfaced when the sanitizer regression was fixed
-  (the text layer was stripped 2026-08-16 → 2026-08-19, blinding every
-  oracle); likely an offset mapping issue in `typst-oracle.ts` matching.
-- **Fallback paginator moves list items whole.** `container()` in
-  `typeset-plugin.ts` breaks lists between children only; while the page
-  oracle is pending (or failed) a long bullet crossing a page boundary
-  leaves a gap, and a bullet taller than one page gets no break at all.
-  Teach it the same line-boundary splitting `paragraph()` does.
+- ~~Compiled line-break verification skips hard-break and dash paragraphs~~
+  — checked 2026-09-11: dash paragraphs verify and agree with the port
+  (the compare hook lists nothing for them). Hard-break paragraphs did
+  fail: the matcher recorded a compiled break AT the hard break (the hard
+  token is consumed at the start of the next line's walk, so the guard
+  looked at the wrong token), the partition refused the paragraph, and
+  the port stood in unverified. Fixed in `matchParagraph`; a paragraph
+  with two hard breaks now verifies like any other.
+- ~~Fallback paginator moves list items whole~~ — checked 2026-09-11:
+  already done. `container()` in `typeset-plugin.ts` breaks inside a list
+  item's paragraphs with the bullet as the owner of the first block, and
+  tests/list-pagination.spec.ts covers a long bullet breaking inside itself
+  and a marker never stranded above the break.
 
 ## Not on this roadmap
 
