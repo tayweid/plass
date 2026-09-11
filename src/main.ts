@@ -553,6 +553,11 @@ if (import.meta.env.DEV) {
   // The source view (tests/source-view.spec.ts) and the demo document it
   // round-trips, through the app's own instances.
   (window as unknown as { __sourceView: typeof sourceView }).__sourceView = sourceView;
+  // The library bibliography (tests/library-bib.spec.ts): point it at an
+  // OPFS file, or a snapshot, through the app's own module instance.
+  void import('./library-bib').then((lib) => {
+    (window as unknown as { __library: typeof lib }).__library = lib;
+  });
   (window as unknown as { __loadDemo: () => void }).__loadDemo = () => fileManager.newDoc(demoDoc(), 'Demo');
   // Compiler worker counters (tests/layout-suspend.spec.ts proves a
   // suspended editor posts no compiler task). The dynamic import resolves

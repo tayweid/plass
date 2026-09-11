@@ -244,6 +244,12 @@ rails can always be finished in Typst itself, because the file is Typst.
   matching the PDF — and a generated References block lists cited works in
   order, renumbering as citations move. Typed `@key ` auto-converts when the
   key is in the bibliography; clicking a citation jumps to the references.
+  A **library** (Bib → Library…) is a `.bib` outside any document — your
+  whole reference collection — whose entries the `@` picker offers beside
+  the document's own, marked `lib`. Citing one copies that single entry
+  into the document's bibliography, so documents stay self-contained and
+  carry exactly what they cite; the library file is re-read when it
+  changes on disk.
 - **Numbered equations & references**: display equations are numbered
   automatically and renumber live as you add/reorder them. Give an equation a
   label in its popover, then type `@` in text to open the reference picker —

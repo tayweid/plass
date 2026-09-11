@@ -10,7 +10,9 @@
 import { Plugin, TextSelection, type EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { schema } from './schema';
-import { citeOrder, getBib } from './citations';
+import { citeOrder, getBib, type DocBib } from './citations';
+import type { BibEntry } from './bibtex';
+import { libraryEntries, libraryEntry, mergeEntryIntoBib, onLibraryChange, refreshLibrary } from './library-bib';
 import { bibAuthors, isPortableCitationKey } from './bibtex';
 import { getSettings } from './settings';
 
@@ -89,17 +91,20 @@ function collectLabels(state: EditorState): LabelEntry[] {
   });
   // Bibliography entries: cite by key, searchable by author/title too.
   const order = citeOrder(state.doc);
+  const inDoc = new Set<string>();
+  const preview = (e: BibEntry) => `${bibAuthors(e)}${e.fields.year ? ` (${e.fields.year})` : ''} ${e.fields.title ?? ''}`.trim().slice(0, 44);
   for (const e of getBib(state)) {
     // Preserve non-portable entries in the bibliography source, but do not
     // offer keys that cannot be represented safely in @key/Typst syntax.
     if (!isPortableCitationKey(e.key)) continue;
+    inDoc.add(e.key);
     const n = order.get(e.key);
-    out.push({
-      label: e.key,
-      display: n ? `[${n}]` : '[·]',
-      preview: `${bibAuthors(e)}${e.fields.year ? ` (${e.fields.year})` : ''} ${e.fields.title ?? ''}`.trim().slice(0, 44),
-      kind: 'cite',
-    });
+    out.push({ label: e.key, display: n ? `[${n}]` : '[·]', preview: preview(e), kind: 'cite' });
+  }
+  // Library entries not yet in the document: citing one copies it in.
+  for (const e of libraryEntries()) {
+    if (inDoc.has(e.key) || !isPortableCitationKey(e.key)) continue;
+    out.push({ label: e.key, display: 'lib', preview: preview(e), kind: 'cite' });
   }
   return out;
 }
@@ -147,6 +152,12 @@ export function refAutocomplete() {
       if (h && h.type === schema.nodes.heading) tr = tr.setNodeMarkup(hp, undefined, { ...h.attrs, label });
     }
     if (kind === 'cite') {
+      // Merge-on-cite: a library entry the document lacks is copied into
+      // its embedded bibliography, so the document stays self-contained.
+      if (!getBib(view.state).some((e) => e.key === label)) {
+        const entry = libraryEntry(label);
+        if (entry) tr = tr.setDocAttribute('bib', mergeEntryIntoBib(view.state.doc.attrs.bib as DocBib | null, entry));
+      }
       let hasBib = false;
       tr.doc.descendants((n) => {
         if (n.type.name === 'bibliography') hasBib = true;
@@ -168,6 +179,8 @@ export function refAutocomplete() {
       return;
     }
     active = found;
+    // The library is read lazily, when the picker opens; a change re-renders.
+    void refreshLibrary();
 
     const all = collectLabels(state);
     const q = found.query.toLowerCase();
@@ -279,6 +292,9 @@ export function refAutocomplete() {
 
   return new Plugin({
     view: (view) => {
+      const unsubscribe = onLibraryChange(() => {
+        if (active) render(view);
+      });
       const onBlur = () => close();
       const onScroll = () => {
         if (menu) close();
@@ -288,6 +304,7 @@ export function refAutocomplete() {
       return {
         update: (v) => render(v),
         destroy: () => {
+          unsubscribe();
           view.dom.removeEventListener('blur', onBlur);
           document.getElementById('scroll')?.removeEventListener('scroll', onScroll);
           close();

@@ -8,6 +8,7 @@ import { Decoration, DecorationSet, type EditorView, type NodeView } from 'prose
 import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
 import { parseBibTeX, bibAuthors, bibVenue, isPortableCitationKey, type BibEntry } from './bibtex';
+import { chooseLibrary, forgetLibrary, libraryStatus, requestLibraryPermission } from './library-bib';
 import { INPUT_LIMITS, InputLimitError, readBoundedText, textSizeError } from './input-limits';
 import { mountTypstSvg } from './safe-svg';
 
@@ -341,6 +342,8 @@ export function editBibliography(view: EditorView, message: (m: string) => void 
       <div class="bib-editor-foot">
         <span class="bib-editor-hint">Stored inside the document · <kbd>⌘Enter</kbd> save · <kbd>Esc</kbd> cancel</span>
         <span class="bib-editor-actions">
+          <button type="button" class="bib-library" title="An app-level .bib whose entries the @ picker offers; citing one copies that entry into this document">Library…</button>
+          <button type="button" class="bib-library-forget" title="Stop offering the library's entries" hidden>Forget library</button>
           <button type="button" class="bib-import">Import .bib…</button>
           <button type="button" class="bib-dl">Download .bib</button>
           <button type="button" class="bib-cancel">Cancel</button>
@@ -372,6 +375,43 @@ export function editBibliography(view: EditorView, message: (m: string) => void 
     });
     input.click();
   });
+
+  // The library: a .bib outside any document, offered in the @ picker.
+  const libraryButton = overlay.querySelector('.bib-library') as HTMLButtonElement;
+  const forgetButton = overlay.querySelector('.bib-library-forget') as HTMLButtonElement;
+  const showLibrary = async () => {
+    const status = await libraryStatus();
+    if (!status) {
+      libraryButton.textContent = 'Library…';
+      forgetButton.hidden = true;
+      return;
+    }
+    libraryButton.textContent = status.needsPermission
+      ? `Library: ${status.name} — click to reconnect`
+      : `Library: ${status.name} (${status.count})`;
+    forgetButton.hidden = false;
+  };
+  libraryButton.addEventListener('click', async () => {
+    try {
+      const status = await libraryStatus();
+      if (status?.needsPermission) {
+        if (await requestLibraryPermission()) message(`Library reconnected — ${status.name}`);
+      } else {
+        const name = await chooseLibrary();
+        if (name) message(`Library set — ${name}; its entries appear in the @ picker`);
+      }
+    } catch (error) {
+      console.warn('Could not set the library', error);
+      message('Could not read that bibliography');
+    }
+    void showLibrary();
+  });
+  forgetButton.addEventListener('click', async () => {
+    await forgetLibrary();
+    message('Library forgotten');
+    void showLibrary();
+  });
+  void showLibrary();
 
   const updateCount = () => {
     if (textSizeError(text.value, INPUT_LIMITS.bibliographyBytes, 'Bibliography')) {

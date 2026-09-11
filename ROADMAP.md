@@ -113,18 +113,19 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
 
 ## Citations (worked plan)
 
-1. **Library bib — external location, merge-on-cite.** A persistent
-   app-level "library" bibliography pointing at a user-selected external
-   `.bib`. The @-picker searches doc bib ∪ library; citing a
-   library-only key copies **that one entry** into the document's
-   embedded bib — documents stay self-contained and carry exactly their
-   cited subset. (Rejected alternative: importing the whole library into
-   each document — works today via Document → Bib → Import .bib, but
-   embeds a stale snapshot per paper.) Storage: persist the file handle in
-   IndexedDB like recents (or reuse the project-folder machinery) and re-read
-   it on change like referenced figures. When a library's citation keys map
-   to local PDF filenames, picker/reference entries could optionally link to
-   those files. This pairs naturally with item 2 in the same code area.
+1. ~~Library bib — external location, merge-on-cite~~ — done 2026-09-11
+   (`src/library-bib.ts`). Bib → **Library…** points Plass at a `.bib`;
+   the file handle is persisted in the shared IndexedDB store
+   (`kv-store.ts`, the same store as recents) and re-read when the file's
+   modification time changes, checked when the @ picker opens. Where the
+   File System Access API is missing, the library is a one-time content
+   snapshot. The picker lists library entries the document lacks, marked
+   `lib`; citing one copies **that one entry's raw BibTeX** into the
+   document's embedded bib (`mergeEntryIntoBib`), creating the
+   bibliography if needed — documents stay self-contained and carry
+   exactly their cited subset. Forgetting the library leaves every
+   document whole. Not done: linking picker entries to local PDFs when
+   keys match filenames.
 
 2. **Citation styles — minimal TS port, oracle-verified.** The
    line-breaker pattern, not a CSL engine: hand-write per-style

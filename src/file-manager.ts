@@ -12,6 +12,7 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { docToTyp } from './typ-serializer';
+import { kvGet as idbGet, kvSet as idbSet } from './kv-store';
 import { holdOpenFile, openInAnotherWindow } from './open-files';
 import { typToDoc } from './typ-parser';
 import { INPUT_LIMITS, inputSizeError, readBoundedText } from './input-limits';
@@ -1004,38 +1005,7 @@ export class FileManager {
   }
 }
 
-// ---------- IndexedDB (file handles are structured-cloneable) ----------
-
-const DB_NAME = 'typeset-files';
-const STORE = 'kv';
-
-function db(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function idbGet(key: string): Promise<unknown> {
-  const d = await db();
-  return new Promise((resolve, reject) => {
-    const req = d.transaction(STORE).objectStore(STORE).get(key);
-    req.onsuccess = () => resolve(req.result ?? null);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function idbSet(key: string, value: unknown): Promise<void> {
-  const d = await db();
-  return new Promise((resolve, reject) => {
-    const tx = d.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put(value, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
+// ---------- recents (persisted in the shared kv-store) ----------
 
 async function addRecent(handle: FileSystemFileHandle, fileName: string, dir: FileSystemDirectoryHandle | null = null) {
   try {
