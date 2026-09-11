@@ -343,11 +343,13 @@ test('a table grows under the keyboard and lets the caret out at its edges', asy
     return $from.depth === 1 && $from.index(0) === 0 && $from.parent.type.name === 'paragraph';
   })).toBe(true);
   // The docked controls never cover the document: the fixed bar ends above
-  // where the page starts (in document coordinates — the test has scrolled).
+  // where the page starts when unscrolled (the document scrolls inside
+  // #scroll, and the test has scrolled it).
   const covers = await page.evaluate(() => {
     const bar = document.querySelector('.native-table-toolbar')!.getBoundingClientRect();
     const page1 = document.querySelector('.ProseMirror')!.getBoundingClientRect();
-    return bar.bottom > page1.top + window.scrollY + 1;
+    const scrolled = (document.getElementById('scroll')?.scrollTop ?? 0) + window.scrollY;
+    return bar.bottom > page1.top + scrolled + 1;
   });
   expect(covers).toBe(false);
 });
