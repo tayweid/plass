@@ -26,7 +26,6 @@ import { DEFAULT_SETTINGS, type DocSettings } from './settings';
 export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offsets?: number[]): string {
   let out: string[] = [];
   const footnotes: string[] = [];
-  let frontmatterLength = 0;
 
   // ---------- frontmatter ----------
   {
@@ -46,7 +45,6 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       warn('document settings (page, font, numbering) are not stored in Markdown — save as .typ to keep them');
     }
     if (fm.length) out.push(`---\n${fm.join('\n')}\n---`);
-    frontmatterLength = out.length ? out[0].length : 0;
   }
 
   const esc = (text: string): string =>
