@@ -284,7 +284,7 @@ test('a table grows under the keyboard and lets the caret out at its edges', asy
     window.view.focus();
   });
   await page.keyboard.press('End');
-  await page.keyboard.press('Meta+Alt+t');
+  await page.keyboard.press('ControlOrMeta+Alt+t');
   await expect(page.locator('.ProseMirror table')).toHaveCount(1);
   // The caret is in the first (empty) header cell.
   await page.keyboard.type('Name');
@@ -397,7 +397,7 @@ test('the Rule control cycles a row rule that paints in the page and exports at 
     window.view.focus();
   });
   await page.keyboard.press('End');
-  await page.keyboard.press('Meta+Alt+t');
+  await page.keyboard.press('ControlOrMeta+Alt+t');
   await expect(page.locator('.ProseMirror table')).toHaveCount(1);
   await page.keyboard.type('H');
   await page.keyboard.press('Enter'); // row 2
