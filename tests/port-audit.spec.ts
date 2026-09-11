@@ -25,7 +25,7 @@ interface PortAuditReport {
     firstDiff: { firstDiffPage: number; cause: string; localStart: unknown; exactStart: unknown } | null;
   };
   blocks: Array<{ pos: number; type: string; text: string; status: string; port?: string; typst?: string; authority?: string | null; reason?: string }>;
-  summary: { blocks: number; match: number; mismatch: number; typstFail: number; noPort: number; pagesAgree: boolean };
+  summary: { blocks: number; match: number; mismatch: number; typstFail: number; noPort: number; browserMismatch: number; pagesAgree: boolean };
 }
 
 declare global {
@@ -134,6 +134,27 @@ FIXTURES.push(
 );
 
 FIXTURES.push({
+  name: 'headings.md',
+  text: [
+    '# A first-level heading long enough to wrap onto a second line of the page at the default size',
+    '',
+    FILLER.repeat(2).trimEnd(),
+    '',
+    '## A second-level heading that also runs long enough to need a second line, and perhaps a third one too',
+    '',
+    FILLER.repeat(2).trimEnd(),
+    '',
+    '### Third level: the algorithm evaluates a complete paragraph and preserves globally optimal line endings',
+    '',
+    FILLER.repeat(3).trimEnd(),
+    '',
+    '## Hyphenation candidates: extraordinarily uncharacteristically straightforward internationalization',
+    '',
+    FILLER.repeat(2).trimEnd(),
+    '',
+  ].join('\n'),
+});
+FIXTURES.push({
   name: 'table-bare.md',
   text: ['| Item | Value |', '| --- | --- |', ...Array.from({ length: TABLE_ROWS - 1 }, (_, i) => `| Row ${i + 1} | ${i + 1} |`), ''].join('\n'),
 });
@@ -204,11 +225,11 @@ async function openText(page: Page, name: string, text: string) {
 function describe(report: PortAuditReport): string {
   const s = report.summary;
   const lines = [
-    `blocks ${s.blocks}: match ${s.match}, mismatch ${s.mismatch}, typst-fail ${s.typstFail}, no-port ${s.noPort}` +
+    `blocks ${s.blocks}: match ${s.match}, mismatch ${s.mismatch}, browser-mismatch ${s.browserMismatch}, typst-fail ${s.typstFail}, no-port ${s.noPort}` +
       ` | pages local ${report.pages.localCount} typst ${report.typst.pageCount} ${s.pagesAgree ? 'agree' : 'DIFFER'}` +
       ` | compile ${Math.round(report.compileMs)} ms, analyze ${Math.round(report.analyzeMs)} ms`,
   ];
-  for (const b of report.blocks.filter((b) => b.status === 'mismatch' || b.status === 'typst-fail' || b.status === 'no-port')) {
+  for (const b of report.blocks.filter((b) => b.status === 'mismatch' || b.status === 'browser-mismatch' || b.status === 'typst-fail' || b.status === 'no-port')) {
     lines.push(`  ${b.status.padEnd(10)} ${b.type}@${b.pos} "${b.text}"` + (b.reason ? ` — ${b.reason}` : b.port ? ` port ${b.port} typst ${b.typst}` : ''));
   }
   if (!s.pagesAgree) {
@@ -233,6 +254,7 @@ for (const doc of docs) {
     console.log(`AUDIT ${doc.path}\n${describe(report!)}`);
     if (!target) {
       expect(report!.summary.mismatch, 'port breaks differ from Typst').toBe(0);
+      expect(report!.summary.browserMismatch, 'browser-laid breaks differ from Typst').toBe(0);
       expect(report!.summary.typstFail, 'blocks Typst could not be matched to').toBe(0);
       expect(report!.summary.pagesAgree, 'page starts differ from Typst').toBe(true);
     }

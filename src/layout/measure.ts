@@ -83,13 +83,13 @@ export class Measurer {
     this.measurementStats = { rangeReads: 0, probePopulations: 0 };
   }
 
-  /** Opaque measurement-context key for text carrying the given marks. */
-  fontFor(marks: readonly Mark[]): string {
-    return marks
-      .map((m) => m.type.name)
-      .filter((n) => MARK_TAG[n])
-      .sort()
-      .join(',');
+  /** Opaque measurement-context key for text carrying the given marks.
+   *  `base` 'bold': the block's unmarked text is bold (a heading), measured
+   *  in the same face `<strong>` selects. */
+  fontFor(marks: readonly Mark[], base: 'regular' | 'bold' = 'regular'): string {
+    const names = marks.map((m) => m.type.name).filter((n) => MARK_TAG[n]);
+    if (base === 'bold' && !names.includes('strong')) names.push('strong');
+    return names.sort().join(',');
   }
 
   /**

@@ -88,8 +88,16 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
         frame to frame) was short by 6.8 px above and 8.5 px below;
         `--table-mt/--table-mb` carry it, and the margin-top is dropped at a
         page top like every weak spacing (the bare 45-row table).
-   - Open: headings are browser-laid (ragged, no port breaks) — the audit
-     reports them as `no-port`; a wrapped heading is unmeasured.
+   - Done 2026-09-11: headings. Typst justifies and hyphenates a heading
+     with the document's paragraph settings, bold at the level's size; the
+     editor wrapped them ragged, and a second-level heading took three
+     lines where Typst needed two. The port lays headings out now (bold
+     base face, level scale), measured in the bold face for justification.
+     The audit reads a browser-laid block's painted breaks back from the
+     DOM (`browser-match`/`browser-mismatch`), so nothing is unmeasured.
+     Open, small: a *numbered* heading keeps browser layout (its painted
+     section number is not in the port's text); it shows in the audit as
+     `browser-mismatch` if it wraps differently.
    - Open, smaller: multi-paragraph footnotes flatten; tight/loose list
      spacing normalizes; a `.typ` save has no home for the Markdown-only
      carry (frontmatter extras) and drops it silently.

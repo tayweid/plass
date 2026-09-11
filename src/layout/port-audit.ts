@@ -17,9 +17,11 @@ export interface BlockAudit {
   /** `match`/`mismatch`: the port's breaks against Typst's. `typst-fail`:
    * Typst's text could not be matched to the block at all (a text
    * shorthand the document does not mirror, usually). `no-port`: the block
-   * has no port layout to compare (fallback path). `rows`: a table, checked
-   * only through its page starts. */
-  status: 'match' | 'mismatch' | 'typst-fail' | 'no-port' | 'rows';
+   * has no port layout to compare (fallback path). `browser-match`/
+   * `browser-mismatch`: the block is browser-laid (headings), and its
+   * painted line breaks were read back from the DOM. `rows`: a table,
+   * checked only through its page starts. */
+  status: 'match' | 'mismatch' | 'typst-fail' | 'no-port' | 'browser-match' | 'browser-mismatch' | 'rows';
   port?: string;
   typst?: string;
   authority?: string | null;
@@ -44,6 +46,7 @@ export interface PortAuditReport {
     mismatch: number;
     typstFail: number;
     noPort: number;
+    browserMismatch: number;
     pagesAgree: boolean;
   };
 }
@@ -75,6 +78,9 @@ export function buildPortAudit(args: {
   typst: SvgAudit;
   local: { starts: PageStartEntry[]; count: number };
   entryFor: (node: PMNode) => BlockLayoutEntry | undefined;
+  /** The painted line breaks of a browser-laid textblock (no port entry),
+   * as a break signature, or null when they cannot be read. */
+  domBreaksFor?: (node: PMNode, pos: number) => string | null;
   compileMs: number;
   analyzeMs: number;
 }): PortAuditReport {
@@ -89,7 +95,11 @@ export function buildPortAudit(args: {
     const typstSig = forcedBreakSignature(u.breaks);
     const portSig = entry?.breakSignature ?? null;
     const authority = entry?.authority ?? null;
-    if (portSig == null) return { ...base, status: 'no-port', typst: typstSig, authority };
+    if (portSig == null) {
+      const dom = node ? args.domBreaksFor?.(node, u.pos) ?? null : null;
+      if (dom == null) return { ...base, status: 'no-port', typst: typstSig, authority };
+      return { ...base, status: dom === typstSig ? 'browser-match' : 'browser-mismatch', port: dom, typst: typstSig, authority: 'browser' };
+    }
     return { ...base, status: portSig === typstSig ? 'match' : 'mismatch', port: portSig, typst: typstSig, authority };
   });
   const typstStarts: PageStartEntry[] = typst.pageStarts.map((ps) => ({ pos: ps.pos, line: ps.line, unit: ps.unit }));
@@ -110,10 +120,11 @@ export function buildPortAudit(args: {
     blocks,
     summary: {
       blocks: blocks.length,
-      match: count('match'),
+      match: count('match') + count('browser-match'),
       mismatch: count('mismatch'),
       typstFail: count('typst-fail'),
       noPort: count('no-port'),
+      browserMismatch: count('browser-mismatch'),
       pagesAgree: agree,
     },
   };

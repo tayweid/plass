@@ -41,7 +41,7 @@ import { loadPrimitives, primitives } from './layout/primitives';
 import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdict } from './environment-check';
 import type { PageOracle } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
-import { escapeTyp, expandMacrosWith, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
+import { escapeTyp, expandMacrosWith, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
 import {
   containerPageTopDropEm,
   footnoteEmptyFrameAction,
@@ -960,7 +960,7 @@ class TypesetView {
     const font = effectiveFont(settings.font);
     const resolveAtom = font.exact ? this.atomResolver() : null;
     const settingsSig = blockLayoutSettingsKey(settings);
-    type LiveBlockKind = 'body' | 'caption' | 'footnote';
+    type LiveBlockKind = 'body' | 'caption' | 'footnote' | 'heading';
     const blocks: Array<{ node: PMNode; pos: number; kind: LiveBlockKind }> = [];
     const addBlock = (node: PMNode, pos: number, kind: LiveBlockKind) => {
       if (!blocks.some((block) => block.pos === pos && block.kind === kind)) blocks.push({ node, pos, kind });
@@ -969,6 +969,10 @@ class TypesetView {
       if (node.type.name === 'table') return false;
       if (node.type.name === 'paragraph') {
         addBlock(node, pos, 'body');
+        return false;
+      }
+      if (node.type.name === 'heading') {
+        addBlock(node, pos, 'heading');
         return false;
       }
       if (node.type.name === 'figure') {
@@ -1052,22 +1056,29 @@ class TypesetView {
           : b.kind === 'footnote'
             ? (fnNums.get(b.node) ?? 1)
             : 0;
-      const extra: { firstLineIndent?: number; scale?: number } =
+      const level = b.kind === 'heading' ? (b.node.attrs.level as number) || 1 : 0;
+      const extra: { firstLineIndent?: number; scale?: number; baseStyle?: 'bold' } =
         b.kind === 'caption'
           ? { firstLineIndent: prefixes!.captionIndent(number) }
           : b.kind === 'footnote'
             ? { firstLineIndent: prefixes!.footnoteIndent(number), scale: prefixes!.footnoteScale }
-            : settings.parIndent && consecutiveParagraph(state.doc, b.pos)
-              ? { firstLineIndent: 1.5 * this.bodyPx() }
-              : {};
+            : b.kind === 'heading'
+              ? { scale: headingScale(level), baseStyle: 'bold' }
+              : settings.parIndent && consecutiveParagraph(state.doc, b.pos)
+                ? { firstLineIndent: 1.5 * this.bodyPx() }
+                : {};
       const keyTag =
         b.kind === 'caption'
           ? `cap${number}`
           : b.kind === 'footnote'
             ? `fn${number}`
-            : paragraphKeyTag(settings, state.doc, b.pos);
+            : b.kind === 'heading'
+              ? `h${Math.min(3, level)}`
+              : paragraphKeyTag(settings, state.doc, b.pos);
       const el = this.view.nodeDOM(b.pos);
       if (!(el instanceof HTMLElement)) continue;
+      // A numbered heading keeps browser layout (see dispatchDecos).
+      if (b.kind === 'heading' && el.dataset.secnum) continue;
       const target =
         b.kind === 'caption'
           ? el.querySelector('figcaption')
@@ -1075,7 +1086,7 @@ class TypesetView {
             ? el.querySelector('.fn-body')
             : el;
       if (!(target instanceof HTMLElement)) continue;
-      const measure = this.blockMeasure(target, b.kind === 'body');
+      const measure = this.blockMeasure(target, b.kind === 'body' || b.kind === 'heading');
       if (!(measure > 60)) continue;
       const atomWidth = makeAtomWidth(this.view, settings, b.pos);
       const spec = resolveAtom ? buildSpec(b.node, resolveAtom) : null;
@@ -1119,6 +1130,7 @@ class TypesetView {
             firstLineIndentPx: b.kind === 'caption' ? undefined : extra.firstLineIndent,
             prefixText: b.kind === 'caption' ? `Figure ${number}: ` : undefined,
             scale: extra.scale,
+            baseStyle: extra.baseStyle,
             atomWidthPt: this.typstAtomWidthPt(),
           });
           if (forced) {
@@ -2253,7 +2265,7 @@ class TypesetView {
       pos: number,
       measure: number,
       skind: SpecKind,
-      extra: { firstLineIndent?: number; scale?: number },
+      extra: { firstLineIndent?: number; scale?: number; baseStyle?: 'bold' },
       keyTag: string,
     ) => {
       // Aligned paragraphs keep browser layout (CSS text-align centers or
@@ -2310,6 +2322,7 @@ class TypesetView {
               firstLineIndentPx: skind.kind === 'caption' ? undefined : extra.firstLineIndent,
               prefixText: skind.kind === 'caption' ? `Figure ${skind.figNo}: ` : undefined,
               scale: extra.scale,
+              baseStyle: extra.baseStyle,
               atomWidthPt: this.typstAtomWidthPt(),
             });
             if (forced) {
@@ -2404,7 +2417,20 @@ class TypesetView {
         return false;
       }
       if (!node.isTextblock) return true;
-      // Only body paragraphs are justified; headings and code stay ragged.
+      if (node.type.name === 'heading' && node.content.size) {
+        // Typst justifies (and hyphenates) a heading with the document's
+        // paragraph settings, bold at the level's size: the port lays it
+        // out like a paragraph. A numbered heading keeps browser layout
+        // for now — its painted number is not in the port's text.
+        const el = this.view.nodeDOM(pos);
+        if (!(el instanceof HTMLElement) || el.dataset.secnum) return false;
+        const measure = this.blockMeasure(el, true, true);
+        if (!(measure > 60)) return false;
+        const level = (node.attrs.level as number) || 1;
+        layoutInto(node, pos, measure, { kind: 'body' }, { scale: headingScale(level), baseStyle: 'bold' }, `h${Math.min(3, level)}`);
+        return false;
+      }
+      // Code blocks stay ragged (Typst's raw block wraps nowhere).
       if (node.type.name !== 'paragraph') return false;
       if (node.content.size === 0) {
         handleFootnotes(node, pos);
@@ -2552,9 +2578,45 @@ class TypesetView {
       typst,
       local: { starts: this.anchorsToPageStartEntries(local.anchors), count: local.count },
       entryFor: (node) => this.cache.get(node),
+      domBreaksFor: (node, pos) => this.domBreakSignature(node, pos),
       compileMs,
       analyzeMs,
     });
+  }
+
+  /** The line breaks the browser painted for a text-only block (a heading),
+   * read back as the oracle's break signature: a break sits before each
+   * word that starts a new line box, at the end of the previous word. The
+   * browser never hyphenates, so a hyphenated Typst line can only mismatch. */
+  private domBreakSignature(node: PMNode, pos: number): string | null {
+    if (!node.isTextblock) return null;
+    let text = '';
+    node.forEach((child) => {
+      if (!child.isText) text = '\u0000';
+      else text += child.text ?? '';
+    });
+    if (text.includes('\u0000')) return null;
+    const el = this.view.nodeDOM(pos);
+    if (!(el instanceof HTMLElement)) return null;
+    const breaks: ForcedBreak[] = [];
+    let lastTop: number | null = null;
+    const re = /\S+/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      let coords: { top: number } | null = null;
+      try {
+        coords = this.view.coordsAtPos(pos + 1 + m.index, 1);
+      } catch {
+        return null;
+      }
+      if (lastTop !== null && Math.abs(coords.top - lastTop) > 2) {
+        let at = m.index;
+        while (at > 0 && /\s/.test(text[at - 1])) at--;
+        breaks.push({ at, hyphen: false });
+      }
+      lastTop = coords.top;
+    }
+    return forcedBreakSignature(breaks);
   }
 
   /**

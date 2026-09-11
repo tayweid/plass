@@ -38,8 +38,12 @@ export interface PortBreakOptions {
   /** Painted prefix width in px consumed at the start of line 1
    * (caption "Figure N: ", footnote marker). */
   firstLineIndentPx?: number;
-  /** Content em scale (0.85 for footnote bodies / captions). */
+  /** Content em scale (0.85 for footnote bodies / captions, a heading's
+   * size ratio). */
   scale?: number;
+  /** The face unmarked text takes: bold for headings (Typst's heading show
+   * rule sets the weight; marks compose on top of it). */
+  baseStyle?: 'regular' | 'bold';
   /** Typst-true atom width in pt (sidecar-shaped markers/citations);
    * null → fall back to the DOM px measurement. */
   atomWidthPt?: (offset: number, child: PMNode) => number | null;
@@ -77,10 +81,11 @@ interface Piece {
   origIdx: Uint32Array | null;
 }
 
-function styleFor(marks: Set<string>): keyof FontFaceKeys | 'mono' {
+function styleFor(marks: Set<string>, base: 'regular' | 'bold' = 'regular'): keyof FontFaceKeys | 'mono' {
   if (marks.has('code')) return 'mono';
-  if (marks.has('strong') && marks.has('em')) return 'bolditalic';
-  if (marks.has('strong')) return 'bold';
+  const bold = base === 'bold' || marks.has('strong');
+  if (bold && marks.has('em')) return 'bolditalic';
+  if (bold) return 'bold';
   if (marks.has('em')) return 'italic';
   return 'regular';
 }
@@ -115,7 +120,7 @@ export function portBreaks(
     if (bad) return;
     if (child.isText && child.text) {
       const marks = new Set(child.marks.map((m) => m.type.name));
-      const style = styleFor(marks);
+      const style = styleFor(marks, opts.baseStyle);
       const styleKey = style === 'mono' ? opts.monoFontKey : opts.fontKeys[style];
       const fontSize = style === 'mono' ? 0.8 * baseSize : baseSize;
       // Collapse space runs to one space: Typst markup collapses them, so

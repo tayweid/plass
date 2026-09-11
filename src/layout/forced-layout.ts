@@ -28,6 +28,8 @@ export interface ForcedLayoutOptions {
   firstLineIndent?: number;
   /** Text/hyphen em scale. Atoms and the painted prefix are already scaled. */
   scale?: number;
+  /** The face unmarked text takes (bold for headings). */
+  baseStyle?: 'regular' | 'bold';
 }
 
 interface TextRun {
@@ -185,7 +187,7 @@ export function layoutForcedBlock(
     if (invalid) return;
     if (child.isText && child.text) {
       const text = child.text;
-      const font = measurer.fontFor(child.marks);
+      const font = measurer.fontFor(child.marks, opts.baseStyle);
       const run: TextRun = { text, font, intervals: [], widths: [] };
       runs.push(run);
 
@@ -371,7 +373,7 @@ export function layoutForcedBlock(
     });
   }
 
-  const baseFont = measurer.fontFor([]);
+  const baseFont = measurer.fontFor([], opts.baseStyle);
   const baseSpace = measurer.spaceWidth(baseFont) * K;
   const eps = fitEps(K);
 

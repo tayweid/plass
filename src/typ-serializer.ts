@@ -132,6 +132,12 @@ export function tableMarginsEm(s: DocSettings): { top: number; bottom: number } 
   };
 }
 
+/** A heading level's text size as a ratio of the body size (levels 4–6
+ * print like 3). The port lays headings out at this scale, bold. */
+export function headingScale(level: number): number {
+  return HEADINGS[Math.min(3, Math.max(1, level)) - 1].hs;
+}
+
 // Heading scale mirrored from the editor CSS (.ProseMirror h1/h2/h3).
 // `shift` is a measured per-level baseline correction (em of body size):
 // Typst places heading baselines slightly lower than the metric model

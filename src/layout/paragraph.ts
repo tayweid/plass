@@ -116,6 +116,8 @@ export interface LayoutOptions {
   firstLineIndent?: number;
   /** Multiply text-measurement widths (content rendered at a smaller em). */
   scale?: number;
+  /** The face unmarked text takes (bold for headings). */
+  baseStyle?: 'regular' | 'bold';
   /** Inline atoms that flex to fill the line (raw Typst using `fr`). They
    *  contribute zero natural width, as in Typst, and take the slack. */
   isFill?: (child: PMNode) => boolean;
@@ -226,7 +228,7 @@ export function layoutBlock(
           });
         }
       }
-      plans.push({ kind: 'text', offset, font: measurer.fontFor(child.marks), text, segs, widths: [] });
+      plans.push({ kind: 'text', offset, font: measurer.fontFor(child.marks, opts.baseStyle), text, segs, widths: [] });
     } else if (child.type.name === 'hard_break') {
       plans.push({ kind: 'nodebreak', offset, size: child.nodeSize });
     } else {
@@ -332,7 +334,7 @@ export function layoutBlock(
   if (!items.some((i) => i.kp.type === 'box')) return [];
   pushEndOfSegment(block.content.size, block.content.size, 'end');
 
-  const baseFont = measurer.fontFor([]);
+  const baseFont = measurer.fontFor([], opts.baseStyle);
   const baseSpace = measurer.spaceWidth(baseFont) * K;
 
   let lines: Array<{ start: number; end: number }>;
