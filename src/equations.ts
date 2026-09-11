@@ -79,13 +79,13 @@ function build(doc: PMNode, numberEquations: boolean, numberSections: boolean): 
   let fig = 0;
   let fn = 0;
   let tab = 0;
-  const sec = [0, 0, 0];
+  const sec = [0, 0, 0, 0, 0, 0];
 
   doc.descendants((node, pos) => {
     if (node.type.name === 'heading' && numberSections) {
-      const level = Math.min(3, node.attrs.level as number);
+      const level = Math.min(6, node.attrs.level as number);
       sec[level - 1]++;
-      for (let i = level; i < 3; i++) sec[i] = 0;
+      for (let i = level; i < 6; i++) sec[i] = 0;
       const num = sec.slice(0, level).join('.');
       decos.push(Decoration.node(pos, pos + node.nodeSize, { 'data-secnum': num }));
       const label = node.attrs.label as string;

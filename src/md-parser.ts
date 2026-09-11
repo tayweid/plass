@@ -43,6 +43,7 @@ interface MdToken {
   info: string;
   children: MdToken[] | null;
   meta: { id?: number } | null;
+  map: [number, number] | null;
   attrGet(name: string): string | null;
   hidden: boolean;
 }
@@ -94,12 +95,30 @@ export function mdToDoc(src: string): MdImport {
     const out: string[] = [];
     const lines = src.split('\n');
     let fence: string | null = null;
+    // An HTML block (a comment, a <div>) is verbatim text: nothing in it
+    // is math or emphasis, and the island must come back byte for byte.
+    let html: 'comment' | 'block' | null = null;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const open = /^(```+|~~~+)/.exec(line);
       if (fence) {
         out.push(line);
         if (open && open[1].startsWith(fence[0]) && open[1].length >= fence.length) fence = null;
+        continue;
+      }
+      if (html) {
+        out.push(line);
+        if (html === 'comment' ? line.includes('-->') : line.trim() === '') html = null;
+        continue;
+      }
+      if (/^ {0,3}<!--/.test(line)) {
+        out.push(line);
+        if (!line.includes('-->')) html = 'comment';
+        continue;
+      }
+      if (/^ {0,3}<\/?[a-zA-Z][\w-]*(\s|>|\/>|$)/.test(line)) {
+        out.push(line);
+        html = 'block';
         continue;
       }
       if (open) {
@@ -141,15 +160,22 @@ export function mdToDoc(src: string): MdImport {
         continue;
       }
       // Inline math outside code spans: $x$ (no surrounding spaces inside).
+      // A run of three or more underscores (a blank to fill in, escaped
+      // or not) is text, not emphasis delimiters: escaped here so
+      // markdown-it keeps every underscore. The serializer escapes such
+      // runs on the way out. (`___bold italic___` is the one Markdown
+      // idiom this gives up; `***` says the same thing.)
       out.push(
         line
           .split(/(`[^`]*`)/)
           .map((seg, k) => {
             if (k % 2 === 1) return seg;
-            return seg.replace(/(?<!\\)\$(\S(?:[^$\n]*?\S)?)\$(?!\d)/g, (_, body: string) => {
-              inlineMath.push(body);
-              return `${S}M${inlineMath.length - 1}${S}`;
-            });
+            return seg
+              .replace(/(?<!\\)\$(\S(?:[^$\n]*?\S)?)\$(?!\d)/g, (_, body: string) => {
+                inlineMath.push(body);
+                return `${S}M${inlineMath.length - 1}${S}`;
+              })
+              .replace(/(?:\\?_){3,}/g, (run) => run.replace(/\\?_/g, '\\_'));
           })
           .join(''),
       );
@@ -295,8 +321,7 @@ export function mdToDoc(src: string): MdImport {
       if (closeType && t.type === closeType) return { nodes, next: i + 1 };
       switch (t.type) {
         case 'heading_open': {
-          const level = Math.min(3, +t.tag.slice(1));
-          if (+t.tag.slice(1) > 3) warnings.push(`h${t.tag.slice(1)} demoted to h3 (Plass has three levels)`);
+          const level = +t.tag.slice(1);
           const inline = tokens[i + 1];
           nodes.push(heading.create({ level }, parseInline(inline?.children ?? [])));
           i += 3;
@@ -392,10 +417,18 @@ export function mdToDoc(src: string): MdImport {
           i = table.next;
           break;
         }
-        case 'html_block':
-          nodes.push(code_block.create({ params: 'md-raw' }, [schema.text(t.content.replace(/\n$/, ''))]));
+        case 'html_block': {
+          // Which sides had no blank line, so the save keeps the file's
+          // spacing (`# Title` directly over its editorial comment).
+          const prev = tokens.slice(0, i).reverse().find((k) => k.map)?.map;
+          const next = tokens.slice(i + 1).find((k) => k.map)?.map;
+          const before = !!t.map && !!prev && prev[1] === t.map[0];
+          const after = !!t.map && !!next && next[0] === t.map[1];
+          const tight = before && after ? 'both' : before ? 'before' : after ? 'after' : '';
+          nodes.push(code_block.create({ params: 'md-raw', tight }, [schema.text(t.content.replace(/\n$/, ''))]));
           i++;
           break;
+        }
         case 'footnote_block_open': {
           // Definitions were consumed in the pre-pass.
           let d = 1;

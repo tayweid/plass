@@ -500,7 +500,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     }
 
     // heading (with optional trailing <label>)
-    m = /^(={1,3})\s+(.*)$/.exec(t);
+    m = /^(={1,6})\s+(.*)$/.exec(t);
     if (m && t === line.trimEnd()) {
       let text = m[2];
       let label = '';
@@ -699,7 +699,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     const para: string[] = [];
     while (i < n) {
       const pt = lines[i].trim();
-      if (!pt || /^(```|={1,3} |[-+] |#)/.test(pt)) break;
+      if (!pt || /^(```|={1,6} |[-+] |#)/.test(pt)) break;
       para.push(lines[i++]);
     }
     out.push(schema.nodes.paragraph.create(null, parseParagraph(para)));
@@ -938,7 +938,7 @@ function parseTableCellContent(content: string): PMNode[] | null {
   for (const chunk of chunks) {
     const lines = chunk.split('\n');
     const first = lines[0]?.trim() ?? '';
-    if (/^(?:```|={1,3}\s|[-+]\s|#(?:pagebreak|line|quote|align|block)\b)/.test(first)) return null;
+    if (/^(?:```|={1,6}\s|[-+]\s|#(?:pagebreak|line|quote|align|block)\b)/.test(first)) return null;
     if (
       first === '// typeset:empty-table-paragraph' &&
       lines.slice(1).every((line) => !line.trim() || line.trim() === '~')

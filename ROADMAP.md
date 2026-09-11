@@ -27,12 +27,18 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      printed glyph, and a straight quote in the document exports escaped
      (`\"`) so it prints straight. Apostrophe paragraphs now get compiled
      verification. English quote set only (no language setting yet).
-   - Open, smaller: h4–h6 demote to h3 (level lost on save); inline HTML
-     stays visible text and is dash-normalized (an inline hidden island
-     would fix it); an image's `"title"` is dropped; multi-paragraph
-     footnotes flatten; tight/loose list spacing normalizes; a `.typ` save
-     has no home for the Markdown-only carry (frontmatter extras, hidden
-     blocks) and drops it silently.
+   - Done 2026-09-11: headings 4–6 are real levels (they print like level
+     3, so the calibrated metrics hold; numbering goes six deep); a run of
+     underscores (a blank to fill in) is text, not emphasis, in and out;
+     `[a note]` stays bare, brackets escape only where they would read as
+     a link, footnote, or citation; a comment's spacing against its
+     neighbours (`# Title` directly over `<!-- … -->`) is recorded on the
+     island and written back.
+   - Open, smaller: inline HTML stays visible text and is dash-normalized
+     (an inline island would fix it); an image's `"title"` is dropped;
+     multi-paragraph footnotes flatten; tight/loose list spacing
+     normalizes; a `.typ` save has no home for the Markdown-only carry
+     (frontmatter extras) and drops it silently.
    - *Corpus baseline (474 files, parser round trip only, no editor):*
      29 byte-identical, 43 differ only in trailing whitespace, 402 change.
      By first difference: 317 hard-wrapped paragraphs re-flowed to one
@@ -130,9 +136,8 @@ the push is ordered by what those files hit, not by feature size:
       so files stay diff-friendly, or accept the one-time reflow and say
       so once per file. Decide; the corpus says this is the most common
       rewrite by far.
-   c. *Headings 4–6* as real levels (Typst renders them; the schema caps
-      at 3). *Bracket escaping* only where a bracket would read as a link.
-      *Inline HTML* as an inert inline island. *Image titles.*
+   c. ~~Headings 4–6, bracket escaping~~ — done. Still open: *inline
+      HTML* as an inert inline island; *image titles*.
    d. Exit for the whole item: `scripts/md-corpus.ts` reports the
       course-notes folder byte-identical except for the decided
       normalizations, and `MD_FILE=… npx playwright test

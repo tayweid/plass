@@ -40,13 +40,13 @@ function collectLabels(state: EditorState): LabelEntry[] {
   let eq = 0;
   let fig = 0;
   let tab = 0;
-  const sec = [0, 0, 0];
+  const sec = [0, 0, 0, 0, 0, 0];
   state.doc.descendants((node, pos) => {
     if (node.type.name === 'heading') {
       if (!numberSections) return true;
-      const level = Math.min(3, node.attrs.level as number);
+      const level = Math.min(6, node.attrs.level as number);
       sec[level - 1]++;
-      for (let i = level; i < 3; i++) sec[i] = 0;
+      for (let i = level; i < 6; i++) sec[i] = 0;
       const num = sec.slice(0, level).join('.');
       let label = node.attrs.label as string;
       let assignPos: number | undefined;

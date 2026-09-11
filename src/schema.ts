@@ -369,15 +369,25 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
   // print as one in the PDF, so page and print agree and nothing is hidden.
   .update('code_block', {
     ...base.spec.nodes.get('code_block')!,
-    attrs: { params: { default: '' } },
+    // `tight` (md-raw islands only): which sides had no blank line in the
+    // .md file — '', 'before', 'after', 'both' — so the save reproduces
+    // the file's own spacing around a comment. Never rendered.
+    attrs: { params: { default: '' }, tight: { default: '' } },
     parseDOM: [
       {
         tag: 'pre',
         preserveWhitespace: 'full',
-        getAttrs: (el) => ({ params: (el as HTMLElement).getAttribute('data-params') ?? '' }),
+        getAttrs: (el) => ({
+          params: (el as HTMLElement).getAttribute('data-params') ?? '',
+          tight: (el as HTMLElement).getAttribute('data-tight') ?? '',
+        }),
       },
     ],
-    toDOM: (node) => ['pre', { 'data-params': (node.attrs.params as string) || null }, ['code', 0]],
+    toDOM: (node) => [
+      'pre',
+      { 'data-params': (node.attrs.params as string) || null, 'data-tight': (node.attrs.tight as string) || null },
+      ['code', 0],
+    ],
   })
   .addToEnd('math_inline', mathInline)
   .addToEnd('typst_inline', typstInline)

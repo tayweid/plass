@@ -1039,7 +1039,10 @@ body {
    collapse: page-gap spacers then insert exactly their own height. */
 .ProseMirror h1,
 .ProseMirror h2,
-.ProseMirror h3 {
+.ProseMirror h3,
+.ProseMirror h4,
+.ProseMirror h5,
+.ProseMirror h6 {
   font-weight: 600;
   line-height: 1.25;
   margin: 0 0 0.5em;
@@ -1054,7 +1057,10 @@ body {
 /* Section numbers, painted by the numbering plugin. */
 .ProseMirror h1[data-secnum]::before,
 .ProseMirror h2[data-secnum]::before,
-.ProseMirror h3[data-secnum]::before {
+.ProseMirror h3[data-secnum]::before,
+.ProseMirror h4[data-secnum]::before,
+.ProseMirror h5[data-secnum]::before,
+.ProseMirror h6[data-secnum]::before {
   content: attr(data-secnum) '\2002';
   user-select: none;
   -webkit-user-select: none;
@@ -1064,7 +1070,12 @@ body {
   font-size: 1.4em;
 }
 
-.ProseMirror h3 {
+/* Levels 4–6 are level 3's box, in the page and in the print (the export
+   gives them level 3's show rules); only the level number differs. */
+.ProseMirror h3,
+.ProseMirror h4,
+.ProseMirror h5,
+.ProseMirror h6 {
   font-size: 1.15em;
 }
 

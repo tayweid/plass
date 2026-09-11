@@ -247,6 +247,50 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount,
   check('critic marks survive as text', out.includes('{++an insertion++}') && out.includes('~~a strike~~'), out);
 }
 
+// Heading levels 4–6 are real levels: kept on import, written back.
+{
+  const md = '#### Four\n\n##### Five\n\n###### Six\n';
+  const { doc, warnings } = mdToDoc(md);
+  const levels: number[] = [];
+  doc.forEach((n) => levels.push(n.attrs.level as number));
+  check('h4–h6 keep their level', JSON.stringify(levels) === '[4,5,6]' && warnings.length === 0, JSON.stringify([levels, warnings]));
+  check('h4–h6 round-trip', docToMd(doc) === md, docToMd(doc));
+}
+
+// Fill-in blanks, brackets, and a comment's spacing come back as written.
+{
+  const blank = 'Between \\_________\\_ and \\_________\\_ per unit.\n';
+  const { doc } = mdToDoc(blank);
+  check('an underscore run is text, not emphasis', doc.firstChild!.textContent === 'Between __________ and __________ per unit.', JSON.stringify(doc.firstChild!.textContent));
+  const out = docToMd(doc);
+  check('an underscore run round-trips through escapes', mdToDoc(out).doc.firstChild!.textContent === doc.firstChild!.textContent && docToMd(mdToDoc(out).doc) === out, out);
+  check('a bracketed note stays bare', docToMd(mdToDoc('[To be developed] and a [b] c\n').doc) === '[To be developed] and a [b] c\n', docToMd(mdToDoc('[To be developed] and a [b] c\n').doc));
+  {
+    // Literal text that only looks like a link or footnote reference stays
+    // text through a save and a reload.
+    const lit = 'x \\[a\\](b) and \\[^n] here\n';
+    const out = docToMd(mdToDoc(lit).doc);
+    const again = mdToDoc(out).doc;
+    let links = 0;
+    let notes = 0;
+    again.descendants((n) => {
+      if (n.type.name === 'footnote') notes++;
+      if (n.isText && n.marks.some((m) => m.type.name === 'link')) links++;
+      return true;
+    });
+    check('a would-be link or footnote stays literal text', links === 0 && notes === 0 && again.textContent === 'x [a](b) and [^n] here' && docToMd(again) === out, out);
+  }
+  const tight = '# Title\n<!-- from extract: filed by hand -->\n\nBody.\n\n<!-- ED: note -->\nNext para.\n';
+  const t = mdToDoc(tight).doc;
+  check('island spacing is recorded', t.child(1).attrs.tight === 'before' && t.child(3).attrs.tight === 'after', JSON.stringify([t.child(1).attrs.tight, t.child(3).attrs.tight]));
+  check('island spacing round-trips byte for byte', docToMd(t) === tight, docToMd(t));
+  const offsets: number[] = [];
+  const md = docToMd(t, () => {}, offsets);
+  check('offsets follow tight joins', md.slice(offsets[1], offsets[1] + 4) === '<!--' && md.slice(offsets[4], offsets[4] + 4) === 'Next', JSON.stringify(offsets));
+  const inComment = 'Para.\n\n<!-- keep ___ and $x$ and *stars* verbatim -->\n';
+  check('nothing inside an HTML block is touched', docToMd(mdToDoc(inComment).doc) === inComment, docToMd(mdToDoc(inComment).doc));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

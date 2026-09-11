@@ -124,12 +124,12 @@ export function parSpacingEm(s: DocSettings): number {
  * this value can never drift apart). Exported for `flow-rules.ts`'s
  * region-top spacing-drop rule.
  */
-export function headingBlockSpacingEm(s: DocSettings, level: 1 | 2 | 3): { above: number; below: number } {
+export function headingBlockSpacingEm(s: DocSettings, level: number): { above: number; below: number } {
   const m = parityMetrics(s.font);
   const lh = s.lineHeight;
   const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
   const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
-  const h = HEADINGS[level - 1];
+  const h = HEADINGS[Math.min(3, level) - 1];
   const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
   const hSlackBelow = (h.hs * (1.25 + m.cssD - m.cssA)) / 2;
   const above = pSlackBelow + 0.9 + h.padTop * h.hs + hSlackAbove - (m.typDesc + m.typAsc * h.hs) - h.shift;
@@ -162,11 +162,14 @@ export function parityRules(s: DocSettings): string {
   if (s.parIndent) out += `#set par(first-line-indent: 1.5em)\n`;
   out += `#set list(spacing: ${pt(lh + 0.25 - m.extent)})\n`;
   out += `#set enum(spacing: ${pt(lh + 0.25 - m.extent)})\n`;
-  for (const h of HEADINGS) {
-    const { above, below } = headingBlockSpacingEm(s, h.level as 1 | 2 | 3);
-    out += `#show heading.where(level: ${h.level}): set text(size: ${pt(h.hs)})\n`;
-    out += `#show heading.where(level: ${h.level}): set block(above: ${pt(above)}, below: ${pt(below)})\n`;
-    out += `#show heading.where(level: ${h.level}): set par(leading: ${pt((1.25 - m.extent) * h.hs)})\n`;
+  // Levels 4–6 print like level 3 (the editor styles them the same), so
+  // the metrics calibrated for three levels hold for six.
+  for (let level = 1; level <= 6; level++) {
+    const h = HEADINGS[Math.min(3, level) - 1];
+    const { above, below } = headingBlockSpacingEm(s, level);
+    out += `#show heading.where(level: ${level}): set text(size: ${pt(h.hs)})\n`;
+    out += `#show heading.where(level: ${level}): set block(above: ${pt(above)}, below: ${pt(below)})\n`;
+    out += `#show heading.where(level: ${level}): set par(leading: ${pt((1.25 - m.extent) * h.hs)})\n`;
   }
   // Inline raw: pin Typst's defaults so editor code spans (same font file,
   // same ratio) have identical advance widths.

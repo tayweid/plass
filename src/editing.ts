@@ -52,8 +52,8 @@ export function buildInputRules(): Plugin {
     // No emDash rule: Typst's dash shorthands (-- en, --- em) are applied
     // by collapseSpaces' normalizer — the stock rule maps -- to an em dash
     // and makes typing --- impossible.
-    // # / ## / ### headings
-    textblockTypeInputRule(/^(#{1,3})\s$/, schema.nodes.heading, (m) => ({ level: m[1].length })),
+    // # … ###### headings (levels 4–6 print like level 3)
+    textblockTypeInputRule(/^(#{1,6})\s$/, schema.nodes.heading, (m) => ({ level: m[1].length })),
     // > blockquote
     wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote),
     // - or * bullet list
@@ -232,6 +232,9 @@ export function buildKeymap(): Plugin {
     'Mod-Alt-1': setBlockType(schema.nodes.heading, { level: 1 }),
     'Mod-Alt-2': setBlockType(schema.nodes.heading, { level: 2 }),
     'Mod-Alt-3': setBlockType(schema.nodes.heading, { level: 3 }),
+    'Mod-Alt-4': setBlockType(schema.nodes.heading, { level: 4 }),
+    'Mod-Alt-5': setBlockType(schema.nodes.heading, { level: 5 }),
+    'Mod-Alt-6': setBlockType(schema.nodes.heading, { level: 6 }),
     'Ctrl->': wrapIn(schema.nodes.blockquote),
     'Enter': chainCommands(exitFootnote, exitFigure, exitFrontMatter, splitListItem(schema.nodes.list_item)),
     'Mod-Alt-f': insertFootnote,

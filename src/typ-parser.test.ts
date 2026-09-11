@@ -588,6 +588,16 @@ function firstDiff(a: string, b: string): string {
   check('bold math round-trip is idempotent', once === twice, firstDiff(once, twice));
 }
 
+// --- 19b. heading levels 4–6 ---
+{
+  const src = '==== Four\n\n====== Six\n';
+  const { doc } = typToDoc(src);
+  check('deep headings keep their level', doc.child(0).attrs.level === 4 && doc.child(1).attrs.level === 6, JSON.stringify([doc.child(0).attrs.level, doc.child(1).attrs.level]));
+  const out = docToTyp(doc);
+  check('deep headings export with their level', out.includes('\n==== Four\n') && out.includes('\n====== Six\n'), out);
+  check('deep headings get show rules like level 3', out.includes('#show heading.where(level: 4): set text(size: 14.375pt)') && out.includes('#show heading.where(level: 6): set text(size: 14.375pt)'), out.slice(0, 900));
+}
+
 // --- 20. raw islands: a multi-line call survives a blank line inside it ---
 {
   const src = 'Intro.\n\n#grid(\n  columns: 2,\n  [first para\n\n  second para],\n  [b],\n)\n\nAfter.\n';

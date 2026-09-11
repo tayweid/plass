@@ -24,7 +24,7 @@ import { DEFAULT_SETTINGS, type DocSettings } from './settings';
  *  follows them. Block-level caret mapping for the source view
  *  (SOURCE-VIEW.md, decision 5). */
 export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offsets?: number[]): string {
-  const out: string[] = [];
+  let out: string[] = [];
   const footnotes: string[] = [];
   let frontmatterLength = 0;
 
@@ -51,11 +51,19 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
 
   const esc = (text: string): string =>
     text
-      .replace(/([\\`*[\]$])/g, '\\$1')
+      .replace(/([\\`*$])/g, '\\$1')
+      // Brackets only where they would read as a link, reference, footnote
+      // or citation: `[note]` alone is text and stays readable.
+      .replace(/\[(?=[@^])/g, '\\[')
+      .replace(/\](?=[([])/g, '\\]')
       // A literal ~~ run would read back as strikethrough.
       .replace(/~(?=~)/g, '\\~')
-      .replace(/(^|\s)_/g, '$1\\_')
-      .replace(/_(?=\s|$)/g, '\\_');
+      // Underscores: every one in a run of two or more (a blank to fill in
+      // would otherwise be read as emphasis delimiters), and a lone one at
+      // a word boundary; snake_case stays bare.
+      .replace(/_{2,}/g, (run) => run.replace(/_/g, '\\_'))
+      .replace(/(^|\s)_(?!\\)/g, '$1\\_')
+      .replace(/(?<!\\)_(?=\s|$)/g, '\\_');
 
   const inline = (node: PMNode): string => {
     let md = '';
@@ -242,31 +250,38 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     }
   };
 
-  // Chunks join with a blank line between them; a block's offset is where
-  // its chunk starts in that joined text — counted the same way the final
-  // join lays it out, so the two cannot drift.
-  const blockChunks: string[] = [];
+  // Chunks join with a blank line between them — one newline where a
+  // Markdown island was tight against its neighbour in the file. A block's
+  // offset is where its chunk starts in that joined text, counted the same
+  // way the final join lays it out, so the two cannot drift.
+  const blockChunks: Array<{ text: string; sepBefore: string }> = [];
+  let prevTightAfter = false;
   doc.forEach((node) => {
     const text = block(node);
-    blockChunks.push(text);
-    if (text) out.push(text);
+    const island = node.type.name === 'code_block' && node.attrs.params === 'md-raw';
+    const tight = island ? (node.attrs.tight as string) : '';
+    const tightBefore = tight === 'before' || tight === 'both';
+    blockChunks.push({ text, sepBefore: tightBefore || prevTightAfter ? '\n' : '\n\n' });
+    prevTightAfter = island && (tight === 'after' || tight === 'both');
   });
-  if (offsets) {
-    offsets.length = 0;
-    // Replay the join: the frontmatter chunk (if any) comes first and
-    // belongs to no block; every emitted chunk after the first is preceded
-    // by the two-character separator.
-    let pos = frontmatterLength;
-    let emitted = frontmatterLength > 0;
-    for (const chunk of blockChunks) {
-      const start = emitted ? pos + 2 : pos;
-      offsets.push(start);
-      if (chunk) {
-        pos = start + chunk.length;
-        emitted = true;
-      }
+  let body = out.join('\n\n');
+  let pos = body.length;
+  let emitted = body.length > 0;
+  const starts: number[] = [];
+  for (const chunk of blockChunks) {
+    const start = emitted ? pos + chunk.sepBefore.length : pos;
+    starts.push(start);
+    if (chunk.text) {
+      body += (emitted ? chunk.sepBefore : '') + chunk.text;
+      pos = start + chunk.text.length;
+      emitted = true;
     }
   }
+  if (offsets) {
+    offsets.length = 0;
+    offsets.push(...starts);
+  }
+  out = [body];
 
   if (footnotes.length) {
     out.push(footnotes.map((f, i) => `[^${i + 1}]: ${f}`).join('\n'));

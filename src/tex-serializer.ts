@@ -240,7 +240,9 @@ function blockToTex(node: PMNode, s: DocSettings): string {
       return t + '\n\n';
     }
     case 'heading': {
-      const cmd = ['\\section', '\\subsection', '\\subsubsection'][Math.min(3, node.attrs.level as number) - 1];
+      const cmd = ['\\section', '\\subsection', '\\subsubsection', '\\paragraph', '\\subparagraph', '\\subparagraph'][
+        Math.min(6, node.attrs.level as number) - 1
+      ];
       const star = s.numberSections ? '' : '*';
       const label = node.attrs.label ? `\\label{${node.attrs.label}}` : '';
       return `${cmd}${star}{${inlineToTex(node)}}${label}\n\n`;
