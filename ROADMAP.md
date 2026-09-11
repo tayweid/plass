@@ -127,8 +127,20 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
    document whole. Not done: linking picker entries to local PDFs when
    keys match filenames.
 
-2. **Citation styles — minimal TS port, oracle-verified.** The
-   line-breaker pattern, not a CSL engine: hand-write per-style
+2. ~~Citation styles — minimal TS port, oracle-verified~~ — done
+   2026-09-11 (`src/citation-styles.ts`). Settings → Citations offers
+   IEEE (numeric) and APA (author–year); the style rides on the
+   `#bibliography(... style:)` line and imports back (an unported style
+   falls back to IEEE). The APA formatter reproduces what hayagriva
+   printed for the probed cases — `(Knuth & Plass, 1981)`, `et al.` from
+   three, corporate names whole, particles dropped, editors as fallback,
+   `n.d.`, `a`/`b` suffixes — and the References compile now also
+   renders every citation on a marked line; a compiled string that
+   differs from the formatter's is logged and painted in its place
+   (`__citationOracle` in dev). Chicago author-date was probed (no
+   comma, "and", editors by full name) and is not offered yet. The
+   original plan follows for the record.
+   The line-breaker pattern, not a CSL engine: hand-write per-style
    formatters in TS and offer ONLY ported styles in a document-settings
    dropdown. IEEE numeric is the existing first-use counter in
    `citations.ts`; author-year is ~150–250 lines (BibTeX name parsing —

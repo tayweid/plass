@@ -11,6 +11,7 @@ import { RAW_FONT, codeBlockMetricsEm, effectiveFont, parityMetrics } from './fo
 import { TABLE_DENSITY_INSET_PT, type TableDensity } from './table-density';
 import { rowRuleArg, type RowRule } from './table-rules';
 import { CELL_FILL_TYPST, type CellFill } from './table-fills';
+import type { CitationStyle } from './citation-styles';
 
 export interface TypExportOptions {
   /** When given, receives the text offset at which each top-level block's
@@ -722,7 +723,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
       // Embedded inline so the .typ stays self-contained (bytes() source).
       const bib = docBib;
       if (!bib?.content) return '';
-      return indent + `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "ieee")\n\n`;
+      return indent + `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "${docCitationStyle}")\n\n`;
     }
     case 'page_break':
       return indent + '#pagebreak()\n\n';
@@ -751,6 +752,7 @@ function containsMath(doc: PMNode): boolean {
 
 let docNumFormat = '1';
 let emitNumberEquations = true;
+let docCitationStyle: CitationStyle = 'ieee';
 let unnumberedEqLabels = new Set<string>();
 
 export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
@@ -798,6 +800,7 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     out += parityRules(s);
     out += textSetLine(s, opts.fontFallback);
     emitNumberEquations = s.numberEquations;
+    docCitationStyle = s.citationStyle;
     if (s.numberEquations) out += '#set math.equation(numbering: "(1)")\n';
     if (s.numberSections) out += '#set heading(numbering: "1.1")\n';
     if (s.pageNumStart !== 1) out += `#counter(page).update(${s.pageNumStart})\n`;

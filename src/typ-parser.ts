@@ -32,7 +32,7 @@ let importBib: { name: string; content: string } | null = null;
 let importBibKeys = new Set<string>();
 let preserveImportBibLine = false;
 
-const BIB_LINE = /^#bibliography\(bytes\((".*")\)(?:,\s*title:\s*"[^"]*")?(?:,\s*style:\s*"[^"]*")?\)$/;
+const BIB_LINE = /^#bibliography\(bytes\((".*")\)(?:,\s*title:\s*"[^"]*")?(?:,\s*style:\s*"([^"]*)")?\)$/;
 
 export function typToDoc(src: string): TypImport {
   const warnings: string[] = [];
@@ -56,6 +56,9 @@ export function typToDoc(src: string): TypImport {
         if (sizeError) throw new Error(sizeError);
         importBib = { name: 'references.bib', content };
         importBibKeys = new Set(parseBibTeX(content).map((e) => e.key));
+        // The citation style is a document setting; only ported styles
+        // are offered, anything else falls back to the default.
+        if (m[2] === 'apa' || m[2] === 'ieee') settings.citationStyle = m[2];
       } catch (error) {
         warnings.push(
           error instanceof Error && error.message.includes("Plass's")

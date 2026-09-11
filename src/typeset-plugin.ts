@@ -58,7 +58,7 @@ import {
   type StickyState,
 } from './layout/flow-rules';
 import { FONT_FALLBACK } from './pdf';
-import { citeOrder } from './citations';
+import { citationLabelMap } from './citations';
 import { eqKey } from './equations';
 import { getInk, inkKey } from './math-ink';
 import { parseTypstSvg } from './safe-svg';
@@ -2007,7 +2007,7 @@ class TypesetView {
     const s = getSettings(state);
     const font = effectiveFont(s.font);
     const regularKey = font.portKeys.regular;
-    let order: Map<string, number> | null = null;
+    let citeLabels: Map<string, string> | undefined;
     let labels: Map<string, string> | null = null;
     let fnNums: WeakMap<PMNode, number> | null = null;
     const upem = prim.upem(regularKey);
@@ -2019,8 +2019,8 @@ class TypesetView {
     return (_offset, child) => {
       switch (child.type.name) {
         case 'citation': {
-          order ??= citeOrder(state.doc);
-          return shapeW('[' + (order.get(child.attrs.key as string) ?? '?') + ']', s.sizePt);
+          citeLabels ??= citationLabelMap(state);
+          return shapeW(citeLabels.get(child.attrs.key as string) ?? '[?]', s.sizePt);
         }
         case 'eq_ref': {
           labels ??= eqKey.getState(state)?.labels ?? new Map<string, string>();
@@ -2072,7 +2072,7 @@ class TypesetView {
     // Citation order and footnote numbering are whole-document walks; a
     // live pass over an atom-free paragraph must not pay for them, so both
     // resolve lazily on the first atom that needs them.
-    let order: Map<string, number> | null = null;
+    let citeLabels: Map<string, string> | undefined;
     let fnNums: Map<PMNode, number> | null = null;
     const footnoteNums = () => {
       if (!fnNums) {
@@ -2113,8 +2113,8 @@ class TypesetView {
           return { markup: `#raw(${JSON.stringify(src)})`, text: src };
         }
         case 'citation': {
-          order ??= citeOrder(state.doc);
-          const t = `[${order.get(child.attrs.key as string) ?? '?'}]`;
+          citeLabels ??= citationLabelMap(state);
+          const t = citeLabels.get(child.attrs.key as string) ?? '[?]';
           return { markup: escapeTyp(t), text: t };
         }
         case 'eq_ref': {

@@ -8,6 +8,7 @@ import type { EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 import { DEFAULT_FONT, cssFontStack, effectiveFont, parityMetrics, selectableFonts, codeBlockMetricsEm } from './font-registry';
+import { CITATION_STYLES, type CitationStyle } from './citation-styles';
 
 export interface DocSettings {
   font: string;
@@ -35,6 +36,9 @@ export interface DocSettings {
   headerFirstPage: boolean;
   /** One definition per line: \name = expansion (KaTeX macros). */
   mathMacros: string;
+  /** Citation style: a ported formatter, verified against the compiler
+   *  (citation-styles.ts). Exported as `style:` on #bibliography. */
+  citationStyle: CitationStyle;
 }
 
 export const DEFAULT_SETTINGS: DocSettings = {
@@ -58,6 +62,7 @@ export const DEFAULT_SETTINGS: DocSettings = {
   headerText: '',
   headerAlign: 'right',
   headerFirstPage: false,
+  citationStyle: 'ieee',
   mathMacros: '',
 };
 
@@ -145,6 +150,7 @@ export function normalizeSettings(raw: Partial<DocSettings> | null | undefined):
   if (typeof source.parIndent === 'boolean') merged.parIndent = source.parIndent;
   if (typeof source.numberEquations === 'boolean') merged.numberEquations = source.numberEquations;
   if (typeof source.numberSections === 'boolean') merged.numberSections = source.numberSections;
+  if (oneOf(source.citationStyle, ['ieee', 'apa'])) merged.citationStyle = source.citationStyle;
   if (typeof source.pageNumShow === 'boolean') merged.pageNumShow = source.pageNumShow;
   if (oneOf(source.pageNumFormat, ['1', '— 1 —', 'i', '1 / 1'])) merged.pageNumFormat = source.pageNumFormat;
   if (oneOf(source.pageNumAlign, ['left', 'center', 'right'])) merged.pageNumAlign = source.pageNumAlign;
@@ -375,6 +381,7 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   }
   row('Paragraphs', select([['block', 'Block (spaced)'], ['indent', 'Indented (classic)']] as Array<[string, string]>, s.parIndent ? 'indent' : 'block', (v) => patch({ parIndent: v === 'indent' })));
   row('Line spacing', select([1.3, 1.4, 1.5, 1.65, 1.8].map((n) => [n, String(n)] as [number, string]), s.lineHeight, (v) => patch({ lineHeight: +v })));
+  row('Citations', select(CITATION_STYLES as Array<[string, string]>, s.citationStyle, (v) => patch({ citationStyle: v as CitationStyle })));
   row('Paper', select([['letter', 'US Letter'], ['a4', 'A4'], ['legal', 'US Legal'], ['b5', 'B5']] as Array<[string, string]>, s.page, (v) => patch({ page: v as DocSettings['page'] })));
   row('Orientation', select([['portrait', 'Portrait'], ['landscape', 'Landscape']] as Array<[string, string]>, s.landscape ? 'landscape' : 'portrait', (v) => patch({ landscape: v === 'landscape' })));
   {

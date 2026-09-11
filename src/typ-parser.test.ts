@@ -645,6 +645,19 @@ function firstDiff(a: string, b: string): string {
   check('a non-preset fill keeps the table as a raw island', other.child(0).type.name === 'code_block' && other.child(0).attrs.params === 'typst-raw', other.child(0).type.name);
 }
 
+// --- 19f. the citation style rides on the bibliography line ---
+{
+  const bib = JSON.stringify('@article{k, author = {Knuth, Donald E.}, title = {A}, year = {1981}}');
+  const src = `A claim @k.\n\n#bibliography(bytes(${bib}), title: "References", style: "apa")\n`;
+  const { doc } = typToDoc(src);
+  check('style: "apa" imports as the citation style setting', doc.attrs.settings.citationStyle === 'apa', JSON.stringify(doc.attrs.settings.citationStyle));
+  const out = docToTyp(doc);
+  check('the style exports back on the bibliography line', out.includes('title: "References", style: "apa")'), out);
+  check('a style round-trip is idempotent', docToTyp(typToDoc(out).doc) === out, firstDiff(docToTyp(typToDoc(out).doc), out));
+  const unknown = typToDoc(src.replace('"apa"', '"chicago-author-date"')).doc;
+  check('an unported style falls back to the default', unknown.attrs.settings.citationStyle === 'ieee', JSON.stringify(unknown.attrs.settings.citationStyle));
+}
+
 // --- 20. raw islands: a multi-line call survives a blank line inside it ---
 {
   const src = 'Intro.\n\n#grid(\n  columns: 2,\n  [first para\n\n  second para],\n  [b],\n)\n\nAfter.\n';

@@ -558,6 +558,14 @@ if (import.meta.env.DEV) {
   void import('./library-bib').then((lib) => {
     (window as unknown as { __library: typeof lib }).__library = lib;
   });
+  // The citation-style oracle (tests/citation-styles.spec.ts): how many
+  // compiler checks ran and which keys fell back to the compiled string.
+  void import('./citations').then((c) => {
+    (window as unknown as { __citationOracle: { runs: () => number; overrides: () => ReadonlyMap<string, string> } }).__citationOracle = {
+      runs: c.citationOracleRuns,
+      overrides: c.citationOracleOverrides,
+    };
+  });
   (window as unknown as { __loadDemo: () => void }).__loadDemo = () => fileManager.newDoc(demoDoc(), 'Demo');
   // Compiler worker counters (tests/layout-suspend.spec.ts proves a
   // suspended editor posts no compiler task). The dynamic import resolves
