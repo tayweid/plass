@@ -135,15 +135,14 @@ test('direct forced layout matches legacy output with fewer DOM measurements', a
     )
     .toBeGreaterThanOrEqual(9);
 
-  // Let the compiled oracle replace matching port answers; identical audit
-  // keys are overwritten rather than counted twice.
+  // Identical audit keys are overwritten rather than counted twice.
   await page.waitForTimeout(1_000);
   const report = await page.evaluate(() => window.__forcedLayoutAudit.stop());
   expect(report.cases.length).toBeGreaterThanOrEqual(9);
 
   for (const entry of report.cases) {
     if (!entry.fast && !entry.legacy) {
-      // A compiled-oracle answer whose breaks neither translator can apply:
+      // A break list neither translator can apply:
       // both engines reject it identically and the cached port layout stays
       // in place, so there is nothing to compare. Only one engine rejecting
       // a representable break list would be a real bug.

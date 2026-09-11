@@ -783,7 +783,7 @@ class NativeTableControls {
     });
     this.advanced = document.createElement('span');
     this.advanced.className = 'native-table-advanced';
-    this.advanced.textContent = 'Custom Typst options are exact in Proof/export; native cells show the base style';
+    this.advanced.textContent = 'Custom Typst options are exact in the PDF; native cells show the base style';
     details.appendChild(this.advanced);
 
     // Docked under the main toolbar (CSS), never over the document: a bar

@@ -548,7 +548,7 @@ function updateStatus() {
   // The source view has no pages: the count is a page-view fact.
   const pages = pageCount && !sourceView.isActive() ? `${pageCount} p · ` : '';
   hudEl.textContent = `${pages}${words} words`;
-  hudEl.title = lastStats ? `layout oracle: ${lastStats.ms.toFixed(1)} ms for ${lastStats.lines} lines` : '';
+  hudEl.title = lastStats ? `layout: ${lastStats.ms.toFixed(1)} ms for ${lastStats.lines} lines` : '';
 }
 updateStatus();
 

@@ -19,7 +19,7 @@ step 5 below (the one rule: typed Typst does not run).
 ## What already exists
 
 - Both directions of the trip. `docToTyp` (`typ-serializer.ts:635`) is
-  computed on every edit as the oracle signature; `typToDoc`
+  the export and the audit's compile; `typToDoc`
   (`typ-parser.ts:33`) is the file-open path. `docToMd`/`mdToDoc` are the
   Markdown pair. `FileManager.serialize` (`file-manager.ts:233`) already
   picks the serializer from the file name.
@@ -78,7 +78,7 @@ either serializer, or a code editor dependency.
    deliberately out of scope.
 6. **The page machinery sleeps in source mode.** The ProseMirror view stays
    mounted (so history and node views survive) but hidden, and the typeset
-   plugin, page oracle, and parity shadow are suspended behind one flag; a
+   plugin and the parity shadow are suspended behind one flag; a
    full pass runs on return. Measuring a hidden editor would poison layout
    snapshots, and compiling a document nobody is looking at wastes the
    worker. Step 0 confirms the plugin's scheduler can be gated this way.
@@ -121,7 +121,7 @@ either serializer, or a code editor dependency.
 ## Steps
 
 0. **Spike (½ day).** Add `offsets` to both serializers; add the suspend
-   flag to the typeset plugin/oracle scheduler and prove a hidden editor
+   flag to the typeset plugin's scheduler and prove a hidden editor
    leaves no snapshot residue. Decide the Typst highlighter (evaluate
    `codemirror-lang-typst` on the demo doc's own output).
 1. **Toggle + round trip (1–2 days).** Mode state, toolbar button, shortcut,
@@ -146,7 +146,7 @@ either serializer, or a code editor dependency.
    decision stands that `.md` does not default to the source view.
 5. **The one rule: typed Typst does not run.** Landed 2026-09-11. Islands
    are inert everywhere: `docToTyp` takes `{ islands: 'file' | 'print' }`
-   — the file save keeps raw Typst verbatim, the page oracle and the PDF
+   — the file save keeps raw Typst verbatim, the audit and the PDF
    print every island as a raw code block — and the page shows an island
    as a code block tagged in the margin ("typst · not run", "markdown"),
    the same block the print shows, so vertical parity holds without
@@ -162,7 +162,7 @@ Total: about a week for 0–3.
 - Unit: serializer offsets equal the real block starts for the demo doc;
   `docToTyp`/`docToMd` unchanged when `offsets` is not requested.
 - Playwright (driving `window.view` and `__fm`, never dynamic-importing app
-  modules): the five in step 1; oracle and typeset passes do not run while
+  modules): the five in step 1; typeset passes do not run while
   in source mode; a source-typed off-rails `#let` returns as one raw island
   with the toast; PDF export from source mode produces a PDF.
 - Round-trip: the demo doc and every fixture in `typ-parser.test.ts` toggle

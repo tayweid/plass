@@ -219,7 +219,7 @@ test('raw Typst islands are shown as code and never compiled or linked', async (
   await expect(island).toHaveText('#link("javascript:alert(1)")[danger]');
   await page.waitForTimeout(1_500);
   expect(await island.locator('svg, a, [href]').count()).toBe(0);
-  // The compile the page oracle runs prints the island as a raw block.
+  // The compile the audit and the PDF run prints the island as a raw block.
   const typ = await page.evaluate(async () => {
     const { docToTyp } = await import('/src/typ-serializer.ts');
     return docToTyp((window as typeof window & { view: import('prosemirror-view').EditorView }).view.state.doc, { islands: 'print' });

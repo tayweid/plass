@@ -65,7 +65,6 @@ test('solution block paginates locally and agrees with Typst', async ({ page }) 
   expect(paint[0].color).toBe('rgb(192, 0, 0)');
   expect(paint[2].color).not.toBe('rgb(192, 0, 0)');
 
-  // The compiled page oracle must take authority (not the local fallback).
   await settleLocal(page);
 
   // Typst splits the long solution mid-block (block is breakable): a page

@@ -17,7 +17,7 @@ declare global {
   }
 }
 
-test('exact live paragraph remains unchanged when the oracle settles', async ({ page }) => {
+test('exact live paragraph remains unchanged when layout settles', async ({ page }) => {
   await page.goto('/?new=1');
   const text =
     'The Knuth-Plass algorithm is based on the idea of cost. A line which has a very tight or ' +
@@ -221,9 +221,9 @@ test('strikethrough keeps live and compiled breaks in agreement', async ({ page 
   });
   await expect.poll(() => page.evaluate(() => window.__layoutDispatchStats().lines)).toBe(1);
   const liveBreaks = await page.evaluate(() => window.__breakSig());
-  // The compiled oracle re-derives breaks from the exported Typst, which
-  // wraps the struck run in #strike[...]; the single live dispatch surviving
-  // the settle uncorrected means the decoration altered no metrics
+  // The export wraps the struck run in #strike[...]; the single live
+  // dispatch surviving the settle uncorrected means the decoration altered
+  // no metrics
   // (line-through is paint-only).
   await page.waitForTimeout(1_200);
   expect(await page.evaluate(() => window.__breakSig())).toBe(liveBreaks);

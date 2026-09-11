@@ -5,7 +5,9 @@ breaker should produce the same ordered break offsets and hyphen kinds as the
 pinned Typst compiler. That is a narrower and testable promise than "all Typst
 documents, always": constructs the adapter cannot represent and environments
 where the shaping sidecar is unavailable deliberately fall back to the legacy
-breaker. The compiled Typst oracle remains the verifier and authority.
+breaker. The pinned Typst compiler is the measuring stick: `npm run audit`
+compares the port's breaks and the local paginator's page starts against it
+(one renderer, decided 2026-09-11 — nothing compiles while editing).
 
 Reference source: [Typst at commit
 `951788cc614cd805d5d786e17bbf93796df73d10`](https://github.com/typst/typst/tree/951788cc614cd805d5d786e17bbf93796df73d10),
@@ -26,21 +28,18 @@ tree.
   compiler, and sidecar. Other bundled or historical names resolve to New
   Computer Modern for live layout and export while their stored preference is
   preserved.
-- **Live behavior:** a changed block uses cached compiled breaks when present,
-  otherwise the local port, otherwise legacy Knuth–Plass. Authoritative
-  offsets go through `layoutForcedBlock`, which skips a second break search;
-  its conservative legacy translator remains the fail-closed fallback.
-  Block-relative decoration updates make a matching settled oracle result a
-  no-op.
+- **Live behavior:** a changed block uses the local port, otherwise legacy
+  Knuth–Plass. The port's offsets go through `layoutForcedBlock`, which
+  skips a second break search; its conservative legacy translator remains
+  the fail-closed fallback.
 - **Proof status:** the differ harness and browser audits cover the supported
   contexts, while port smoke and face-registration checks run under
   `npm run test:layout`. This is not a universal certification of arbitrary
   Typst markup, scripts, languages, fonts, or fallback shaping.
-- **Pagination is separate:** whole-document Typst page starts are used when
-  they compile and map safely, then may be held while a replacement is
-  pending. The complete local paginator remains the fallback. The suffix-only
-  planner is a development shadow comparison: whenever it runs, the full
-  fallback result is installed, and production does not invoke the planner.
+- **Pagination is separate:** the local paginator lays every page
+  (PAGE-PORT.md) and `npm run audit` measures its page starts against the
+  compiled document; nothing is installed from a compile (one renderer,
+  2026-09-11).
 
 ## Finding: Typst is not TeX, and we implemented TeX
 
@@ -263,10 +262,9 @@ fallback.
 
 ### 6. Page breaking — its own port, tracked in PAGE-PORT.md
 
-- The whole-document Typst oracle provides exact page starts when compilation
-  and DOM mapping succeed. Mapped starts can be held while a fresh result is
-  pending; confidence failure or invalid geometry returns to the full local
-  paginator, which mirrors Typst's flow rules for footnote reservation,
+- The local paginator lays out every page (one renderer since 2026-09-11;
+  the whole-document compile no longer installs page starts). It mirrors
+  Typst's flow rules for footnote reservation,
   widow/orphan needs, spacing collapse, sticky headings, and table row
   breaks with the header repeated (PAGE-PORT.md phases 0–4 and 7; phase 5,
   breakable blocks, is open).

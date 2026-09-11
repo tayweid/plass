@@ -32,7 +32,7 @@ export interface TypExportOptions {
    * What becomes of islands — raw Typst (`typst-raw` blocks, `typst_inline`
    * spans) and raw Markdown (`md-raw` blocks). 'file' (default) is the .typ
    * on disk: raw Typst verbatim, so the file never loses content. 'print'
-   * is what Plass compiles (page oracle, PDF): every island is a raw code
+   * is what Plass compiles (the audit, PDF): every island is a raw code
    * block or inline raw, shown as source and never run — the page shows the
    * same code block, so page and print agree (Typst on rails).
    */
@@ -309,7 +309,7 @@ function expandMacros(src: string): string {
   return expandMacrosWith(src, docMacros);
 }
 
-/** The #set text(...) header line (shared with the layout oracle's probes). */
+/** The #set text(...) header line. */
 export function textSetLine(s: DocSettings, fontFallback?: string[]): string {
   const primary = effectiveFont(s.font).typstFamily;
   const fonts = fontFallback?.length
@@ -536,8 +536,8 @@ function blockToTyp(node: PMNode, indent = ''): string {
       let s = inlineToTyp(node);
       // An empty paragraph is one blank line of vertical space — in the PDF
       // too (a bare ~ renders as an empty line of full line height). Without
-      // this, Typst sees nothing where the editor shows a gap, and the page
-      // oracle's breaks drift below the editor's real heights.
+      // this, Typst sees nothing where the editor shows a gap, and its pages
+      // drift from the editor's real heights.
       if (!s.trim()) return indent + '~\n\n';
       // A leading =, - or + would re-parse as heading/list syntax.
       if (/^[=\-+]/.test(s)) s = '\\' + s;

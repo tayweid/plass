@@ -375,7 +375,7 @@ export function scheduleTypeset(view: EditorView) {
 }
 
 /** An asset changed on disk (image rewritten): page geometry may have moved
- *  even though the document — and so the page-oracle signature — did not. */
+ *  even though the document did not. */
 export function invalidatePageLayout(view: EditorView) {
   const tv = viewRegistry.get(view);
   if (!tv) return;
@@ -389,8 +389,8 @@ export function invalidatePageLayout(view: EditorView) {
  * Suspended, no pass measures the DOM, nothing dispatches, and no compile
  * launches; a hidden editor measures zero heights, and a snapshot taken
  * from it would poison pagination. Resuming runs exactly one full settled
- * pass — the same pass a freshly opened document gets — which re-requests
- * every oracle answer it lacks.
+ * pass — the same pass a freshly opened document gets — which re-lays
+ * every block it lacks.
  */
 export function setLayoutSuspended(view: EditorView, suspended: boolean) {
   viewRegistry.get(view)?.setSuspended(suspended);
@@ -499,7 +499,7 @@ class TypesetView {
    * Startup probe (environment-check.ts): the browser's width for a prose
    * run in the document's font and size against the port's shaped width.
    * A disagreement beyond the tolerance turns the exact path off for the
-   * session — legacy breaker, oracles suspended — and tells the writer.
+   * session — legacy breaker — and tells the writer.
    * `simulateRatio` (dev/test) stands in for a hinting browser.
    */
   checkEnvironment(simulateRatio?: number): EnvironmentVerdict | null {
@@ -566,8 +566,8 @@ class TypesetView {
     { epoch: number; parent: Node | null; value: number }
   >();
   private destroyed = false;
-  /** Asleep behind a hidden editor (setLayoutSuspended). The scheduler and
-   * oracles hold the real gates; this mirror lets the two direct entry
+  /** Asleep behind a hidden editor (setLayoutSuspended). The scheduler
+   * holds the real gate; this mirror lets the two direct entry
    * points (liveRun/run) and the suffix-verification deferral — which
    * bypass the scheduler — refuse to touch the DOM. */
   private suspended = false;
@@ -1253,16 +1253,14 @@ class TypesetView {
    *
    * Sleeping cancels every pending pass and compile launch and drops the
    * sampled suffix-verification ticket (its geometry premise cannot be
-   * re-measured behind a hidden editor). In-flight compiles finish into the
-   * oracle caches; their publication reaches the sleeping scheduler and
-   * installs nothing.
+   * re-measured behind a hidden editor).
    *
    * Waking discards every DOM-derived basis — geometry epoch, per-element
    * reads, the exact and fallback page bases — so the single settled pass
    * the scheduler runs is a full one from fresh measurements, not a suffix
    * repagination seeded from pre-sleep pixels (fonts and widths may have
-   * changed while hidden). Oracle caches persist: an unchanged document
-   * lands back on its exact answer in that one pass.
+   * changed while hidden). The block layout cache persists: an unchanged
+   * document lands back on its exact answer in that one pass.
    */
   setSuspended(suspended: boolean) {
     if (this.destroyed || suspended === this.suspended) return;
@@ -2606,8 +2604,8 @@ class TypesetView {
     this.suffixPaginationStats.lastFullPass = { units: fallback.visitedUnits, ms: fullMs };
     this.suffixPaginationStats.reasons[suffixPlan.reason] =
       (this.suffixPaginationStats.reasons[suffixPlan.reason] ?? 0) + 1;
-    // An unchanged-document re-settle (oracle results arriving, images
-    // decoding) reinstalls identical geometry, so a pending verification
+    // An unchanged-document re-settle (fonts arriving, images decoding)
+    // reinstalls identical geometry, so a pending verification
     // ticket's premises still hold: keep it alive rather than letting the
     // pass counter orphan the sample before its idle slot arrives.
     if (
@@ -2832,9 +2830,8 @@ class TypesetView {
       fnCarry = settled.carry;
       for (const fragment of settled.placed) pageFnH += footnoteEntryCost(fragment, F);
     };
-    // The same page-top ink adjustment paginateForced applies: fallback
-    // pagination must land units at identical offsets, or an oracle miss
-    // visibly shifts the whole page rhythm by the adjustment.
+    // The page-top ink adjustment: a unit at a page top lands with its
+    // Typst frame at the margin, not its browser box.
     const adjFor = (pos: number, kind: Spacer['kind']): number => {
       if (kind === 'line') return pageTopAdjustEm(s, 'line') * F;
       // A table row at a page top has no calibrated ascent adjustment (the

@@ -398,13 +398,3 @@ export function gridPlugin(): Plugin {
     },
   });
 }
-
-/** For tests and the audit: the settings-dependent frame margins a cell
- *  gets for given first and last leaf kinds (px). */
-export function cellFrameMargins(s: DocSettings, F: number, first: PMNode, last: PMNode, extraAbove: number, extraBelow: number) {
-  const ref = blockFrameSlackEm(schema.nodes.paragraph.create(), s);
-  return {
-    top: ref.above * F - (extraAbove + blockFrameSlackEm(first, s).above * F),
-    bottom: ref.below * F - (extraBelow + blockFrameSlackEm(last, s).below * F),
-  };
-}

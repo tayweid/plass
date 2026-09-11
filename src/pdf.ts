@@ -66,7 +66,7 @@ function dataUrlToBytes(src: string): { data: Uint8Array; ext: string } | null {
  * path map. Remote URLs never leave the browser until the editor's explicit
  * per-origin load action has granted this shared session policy. */
 /** A gray dashed "missing image" PNG, generated once — registered in place
- * of unreadable assets so exports and oracle compiles never hard-fail. */
+ * of unreadable assets so exports and the audit compile never hard-fail. */
 let placeholderPng: Uint8Array | null = null;
 async function missingPlaceholder(): Promise<Uint8Array> {
   if (placeholderPng) return placeholderPng;
@@ -182,8 +182,8 @@ async function prepareAssets(doc: PMNode): Promise<{
       // A reference that walks above the project folder ("../logo.png") has no
       // VFS location — Typst's own root rule forbids one just as the browser
       // forbids reading it — so it gets a flat placeholder path. Registering it
-      // literally would produce "/../logo.png" and fail the whole compile, page
-      // oracle included, over one unreachable image.
+      // literally would produce "/../logo.png" and fail the whole compile
+      // over one unreachable image.
       const placeable = isValidAssetPath('/' + src);
       const data = placeable ? await assetReader(src, COMPILER_LIMITS.assetBytes) : null;
       if (data) {
@@ -239,7 +239,7 @@ export function typstQuery<T = unknown>(
 
 /**
  * Compile the full document (with embedded assets) to a multi-page SVG —
- * the page-break oracle's channel. Returns null on failure.
+ * the port audit's channel. Returns null on failure.
  */
 export function compileDocSvg(doc: PMNode, onMsg: (m: string) => void = () => {}): Promise<string | null> {
   return (async () => {

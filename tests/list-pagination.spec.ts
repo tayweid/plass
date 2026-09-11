@@ -124,10 +124,9 @@ test('a code block immediately followed by an ordered list paginates', async ({
   await settleLocal(page);
 });
 
-// The oracle is not always the one answering — a long document, a timeout, or
-// a compile failure puts the local fallback in charge. It used to move a list
-// item whole, which is the same large gap the test above guards against, so it
-// has to split inside the item too.
+// The local paginator used to move a list item whole, which is the same
+// large gap the test above guards against, so it has to split inside the
+// item too.
 async function fallbackOnly(page: import('playwright/test').Page) {
   await page.goto('/?new=1');
 }

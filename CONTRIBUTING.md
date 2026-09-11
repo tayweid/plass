@@ -103,12 +103,14 @@ Layout changes carry a stricter contract than ordinary UI changes:
   algorithmic references. Do not mix changes to either file into a renderer,
   cache, scheduling, or pagination refactor. A deliberate upstream-port change
   requires its own review and regenerated differential evidence.
-- The live port and compiled Typst oracle must choose the same ordered break
-  offsets and hyphen kinds for every certified font and supported content
-  context. Browser-greedy breaks, frozen-prefix approximations, or stability
-  costs must never replace the selected exact breaks.
-- A normal edit installs at most one line-decoration update. A matching oracle
-  result must be a no-op, not a second visual correction.
+- The port must choose the same ordered break offsets and hyphen kinds as
+  the pinned Typst compiler for every certified font and supported content
+  context, and the local paginator the same page starts; `npm run audit`
+  measures both. Browser-greedy breaks, frozen-prefix approximations, or
+  stability costs must never replace the selected exact breaks.
+- A normal edit installs at most one line-decoration update. Nothing
+  compiles while editing: Typst is the printer and the measuring stick,
+  never a second opinion installed over the page.
 - Line breaks, spacing, hyphens, and page gaps stay presentation-only. They may
   not enter document content, undo history, clipboard data, accessibility
   text, persistence, or exported source.
@@ -129,13 +131,13 @@ For any layout change, in addition to the full command set above:
    ```
 
 2. Run `npm run test:layout` for port smoke and font certification, `npm test`
-   for pure layout contracts, and `npm run test:browser` for live/oracle,
+   for pure layout contracts, and `npm run test:browser` for live layout,
    decoration, pagination, selection, undo, and writing-stability behavior.
-3. Confirm the compiled oracle causes no correction in certified cases, page
-   starts and line ranges retain their signatures, and performance counters do
-   not exceed their checked-in budgets. Do not loosen a tolerance or update a
-   baseline without attaching the before/after fixture and explaining the
-   numerical cause.
+3. Run `npm run audit`: every fixture must agree with Typst on every line
+   break, page start, and margin line (a new rail adds a fixture), and
+   performance counters must not exceed their checked-in budgets. Do not
+   loosen a tolerance or update a baseline without attaching the
+   before/after fixture and explaining the numerical cause.
 
 ## Supported-font contract
 
