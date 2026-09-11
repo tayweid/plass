@@ -36,6 +36,9 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       if (n.type.name === 'doc_authors' && n.textContent) fm.push(`author: "${n.textContent.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
       if (n.type.name === 'doc_date' && n.textContent) fm.push(`date: "${n.textContent.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
     });
+    // Frontmatter the import had no field for comes back verbatim.
+    const extra = ((doc.attrs.frontmatter as string | undefined) ?? '').replace(/^\n+|\n+$/g, '');
+    if (extra) fm.push(extra);
     // Markdown stays pure markdown: no app-branded metadata. Settings
     // live in .typ; saying so beats smuggling them into frontmatter.
     const s = doc.attrs.settings as DocSettings;
@@ -84,7 +87,10 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         }
         let t = has('code') ? '`' + child.text + '`' : esc(child.text);
         const link = marks.find((m: Mark) => m.type.name === 'link');
-        if (link) t = `[${t}](${link.attrs.href as string})`;
+        if (link) {
+          const title = link.attrs.title as string | null;
+          t = `[${t}](${link.attrs.href as string}${title ? ` "${title.replace(/"/g, '\\"')}"` : ''})`;
+        }
         run += t;
         return;
       }
@@ -202,7 +208,9 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           const hang = ' '.repeat(marker.length);
           const inner: string[] = [];
           item.forEach((child) => inner.push(block(child, indent + hang)));
-          items.push(marker + inner.join(`\n\n${hang}`).replace(/\n(?!\n)/g, `\n${hang}`));
+          // Every line after the first hangs under the marker; the blank
+          // line between an item's blocks stays blank.
+          items.push(marker + inner.join('\n\n').replace(/\n(?!\n)/g, `\n${hang}`));
         });
         return items.join('\n');
       }
@@ -216,6 +224,8 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         return table(node);
       case 'horizontal_rule':
         return '---';
+      case 'md_raw':
+        return node.attrs.src as string;
       case 'page_break':
         return '```typst\n#pagebreak()\n```';
       case 'numbering_restart':

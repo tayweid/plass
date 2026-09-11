@@ -40,6 +40,28 @@ const pageBreak: NodeSpec = {
   toDOM: () => ['div', { 'data-page-break': '', class: 'ts-pagebreak', contenteditable: 'false' }],
 };
 
+// Markdown the page view cannot show — an HTML block, an editorial
+// `<!-- comment -->` — kept verbatim from .md open to .md save. Hidden in
+// the page as a zero-height marker (the print has nothing there, so
+// vertical parity holds), read on hover, edited in the source view. Never
+// exported to Typst.
+const mdRaw: NodeSpec = {
+  group: 'block',
+  atom: true,
+  selectable: true,
+  attrs: { src: { default: '' } },
+  parseDOM: [
+    {
+      tag: 'div[data-md-raw]',
+      getAttrs: (el) => ({ src: (el as HTMLElement).getAttribute('data-md-raw') ?? '' }),
+    },
+  ],
+  toDOM: (node) => [
+    'div',
+    { 'data-md-raw': node.attrs.src, class: 'ts-md-raw', contenteditable: 'false', title: node.attrs.src },
+  ],
+};
+
 const numberingRestart: NodeSpec = {
   group: 'block',
   atom: true,
@@ -355,6 +377,10 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
       settings: { default: DEFAULT_SETTINGS },
       // { name: string, content: string } | null — the document's BibTeX data
       bib: { default: null },
+      // Markdown frontmatter lines Plass has no field for (unknown keys,
+      // YAML lists and block scalars), kept verbatim from .md open to .md
+      // save. Never rendered; .typ has no home for it.
+      frontmatter: { default: '' },
     },
   })
   // Language/params tag on code blocks; 'typst-raw' marks a raw-Typst island
@@ -372,6 +398,7 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
   .addToEnd('bibliography', bibliography)
   .addToEnd('eq_ref', eqRef)
   .addToEnd('page_break', pageBreak)
+  .addToEnd('md_raw', mdRaw)
   .addToEnd('numbering_restart', numberingRestart)
   .addToEnd('doc_title', docTitle)
   .addToEnd('doc_authors', docAuthors)

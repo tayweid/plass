@@ -292,6 +292,10 @@ function blockToTex(node: PMNode, s: DocSettings): string {
       return tableToTex(node, s);
     case 'bibliography':
       return `\\bibliographystyle{unsrt}\n\\bibliography{refs}\n\n`;
+    case 'md_raw': {
+      const lines = (node.attrs.src as string).split('\n').map((l) => '% ' + l);
+      return `% [Plass] hidden Markdown block:\n${lines.join('\n')}\n\n`;
+    }
     case 'page_break':
       return '\\clearpage\n\n';
     case 'numbering_restart':

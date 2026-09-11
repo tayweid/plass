@@ -107,6 +107,7 @@ const ELIGIBLE_BLOCK_TYPES = new Set([
   'horizontal_rule',
   'page_break',
   'numbering_restart',
+  'md_raw',
   'doc_title',
   'doc_authors',
   'doc_date',

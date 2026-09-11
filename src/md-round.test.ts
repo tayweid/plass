@@ -3,6 +3,7 @@
 // Run: npx tsx src/md-round.test.ts
 import { mdToDoc } from './md-parser';
 import { docToMd } from './md-serializer';
+import { docToTyp } from './typ-serializer';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = '') {
@@ -76,7 +77,7 @@ check('display math with label', (() => {
   });
   return ok;
 })());
-check('unknown frontmatter reported', first.warnings.some((w) => /keywords/.test(w)), JSON.stringify(first.warnings));
+check('unknown frontmatter kept, not reported', doc.attrs.frontmatter === 'keywords: "voting, econ"' && !first.warnings.some((w) => /keywords/.test(w)), JSON.stringify([doc.attrs.frontmatter, first.warnings]));
 check('bib captured', /arrow1950/.test((doc.attrs.bib as { content: string })?.content ?? ''));
 check('inline pieces', (() => {
   let cite = false, ref = false, math = false, fn = false, link = false;
@@ -191,6 +192,58 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount,
   let bold = false;
   p.forEach((n) => { if (n.type.name === 'math_inline' && n.attrs.src === '2') bold = n.marks.some((m) => m.type.name === 'strong'); });
   check('markdown import marks math inside bold', bold);
+}
+
+// Nothing Markdown says is stripped on the way through the page view.
+{
+  const fm = '---\ntitle: "T"\nauthor:\n  - Alice\n  - Bob\nkeywords: [a, b]\nabstract: |\n  Two lines\n  of it\n---\n\nBody.\n';
+  const { doc, warnings } = mdToDoc(fm);
+  check('unknown and block frontmatter is kept verbatim', doc.attrs.frontmatter === 'author:\n  - Alice\n  - Bob\nkeywords: [a, b]\nabstract: |\n  Two lines\n  of it', JSON.stringify(doc.attrs.frontmatter));
+  check('kept frontmatter raises no warning', warnings.length === 0, warnings.join('; '));
+  const out = docToMd(doc);
+  check('kept frontmatter is written back', out === fm, out);
+
+  const code = 'Para.\n\n    indented one\n    indented two\n\nAfter.\n';
+  const outCode = docToMd(mdToDoc(code).doc);
+  check('indented code survives as a fence', outCode === 'Para.\n\n```\nindented one\nindented two\n```\n\nAfter.\n', outCode);
+
+  const link = 'A [link](http://x.y "The \\"title\\"") here.\n';
+  const outLink = docToMd(mdToDoc(link).doc);
+  check('link titles survive', outLink === link, outLink);
+
+  const list = '1. one\n2. two\n\n   para in item\n\n   - nested\n';
+  const outList = docToMd(mdToDoc(list).doc);
+  check('list continuation hangs under the marker once', outList === list, outList);
+}
+
+// HTML blocks — editorial comments above all — are Markdown the page
+// cannot show: hidden islands, verbatim in, verbatim out, nothing in print.
+{
+  const md = [
+    'Para one.',
+    '',
+    '<!-- ED: MOVED (2026-09-01) -- keep A3\'s closer pure — see chat. Marked {++stitches++} only. -->',
+    '',
+    '<div style="margin-top: -70px;"></div>',
+    '',
+    '- item',
+    '',
+    '  <!-- inside a list item -->',
+    '',
+    'Para two with {++an insertion++} and ~~a strike~~.',
+    '',
+  ].join('\n');
+  const { doc, warnings } = mdToDoc(md);
+  const kinds: string[] = [];
+  doc.forEach((n) => kinds.push(n.type.name));
+  check('HTML blocks become hidden islands', JSON.stringify(kinds) === JSON.stringify(['paragraph', 'md_raw', 'md_raw', 'bullet_list', 'paragraph']), JSON.stringify(kinds));
+  check('a comment keeps its dashes', doc.child(1).attrs.src === '<!-- ED: MOVED (2026-09-01) -- keep A3\'s closer pure — see chat. Marked {++stitches++} only. -->', doc.child(1).attrs.src);
+  check('hidden islands raise no warning', warnings.length === 0, warnings.join('; '));
+  const out = docToMd(doc);
+  check('hidden islands are written back verbatim', out === md, out);
+  const typ = docToTyp(doc);
+  check('hidden islands print nothing', !typ.includes('<!--') && !typ.includes('<div'), typ);
+  check('critic marks survive as text', out.includes('{++an insertion++}') && out.includes('~~a strike~~'), out);
 }
 
 declare const process: { exitCode?: number };

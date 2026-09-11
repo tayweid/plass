@@ -94,32 +94,41 @@ interface Active {
   stackHeight: string;
   /** Islands the document had on entry, so the exit toast counts only
    *  what the source round trip produced. */
-  islands: { blocks: number; inline: number };
+  islands: { blocks: number; inline: number; hidden: number };
 }
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
-/** Raw-Typst islands in a document: blocks and inline spans the page view
- *  keeps verbatim because it cannot show them. */
-function countIslands(doc: PMNode): { blocks: number; inline: number } {
+/** Islands in a document: raw-Typst blocks and inline spans, and hidden
+ *  Markdown blocks — content the page view keeps verbatim because it
+ *  cannot show it. */
+function countIslands(doc: PMNode): { blocks: number; inline: number; hidden: number } {
   let blocks = 0;
   let inline = 0;
+  let hidden = 0;
   doc.descendants((n) => {
     if (n.type.name === 'code_block' && n.attrs.params === 'typst-raw') blocks++;
     else if (n.type.name === 'typst_inline') inline++;
+    else if (n.type.name === 'md_raw') hidden++;
     return true;
   });
-  return { blocks, inline };
+  return { blocks, inline, hidden };
 }
 
 /** The toast for islands the source round trip produced (decision 8). */
-function islandNotice(before: { blocks: number; inline: number }, after: { blocks: number; inline: number }): string | null {
+function islandNotice(
+  before: { blocks: number; inline: number; hidden: number },
+  after: { blocks: number; inline: number; hidden: number },
+): string | null {
   const blocks = Math.max(0, after.blocks - before.blocks);
   const inline = Math.max(0, after.inline - before.inline);
+  const hidden = Math.max(0, after.hidden - before.hidden);
   const parts: string[] = [];
   if (blocks) parts.push(`${blocks} block${blocks === 1 ? '' : 's'}`);
   if (inline) parts.push(`${inline} inline span${inline === 1 ? '' : 's'}`);
-  return parts.length ? `${parts.join(' and ')} kept as raw Typst` : null;
+  const typst = parts.length ? `${parts.join(' and ')} kept as raw Typst` : '';
+  const md = hidden ? `${hidden} Markdown block${hidden === 1 ? '' : 's'} hidden from the page` : '';
+  return [typst, md].filter(Boolean).join('; ') || null;
 }
 
 /** Which top-level block a caret in the typed text sits in (decision 5).

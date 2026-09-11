@@ -11,10 +11,15 @@
 //     policy as the Typst importer), ```bibtex becomes the document's
 //     embedded bibliography
 //   - YAML frontmatter carries the standard title/author/date keys and
-//     nothing app-specific — unknown keys are reported, not silently eaten
+//     nothing app-specific — every other frontmatter line rides along
+//     verbatim (doc.attrs.frontmatter) and is written back on save
 //
-// Anything markdown expresses that the model can't (inline HTML) degrades
-// to plain text with a warning.
+// An HTML block — a `<div>`, an editorial `<!-- comment -->` — is Markdown
+// the page cannot show: it becomes a hidden `md_raw` island, verbatim, and
+// comes back on save. (Left as text it would be normalized like prose: the
+// `--` of a comment turns into an en dash and the comment stops being one.)
+// Inline HTML degrades to plain text with a warning. Nothing is dropped:
+// what the page cannot show is carried, not stripped.
 
 import MarkdownIt from 'markdown-it';
 import footnotePlugin from 'markdown-it-footnote';
@@ -53,21 +58,29 @@ export function mdToDoc(src: string): MdImport {
   let title: string | null = null;
   let authors: string | null = null;
   let date: string | null = null;
+  let frontmatter = '';
   if (src.startsWith('---\n')) {
     const end = src.indexOf('\n---\n', 4);
     if (end > 0) {
+      // A known key with a scalar value on its own line becomes the title/
+      // author/date block. Every other line — unknown keys, a YAML list
+      // under `author:`, a block scalar (`abstract: |`), comments — is kept
+      // in order, verbatim, and written back on save.
+      const extra: string[] = [];
       for (const line of src.slice(4, end).split('\n')) {
-        const m = /^(\w[\w-]*):\s*(.*)$/.exec(line);
-        if (!m) continue;
-        const key = m[1].toLowerCase();
-        const value = m[2].trim().replace(/^["']|["']$/g, '');
-        if (key === 'title') title = value;
-        else if (key === 'author' || key === 'authors') authors = value;
-        else if (key === 'date') date = value;
-        else if (value) {
-          warnings.push(`frontmatter "${key}" has no Plass equivalent — dropped`);
+        const m = /^(title|authors?|date):\s*(\S.*)$/i.exec(line);
+        const value = m ? m[2].trim() : '';
+        if (!m || /^[|>][-+]?\d*$/.test(value)) {
+          extra.push(line);
+          continue;
         }
+        const key = m[1].toLowerCase();
+        const text = value.replace(/^["']|["']$/g, '');
+        if (key === 'title') title = text;
+        else if (key === 'date') date = text;
+        else authors = text;
       }
+      frontmatter = extra.join('\n').replace(/^\n+|\n+$/g, '');
       src = src.slice(end + 5);
     }
   }
@@ -143,7 +156,7 @@ export function mdToDoc(src: string): MdImport {
   }
 
   // ---------- tokenize ----------
-  const md = new MarkdownIt({ html: false }).use(footnotePlugin);
+  const md = new MarkdownIt({ html: true }).use(footnotePlugin);
   const tokens = md.parse(src, {}) as unknown as MdToken[];
 
   // Footnote definitions (markdown-it emits them at the stream tail).
@@ -304,6 +317,11 @@ export function mdToDoc(src: string): MdImport {
           i += 3;
           break;
         }
+        case 'code_block':
+          // Indented (four-space) code: same node as a fence, no language.
+          nodes.push(code_block.create({ params: '' }, [schema.text(t.content.replace(/\n$/, ''))]));
+          i++;
+          break;
         case 'fence': {
           const lang = t.info.trim().toLowerCase();
           const body = t.content.replace(/\n$/, '');
@@ -371,8 +389,7 @@ export function mdToDoc(src: string): MdImport {
           break;
         }
         case 'html_block':
-          warnings.push('HTML block kept as a code block');
-          nodes.push(code_block.create({ params: 'html' }, [schema.text(t.content.replace(/\n$/, ''))]));
+          nodes.push(schema.nodes.md_raw.create({ src: t.content.replace(/\n$/, '') }));
           i++;
           break;
         case 'footnote_block_open': {
@@ -442,6 +459,6 @@ export function mdToDoc(src: string): MdImport {
   const blocks = [...front, ...body];
   if (bib && !sawBibNode) blocks.push(schema.nodes.bibliography.create());
   if (!blocks.length) blocks.push(paragraph.create());
-  const doc = schema.nodes.doc.create({ settings, bib }, blocks);
+  const doc = schema.nodes.doc.create({ settings, bib, frontmatter }, blocks);
   return { doc, warnings };
 }

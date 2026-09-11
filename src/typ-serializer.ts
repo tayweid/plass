@@ -667,6 +667,10 @@ function blockToTyp(node: PMNode, indent = ''): string {
       if (!bib?.content) return '';
       return indent + `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "ieee")\n\n`;
     }
+    case 'md_raw':
+      // Hidden Markdown (HTML blocks, editorial comments): no print, no
+      // Typst. It lives only in the .md file.
+      return '';
     case 'page_break':
       return indent + '#pagebreak()\n\n';
     case 'numbering_restart':

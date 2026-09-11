@@ -3528,6 +3528,8 @@ class TypesetView {
         case 'table':
           table(pos, node);
           break;
+        case 'md_raw':
+          break; // hidden Markdown: zero height in the page, nothing in print
         default:
           atomic(pos, node, owner);
       }
@@ -3556,6 +3558,8 @@ class TypesetView {
         case 'table':
           table(offset, node);
           break;
+        case 'md_raw':
+          break; // hidden Markdown: zero height in the page, nothing in print
         default:
           // Headings are sticky by default (heading.rs:294); only top-level
           // ones are modeled — a heading nested in a list item or quote
