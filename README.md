@@ -104,8 +104,8 @@ tier is always visible to the writer.
   oracle verification, one at a time.
 
 Two consequences follow. Styling is offered as presets the layout engine
-has been verified on, not as free parameters. And the source view, when it
-arrives, is a second editor for the same rails, not a way around them: a
+has been verified on, not as free parameters. And the source view is a
+second editor for the same rails, not a way around them: a
 plain-text surface in the spirit of iA Writer for simpler files, editing
 the same headings, lists, math, and notes as text. It does not admit
 constructs the page view cannot show. A document that needs more than the
@@ -192,41 +192,33 @@ rails can always be finished in Typst itself, because the file is Typst.
   clicking a marker jumps to its body. Exports as Typst `#footnote[...]`
   (the PDF gets true Typst footnotes); in browser print, bodies degrade to
   inline notes.
-- **Tables** (⊞ in the toolbar): header row, Tab/Shift-Tab cell navigation,
-  and contextual controls that appear in the toolbar while inside a table —
-  add/delete rows and columns, merge/split cells, toggle header,
-  **per-column alignment (L/C/R — right-align for regression numbers)**, and
-  a **Style cycle: booktabs (academic default: horizontal rules only) →
-  grid → plain**. Cell selection by shift-click/drag. Breakable long tables
-  use a paged Typst mini-compile and appear as cropped page fragments,
-  including repeated `table.header` rows; content Typst keeps unbreakable is
-  pushed whole. While a split compile is pending or cannot be verified, the
-  existing split or atomic layout remains in place. Tables export as native
-  Typst — booktabs becomes `stroke: none` + `table.hline()` rules, alignment
-  becomes the `align: (…)` tuple with per-cell overrides, and merges become
-  `table.cell(colspan/rowspan)` — all preserved through the round trip. (Cells
-  keep browser layout — narrow measures justify badly.) For full Typst control,
-  the **Opts** button
-  stores raw `#table` arguments on the table (stroke/fill functions,
-  `inset`, fractional column widths, …), emitted verbatim into the export
-  and PDF — presets are suppressed while custom args exist. The document
-  **always shows the compiled table** (the in-app Typst render — same
-  fonts, engine, and centering as the PDF). Clicking it opens a focused
-  **editing card**, following the math-editor pattern: a plain cell grid
-  (Tab/arrows to move, header row bold, shift-click to select a range),
-  structural controls (rows, columns, merge/split, header toggle,
-  per-column alignment, style cycle), **clickable row boundaries** that
-  toggle booktabs midrules, a card-local **⌘Z/⌘⇧Z undo stack**, and a live
-  compiled result. The **Typst panel** at the bottom always shows the full
-  `#table(...)` arguments the current state compiles with — editing it
-  parses back through the importer, so GUI and source are two views of one
-  thing; custom arguments are additive with the style preset (add
-  `inset: 9pt` and booktabs stays). ⌘Enter saves as one undoable step; Esc
-  cancels. Cells with rich content (math, references) are preserved unless
-  their text is edited. Imported tables keep
-  unknown named arguments the same way; forms we can't reconstruct
-  faithfully (custom-positioned rules, vlines) fall back to raw-Typst
-  islands rather than being simplified.
+- **Tables** (⊞ in the toolbar or ⌘⌥T): a 3×3 table with a header row
+  lands in the document as **native editable cells** — the caret goes
+  straight into the first cell, Tab/Shift-Tab move between cells, and
+  shift-click/drag selects a range. Cells hold ordinary rich text (marks,
+  inline math, citations, `@` references); an edit that would leave that
+  lossless subset is refused with a notice rather than flattened. While the
+  caret is inside a table a floating control bar appears: add/delete rows
+  and columns, merge/split, toggle the header row, **L/C/R alignment for
+  the selected cells** (right-align regression numbers), a **style preset
+  (booktabs — the academic default, horizontal rules only — grid, plain)**,
+  a text-size menu (100–75%), and **Details** for a caption and a reference
+  label. A captioned or labelled table gets a painted "Table N:" caption
+  that renumbers live and is listed in the `@` picker. The editor table
+  uses Typst's own box model (intrinsic width, centered, 5pt insets), so it
+  sits where the PDF puts it. Long tables **break between rows with the
+  header repeated** on the next page, laid out locally and matched against
+  Typst's page starts row by row; a rowspan across the break, a tall split
+  cell, or a captioned table (a Typst figure) is placed whole instead.
+  Exports as native Typst — booktabs becomes `stroke: none` +
+  `table.hline()` rules, alignment the `align: (…)` tuple with per-cell
+  overrides, merges `table.cell(colspan/rowspan)`, captions
+  `#figure(table(…), caption: [...]) <label>` — and all of it round-trips.
+  Named `#table` arguments Plass has no control for (`inset`, fill
+  functions, `columns` widths, positioned rules) survive import verbatim
+  on the table and are re-emitted, additive with the preset — exact in the
+  PDF, while the editor shows the base style; rule layouts that no preset
+  can reconstruct stay raw-Typst islands rather than being simplified.
 - **Citations & bibliography** (hover the References block → Edit, or
   Document → Bib → Import .bib): the BibTeX is editable in-app (live entry
   count, ⌘Enter to save, Download .bib to get it back out; saves are

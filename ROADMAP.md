@@ -11,6 +11,26 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
 
 1. **Dogfood.** Write the document. Frictions harvested there become the new
    top of this file and outrank everything queued below.
+   *Harvested 2026-09-10 from the course notes (Markdown files with
+   hundreds of editorial `<!-- -->` comments and CriticMarkup):*
+   - Done: HTML blocks and comments are hidden islands (the dash
+     normalizer was turning `<!--` into `<!–`); frontmatter lines with no
+     Plass field ride along verbatim; indented code blocks and link titles
+     survive; list continuations indent once.
+   - **Open, top: straight quotes.** Typst prints `'`/`"` as smart quotes;
+     the document holds them straight. The oracle's text matcher rejects
+     every paragraph with an apostrophe (`expected 'shouldn't' got
+     'shouldn’t'`), so those paragraphs never get compiled verification and
+     the page map declines. Same doctrine as dashes: the normalizer and
+     importers should hold the printed glyph (mirror Typst's `smartquote`
+     rules for open/close), or the export disables `smartquote` — decide,
+     then do it once for `.typ` and `.md` alike.
+   - Open, smaller: h4–h6 demote to h3 (level lost on save); inline HTML
+     stays visible text and is dash-normalized (an inline hidden island
+     would fix it); an image's `"title"` is dropped; multi-paragraph
+     footnotes flatten; tight/loose list spacing normalizes; a `.typ` save
+     has no home for the Markdown-only carry (frontmatter extras, hidden
+     blocks) and drops it silently.
 2. **Finish the started features** — each is one short session:
    - *Keep-together*: machinery exists (⌘⌥K, atomic pagination,
      `block(breakable: false)` emission/import). Open: a discoverable UI
@@ -87,6 +107,24 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      free). Half-day minimal version: dropdown wired to PDF + References
      block only, quick TS author-year for the inline marks.
 
+## Next push (drafted 2026-09-10)
+
+The documents being written in Plass today are Markdown course notes, so
+the push is ordered by what those files hit, not by feature size:
+
+1. **Markdown fidelity to the finish** — the dogfood list above, smart
+   quotes first. Exit test: every file in the course-notes folder
+   round-trips byte-identical through the live editor
+   (`MD_FILE=… npx playwright test tests/md-comments.spec.ts`) and its
+   apostrophe paragraphs get compiled verification.
+2. **Tables as daily tools** — item 3 above (rule weights, insets,
+   span-aware ops, rich-cell editing), since "clunky to edit" was the
+   stated reason tables went unused.
+3. **Citations** — the worked plan below; a design session on library-bib
+   storage before code.
+
+Deferred on purpose: PAGE-PORT Phase 6, multiple columns, offline PWA.
+
 ## Needs its own design session
 
 - **Multiple columns** — `#set page(columns: 2)`. The big one, flagged
@@ -101,21 +139,9 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
 ## Standing backlog
 
 - Raw-Typst-island compiled previews (same pattern as tables/math/bib).
-- **Source view** — moved up; planned in SOURCE-VIEW.md as a second
-  editor for the same rails in the spirit of iA Writer (not an escape
-  hatch). The original sketch follows for history.
-- **Source view toggle** — a toolbar button switching between the WYSIWYG
-  view and the document's plain-text source (its on-disk format: .typ or
-  .md, which `file-manager`'s text method already produces). Both directions
-  exist: `docToTyp` is computed per edit as the oracle signature, and the
-  return trip is the file-open parser (unknown Typst survives as raw
-  islands, so an editable source view doubles as the escape hatch for Typst
-  the editor has no UI for). New work: the toggle + a mono `<textarea>`
-  (no CodeMirror in v1), one `replaceWith` on return (a single undo step),
-  a toggle-and-back identity test. Punt cursor/scroll mapping and live
-  two-view sync. Known cost to accept: the serializer re-normalizes
-  hand-formatting of untouched regions after a source-side edit.
-  Editable version ~1 day; read-only half that.
+- **Source view, step 4** — steps 0–3b shipped (SOURCE-VIEW.md). Left:
+  the writing niceties — focus mode, typewriter scrolling, ⌘B/⌘I wrapping
+  markup, mode memory per format, optionally `.md` opening in source.
 - **Incremental pagination activation for 50+ page documents.** The suffix
   planner and full-versus-suffix comparator exist, and the 40–50-page browser
   fixture requires a late-edit candidate to visit less than 25% of the full

@@ -78,8 +78,10 @@
   there is no cross-span peek/take. Fast paths (whole paragraph, container,
   container child) keep a conservative whole-entry peek as their sufficient
   condition and fall through to the exact walk otherwise.
-- **Filed vertical-parity bug (not a rule bug): the phantom space before a
-  footnote marker.** Measured 2026-08-29 on the footnote soak corpus (seed
+- **Fixed (9f86287): the phantom space before a footnote marker.** The
+  document no longer holds the space — the importers and the edit-time
+  normalizer drop it, so the DOM paints what Typst prints. The analysis
+  that found it, kept for the record: measured 2026-08-29 on the footnote soak corpus (seed
   424242). The whole layout stack models Typst's gluing — a source space
   immediately before a footnote marker is dropped from the width model
   (`paragraph.ts` `plan.glueLeft`, `forced-layout.ts`'s
@@ -119,11 +121,12 @@
   footnote glue), 9d35355 (opaque-block resync vs list markers). Known
   open oracle family: inline math butted against a known token
   (typst-oracle.ts ~482–502) — not yet reproduced in isolation.
-- Next up: Phase 6 (retire pageTopAdjustEm — now the dominant residual,
-  with the same-paragraph line-vs-block unit mismatch the heading soak
-  shows), Phase 5's breakable blocks, Phase 7 below.
+- Phase 7 (table row-breaking): **landed** a5da0e1 → 9d745a9, steps 1–5.
+- Open: Phase 5 (breakable blocks, figures, oversize). Phase 6 (retire
+  pageTopAdjustEm) is deprioritized by decision (2026-09-02): it is a
+  parity residual, not a dogfood friction — do not pick it up unasked.
 - Native-tables port: **done** on `codex/native-tables-port` (5788e87) —
-  see HANDOFF-TABLES-REPORT.md. Tables are native ProseMirror trees and
+  see docs/archive/HANDOFF-TABLES-REPORT.md. Tables are native ProseMirror trees and
   land atomic; `table-split.ts` and the mini-compile split path are gone.
 - Phase 7 (table row breaks): **in progress** on `claude/page-port-phase7`.
   Step 1 (oracle row matching) landed: `buildTableUnit`/`matchPageStarts`
