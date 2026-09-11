@@ -123,11 +123,20 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      each file and classify the first differing line; worth keeping as
      `scripts/md-corpus.ts` with a folder argument.
 2. **Finish the started features** — each is one short session:
-   - *Running headers/footers*: header text, alignment, `{page}`
-     substitution, first-page suppression, and emission/import are done.
-     Open: custom footer content, section-aware values via `context`, a
-     first-page behavior control in the settings UI, and moving the ordinary
-     folio into the header.
+   - ~~Running headers/footers~~ — done 2026-09-11. A footer text (with
+     the header's substitutions; it replaces the automatic number on its
+     edge, as Typst's explicit content does), `{section}` = the level-1
+     heading in force at the top of the page (Typst's
+     `query(heading).before(here())` from the header: the last heading on
+     an earlier page; the editor computes the same), `{page}` in the
+     document's numbering format (it was always plain; Typst's
+     `display()` follows the numbering), an "On first page" control for
+     header and footer, and the automatic number at the top of the page
+     (`number-align: top + …`). The audit now sets every margin line
+     aside by position and compares it with the chrome the editor
+     painted (`chromeMismatch`), so headers, footers, and numbers are
+     measured against Typst like everything else; fixtures `chrome.typ`,
+     `chrome-top.typ`.
    - Dropped 2026-09-11 (Taylor): a keep-together control and "keep heading
      with next block" (⌘⌥K and the atomic pagination stay as they are);
      the draft niceties (double spacing, DRAFT watermark, margin line

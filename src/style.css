@@ -199,6 +199,12 @@ body {
   z-index: 20;
 }
 
+/* A flyout item that has nothing to act on where the caret is (the list
+   pitch outside a list): dimmed, still a button. */
+.tb-flyout .tb-btn.tb-idle {
+  opacity: 0.45;
+}
+
 .tb-flyout {
   position: absolute;
   /* Centered on the trigger; the items are ordered so the

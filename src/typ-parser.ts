@@ -20,6 +20,7 @@ import { parseRowRuleArg } from './table-rules';
 import { cellFillFromTypst, type CellFill } from './table-fills';
 import { parseBibTeX } from './bibtex';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
+import { RUNNING_PAGE_TYP, RUNNING_SECTION_TYP } from './typ-serializer';
 
 export interface TypImport {
   doc: PMNode;
@@ -174,16 +175,29 @@ export function typToDoc(src: string): TypImport {
       } else {
         settings.pageNumShow = false;
       }
-      const nAlign = /number-align:\s*(left|center|right)/.exec(m[1])?.[1];
-      if (nAlign) settings.pageNumAlign = nAlign as typeof settings.pageNumAlign;
-      // Running header: header: [context if(...) {] align(X)[text] [}]
-      const header = /header:\s*(context if\(counter\(page\)\.get\(\)\.first\(\) > 1\) \{ )?align\((left|center|right)\)\[(.*?)\](?: \})?(?:,|$)/.exec(m[1]);
-      if (header) {
-        settings.headerFirstPage = !header[1];
-        settings.headerAlign = header[2] as typeof settings.headerAlign;
-        settings.headerText = unescapeTypText(
-          header[3].replace(/#context counter\(page\)\.display\(\)/g, '{page}'),
+      const nAlign = /number-align:\s*(?:(top|bottom)\s*\+\s*)?(left|center|right)/.exec(m[1]);
+      if (nAlign) {
+        settings.pageNumAlign = nAlign[2] as typeof settings.pageNumAlign;
+        settings.pageNumPlace = nAlign[1] === 'top' ? 'top' : 'bottom';
+      }
+      // Running header / footer: key: [context if(...) {] align(X)[text] [}]
+      for (const key of ['header', 'footer'] as const) {
+        const run = new RegExp(
+          `(?:^|[\\s(,])${key}:\\s*(context if\\(counter\\(page\\)\\.get\\(\\)\\.first\\(\\) > 1\\) \\{ )?align\\((left|center|right)\\)\\[(.*?)\\](?: \\})?(?:,|$)`,
+        ).exec(m[1]);
+        if (!run) continue;
+        const text = unescapeTypText(
+          run[3].split(RUNNING_SECTION_TYP).join('{section}').split(RUNNING_PAGE_TYP).join('{page}'),
         );
+        if (key === 'header') {
+          settings.headerFirstPage = !run[1];
+          settings.headerAlign = run[2] as typeof settings.headerAlign;
+          settings.headerText = text;
+        } else {
+          settings.footerFirstPage = !run[1];
+          settings.footerAlign = run[2] as typeof settings.footerAlign;
+          settings.footerText = text;
+        }
       }
       i++;
       continue;

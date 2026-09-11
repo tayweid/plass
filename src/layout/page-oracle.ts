@@ -11,7 +11,7 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import { buildSpec, matchParagraph, type AtomResolver, type SvgLine, type ParagraphSpec } from './typst-oracle';
 import type { ForcedBreak } from './paragraph';
-import { formatPageNumber, pageSize, type DocSettings } from '../settings';
+import { pageSize, type DocSettings } from '../settings';
 import { parseTypstSvg } from '../safe-svg';
 import { tableRowModel, type TableRowModel } from './table-rows';
 
@@ -54,6 +54,8 @@ export interface Unit {
 
 export interface PagedLine extends SvgLine {
   page: number;
+  /** Top of the line as a fraction of the page height. */
+  yFrac: number;
 }
 
 /** Per-page tsel lines from the multi-page SVG. The svg renders at an
@@ -68,15 +70,25 @@ function extractPages(svg: string, yTolPt: number, pageHPt: number): PagedLine[]
   document.body.appendChild(div);
   const out: PagedLine[] = [];
   const pages = [...div.querySelectorAll('.typst-page')];
+  // A page group's bounding box is its ink, not the sheet: the sheet's top
+  // is the group's translate and its height the page attribute, scaled by
+  // the svg's px per pt (the viewBox is in pt).
+  const svgRect = svgEl.getBoundingClientRect();
+  const viewW = parseFloat(svgEl.getAttribute('viewBox')?.split(/\s+/)[2] ?? '') || svgRect.width;
+  const scale = svgRect.width / viewW;
   pages.forEach((pageEl, page) => {
-    const rect = pageEl.getBoundingClientRect();
-    const yTol = (yTolPt * rect.height) / pageHPt;
+    const ink = pageEl.getBoundingClientRect();
+    const ty = parseFloat(/translate\(\s*[-\d.]+[\s,]+([-\d.]+)/.exec(pageEl.getAttribute('transform') ?? '')?.[1] ?? '');
+    const hAttr = parseFloat(pageEl.getAttribute('data-page-height') ?? '');
+    const top = Number.isFinite(ty) ? svgRect.top + ty * scale : ink.top;
+    const height = Number.isFinite(hAttr) ? hAttr * scale : ink.height;
+    const yTol = (yTolPt * height) / pageHPt;
     for (const el of pageEl.querySelectorAll('.tsel')) {
-      const y = el.getBoundingClientRect().top - rect.top;
+      const y = el.getBoundingClientRect().top - top;
       const text = el.textContent ?? '';
       const last = out[out.length - 1];
       if (last && last.page === page && Math.abs(y - last.y) < yTol) last.text += text;
-      else out.push({ text, y, page });
+      else out.push({ text, y, page, yFrac: y / height });
     }
   });
   // Record the page count on the array for the caller.
@@ -284,37 +296,34 @@ export function stripFootnoteLines(lines: PagedLine[], heads: string[]): PagedLi
   return lines.filter((_, i) => !drop.has(i));
 }
 
-function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver, audit?: UnitAudit[]): PageOracleEntry {
+function analyze(
+  svg: string,
+  doc: PMNode,
+  settings: DocSettings,
+  resolveAtom: AtomResolver,
+  audit?: UnitAudit[],
+  marginals?: Marginal[],
+): PageOracleEntry {
   const pitch = settings.lineHeight * settings.sizePt;
   const pageHPt = pageSize(settings).h * 0.75;
   const raw = extractPages(svg, pitch / 2, pageHPt);
   const pageCount = (raw as PagedLine[] & { pageCount?: number }).pageCount ?? 1;
   if (!raw.length) return { status: 'fail', reason: 'no text layer' };
 
-  // Page numbers render in the footer and reach the text layer too. A
-  // numbering-restart marker makes folio values non-sequential (roman
-  // front matter, body restarting at 1), so match folio PATTERNS for the
-  // formats in play rather than one exact per-page value.
-  let hasRestart = false;
-  doc.forEach((n) => {
-    if (n.type.name === 'numbering_restart') hasRestart = true;
-  });
-  const folioRe = (fmt: DocSettings['pageNumFormat']): RegExp =>
-    fmt === '1'
-      ? /^\d+$/
-      : fmt === '— 1 —'
-        ? /^— \d+ —$/
-        : fmt === 'i'
-          ? /^[ivxlcdm]+$/
-          : /^\d+ \/ \d+$/;
-  const folioPatterns = hasRestart
-    ? [folioRe(settings.pageNumFormat), folioRe('i')]
-    : [folioRe(settings.pageNumFormat)];
-  const isFolio = (l: PagedLine) =>
-    hasRestart
-      ? folioPatterns.some((re) => re.test(l.text.trim()))
-      : l.text.trim() === formatPageNumber(settings, l.page + 1, pageCount);
-  const all = settings.pageNumShow ? raw.filter((l) => !isFolio(l)) : raw;
+  // The page chrome (the number, a running header or footer) reaches the
+  // text layer too, in the margins: everything above the top margin or
+  // below the bottom one is a marginal, kept aside for the chrome check.
+  // A text line's box top is its tallest ink, which can poke half a
+  // size above the cap top a first line sets at the margin; the chrome
+  // sits well clear (a header's bottom at 0.7 × the margin, a footer's
+  // top past 0.7 × the margin below the content).
+  const topFrac = (settings.marginTop * 72 - 0.5 * settings.sizePt) / pageHPt;
+  const bottomFrac = 1 - (settings.marginBottom * 72 - 0.5 * settings.sizePt) / pageHPt;
+  const all: PagedLine[] = [];
+  for (const l of raw) {
+    if (l.yFrac < topFrac || l.yFrac > bottomFrac) marginals?.push({ page: l.page, text: l.text });
+    else all.push(l);
+  }
 
   const units = buildUnits(doc, resolveAtom);
   const lines = stripFootnoteLines(all, footnoteHeads(doc));
@@ -489,6 +498,12 @@ export function matchPageStarts(units: Unit[], lines: PagedLine[], audit?: UnitA
   return { status: 'ok', pageStarts };
 }
 
+/** A text line Typst set in a page's margin: the number, a running text. */
+export interface Marginal {
+  page: number;
+  text: string;
+}
+
 export interface SvgAudit {
   /** Typst's page starts, present even when a unit disagreed (audit mode
    * resyncs); `status` says whether the whole match was clean. */
@@ -497,6 +512,7 @@ export interface SvgAudit {
   pageStarts: PageStart[];
   pageCount: number;
   units: UnitAudit[];
+  marginals: Marginal[];
 }
 
 /**
@@ -507,12 +523,14 @@ export interface SvgAudit {
  */
 export function auditSvg(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver): SvgAudit {
   const units: UnitAudit[] = [];
-  const entry = analyze(svg, doc, settings, resolveAtom, units);
+  const marginals: Marginal[] = [];
+  const entry = analyze(svg, doc, settings, resolveAtom, units, marginals);
   return {
     status: entry.status,
     reason: entry.reason,
     pageStarts: entry.pageStarts ?? [],
     pageCount: entry.pageCount ?? 1,
     units,
+    marginals,
   };
 }

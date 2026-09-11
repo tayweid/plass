@@ -722,6 +722,29 @@ function firstDiff(a: string, b: string): string {
   check('nested loose lists round-trip', nOut === docToTyp(typToDoc(nOut).doc), firstDiff(nOut, docToTyp(typToDoc(nOut).doc)));
 }
 
+{
+  // Page chrome: a running header and footer with {page}/{section}, the
+  // number at the top of the page, and the first-page flags round-trip
+  // through the page line.
+  const SECTION = '#context { let hs = query(selector(heading.where(level: 1)).before(here())); if hs.len() > 0 { hs.last().body } }';
+  const PAGE = '#context counter(page).display()';
+  const src =
+    `#set page(paper: "us-letter", margin: 1in, numbering: "— 1 —", number-align: top + right, header: context if(counter(page).get().first() > 1) { align(left)[Notes · ${SECTION} · ${PAGE}] }, footer: align(center)[Econ 0100 · ${PAGE}])\n` +
+    '#set text(font: "New Computer Modern", size: 12.5pt)\n\n= Title\n\nBody.\n';
+  const { doc } = typToDoc(src);
+  const s = doc.attrs.settings as Record<string, unknown>;
+  check(
+    'header, footer, and number placement import',
+    s.headerText === 'Notes · {section} · {page}' && s.headerAlign === 'left' && s.headerFirstPage === false &&
+      s.footerText === 'Econ 0100 · {page}' && s.footerAlign === 'center' && s.footerFirstPage === true &&
+      s.pageNumPlace === 'top' && s.pageNumAlign === 'right' && s.pageNumFormat === '— 1 —',
+    JSON.stringify(s),
+  );
+  const out = docToTyp(doc);
+  check('the page line is written back the same', out.includes(src.split('\n')[0]), out.split('\n')[1]);
+  check('chrome round-trips byte for byte', out === docToTyp(typToDoc(out).doc), firstDiff(out, docToTyp(typToDoc(out).doc)));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

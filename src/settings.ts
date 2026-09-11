@@ -31,12 +31,25 @@ export interface DocSettings {
   pageNumShow: boolean;
   pageNumFormat: '1' | '— 1 —' | 'i' | '1 / 1';
   pageNumAlign: 'left' | 'center' | 'right';
+  /** Where the automatic page number goes: the footer (Typst's default)
+   *  or the header (`number-align: top + …`). A running header or footer
+   *  text replaces the number on its edge, as Typst's explicit content
+   *  does — write {page} into the text to keep it. */
+  pageNumPlace: 'bottom' | 'top';
   pageNumStart: number;
-  /** Running header text ('' = none). Use {page} for the page number. */
+  /** Running header text ('' = none). {page} is the page number in the
+   *  document's format, {section} the level-1 heading in force at the top
+   *  of the page (the last one on an earlier page, as Typst's
+   *  `query(...).before(here())` sees it from the header). */
   headerText: string;
   headerAlign: 'left' | 'center' | 'right';
   /** Show the header on page 1 (off = academic convention). */
   headerFirstPage: boolean;
+  /** Running footer text ('' = the automatic page number). Same
+   *  substitutions as the header. */
+  footerText: string;
+  footerAlign: 'left' | 'center' | 'right';
+  footerFirstPage: boolean;
   /** One definition per line: \name = expansion (KaTeX macros). */
   mathMacros: string;
   /** Citation style: a ported formatter, verified against the compiler
@@ -73,10 +86,14 @@ export const DEFAULT_SETTINGS: DocSettings = {
   pageNumShow: true,
   pageNumFormat: '1',
   pageNumAlign: 'center',
+  pageNumPlace: 'bottom',
   pageNumStart: 1,
   headerText: '',
   headerAlign: 'right',
   headerFirstPage: false,
+  footerText: '',
+  footerAlign: 'center',
+  footerFirstPage: true,
   citationStyle: 'ieee',
   footnoteNumbering: '1',
   footnoteSeparator: 'rule',
@@ -113,6 +130,19 @@ export function toRoman(n: number): string {
 }
 
 /** Render a page number per the document's format setting. */
+/** The running text's substitutions: {page} and {section}. */
+export function runningText(template: string, page: string, section: string): string {
+  return template.replace(/\{page\}/g, page).replace(/\{section\}/g, section);
+}
+
+/** The format `counter(page).display()` uses for a {page} in a running
+ *  text: the document's numbering when page numbers are on (a two-number
+ *  pattern shows its first number alone), else Typst's default `1`. */
+export function runningPageFormat(s: DocSettings): DocSettings['pageNumFormat'] {
+  if (!s.pageNumShow) return '1';
+  return s.pageNumFormat === '1 / 1' ? '1' : s.pageNumFormat;
+}
+
 export function formatPageNumber(s: DocSettings, page: number, total: number): string {
   const n = page + s.pageNumStart - 1;
   switch (s.pageNumFormat) {
@@ -198,6 +228,12 @@ export function normalizeSettings(raw: Partial<DocSettings> | null | undefined):
   }
   if (oneOf(source.headerAlign, ['left', 'center', 'right'])) merged.headerAlign = source.headerAlign;
   if (typeof source.headerFirstPage === 'boolean') merged.headerFirstPage = source.headerFirstPage;
+  if (typeof source.footerText === 'string' && source.footerText.length <= 1_024) {
+    merged.footerText = source.footerText;
+  }
+  if (oneOf(source.footerAlign, ['left', 'center', 'right'])) merged.footerAlign = source.footerAlign;
+  if (typeof source.footerFirstPage === 'boolean') merged.footerFirstPage = source.footerFirstPage;
+  if (oneOf(source.pageNumPlace, ['bottom', 'top'])) merged.pageNumPlace = source.pageNumPlace;
   if (
     typeof source.mathMacros === 'string' &&
     // File/editor ingress performs the exact UTF-8 check. Use a conservative
@@ -369,15 +405,35 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
     panel.appendChild(notice);
   }
   row('Size', select([10, 11, 12, 12.5, 13, 14].map((n) => [n, `${n} pt`] as [number, string]), s.sizePt, (v) => patch({ sizePt: +v })));
-  {
+  for (const edge of ['header', 'footer'] as const) {
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Title · Name · {page}';
-    input.value = s.headerText;
-    input.addEventListener('change', () => patch({ headerText: input.value }));
-    row('Header', input);
+    input.placeholder = edge === 'header' ? 'Title · {section} · {page}' : 'Name · {page}';
+    input.value = edge === 'header' ? s.headerText : s.footerText;
+    input.addEventListener('change', () => patch(edge === 'header' ? { headerText: input.value } : { footerText: input.value }));
+    row(edge === 'header' ? 'Header' : 'Footer', input);
+    row(
+      edge === 'header' ? 'Header align' : 'Footer align',
+      select(
+        [['left', 'Left'], ['center', 'Center'], ['right', 'Right']] as Array<[string, string]>,
+        edge === 'header' ? s.headerAlign : s.footerAlign,
+        (v) => patch(edge === 'header' ? { headerAlign: v as DocSettings['headerAlign'] } : { footerAlign: v as DocSettings['footerAlign'] }),
+      ),
+    );
   }
-  row('Header align', select([['left', 'Left'], ['center', 'Center'], ['right', 'Right']] as Array<[string, string]>, s.headerAlign, (v) => patch({ headerAlign: v as DocSettings['headerAlign'] })));
+  row(
+    'On first page',
+    select(
+      [
+        ['both', 'Header and footer'],
+        ['footer', 'Footer only'],
+        ['header', 'Header only'],
+        ['none', 'Neither'],
+      ] as Array<[string, string]>,
+      s.headerFirstPage ? (s.footerFirstPage ? 'both' : 'header') : s.footerFirstPage ? 'footer' : 'none',
+      (v) => patch({ headerFirstPage: v === 'both' || v === 'header', footerFirstPage: v === 'both' || v === 'footer' }),
+    ),
+  );
   {
     // The marker is a document position, but its placement is structural:
     // right after the leading front-matter blocks. The setting manages it.
@@ -511,9 +567,19 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   row(
     'Number position',
     select(
-      [['left', 'Bottom left'], ['center', 'Bottom center'], ['right', 'Bottom right']] as Array<[string, string]>,
-      s.pageNumAlign,
-      (v) => patch({ pageNumAlign: v as DocSettings['pageNumAlign'] }),
+      [
+        ['bottom left', 'Bottom left'],
+        ['bottom center', 'Bottom center'],
+        ['bottom right', 'Bottom right'],
+        ['top left', 'Top left'],
+        ['top center', 'Top center'],
+        ['top right', 'Top right'],
+      ] as Array<[string, string]>,
+      `${s.pageNumPlace} ${s.pageNumAlign}`,
+      (v) => {
+        const [place, align] = v.split(' ');
+        patch({ pageNumPlace: place as DocSettings['pageNumPlace'], pageNumAlign: align as DocSettings['pageNumAlign'] });
+      },
     ),
   );
   row('First page number', select([1, 2, 3, 4, 5, 10, 100].map((n) => [n, String(n)] as [number, string]), s.pageNumStart, (v) => patch({ pageNumStart: +v })));

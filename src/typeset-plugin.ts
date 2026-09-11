@@ -2380,6 +2380,11 @@ class TypesetView {
       local: { starts: this.anchorsToPageStartEntries(local.anchors), count: local.count },
       entryFor: (node) => this.cache.get(node),
       domBreaksFor: (node, pos) => this.domBreakSignature(node, pos),
+      // The chrome main.ts painted (number, running header/footer), by page.
+      editorChrome: [...document.querySelectorAll<HTMLElement>('#pages .page-num')].map((el) => ({
+        page: Number(el.dataset.page ?? -1),
+        text: el.textContent ?? '',
+      })),
       compileMs,
       analyzeMs,
     });

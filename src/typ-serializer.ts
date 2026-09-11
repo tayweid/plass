@@ -217,6 +217,15 @@ export function equationBlockSpacingEm(s: DocSettings): { above: number; below: 
   return { above, below };
 }
 
+/** {page} in a running text: the page counter in the numbering in force. */
+export const RUNNING_PAGE_TYP = '#context counter(page).display()';
+/** {section} in a running text: the level-1 heading in force at the top
+ *  of the page — the last one before the header's own location, so a
+ *  heading that opens this page is not yet it (the editor mirrors this:
+ *  the last level-1 heading on an earlier page). */
+export const RUNNING_SECTION_TYP =
+  '#context { let hs = query(selector(heading.where(level: 1)).before(here())); if hs.len() > 0 { hs.last().body } }';
+
 /** The parity header: set/show rules reproducing editor spacing in Typst. */
 export function parityRules(s: DocSettings): string {
   const m = parityMetrics(s.font);
@@ -867,15 +876,22 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     docSettings = s;
     // With a restart marker, front-matter pages number in roman.
     const frontFormat = hasRestart ? 'i' : s.pageNumFormat;
-    if (s.pageNumShow) pageArgs.push(`numbering: "${frontFormat}"`, `number-align: ${s.pageNumAlign}`);
-    if (s.headerText) {
-      const inner = escapeTyp(s.headerText).replace(/\\\{page\\\}|\{page\}/g, '#context counter(page).display()');
-      const body = `align(${s.headerAlign})[${inner}]`;
-      pageArgs.push(
-        s.headerFirstPage
-          ? `header: ${body}`
-          : `header: context if(counter(page).get().first() > 1) { ${body} }`,
-      );
+    if (s.pageNumShow) {
+      pageArgs.push(`numbering: "${frontFormat}"`, `number-align: ${s.pageNumPlace === 'top' ? 'top + ' : ''}${s.pageNumAlign}`);
+    }
+    // Running header and footer: explicit page content (which replaces the
+    // automatic number on that edge, as in Typst), with {page} and
+    // {section} as context expressions.
+    for (const [key, text, align, first] of [
+      ['header', s.headerText, s.headerAlign, s.headerFirstPage],
+      ['footer', s.footerText, s.footerAlign, s.footerFirstPage],
+    ] as Array<[string, string, string, boolean]>) {
+      if (!text) continue;
+      const inner = escapeTyp(text)
+        .replace(/\\\{page\\\}|\{page\}/g, RUNNING_PAGE_TYP)
+        .replace(/\\\{section\\\}|\{section\}/g, RUNNING_SECTION_TYP);
+      const body = `align(${align})[${inner}]`;
+      pageArgs.push(first ? `${key}: ${body}` : `${key}: context if(counter(page).get().first() > 1) { ${body} }`);
     }
     out += `#set page(${pageArgs.join(', ')})\n`;
     out += parityRules(s);

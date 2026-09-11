@@ -485,8 +485,9 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
         break;
       }
     }
+    // Never `disabled`: the tools pill's disabled state means "source view".
     listSpacingBtn.querySelector('.lbl')!.textContent = tight === false ? 'Tight' : 'Loose';
-    listSpacingBtn.disabled = tight === null;
+    listSpacingBtn.classList.toggle('tb-idle', tight === null);
   };
   syncListSpacing();
   view.dom.addEventListener('focusin', syncListSpacing);

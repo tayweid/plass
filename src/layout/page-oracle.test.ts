@@ -150,7 +150,7 @@ import { buildTableUnit, matchPageStarts, type PagedLine } from './page-oracle';
   check('a plain table becomes a row-matched unit', units[1].kind === 'table' && units[1].rows?.length === 5);
   check('row tokens glue cell boundaries', units[1].rows![1].tokens.map((t) => `${t.spaceBefore ? ' ' : ''}${t.text}`).join('|') === 'Alpha| 1|1.5|n1');
 
-  const line = (page: number, text: string): PagedLine => ({ page, y: 0, text });
+  const line = (page: number, text: string): PagedLine => ({ page, y: 0, yFrac: 0.5, text });
   const linesFor = (split: number, repeat = true): PagedLine[] => {
     const out: PagedLine[] = [line(0, 'Intro paragraph before the table.'), line(0, 'ItemValueNote')];
     for (let i = 1; i <= 4; i++) {

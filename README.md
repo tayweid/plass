@@ -284,9 +284,16 @@ rails can always be finished in Typst itself, because the file is Typst.
   numbering** ("1.2"-style painted on headings; headings then become
   `@sec:` targets in the picker, auto-labeled on first reference and
   exported as `= Title <label>` + `#set heading(numbering: "1.1")`), **page
-  numbers** (show/hide, formats 1 / — 1 — / roman / 1-of-N, position,
-  first-page number — mirrored in the painted chrome and exported as
-  `#set page(numbering:, number-align:)` + `#counter(page).update()`), and
+  numbers** (show/hide, formats 1 / — 1 — / roman / 1-of-N, position at
+  the bottom or the top of the page, first-page number — mirrored in the
+  painted chrome and exported as `#set page(numbering:, number-align:)` +
+  `#counter(page).update()`), **running header and footer** (a text with
+  `{page}` for the page number in the document's format and `{section}`
+  for the level-1 heading in force at the top of the page; alignment;
+  either can be off on page 1; a footer text replaces the automatic
+  number on its edge, as Typst's explicit `footer:` does — put `{page}`
+  in it to keep the number; the port audit checks every page's margins
+  against Typst's), and
   **math macros** (define `\E = \mathbb{E}` once; live in every KaTeX
   render and expanded to plain LaTeX on export so files compile anywhere;
   persisted via a `// typeset:math-macros` header directive). Settings are

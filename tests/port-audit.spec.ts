@@ -17,6 +17,7 @@ interface PortAuditReport {
   compileMs: number;
   analyzeMs: number;
   typst: { status: 'ok' | 'fail'; reason?: string; pageCount: number };
+  chrome: Array<{ page: number; typst: string[]; editor: string[] }>;
   pages: {
     local: Array<{ pos: number; line: number; unit: string }>;
     typst: Array<{ pos: number; line: number; unit: string }>;
@@ -25,7 +26,7 @@ interface PortAuditReport {
     firstDiff: { firstDiffPage: number; cause: string; localStart: unknown; exactStart: unknown } | null;
   };
   blocks: Array<{ pos: number; type: string; text: string; status: string; port?: string; typst?: string; authority?: string | null; reason?: string }>;
-  summary: { blocks: number; match: number; mismatch: number; typstFail: number; noPort: number; browserMismatch: number; pagesAgree: boolean };
+  summary: { blocks: number; match: number; mismatch: number; typstFail: number; noPort: number; browserMismatch: number; pagesAgree: boolean; chromeMismatch: number };
 }
 
 declare global {
@@ -223,6 +224,38 @@ FIXTURES.push(
   },
 );
 
+FIXTURES.push(
+  {
+    // Page chrome: a running header with the section in force and the page
+    // number in the document's format, a running footer (which replaces
+    // the automatic number), neither on page 1.
+    name: 'chrome.typ',
+    text:
+      TYP_HEAD(
+        'paper: "us-letter", margin: 1.25in, numbering: "— 1 —", number-align: center, ' +
+          'header: context if(counter(page).get().first() > 1) { align(right)[Notes · #context { let hs = query(selector(heading.where(level: 1)).before(here())); if hs.len() > 0 { hs.last().body } } · #context counter(page).display()] }, ' +
+          'footer: context if(counter(page).get().first() > 1) { align(center)[Econ 0100 · #context counter(page).display()] }',
+      ) +
+      '= Introduction\n\n' +
+      Array.from({ length: 5 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') +
+      '\n\n= Supply and demand\n\n' +
+      Array.from({ length: 6 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') +
+      '\n\n= Elasticity\n\n' +
+      Array.from({ length: 7 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') +
+      '\n',
+  },
+  {
+    // The automatic number in the header (number-align: top), a two-number
+    // format, and a footer whose {page} shows the counter alone.
+    name: 'chrome-top.typ',
+    text:
+      TYP_HEAD('paper: "us-letter", margin: 1.25in, numbering: "1 / 1", number-align: top + right, footer: align(center)[Page #context counter(page).display()]') +
+      '= Numbers\n\n' +
+      Array.from({ length: 12 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') +
+      '\n',
+  },
+);
+
 FIXTURES.push({
   name: 'table-bare.md',
   text: ['| Item | Value |', '| --- | --- |', ...Array.from({ length: TABLE_ROWS - 1 }, (_, i) => `| Row ${i + 1} | ${i + 1} |`), ''].join('\n'),
@@ -301,6 +334,7 @@ function describe(report: PortAuditReport): string {
   for (const b of report.blocks.filter((b) => b.status === 'mismatch' || b.status === 'browser-mismatch' || b.status === 'typst-fail' || b.status === 'no-port')) {
     lines.push(`  ${b.status.padEnd(10)} ${b.type}@${b.pos} "${b.text}"` + (b.reason ? ` — ${b.reason}` : b.port ? ` port ${b.port} typst ${b.typst}` : ''));
   }
+  for (const c of report.chrome) lines.push(`  chrome page ${c.page + 1}: typst ${JSON.stringify(c.typst)} editor ${JSON.stringify(c.editor)}`);
   if (!s.pagesAgree) {
     const d = report.pages.firstDiff;
     lines.push(`  pages: first difference on page ${d?.firstDiffPage} (${d?.cause}) local ${JSON.stringify(d?.localStart)} typst ${JSON.stringify(d?.exactStart)}`);
@@ -326,6 +360,7 @@ for (const doc of docs) {
       expect(report!.summary.browserMismatch, 'browser-laid breaks differ from Typst').toBe(0);
       expect(report!.summary.typstFail, 'blocks Typst could not be matched to').toBe(0);
       expect(report!.summary.pagesAgree, 'page starts differ from Typst').toBe(true);
+      expect(report!.summary.chromeMismatch, 'page chrome differs from Typst').toBe(0);
     }
   });
 }

@@ -21,7 +21,7 @@ import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { TypstInlineView } from './inline-raw';
 import { refAutocomplete } from './ref-autocomplete';
-import { applySettings, formatPageNumber, getSettings } from './settings';
+import { applySettings, formatPageNumber, getSettings, runningPageFormat, runningText, type DocSettings } from './settings';
 import { FileManager } from './file-manager';
 import { resetCompilerCircuit } from './compiler-circuit';
 import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
@@ -190,48 +190,81 @@ function renderPages(info: PageInfo) {
       }
     }
   }
-  const folio = (k: number) =>
+  const numberOn = (k: number, fmt: DocSettings) =>
     restartPage < 0
-      ? formatPageNumber(s, k + 1, info.count)
+      ? formatPageNumber(fmt, k + 1, info.count)
       : k < restartPage
-        ? formatPageNumber({ ...s, pageNumFormat: 'i' }, k + 1, restartPage)
-        : formatPageNumber(s, k - restartPage + 1, info.count - restartPage);
-  const sig = `${info.count}:${info.pageH}:${info.marginBottom}:${info.marginLeft}:${info.marginRight}:${s.pageNumShow}:${s.pageNumFormat}:${s.pageNumAlign}:${s.pageNumStart}:${s.headerText}:${s.headerAlign}:${s.headerFirstPage}:${restartPage}`;
+        ? formatPageNumber({ ...fmt, pageNumFormat: 'i' }, k + 1, restartPage)
+        : formatPageNumber(fmt, k - restartPage + 1, info.count - restartPage);
+  // The automatic number, and the {page} of a running text (the counter
+  // displayed in the numbering in force).
+  const folio = (k: number) => numberOn(k, s);
+  const runningPage = (k: number) => numberOn(k, { ...s, pageNumFormat: runningPageFormat(s) });
+  // {section}: the level-1 heading in force at the top of page k — the
+  // last one on an earlier page, which is what Typst's header sees with
+  // `query(heading).before(here())` (a heading opening page k is after
+  // the header's own location).
+  const sections: Array<{ page: number; text: string }> = [];
+  if (/\{section\}/.test(s.headerText + s.footerText)) {
+    const host = view.dom.parentElement ?? view.dom;
+    const stackTop = host.getBoundingClientRect().top;
+    view.state.doc.forEach((node, offset) => {
+      if (node.type.name !== 'heading' || node.attrs.level !== 1) return;
+      try {
+        const c = view.coordsAtPos(offset + 1);
+        sections.push({ page: Math.max(0, Math.floor((c.top - stackTop) / (info.pageH + info.gap))), text: node.textContent });
+      } catch {
+        /* an unmeasurable heading has no page */
+      }
+    });
+  }
+  const sectionOn = (k: number) => {
+    let text = '';
+    for (const h of sections) if (h.page < k) text = h.text;
+    return text;
+  };
+  const sig = [
+    info.count, info.pageH, info.marginBottom, info.marginLeft, info.marginRight, s.marginTop, s.sizePt,
+    s.pageNumShow, s.pageNumFormat, s.pageNumAlign, s.pageNumPlace, s.pageNumStart,
+    s.headerText, s.headerAlign, s.headerFirstPage, s.footerText, s.footerAlign, s.footerFirstPage,
+    restartPage, sections.map((h) => `${h.page}=${h.text}`).join('\u0001'),
+  ].join(':');
   if (sig !== pageSignature) {
     pageSignature = sig;
     const frag = document.createDocumentFragment();
+    const em = s.sizePt * (4 / 3);
     for (let k = 0; k < info.count; k++) {
       const top = k * (info.pageH + info.gap);
       const box = document.createElement('div');
       box.className = 'page-box';
       box.style.top = `${top}px`;
       frag.appendChild(box);
-      if (s.headerText && (s.headerFirstPage || k > 0)) {
-        const head = document.createElement('div');
-        head.className = 'page-num page-header';
-        // Typst header: block bottom sits header-ascent (30%) above the
-        // content area, i.e. at 0.7 * top margin.
-        const em = s.sizePt * (4 / 3);
-        head.style.top = `${top + 0.7 * (s.marginTop * 96) - 1.2 * em}px`;
-        head.style.textAlign = s.headerAlign;
-        head.style.padding = `0 ${info.marginRight}px 0 ${info.marginLeft}px`;
-        head.textContent = s.headerText.replace(
-          /\{page\}/g,
-          restartPage < 0 || k >= restartPage
-            ? formatPageNumber({ ...s, pageNumFormat: '1' }, restartPage < 0 ? k + 1 : k - restartPage + 1, info.count)
-            : formatPageNumber({ ...s, pageNumFormat: 'i' }, k + 1, restartPage),
-        );
-        frag.appendChild(head);
-      }
-      if (s.pageNumShow) {
-        const num = document.createElement('div');
-        num.className = 'page-num';
-        // Typst's folio: centered one third of the margin below the content.
-        num.style.top = `${top + info.pageH - (2 / 3) * info.marginBottom - 0.55 * s.sizePt * (4 / 3)}px`;
-        num.style.textAlign = s.pageNumAlign;
-        num.style.padding = `0 ${info.marginRight}px 0 ${info.marginLeft}px`;
-        num.textContent = folio(k);
-        frag.appendChild(num);
+      // Typst's header: its block bottom sits header-ascent (30%) above the
+      // content area, i.e. at 0.7 × top margin; its footer one third of the
+      // bottom margin below the content. A running text on an edge replaces
+      // the automatic number there (Typst: explicit content over `numbering`).
+      const chrome = (edge: 'header' | 'footer', align: string, text: string) => {
+        const el = document.createElement('div');
+        el.className = `page-num page-${edge}`;
+        el.dataset.page = String(k);
+        el.style.top =
+          edge === 'header'
+            ? `${top + 0.7 * (s.marginTop * 96) - 1.2 * em}px`
+            : `${top + info.pageH - (2 / 3) * info.marginBottom - 0.55 * em}px`;
+        el.style.textAlign = align;
+        el.style.padding = `0 ${info.marginRight}px 0 ${info.marginLeft}px`;
+        el.textContent = text;
+        frag.appendChild(el);
+      };
+      for (const [edge, text, align, first] of [
+        ['header', s.headerText, s.headerAlign, s.headerFirstPage],
+        ['footer', s.footerText, s.footerAlign, s.footerFirstPage],
+      ] as Array<['header' | 'footer', string, string, boolean]>) {
+        if (text) {
+          if (first || k > 0) chrome(edge, align, runningText(text, runningPage(k), sectionOn(k)));
+        } else if (s.pageNumShow && (s.pageNumPlace === 'top') === (edge === 'header')) {
+          chrome(edge, s.pageNumAlign, folio(k));
+        }
       }
     }
     pagesEl.replaceChildren(frag);

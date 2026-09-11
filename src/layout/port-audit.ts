@@ -28,10 +28,20 @@ export interface BlockAudit {
   reason?: string;
 }
 
+/** A page whose margins Typst set differently from the editor's chrome
+ * (number, running header or footer), texts compared without spaces. */
+export interface ChromeAudit {
+  page: number;
+  typst: string[];
+  editor: string[];
+}
+
 export interface PortAuditReport {
   compileMs: number;
   analyzeMs: number;
   typst: { status: 'ok' | 'fail'; reason?: string; pageCount: number };
+  /** Pages whose chrome differs; empty when every margin agrees. */
+  chrome: ChromeAudit[];
   pages: {
     local: PageStartEntry[];
     typst: PageStartEntry[];
@@ -48,6 +58,7 @@ export interface PortAuditReport {
     noPort: number;
     browserMismatch: number;
     pagesAgree: boolean;
+    chromeMismatch: number;
   };
 }
 
@@ -81,6 +92,8 @@ export function buildPortAudit(args: {
   /** The painted line breaks of a browser-laid textblock (no port entry),
    * as a break signature, or null when they cannot be read. */
   domBreaksFor?: (node: PMNode, pos: number) => string | null;
+  /** The chrome the editor painted, page by page. */
+  editorChrome?: Array<{ page: number; text: string }>;
   compileMs: number;
   analyzeMs: number;
 }): PortAuditReport {
@@ -106,10 +119,21 @@ export function buildPortAudit(args: {
   const localStarts = local.starts.map((entry) => canonicalStart(doc, entry));
   const agree = samePageStarts(localStarts, typstStarts) && local.count === typst.pageCount;
   const count = (status: BlockAudit['status']) => blocks.filter((b) => b.status === status).length;
+  const chrome: ChromeAudit[] = [];
+  {
+    const pageCount = Math.max(typst.pageCount, local.count);
+    const norm = (t: string) => t.replace(/\s+/g, '');
+    for (let page = 0; page < pageCount; page++) {
+      const got = typst.marginals.filter((m) => m.page === page).map((m) => norm(m.text)).filter(Boolean).sort();
+      const want = (args.editorChrome ?? []).filter((m) => m.page === page).map((m) => norm(m.text)).filter(Boolean).sort();
+      if (got.length !== want.length || got.some((t, i) => t !== want[i])) chrome.push({ page, typst: got, editor: want });
+    }
+  }
   return {
     compileMs: args.compileMs,
     analyzeMs: args.analyzeMs,
     typst: { status: typst.status, reason: typst.reason, pageCount: typst.pageCount },
+    chrome,
     pages: {
       local: localStarts,
       typst: typstStarts,
@@ -126,6 +150,7 @@ export function buildPortAudit(args: {
       noPort: count('no-port'),
       browserMismatch: count('browser-mismatch'),
       pagesAgree: agree,
+      chromeMismatch: chrome.length,
     },
   };
 }
