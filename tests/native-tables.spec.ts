@@ -432,6 +432,38 @@ test('the Rule control cycles a row rule that paints in the page and exports at 
   await expect(rule).toBeDisabled();
 });
 
+test('the Fill control cycles a preset that paints the cell and exports', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    window.view.dispatch(state.tr.insertText('Before.', 1));
+    window.view.focus();
+  });
+  await page.keyboard.press('End');
+  await page.keyboard.press('ControlOrMeta+Alt+t');
+  await expect(page.locator('.ProseMirror table')).toHaveCount(1);
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('shaded');
+  const fill = page.getByRole('toolbar', { name: 'Table controls' }).getByRole('button', { name: /^Fill behind/ });
+  await expect(fill).toHaveText('Fill');
+  const bg = () => page.evaluate(() => getComputedStyle(document.querySelectorAll('.ProseMirror tr')[1].querySelector('td')!).backgroundColor);
+  await fill.click();
+  await expect(fill).toHaveText('Fill: gray');
+  expect(await bg()).toBe('rgb(240, 240, 240)');
+  await fill.click();
+  await expect(fill).toHaveText('Fill: yellow');
+  expect(await bg()).toBe('rgb(255, 243, 176)');
+  const typ = await page.evaluate(async () => {
+    const { docToTyp } = await import('/src/typ-serializer.ts');
+    return docToTyp(window.view.state.doc);
+  });
+  expect(typ).toContain('table.cell(fill: rgb("#fff3b0"))[shaded]');
+  await fill.click();
+  await fill.click();
+  await expect(fill).toHaveText('Fill');
+  expect(await bg()).toBe('rgba(0, 0, 0, 0)');
+});
+
 test('default native table uses the intrinsic centered Typst box model', async ({ page }) => {
   await page.goto('/?new=1');
   await page.waitForFunction(() => !!window.view);

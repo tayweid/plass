@@ -17,6 +17,7 @@ import { trimSpaceBeforeMarker } from './collapse-spaces';
 import { beforeAfterNode, createQuoteState, feedGlyph, lastVisible, smartQuote, type QuoteState } from './smart-quotes';
 import { densityFromInsetPt, type TableDensity } from './table-density';
 import { parseRowRuleArg } from './table-rules';
+import { cellFillFromTypst, type CellFill } from './table-fills';
 import { parseBibTeX } from './bibtex';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 
@@ -755,6 +756,7 @@ interface ParsedCell {
   rowspan: number;
   header: boolean;
   align: string | null;
+  fill: CellFill;
 }
 
 export interface TableSourceParts {
@@ -883,7 +885,7 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
   if (arg.startsWith('[')) {
     const end = matchBracket(arg, 0);
     if (end !== arg.length - 1) return null;
-    return { content: arg.slice(1, end), colspan: 1, rowspan: 1, header, align: null };
+    return { content: arg.slice(1, end), colspan: 1, rowspan: 1, header, align: null, fill: '' };
   }
   if (arg.startsWith('table.cell(')) {
     const argsStart = 'table.cell('.length;
@@ -893,12 +895,21 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
     const end = matchBracket(arg, bracket);
     if (end !== arg.length - 1) return null;
     const a = arg.slice(argsStart, argsEnd);
+    // A fill is a preset or the table is not native (table-fills.ts).
+    let fill: CellFill = '';
+    const fillM = /(?:^|,)\s*fill:\s*([^,]+(?:\([^)]*\))?[^,]*)/.exec(a);
+    if (fillM) {
+      const preset = cellFillFromTypst(fillM[1]);
+      if (!preset) return null;
+      fill = preset;
+    }
     return {
       content: arg.slice(bracket + 1, end),
       colspan: parseInt(/colspan:\s*(\d+)/.exec(a)?.[1] ?? '1', 10),
       rowspan: parseInt(/rowspan:\s*(\d+)/.exec(a)?.[1] ?? '1', 10),
       header,
       align: /align:\s*(left|center|right)/.exec(a)?.[1] ?? null,
+      fill,
     };
   }
   return null;
@@ -1081,7 +1092,7 @@ export function parseTable(src: string): PMNode | null {
       const content = parseTableCellContent(c.content);
       if (!content) return null;
       rowCells.push(
-        type.create({ colspan: c.colspan, rowspan: c.rowspan, align: c.align ?? colAligns[col] }, content),
+        type.create({ colspan: c.colspan, rowspan: c.rowspan, align: c.align ?? colAligns[col], fill: c.fill }, content),
       );
       for (let k = col; k < Math.min(columns, col + c.colspan); k++) {
         if (c.rowspan > 1) pending[k] += c.rowspan - 1;

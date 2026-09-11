@@ -33,6 +33,7 @@ import {
 import { isHistoryTransaction, redo, undo } from 'prosemirror-history';
 import { isPortableCitationKey } from './bibtex';
 import { ROW_RULE_CYCLE, type RowRule } from './table-rules';
+import { CELL_FILL_CYCLE, type CellFill } from './table-fills';
 import { schema } from './schema';
 import {
   transactionChangesDerivedStructure,
@@ -132,6 +133,28 @@ export const cycleRowRule: Command = (state, dispatch) => {
   dispatch(tr);
   return true;
 };
+
+/** The fill of the selected cells, cycled: none → gray → yellow → blue.
+ *  Every selected cell takes the value after the anchor cell's. */
+export const cycleCellFill: Command = (state, dispatch, view) => {
+  if (!isInTable(state)) return false;
+  const current = selectedCellFill(state);
+  if (current === null) return false;
+  const next = CELL_FILL_CYCLE[(CELL_FILL_CYCLE.indexOf(current) + 1) % CELL_FILL_CYCLE.length];
+  return setCellAttr('fill', next)(state, dispatch, view);
+};
+
+/** The fill preset of the anchor cell, for the control's label. */
+export function selectedCellFill(state: EditorState): CellFill | null {
+  if (!isInTable(state)) return null;
+  try {
+    const rect = selectedRect(state);
+    const offset = rect.map.map[rect.top * rect.map.width + rect.left];
+    return (rect.table.nodeAt(offset)?.attrs.fill as CellFill) || '';
+  } catch {
+    return null;
+  }
+}
 
 /** The rule preset of the first selected row, for the control's label. */
 export function selectedRowRule(state: EditorState): RowRule | null {
@@ -436,11 +459,11 @@ const tableControlsKey = new PluginKey<NativeTablePluginState>('native-table-con
 // commands and table metadata remain explicit, transaction-local revisions.
 const TABLE_CONTROL_STRUCTURE: DerivedStructureRules = {
   table: {
-    attrs: ['style', 'params', 'caption', 'label', 'fontSize'],
+    attrs: ['style', 'params', 'caption', 'label', 'fontSize', 'density'],
     structure: {
-      table_row: [],
-      table_cell: ['colspan', 'rowspan', 'colwidth', 'align'],
-      table_header: ['colspan', 'rowspan', 'colwidth', 'align'],
+      table_row: ['rule'],
+      table_cell: ['colspan', 'rowspan', 'colwidth', 'align', 'fill'],
+      table_header: ['colspan', 'rowspan', 'colwidth', 'align', 'fill'],
     },
   },
 };
@@ -597,6 +620,7 @@ class NativeTableControls {
   private readonly fontSelect: HTMLSelectElement;
   private readonly densitySelect: HTMLSelectElement;
   private readonly ruleButton: HTMLButtonElement;
+  private readonly fillButton: HTMLButtonElement;
   private readonly captionInput: HTMLInputElement;
   private readonly labelInput: HTMLInputElement;
   private readonly advanced: HTMLSpanElement;
@@ -651,6 +675,7 @@ class NativeTableControls {
     commandButton(cells, 'Split', 'Split merged cell', splitCell);
     commandButton(cells, 'Header', 'Toggle selected row as header', toggleHeaderRow);
     this.ruleButton = commandButton(cells, 'Rule', 'Rule under the selected rows: preset, light, heavy, none', cycleRowRule);
+    this.fillButton = commandButton(cells, 'Fill', 'Fill behind the selected cells: none, gray, yellow, blue', cycleCellFill);
     const alignment = group('Cell alignment');
     for (const [value, label] of [['left', 'L'], ['center', 'C'], ['right', 'R']] as const) {
       const button = commandButton(alignment, label, `Align selected cells ${value}`, alignSelectedTableCells(value));
@@ -793,6 +818,9 @@ class NativeTableControls {
     const rule = selectedRowRule(view.state);
     this.ruleButton.textContent = rule ? `Rule: ${rule}` : 'Rule';
     this.ruleButton.disabled = !cycleRowRule(view.state);
+    const fill = selectedCellFill(view.state);
+    this.fillButton.textContent = fill ? `Fill: ${fill}` : 'Fill';
+    this.fillButton.disabled = fill === null;
     if (!refreshControls) return;
     const dom = view.nodeDOM(context.pos);
     const element = dom instanceof HTMLElement

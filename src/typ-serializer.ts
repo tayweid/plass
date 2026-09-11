@@ -10,6 +10,7 @@ import { isPortableCitationKey, parseBibTeX } from './bibtex';
 import { RAW_FONT, codeBlockMetricsEm, effectiveFont, parityMetrics } from './font-registry';
 import { TABLE_DENSITY_INSET_PT, type TableDensity } from './table-density';
 import { rowRuleArg, type RowRule } from './table-rules';
+import { CELL_FILL_TYPST, type CellFill } from './table-fills';
 
 export interface TypExportOptions {
   /** When given, receives the text offset at which each top-level block's
@@ -582,6 +583,8 @@ function blockToTyp(node: PMNode, indent = ''): string {
           const colspan = (cell.attrs.colspan as number) ?? 1;
           const rowspan = (cell.attrs.rowspan as number) ?? 1;
           const align = cell.attrs.align as string | null;
+          const fill = ((cell.attrs.fill as CellFill) || '') as CellFill;
+          const fillArg = fill ? `fill: ${CELL_FILL_TYPST[fill]}` : '';
 
           const inDecimal = decimalCols.includes(col) && colspan === 1;
           if (inDecimal) {
@@ -591,7 +594,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
             if (!isHeader && plain && numM && !exportOpts.cellLinks) {
               const intPart = numM[1] ?? '';
               const fracPart = numM[2] ?? '';
-              const rs = rowspan > 1 ? `, rowspan: ${rowspan}` : '';
+              const rs = (rowspan > 1 ? `, rowspan: ${rowspan}` : '') + (fillArg ? `, ${fillArg}` : '');
               cells.push(`table.cell(align: right, inset: (right: 0pt)${rs})[${escapeTyp(intPart)}]`);
               cells.push(`table.cell(align: left, inset: (left: 0pt)${rs})[${escapeTyp(fracPart)}]`);
             } else {
@@ -599,6 +602,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
               const args = [`colspan: 2`];
               if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
               args.push(`align: ${isHeader ? 'center' : 'right'}`);
+              if (fillArg) args.push(fillArg);
               cells.push(`table.cell(${args.join(', ')})${body}`);
             }
             col += colspan;
@@ -610,6 +614,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
           if (emitSpan > 1) args.push(`colspan: ${emitSpan}`);
           if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
           if (align && align !== colAligns[col]) args.push(`align: ${align}`);
+          if (fillArg) args.push(fillArg);
           cells.push(args.length ? `table.cell(${args.join(', ')})${body}` : body);
           col += colspan;
         });

@@ -241,6 +241,14 @@ const tables = tableNodes({
         if (value) attrs.style = ((attrs.style as string) ?? '') + `text-align:${value};`;
       },
     },
+    // A fill preset (table-fills.ts): '' | 'gray' | 'yellow' | 'blue'.
+    fill: {
+      default: '',
+      getFromDOM: (dom) => (dom as HTMLElement).getAttribute('data-fill') ?? '',
+      setDOMAttr: (value, attrs) => {
+        if (value) attrs['data-fill'] = value;
+      },
+    },
   },
 });
 

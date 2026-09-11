@@ -632,6 +632,19 @@ function firstDiff(a: string, b: string): string {
   check('an unrecognized weight stays custom', custom.child(0).child(1).attrs.rule === '' && /hline\(y: 2, stroke: 1pt\)/.test(custom.child(0).attrs.params as string), JSON.stringify(custom.child(0).attrs));
 }
 
+// --- 19e. cell fill presets ---
+{
+  const src = '#align(center, table(\n  columns: 2,\n  stroke: none,\n  table.hline(stroke: 0.08em),\n  table.header([A], [B]),\n  table.hline(stroke: 0.05em),\n  table.cell(fill: luma(240))[1], [2],\n  [3], table.cell(align: right, fill: rgb("#fff3b0"))[4],\n  table.hline(stroke: 0.08em),\n))\n';
+  const { doc } = typToDoc(src);
+  const t = doc.child(0);
+  check('preset fills import onto the cells', t.type.name === 'table' && t.child(1).child(0).attrs.fill === 'gray' && t.child(2).child(1).attrs.fill === 'yellow' && t.child(2).child(1).attrs.align === 'right', JSON.stringify([t.type.name, t.child(1).child(0).attrs, t.child(2).child(1).attrs]));
+  const out = docToTyp(doc);
+  check('fills export as table.cell(fill:)', out.includes('table.cell(fill: luma(240))[1]') && out.includes('table.cell(fill: rgb("#fff3b0"))[4]') && out.includes('align: (auto, right)'), out);
+  check('a filled table round-trips byte-identically', docToTyp(typToDoc(out).doc) === out, firstDiff(docToTyp(typToDoc(out).doc), out));
+  const other = typToDoc(src.replace('luma(240)', 'red')).doc;
+  check('a non-preset fill keeps the table as a raw island', other.child(0).type.name === 'code_block' && other.child(0).attrs.params === 'typst-raw', other.child(0).type.name);
+}
+
 // --- 20. raw islands: a multi-line call survives a blank line inside it ---
 {
   const src = 'Intro.\n\n#grid(\n  columns: 2,\n  [first para\n\n  second para],\n  [b],\n)\n\nAfter.\n';

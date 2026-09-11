@@ -87,11 +87,14 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      both columns); now one row or column goes and the merge shrinks, a
      cell selection still removes what it covers, and a row added below
      the header is a body row rather than a second header.
-   - *Rich cells* — tables are now native editable trees (no modal card);
-     math/references inside cells serialize losslessly but the in-cell
-     editing affordances (e.g. "edit as math") are still to be built.
-   - Per-selection cell fills (the fill presets ship; individual cells are
-     still open). Complex-table stress testing. Mid-table page breaks
+   - *Rich cells* — tables are native editable trees; math/references
+     inside cells serialize losslessly but the in-cell editing affordances
+     (e.g. "edit as math") are still to be built. The last open table item.
+   - ~~Per-selection cell fills~~ — done 2026-09-11: a Fill control cycles
+     a preset (gray / yellow / blue — verified colours, not a picker) over
+     the selected cells; exported as `table.cell(fill: …)`, read back, and
+     a non-preset fill makes the table a raw island rather than a native
+     table that lost its colour. Complex-table stress testing. Mid-table page breaks
      ship (PAGE-PORT Phase 7): a table breaks between rows with the
      header repeated, as Typst lays it; a rowspan across the break, a
      tall cell split by Typst, or a captioned (figure) table still places

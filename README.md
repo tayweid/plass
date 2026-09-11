@@ -213,8 +213,10 @@ rails can always be finished in Typst itself, because the file is Typst.
   — Typst's cell `inset` at 3, 5, or 8pt, exact in the page), a **Rule**
   control that cycles the rule under the selected rows (preset → light →
   heavy → none; exported as `table.hline(y: N, stroke: …)` at that
-  boundary, where the style's own rule yields to it), and **Details** for
-  a caption and a reference label. A captioned or labelled table gets a painted "Table N:" caption
+  boundary, where the style's own rule yields to it), a **Fill** control
+  that cycles a preset colour behind the selected cells (gray / yellow /
+  blue, exported as `table.cell(fill: …)`), and **Details** for a caption
+  and a reference label. A captioned or labelled table gets a painted "Table N:" caption
   that renumbers live and is listed in the `@` picker. The editor table
   uses Typst's own box model (intrinsic width, centered, 5pt insets), so it
   sits where the PDF puts it. Long tables **break between rows with the
