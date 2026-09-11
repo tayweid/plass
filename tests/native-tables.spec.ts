@@ -389,6 +389,44 @@ test('cell density presets match Typst row heights exactly', async ({ page }) =>
   for (const r of results) expect(Math.abs(r.nativePt - r.compiledPt), JSON.stringify(results)).toBeLessThan(0.5);
 });
 
+test('the Rule control cycles a row rule that paints in the page and exports at its boundary', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    window.view.dispatch(state.tr.insertText('Before.', 1));
+    window.view.focus();
+  });
+  await page.keyboard.press('End');
+  await page.keyboard.press('Meta+Alt+t');
+  await expect(page.locator('.ProseMirror table')).toHaveCount(1);
+  await page.keyboard.type('H');
+  await page.keyboard.press('Enter'); // row 2
+  await page.keyboard.type('body');
+  const rule = page.getByRole('toolbar', { name: 'Table controls' }).getByRole('button', { name: /^Rule under/ });
+  await expect(rule).toHaveText('Rule');
+  const shadow = () => page.evaluate(() => getComputedStyle(document.querySelectorAll('.ProseMirror tr')[1].querySelector('td')!).boxShadow);
+  expect(await shadow()).toBe('none');
+  await rule.click();
+  await expect(rule).toHaveText('Rule: light');
+  expect(await page.evaluate(() => document.querySelectorAll('.ProseMirror tr')[1].getAttribute('data-rule'))).toBe('light');
+  expect(await shadow()).not.toBe('none');
+  await rule.click();
+  await expect(rule).toHaveText('Rule: heavy');
+  await rule.click();
+  await expect(rule).toHaveText('Rule: none');
+  await rule.click();
+  await expect(rule).toHaveText('Rule');
+  await rule.click(); // light again, for the export
+  const typ = await page.evaluate(async () => {
+    const { docToTyp } = await import('/src/typ-serializer.ts');
+    return docToTyp(window.view.state.doc);
+  });
+  expect(typ).toContain('table.hline(y: 2, stroke: 0.05em)');
+  // Grid tables draw cell strokes; the control is disabled there.
+  await page.getByRole('toolbar', { name: 'Table controls' }).getByRole('combobox', { name: 'Table rule style' }).selectOption('grid');
+  await expect(rule).toBeDisabled();
+});
+
 test('default native table uses the intrinsic centered Typst box model', async ({ page }) => {
   await page.goto('/?new=1');
   await page.waitForFunction(() => !!window.view);

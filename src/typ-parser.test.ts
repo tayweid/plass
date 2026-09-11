@@ -612,6 +612,26 @@ function firstDiff(a: string, b: string): string {
   check('inset: 5pt is the default and exports without an inset', five.child(0).attrs.density === '' && !docToTyp(five).includes('inset:'), docToTyp(five));
 }
 
+// --- 19d. row rule presets: table.hline(y:, stroke:) at a row boundary ---
+{
+  const src = '#align(center, table(\n  columns: 2,\n  stroke: none,\n  table.hline(y: 2, stroke: 0.05em),\n  table.hline(stroke: 0.08em),\n  table.header([A], [B]),\n  table.hline(stroke: 0.05em),\n  [1], [2],\n  [3], [4],\n  table.hline(stroke: 0.08em),\n))\n';
+  const { doc } = typToDoc(src);
+  const t = doc.child(0);
+  check('a light rule under row 2 is the row preset', t.type.name === 'table' && t.child(1).attrs.rule === 'light' && !t.attrs.params, JSON.stringify([t.type.name, t.child(1).attrs, t.attrs.params]));
+  const out = docToTyp(doc);
+  check('the row rule exports at its boundary', out.includes('  table.hline(y: 2, stroke: 0.05em),'), out);
+  check('a row-rule table round-trips byte-identically', docToTyp(typToDoc(out).doc) === out, firstDiff(docToTyp(typToDoc(out).doc), out));
+  // The header row's rule set to none replaces the booktabs midrule.
+  const none = '#align(center, table(\n  columns: 2,\n  stroke: none,\n  table.hline(y: 1, stroke: none),\n  table.hline(stroke: 0.08em),\n  table.header([A], [B]),\n  [1], [2],\n  table.hline(stroke: 0.08em),\n))\n';
+  const nd = typToDoc(none).doc;
+  check('a header rule of none imports as the row preset', nd.child(0).type.name === 'table' && nd.child(0).child(0).attrs.rule === 'none', JSON.stringify(nd.child(0).attrs));
+  const nout = docToTyp(nd);
+  check('the preset midrule yields to the none rule', nout.includes('table.hline(y: 1, stroke: none)') && !nout.includes('table.hline(stroke: 0.05em)'), nout);
+  // A partial or oddly-weighted rule stays a custom parameter.
+  const custom = typToDoc(src.replace('table.hline(y: 2, stroke: 0.05em)', 'table.hline(y: 2, stroke: 1pt)')).doc;
+  check('an unrecognized weight stays custom', custom.child(0).child(1).attrs.rule === '' && /hline\(y: 2, stroke: 1pt\)/.test(custom.child(0).attrs.params as string), JSON.stringify(custom.child(0).attrs));
+}
+
 // --- 20. raw islands: a multi-line call survives a blank line inside it ---
 {
   const src = 'Intro.\n\n#grid(\n  columns: 2,\n  [first para\n\n  second para],\n  [b],\n)\n\nAfter.\n';

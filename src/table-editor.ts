@@ -28,6 +28,7 @@ import {
 } from 'prosemirror-tables';
 import { isHistoryTransaction, redo, undo } from 'prosemirror-history';
 import { isPortableCitationKey } from './bibtex';
+import { ROW_RULE_CYCLE, type RowRule } from './table-rules';
 import { schema } from './schema';
 import {
   transactionChangesDerivedStructure,
@@ -102,6 +103,41 @@ export function insertStructuredTable(view: EditorView): void {
   tr.setSelection(TextSelection.between(tr.doc.resolve(cellPos + 1), tr.doc.resolve(cellPos + firstNode.nodeSize - 1)));
   view.dispatch(tr.scrollIntoView());
   view.focus();
+}
+
+/** The rule under the selected rows, cycled: preset → light → heavy →
+ *  none. Every selected row takes the value after the first row's. Grid
+ *  tables draw cell strokes instead and have no row rules. */
+export const cycleRowRule: Command = (state, dispatch) => {
+  if (!isInTable(state)) return false;
+  let rect: ReturnType<typeof selectedRect>;
+  try {
+    rect = selectedRect(state);
+  } catch {
+    return false;
+  }
+  if (rect.table.attrs.style === 'grid') return false;
+  if (!dispatch) return true;
+  const first = rect.table.child(rect.top);
+  const current = (first.attrs.rule as RowRule) || '';
+  const next = ROW_RULE_CYCLE[(ROW_RULE_CYCLE.indexOf(current) + 1) % ROW_RULE_CYCLE.length];
+  const tr = state.tr;
+  rect.table.forEach((row, offset, i) => {
+    if (i >= rect.top && i < rect.bottom) tr.setNodeMarkup(rect.tableStart + offset, undefined, { ...row.attrs, rule: next });
+  });
+  dispatch(tr);
+  return true;
+};
+
+/** The rule preset of the first selected row, for the control's label. */
+export function selectedRowRule(state: EditorState): RowRule | null {
+  if (!isInTable(state)) return null;
+  try {
+    const rect = selectedRect(state);
+    return (rect.table.child(rect.top).attrs.rule as RowRule) || '';
+  } catch {
+    return null;
+  }
 }
 
 /** Select a cell's whole content, as Tab does when it lands in one. */
@@ -487,6 +523,7 @@ class NativeTableControls {
   private readonly styleSelect: HTMLSelectElement;
   private readonly fontSelect: HTMLSelectElement;
   private readonly densitySelect: HTMLSelectElement;
+  private readonly ruleButton: HTMLButtonElement;
   private readonly captionInput: HTMLInputElement;
   private readonly labelInput: HTMLInputElement;
   private readonly advanced: HTMLSpanElement;
@@ -540,6 +577,7 @@ class NativeTableControls {
     commandButton(cells, 'Merge', 'Merge selected cells', mergeCells);
     commandButton(cells, 'Split', 'Split merged cell', splitCell);
     commandButton(cells, 'Header', 'Toggle selected row as header', toggleHeaderRow);
+    this.ruleButton = commandButton(cells, 'Rule', 'Rule under the selected rows: preset, light, heavy, none', cycleRowRule);
     const alignment = group('Cell alignment');
     for (const [value, label] of [['left', 'L'], ['center', 'C'], ['right', 'R']] as const) {
       const button = commandButton(alignment, label, `Align selected cells ${value}`, alignSelectedTableCells(value));
@@ -677,6 +715,11 @@ class NativeTableControls {
     // An ordinary text transaction can change the table's rendered height,
     // but it cannot change any control semantics. Retain every control DOM
     // value and move the optional geometry read past the first text paint.
+    // The rule label follows the selected row's attribute, which changes
+    // without the selection moving.
+    const rule = selectedRowRule(view.state);
+    this.ruleButton.textContent = rule ? `Rule: ${rule}` : 'Rule';
+    this.ruleButton.disabled = !cycleRowRule(view.state);
     if (!refreshControls) return;
     const dom = view.nodeDOM(context.pos);
     const element = dom instanceof HTMLElement

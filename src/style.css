@@ -1743,6 +1743,23 @@ body {
 
 /* plain preset: no rules at all */
 
+/* Row rule presets (table-rules.ts): the rule under a row, replacing the
+   style preset's at that boundary. Grid tables keep their cell strokes. */
+.ProseMirror table:not(.ts-table-grid) tr[data-rule='light'] > th,
+.ProseMirror table:not(.ts-table-grid) tr[data-rule='light'] > td {
+  box-shadow: inset 0 -0.05em 0 var(--ink);
+}
+
+.ProseMirror table:not(.ts-table-grid) tr[data-rule='heavy'] > th,
+.ProseMirror table:not(.ts-table-grid) tr[data-rule='heavy'] > td {
+  box-shadow: inset 0 -0.08em 0 var(--ink);
+}
+
+.ProseMirror table:not(.ts-table-grid) tr[data-rule='none'] > th,
+.ProseMirror table:not(.ts-table-grid) tr[data-rule='none'] > td {
+  box-shadow: none;
+}
+
 .ProseMirror th p,
 .ProseMirror td p {
   margin: 0;

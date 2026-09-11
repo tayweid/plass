@@ -9,6 +9,7 @@ import { wrapAligned } from './math-src';
 import { isPortableCitationKey, parseBibTeX } from './bibtex';
 import { RAW_FONT, codeBlockMetricsEm, effectiveFont, parityMetrics } from './font-registry';
 import { TABLE_DENSITY_INSET_PT, type TableDensity } from './table-density';
+import { rowRuleArg, type RowRule } from './table-rules';
 
 export interface TypExportOptions {
   /** When given, receives the text offset at which each top-level block's
@@ -617,10 +618,17 @@ function blockToTyp(node: PMNode, indent = ''): string {
       });
 
       // User midrules (table.hline(y: …)) coexist with style presets; the
-      // rest of the custom params replace the preset entirely.
-      const customAll = ((node.attrs.params as string) || '').trim();
-      const userRules: string[] = [];
-      const custom = customAll
+      // rest of the custom params replace the preset entirely. A row's own
+      // rule preset is the same construct at the row's lower boundary.
+      const rowRules: string[] = [];
+      node.forEach((row, _off, i) => {
+        const rule = (row.attrs.rule as RowRule) || '';
+        if (rule) rowRules.push(rowRuleArg(i, rule));
+      });
+      const customAll = [((node.attrs.params as string) || '').trim(), ...rowRules].filter(Boolean).join(',\n');
+      const userRules: string[] = [...rowRules];
+      const custom = ((node.attrs.params as string) || '')
+        .trim()
         .replace(/table\.[hv]line\([^)]*\)\s*,?/g, (m) => {
           userRules.push(m.replace(/,?\s*$/, ''));
           return '';

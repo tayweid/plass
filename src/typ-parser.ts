@@ -16,6 +16,7 @@ import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings } from './setting
 import { trimSpaceBeforeMarker } from './collapse-spaces';
 import { beforeAfterNode, createQuoteState, feedGlyph, lastVisible, smartQuote, type QuoteState } from './smart-quotes';
 import { densityFromInsetPt, type TableDensity } from './table-density';
+import { parseRowRuleArg } from './table-rules';
 import { parseBibTeX } from './bibtex';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 
@@ -1052,8 +1053,6 @@ export function parseTable(src: string): PMNode | null {
     // A custom stroke without preset markers: keep style neutral.
     style = 'plain';
   }
-  const params = [...customParams, ...userHlines].join(',\n');
-
   const colAligns: Array<string | null> = new Array(columns).fill(null);
   if (alignTuple) {
     alignTuple.split(',').forEach((a, i) => {
@@ -1098,6 +1097,17 @@ export function parseTable(src: string): PMNode | null {
     }
   }
   if (!rows.length || idx !== cells.length || pending.some((remaining) => remaining > 0)) return null;
+  // A full-width rule of a preset weight at a row's lower boundary is that
+  // row's rule preset (table-rules.ts); other explicit rules stay custom.
+  const remainingHlines: string[] = [];
+  for (const arg of userHlines) {
+    const rowRule = parseRowRuleArg(arg);
+    if (rowRule && rowRule.index >= 0 && rowRule.index < rows.length) {
+      const row = rows[rowRule.index];
+      rows[rowRule.index] = row.type.create({ ...row.attrs, rule: rowRule.rule }, row.content);
+    } else remainingHlines.push(arg);
+  }
+  const params = [...customParams, ...remainingHlines].join(',\n');
   // Booktabs fidelity: the bare positional rules must be exactly the
   // preset's own — top, bottom, and the header midrule — minus any the
   // user replaced with an explicit y: rule at that boundary.

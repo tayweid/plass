@@ -74,8 +74,10 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
    that ended the document could not be left by keyboard (ArrowDown and
    ArrowUp step out, creating a paragraph if needed). A new table's headers
    start empty. Styling remainder:
-   - *Rule weights* — light/heavy midrule choice (booktabs toprule vs
-     midrule); maybe a click-cycle on an active rule.
+   - ~~Rule weights~~ — done 2026-09-11: a per-row rule preset (light /
+     heavy / none / the style's) cycled from the control bar, painted
+     as a shadow (no layout cost) and exported as Typst's own
+     `table.hline(y:, stroke:)`, read back into the row on import.
    - ~~Cell insets~~ — done 2026-09-11: density presets (compact 3pt /
      normal 5pt / roomy 8pt → `inset:`), with the cell box made exact for
      every preset (the 0.283px-per-row drift PAGE-PORT tracked is gone).

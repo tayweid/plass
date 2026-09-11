@@ -208,8 +208,11 @@ rails can always be finished in Typst itself, because the file is Typst.
   the selected cells** (right-align regression numbers), a **style preset
   (booktabs — the academic default, horizontal rules only — grid, plain)**,
   a text-size menu (100–75%), a **density** menu (compact / normal / roomy
-  — Typst's cell `inset` at 3, 5, or 8pt, exact in the page), and
-  **Details** for a caption and a reference label. A captioned or labelled table gets a painted "Table N:" caption
+  — Typst's cell `inset` at 3, 5, or 8pt, exact in the page), a **Rule**
+  control that cycles the rule under the selected rows (preset → light →
+  heavy → none; exported as `table.hline(y: N, stroke: …)` at that
+  boundary, where the style's own rule yields to it), and **Details** for
+  a caption and a reference label. A captioned or labelled table gets a painted "Table N:" caption
   that renumbers live and is listed in the `@` picker. The editor table
   uses Typst's own box model (intrinsic width, centered, 5pt insets), so it
   sits where the PDF puts it. Long tables **break between rows with the

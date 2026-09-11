@@ -246,6 +246,14 @@ const tables = tableNodes({
 
 const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
   .append(tables)
+  // The rule under a row: '' (the style preset's), 'light', 'heavy', or
+  // 'none' (table-rules.ts).
+  .update('table_row', {
+    ...tables.table_row,
+    attrs: { rule: { default: '' } },
+    parseDOM: [{ tag: 'tr', getAttrs: (el) => ({ rule: (el as HTMLElement).getAttribute('data-rule') ?? '' }) }],
+    toDOM: (node) => ['tr', { 'data-rule': (node.attrs.rule as string) || null }, 0],
+  })
   // Paragraphs may be kept together across page breaks (block(breakable:
   // false) on export; the paginator treats them as atomic).
   .update('paragraph', {
