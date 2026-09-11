@@ -7,10 +7,13 @@ import { EditorState, NodeSelection, TextSelection } from 'prosemirror-state';
 import { TableMap, goToNextCell, tableEditing } from 'prosemirror-tables';
 import {
   CellSelection,
+  addBodyRowAfter,
   addColumnAfter,
   addRowAfter,
   deleteColumn,
   deleteRow,
+  deleteSelectedColumns,
+  deleteSelectedRows,
   mergeCells,
   splitCell,
   structuredTablePlugin,
@@ -210,6 +213,73 @@ function hasInline(node: PMNode, type: string): boolean {
   const commandAccepted = setBlockType(schema.nodes.code_block)(state, dispatch);
   check('unsupported block command produces a transaction', commandAccepted);
   check('unsupported cell edit is explicitly rejected without document loss', JSON.stringify(state.doc.toJSON()) === before);
+}
+
+{
+  // Span-aware structure: deleting from inside a merged cell removes one
+  // row or column, not the whole span; a row added below the header is a
+  // body row.
+  const p = (t: string) => schema.text(t);
+  const cell = (t: string, header = false) => (header ? schema.nodes.table_header : schema.nodes.table_cell).create(null, schema.nodes.paragraph.create(null, p(t)));
+  const row = (...cells: PMNode[]) => schema.nodes.table_row.create(null, cells);
+  const table = schema.nodes.table.create({ style: 'booktabs' }, [
+    row(cell('A', true), cell('B', true), cell('C', true)),
+    row(cell('a1'), cell('b1'), cell('c1')),
+    row(cell('a2'), cell('b2'), cell('c2')),
+    row(cell('a3'), cell('b3'), cell('c3')),
+  ]);
+  let state = EditorState.create({ doc: schema.nodes.doc.create(null, [table]), plugins: [tableEditing()] });
+  const cellPos = (s: EditorState, r: number, c: number) => {
+    const t = s.doc.child(0);
+    const map = TableMap.get(t);
+    return 1 + map.map[r * map.width + c];
+  };
+  const shape = (s: EditorState) => {
+    const t = s.doc.child(0);
+    const rows: string[] = [];
+    t.forEach((r) => {
+      const cs: string[] = [];
+      r.forEach((c) => cs.push(`${c.textContent || '·'}${c.attrs.colspan > 1 ? 'x' + c.attrs.colspan : ''}${c.attrs.rowspan > 1 ? 'y' + c.attrs.rowspan : ''}`));
+      rows.push(cs.join('|'));
+    });
+    return rows.join(' / ');
+  };
+  const run = (cmd: (s: EditorState, d: (tr: import('prosemirror-state').Transaction) => void) => boolean) => {
+    let next = state;
+    const ok = cmd(state, (tr) => { next = state.apply(tr); });
+    state = next;
+    return ok;
+  };
+  const select = (r1: number, c1: number, r2: number, c2: number) => {
+    state = state.apply(state.tr.setSelection(CellSelection.create(state.doc, cellPos(state, r1, c1), cellPos(state, r2, c2))));
+  };
+  const caret = (r: number, c: number) => {
+    state = state.apply(state.tr.setSelection(TextSelection.create(state.doc, cellPos(state, r, c) + 2)));
+  };
+  select(1, 0, 1, 1);
+  run(mergeCells);
+  select(2, 2, 3, 2);
+  run(mergeCells);
+  check('merges in place', shape(state) === 'A|B|C / a1b1x2|c1 / a2|b2|c2c3y2 / a3|b3', shape(state));
+  caret(1, 0);
+  run(deleteSelectedColumns);
+  check('deleting a column from inside a merged cell removes one column', shape(state) === 'B|C / a1b1|c1 / b2|c2c3y2 / b3', shape(state));
+  caret(2, 1);
+  run(deleteSelectedRows);
+  check('deleting a row from inside a merged cell removes one row', shape(state) === 'B|C / a1b1|c1 / b3|c2c3', shape(state));
+  select(1, 0, 1, 1);
+  run(deleteSelectedRows);
+  check('a cell selection still deletes what it covers', shape(state) === 'B|C / b3|c2c3', shape(state));
+  caret(0, 0);
+  run(addBodyRowAfter);
+  const added = state.doc.child(0).child(1);
+  check('a row added below the header is a body row', added.child(0).type.name === 'table_cell' && shape(state) === 'B|C / ·|· / b3|c2c3', shape(state));
+  caret(0, 0);
+  run(deleteSelectedRows);
+  caret(0, 0);
+  run(deleteSelectedRows);
+  run(deleteSelectedRows);
+  check('deleting the last row deletes the table', state.doc.childCount === 1 && state.doc.child(0).type.name !== 'table', state.doc.child(0).type.name);
 }
 
 declare const process: { exitCode?: number };

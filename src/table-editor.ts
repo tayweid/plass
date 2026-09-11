@@ -18,9 +18,13 @@ import {
   deleteColumn,
   deleteRow,
   deleteTable,
+  addRow,
   goToNextCell,
   isInTable,
   mergeCells,
+  removeColumn,
+  removeRow,
+  rowIsHeader,
   selectedRect,
   setCellAttr,
   splitCell,
@@ -140,6 +144,75 @@ export function selectedRowRule(state: EditorState): RowRule | null {
   }
 }
 
+/**
+ * Span-aware deletion. prosemirror-tables' deleteRow/deleteColumn remove
+ * every row or column the selection's rectangle covers — and a text caret
+ * inside a merged cell covers the whole span, so deleting "the column" from
+ * inside a two-column cell took both columns. With a caret, only the cell's
+ * first row or column goes (the merged cell shrinks by one, as in a
+ * spreadsheet); a cell selection still removes exactly what it covers. The
+ * last row or column deletes the table.
+ */
+function deleteSpanAware(axis: 'row' | 'col'): Command {
+  return (state, dispatch) => {
+    if (!isInTable(state)) return false;
+    let rect: ReturnType<typeof selectedRect>;
+    try {
+      rect = selectedRect(state);
+    } catch {
+      return false;
+    }
+    const whole = state.selection instanceof CellSelection;
+    const size = axis === 'row' ? rect.map.height : rect.map.width;
+    const from = axis === 'row' ? rect.top : rect.left;
+    const to = whole ? (axis === 'row' ? rect.bottom : rect.right) : from + 1;
+    if (!dispatch) return true;
+    if (from === 0 && to === size) return deleteTable(state, dispatch);
+    const tr = state.tr;
+    for (let i = to - 1; i >= from; i--) {
+      // Re-read the table each step: the map changes with every removal.
+      const table = tr.doc.nodeAt(rect.tableStart - 1)!;
+      const live = { ...rect, map: TableMap.get(table), table };
+      if (axis === 'row') removeRow(tr, live, i);
+      else removeColumn(tr, live, i);
+    }
+    dispatch(tr.scrollIntoView());
+    return true;
+  };
+}
+export const deleteSelectedRows = deleteSpanAware('row');
+export const deleteSelectedColumns = deleteSpanAware('col');
+
+/** A row added below the selection. Below a header row it is a body row —
+ *  the library would clone the header type and stack a second header. */
+export const addBodyRowAfter: Command = (state, dispatch) => {
+  if (!isInTable(state)) return false;
+  let rect: ReturnType<typeof selectedRect>;
+  try {
+    rect = selectedRect(state);
+  } catch {
+    return false;
+  }
+  if (!dispatch) return true;
+  const tr = addRow(state.tr, rect, rect.bottom);
+  if (rowIsHeader(rect.map, rect.table, rect.bottom - 1)) {
+    const table = tr.doc.nodeAt(rect.tableStart - 1)!;
+    const map = TableMap.get(table);
+    const seen = new Set<number>();
+    for (let col = 0; col < map.width; col++) {
+      const offset = map.map[rect.bottom * map.width + col];
+      if (seen.has(offset)) continue;
+      seen.add(offset);
+      const cell = table.nodeAt(offset)!;
+      // A cell that spans down from the header is not the new row's own.
+      if (map.colCount(offset) !== undefined && map.findCell(offset).top !== rect.bottom) continue;
+      if (cell.type.name === 'table_header') tr.setNodeMarkup(rect.tableStart + offset, schema.nodes.table_cell, cell.attrs);
+    }
+  }
+  dispatch(tr.scrollIntoView());
+  return true;
+};
+
 /** Select a cell's whole content, as Tab does when it lands in one. */
 function selectCell(tr: Transaction, cellPos: number): Transaction {
   const cell = tr.doc.nodeAt(cellPos);
@@ -152,7 +225,7 @@ function selectCell(tr: Transaction, cellPos: number): Transaction {
 export const tabInTable: Command = (state, dispatch, view) => {
   if (!isInTable(state)) return false;
   if (goToNextCell(1)(state, dispatch)) return true;
-  if (!addRowAfter(state, dispatch)) return false;
+  if (!addBodyRowAfter(state, dispatch)) return false;
   if (view) goToNextCell(1)(view.state, view.dispatch);
   return true;
 };
@@ -169,7 +242,7 @@ export const enterInTable: Command = (state, dispatch, view) => {
   }
   const { map, tableStart } = rect;
   if (rect.bottom >= map.height) {
-    if (!addRowAfter(state, dispatch)) return false;
+    if (!addBodyRowAfter(state, dispatch)) return false;
     if (view) {
       const next = selectedRect(view.state);
       const below = next.map.map[(next.bottom) * next.map.width + next.left];
@@ -568,11 +641,11 @@ class NativeTableControls {
 
     const structure = group('Rows and columns');
     commandButton(structure, '↑ Row', 'Add row above', addRowBefore);
-    commandButton(structure, '↓ Row', 'Add row below', addRowAfter);
-    commandButton(structure, '− Row', 'Delete selected row', deleteRow);
+    commandButton(structure, '↓ Row', 'Add row below', addBodyRowAfter);
+    commandButton(structure, '− Row', 'Delete selected row', deleteSelectedRows);
     commandButton(structure, '← Col', 'Add column before', addColumnBefore);
     commandButton(structure, 'Col →', 'Add column after', addColumnAfter);
-    commandButton(structure, '− Col', 'Delete selected column', deleteColumn);
+    commandButton(structure, '− Col', 'Delete selected column', deleteSelectedColumns);
     const cells = group('Cells');
     commandButton(cells, 'Merge', 'Merge selected cells', mergeCells);
     commandButton(cells, 'Split', 'Split merged cell', splitCell);

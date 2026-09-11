@@ -203,8 +203,10 @@ rails can always be finished in Typst itself, because the file is Typst.
   caret is in a table, never over the text. Cells hold ordinary rich text (marks,
   inline math, citations, `@` references); an edit that would leave that
   lossless subset is refused with a notice rather than flattened. While the
-  caret is inside a table a floating control bar appears: add/delete rows
-  and columns, merge/split, toggle the header row, **L/C/R alignment for
+  caret is inside a table a control bar docks under the toolbar: add/delete
+  rows and columns (span-aware: deleting from inside a merged cell removes
+  one row or column and shrinks the merge), merge/split, toggle the header
+  row, **L/C/R alignment for
   the selected cells** (right-align regression numbers), a **style preset
   (booktabs — the academic default, horizontal rules only — grid, plain)**,
   a text-size menu (100–75%), a **density** menu (compact / normal / roomy

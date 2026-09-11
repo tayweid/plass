@@ -81,9 +81,12 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
    - ~~Cell insets~~ — done 2026-09-11: density presets (compact 3pt /
      normal 5pt / roomy 8pt → `inset:`), with the cell box made exact for
      every preset (the 0.283px-per-row drift PAGE-PORT tracked is gone).
-   - *Merges + shape ops together* — column/row insert/delete that
-     understands spans (occupancy grid) instead of disabling while merges
-     exist.
+   - ~~Merges + shape ops together~~ — done 2026-09-11. The library's
+     insert/delete were already span-aware, but deleting from a caret
+     inside a merged cell removed the whole span (a two-column cell took
+     both columns); now one row or column goes and the merge shrinks, a
+     cell selection still removes what it covers, and a row added below
+     the header is a body row rather than a second header.
    - *Rich cells* — tables are now native editable trees (no modal card);
      math/references inside cells serialize losslessly but the in-cell
      editing affordances (e.g. "edit as math") are still to be built.
