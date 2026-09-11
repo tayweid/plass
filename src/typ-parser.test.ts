@@ -701,6 +701,27 @@ function firstDiff(a: string, b: string): string {
   check('the print shows an inline island as inline raw', print.includes('Fill #raw("#h(1fr)") here.'), print);
 }
 
+{
+  // A loose list in Typst markup (blank lines between items) imports with
+  // its pitch, exports as the set/restore pair around blank-lined items,
+  // and the pair is consumed on the way back in. A tight one is untouched.
+  const src = 'Intro.\n\n- one\n\n- two\n\n+ a\n+ b\n\nAfter.\n';
+  const { doc } = typToDoc(src);
+  const kinds: string[] = [];
+  doc.forEach((n) => kinds.push(n.type.name + (n.attrs.tight === false ? ':loose' : n.attrs.tight === true ? ':tight' : '')));
+  check('blank-lined items are one loose list; consecutive items a tight one', JSON.stringify(kinds) === JSON.stringify(['paragraph', 'bullet_list:loose', 'ordered_list:tight', 'paragraph']), JSON.stringify(kinds));
+  const out = docToTyp(doc);
+  check('the loose list exports as a set/restore pair', /#set list\(spacing: [\d.]+pt\)\n- one\n\n- two\n#set list\(spacing: [\d.]+pt\)\n\n\+ a\n\+ b\n/.test(out), out);
+  const again = docToTyp(typToDoc(out).doc);
+  check('loose and tight lists round-trip byte for byte', out === again, firstDiff(out, again));
+  const nested = 'Intro.\n\n- outer\n\n  - inner\n\n  - inner two\n\n- outer two\n';
+  const nd = typToDoc(nested).doc;
+  const outer = nd.child(1);
+  check('a nested loose list keeps its own pitch', outer.attrs.tight === false && outer.child(0).child(1).attrs.tight === false && outer.childCount === 2, JSON.stringify([outer.attrs, outer.childCount, outer.child(0).child(1)?.attrs]));
+  const nOut = docToTyp(nd);
+  check('nested loose lists round-trip', nOut === docToTyp(typToDoc(nOut).doc), firstDiff(nOut, docToTyp(typToDoc(nOut).doc)));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

@@ -98,9 +98,16 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      Open, small: a *numbered* heading keeps browser layout (its painted
      section number is not in the port's text); it shows in the audit as
      `browser-mismatch` if it wraps differently.
-   - Open, smaller: multi-paragraph footnotes flatten; tight/loose list
-     spacing normalizes; a `.typ` save has no home for the Markdown-only
-     carry (frontmatter extras) and drops it silently.
+   - Done 2026-09-11: list pitch. A list with blank lines between its
+     items (loose, in both Markdown and Typst markup) spaces them by
+     paragraph spacing; a tight one by the item pitch. The flag rides the
+     list node (`tight`), the toolbar's List control and ⌘⇧7 flip it, both
+     formats read and write it (the `.typ` sets and restores the pitch
+     around a loose list), and a second paragraph inside an item now sits
+     at paragraph spacing as Typst puts it. Audit fixture `lists-loose.md`.
+   - Open, smaller: multi-paragraph footnotes flatten; a `.typ` save has no
+     home for the Markdown-only carry (frontmatter extras) and drops it
+     silently.
    - *Corpus after this pass:* 22 byte-identical, 37 trailing-whitespace
      only, 27 blank lines only, 388 changed — 202 of them first at a smart
      quote (the decided normalization), the rest hard-wrapped paragraphs

@@ -211,9 +211,11 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount,
   const outLink = docToMd(mdToDoc(link).doc);
   check('link titles survive', outLink === link, outLink);
 
+  // An item with a blank line inside makes the whole list loose
+  // (CommonMark), so the save writes the blank line between the items too.
   const list = '1. one\n2. two\n\n   para in item\n\n   - nested\n';
   const outList = docToMd(mdToDoc(list).doc);
-  check('list continuation hangs under the marker once', outList === list, outList);
+  check('list continuation hangs under the marker once', outList === '1. one\n\n2. two\n\n   para in item\n\n   - nested\n', outList);
 }
 
 // HTML blocks — editorial comments above all — are Markdown the page
@@ -300,6 +302,26 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount,
   check('offsets follow tight joins', md.slice(offsets[1], offsets[1] + 4) === '<!--' && md.slice(offsets[4], offsets[4] + 4) === 'Next', JSON.stringify(offsets));
   const inComment = 'Para.\n\n<!-- keep ___ and $x$ and *stars* verbatim -->\n';
   check('nothing inside an HTML block is touched', docToMd(mdToDoc(inComment).doc) === inComment, docToMd(mdToDoc(inComment).doc));
+}
+
+{
+  // Item pitch: blank lines between items make a loose list (paragraph
+  // spacing); the flag rides the list node and comes back out as the
+  // blank lines. A tight list stays tight.
+  const loose = '- one\n\n- two\n\n- three\n';
+  const tight = '- one\n- two\n- three\n';
+  const ld = mdToDoc(loose).doc;
+  const td = mdToDoc(tight).doc;
+  check('a list with blank lines between items is loose', ld.firstChild!.attrs.tight === false, JSON.stringify(ld.firstChild!.attrs));
+  check('a list without blank lines is tight', td.firstChild!.attrs.tight === true, JSON.stringify(td.firstChild!.attrs));
+  check('a loose list round-trips with its blank lines', docToMd(ld) === loose, docToMd(ld));
+  check('a tight list round-trips without them', docToMd(td) === tight, docToMd(td));
+  const nested = '1. one\n\n   - a\n   - b\n\n2. two\n';
+  const nd = mdToDoc(nested).doc;
+  check('looseness is per list: loose outer, tight inner', nd.firstChild!.attrs.tight === false && nd.firstChild!.child(0).child(1).attrs.tight === true, JSON.stringify([nd.firstChild!.attrs, nd.firstChild!.child(0).child(1).attrs]));
+  check('nested pitch round-trips', docToMd(nd) === nested, docToMd(nd));
+  const typ = docToTyp(ld);
+  check('a loose list exports with Typst blank lines and its own item pitch', /#set list\(spacing: [\d.]+pt\)\n- one\n\n- two\n\n- three\n#set list\(spacing: [\d.]+pt\)\n/.test(typ), typ);
 }
 
 declare const process: { exitCode?: number };

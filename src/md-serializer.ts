@@ -222,7 +222,8 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           // line between an item's blocks stays blank.
           items.push(marker + inner.join('\n\n').replace(/\n(?!\n)/g, `\n${hang}`));
         });
-        return items.join('\n');
+        // A loose list keeps the blank lines between its items.
+        return items.join(node.attrs.tight === false ? '\n\n' : '\n');
       }
       case 'figure': {
         const src = node.attrs.src as string;

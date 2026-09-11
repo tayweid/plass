@@ -215,6 +215,23 @@ export function isolateDocumentReplace(): Plugin {
   });
 }
 
+/** Flip the item pitch of the list around the selection: tight (Typst's
+ *  leading-spaced items) or loose (paragraph spacing, the Markdown list
+ *  with blank lines between its items). */
+export const toggleListSpacing: Command = (state, dispatch) => {
+  const { $from } = state.selection;
+  for (let d = $from.depth; d > 0; d--) {
+    const node = $from.node(d);
+    if (node.type === schema.nodes.bullet_list || node.type === schema.nodes.ordered_list) {
+      if (dispatch) {
+        dispatch(state.tr.setNodeMarkup($from.before(d), undefined, { ...node.attrs, tight: node.attrs.tight === false }));
+      }
+      return true;
+    }
+  }
+  return false;
+};
+
 export function buildKeymap(): Plugin {
   const backToParagraph: Command = setBlockType(schema.nodes.paragraph);
   const keys: Record<string, Command> = {
@@ -229,6 +246,7 @@ export function buildKeymap(): Plugin {
     'Shift-Mod-m': insertMath(true),
     'Shift-Mod-8': wrapInList(schema.nodes.bullet_list),
     'Shift-Mod-9': wrapInList(schema.nodes.ordered_list),
+    'Shift-Mod-7': toggleListSpacing,
     'Mod-Alt-0': backToParagraph,
     'Mod-Alt-1': setBlockType(schema.nodes.heading, { level: 1 }),
     'Mod-Alt-2': setBlockType(schema.nodes.heading, { level: 2 }),

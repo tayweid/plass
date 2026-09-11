@@ -1,4 +1,4 @@
-import { Schema, type NodeSpec } from 'prosemirror-model';
+import { Schema, type Node as PMNode, type NodeSpec } from 'prosemirror-model';
 import { schema as base } from 'prosemirror-schema-basic';
 import { addListNodes } from 'prosemirror-schema-list';
 import { tableNodes } from 'prosemirror-tables';
@@ -252,7 +252,40 @@ const tables = tableNodes({
   },
 });
 
-const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
+const listNodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block');
+/** Item pitch. Typst spaces a tight list's items by leading (Plass: leading +
+ *  0.25em, the calibrated `list.spacing`) and a loose one's by paragraph
+ *  spacing; Markdown reads looseness from blank lines between items, Typst
+ *  markup the same. `data-tight="0"` paints the loose pitch. */
+const withTight = (name: 'bullet_list' | 'ordered_list') => {
+  const spec = listNodes.get(name)!;
+  const tag = name === 'bullet_list' ? 'ul' : 'ol';
+  return {
+    ...spec,
+    attrs: { ...(spec.attrs ?? {}), tight: { default: true } },
+    parseDOM: [
+      {
+        tag,
+        getAttrs: (el: HTMLElement | string) => {
+          if (typeof el === 'string') return { tight: true };
+          const attrs: Record<string, unknown> = { tight: el.getAttribute('data-tight') !== '0' };
+          if (name === 'ordered_list') attrs.order = el.hasAttribute('start') ? +el.getAttribute('start')! : 1;
+          return attrs;
+        },
+      },
+    ],
+    toDOM(node: PMNode) {
+      const attrs: Record<string, string> = {};
+      if (!node.attrs.tight) attrs['data-tight'] = '0';
+      if (name === 'ordered_list' && (node.attrs.order as number) !== 1) attrs.start = String(node.attrs.order);
+      return [tag, attrs, 0] as const;
+    },
+  };
+};
+
+const nodes = listNodes
+  .update('bullet_list', withTight('bullet_list'))
+  .update('ordered_list', withTight('ordered_list'))
   .append(tables)
   // The rule under a row: '' (the style preset's), 'light', 'heavy', or
   // 'none' (table-rules.ts).

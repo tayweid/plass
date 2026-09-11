@@ -7,7 +7,9 @@ import { TextSelection } from 'prosemirror-state';
 import { lift, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import type { Command, EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
+import { wrapInList } from 'prosemirror-schema-list';
 import { schema } from './schema';
+import { toggleListSpacing } from './editing';
 import { insertMath } from './math';
 import { insertFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
@@ -58,6 +60,9 @@ const ICONS: Record<string, string> = {
   aligncenter: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="6.5" y1="12" x2="17.5" y2="12"/><line x1="5" y1="18" x2="19" y2="18"/>',
   alignright: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="6" y1="18" x2="21" y2="18"/>',
   code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  list: '<circle cx="4" cy="6" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="4" cy="18" r="1.2" fill="currentColor"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>',
+  listnum: '<text x="2" y="8.5" font-size="7" fill="currentColor" stroke="none">1</text><text x="2" y="20.5" font-size="7" fill="currentColor" stroke="none">2</text><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="18" x2="21" y2="18"/>',
+  listspace: '<circle cx="4" cy="5" r="1.2" fill="currentColor"/><circle cx="4" cy="19" r="1.2" fill="currentColor"/><line x1="8" y1="5" x2="21" y2="5"/><line x1="8" y1="19" x2="21" y2="19"/><line x1="14" y1="9" x2="14" y2="15"/><polyline points="12 11 14 9 16 11"/><polyline points="12 13 14 15 16 13"/>',
   paragraph: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="15" y2="18"/>',
   quote: '<line x1="3" y1="4" x2="3" y2="20" stroke-dasharray="2 2"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="16" y2="18"/>',
   solution: '<line x1="3" y1="4" x2="3" y2="20" stroke-width="3"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="16" y2="18"/>',
@@ -227,6 +232,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     wrap.appendChild(trigger);
     const fly = document.createElement('span');
     fly.className = 'tb-flyout';
+    const buttons: HTMLButtonElement[] = [];
     for (const it of items) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -236,9 +242,11 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       b.addEventListener('mousedown', (e) => e.preventDefault());
       b.addEventListener('click', () => it.run(b));
       fly.appendChild(b);
+      buttons.push(b);
     }
     wrap.appendChild(fly);
     parent.appendChild(wrap);
+    return buttons;
   };
 
   {
@@ -459,6 +467,30 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     { glyph: icon('aligncenter'), label: 'Center', title: 'Center text', run: () => setAlign('center') },
     { glyph: icon('alignright'), label: 'Right', title: 'Align right', run: () => setAlign('right') },
   ]);
+  // Lists: the two kinds, and the item pitch — tight (Typst's default) or
+  // loose (paragraph spacing; the Markdown list with blank lines between
+  // its items). The pitch button reports which one the caret's list has.
+  const listSpacingBtn = flyout(currentPod, icon('list'), 'List — bullets, numbers, item spacing', [
+    { glyph: icon('list'), label: 'Bullets', title: 'Bulleted list (⌘⇧8) — or type - at a line start', run: runCmd(wrapInList(schema.nodes.bullet_list)) },
+    { glyph: icon('listnum'), label: 'Numbers', title: 'Numbered list (⌘⇧9) — or type 1. at a line start', run: runCmd(wrapInList(schema.nodes.ordered_list)) },
+    { glyph: icon('listspace'), label: 'Loose', title: 'Item spacing (⌘⇧7) — tight, or loose with paragraph spacing between items', run: runCmd(toggleListSpacing) },
+  ])[2];
+  const syncListSpacing = () => {
+    const { $from } = view.state.selection;
+    let tight: boolean | null = null;
+    for (let d = $from.depth; d > 0; d--) {
+      const node = $from.node(d);
+      if (node.type === schema.nodes.bullet_list || node.type === schema.nodes.ordered_list) {
+        tight = node.attrs.tight !== false;
+        break;
+      }
+    }
+    listSpacingBtn.querySelector('.lbl')!.textContent = tight === false ? 'Tight' : 'Loose';
+    listSpacingBtn.disabled = tight === null;
+  };
+  syncListSpacing();
+  view.dom.addEventListener('focusin', syncListSpacing);
+  document.addEventListener('selectionchange', syncListSpacing);
   // Block kind: plain body, quote (#quote(block: true)), or the solution
   // preset (left rule, red text). Wrapping and re-kinding both go through
   // the same blockquote node; "Plain" lifts the selection back out.

@@ -618,13 +618,26 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
-    // lists (marker at line start; continuation lines indented two spaces)
+    // A per-list item pitch (the loose list's set/restore pair) is
+    // regenerated from the list's own spacing on export.
+    if (/^#set (list|enum)\(spacing: [\d.]+pt\)$/.test(t)) {
+      i++;
+      continue;
+    }
+
+    // lists (marker at line start; continuation lines indented two spaces;
+    // a blank line between two items makes the list loose)
     m = /^([-+]) /.exec(line);
     if (m) {
       const marker = m[1];
       const itemRe = new RegExp(`^\\${marker} (.*)$`);
       const items: PMNode[] = [];
+      let tight = true;
       while (i < n) {
+        if (items.length && lines[i].trim() === '' && itemRe.test(lines[i + 1] ?? '')) {
+          tight = false;
+          i++;
+        }
         const im = itemRe.exec(lines[i]);
         if (!im) break;
         const body: string[] = [im[1]];
@@ -643,7 +656,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
         items.push(schema.nodes.list_item.create(null, content));
       }
       const type = marker === '-' ? schema.nodes.bullet_list : schema.nodes.ordered_list;
-      out.push(type.create(null, items));
+      out.push(type.create({ tight }, items));
       continue;
     }
 

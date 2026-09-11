@@ -1248,6 +1248,22 @@ body {
   margin-bottom: 0.25em;
 }
 
+/* Inside an item, a paragraph followed by another block is spaced from it
+   by paragraph spacing, as anywhere else (Typst: the larger of the two
+   blocks' weak spacings — measured 30pt line to line at the default size). */
+.ProseMirror li > p:not(:last-child) {
+  margin-bottom: var(--par-margin, 0.9em);
+}
+
+/* A loose list (blank lines between its items in the file): Typst spaces
+   the items by paragraph spacing instead of the list's item pitch. The
+   last item keeps the tight margin so the spacing after the list is the
+   same either way. */
+.ProseMirror ul[data-tight='0'] > li:not(:last-child) > p:last-child,
+.ProseMirror ol[data-tight='0'] > li:not(:last-child) > p:last-child {
+  margin-bottom: var(--par-margin, 0.9em);
+}
+
 /* A nested list inside an item: Typst separates the item's text from it by
    the full block spacing (paragraph spacing — measured: 30pt line to line
    at the default size, not the 21.9pt item spacing), and nothing extra

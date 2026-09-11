@@ -47,6 +47,7 @@ interface MdToken {
   map: [number, number] | null;
   attrGet(name: string): string | null;
   hidden: boolean;
+  level: number;
 }
 
 // Math placeholders use a private-use character: markdown-it passes it
@@ -400,14 +401,14 @@ export function mdToDoc(src: string): MdImport {
         }
         case 'bullet_list_open': {
           const items = parseListItems(i + 1, 'bullet_list_close');
-          nodes.push(schema.nodes.bullet_list.create(null, items.nodes));
+          nodes.push(schema.nodes.bullet_list.create({ tight: items.tight }, items.nodes));
           i = items.next;
           break;
         }
         case 'ordered_list_open': {
           const items = parseListItems(i + 1, 'ordered_list_close');
           const start = t.attrGet('start');
-          nodes.push(schema.nodes.ordered_list.create(start ? { order: +start } : null, items.nodes));
+          nodes.push(schema.nodes.ordered_list.create({ order: start ? +start : 1, tight: items.tight }, items.nodes));
           i = items.next;
           break;
         }
@@ -451,10 +452,18 @@ export function mdToDoc(src: string): MdImport {
     return { nodes, next: i };
   }
 
-  function parseListItems(i: number, closeType: string): { nodes: PMNode[]; next: number } {
+  function parseListItems(i: number, closeType: string): { nodes: PMNode[]; next: number; tight: boolean } {
     const items: PMNode[] = [];
+    // markdown-it marks a tight list by hiding the paragraphs directly
+    // inside its items; a paragraph left visible means the list is loose.
+    let tight = true;
     while (i < tokens.length && tokens[i].type !== closeType) {
       if (tokens[i].type === 'list_item_open') {
+        const itemLevel = tokens[i].level;
+        for (let j = i + 1; j < tokens.length && tokens[j].type !== 'list_item_close'; j++) {
+          if (tokens[j].type === 'paragraph_open' && tokens[j].level === itemLevel + 1 && !tokens[j].hidden) tight = false;
+          if (tokens[j].type === 'list_item_open') break;
+        }
         const inner = parseBlocks(i + 1, 'list_item_close');
         items.push(
           schema.nodes.list_item.create(null, inner.nodes.length ? inner.nodes : [paragraph.create()]),
@@ -462,7 +471,7 @@ export function mdToDoc(src: string): MdImport {
         i = inner.next;
       } else i++;
     }
-    return { nodes: items, next: i + 1 };
+    return { nodes: items, next: i + 1, tight };
   }
 
   function parseTableTokens(i: number): { node: PMNode; next: number } {

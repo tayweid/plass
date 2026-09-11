@@ -149,6 +149,8 @@ rails can always be finished in Typst itself, because the file is Typst.
 - **Editing**: ProseMirror core. Markdown-style input rules (`#` headings,
   `**bold**`, `*italic*`, `` `code` ``, `>` quotes, `-`/`1.` lists, ` ``` `
   code blocks), keyboard shortcuts, undo/redo, autosave to localStorage.
+  A list is tight or loose (blank lines between its items in the file,
+  paragraph spacing on the page); the List control or ⌘⇧7 flips it.
 - **Solution blocks**: the Block control (plain / quote / solution) turns
   the selected paragraphs into a solution — red text with a red rule down
   the left, for problem-set answers. It is a preset on the quote rail:

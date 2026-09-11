@@ -4,7 +4,7 @@
 // mitex Typst package, which compiles LaTeX math inside Typst documents.
 
 import type { Node as PMNode } from 'prosemirror-model';
-import { normalizeSettings, parseMathMacros, type DocSettings, paperInches } from './settings';
+import { normalizeSettings, parseMathMacros, type DocSettings, paperInches, DEFAULT_SETTINGS } from './settings';
 import { wrapAligned } from './math-src';
 import { isPortableCitationKey, parseBibTeX } from './bibtex';
 import { RAW_FONT, codeBlockMetricsEm, effectiveFont, parityMetrics } from './font-registry';
@@ -167,6 +167,14 @@ const HEADINGS: Array<{ level: number; hs: number; padTop: number; marginBottom:
  * Typst's collector assigns this construct (weakness 4) without
  * duplicating the formula.
  */
+/** Item pitch (body em, frame to frame): a tight list's items sit at
+ *  leading + 0.25em (the editor's `li > p` margin), a loose list's at
+ *  paragraph spacing — Typst's own rule, with `spacing: auto`. */
+export function listSpacingEm(s: DocSettings, tight: boolean): number {
+  if (!tight) return parSpacingEm(s);
+  return s.lineHeight + 0.25 - parityMetrics(s.font).extent;
+}
+
 export function parSpacingEm(s: DocSettings): number {
   const m = parityMetrics(s.font);
   // Classic (indented) paragraphs flow with no extra gap: spacing = leading.
@@ -217,8 +225,8 @@ export function parityRules(s: DocSettings): string {
   let out = '';
   out += `#set par(justify: true, leading: ${pt(lh - m.extent)}, spacing: ${pt(parSpacingEm(s))})\n`;
   if (s.parIndent) out += `#set par(first-line-indent: 1.5em)\n`;
-  out += `#set list(spacing: ${pt(lh + 0.25 - m.extent)})\n`;
-  out += `#set enum(spacing: ${pt(lh + 0.25 - m.extent)})\n`;
+  out += `#set list(spacing: ${pt(listSpacingEm(s, true))})\n`;
+  out += `#set enum(spacing: ${pt(listSpacingEm(s, true))})\n`;
   // Levels 4–6 print like level 3 (the editor styles them the same), so
   // the metrics calibrated for three levels hold for six.
   for (let level = 1; level <= 6; level++) {
@@ -581,11 +589,25 @@ function blockToTyp(node: PMNode, indent = ''): string {
     case 'bullet_list':
     case 'ordered_list': {
       const marker = node.type.name === 'bullet_list' ? '- ' : '+ ';
+      const tight = node.attrs.tight !== false;
       let out = '';
-      node.forEach((item) => {
+      node.forEach((item, _o, k) => {
         const body = blocksToTyp(item, '').trimEnd().split('\n').join('\n' + indent + '  ');
-        out += indent + marker + body + '\n';
+        // A loose list: blank lines between the items (Typst's own tight:
+        // false), spaced by paragraph spacing. The document's `#set` fixes
+        // the item pitch for tight lists, so the loose one is set and
+        // restored around the list (bare set rules, like an equation's
+        // numbering override: a wrapping content block would add spacing).
+        out += (tight || k === 0 ? '' : '\n') + indent + marker + body + '\n';
       });
+      if (!tight) {
+        const kind = node.type.name === 'bullet_list' ? 'list' : 'enum';
+        const spacing = (em: number) => `${(em * docSettings.sizePt).toFixed(3)}pt`;
+        out =
+          indent + `#set ${kind}(spacing: ${spacing(listSpacingEm(docSettings, false))})\n` +
+          out +
+          indent + `#set ${kind}(spacing: ${spacing(listSpacingEm(docSettings, true))})\n`;
+      }
       return out + '\n';
     }
     case 'table': {
@@ -804,6 +826,7 @@ function containsMath(doc: PMNode): boolean {
 }
 
 let docNumFormat = '1';
+let docSettings: DocSettings = DEFAULT_SETTINGS;
 let emitNumberEquations = true;
 let docCitationStyle: CitationStyle = 'ieee';
 let unnumberedEqLabels = new Set<string>();
@@ -841,6 +864,7 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
       if (n.type.name === 'numbering_restart') hasRestart = true;
     });
     docNumFormat = s.pageNumFormat;
+    docSettings = s;
     // With a restart marker, front-matter pages number in roman.
     const frontFormat = hasRestart ? 'i' : s.pageNumFormat;
     if (s.pageNumShow) pageArgs.push(`numbering: "${frontFormat}"`, `number-align: ${s.pageNumAlign}`);

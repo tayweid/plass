@@ -134,6 +134,46 @@ FIXTURES.push(
 );
 
 FIXTURES.push({
+  // Item pitch: tight lists, loose lists (blank lines between items), an
+  // item holding two paragraphs, a loose list nested in a tight one.
+  name: 'lists-loose.md',
+  text: [
+    '# Pitch',
+    '',
+    FILLER.repeat(2).trimEnd(),
+    '',
+    ...Array.from({ length: 3 }, (_, i) => '- ' + FILLER.repeat(1 + (i % 2)).trimEnd()),
+    '',
+    FILLER.repeat(1).trimEnd(),
+    '',
+    ...Array.from({ length: 3 }, (_, i) => '- ' + FILLER.repeat(1 + (i % 2)).trimEnd() + '\n'),
+    FILLER.repeat(1).trimEnd(),
+    '',
+    ...Array.from({ length: 3 }, (_, i) => `${i + 1}. ` + FILLER.repeat(1 + (i % 2)).trimEnd() + '\n'),
+    FILLER.repeat(1).trimEnd(),
+    '',
+    '- ' + FILLER.repeat(1).trimEnd(),
+    '',
+    '  ' + FILLER.repeat(1).trimEnd(),
+    '',
+    '- ' + FILLER.repeat(1).trimEnd(),
+    '',
+    FILLER.repeat(1).trimEnd(),
+    '',
+    '- ' + FILLER.repeat(1).trimEnd(),
+    '  - ' + FILLER.repeat(1).trimEnd(),
+    '',
+    '  - ' + FILLER.repeat(1).trimEnd(),
+    '- ' + FILLER.repeat(1).trimEnd(),
+    '',
+    ...Array.from({ length: 4 }, () => FILLER.repeat(3).trimEnd() + '\n'),
+    ...Array.from({ length: 6 }, (_, i) => '- ' + FILLER.repeat(2 + (i % 3)).trimEnd() + '\n'),
+    FILLER.repeat(3).trimEnd(),
+    '',
+  ].join('\n'),
+});
+
+FIXTURES.push({
   name: 'headings.md',
   text: [
     '# A first-level heading long enough to wrap onto a second line of the page at the default size',
