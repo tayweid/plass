@@ -137,10 +137,8 @@ the push is ordered by what those files hit, not by feature size:
 
 1. **Markdown fidelity to the finish**, in this order:
    a. ~~Smart quotes~~ — done (Dogfood, above).
-   b. *Hard-wrapped paragraphs.* Either re-wrap on save at a fixed measure
-      so files stay diff-friendly, or accept the one-time reflow and say
-      so once per file. Decide; the corpus says this is the most common
-      rewrite by far.
+   b. ~~Hard-wrapped paragraphs~~ — decided 2026-09-11 (Taylor): the
+      one-time reflow is fine as is; no re-wrap on save.
    c. ~~Headings 4–6, bracket escaping, inline HTML, image titles~~ —
       done.
    d. Exit for the whole item: `scripts/md-corpus.ts` reports the
@@ -202,6 +200,14 @@ Deferred on purpose: PAGE-PORT Phase 6, multiple columns, offline PWA.
   also decides how an update reaches an already-open app.
 - Custom paper dimensions; inside/outside (two-sided) margins; footnote
   per-page vs continuous numbering and separator options.
+- **Environment check for text metrics.** CI's Linux Chromium hinted the
+  bundled fonts and rounded every glyph advance to a whole pixel (a
+  26-letter run 225px vs 212.6px on macOS), so the port's exact breaks
+  overflowed and pagination drifted on every page. The test runner now
+  launches with `--font-render-hinting=none`, but a user's browser is not
+  under our control: the layout should measure one probe run against the
+  port's shaped width at startup and, on a mismatch, declare the exact
+  path uncertified (fall back, say so) rather than lay out wrong lines.
 - **Compiled line-break verification skips hard-break and dash paragraphs.**
   The compiled oracle's forced breaks fail to partition blocks containing
   `hard_break` nodes or en/em dashes (`layoutAuthoritative` returns null) and
