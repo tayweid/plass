@@ -341,7 +341,7 @@ const fileManager = new FileManager({
     toolbar?.setFile(fileManager.name, fileManager.dirty);
     // Just the file name, as Knuth does: an installed PWA window already
     // prepends the app's name, so " - Plass" made the window read it twice.
-    document.title = `${fileManager.name}.typ${fileManager.dirty ? ' •' : ''}`;
+    document.title = `${fileManager.name}${fileManager.format}${fileManager.dirty ? ' •' : ''}`;
   },
   message: showMessage,
   messageAction: showMessage,

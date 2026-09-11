@@ -637,3 +637,18 @@ test('a clean document hot-reloads an external change to its file', async ({ pag
     }),
   ).toEqual({ text: 'hot reloaded from disk', dirty: false, conflict: false });
 });
+
+test('an opened .md file shows .md in the window title', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const h = await root.getFileHandle('Notes.md', { create: true });
+    const w = await h.createWritable();
+    await w.write('# Hello\n\nA paragraph.\n');
+    await w.close();
+    const fm = (window as unknown as { __fm: { loadHandle: (h: FileSystemFileHandle) => Promise<unknown> } }).__fm;
+    await fm.loadHandle(h);
+  });
+  await expect(page).toHaveTitle('Notes.md');
+});
