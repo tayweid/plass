@@ -38,6 +38,7 @@ import {
 import { buildSpec, type TypstOracle, type AtomResolver, type SpecKind } from './layout/typst-oracle';
 import { portBreaks } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
+import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdict } from './environment-check';
 import type { PageOracle, PageOracleEntry } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
@@ -63,7 +64,7 @@ import { eqKey } from './equations';
 import { getInk, inkKey } from './math-ink';
 import { parseTypstSvg } from './safe-svg';
 import { recordLayoutPerf } from './layout/perf';
-import { COMMON_PORT_KEYS, effectiveFont, parityMetrics } from './font-registry';
+import { COMMON_PORT_KEYS, effectiveFont, parityMetrics, cssFontStack } from './font-registry';
 import {
   appendLineDecorations,
   blockSpacerDecoration,
@@ -146,6 +147,8 @@ export type { PageInfo, TypesetMeta, TypesetState, TypesetStats };
  * breaker. Console: __usePort(false) to A/B against the legacy path;
  * __portStats() reports how often each path ran. */
 let USE_PORT = true;
+/** The startup probe's verdict (environment-check.ts), for the dev hook. */
+let environmentVerdict: EnvironmentVerdict | null = null;
 let portHits = 0;
 let legacyHits = 0;
 let adapterNulls = 0;
@@ -375,7 +378,7 @@ export function isLayoutSuspended(view: EditorView): boolean {
 }
 
 export function typesetPlugin(
-  opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo) => void } = {},
+  opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo) => void; onEnvironment?: (v: EnvironmentVerdict) => void } = {},
 ) {
   return new Plugin<TypesetState>({
     key: typesetKey,
@@ -476,6 +479,38 @@ class TypesetView {
   /** Which source produced the last pagination (diagnostics). */
   private pagPath: 'exact' | 'held' | 'fallback' = 'exact';
   private pagLog: string[] = [];
+  /**
+   * Startup probe (environment-check.ts): the browser's width for a prose
+   * run in the document's font and size against the port's shaped width.
+   * A disagreement beyond the tolerance turns the exact path off for the
+   * session — legacy breaker, oracles suspended — and tells the writer.
+   * `simulateRatio` (dev/test) stands in for a hinting browser.
+   */
+  checkEnvironment(simulateRatio?: number): EnvironmentVerdict | null {
+    const prim = primitives();
+    if (!prim) return null;
+    const s = getSettings(this.view.state);
+    const font = effectiveFont(s.font);
+    const sizePx = (s.sizePt * 4) / 3;
+    const upem = prim.upem(font.portKeys.regular);
+    let em = 0;
+    for (const g of prim.shape(font.portKeys.regular, PROBE_TEXT)) em += g.xAdvance / upem;
+    const portPx = em * sizePx;
+    const host = this.view.dom.parentElement ?? document.body;
+    const browserPx = measureBrowserRun(host, cssFontStack(s.font), sizePx) * (simulateRatio ?? 1);
+    const verdict = judgeEnvironment(browserPx, portPx, font.label, sizePx);
+    environmentVerdict = verdict;
+    if (!verdict.certified && USE_PORT) {
+      console.warn('exact layout is off: browser text metrics disagree with the compiler', verdict);
+      USE_PORT = false;
+      this.oracles.suspend();
+      this.cache.clear();
+      this.invalidatePages();
+      this.opts.onEnvironment?.(verdict);
+    }
+    return verdict;
+  }
+
   /** Total pagLog pushes ever. The log itself is a 40-entry ring, so length
    * deltas stop working once it fills; pollers must diff THIS counter. */
   private pagLogTotal = 0;
@@ -549,7 +584,7 @@ class TypesetView {
 
   constructor(
     private view: EditorView,
-    private opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo) => void },
+    private opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo) => void; onEnvironment?: (v: EnvironmentVerdict) => void },
   ) {
     viewRegistry.set(view, this);
     this.measurer = new Measurer(view.dom);
@@ -557,7 +592,9 @@ class TypesetView {
     // fonts in the background; until ready, liveRun uses the legacy path.
     loadPrimitives().then(
       () => {
-        if (!this.destroyed) this.requestRun();
+        if (this.destroyed) return;
+        this.checkEnvironment();
+        this.requestRun();
       },
       (e) => console.warn('sidecar primitives failed to load', e),
     );
@@ -662,6 +699,12 @@ class TypesetView {
           : null;
       };
       (w as unknown as { __pagLog: () => string[] }).__pagLog = () => this.pagLog;
+      (w as unknown as { __environment: () => EnvironmentVerdict | null }).__environment = () => environmentVerdict;
+      (w as unknown as { __environmentSimulate: (ratio: number) => EnvironmentVerdict | null }).__environmentSimulate = (ratio) => {
+        const v = this.checkEnvironment(ratio);
+        this.requestRun();
+        return v;
+      };
       (w as unknown as { __pagCount: () => number }).__pagCount = () => this.pagLogTotal;
       (w as unknown as { __layoutSuspend: (suspended: boolean) => boolean }).__layoutSuspend = (
         suspended: boolean,

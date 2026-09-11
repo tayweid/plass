@@ -24,6 +24,7 @@ import { applySettings, formatPageNumber, getSettings } from './settings';
 import { FileManager } from './file-manager';
 import { resetCompilerCircuit } from './compiler-circuit';
 import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
+import { describeVerdict } from './environment-check';
 
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
@@ -132,7 +133,7 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       footnoteGuard(),
       collapseSpaces(),
       copyTextWithoutItsBlock(),
-      typesetPlugin({ onStats, onPages: renderPages }),
+      typesetPlugin({ onStats, onPages: renderPages, onEnvironment: (v) => showMessage(describeVerdict(v)) }),
       // Native cell selection, rectangular copy/paste, and structural table
       // invariants. Keep this last so its broad arrow/mouse handlers only run
       // after more specific editor behavior has had a chance.

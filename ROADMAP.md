@@ -248,14 +248,15 @@ Deferred on purpose: PAGE-PORT Phase 6, multiple columns, offline PWA.
   also decides how an update reaches an already-open app.
 - Custom paper dimensions; inside/outside (two-sided) margins; footnote
   per-page vs continuous numbering and separator options.
-- **Environment check for text metrics.** CI's Linux Chromium hinted the
-  bundled fonts and rounded every glyph advance to a whole pixel (a
-  26-letter run 225px vs 212.6px on macOS), so the port's exact breaks
-  overflowed and pagination drifted on every page. The test runner now
-  launches with `--font-render-hinting=none`, but a user's browser is not
-  under our control: the layout should measure one probe run against the
-  port's shaped width at startup and, on a mismatch, declare the exact
-  path uncertified (fall back, say so) rather than lay out wrong lines.
+- ~~Environment check for text metrics~~ — done 2026-09-11
+  (`src/environment-check.ts`). CI's Linux Chromium hinted the bundled
+  fonts and rounded every advance to a whole pixel (225px vs 212.6px for
+  26 letters), so the port's exact breaks overflowed on every page. The
+  test runner launches with hinting off; a writer's browser is probed at
+  startup — one prose run in the document's font and size, browser width
+  against the port's shaped width — and a disagreement beyond 0.4% turns
+  the exact path off for the session (legacy breaker, oracles suspended)
+  with a notice. `__environment()` / `__environmentSimulate(ratio)` in dev.
 - ~~Compiled line-break verification skips hard-break and dash paragraphs~~
   — checked 2026-09-11: dash paragraphs verify and agree with the port
   (the compare hook lists nothing for them). Hard-break paragraphs did
