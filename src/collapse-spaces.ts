@@ -115,6 +115,27 @@ export function collapseSpaces(): Plugin {
             const base = pos + 1 + offset + m.index;
             swaps.push([base, base + m[0].length, ' ', child.marks]);
           }
+          // A space typed against an inline atom (a formula, a citation, a
+          // reference) arrives as a LONE nbsp: the browser writes it that
+          // way because, under the editor's `white-space: normal`, a plain
+          // space at the end of a text node is collapsible and Chrome eats
+          // it on the next keystroke. Left alone it exports as `~` and welds
+          // the formula to the next word. A single nbsp touching an atom is
+          // that artifact and becomes a plain space — once a character
+          // follows it, so the space is never the trailing one Chrome
+          // cannot keep. A run of two or more is still intentional glue.
+          const prevAtom = index > 0 && !node.child(index - 1).isText;
+          const nextNode = index + 1 < node.childCount ? node.child(index + 1) : null;
+          const nextAtom = !!nextNode && !nextNode.isText && nextNode.type.name !== 'footnote';
+          if (prevAtom && text[0] === '\u00a0' && text.length > 1 && !/[ \u00a0]/.test(text[1])) {
+            const base = pos + 1 + offset;
+            swaps.push([base, base + 1, ' ', child.marks]);
+          }
+          const last = text.length - 1;
+          if (nextAtom && last > 0 && text[last] === '\u00a0' && !/[ \u00a0]/.test(text[last - 1])) {
+            const base = pos + 1 + offset + last;
+            swaps.push([base, base + 1, ' ', child.marks]);
+          }
           // Typst dash shorthands print differently than they type: the
           // document holds the printed glyphs (--- em, -- en — including
           // the "–-" state mid-way through typing an em dash — and a

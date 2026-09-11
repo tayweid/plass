@@ -143,6 +143,28 @@ console.log('collapse-spaces:');
   check('pasted prose normalizes whole', pd.doc.firstChild!.textContent === 'The 5′11″ ‘quick’ fox’s “lazy” dog', JSON.stringify(pd.doc.firstChild!.textContent));
 }
 
+{
+  // A lone nbsp against an inline atom is the browser's artifact for a
+  // typed space and becomes a plain space; a run of two stays as glue.
+  const math = schema.nodes.math_inline.create({ src: 'x' });
+  const para = schema.nodes.paragraph.create(null, [schema.text('area '), math, schema.text('\u00a0done')]);
+  const s = EditorState.create({ doc: schema.nodes.doc.create(null, [para]), plugins: [collapseSpaces()] });
+  const after = s.apply(s.tr.insertText('!', s.doc.content.size - 1));
+  check('a lone nbsp after a formula becomes a space', after.doc.firstChild!.child(2).text === ' done!', JSON.stringify(after.doc.firstChild!.child(2).text));
+  const before = schema.nodes.paragraph.create(null, [schema.text('see\u00a0'), math, schema.text(' now')]);
+  const s2 = EditorState.create({ doc: schema.nodes.doc.create(null, [before]), plugins: [collapseSpaces()] });
+  const after2 = s2.apply(s2.tr.insertText('!', 1));
+  check('a lone nbsp before a formula becomes a space', after2.doc.firstChild!.child(0).text === '!see ', JSON.stringify(after2.doc.firstChild!.child(0).text));
+  const glue = schema.nodes.paragraph.create(null, [schema.text('a'), math, schema.text('\u00a0\u00a0b')]);
+  const s3 = EditorState.create({ doc: schema.nodes.doc.create(null, [glue]), plugins: [collapseSpaces()] });
+  const after3 = s3.apply(s3.tr.insertText('!', 1));
+  check('a pure nbsp run after a formula stays', after3.doc.firstChild!.child(2).text === '\u00a0\u00a0b', JSON.stringify(after3.doc.firstChild!.child(2).text));
+  const mid = schema.nodes.paragraph.create(null, [schema.text('a\u00a0b')]);
+  const s4 = EditorState.create({ doc: schema.nodes.doc.create(null, [mid]), plugins: [collapseSpaces()] });
+  const after4 = s4.apply(s4.tr.insertText('!', 1));
+  check('a lone nbsp inside text stays', after4.doc.firstChild!.textContent === '!a\u00a0b', JSON.stringify(after4.doc.firstChild!.textContent));
+}
+
 if (failures) {
   console.error(`${failures} failure(s)`);
   process.exit(1);

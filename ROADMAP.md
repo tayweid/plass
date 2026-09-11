@@ -65,7 +65,8 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      folio into the header.
    - *Draft niceties*: 1.5 spacing exists. Open: double spacing, DRAFT
      watermark/background, margin line numbers.
-3. **Tables as daily tools.** Done 2026-09-11, the first slice — what
+3. **Tables as daily tools.** Done 2026-09-11 — every item below landed
+   in one day of slices. First slice — what
    made them "clunky to edit": the floating control bar covered the
    paragraph above the table (now docked under the toolbar); typing into
    a fresh table prepended to "Column 1" (the placeholder is selected);
@@ -87,9 +88,13 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      both columns); now one row or column goes and the merge shrinks, a
      cell selection still removes what it covers, and a row added below
      the header is a body row rather than a second header.
-   - *Rich cells* — tables are native editable trees; math/references
-     inside cells serialize losslessly but the in-cell editing affordances
-     (e.g. "edit as math") are still to be built. The last open table item.
+   - ~~Rich cells~~ — checked 2026-09-11: math in cells already worked
+     everywhere it works in a paragraph (`$…$` typing, ⌘M, click to edit,
+     Enter to save; display math is refused with a notice), now pinned by
+     a spec. What the check found instead was a document-wide bug: a space
+     typed right after any inline formula was stored as a non-breaking
+     space (Chrome's artifact under `white-space: normal`) and exported as
+     `~`, welding the formula to the next word. Fixed in the normalizer.
    - ~~Per-selection cell fills~~ — done 2026-09-11: a Fill control cycles
      a preset (gray / yellow / blue — verified colours, not a picker) over
      the selected cells; exported as `table.cell(fill: …)`, read back, and

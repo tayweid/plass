@@ -464,6 +464,69 @@ test('the Fill control cycles a preset that paints the cell and exports', async 
   expect(await bg()).toBe('rgba(0, 0, 0, 0)');
 });
 
+test('math is written and edited inside cells like anywhere else', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    window.view.dispatch(state.tr.insertText('Before.', 1));
+    window.view.focus();
+  });
+  await page.keyboard.press('End');
+  await page.keyboard.press('ControlOrMeta+Alt+t');
+  await expect(page.locator('.ProseMirror table')).toHaveCount(1);
+  await page.keyboard.press('Enter'); // first body row, column 1
+  // Typing $…$ converts in a cell as it does in a paragraph.
+  await page.keyboard.type('area $a^2$ done');
+  const cellOf = (r: number, c: number) => page.evaluate(([r, c]) => {
+    const cell = window.view.state.doc.child(1).child(r).child(c);
+    const out: string[] = [];
+    cell.firstChild!.forEach((n) => out.push(n.type.name === 'math_inline' ? `math:${n.attrs.src}` : n.text ?? n.type.name));
+    return out;
+  }, [r, c] as [number, number]);
+  expect(await cellOf(1, 0)).toEqual(['area ', 'math:a^2', ' done']);
+  // Clicking the formula opens the editor; Enter saves the edit.
+  await page.locator('.ProseMirror td .math-inline').first().click();
+  const editor = page.locator('.math-editor .math-editor-input');
+  await expect(editor).toBeVisible();
+  await editor.fill('a^2 + b^2');
+  await editor.press('Enter');
+  await expect(editor).toHaveCount(0);
+  expect(await cellOf(1, 0)).toEqual(['area ', 'math:a^2 + b^2', ' done']);
+  // ⌘M in another cell inserts a formula and opens the editor on it.
+  await page.evaluate(() => {
+    const table = window.view.state.doc.child(1);
+    const rowOff = table.child(0).nodeSize;
+    const row = table.child(1);
+    const cellOff = row.child(0).nodeSize;
+    const pos = window.view.state.doc.child(0).nodeSize + 1 + rowOff + 1 + cellOff + 2;
+    const TS = window.view.state.selection.constructor as typeof import('prosemirror-state').TextSelection;
+    window.view.dispatch(window.view.state.tr.setSelection(TS.near(window.view.state.doc.resolve(pos))));
+    window.view.focus();
+  });
+  await page.keyboard.press('ControlOrMeta+m');
+  await expect(editor).toBeVisible();
+  await editor.fill('\\frac{1}{2}');
+  await editor.press('Enter');
+  expect(await cellOf(1, 1)).toEqual(['math:\\frac{1}{2}']);
+  // The export carries both as inline math inside the cells.
+  const typ = await page.evaluate(async () => {
+    const { docToTyp } = await import('/src/typ-serializer.ts');
+    return docToTyp(window.view.state.doc);
+  });
+  expect(typ).toContain('#mi(raw("a^2 + b^2", block: false))');
+  expect(typ).toContain('#mi(raw("\\\\frac{1}{2}", block: false))');
+  // Display math has no lossless cell form: the edit is refused, the cell
+  // keeps its text, and the writer is told.
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('$$');
+  await page.keyboard.press('Enter');
+  expect(await page.evaluate(() => {
+    let display = 0;
+    window.view.state.doc.child(1).descendants((n) => { if (n.type.name === 'math_display') display++; return true; });
+    return display;
+  })).toBe(0);
+});
+
 test('default native table uses the intrinsic centered Typst box model', async ({ page }) => {
   await page.goto('/?new=1');
   await page.waitForFunction(() => !!window.view);
