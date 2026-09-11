@@ -114,20 +114,27 @@ async function compileOne(
     (item.display
       ? `#mitex(\`\n${latex}\n\`)\n`
       : (item.bold ? `#strong[#mi(\`${latex}\`)]` : `#mi(\`${latex}\`)`) +
-        '#context metadata(here().position());#box()\n');
+        // The baseline, and the formula's exact advance: an auto-sized page
+        // rounds to whole points (68.8pt came back as a 69pt page), and the
+        // port needs the width Typst measures in the flow.
+        `#context metadata((pos: here().position(), width: measure(${item.bold ? `strong[mi(\`${latex}\`)]` : `mi(\`${latex}\`)`}).width));#box()\n`);
 
   const svg = await compileSvg(src);
   if (!svg) return null;
-  const pos = item.display
+  const meta = item.display
     ? null
-    : await typstQuery<{ func: string; value: { x: string; y: string } }>(src, 'metadata');
-  const baselinePt = pos?.[0]?.value ? parseFloat(pos[0].value.y) : NaN;
+    : await typstQuery<{ func: string; value: { pos: { x: string; y: string }; width: string } }>(src, 'metadata');
+  const baselinePt = meta?.[0]?.value?.pos ? parseFloat(meta[0].value.pos.y) : NaN;
+  const measuredPt = meta?.[0]?.value?.width ? parseFloat(meta[0].value.width) : NaN;
 
+  // The viewBox carries the exact page size; the width/height attributes
+  // are rounded (an auto-sized page came back as width="69" for 68.8pt),
+  // and the port needs the exact advance Typst measures in the flow.
   const m = /viewBox="0 0 ([\d.]+) ([\d.]+)"/.exec(svg) ?? [];
   const wAttr = /width="([\d.]+)"/.exec(svg);
   const hAttr = /height="([\d.]+)"/.exec(svg);
-  const wPt = wAttr ? parseFloat(wAttr[1]) : m[1] ? parseFloat(m[1]) : NaN;
-  const hPt = hAttr ? parseFloat(hAttr[1]) : m[2] ? parseFloat(m[2]) : NaN;
+  const wPt = Number.isFinite(measuredPt) && measuredPt > 0 ? measuredPt : m[1] ? parseFloat(m[1]) : wAttr ? parseFloat(wAttr[1]) : NaN;
+  const hPt = m[2] ? parseFloat(m[2]) : hAttr ? parseFloat(hAttr[1]) : NaN;
   if (!(wPt > 0) || !(hPt > 0)) return null;
 
   const PX = 4 / 3;

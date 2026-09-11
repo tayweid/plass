@@ -36,12 +36,12 @@ import {
   type LineLayout,
 } from './layout/paragraph';
 import { buildSpec, type TypstOracle, type AtomResolver, type SpecKind } from './layout/typst-oracle';
-import { portBreaks } from './layout/port/adapter';
+import { portBreaks, shapedWidthPt } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
 import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdict } from './environment-check';
 import type { PageOracle } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
-import { escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
+import { escapeTyp, expandMacrosWith, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
 import {
   containerPageTopDropEm,
   footnoteEmptyFrameAction,
@@ -64,7 +64,7 @@ import { eqKey } from './equations';
 import { getInk, inkKey } from './math-ink';
 import { parseTypstSvg } from './safe-svg';
 import { recordLayoutPerf } from './layout/perf';
-import { COMMON_PORT_KEYS, effectiveFont, parityMetrics, cssFontStack } from './font-registry';
+import { COMMON_PORT_KEYS, effectiveFont, parityMetrics, cssFontStack, footnoteFrameInsetsEm } from './font-registry';
 import {
   appendLineDecorations,
   blockSpacerDecoration,
@@ -134,6 +134,30 @@ import { buildPortAudit, type PortAuditReport } from './layout/port-audit';
 
 /** Islands never flex: nothing in the document takes a line's slack. */
 const noFill = () => false;
+
+/** Slack allowed when a frame is tested against the page bottom, in px.
+ * Typst allows none (`Abs::fits` is exact to 1e-6pt); the browser's layout
+ * is exact to 1/64 px, so this only absorbs that quantization — a looser
+ * value placed lines Typst rejects by half a point. */
+const FIT_TOLERANCE_PX = 0.1;
+
+/** The widths of a block's inline atoms, as the port will receive them,
+ * folded into its layout cache key: a formula's compiled ink arrives after
+ * the block was first laid out with a placeholder, and a layout reused
+ * across that arrival would keep the placeholder's breaks. */
+function atomWidthSignature(node: PMNode, atomWidth: AtomWidth): string {
+  let sig = '';
+  node.forEach((child, offset) => {
+    if (child.isText) return;
+    sig += `|${atomWidth(offset, child).toFixed(2)}`;
+  });
+  return sig;
+}
+
+/** Typst's second-level list marker "‣" (U+2023) is not in the bundled body
+ * faces; the compiler shapes it from its fallback face at this advance
+ * (measured: 4.69pt at 12.5pt). The port's shaper would report .notdef. */
+const LIST_TRIANGLE_EM = 0.375;
 
 export { typesetKey };
 export type { PageInfo, TypesetMeta, TypesetState, TypesetStats };
@@ -619,6 +643,23 @@ class TypesetView {
       };
       w.__oracle = this.oracles.paragraph;
       w.__pageOracle = this.oracles.page;
+      (w as unknown as { __portAtoms: (pos: number) => unknown }).__portAtoms = (pos) => {
+        const node = this.view.state.doc.nodeAt(pos);
+        if (!node) return null;
+        const st = getSettings(this.view.state);
+        const px = makeAtomWidth(this.view, st, pos);
+        const pt = this.typstAtomWidthPt();
+        const out: unknown[] = [];
+        node.forEach((child, offset) => {
+          if (child.isText) return;
+          out.push({ type: child.type.name, offset, domPt: px(offset, child) * 0.75, typstPt: pt(offset, child) });
+        });
+        return out;
+      };
+      (w as unknown as { __shapedWidthPt: (text: string, style?: 'regular' | 'bold' | 'italic') => number | null }).__shapedWidthPt = (text, style = 'regular') => {
+        const st = getSettings(this.view.state);
+        return shapedWidthPt(text, effectiveFont(st.font).portKeys[style], st.sizePt);
+      };
       (w as unknown as { __audit: () => Promise<PortAuditReport | null> }).__audit = () => this.audit();
       (w as unknown as { __comparePort: () => unknown }).__comparePort = () => {
         const state = this.view.state;
@@ -1038,7 +1079,7 @@ class TypesetView {
       if (!(measure > 60)) continue;
       const atomWidth = makeAtomWidth(this.view, settings, b.pos);
       const spec = resolveAtom ? buildSpec(b.node, resolveAtom) : null;
-      const okey = spec ? blockOracleKey(settingsSig, keyTag, measure, spec.key) : null;
+      const okey = spec ? blockOracleKey(settingsSig, keyTag + atomWidthSignature(b.node, atomWidth), measure, spec.key) : null;
       // Exact-path fast reuse only: the keystroke path never REQUESTS a
       // compile (it would launch one for nearly every intermediate paragraph
       // state). The settled pass — which only runs after the edit-settle
@@ -1777,9 +1818,53 @@ class TypesetView {
     const host = this.view.dom.parentElement;
     if (!host) return;
     const s = getSettings(this.view.state);
-    const kind = this.unitKindOf(this.view.state.doc.firstChild);
-    const adj = kind ? pageTopAdjustEm(s, kind) * this.bodyPx() : 0;
+    const first = this.view.state.doc.firstChild;
+    const kind = this.unitKindOf(first);
+    const adj = kind
+      ? pageTopAdjustEm(s, kind) * this.bodyPx()
+      : first?.type.name === 'table'
+        ? -tableMarginsEm(s).top * this.bodyPx()
+        : 0;
     host.style.paddingTop = `${(s.marginTop * 96 + adj).toFixed(2)}px`;
+  }
+
+  /** Key of the last published geometry variables (null: never, or the
+   *  port was not up yet and the list indents fell back to the CSS defaults). */
+  private geometryVarsKey: string | null = null;
+
+  /**
+   * Publish the block geometry Typst decides from metrics the stylesheet
+   * cannot know: list body indents (the marker column — the marker's shaped
+   * width — plus Typst's 0.5em body-indent; "‣" is not in the body fonts,
+   * so its width is the compiler's fallback face's, a constant), enum
+   * indents by label digit count, and the table's block spacing (Typst's
+   * Auto spacing = paragraph spacing, measured frame to frame; the editor's
+   * box has the paragraph's descent below and cap slack above to absorb).
+   * Idempotent per (font, size, spacing) key; the CSS carries fallbacks
+   * until the port is up.
+   */
+  private publishGeometryVars(s: DocSettings) {
+    const font = effectiveFont(s.font);
+    const bullet = shapedWidthPt('•', font.portKeys.regular, s.sizePt);
+    const key = `${s.font}|${s.sizePt}|${s.lineHeight}|${s.parIndent}|${bullet === null ? 'nopt' : 'pt'}`;
+    if (key === this.geometryVarsKey) return;
+    this.geometryVarsKey = key;
+    const root = document.documentElement.style;
+    const F = this.bodyPx();
+    const px = (pt: number) => `${((pt * 4) / 3).toFixed(4)}px`;
+    const bodyIndent = 0.5 * s.sizePt;
+    if (bullet !== null) {
+      root.setProperty('--list-indent-1', px(bullet + bodyIndent));
+      root.setProperty('--list-indent-2', px(LIST_TRIANGLE_EM * s.sizePt + bodyIndent));
+      root.setProperty('--list-indent-3', px((shapedWidthPt('–', font.portKeys.regular, s.sizePt) ?? 0.5 * s.sizePt) + bodyIndent));
+      for (const digits of [1, 2, 3]) {
+        const label = '1'.padEnd(digits, '0') + '.';
+        root.setProperty(`--enum-indent-${digits}`, px((shapedWidthPt(label, font.portKeys.regular, s.sizePt) ?? 0) + bodyIndent));
+      }
+    }
+    const table = tableMarginsEm(s);
+    root.setProperty('--table-mt', `${(table.top * F).toFixed(4)}px`);
+    root.setProperty('--table-mb', `${(table.bottom * F).toFixed(4)}px`);
   }
 
   private run() {
@@ -1792,6 +1877,7 @@ class TypesetView {
     // keystroke burst.
     this.syncDomGeometryWidth();
     this.bodyPxCache = null;
+    this.publishGeometryVars(getSettings(this.view.state));
     this.applyTopAdjust();
 
     // Pass 1: line layout with the CURRENT page spacers kept in place — in
@@ -2179,7 +2265,7 @@ class TypesetView {
       // ever arrive here and the port lays out every block. The oracle
       // lookup stays only until the compiled-authority plumbing is removed.
       const spec = resolveAtom ? buildSpec(node, resolveAtom) : null;
-      const okey = spec ? blockOracleKey(settingsSig, keyTag, measure, spec.key) : null;
+      const okey = spec ? blockOracleKey(settingsSig, keyTag + atomWidthSignature(node, atomWidth), measure, spec.key) : null;
       const oentry = okey ? this.oracles.paragraph.get(okey) : undefined;
       const ostatus = oentry?.status ?? 'none';
 
@@ -2713,7 +2799,12 @@ class TypesetView {
     // whole lines the way Typst's text layout produces them; a 'normal' or
     // unparseable computed line-height yields 0, which the split function
     // reads as "plain pixel clamp".
-    const fnList: Array<{ pos: number; height: number; lineHeight: number }> = [];
+    // Heights are Typst FRAMES (footnoteFrameInsetsEm): the painted box less
+    // its cap-top slack and last-line descent, so the reservation ends at
+    // the last entry's baseline exactly as Typst's does.
+    const fnInsets = footnoteFrameInsetsEm(s);
+    const fnLeadingPx = fnInsets.leading * F;
+    const fnList: Array<{ pos: number; height: number; lineHeight: number; leading: number }> = [];
     view.state.doc.descendants((node, pos) => {
       if (node.type.name !== 'footnote') return true;
       const dom = view.nodeDOM(pos);
@@ -2721,8 +2812,9 @@ class TypesetView {
       const lineHeight = body ? parseFloat(getComputedStyle(body).lineHeight) : NaN;
       fnList.push({
         pos,
-        height: body ? body.offsetHeight : 0,
+        height: body && body.offsetHeight > 0 ? Math.max(0, body.offsetHeight - fnLeadingPx) : 0,
         lineHeight: Number.isFinite(lineHeight) ? lineHeight : 0,
+        leading: fnLeadingPx,
       });
       return false;
     });
@@ -2802,7 +2894,7 @@ class TypesetView {
     const commitFootnotes = (endPos: number, needBottom: FlowNeedBottom) => {
       while (fnIdx < fnList.length && fnList[fnIdx].pos < endPos) {
         const item = fnList[fnIdx++];
-        const carried: FootnoteCarryItem = { heightPx: item.height, lineHeightPx: item.lineHeight };
+        const carried: FootnoteCarryItem = { heightPx: item.height, lineHeightPx: item.lineHeight, leadingPx: item.leading };
         // A spill or queue is outstanding: order must not be disrupted, so
         // this entry queues whole (charging this page nothing).
         if (fnCarry.length > 0) {
@@ -2813,6 +2905,7 @@ class TypesetView {
         const avail = podStart === null ? Number.POSITIVE_INFINITY : bottomFor() - podStart;
         const fit = footnoteEntryFit(item.height, avail, pageFnH > 0, F, {
           lineHeightPx: item.lineHeight,
+          leadingPx: item.leading,
         });
         if (fit.empty) {
           // Nothing fit. Migration (moving the whole origin frame) is decided
@@ -2822,7 +2915,7 @@ class TypesetView {
           continue;
         }
         if (fit.remainder > 0) {
-          fnCarry.push({ heightPx: fit.remainder, lineHeightPx: item.lineHeight });
+          fnCarry.push({ heightPx: fit.remainder, lineHeightPx: item.lineHeight, leadingPx: item.leading });
         }
         pageFnH += footnoteEntryCost(fit.fragment, F);
       }
@@ -2843,6 +2936,7 @@ class TypesetView {
       if (!first || first.pos >= endPos) return false;
       const fit = footnoteEntryFit(first.height, bottomFor() - podStart, pageFnH > 0, F, {
         lineHeightPx: first.lineHeight,
+        leadingPx: first.leading,
       });
       if (!fit.empty) return false;
       const mayProgressNow = !atPageTop || pageFnH > 0;
@@ -2875,6 +2969,9 @@ class TypesetView {
         const lv = Math.min(3, (n.attrs.level as number) || 1);
         return pageTopAdjustEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;
       }
+      // A table's spacing above is its margin-top (tableMarginsEm): weak,
+      // dropped at a page top; the spacer lands the box on the margin.
+      if (n?.type.name === 'table') return -tableMarginsEm(s).top * F;
       // Every other top-level block's own "above" spacing is weak in
       // Typst's model (Auto block spacing or `#quote`'s explicit default —
       // both weakness >= 1, src/layout/flow-rules.ts's SPACING_WEAKNESS),
@@ -2891,6 +2988,29 @@ class TypesetView {
       }
       return 0;
     };
+    /** The Typst frame ends ABOVE the painted box's bottom by this much
+     *  (pageBottomInsetEm): the last line's descent and half-leading for
+     *  text blocks, a container's last text block's, nothing for the kinds
+     *  with no calibration (figures, display math, tables). Fit tests
+     *  compare frame bottoms against the page bottom — the counterpart of
+     *  adjFor, which lands frame TOPS at the page top. */
+    const bottomInsetFor = (pos: number): number => {
+      let n = view.state.doc.nodeAt(pos);
+      // A container's frame ends where its last descendant block's does.
+      while (n && !n.isTextblock && !n.isAtom && n.type.name !== 'table' && n.type.name !== 'figure' && n.lastChild) n = n.lastChild;
+      if (!n) return 0;
+      if (n.type.name === 'paragraph') return pageBottomInsetEm(s, 'paragraph') * F;
+      if (n.type.name === 'code_block') return pageBottomInsetEm(s, 'code') * F;
+      if (n.type.name === 'heading') {
+        const lv = Math.min(3, (n.attrs.level as number) || 1);
+        return pageBottomInsetEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;
+      }
+      return 0;
+    };
+    /** A paragraph line's frame TOP sits below its line-box top by the
+     *  half-leading and the ascent above the cap height — exactly what
+     *  adjFor lands at the page top, negated. Line fit tests start there. */
+    const lineTop = -pageTopAdjustEm(s, 'line') * F;
     /** `hdr` (row breaks only): the repeated table header's height, laid at
      *  the new page's top ahead of the row, so the row lands below it. */
     const breakBefore = (pos: number, y: number, kind: Spacer['kind'], hdr = 0) => {
@@ -2989,6 +3109,7 @@ class TypesetView {
         return;
       }
       const y = stackY(r.top, pos);
+      const frameBottom = y + r.height - bottomInsetFor(pos);
       const framePos = owner?.pos ?? pos;
       const frameY = owner?.y ?? y;
       // `Distributor::single` (distribute.rs:269-271): the block doesn't fit
@@ -2998,14 +3119,14 @@ class TypesetView {
       // overflow — an oversize block therefore first moves to a fresh page
       // (from anywhere else, progress is possible) and overflows there.
       let relocations = 0;
-      while (y + shift + r.height > bottomFor() + 0.5 && mayProgressAt(framePos) && relocations < MAX_RELOCATIONS) {
+      while (frameBottom + shift > bottomFor() + FIT_TOLERANCE_PX && mayProgressAt(framePos) && relocations < MAX_RELOCATIONS) {
         relocations++;
         finishBefore(framePos, frameY, 'block');
       }
       // `frame()` (distribute.rs:340-369): a heading starts or continues a
       // sticky run; any other block anchors one.
       stickyFrameAt(isSticky, framePos, frameY);
-      if (footnoteMigrates(endPos, y + shift + r.height, r.height, !mayProgressAt(framePos))) {
+      if (footnoteMigrates(endPos, frameBottom + shift, r.height, !mayProgressAt(framePos))) {
         // The unit is unbreakable and its first entry cannot start here:
         // Typst migrates the whole origin frame rather than break the
         // marker/entry invariant (`footnotes()` raises the finish at
@@ -3017,7 +3138,7 @@ class TypesetView {
       }
       // Unbreakable frame: flow need is the frame's FULL height, so the
       // entry's pod begins at the unit's bottom (flow/compose.rs:385, :450).
-      commitFootnotes(endPos, () => y + shift + r.height);
+      commitFootnotes(endPos, () => frameBottom + shift);
     };
 
     const paragraph = (pos: number, node: PMNode, owner?: { pos: number; y: number }) => {
@@ -3041,13 +3162,13 @@ class TypesetView {
       // against the space below its own marker line's bottom (an unbreakable
       // line frame's flow need, distribute.rs:247 + compose.rs:385), spilling
       // onto following pages as needed.
-      if (yTop + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
+      if (yTop + shift + r.height - bottomInsetFor(pos) <= bottomFor(peekFnH(endPos)) + FIT_TOLERANCE_PX) {
         // Its first line is a non-sticky frame: it anchors any heading run
         // above (distribute.rs:363-369).
         stickyFrameAt(false, owner?.pos ?? pos, owner?.y ?? yTop);
         const blockEl = view.nodeDOM(pos);
         commitFootnotes(endPos, (fnPos) =>
-          markerLineTop(fnPos, blockEl instanceof HTMLElement ? blockEl : null) + extentPx + shift,
+          markerLineTop(fnPos, blockEl instanceof HTMLElement ? blockEl : null) + lineTop + extentPx + shift,
         );
         return;
       }
@@ -3087,7 +3208,7 @@ class TypesetView {
         // (distribute.rs:372-378; compose.rs:385 keeps it for unbreakable
         // frames; compose.rs:450 subtracts it from the pod).
         // Evaluated lazily — `shift` moves whenever a break is inserted.
-        const lineBottom = () => y + shift + heights[k];
+        const lineBottom = () => y + lineTop + shift + heights[k];
         // One line's trip through Typst's flow, in Typst's order:
         //
         // STAGE 1 — pre-insertion (distribute.rs:226-248): own height and
@@ -3142,15 +3263,15 @@ class TypesetView {
           // STAGE 1 — pre-insertion: reservation only from entries already
           // committed on this page (pageFnH), none from this line yet.
           const bottomPre = bottomFor();
-          const ownPre = y + shift + heights[k] <= bottomPre + 0.5;
-          const needPre = y + shift + needs[k] <= bottomPre + 0.5;
+          const ownPre = y + lineTop + shift + heights[k] <= bottomPre + FIT_TOLERANCE_PX;
+          const needPre = y + lineTop + shift + needs[k] <= bottomPre + FIT_TOLERANCE_PX;
           if (!ownPre || !needPre) {
             // `Distributor::line` (distribute.rs:226-245): own height
             // failing finishes the region iff `may_progress()`; need failing
             // (own height fits) finishes iff the NEXT raw region fits the
             // need. Pages are uniform, so when progress is impossible the
             // next region is this one and neither test can pass.
-            const finish = mayProgressAt(framePos) && (!ownPre || needs[k] <= contentH + 0.5);
+            const finish = mayProgressAt(framePos) && (!ownPre || needs[k] <= contentH + FIT_TOLERANCE_PX);
             if (!finish || migrated || stranded || relocations >= MAX_RELOCATIONS) {
               // Typst places the line and lets it overflow (a fresh page
               // can't help: at the page top, or oversize), or this ledger's
@@ -3206,11 +3327,11 @@ class TypesetView {
           // once the entries are in the region. Own height is re-checked
           // for robustness only; the pod arithmetic guarantees it.
           const bottomPost = bottomFor();
-          const ownPost = y + shift + heights[k] <= bottomPost + 0.5;
-          const needPost = y + shift + needs[k] <= bottomPost + 0.5;
+          const ownPost = y + lineTop + shift + heights[k] <= bottomPost + FIT_TOLERANCE_PX;
+          const needPost = y + lineTop + shift + needs[k] <= bottomPost + FIT_TOLERANCE_PX;
           if (ownPost && needPost) break loop;
           const triggerPost = ownPost ? needs[k] : heights[k];
-          if (stranded || (ownPost && triggerPost > contentH + 0.5)) {
+          if (stranded || (ownPost && triggerPost > contentH + FIT_TOLERANCE_PX)) {
             // The need can never fit any raw page (Typst places the line,
             // splitting the pair — distribute.rs:237-245's condition goes
             // false and falls through to frame()), or this line already
@@ -3253,7 +3374,7 @@ class TypesetView {
       // commitment implies; otherwise the per-child walk decides.
       const markerNeed = (fnPos: number) => markerLineTop(fnPos, null) + shift;
       const yTop = stackY(r.top, pos);
-      if (yTop + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
+      if (yTop + shift + r.height - bottomInsetFor(pos) <= bottomFor(peekFnH(endPos)) + FIT_TOLERANCE_PX) {
         // The container's (only) frame is non-sticky and non-empty: it
         // anchors a heading run above (distribute.rs:363-369).
         stickyFrameAt(false, pos, yTop);
@@ -3278,7 +3399,7 @@ class TypesetView {
           return;
         }
         const y = stackY(cr.top, childPos);
-        if (y + shift + cr.height <= bottomFor(peekFnH(childEnd)) + 0.5) {
+        if (y + shift + cr.height - bottomInsetFor(childPos) <= bottomFor(peekFnH(childEnd)) + FIT_TOLERANCE_PX) {
           // A child placed whole is a non-empty frame of the container: it
           // anchors a heading run above, so a later child's break stays
           // inside the container (distribute.rs:363-369).
@@ -3332,7 +3453,7 @@ class TypesetView {
       const y = stackY(r.top, pos);
       // Whole-table fast path (conservative footnote peek, as for atoms):
       // one non-sticky, non-empty frame that anchors a heading run above.
-      if (y + shift + r.height <= bottomFor(peekFnH(endPos)) + 0.5) {
+      if (y + shift + r.height <= bottomFor(peekFnH(endPos)) + FIT_TOLERANCE_PX) {
         stickyFrameAt(false, pos, y);
         commitFootnotes(endPos, () => y + shift + r.height);
         return;
@@ -3359,7 +3480,7 @@ class TypesetView {
         }
         return contentH - (cost > 0 ? cost + footnoteHeadReservePx(F) : 0);
       };
-      const plan = planTableRowBreaks(model, rows, bottomFor() - (y + shift), capacity, mayProgressAt(pos));
+      const plan = planTableRowBreaks(model, rows, bottomFor() - (y + shift), capacity, mayProgressAt(pos), FIT_TOLERANCE_PX);
       if (plan.kind === 'atomic') return atomic(pos, node);
       let placedFirst = false;
       for (const brk of plan.breaks) {
@@ -3633,6 +3754,9 @@ class TypesetView {
     const stackTop = host.getBoundingClientRect().top;
     const F = this.bodyPx();
 
+    // Frames, as the paginator reserved them (footnoteFrameInsetsEm): the
+    // painted box is offset so its cap top lands on the frame top.
+    const fnInsets = footnoteFrameInsetsEm(s);
     const groups = new Map<number, Array<{ el: HTMLElement; height: number }>>();
     view.state.doc.descendants((node, pos) => {
       if (node.type.name !== 'footnote') return true;
@@ -3643,7 +3767,7 @@ class TypesetView {
         const page = Math.min(count - 1, Math.max(0, Math.floor((c.top - stackTop) / (size.h + PAGE_GAP))));
         let list = groups.get(page);
         if (!list) groups.set(page, (list = []));
-        list.push({ el: body, height: body.offsetHeight });
+        list.push({ el: body, height: Math.max(0, body.offsetHeight - fnInsets.leading * F) });
       }
       return false;
     });
@@ -3662,7 +3786,7 @@ class TypesetView {
         bottomEdge,
       );
       list.forEach((f, i) => {
-        const y = entryTops[i] - pmOffset;
+        const y = entryTops[i] - fnInsets.top * F - pmOffset;
         // Hysteresis: sub-pixel re-measurements must not nudge the body.
         const prev = parseFloat(f.el.style.top);
         if (!(Math.abs(prev - y) < 0.75)) f.el.style.top = `${y.toFixed(1)}px`;

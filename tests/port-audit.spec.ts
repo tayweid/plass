@@ -78,6 +78,66 @@ const FIXTURES: Array<{ name: string; text: string }> = [
   },
 ];
 
+const TABLE_ROWS = 45;
+FIXTURES.push(
+  {
+    name: 'lists.md',
+    text: [
+      '# Lists',
+      '',
+      FILLER.repeat(2).trimEnd(),
+      '',
+      ...Array.from({ length: 4 }, (_, i) => '- ' + FILLER.repeat(2 + (i % 3)).trimEnd()),
+      '  - Nested ' + FILLER.repeat(2).trimEnd(),
+      '    - Third level ' + FILLER.repeat(2).trimEnd(),
+      '',
+      ...Array.from({ length: 12 }, (_, i) => `${i + 1}. Item ${i + 1}: ` + FILLER.repeat(1 + (i % 2)).trimEnd()),
+      '',
+      ...Array.from({ length: 6 }, () => FILLER.repeat(4).trimEnd() + '\n'),
+    ].join('\n'),
+  },
+  {
+    name: 'footnotes.md',
+    text: [
+      '# Footnotes',
+      '',
+      ...Array.from({ length: 12 }, (_, i) => FILLER.repeat(3).trimEnd() + ` A remark.[^${i + 1}] ` + FILLER.repeat(2).trimEnd() + '\n'),
+      ...Array.from({ length: 12 }, (_, i) => `[^${i + 1}]: Footnote ${i + 1}. ` + FILLER.repeat(i % 2 ? 2 : 1).trimEnd()),
+    ].join('\n'),
+  },
+  {
+    name: 'math.md',
+    text: [
+      '# Math',
+      '',
+      ...Array.from({ length: 10 }, (_, i) => `Inline math $x^${i} + y^2 = z^2$ sits in the run. ` + FILLER.repeat(3).trimEnd() + ` Then $\\alpha_${i}$ again. ` + FILLER.repeat(2).trimEnd() + '\n'),
+      '$$ \\int_0^1 f(x) \\, dx = F(1) - F(0) $$',
+      '',
+      ...Array.from({ length: 6 }, () => FILLER.repeat(4).trimEnd() + '\n'),
+    ].join('\n'),
+  },
+  {
+    name: 'table.md',
+    text: [
+      '# A long table',
+      '',
+      'An introductory paragraph sits above the table.',
+      '',
+      '| Item | Value |',
+      '| --- | --- |',
+      ...Array.from({ length: TABLE_ROWS - 1 }, (_, i) => `| Row ${i + 1} | ${i + 1} |`),
+      '',
+      'A closing paragraph follows the table. ' + FILLER.repeat(3).trimEnd(),
+      '',
+    ].join('\n'),
+  },
+);
+
+FIXTURES.push({
+  name: 'table-bare.md',
+  text: ['| Item | Value |', '| --- | --- |', ...Array.from({ length: TABLE_ROWS - 1 }, (_, i) => `| Row ${i + 1} | ${i + 1} |`), ''].join('\n'),
+});
+
 function collect(target: string): string[] {
   const p = resolve(target);
   const st = statSync(p);

@@ -56,25 +56,40 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      measures the port and the local paginator against Typst on demand.
      `...` now imports and types as an ellipsis. `.md` windows show `.md`
      in the title.
-   - **Open — port divergences the first audit found** (each a port bug;
-     fix one at a time, fixture first):
-     1. A page that ends inside a paragraph fits one line more locally
-        than in Typst (prose fixture: 11-line paragraph, local 3 lines /
-        Typst 2; the third line's box ends 11 px past the content bottom;
-        also `_Announcements.md` page 9 and the fingerprint fixture).
-        Most visible; fix first.
-     2. List items break differently (bullet and ordered items: the port
-        breaks `s218` where Typst hyphenates `h223`; a later line off by
-        five characters) — a list-item measure or hyphenation input.
-     3. Paragraphs opening with bold or a link break their first line
-        4 characters later in Typst (`Funwork …`, `Homework 4 Demo …`);
-        one plain paragraph differs at its second line.
-     4. An inline-math-plus-footnote paragraph differs from its first
-        line (atom width or marker glue).
-     5. A 45-row booktabs table breaks one row earlier locally (row 32 vs
-        Typst's 33); the 40-row fixture agrees.
-     6. Headings are browser-laid (ragged, no port breaks): the audit
-        reports them as `no-port`; a wrapped heading is unmeasured.
+   - Done 2026-09-11: **the divergences the first audit found**, each
+     reproduced as an audit fixture (`npm run audit`: prose, structure,
+     lists, footnotes, math, table, table-bare) and fixed at the cause; all
+     fixtures and the 33-page announcements file now agree with Typst on
+     every line break and page start:
+     1. Page bottoms: the paginator tested browser boxes against the page
+        bottom; Typst tests frames (cap top to last baseline). Every fit
+        test now subtracts the unit's bottom inset (`pageBottomInsetEm`)
+        and starts a line at its cap top, with a 0.1 px tolerance (Typst
+        allows none; 0.5 px placed lines Typst rejected by half a point).
+        Footnote entries are reserved and painted as frames too, at
+        Typst's entry pitch (cap height + 0.5em of the entry size,
+        `--fn-line`), and a heading at a page top carries its calibrated
+        baseline shift.
+     2. Lists: the editor indented list bodies 1.6em; Typst's grid puts
+        the body after the marker's shaped width plus 0.5em (• 0.78em,
+        ‣ 0.375em from the fallback face, – 0.5em; enums after the widest
+        label). The stylesheet now takes the indents the plugin publishes
+        from the port's shaper (`--list-indent-N`, `--enum-indent-N` by
+        item-count digits via `list-indent.ts`) and paints Typst's markers
+        out of flow. A nested list follows its item's text at the full
+        block spacing and adds nothing after itself.
+     3. The "bold/link" paragraphs were list items too — same fix.
+     4. Inline math: a formula's block was laid out with the placeholder's
+        width and the cached layout survived the ink's arrival; atom widths
+        are part of the layout cache key now, and the ink's width is
+        measured in Typst (`measure()`) rather than read off a page that
+        rounds to whole points.
+     5. Tables: their block spacing (Typst's Auto = paragraph spacing,
+        frame to frame) was short by 6.8 px above and 8.5 px below;
+        `--table-mt/--table-mb` carry it, and the margin-top is dropped at a
+        page top like every weak spacing (the bare 45-row table).
+   - Open: headings are browser-laid (ragged, no port breaks) — the audit
+     reports them as `no-port`; a wrapped heading is unmeasured.
    - Open, smaller: multi-paragraph footnotes flatten; tight/loose list
      spacing normalizes; a `.typ` save has no home for the Markdown-only
      carry (frontmatter extras) and drops it silently.

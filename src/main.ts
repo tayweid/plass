@@ -9,6 +9,7 @@ import { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
 import { collapseSpaces } from './collapse-spaces';
+import { listIndent } from './list-indent';
 import { typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugin';
 import { MathView } from './math';
 import { demoDoc } from './demo-doc';
@@ -132,6 +133,7 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       figuresPlugin(),
       footnoteGuard(),
       collapseSpaces(),
+      listIndent(),
       copyTextWithoutItsBlock(),
       typesetPlugin({ onStats, onPages: renderPages, onEnvironment: (v) => showMessage(describeVerdict(v)) }),
       // Native cell selection, rectangular copy/paste, and structural table

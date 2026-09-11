@@ -15,6 +15,7 @@ import { ByteText } from './bytes';
 import { defaultConfig, prepare, type InputSegment } from './prepare';
 import { linebreak } from './linebreak';
 import { linebreakIncremental } from './incremental';
+import { primitives } from '../primitives';
 
 const PT_PER_PX = 0.75;
 
@@ -45,6 +46,22 @@ export interface PortBreakOptions {
   /** Painted prefix modeled as REAL TEXT ('Figure N: ' for captions — its
    * trailing space justifies with the line, unlike a fixed indent). */
   prefixText?: string;
+}
+
+/**
+ * The advance of a shaped run in pt — what Typst measures for the same
+ * text in the same face — or null before the primitives are loaded. Used
+ * for list marker columns (Typst sizes them to the marker's width).
+ */
+export function shapedWidthPt(text: string, styleKey: string, sizePt: number): number | null {
+  if (!primitives()) return null;
+  const prep = prepare([{ kind: 'text', text, styleKey, fontSize: sizePt }], defaultConfig(sizePt));
+  let width = 0;
+  for (const [, , item] of prep.items) {
+    if (item.kind === 'text') width += item.shaped.width();
+    else if (item.kind === 'absolute' || item.kind === 'frame') width += item.width;
+  }
+  return width;
 }
 
 /** One piece of the paragraph with its PM anchor. */

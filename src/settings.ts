@@ -7,7 +7,7 @@
 import type { EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
-import { DEFAULT_FONT, cssFontStack, effectiveFont, parityMetrics, selectableFonts, codeBlockMetricsEm } from './font-registry';
+import { DEFAULT_FONT, cssFontStack, effectiveFont, parityMetrics, selectableFonts, codeBlockMetricsEm, footnoteFrameInsetsEm, FN_LEADING_EM, FN_SCALE } from './font-registry';
 import { CITATION_STYLES, type CitationStyle } from './citation-styles';
 
 export interface DocSettings {
@@ -200,6 +200,8 @@ export function applySettings(state: EditorState) {
   // half-leading on each side (style.css, `--cell-inset`).
   root.setProperty('--half-leading', `${(((s.lineHeight - parityMetrics(s.font).extent) / 2) * bodyPx).toFixed(4)}px`);
   root.setProperty('--code-line', `${(code.lineEm * bodyPx).toFixed(4)}px`);
+  root.setProperty('--fn-top-inset', `${(footnoteFrameInsetsEm(s).top * bodyPx).toFixed(4)}px`);
+  root.setProperty('--fn-line', `${((parityMetrics(s.font).extent + FN_LEADING_EM) * FN_SCALE * bodyPx).toFixed(4)}px`);
   root.setProperty('--code-pad', `${(code.padTopEm * bodyPx).toFixed(4)}px`);
   root.setProperty('--code-mb', `${(code.marginBottomEm * bodyPx).toFixed(4)}px`);
   const size = pageSize(s);

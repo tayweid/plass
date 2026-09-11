@@ -132,6 +132,9 @@ export interface FootnoteCarryItem {
   /** The entry's own line height (px), used to quantize a partial fragment
    * to whole lines. Omitted/0: fragments fall back to a plain pixel clamp. */
   readonly lineHeightPx?: number;
+  /** The entry's leading (px): heights are Typst FRAMES, so a fragment of
+   * k lines is k line boxes minus one leading (its last baseline ends it). */
+  readonly leadingPx?: number;
 }
 
 export interface FootnoteFitResult {
@@ -169,21 +172,28 @@ export function footnoteEntryFit(
   availablePx: number,
   pageHasFootnotes: boolean,
   bodyPx: number,
-  opts: { lineHeightPx?: number } = {},
+  opts: { lineHeightPx?: number; leadingPx?: number } = {},
 ): FootnoteFitResult {
   const separatorNeed = pageHasFootnotes ? 0 : footnoteHeadReservePx(bodyPx);
   const pod = availablePx - separatorNeed - FOOTNOTE_GAP_EM * bodyPx;
   if (fits(pod, entryHeightPx)) return { fragment: entryHeightPx, remainder: 0, empty: false };
 
   const lineHeightPx = opts.lineHeightPx;
+  const leading = opts.leadingPx ?? 0;
   let fragment: number;
+  let remainder: number;
   if (typeof lineHeightPx === 'number' && Number.isFinite(lineHeightPx) && lineHeightPx > 0) {
-    const lines = Math.floor((pod + ABS_EPS) / lineHeightPx);
-    fragment = Math.min(entryHeightPx, Math.max(0, lines) * lineHeightPx);
+    // k lines fit when their frame — k boxes less one leading — fits.
+    const lines = Math.max(0, Math.floor((pod + leading + ABS_EPS) / lineHeightPx));
+    fragment = lines > 0 ? Math.min(entryHeightPx, lines * lineHeightPx - leading) : 0;
+    // The rest is its own frame: it ends at a baseline too, so the leading
+    // between the two fragments belongs to neither page.
+    const rest = entryHeightPx - fragment;
+    remainder = fragment > 0 && rest > 0 ? Math.max(0, rest - leading) : Math.max(0, rest);
   } else {
     fragment = Math.max(0, Math.min(entryHeightPx, pod));
+    remainder = Math.max(0, entryHeightPx - fragment);
   }
-  const remainder = Math.max(0, entryHeightPx - fragment);
   // `exist_non_empty_frame` is true exactly when the entry has any content
   // at all: a zero-height entry produces only empty frames, so Typst falls
   // through to committing it (no queue, no migration) even in no space.
@@ -258,6 +268,7 @@ export function settleFootnoteCarry(
     const item = rest[0];
     const fit = footnoteEntryFit(item.heightPx, contentPx - used, true, bodyPx, {
       lineHeightPx: item.lineHeightPx,
+      leadingPx: item.leadingPx,
     });
     // Nothing at all fits: the whole item (and everything behind it) waits.
     if (fit.empty) break;
@@ -266,7 +277,7 @@ export function settleFootnoteCarry(
     rest.shift();
     if (fit.remainder > 0) {
       // One frame per page: the remainder re-spills and blocks the rest.
-      rest.unshift({ heightPx: fit.remainder, lineHeightPx: item.lineHeightPx });
+      rest.unshift({ heightPx: fit.remainder, lineHeightPx: item.lineHeightPx, leadingPx: item.leadingPx });
       break;
     }
   }

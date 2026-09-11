@@ -20,6 +20,15 @@
   past the content bottom); list items break differently from the port
   (measure or hyphenation); a 45-row table breaks one row earlier locally
   (row 32 vs 33); a rowspan row Typst splits is declared, not mirrored.
+  All but the rowspan fixed the same day (ROADMAP.md "Done 2026-09-11:
+  the divergences"): **fit tests compare Typst frames, not browser
+  boxes** — `pageBottomInsetEm` (typ-serializer.ts) is the per-kind
+  distance from a box bottom to its frame's last baseline, the
+  counterpart of `pageTopAdjustEm`; a line's frame starts at its cap top
+  (`lineTop` in the pass); footnote entries are frames
+  (`footnoteFrameInsetsEm`); the tolerance is 0.1 px. This is Phase 6's
+  question answered from the bottom edge: the top adjustment stays, and
+  the bottom inset is derived from the same metrics.
 
 ## Status (2026-09-02)
 

@@ -1163,14 +1163,98 @@ body {
   margin-bottom: 0;
 }
 
+/* Lists mirror Typst's list/enum grid: a marker column as wide as the
+   marker (the widest label, for enums), then a 0.5em body-indent. The
+   typeset plugin publishes the indents from shaped widths (--list-indent-N
+   by nesting depth — Typst cycles •, ‣, – — and --enum-indent-N by the
+   item count's digits, set on <ol data-digits>); the fallbacks are New
+   Computer Modern's values. Markers are painted at the column's left edge,
+   out of flow, so the body measure is exactly Typst's. */
 .ProseMirror ul,
 .ProseMirror ol {
-  padding-left: 1.6em;
+  padding-left: var(--list-indent-1, 1.278em);
   margin: 0 0 0.9em;
+  list-style: none;
+}
+
+.ProseMirror ul ul,
+.ProseMirror ul ul ul ul {
+  padding-left: var(--list-indent-2, 0.875em);
+}
+
+.ProseMirror ul ul ul,
+.ProseMirror ul ul ul ul ul {
+  padding-left: var(--list-indent-3, 1em);
+}
+
+.ProseMirror ol {
+  padding-left: var(--enum-indent-1, 1.278em);
+  counter-reset: plass-enum;
+}
+
+.ProseMirror ol[data-digits='2'] {
+  padding-left: var(--enum-indent-2, 1.778em);
+}
+
+.ProseMirror ol[data-digits='3'] {
+  padding-left: var(--enum-indent-3, 2.278em);
+}
+
+.ProseMirror li {
+  position: relative;
+}
+
+.ProseMirror li::before {
+  position: absolute;
+  top: 0;
+  pointer-events: none;
+}
+
+.ProseMirror ul > li::before {
+  content: '•';
+  left: calc(-1 * var(--list-indent-1, 1.278em));
+}
+
+.ProseMirror ul ul > li::before,
+.ProseMirror ul ul ul ul > li::before {
+  content: '‣';
+  left: calc(-1 * var(--list-indent-2, 0.875em));
+}
+
+.ProseMirror ul ul ul > li::before,
+.ProseMirror ul ul ul ul ul > li::before {
+  content: '–';
+  left: calc(-1 * var(--list-indent-3, 1em));
+}
+
+.ProseMirror ol > li {
+  counter-increment: plass-enum;
+}
+
+.ProseMirror ol > li::before {
+  content: counter(plass-enum) '.';
+  left: calc(-1 * var(--enum-indent-1, 1.278em));
+}
+
+.ProseMirror ol[data-digits='2'] > li::before {
+  left: calc(-1 * var(--enum-indent-2, 1.778em));
+}
+
+.ProseMirror ol[data-digits='3'] > li::before {
+  left: calc(-1 * var(--enum-indent-3, 2.278em));
 }
 
 .ProseMirror li > p {
   margin-bottom: 0.25em;
+}
+
+/* A nested list inside an item: Typst separates the item's text from it by
+   the full block spacing (paragraph spacing — measured: 30pt line to line
+   at the default size, not the 21.9pt item spacing), and nothing extra
+   after it — the next outer item follows at the item spacing. */
+.ProseMirror li > ul,
+.ProseMirror li > ol {
+  margin: 0.9em 0 0;
 }
 
 .ProseMirror code {
@@ -1402,7 +1486,9 @@ body {
      indent, full ink. These constants are mirrored in typeset-plugin's
      fnIndent()/FN_SCALE — keep them in sync. */
   font-size: 0.85em;
-  line-height: 1.2;
+  /* Typst's entry line pitch: cap height plus a 0.5em leading of the entry
+     size (measured 12.57pt at the default size), published by settings. */
+  line-height: var(--fn-line, 1.183);
   color: #1a1a1a;
   /* Oracle-laid lines end in <br> (CSS justify skips them; word-spacing
      decos do the work); while being edited, decos are stripped and CSS
@@ -1421,7 +1507,9 @@ body {
 .fn-body.fn-first::before {
   content: '';
   position: absolute;
-  top: calc(-0.5pt - var(--doc-size) * 0.5);
+  /* The entry's FRAME (its cap top) sits --fn-top-inset below the box
+     top; the separator's bottom is the gap above that frame. */
+  top: calc(-0.5pt - var(--doc-size) * 0.5 + var(--fn-top-inset, 0px));
   left: 0;
   width: 30%;
   border-top: 0.5pt solid #1a1a1a;
@@ -1689,7 +1777,10 @@ body {
   /* Typst's auto columns produce an intrinsic table centered by the
      serializer's #align(center, ...). Keep the editable surface on that same
      box model; max-width lets long technical cells wrap at the page edge. */
-  margin: 0.25em auto 0.8em;
+  /* Typst's Auto block spacing (= paragraph spacing) measured frame to
+     frame: the neighbours' boxes carry a descent below and cap slack above,
+     which the typeset plugin subtracts when it publishes these. */
+  margin: var(--table-mt, 1.396em) auto var(--table-mb, 1.221em);
   width: auto;
   max-width: 100%;
   table-layout: auto;

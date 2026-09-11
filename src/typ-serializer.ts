@@ -82,7 +82,54 @@ export function pageTopAdjustEm(s: DocSettings, unit: 'paragraph' | 'line' | 'h1
   }
   const h = HEADINGS[unit === 'h1' ? 0 : unit === 'h2' ? 1 : 2];
   const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
-  return m.typAsc * h.hs - (h.padTop * h.hs + hSlackAbove);
+  // `shift`: Typst's heading frame sits that much lower than the metric
+  // model predicts (headingBlockSpacingEm's calibration), at a page top too.
+  return m.typAsc * h.hs - (h.padTop * h.hs + hSlackAbove) + h.shift;
+}
+
+/**
+ * How far a unit's Typst frame BOTTOM sits above the bottom of its painted
+ * editor box, in body em — the counterpart of pageTopAdjustEm for the page
+ * bottom. Typst's default bottom edge is the baseline, so a text frame ends
+ * at its last baseline; the editor's line box goes on below it by the
+ * descent and the half-leading. The local paginator subtracts this before
+ * testing a unit against the page's content bottom, so a line or block that
+ * Typst would place — its frame ending at the margin — is placed here too.
+ *
+ * Derivation per kind: box = padTop + n·lineBox; frame top = box top +
+ * (padTop + slackAbove − typAsc) (pageTopAdjustEm, negated); frame height
+ * = n·extent + (n−1)·leading with lineBox = extent + leading. The box's
+ * excess below the frame is then lineBox − slackAbove − (extent − typAsc),
+ * independent of n and of padTop.
+ */
+export function pageBottomInsetEm(s: DocSettings, unit: 'paragraph' | 'line' | 'h1' | 'h2' | 'h3' | 'code'): number {
+  const m = parityMetrics(s.font);
+  if (unit === 'paragraph' || unit === 'line') {
+    const pSlackAbove = s.lineHeight / 2 + (m.cssA - m.cssD) / 2;
+    return s.lineHeight - pSlackAbove - (m.extent - m.typAsc);
+  }
+  if (unit === 'code') {
+    // The raw frame's extent is its top edge (typeset-plugin's rail).
+    const c = codeBlockMetricsEm(s);
+    const slackAbove = c.lineEm / 2 + (RAW_FONT.scale * (RAW_FONT.cssA - RAW_FONT.cssD)) / 2;
+    return c.lineEm - slackAbove;
+  }
+  const h = HEADINGS[unit === 'h1' ? 0 : unit === 'h2' ? 1 : 2];
+  const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
+  return 1.25 * h.hs - hSlackAbove - (m.extent - m.typAsc) * h.hs - h.shift;
+}
+
+/**
+ * A table's block spacing in the editor, body em: Typst's Auto spacing (=
+ * paragraph spacing) measured frame to frame, less what the neighbouring
+ * paragraph boxes already carry (descent below, cap slack above). The
+ * margin-top is dropped at a page top like every weak block spacing.
+ */
+export function tableMarginsEm(s: DocSettings): { top: number; bottom: number } {
+  return {
+    top: parSpacingEm(s) - pageBottomInsetEm(s, 'paragraph'),
+    bottom: parSpacingEm(s) + pageTopAdjustEm(s, 'paragraph'),
+  };
 }
 
 // Heading scale mirrored from the editor CSS (.ProseMirror h1/h2/h3).

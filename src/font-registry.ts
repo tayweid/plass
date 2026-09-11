@@ -255,3 +255,28 @@ export function codeBlockMetricsEm(s: { font: string; lineHeight: number; parInd
   const parGapEm = s.parIndent ? 0 : 0.9;
   return { lineEm, padTopEm, marginBottomEm: parGapEm - padTopEm };
 }
+
+/** Footnote entry text: Typst's `footnote.entry` show rule sets 0.85em, and
+ * its lines are pitched at the cap height plus a leading of 0.5em of that
+ * size (measured against the compiled page: 12.57pt at 12.5pt body text).
+ * `.fn-body` mirrors both through `--fn-line`. */
+export const FN_SCALE = 0.85;
+export const FN_LEADING_EM = 0.5;
+
+/**
+ * A footnote entry's Typst frame against its painted `.fn-body` box, in
+ * body em: the frame starts `top` below the box top (the entry's cap top)
+ * and ends `bottom` above the box bottom (its last baseline); `leading` is
+ * their sum — a frame of n lines is n line boxes minus one leading. The
+ * paginator reserves frames (Typst stacks entry frames at the page bottom,
+ * the last baseline on the margin), and the painter offsets the boxes.
+ */
+export function footnoteFrameInsetsEm(s: { font: string }): { top: number; bottom: number; leading: number } {
+  const m = parityMetrics(s.font);
+  const k = FN_SCALE;
+  const lineBox = (m.extent + FN_LEADING_EM) * k;
+  const slackAbove = lineBox / 2 + ((m.cssA - m.cssD) / 2) * k;
+  const top = slackAbove - m.typAsc * k;
+  const bottom = lineBox - slackAbove - (m.extent - m.typAsc) * k;
+  return { top, bottom, leading: top + bottom };
+}
