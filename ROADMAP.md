@@ -37,6 +37,14 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
    - Done 2026-09-11: inline HTML (`<sub>`, an inline `<!-- comment -->`)
      is an inline island — verbatim in the file, inline code in the page
      and the print; an image's `"title"` is carried.
+   - Done 2026-09-11: double-clicking a file already open in Plass opened a
+     blank window (the new window found the file held elsewhere and
+     stopped). The manifest's `launch_handler` now routes the launch to an
+     existing window, and a window that already shows the file keeps it
+     (no reload, no unsaved-changes prompt). Reinstall the app for the
+     manifest to take effect. With several Plass windows open, the launch
+     lands in the last-focused one and names the window that has the
+     file — no web API can focus another independent window.
    - Open, smaller: multi-paragraph footnotes flatten; tight/loose list
      spacing normalizes; a `.typ` save has no home for the Markdown-only
      carry (frontmatter extras) and drops it silently.

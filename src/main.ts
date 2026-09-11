@@ -365,9 +365,18 @@ applySettings(view.state);
 /** Open a file-handler launch: the file arrives as a bare handle with no
  *  directory context, so documents with on-disk figures get a one-click
  *  folder grant. */
-function openLaunched(files: ReadonlyArray<FileSystemFileHandle>) {
+async function openLaunched(files: ReadonlyArray<FileSystemFileHandle>): Promise<void> {
   const [file] = files;
-  void fileManager.loadHandle(file).then((opened) => {
+  // The manifest's launch_handler routes a launch to an existing window
+  // (focus-existing): when that window already shows the launched file,
+  // the launch is only a "bring me to front" — the browser has done that,
+  // and reloading here would throw away unsaved edits or prompt for them.
+  const current = fileManager.handle;
+  if (current && (await current.isSameEntry?.(file).catch(() => false))) {
+    showMessage(`${file.name} is open here`);
+    return;
+  }
+  await fileManager.loadHandle(file).then((opened) => {
     if (!opened) return;
     if (files.length > 1) {
       showMessage(`Opened ${file.name} — Plass opens one document at a time`);
@@ -405,9 +414,13 @@ window.launchQueue?.setConsumer((params) => {
     // before the reconnect below decides anything: a window reused for a new
     // Finder launch must show THAT file, not race its previous one back in.
     launching = true;
-    openLaunched(params.files);
+    void openLaunched(params.files);
   }
 });
+if (import.meta.env.DEV) {
+  // tests/pwa.spec.ts drives a launch without an OS.
+  (window as unknown as { __openLaunched: typeof openLaunched }).__openLaunched = openLaunched;
+}
 
 // A reloaded window reconnects to the file IT had open — every kind of
 // window, app windows included: refreshing a document must not rename it
