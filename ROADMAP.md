@@ -31,6 +31,16 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      footnotes flatten; tight/loose list spacing normalizes; a `.typ` save
      has no home for the Markdown-only carry (frontmatter extras, hidden
      blocks) and drops it silently.
+   - *Corpus baseline (474 files, parser round trip only, no editor):*
+     29 byte-identical, 43 differ only in trailing whitespace, 402 change.
+     By first difference: 317 hard-wrapped paragraphs re-flowed to one
+     line (a save rewrites every wrapped line — not a loss, but every
+     first save is a whole-file diff), 28 over-escaped brackets
+     (`[To be developed]` → `\[To be developed\]`), 23 h4+ demotions,
+     12 list re-indents, 1 table separator restyled. 310 files carry
+     straight quotes, 191 carry h4+ headings. Script: parse → serialize
+     each file and classify the first differing line; worth keeping as
+     `scripts/md-corpus.ts` with a folder argument.
 2. **Finish the started features** — each is one short session:
    - *Keep-together*: machinery exists (⌘⌥K, atomic pagination,
      `block(breakable: false)` emission/import). Open: a discoverable UI
@@ -112,16 +122,39 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
 The documents being written in Plass today are Markdown course notes, so
 the push is ordered by what those files hit, not by feature size:
 
-1. **Markdown fidelity to the finish** — the dogfood list above, smart
-   quotes first. Exit test: every file in the course-notes folder
-   round-trips byte-identical through the live editor
-   (`MD_FILE=… npx playwright test tests/md-comments.spec.ts`) and its
-   apostrophe paragraphs get compiled verification.
-2. **Tables as daily tools** — item 3 above (rule weights, insets,
+1. **Markdown fidelity to the finish**, in this order:
+   a. *Smart quotes.* Decide the mechanism (mirror Typst's `smartquote`
+      open/close rules in the normalizer and importers, so the document
+      holds the printed glyph like it does for dashes; or disable
+      `smartquote` in the export and print straight). Whichever, one rule
+      for `.typ` and `.md`. Exit: apostrophe paragraphs in the course notes
+      get compiled verification (`exact[` in `__pagLog`).
+   b. *Hard-wrapped paragraphs.* Either re-wrap on save at a fixed measure
+      so files stay diff-friendly, or accept the one-time reflow and say
+      so once per file. Decide; the corpus says this is the most common
+      rewrite by far.
+   c. *Headings 4–6* as real levels (Typst renders them; the schema caps
+      at 3). *Bracket escaping* only where a bracket would read as a link.
+      *Inline HTML* as an inert inline island. *Image titles.*
+   d. Exit for the whole item: `scripts/md-corpus.ts` reports the
+      course-notes folder byte-identical except for the decided
+      normalizations, and `MD_FILE=… npx playwright test
+      tests/md-comments.spec.ts` passes on a sample through the live editor.
+2. **The one rule for the source view** (SOURCE-VIEW.md step 5): typed
+   Typst is kept, never run. Islands become inert everywhere, the island
+   compile pipeline is retired, and the page marks islands the way it marks
+   hidden Markdown. Small, and it simplifies the layout code.
+3. **Tables as daily tools** — item 3 above (rule weights, insets,
    span-aware ops, rich-cell editing), since "clunky to edit" was the
    stated reason tables went unused.
-3. **Citations** — the worked plan below; a design session on library-bib
+4. **Citations** — the worked plan below; a design session on library-bib
    storage before code.
+
+Also small and ready: SOURCE-VIEW step 4 (writing niceties). Housekeeping
+before the push: merge the nine Dependabot bumps that touch npm and GitHub
+Actions (each one commit, cleanly based on `main`, gated by `npm run build`
+and the browser suite); leave the four ICU 1.5 → 2.x sidecar bumps alone
+until the sidecar's version-pinned identity is re-verified against them.
 
 Deferred on purpose: PAGE-PORT Phase 6, multiple columns, offline PWA.
 

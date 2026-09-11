@@ -5,15 +5,16 @@ document in its own on-disk format (`.typ` or `.md`), in the spirit of iA
 Writer — a quiet, wide-margined text column with the markup lightly styled,
 for files that are simpler than a paginated paper. It is a second way to
 write the same on-rails document, not a way around the rails (README, "Typst
-on rails"): Typst the page view cannot show still arrives as a visible raw
-island, and the source view promises nothing about how it prints.
+on rails"): Typst the page view cannot show is kept as an island, and the
+source view promises nothing about how it prints.
 
-Status: steps 0–3 landed — toggle (title-pill button, `Mod-/`), lazy
+Status: steps 0–3b landed — toggle (title-pill button, `Mod-/`), lazy
 CodeMirror, serialize-on-enter / single-transaction parse-on-exit, verbatim
 `getText` saves, per-tab session restore; the sheet, measure and fonts, the
 rails highlighter for both languages, resting toolbar, print rule; block-level
-caret and scroll mapping both ways, the island toast, export from source mode.
-Step 4 (writing niceties, incl. applying the per-format mode memory) is open.
+caret and scroll mapping both ways, the island toast, export from source mode;
+the generated Typst preamble folded. Open: step 4 (writing niceties) and
+step 5 below (the one rule: typed Typst does not run).
 
 ## What already exists
 
@@ -138,6 +139,18 @@ either serializer, or a code editor dependency.
    but the current paragraph), typewriter scrolling, `Mod-b`/`Mod-i`
    wrapping markup in source, mode memory per format, a "simpler files"
    default for `.md` if wanted.
+5. **The one rule: typed Typst does not run (1–2 days).** Decided
+   2026-09-10 (see below). Islands become inert everywhere: `docToTyp`
+   grows a `{ islands: 'keep' | 'omit' }` option — the file save keeps
+   them verbatim, the oracle signature and the PDF compile omit them — and
+   the page shows a raw-Typst island the way it shows a hidden Markdown
+   block (`md_raw`: zero height, margin marker, hover to read). Retire the
+   island compile pipeline (`raw-preview.ts`), the `typst-raw` spacing
+   special case in `flow-rules.ts`, and the island mitex-import rule in the
+   serializer. The toast changes from "kept as raw Typst" to "kept, not
+   rendered". Tests: the `#let` source test expects an inert island and a
+   PDF without it; `typ-parser` byte-identity still holds for files with
+   islands.
 
 Total: about a week for 0–3.
 
@@ -174,6 +187,22 @@ Total: about a week for 0–3.
 - Toggle shortcut: `Mod-Shift-M`.
 - The Markdown round-trip rewrite (Risks, first item) is accepted for now
   and gets its own fix later; it does not block the source view.
+
+## Decision (2026-09-10): the one rule
+
+The source view is plain text of the same rails, with one deviation from
+"purely plain": **Typst typed into it does not run as Typst.** It shows up in
+the source view exactly as typed, it is saved into the file verbatim (never
+destroy content), and it never reaches the renderer — neither the page view
+nor Plass's own PDF export. Bespoke Typst therefore never needs to be
+rendered on the page, and the Tolerated tier becomes preservation only.
+
+Reading taken for the plan: one rule for all islands, typed or opened from
+disk — after a save and reopen the two are indistinguishable, so a
+typed/opened distinction cannot survive. Consequence to confirm: a `.typ`
+opened from disk with a hand-written `#grid` prints it under the Typst CLI
+but not from Plass's Export → PDF (the page shows the island marker where it
+sits, so the omission is visible, never silent).
 
 ## Open questions
 

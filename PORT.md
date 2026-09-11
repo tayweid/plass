@@ -261,15 +261,18 @@ fallback.
 - Conservative forced-layout tolerances and the legacy translator remain as
   browser-rendering guards; they are not alternate break-selection policies.
 
-### 6. Page breaking — partial, separate from the line port
+### 6. Page breaking — its own port, tracked in PAGE-PORT.md
 
 - The whole-document Typst oracle provides exact page starts when compilation
   and DOM mapping succeed. Mapped starts can be held while a fresh result is
   pending; confidence failure or invalid geometry returns to the full local
-  paginator for footnotes, widow/orphan rules, and block placement.
+  paginator, which mirrors Typst's flow rules for footnote reservation,
+  widow/orphan needs, spacing collapse, sticky headings, and table row
+  breaks with the header repeated (PAGE-PORT.md phases 0–4 and 7; phase 5,
+  breakable blocks, is open).
 - Each pass captures one immutable geometry snapshot and uses prefix sums for
-  height queries. Long-table splits come from paged Typst mini-compiles and
-  can be checked against whole-document oracle boundaries.
+  height queries. Native tables are broken between rows locally and matched
+  against Typst's page starts row by row.
 - A conservative suffix planner accepts only simple top-level paragraph edits
   at proven page anchors. It currently runs in development as a full-versus-
   suffix shadow and records comparison telemetry. The full result is always
