@@ -143,7 +143,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
   };
 
   const table = (node: PMNode): string => {
-    if ((node.attrs.params as string) || (node.attrs.caption as string) || (node.attrs.label as string)) {
+    if ((node.attrs.params as string) || (node.attrs.caption as string) || (node.attrs.label as string) || (node.attrs.density as string)) {
       warn('table styling/captions are not representable in Markdown — simplified to a plain table');
     }
     const rows: string[][] = [];

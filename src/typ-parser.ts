@@ -15,6 +15,7 @@ import { unwrapAligned } from './math-src';
 import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings } from './settings';
 import { trimSpaceBeforeMarker } from './collapse-spaces';
 import { beforeAfterNode, createQuoteState, feedGlyph, lastVisible, smartQuote, type QuoteState } from './smart-quotes';
+import { densityFromInsetPt, type TableDensity } from './table-density';
 import { parseBibTeX } from './bibtex';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 
@@ -967,6 +968,7 @@ export function parseTable(src: string): PMNode | null {
   let columns = 0;
   let strokeNone = false;
   let alignTuple: string | null = null;
+  let density: TableDensity = '';
   let hlines = 0;
   const userHlines: string[] = [];
   const customParams: string[] = [];
@@ -990,6 +992,12 @@ export function parseTable(src: string): PMNode | null {
       else customParams.push(arg);
     } else if (/^stroke\s*:\s*none$/.test(arg)) {
       strokeNone = true;
+    } else if (/^inset\s*:\s*\d+(?:\.\d+)?pt$/.test(arg)) {
+      // A uniform inset that matches a density preset is the preset; any
+      // other inset stays a custom parameter, exact in the export.
+      const preset = densityFromInsetPt(parseFloat(arg.split(':')[1]));
+      if (preset !== null) density = preset;
+      else customParams.push(arg);
     } else if (arg.startsWith('table.hline(')) {
       // Explicit-position rules (y:) are user midrules — carried in params;
       // bare rules are the style preset's own.
@@ -1108,7 +1116,7 @@ export function parseTable(src: string): PMNode | null {
     if (hlines !== expected) return null;
   }
   try {
-    return table.create({ style, params }, rows);
+    return table.create({ style, params, density }, rows);
   } catch {
     return null;
   }

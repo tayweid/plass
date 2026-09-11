@@ -72,10 +72,13 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
    Tab from the last cell did nothing (adds a row); Enter split a cell
    into paragraphs (moves down a row, adds one at the bottom); a table
    that ended the document could not be left by keyboard (ArrowDown and
-   ArrowUp step out, creating a paragraph if needed). Styling remainder:
+   ArrowUp step out, creating a paragraph if needed). A new table's headers
+   start empty. Styling remainder:
    - *Rule weights* — light/heavy midrule choice (booktabs toprule vs
      midrule); maybe a click-cycle on an active rule.
-   - *Cell insets* — density presets (compact / normal / roomy) → `inset:`.
+   - ~~Cell insets~~ — done 2026-09-11: density presets (compact 3pt /
+     normal 5pt / roomy 8pt → `inset:`), with the cell box made exact for
+     every preset (the 0.283px-per-row drift PAGE-PORT tracked is gone).
    - *Merges + shape ops together* — column/row insert/delete that
      understands spans (occupancy grid) instead of disabling while merges
      exist.

@@ -598,6 +598,20 @@ function firstDiff(a: string, b: string): string {
   check('deep headings get show rules like level 3', out.includes('#show heading.where(level: 4): set text(size: 14.375pt)') && out.includes('#show heading.where(level: 6): set text(size: 14.375pt)'), out.slice(0, 900));
 }
 
+// --- 19c. table density presets: a uniform inset round-trips as the preset ---
+{
+  const src = '#align(center, table(\n  columns: 2,\n  inset: 3pt,\n  stroke: none,\n  table.hline(stroke: 0.08em),\n  table.header([A], [B]),\n  table.hline(stroke: 0.05em),\n  [1], [2],\n  table.hline(stroke: 0.08em),\n))\n';
+  const { doc } = typToDoc(src);
+  check('inset: 3pt imports as the compact preset', doc.child(0).type.name === 'table' && doc.child(0).attrs.density === 'compact' && !doc.child(0).attrs.params, JSON.stringify(doc.child(0).attrs));
+  const out = docToTyp(doc);
+  check('the compact preset exports inset: 3pt', out.includes('  inset: 3pt,'), out);
+  check('a density table round-trips byte-identically', docToTyp(typToDoc(out).doc) === out, firstDiff(docToTyp(typToDoc(out).doc), out));
+  const other = typToDoc(src.replace('inset: 3pt', 'inset: (x: 2pt, y: 1pt)')).doc;
+  check('a non-uniform inset stays a custom parameter', other.child(0).attrs.density === '' && /inset/.test(other.child(0).attrs.params as string), JSON.stringify(other.child(0).attrs));
+  const five = typToDoc(src.replace('inset: 3pt', 'inset: 5pt')).doc;
+  check('inset: 5pt is the default and exports without an inset', five.child(0).attrs.density === '' && !docToTyp(five).includes('inset:'), docToTyp(five));
+}
+
 // --- 20. raw islands: a multi-line call survives a blank line inside it ---
 {
   const src = 'Intro.\n\n#grid(\n  columns: 2,\n  [first para\n\n  second para],\n  [b],\n)\n\nAfter.\n';

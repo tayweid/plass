@@ -286,7 +286,7 @@ test('a table grows under the keyboard and lets the caret out at its edges', asy
   await page.keyboard.press('End');
   await page.keyboard.press('Meta+Alt+t');
   await expect(page.locator('.ProseMirror table')).toHaveCount(1);
-  // The first header's placeholder is selected: typing replaces it.
+  // The caret is in the first (empty) header cell.
   await page.keyboard.type('Name');
   await page.keyboard.press('Tab');
   await page.keyboard.type('Score');
@@ -312,7 +312,7 @@ test('a table grows under the keyboard and lets the caret out at its edges', asy
     return rows;
   });
   expect(shape).toEqual([
-    ['Name', 'Score', 'Column 3'],
+    ['Name', 'Score', ''],
     ['', '12', 'x'],
     ['y', 'z', 'new row'],
   ]);
@@ -345,6 +345,48 @@ test('a table grows under the keyboard and lets the caret out at its edges', asy
     return bar.bottom > page1.top + 1;
   });
   expect(covers).toBe(false);
+});
+
+test('cell density presets match Typst row heights exactly', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!window.view);
+  const results: Array<{ density: string; nativePt: number; compiledPt: number }> = [];
+  for (const density of ['compact', '', 'roomy']) {
+    await page.evaluate((density) => {
+      const { state } = window.view;
+      const s = state.schema;
+      const paragraph = (text = '') => s.nodes.paragraph.create(null, text ? s.text(text) : undefined);
+      const cell = (text: string, header: boolean) =>
+        (header ? s.nodes.table_header : s.nodes.table_cell).create(null, paragraph(text));
+      const table = s.nodes.table.create(
+        { style: 'booktabs', caption: '', label: '', params: '', fontSize: '', density },
+        [
+          s.nodes.table_row.create(null, [cell('Item', true), cell('Value', true), cell('Note', true)]),
+          s.nodes.table_row.create(null, [cell('alpha', false), cell('1.5', false), cell('one line', false)]),
+          s.nodes.table_row.create(null, [
+            cell('beta', false),
+            cell('', false),
+            s.nodes.table_cell.create(null, s.nodes.paragraph.create(null, [s.text('two'), s.nodes.hard_break.create(), s.text('lines')])),
+          ]),
+          s.nodes.table_row.create(null, [cell('', false), cell('', false), cell('', false)]),
+        ],
+      );
+      window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, table).setMeta('addToHistory', false));
+    }, density);
+    await page.evaluate(() => document.fonts.ready);
+    const r = await page.evaluate(async () => {
+      const table = document.querySelector<HTMLElement>('.ProseMirror table')!;
+      const proof = await window.__nativeTableProofGeometry();
+      return { nativePt: table.getBoundingClientRect().height * 0.75, compiledPt: proof.heightPt };
+    });
+    results.push({ density, ...r });
+  }
+  // Compact rows are shorter than normal, normal than roomy; every table is
+  // the height Typst prints, within a tenth of a point per row.
+  expect(results[0].nativePt).toBeLessThan(results[1].nativePt);
+  expect(results[1].nativePt).toBeLessThan(results[2].nativePt);
+  for (const r of results) expect(Math.abs(r.nativePt - r.compiledPt), JSON.stringify(results)).toBeLessThan(0.5);
 });
 
 test('default native table uses the intrinsic centered Typst box model', async ({ page }) => {

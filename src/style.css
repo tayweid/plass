@@ -1664,10 +1664,10 @@ body {
   line-height: inherit;
 }
 
-.ProseMirror table[data-font-size='0.9em'] { font-size: 0.9em; }
-.ProseMirror table[data-font-size='0.85em'] { font-size: 0.85em; }
-.ProseMirror table[data-font-size='0.8em'] { font-size: 0.8em; }
-.ProseMirror table[data-font-size='0.75em'] { font-size: 0.75em; }
+.ProseMirror table[data-font-size='0.9em'] { font-size: 0.9em; --table-scale: 0.9; }
+.ProseMirror table[data-font-size='0.85em'] { font-size: 0.85em; --table-scale: 0.85; }
+.ProseMirror table[data-font-size='0.8em'] { font-size: 0.8em; --table-scale: 0.8; }
+.ProseMirror table[data-font-size='0.75em'] { font-size: 0.75em; --table-scale: 0.75; }
 
 .ProseMirror th[style*='text-align: decimal'],
 .ProseMirror td[style*='text-align: decimal'] {
@@ -1675,16 +1675,31 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.ProseMirror table {
+  /* Typst's cell inset: 5pt by default, a density preset otherwise
+     (table-density.ts). */
+  --cell-inset: 5pt;
+  --table-scale: 1;
+}
+
+.ProseMirror table[data-density='compact'] {
+  --cell-inset: 3pt;
+}
+
+.ProseMirror table[data-density='roomy'] {
+  --cell-inset: 8pt;
+}
+
 .ProseMirror th,
 .ProseMirror td {
   min-width: 0;
-  /* Typst table.inset defaults to 5pt. Inline inset must be explicit; the
-     inherited CSS line box already supplies almost exactly the two 5pt
-     vertical shoulders around a NewCM glyph. Adding block padding as well
-     would double-count them and made a three-row table over twice as tall as
-     Typst. Empty cells have no glyph box, so the rule below restores their
-     literal 5pt block inset. */
-  padding: 0 5pt;
+  /* Horizontal inset as is. Vertically, Typst's one-line cell is inset +
+     top edge + inset; the editor's line box is line-height tall, which
+     exceeds the glyph's top-edge-to-baseline extent by the leading. So the
+     block inset is applied as a margin on the cell's first and last
+     paragraph of (inset − half-leading), negative under compact insets:
+     the row is then exactly Typst's for any line count. */
+  padding: 0 var(--cell-inset);
   vertical-align: top;
   position: relative;
   transition: background-color 90ms ease, box-shadow 90ms ease;
@@ -1697,20 +1712,33 @@ body {
   text-align: left;
 }
 
-/* grid preset: Typst's default one-point black cell strokes. */
+/* Rules are paint only. Typst draws a stroke centered on the cell
+   boundary and charges the layout nothing for it; a CSS border would add
+   its width to every row and the table, and the page would drift from the
+   print by a rule's width per rule. */
+
+/* grid preset: Typst's default one-point black cell strokes — a half-point
+   ring outside each cell, so neighbours overlap to one point and the outer
+   edge gets the half Typst paints outside the table box. Collapsed-border
+   tables do not paint cell shadows, so the grid keeps separate borders
+   with no spacing: the same box, shadow-capable cells. */
+.ProseMirror table.ts-table-grid {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
 .ProseMirror table.ts-table-grid th,
 .ProseMirror table.ts-table-grid td {
-  border: 1pt solid var(--ink);
+  box-shadow: 0 0 0 0.5pt var(--ink);
 }
 
 /* booktabs preset: horizontal rules only — the academic look */
 .ProseMirror table.ts-table-booktabs {
-  border-top: 0.08em solid var(--ink);
-  border-bottom: 0.08em solid var(--ink);
+  box-shadow: inset 0 0.08em 0 var(--ink), inset 0 -0.08em 0 var(--ink);
 }
 
 .ProseMirror table.ts-table-booktabs tr:first-child th {
-  border-bottom: 0.05em solid var(--ink);
+  box-shadow: inset 0 -0.05em 0 var(--ink);
 }
 
 /* plain preset: no rules at all */
@@ -1720,9 +1748,25 @@ body {
   margin: 0;
 }
 
+.ProseMirror th > p:first-child,
+.ProseMirror td > p:first-child {
+  margin-top: calc(var(--cell-inset) - var(--half-leading, 6.81px) * var(--table-scale));
+}
+
+.ProseMirror th > p:last-child,
+.ProseMirror td > p:last-child {
+  margin-bottom: calc(var(--cell-inset) - var(--half-leading, 6.81px) * var(--table-scale));
+}
+
+/* An empty cell has no glyph box: its height is the two insets alone. */
 .ProseMirror th:has(> p:only-child > br.ProseMirror-trailingBreak:only-child),
 .ProseMirror td:has(> p:only-child > br.ProseMirror-trailingBreak:only-child) {
-  padding-block: 5pt;
+  padding-block: var(--cell-inset);
+}
+
+.ProseMirror th:has(> p:only-child > br.ProseMirror-trailingBreak:only-child) > p,
+.ProseMirror td:has(> p:only-child > br.ProseMirror-trailingBreak:only-child) > p {
+  margin: 0;
 }
 
 .ProseMirror th > p:only-child:has(> br.ProseMirror-trailingBreak:only-child),

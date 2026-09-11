@@ -8,6 +8,7 @@ import { normalizeSettings, parseMathMacros, type DocSettings } from './settings
 import { wrapAligned } from './math-src';
 import { isPortableCitationKey, parseBibTeX } from './bibtex';
 import { RAW_FONT, codeBlockMetricsEm, effectiveFont, parityMetrics } from './font-registry';
+import { TABLE_DENSITY_INSET_PT, type TableDensity } from './table-density';
 
 export interface TypExportOptions {
   /** When given, receives the text offset at which each top-level block's
@@ -653,6 +654,9 @@ function blockToTyp(node: PMNode, indent = ''): string {
 
       const params: string[] = [];
       if (!customHas('columns')) params.push(`  columns: ${columns + decimalCols.length},`);
+      // Density preset: a uniform cell inset (Typst's default 5pt is implicit).
+      const density = ((node.attrs.density as string) || '') as TableDensity;
+      if (density && !customHas('inset')) params.push(`  inset: ${TABLE_DENSITY_INSET_PT[density]}pt,`);
       if (anyAlign && !customHas('align')) {
         const emitted: string[] = [];
         colAligns.forEach((a, i) => {

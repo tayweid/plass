@@ -86,7 +86,7 @@ export function insertStructuredTable(view: EditorView): void {
     paragraph.create(null, text ? schema.text(text) : undefined),
   );
   const node = table.create({ style: 'booktabs' }, [
-    table_row.create(null, [cell(true, 'Column 1'), cell(true, 'Column 2'), cell(true, 'Column 3')]),
+    table_row.create(null, [cell(true), cell(true), cell(true)]),
     table_row.create(null, [cell(false), cell(false), cell(false)]),
     table_row.create(null, [cell(false), cell(false), cell(false)]),
   ]);
@@ -95,8 +95,7 @@ export function insertStructuredTable(view: EditorView): void {
   const tr = view.state.tr.insert(insertPos, node);
   const inserted = tr.doc.nodeAt(insertPos);
   if (!inserted) return;
-  // The first header's placeholder is selected, like every cell Tab lands
-  // in: typing replaces "Column 1" instead of prepending to it.
+  // The caret lands in the first (empty) header cell.
   const firstCell = TableMap.get(inserted).map[0];
   const cellPos = insertPos + 1 + firstCell;
   const firstNode = tr.doc.nodeAt(cellPos)!;
@@ -487,6 +486,7 @@ class NativeTableControls {
   private readonly root: HTMLDivElement;
   private readonly styleSelect: HTMLSelectElement;
   private readonly fontSelect: HTMLSelectElement;
+  private readonly densitySelect: HTMLSelectElement;
   private readonly captionInput: HTMLInputElement;
   private readonly labelInput: HTMLInputElement;
   private readonly advanced: HTMLSpanElement;
@@ -575,6 +575,21 @@ class NativeTableControls {
       dispatchTableAttrs(this.view, { fontSize: this.fontSelect.value });
     });
     appearance.appendChild(this.fontSelect);
+
+    this.densitySelect = document.createElement('select');
+    this.densitySelect.className = 'native-table-density';
+    this.densitySelect.title = 'Cell density (Typst inset: compact 3pt, normal 5pt, roomy 8pt)';
+    this.densitySelect.setAttribute('aria-label', 'Table cell density');
+    for (const [value, label] of [['compact', 'Compact'], ['', 'Normal'], ['roomy', 'Roomy']]) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      this.densitySelect.appendChild(option);
+    }
+    this.densitySelect.addEventListener('change', () => {
+      dispatchTableAttrs(this.view, { density: this.densitySelect.value });
+    });
+    appearance.appendChild(this.densitySelect);
 
     const detailsButton = document.createElement('button');
     detailsButton.type = 'button';
@@ -677,6 +692,7 @@ class NativeTableControls {
     this.root.hidden = false;
     this.styleSelect.value = String(context.node.attrs.style || 'booktabs');
     this.fontSelect.value = String(context.node.attrs.fontSize || '');
+    this.densitySelect.value = String(context.node.attrs.density || '');
     this.syncMetadataInputs(context);
     this.advanced.hidden = !String(context.node.attrs.params ?? '').trim();
     for (const { button, command } of this.commandButtons) button.disabled = !command(view.state);

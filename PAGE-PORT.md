@@ -396,12 +396,15 @@ between rows; `#figure(table(..))` (any caption/label) never does
 (figure.rs:412, `breakable: false`). Only the LAST of consecutive
 `table.header` rows repeats (resolve.rs:1834-1843 marks the earlier ones
 short-lived); the repeated header sits at the very top of the continuation
-region, followed by the row Typst broke before. Vertical-parity note, filed
-here rather than fixed: a single-line cell row is 18.54pt in Typst
-(2×5pt inset + cap-height extent at 12.5pt) = 24.72px, while the editor row
-is the 25px line box — +0.283px per row, constant per line count (a 3-line
-cell row measured 74.72 vs 75px). Over 28 rows that is 7.9px; local
-decisions can differ from Typst's by one row at a knife edge until the
+region, followed by the row Typst broke before. Vertical-parity note, fixed
+2026-09-11 with the density presets: a single-line cell row is 18.54pt in
+Typst (2×5pt inset + cap-height extent at 12.5pt) = 24.72px, while the
+editor row was the 25px line box — +0.283px per row. The cell's first and
+last paragraph now carry a margin of (inset − half-leading), so the row is
+2×inset + extent + (n − 1)×pitch for any line count and any preset
+(`style.css` `--cell-inset`, `--half-leading`). Before the fix, over 28
+rows that was 7.9px; local decisions could differ from Typst's by one row
+at a knife edge until the
 cell box model charges exactly `10pt + extent·em` per first line.
 
 1. Oracle: accept page starts inside tables by matching row text against

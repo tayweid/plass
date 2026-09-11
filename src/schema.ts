@@ -334,6 +334,9 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
       caption: { default: '' },
       label: { default: '' },
       fontSize: { default: '' },
+      // Cell inset preset: '' (Typst's 5pt), 'compact' (3pt), 'roomy'
+      // (8pt) — table-density.ts.
+      density: { default: '' },
     },
     parseDOM: [
       {
@@ -344,6 +347,7 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
           caption: (el as HTMLElement).getAttribute('data-caption') || '',
           label: (el as HTMLElement).getAttribute('data-label') || '',
           fontSize: (el as HTMLElement).getAttribute('data-font-size') || '',
+          density: (el as HTMLElement).getAttribute('data-density') || '',
         }),
       },
     ],
@@ -355,6 +359,7 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
         'data-caption': node.attrs.caption,
         'data-label': node.attrs.label,
         'data-font-size': node.attrs.fontSize,
+        'data-density': (node.attrs.density as string) || null,
         class: `ts-table-${node.attrs.style}`,
       },
       ['tbody', 0],

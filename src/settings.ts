@@ -7,7 +7,7 @@
 import type { EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
-import { DEFAULT_FONT, cssFontStack, effectiveFont, selectableFonts, codeBlockMetricsEm } from './font-registry';
+import { DEFAULT_FONT, cssFontStack, effectiveFont, parityMetrics, selectableFonts, codeBlockMetricsEm } from './font-registry';
 
 export interface DocSettings {
   font: string;
@@ -189,6 +189,10 @@ export function applySettings(state: EditorState) {
   // the block's own 0.8em font size cannot rescale them.
   const code = codeBlockMetricsEm(s);
   const bodyPx = (s.sizePt * 4) / 3;
+  // Table cells: a one-line cell is inset + top edge + inset tall in Typst,
+  // while the editor's line box is line-height tall; the difference is the
+  // half-leading on each side (style.css, `--cell-inset`).
+  root.setProperty('--half-leading', `${(((s.lineHeight - parityMetrics(s.font).extent) / 2) * bodyPx).toFixed(4)}px`);
   root.setProperty('--code-line', `${(code.lineEm * bodyPx).toFixed(4)}px`);
   root.setProperty('--code-pad', `${(code.padTopEm * bodyPx).toFixed(4)}px`);
   root.setProperty('--code-mb', `${(code.marginBottomEm * bodyPx).toFixed(4)}px`);
