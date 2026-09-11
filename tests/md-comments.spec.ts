@@ -12,10 +12,10 @@ const FILLER =
   'The Knuth Plass algorithm evaluates a complete paragraph and preserves globally optimal line endings while editing without visible jitter. ';
 
 // Editorial HTML comments and other HTML blocks in a .md file are Markdown
-// the page cannot show. They go through the editor — the load, the edit-time
-// normalizers (which turn a prose `--` into an en dash and would otherwise
-// break `<!--`), the save — as hidden islands, and come back verbatim.
-// MD_FILE=path runs the same check on a real file.
+// the page cannot render. They go through the editor — the load, the
+// edit-time normalizers (which turn a prose `--` into an en dash and would
+// otherwise break `<!--`), the save — as islands shown as code blocks, and
+// come back verbatim. MD_FILE=path runs the same check on a real file.
 const FIXTURE = [
   '# Notes',
   '',
@@ -32,7 +32,7 @@ const FIXTURE = [
   ...Array.from({ length: 6 }, () => FILLER.repeat(5).trimEnd() + '\n'),
 ].join('\n');
 
-test('hidden Markdown blocks survive the editor and take no space in the page', async ({ page }) => {
+test('Markdown islands survive the editor and show as code blocks', async ({ page }) => {
   test.setTimeout(90_000);
   const src = process.env.MD_FILE ? readFileSync(process.env.MD_FILE, 'utf8') : FIXTURE;
   await page.goto('/?new=1');
@@ -43,19 +43,23 @@ test('hidden Markdown blocks survive the editor and take no space in the page', 
     const { state } = window.view;
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content).setMeta('addToHistory', false));
     await new Promise((r) => setTimeout(r, 3000));
-    const hidden = [...document.querySelectorAll<HTMLElement>('.ts-md-raw')].map((el) => el.getBoundingClientRect().height);
-    return { out: docToMd(window.view.state.doc), hidden };
+    const islands = [...document.querySelectorAll<HTMLElement>('.ProseMirror pre[data-params="md-raw"]')].map((el) => ({
+      height: el.getBoundingClientRect().height,
+      text: el.textContent ?? '',
+    }));
+    return { out: docToMd(window.view.state.doc), islands };
   }, src);
   const comments = src.match(/<!--[\s\S]*?-->/g) ?? [];
   const critic = src.match(/\{(\+\+|--|~~|==|>>)[\s\S]*?(\+\+|--|~~|==|<<)\}/g) ?? [];
   expect(comments.filter((c) => !result.out.includes(c))).toEqual([]);
   expect(critic.filter((c) => !result.out.includes(c))).toEqual([]);
-  expect(result.hidden.length).toBeGreaterThanOrEqual(Math.min(comments.length, 1));
-  for (const h of result.hidden) expect(h).toBe(0);
+  expect(result.islands.length).toBeGreaterThanOrEqual(Math.min(comments.length, 1));
+  for (const island of result.islands) expect(island.height).toBeGreaterThan(0);
+  for (const c of comments) expect(result.islands.some((i) => i.text === c || i.text.includes(c))).toBe(true);
   if (!process.env.MD_FILE) expect(result.out).toBe(src);
 
-  // The compiled page oracle still takes authority with hidden blocks in
-  // the flow: they print nothing and the page reserves nothing for them.
+  // The compiled page oracle still takes authority with islands in the
+  // flow: they print as the same code blocks the page shows.
   await expect
     .poll(() => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('exact[') ?? false), {
       timeout: 30_000,

@@ -282,9 +282,11 @@ function blockToTex(node: PMNode, s: DocSettings): string {
     case 'blockquote':
       return `\\begin{quote}\n${blocksToTex(node, s).trim()}\n\\end{quote}\n\n`;
     case 'code_block': {
-      if ((node.attrs.params as string) === 'typst-raw') {
+      const params = node.attrs.params as string;
+      if (params === 'typst-raw' || params === 'md-raw') {
         const lines = node.textContent.split('\n').map((l) => '% ' + l);
-        return `% [Plass] raw Typst block with no LaTeX equivalent:\n${lines.join('\n')}\n\n`;
+        const what = params === 'typst-raw' ? 'raw Typst' : 'raw Markdown';
+        return `% [Plass] ${what} block with no LaTeX equivalent:\n${lines.join('\n')}\n\n`;
       }
       return `\\begin{verbatim}\n${node.textContent}\n\\end{verbatim}\n\n`;
     }
@@ -292,10 +294,6 @@ function blockToTex(node: PMNode, s: DocSettings): string {
       return tableToTex(node, s);
     case 'bibliography':
       return `\\bibliographystyle{unsrt}\n\\bibliography{refs}\n\n`;
-    case 'md_raw': {
-      const lines = (node.attrs.src as string).split('\n').map((l) => '% ' + l);
-      return `% [Plass] hidden Markdown block:\n${lines.join('\n')}\n\n`;
-    }
     case 'page_break':
       return '\\clearpage\n\n';
     case 'numbering_restart':

@@ -245,7 +245,7 @@ export function compileDocSvg(doc: PMNode, onMsg: (m: string) => void = () => {}
   return (async () => {
     try {
       const { map, assets } = await prepareAssets(doc);
-      const source = docToTyp(doc, { resolveImage: (s) => map.get(s) ?? s, fontFallback: FONT_FALLBACK });
+      const source = docToTyp(doc, { resolveImage: (s) => map.get(s) ?? s, fontFallback: FONT_FALLBACK, islands: 'print' });
       return await runCompilerTask<string>(
         { kind: 'document-svg', source, assets },
         { timeoutMs: COMPILER_DEADLINES.documentMs, onMessage: onMsg },
@@ -295,6 +295,7 @@ export async function exportPdf(
     const src = docToTyp(doc, {
       resolveImage: (s) => map.get(s) ?? s,
       fontFallback: FONT_FALLBACK,
+      islands: 'print',
     });
 
     onMsg('Typesetting with Typst…');

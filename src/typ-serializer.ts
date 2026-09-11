@@ -7,7 +7,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { normalizeSettings, parseMathMacros, type DocSettings } from './settings';
 import { wrapAligned } from './math-src';
 import { isPortableCitationKey, parseBibTeX } from './bibtex';
-import { effectiveFont, parityMetrics } from './font-registry';
+import { RAW_FONT, codeBlockMetricsEm, effectiveFont, parityMetrics } from './font-registry';
 
 export interface TypExportOptions {
   /** When given, receives the text offset at which each top-level block's
@@ -24,6 +24,27 @@ export interface TypExportOptions {
    * compiled SVGs expose per-cell hit geometry for in-place editing.
    */
   cellLinks?: boolean;
+  /**
+   * What becomes of islands — raw Typst (`typst-raw` blocks, `typst_inline`
+   * spans) and raw Markdown (`md-raw` blocks). 'file' (default) is the .typ
+   * on disk: raw Typst verbatim, so the file never loses content. 'print'
+   * is what Plass compiles (page oracle, PDF): every island is a raw code
+   * block or inline raw, shown as source and never run — the page shows the
+   * same code block, so page and print agree (Typst on rails).
+   */
+  islands?: 'file' | 'print';
+}
+
+/** A fence longer than any backtick run inside `text` (Typst raw blocks). */
+function rawFence(text: string): string {
+  const longest = Math.max(2, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  return '`'.repeat(longest + 1);
+}
+
+/** An island as printed: a raw block, never executed. */
+function islandBlock(text: string, indent: string): string {
+  const fence = rawFence(text);
+  return indent + fence + '\n' + text + '\n' + fence + '\n\n';
 }
 
 // ---------- editor↔Typst vertical parity ----------
@@ -43,10 +64,18 @@ export interface TypExportOptions {
  * editor's CSS line boxes/padding still apply. The paginator shifts its
  * page spacers by this amount so page-top ink coincides with the PDF.
  */
-export function pageTopAdjustEm(s: DocSettings, unit: 'paragraph' | 'line' | 'h1' | 'h2' | 'h3'): number {
+export function pageTopAdjustEm(s: DocSettings, unit: 'paragraph' | 'line' | 'h1' | 'h2' | 'h3' | 'code'): number {
   const m = parityMetrics(s.font);
   const pSlackAbove = s.lineHeight / 2 + (m.cssA - m.cssD) / 2;
   if (unit === 'paragraph' || unit === 'line') return m.typAsc - pSlackAbove;
+  if (unit === 'code') {
+    // The raw block's top edge sits at the margin; its first baseline is
+    // one raw top-edge below. The editor's first baseline is the padding
+    // plus the line box's slack above the glyphs.
+    const c = codeBlockMetricsEm(s);
+    const slackAbove = c.lineEm / 2 + (RAW_FONT.scale * (RAW_FONT.cssA - RAW_FONT.cssD)) / 2;
+    return RAW_FONT.scale * RAW_FONT.topEdge - (c.padTopEm + slackAbove);
+  }
   const h = HEADINGS[unit === 'h1' ? 0 : unit === 'h2' ? 1 : 2];
   const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
   return m.typAsc * h.hs - (h.padTop * h.hs + hSlackAbove);
@@ -279,8 +308,8 @@ function inlineToTyp(node: PMNode, tableCell = false): string {
     flush();
     sig = '';
     if (child.type.name === 'typst_inline') {
-      // Raw Typst: the source IS the export.
-      out += child.attrs.src;
+      // Raw Typst: verbatim in the file; printed as inline raw, never run.
+      out += exportOpts.islands === 'print' ? `#raw(${JSON.stringify(child.attrs.src as string)})` : child.attrs.src;
     } else if (child.type.name === 'eq_ref') {
       // Equation refs render as "(1)" to match the editor (Typst's default
       // would be "Equation 1"); figure refs keep "Figure 1".
@@ -451,8 +480,11 @@ function blockToTyp(node: PMNode, indent = ''): string {
       }
       return indent + '#quote(block: true)[\n' + blocksToTyp(node, indent + '  ') + indent + ']\n\n';
     case 'code_block':
-      // Raw-Typst escape-hatch islands (from import) pass through verbatim.
-      if (node.attrs.params === 'typst-raw') return indent + node.textContent + '\n\n';
+      // Islands: a raw-Typst block stays verbatim in the .typ file and is
+      // printed as a raw block; a Markdown block has no Typst form and is
+      // a raw block in both.
+      if (node.attrs.params === 'typst-raw' && exportOpts.islands !== 'print') return indent + node.textContent + '\n\n';
+      if (node.attrs.params === 'typst-raw' || node.attrs.params === 'md-raw') return islandBlock(node.textContent, indent);
       return indent + '```' + (node.attrs.params ?? '') + '\n' + node.textContent + '\n```\n\n';
     case 'math_display': {
       const numberedAttr = node.attrs.numbered as boolean | null;
@@ -667,10 +699,6 @@ function blockToTyp(node: PMNode, indent = ''): string {
       if (!bib?.content) return '';
       return indent + `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "ieee")\n\n`;
     }
-    case 'md_raw':
-      // Hidden Markdown (HTML blocks, editorial comments): no print, no
-      // Typst. It lives only in the .md file.
-      return '';
     case 'page_break':
       return indent + '#pagebreak()\n\n';
     case 'numbering_restart':
@@ -686,15 +714,11 @@ function blockToTyp(node: PMNode, indent = ''): string {
   }
 }
 
-/** Whether the export needs the mitex import: a math node, or a raw island
- * (block or inline) that calls `#mi(`/`#mitex(` itself — an island is
- * compiled on its own for its live preview, and would fail without it. */
+/** Whether the export needs the mitex import: a math node anywhere. */
 function containsMath(doc: PMNode): boolean {
   let found = false;
   doc.descendants((n) => {
     if (n.type.name === 'math_inline' || n.type.name === 'math_display') found = true;
-    else if (n.type.name === 'code_block' && n.attrs.params === 'typst-raw' && /#mi(?:tex)?\(/.test(n.textContent)) found = true;
-    else if (n.type.name === 'typst_inline' && /#mi(?:tex)?\(/.test(n.attrs.src as string)) found = true;
     return !found;
   });
   return found;

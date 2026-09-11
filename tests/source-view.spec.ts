@@ -362,7 +362,7 @@ test('an off-rails #let typed in the source returns as one raw island, announced
   });
   const toast = page.locator('#toast');
   await exit(page);
-  await expect(toast).toHaveText('1 block kept as raw Typst');
+  await expect(toast).toHaveText('1 block kept as Typst source, not run');
   const islands = await page.evaluate(() => {
     let n = 0;
     window.view.state.doc.descendants((node) => {

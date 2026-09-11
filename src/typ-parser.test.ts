@@ -600,11 +600,16 @@ function firstDiff(a: string, b: string): string {
   const out = docToTyp(doc);
   const again = docToTyp(typToDoc(out).doc);
   check('multi-line island round-trip is idempotent', out === again, firstDiff(out, again));
-  // An island that calls #mi itself carries the mitex import for its
-  // own preview compile.
-  const island = schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text('#grid(columns: 2, [a #mi(`x`)], [b])')]);
-  const solo = docToTyp(schema.nodes.doc.create(null, [island]));
-  check('island with #mi gets the mitex import', solo.includes('#import "@preview/mitex:0.2.5"'), solo.slice(0, 200));
+  // Islands never run: the file keeps the Typst verbatim, the print is a
+  // raw block of the same source (Typst on rails).
+  const island = schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text('#grid(columns: 2, [a `x`], [b])')]);
+  const inline = schema.nodes.paragraph.create(null, [schema.text('Fill '), schema.nodes.typst_inline.create({ src: '#h(1fr)' }), schema.text(' here.')]);
+  const solo = schema.nodes.doc.create(null, [island, inline]);
+  const file = docToTyp(solo);
+  const print = docToTyp(solo, { islands: 'print' });
+  check('the file keeps the island verbatim', file.includes('\n#grid(columns: 2, [a `x`], [b])\n') && file.includes('Fill #h(1fr) here.'), file);
+  check('the print shows the island as a raw block', print.includes('\n``\`\n#grid(columns: 2, [a `x`], [b])\n``\`\n') && (print.match(/^#grid/gm) ?? []).length === (print.match(/```\n#grid/g) ?? []).length, print);
+  check('the print shows an inline island as inline raw', print.includes('Fill #raw("#h(1fr)") here.'), print);
 }
 
 declare const process: { exitCode?: number };

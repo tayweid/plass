@@ -15,11 +15,12 @@
 //     verbatim (doc.attrs.frontmatter) and is written back on save
 //
 // An HTML block — a `<div>`, an editorial `<!-- comment -->` — is Markdown
-// the page cannot show: it becomes a hidden `md_raw` island, verbatim, and
-// comes back on save. (Left as text it would be normalized like prose: the
-// `--` of a comment turns into an en dash and the comment stops being one.)
+// the page cannot render: it becomes an `md-raw` island (a code block
+// tagged as Markdown), shown and printed as code, verbatim in and verbatim
+// out on save. (Left as prose it would be normalized like prose: the `--`
+// of a comment turns into an en dash and the comment stops being one.)
 // Inline HTML degrades to plain text with a warning. Nothing is dropped:
-// what the page cannot show is carried, not stripped.
+// what the page cannot render is carried, not stripped.
 
 import MarkdownIt from 'markdown-it';
 import footnotePlugin from 'markdown-it-footnote';
@@ -389,7 +390,7 @@ export function mdToDoc(src: string): MdImport {
           break;
         }
         case 'html_block':
-          nodes.push(schema.nodes.md_raw.create({ src: t.content.replace(/\n$/, '') }));
+          nodes.push(code_block.create({ params: 'md-raw' }, [schema.text(t.content.replace(/\n$/, ''))]));
           i++;
           break;
         case 'footnote_block_open': {

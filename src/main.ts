@@ -18,7 +18,6 @@ import { equationsPlugin } from './equations';
 import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
-import { CodeBlockView, rawIslandPlugin } from './raw-preview';
 import { TypstInlineView } from './inline-raw';
 import { refAutocomplete } from './ref-autocomplete';
 import { applySettings, formatPageNumber, getSettings } from './settings';
@@ -130,7 +129,6 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       equationsPlugin(),
       citationsPlugin(),
       figuresPlugin(),
-      rawIslandPlugin(),
       footnoteGuard(),
       collapseSpaces(),
       copyTextWithoutItsBlock(),
@@ -265,7 +263,6 @@ const view = new EditorView(editorEl, {
     figure: (node, v, getPos) => new FigureView(node, v, getPos),
     footnote: (node) => new FootnoteView(node),
     bibliography: (node, v) => new BibliographyView(node, v),
-    code_block: (node, v, getPos) => new CodeBlockView(node, v, getPos),
     typst_inline: (node, v, getPos) => new TypstInlineView(node, v, getPos),
   },
   attributes: { spellcheck: 'true' },

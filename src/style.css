@@ -1136,25 +1136,38 @@ body {
   border-radius: 3px;
 }
 
+/* Code blocks — plain fences and islands alike — mirror Typst's raw block:
+   DejaVu Sans Mono at 0.8em (the same font file feeds the compiler, so
+   wrapping agrees), a line pitch of leading + raw top edge, no horizontal
+   inset (Typst wraps raw at the full measure), tab = 2 spaces. Vertical
+   parity: --code-line/--code-pad/--code-mb come from settings.ts
+   (`codeBlockMetricsEm`) so the baselines into and out of the block equal
+   Typst's for the document's body font and line height. The chip is paint
+   only (a spread shadow), never layout. */
 .ProseMirror pre {
-  font-family: var(--mono);
-  font-size: 0.82em;
+  font-family: 'DejaVu Sans Mono', var(--mono);
+  font-size: 0.8em;
+  line-height: var(--code-line, 1.425em);
+  tab-size: 2;
   background: rgba(0, 0, 0, 0.045);
-  padding: 0.8em 1em;
-  border-radius: 5px;
+  box-shadow: 0 0 0 0.6em rgba(0, 0, 0, 0.045);
+  border-radius: 3px;
+  padding: var(--code-pad, 0.13em) 0 0;
   white-space: pre-wrap;
-  margin: 0 0 0.9em;
+  margin: 0 0 var(--code-mb, 0.99em);
 }
 
-/* Inline raw Typst: the compiled fragment sits in the text line. Fixed
-   fragments size themselves; flexible (fr) ones get their width from the
-   paginator, which is why this must not shrink-wrap. */
+/* Inline raw Typst: an island shown as inline code — the same DejaVu Sans
+   Mono at 0.8em the code mark uses, which is how it prints (`#raw`). */
 .ts-inline-raw {
+  font-family: 'DejaVu Sans Mono', var(--mono);
+  font-size: 0.8em;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 0.1em 0.2em;
+  margin: 0 -0.2em;
+  border-radius: 3px;
   cursor: pointer;
-}
-
-.ts-inline-raw svg {
-  vertical-align: baseline;
+  white-space: pre-wrap;
 }
 
 .ProseMirror .ts-inline-raw.ProseMirror-selectednode {
@@ -1163,38 +1176,43 @@ body {
   border-radius: 2px;
 }
 
-.inline-raw-editor .inline-raw-preview {
-  min-height: 1.6em;
-  overflow: hidden;
+/* Islands — raw Typst from a .typ file or the source view, raw Markdown
+   (HTML blocks, editorial comments) from a .md file — are code blocks with
+   a tag in the margin. They print as the same code block, never run. */
+.ProseMirror pre[data-params='typst-raw'],
+.ProseMirror pre[data-params='md-raw'] {
+  position: relative;
 }
 
-/* Raw-Typst islands: the compiled render IS the block; the source chip
-   shows while editing (click the render) or when the island paints
-   nothing (set rules, counters). Margins mirror paragraph rhythm. */
-.ts-raw {
-  margin: 0 0 0.9em;
+.ProseMirror pre[data-params='typst-raw']::before,
+.ProseMirror pre[data-params='md-raw']::before {
+  position: absolute;
+  right: 100%;
+  margin-right: 1.4em;
+  top: 0.15em;
+  font: 9.5px var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--bar-ink-soft);
+  white-space: nowrap;
+  opacity: 0.75;
+  pointer-events: none;
 }
 
-.ts-raw .ts-raw-render {
-  display: none;
-  cursor: pointer;
+.ProseMirror pre[data-params='typst-raw']::before {
+  content: 'typst · not run';
 }
 
-.ts-raw.ts-raw-visual:not(.ts-raw-editing) .ts-raw-render {
-  display: block;
-}
-
-.ts-raw.ts-raw-visual:not(.ts-raw-editing) > pre {
-  display: none;
-}
-
-.ts-raw > pre {
-  margin: 0;
+.ProseMirror pre[data-params='md-raw']::before {
+  content: 'markdown';
 }
 
 .ProseMirror pre code {
+  font-size: 1em;
+  line-height: inherit;
   background: none;
   padding: 0;
+  margin: 0;
 }
 
 .ProseMirror hr {
@@ -1575,36 +1593,6 @@ body {
 
 /* Manual page break: zero-height in flow (the next block starts the page
    exactly like the PDF); a floating chip marks it for editing. */
-/* Hidden Markdown (HTML blocks, editorial comments): nothing prints, so
-   the block is zero-height — parity with the compiled page — and announces
-   itself with a marker in the margin. Hover reads it; the source view
-   edits it. */
-.ts-md-raw {
-  height: 0;
-  margin: 0;
-  position: relative;
-}
-
-.ts-md-raw::after {
-  content: 'hidden';
-  position: absolute;
-  right: 100%;
-  margin-right: 1em;
-  top: -0.6em;
-  font: 9.5px var(--sans);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--bar-ink-soft);
-  white-space: nowrap;
-  opacity: 0.75;
-  cursor: help;
-}
-
-.ProseMirror .ts-md-raw.ProseMirror-selectednode::after {
-  color: var(--accent);
-  opacity: 1;
-}
-
 .ts-pagebreak {
   height: 0;
   position: relative;

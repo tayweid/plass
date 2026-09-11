@@ -40,28 +40,6 @@ const pageBreak: NodeSpec = {
   toDOM: () => ['div', { 'data-page-break': '', class: 'ts-pagebreak', contenteditable: 'false' }],
 };
 
-// Markdown the page view cannot show — an HTML block, an editorial
-// `<!-- comment -->` — kept verbatim from .md open to .md save. Hidden in
-// the page as a zero-height marker (the print has nothing there, so
-// vertical parity holds), read on hover, edited in the source view. Never
-// exported to Typst.
-const mdRaw: NodeSpec = {
-  group: 'block',
-  atom: true,
-  selectable: true,
-  attrs: { src: { default: '' } },
-  parseDOM: [
-    {
-      tag: 'div[data-md-raw]',
-      getAttrs: (el) => ({ src: (el as HTMLElement).getAttribute('data-md-raw') ?? '' }),
-    },
-  ],
-  toDOM: (node) => [
-    'div',
-    { 'data-md-raw': node.attrs.src, class: 'ts-md-raw', contenteditable: 'false', title: node.attrs.src },
-  ],
-};
-
 const numberingRestart: NodeSpec = {
   group: 'block',
   atom: true,
@@ -172,8 +150,8 @@ const figure: NodeSpec = {
 // Inline raw Typst: an escape hatch mid-sentence, the inline twin of the
 // raw-Typst island block. Renders as its compiled self; the source is the
 // document's truth and exports verbatim. `#h(1fr)` and other fr content is
-// FLEXIBLE — the paginator measures the line's slack and hands it over
-// (see inline-raw.ts), the one atom whose width layout decides.
+// Inline raw Typst (`#h(1fr)` in a .typ file). An island: kept verbatim in
+// the file, shown and printed as inline code, never run (Typst on rails).
 const typstInline: NodeSpec = {
   group: 'inline',
   inline: true,
@@ -383,11 +361,23 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
       frontmatter: { default: '' },
     },
   })
-  // Language/params tag on code blocks; 'typst-raw' marks a raw-Typst island
-  // that the exporter passes through verbatim.
+  // Language/params tag on code blocks. Two values mark islands — content
+  // the page keeps but does not run: 'typst-raw' (unknown Typst from a .typ
+  // file, or typed in the source view; the .typ save keeps it verbatim) and
+  // 'md-raw' (an HTML block or `<!-- comment -->` from a .md file; the .md
+  // save keeps it verbatim). Both show as a code block in the page and
+  // print as one in the PDF, so page and print agree and nothing is hidden.
   .update('code_block', {
     ...base.spec.nodes.get('code_block')!,
     attrs: { params: { default: '' } },
+    parseDOM: [
+      {
+        tag: 'pre',
+        preserveWhitespace: 'full',
+        getAttrs: (el) => ({ params: (el as HTMLElement).getAttribute('data-params') ?? '' }),
+      },
+    ],
+    toDOM: (node) => ['pre', { 'data-params': (node.attrs.params as string) || null }, ['code', 0]],
   })
   .addToEnd('math_inline', mathInline)
   .addToEnd('typst_inline', typstInline)
@@ -398,7 +388,6 @@ const nodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block')
   .addToEnd('bibliography', bibliography)
   .addToEnd('eq_ref', eqRef)
   .addToEnd('page_break', pageBreak)
-  .addToEnd('md_raw', mdRaw)
   .addToEnd('numbering_restart', numberingRestart)
   .addToEnd('doc_title', docTitle)
   .addToEnd('doc_authors', docAuthors)

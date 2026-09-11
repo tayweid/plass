@@ -202,7 +202,7 @@ test('compiled bibliography SVG cannot restore a dangerous URL', async ({ page }
   expect(active.some((attr) => /^on/i.test(attr))).toBe(false);
 });
 
-test('raw Typst previews use the sanitized SVG boundary', async ({ page }) => {
+test('raw Typst islands are shown as code and never compiled or linked', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const app = window as typeof window & { view: import('prosemirror-view').EditorView };
@@ -214,17 +214,19 @@ test('raw Typst previews use the sanitized SVG boundary', async ({ page }) => {
     app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, raw));
   });
 
-  const render = page.locator('.ts-raw-render');
-  await expect(render.locator('svg')).toHaveCount(1, { timeout: 20_000 });
-  const active = await render.locator('*').evaluateAll((elements) =>
-    elements.flatMap((element) =>
-      element.getAttributeNames()
-        .filter((name) => name.startsWith('on') || /^(?:href|xlink:href)$/i.test(name))
-        .map((name) => `${name}=${element.getAttribute(name)}`),
-    ),
-  );
-  expect(active.some((attribute) => /javascript:/i.test(attribute))).toBe(false);
-  expect(active.some((attribute) => /^on/i.test(attribute))).toBe(false);
+  const island = page.locator('.ProseMirror pre[data-params="typst-raw"]');
+  await expect(island).toHaveCount(1);
+  await expect(island).toHaveText('#link("javascript:alert(1)")[danger]');
+  await page.waitForTimeout(1_500);
+  expect(await island.locator('svg, a, [href]').count()).toBe(0);
+  // The compile the page oracle runs prints the island as a raw block.
+  const typ = await page.evaluate(async () => {
+    const { docToTyp } = await import('/src/typ-serializer.ts');
+    return docToTyp((window as typeof window & { view: import('prosemirror-view').EditorView }).view.state.doc, { islands: 'print' });
+  });
+  expect(typ).toContain('```\n#link("javascript:alert(1)")[danger]\n```');
+  // Every occurrence sits inside a fence: nothing executable at line start.
+  expect((typ.match(/^#link/gm) ?? []).length).toBe((typ.match(/```\n#link/g) ?? []).length);
 });
 
 test('compiler package policy makes only one pinned integrity-checked request', async ({ page }) => {

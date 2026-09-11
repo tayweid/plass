@@ -508,7 +508,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     {
       glyph: '<span class="ico tico">#</span>',
       label: 'Typst',
-      title: 'Raw Typst block — compiles into the document (rules, spacing, anything Typst)',
+      title: 'Raw Typst block — kept in the file as Typst, shown and printed as code, never run',
       run: () => {
         setBlockType(schema.nodes.code_block, { params: 'typst-raw' })(view.state, view.dispatch);
         view.focus();
@@ -517,7 +517,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     {
       glyph: '<span class="ico tico">#·</span>',
       label: 'Inline',
-      title: 'Inline raw Typst — mid-sentence: fill lines (#h(1fr)), blanks, symbols',
+      title: 'Inline raw Typst — kept in the file verbatim, shown and printed as inline code, never run',
       run: () => void import('./inline-raw').then(({ insertTypstInline }) => insertTypstInline(view)),
     },
   ]);

@@ -139,18 +139,16 @@ either serializer, or a code editor dependency.
    but the current paragraph), typewriter scrolling, `Mod-b`/`Mod-i`
    wrapping markup in source, mode memory per format, a "simpler files"
    default for `.md` if wanted.
-5. **The one rule: typed Typst does not run (1–2 days).** Decided
-   2026-09-10 (see below). Islands become inert everywhere: `docToTyp`
-   grows a `{ islands: 'keep' | 'omit' }` option — the file save keeps
-   them verbatim, the oracle signature and the PDF compile omit them — and
-   the page shows a raw-Typst island the way it shows a hidden Markdown
-   block (`md_raw`: zero height, margin marker, hover to read). Retire the
-   island compile pipeline (`raw-preview.ts`), the `typst-raw` spacing
-   special case in `flow-rules.ts`, and the island mitex-import rule in the
-   serializer. The toast changes from "kept as raw Typst" to "kept, not
-   rendered". Tests: the `#let` source test expects an inert island and a
-   PDF without it; `typ-parser` byte-identity still holds for files with
-   islands.
+5. **The one rule: typed Typst does not run.** Landed 2026-09-11. Islands
+   are inert everywhere: `docToTyp` takes `{ islands: 'file' | 'print' }`
+   — the file save keeps raw Typst verbatim, the page oracle and the PDF
+   print every island as a raw code block — and the page shows an island
+   as a code block tagged in the margin ("typst · not run", "markdown"),
+   the same block the print shows, so vertical parity holds without
+   hiding anything. The island compile pipeline (`raw-preview.ts`,
+   `fragment-source.ts`) and the flexible-fill inline machinery are gone;
+   inline islands are inline code. The toast says "kept as Typst source,
+   not run".
 
 Total: about a week for 0–3.
 
@@ -193,16 +191,17 @@ Total: about a week for 0–3.
 The source view is plain text of the same rails, with one deviation from
 "purely plain": **Typst typed into it does not run as Typst.** It shows up in
 the source view exactly as typed, it is saved into the file verbatim (never
-destroy content), and it never reaches the renderer — neither the page view
-nor Plass's own PDF export. Bespoke Typst therefore never needs to be
-rendered on the page, and the Tolerated tier becomes preservation only.
+destroy content), and it is never executed — not by the page view, not by
+Plass's PDF export. Bespoke Typst therefore never needs to be rendered on
+the page, and the Tolerated tier becomes preservation only.
 
-Reading taken for the plan: one rule for all islands, typed or opened from
-disk — after a save and reopen the two are indistinguishable, so a
-typed/opened distinction cannot survive. Consequence to confirm: a `.typ`
-opened from disk with a hand-written `#grid` prints it under the Typst CLI
-but not from Plass's Export → PDF (the page shows the island marker where it
-sits, so the omission is visible, never silent).
+Refined 2026-09-11 (Taylor): the honest presentation is not a hidden
+marker but a visible one — the island shows as a code block in the page,
+and the print shows the same code block, so nothing is hidden and page
+heights still equal print heights. One rule for all islands, typed or
+opened from disk (indistinguishable after a save). A `.typ` opened from
+disk with a hand-written `#grid` runs under the Typst CLI; Plass prints its
+source as code.
 
 ## Open questions
 

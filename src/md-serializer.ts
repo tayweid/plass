@@ -184,6 +184,8 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       }
       case 'code_block': {
         const params = node.attrs.params as string;
+        // A Markdown island is the file's own text: back verbatim.
+        if (params === 'md-raw') return node.textContent;
         const lang = params === 'typst-raw' ? 'typst' : params;
         return `\`\`\`${lang}\n${node.textContent}\n\`\`\``;
       }
@@ -224,8 +226,6 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         return table(node);
       case 'horizontal_rule':
         return '---';
-      case 'md_raw':
-        return node.attrs.src as string;
       case 'page_break':
         return '```typst\n#pagebreak()\n```';
       case 'numbering_restart':

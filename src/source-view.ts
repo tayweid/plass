@@ -99,9 +99,9 @@ interface Active {
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
-/** Islands in a document: raw-Typst blocks and inline spans, and hidden
- *  Markdown blocks — content the page view keeps verbatim because it
- *  cannot show it. */
+/** Islands in a document: raw-Typst blocks and inline spans, and raw
+ *  Markdown blocks — content the page keeps verbatim and shows as code,
+ *  never run. */
 function countIslands(doc: PMNode): { blocks: number; inline: number; hidden: number } {
   let blocks = 0;
   let inline = 0;
@@ -109,7 +109,7 @@ function countIslands(doc: PMNode): { blocks: number; inline: number; hidden: nu
   doc.descendants((n) => {
     if (n.type.name === 'code_block' && n.attrs.params === 'typst-raw') blocks++;
     else if (n.type.name === 'typst_inline') inline++;
-    else if (n.type.name === 'md_raw') hidden++;
+    else if (n.type.name === 'code_block' && n.attrs.params === 'md-raw') hidden++;
     return true;
   });
   return { blocks, inline, hidden };
@@ -126,8 +126,8 @@ function islandNotice(
   const parts: string[] = [];
   if (blocks) parts.push(`${blocks} block${blocks === 1 ? '' : 's'}`);
   if (inline) parts.push(`${inline} inline span${inline === 1 ? '' : 's'}`);
-  const typst = parts.length ? `${parts.join(' and ')} kept as raw Typst` : '';
-  const md = hidden ? `${hidden} Markdown block${hidden === 1 ? '' : 's'} hidden from the page` : '';
+  const typst = parts.length ? `${parts.join(' and ')} kept as Typst source, not run` : '';
+  const md = hidden ? `${hidden} Markdown block${hidden === 1 ? '' : 's'} kept as source` : '';
   return [typst, md].filter(Boolean).join('; ') || null;
 }
 

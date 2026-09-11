@@ -207,7 +207,6 @@ function extractPages(svg: string, yTolPt: number, pageHPt: number): PagedLine[]
 export function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
   const units: Unit[] = [];
   const push = (node: PMNode, pos: number, marker: boolean | string = false) => {
-    if (node.type.name === 'md_raw') return; // hidden Markdown: nothing printed, nothing to match
     if (node.type.name === 'paragraph' && node.attrs.align) {
       // Aligned paragraphs are browser-laid (no line cache): opaque, so a
       // page can start AT them but a split inside one fails to fallback.

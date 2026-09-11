@@ -7,7 +7,7 @@
 import type { EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
-import { DEFAULT_FONT, cssFontStack, effectiveFont, selectableFonts } from './font-registry';
+import { DEFAULT_FONT, cssFontStack, effectiveFont, selectableFonts, codeBlockMetricsEm } from './font-registry';
 
 export interface DocSettings {
   font: string;
@@ -185,6 +185,13 @@ export function applySettings(state: EditorState) {
   root.setProperty('--doc-line', String(s.lineHeight));
   root.setProperty('--par-margin', s.parIndent ? '0em' : '0.9em');
   root.setProperty('--par-indent', s.parIndent ? '1.5em' : '0em');
+  // Code blocks (and islands) mirror Typst's raw block: published in px so
+  // the block's own 0.8em font size cannot rescale them.
+  const code = codeBlockMetricsEm(s);
+  const bodyPx = (s.sizePt * 4) / 3;
+  root.setProperty('--code-line', `${(code.lineEm * bodyPx).toFixed(4)}px`);
+  root.setProperty('--code-pad', `${(code.padTopEm * bodyPx).toFixed(4)}px`);
+  root.setProperty('--code-mb', `${(code.marginBottomEm * bodyPx).toFixed(4)}px`);
   const size = pageSize(s);
   root.setProperty('--page-w', `${size.w}px`);
   root.setProperty('--page-h', `${size.h}px`);

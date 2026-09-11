@@ -61,7 +61,6 @@ import { FONT_FALLBACK } from './pdf';
 import { citeOrder } from './citations';
 import { eqKey } from './equations';
 import { getInk, inkKey } from './math-ink';
-import { isFlexibleAtom } from './inline-raw';
 import { parseTypstSvg } from './safe-svg';
 import { recordLayoutPerf } from './layout/perf';
 import { COMMON_PORT_KEYS, effectiveFont, parityMetrics } from './font-registry';
@@ -136,6 +135,9 @@ import {
   type PageParityStats,
   type PageStartEntry,
 } from './layout/page-parity';
+
+/** Islands never flex: nothing in the document takes a line's slack. */
+const noFill = () => false;
 
 export { typesetKey };
 export type { PageInfo, TypesetMeta, TypesetState, TypesetStats };
@@ -1076,7 +1078,7 @@ class TypesetView {
               atomWidth,
               {
                 hyphenate: settings.hyphenate,
-                isFill: isFlexibleAtom,
+                isFill: noFill,
                 ...extra,
                 forced,
               },
@@ -1098,7 +1100,7 @@ class TypesetView {
         legacyHits++;
         lines = layoutBlock(b.node, measure, this.measurer, atomWidth, {
           hyphenate: settings.hyphenate,
-          isFill: isFlexibleAtom,
+          isFill: noFill,
           ...extra,
         });
         // The fallback's KP-chosen breaks get a real signature: compiled
@@ -2105,8 +2107,11 @@ class TypesetView {
         // null drops the paragraph to the local breaker (which models fr
         // exactly), the documented fallback for content the spec can't
         // express. These lines are form blanks, not justified prose.
-        case 'typst_inline':
-          return isFlexibleAtom(child) ? null : { markup: child.attrs.src as string };
+        // An inline island prints as inline raw — its own source, never run.
+        case 'typst_inline': {
+          const src = child.attrs.src as string;
+          return { markup: `#raw(${JSON.stringify(src)})`, text: src };
+        }
         case 'citation': {
           order ??= citeOrder(state.doc);
           const t = `[${order.get(child.attrs.key as string) ?? '?'}]`;
@@ -2138,7 +2143,7 @@ class TypesetView {
     const decos: Decoration[] = [];
     const settings = getSettings(state);
     const font = effectiveFont(settings.font);
-    const layoutOpts = { hyphenate: settings.hyphenate, isFill: isFlexibleAtom };
+    const layoutOpts = { hyphenate: settings.hyphenate, isFill: noFill };
     const useOracle = font.exact;
     const resolveAtom = useOracle ? this.atomResolver() : null;
     const settingsSig = blockLayoutSettingsKey(settings);
@@ -2990,6 +2995,7 @@ class TypesetView {
       if (kind === 'row') return 0;
       const n = view.state.doc.nodeAt(pos);
       if (n?.type.name === 'paragraph') return pageTopAdjustEm(s, 'paragraph') * F;
+      if (n?.type.name === 'code_block') return pageTopAdjustEm(s, 'code') * F;
       if (n?.type.name === 'heading') {
         const lv = Math.min(3, (n.attrs.level as number) || 1);
         return pageTopAdjustEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;
@@ -3005,8 +3011,7 @@ class TypesetView {
       // own painted padding-top, which otherwise survives in full at a page
       // top even though Typst never charges it there.
       if (n) {
-        const isRaw = n.type.name === 'code_block' && n.attrs.params === 'typst-raw';
-        const dropEm = containerPageTopDropEm(n.type.name, isRaw, (n.attrs.kind as string | null) ?? null);
+        const dropEm = containerPageTopDropEm(n.type.name, (n.attrs.kind as string | null) ?? null);
         if (dropEm) return -dropEm * F;
       }
       return 0;
@@ -3528,8 +3533,6 @@ class TypesetView {
         case 'table':
           table(pos, node);
           break;
-        case 'md_raw':
-          break; // hidden Markdown: zero height in the page, nothing in print
         default:
           atomic(pos, node, owner);
       }
@@ -3558,8 +3561,6 @@ class TypesetView {
         case 'table':
           table(offset, node);
           break;
-        case 'md_raw':
-          break; // hidden Markdown: zero height in the page, nothing in print
         default:
           // Headings are sticky by default (heading.rs:294); only top-level
           // ones are modeled — a heading nested in a list item or quote

@@ -584,8 +584,9 @@ export function peekWeakSpacing(items: readonly FlowItem[]): number {
  * Auto (weakness-4) "above" spacing as `padding-top` on the block's own box
  * rather than as a calibrated ascent formula the way paragraphs/headings/
  * lines get via `pageTopAdjustEm` (`typ-serializer.ts`): blockquote
- * (`#quote(block: true)`, 0.66em), a plain (non-`typst-raw`) code block
- * (`.ProseMirror pre`, 0.8em), and a figure (`.ts-figure`, 0.4em). Lists and
+ * (`#quote(block: true)`, 0.66em) and a figure (`.ts-figure`, 0.4em).
+ * Code blocks (islands included) have a calibrated landing spot of their
+ * own (`pageTopAdjustEm(s, 'code')`), like paragraphs. Lists and
  * tables paint zero padding-top already (their CSS puts spacing entirely in
  * the PREVIOUS sibling's margin-bottom), so they need no entry here — there
  * is nothing to drop.
@@ -604,19 +605,14 @@ export function peekWeakSpacing(items: readonly FlowItem[]): number {
  */
 export const CONTAINER_PAGE_TOP_PADDING_EM: Readonly<Record<string, number>> = {
   blockquote: 0.66,
-  code_block: 0.8,
   figure: 0.4,
 };
 
 /** The page-top spacing drop (body em) for a container `kind`, or 0 for a
- * kind not in `CONTAINER_PAGE_TOP_PADDING_EM` (nothing to drop). `isRaw`
- * must be `true` for a `code_block` with `params === 'typst-raw'`: that
- * variant paints via `.ts-raw` (margin-bottom only, no padding-top), not
- * `.ProseMirror pre` — the drop does not apply to it. `variant` is a
- * blockquote's `kind` attr: the 0.66em entry is `#quote(block: true)`'s
+ * kind not in `CONTAINER_PAGE_TOP_PADDING_EM` (nothing to drop). `variant`
+ * is a blockquote's `kind` attr: the 0.66em entry is `#quote(block: true)`'s
  * only; the 'solution' kind paints no padding-top. */
-export function containerPageTopDropEm(kind: string, isRaw = false, variant: string | null = null): number {
-  if (kind === 'code_block' && isRaw) return 0;
+export function containerPageTopDropEm(kind: string, variant: string | null = null): number {
   // The solution variant paints no padding-top (Auto spacing lives in the
   // previous sibling's margin-bottom, like a paragraph): nothing to drop.
   if (kind === 'blockquote' && variant === 'solution') return 0;

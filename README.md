@@ -93,10 +93,11 @@ tier is always visible to the writer.
   are edited directly in the page, laid out live by the local mirror, and
   verified by the compiler. What you see is what prints.
 - **Tolerated.** Typst that arrives in a file and that Plass does not
-  model is preserved verbatim as a raw island: a clearly marked source
-  block that is never rendered live, never altered, and passed straight
-  through to the PDF. It can be read, moved, or deleted, and it carries no
-  layout guarantee. This is how files survive round trips through other
+  model is preserved verbatim as a raw island: a code block tagged in the
+  margin ("typst · not run"), never altered in the file, and printed by
+  Plass as the same code block — its source, never executed. It can be
+  read, moved, or deleted. Page and print agree because both show the same
+  block. This is how files survive round trips through other
   tools; it is not an authoring path.
 - **Off.** Multi-column layout, floats, custom show and set rules, and
   hand-written layout code are declined on purpose. They are not queued

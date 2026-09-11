@@ -5,7 +5,6 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import { Decoration, type DecorationSet } from 'prosemirror-view';
 import type { LineLayout } from './paragraph';
-import { applyFill } from '../inline-raw';
 import { tableBreakWidget } from './table-break-widget';
 
 /** Semantic roles owned by the typesetting layer. These tags are deliberately
@@ -260,15 +259,6 @@ export function appendLineDecorations(
     const spacing = wordSpacingValue(line.spacing);
     if (spacing) {
       emitSpacing(line.from, line.to, `word-spacing:${spacing}px`);
-    }
-    // Flexible (fr) inline atoms take the line's leftover space: layout
-    // measured it, the atom's view paints it. Both layout paths land here,
-    // so the assignment happens once, wherever the lines came from.
-    if (line.fills) {
-      for (const offset of line.fills.offsets) {
-        const child = node.nodeAt(offset);
-        if (child) applyFill(child, line.fills.width);
-      }
     }
     if (line.breakPos === null) continue;
 

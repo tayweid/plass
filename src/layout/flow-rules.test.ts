@@ -607,9 +607,8 @@ function content(): FlowItem {
 
 {
   assert.equal(containerPageTopDropEm('blockquote'), 0.66);
-  assert.equal(containerPageTopDropEm('code_block'), 0.8);
-  assert.equal(containerPageTopDropEm('code_block', true), 0); // typst-raw: no padding-top
-  assert.equal(containerPageTopDropEm('blockquote', false, 'solution'), 0); // solution kind: no padding-top
+  assert.equal(containerPageTopDropEm('code_block'), 0); // calibrated via pageTopAdjustEm('code')
+  assert.equal(containerPageTopDropEm('blockquote', 'solution'), 0); // solution kind: no padding-top
   assert.equal(containerPageTopDropEm('figure'), 0.4);
   assert.equal(containerPageTopDropEm('bullet_list'), 0); // no padding-top to drop
   assert.equal(containerPageTopDropEm('table'), 0);

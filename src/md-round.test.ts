@@ -217,7 +217,8 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount,
 }
 
 // HTML blocks — editorial comments above all — are Markdown the page
-// cannot show: hidden islands, verbatim in, verbatim out, nothing in print.
+// cannot render: islands shown as code, verbatim in, verbatim out, and
+// printed as the same code block.
 {
   const md = [
     'Para one.',
@@ -236,13 +237,13 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount,
   const { doc, warnings } = mdToDoc(md);
   const kinds: string[] = [];
   doc.forEach((n) => kinds.push(n.type.name));
-  check('HTML blocks become hidden islands', JSON.stringify(kinds) === JSON.stringify(['paragraph', 'md_raw', 'md_raw', 'bullet_list', 'paragraph']), JSON.stringify(kinds));
-  check('a comment keeps its dashes', doc.child(1).attrs.src === '<!-- ED: MOVED (2026-09-01) -- keep A3\'s closer pure — see chat. Marked {++stitches++} only. -->', doc.child(1).attrs.src);
-  check('hidden islands raise no warning', warnings.length === 0, warnings.join('; '));
+  check('HTML blocks become Markdown islands', JSON.stringify(kinds) === JSON.stringify(['paragraph', 'code_block', 'code_block', 'bullet_list', 'paragraph']) && doc.child(1).attrs.params === 'md-raw' && doc.child(2).attrs.params === 'md-raw', JSON.stringify(kinds));
+  check('a comment keeps its dashes', doc.child(1).textContent === '<!-- ED: MOVED (2026-09-01) -- keep A3\'s closer pure — see chat. Marked {++stitches++} only. -->', doc.child(1).textContent);
+  check('islands raise no warning', warnings.length === 0, warnings.join('; '));
   const out = docToMd(doc);
-  check('hidden islands are written back verbatim', out === md, out);
-  const typ = docToTyp(doc);
-  check('hidden islands print nothing', !typ.includes('<!--') && !typ.includes('<div'), typ);
+  check('islands are written back verbatim', out === md, out);
+  const typ = docToTyp(doc, { islands: 'print' });
+  check('islands print as raw blocks, never run', typ.includes('```\n<!-- ED: MOVED') && typ.includes('```\n<div style') && (typ.match(/^<div/gm) ?? []).length === (typ.match(/```\n<div/g) ?? []).length, typ);
   check('critic marks survive as text', out.includes('{++an insertion++}') && out.includes('~~a strike~~'), out);
 }
 

@@ -13,10 +13,14 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
    top of this file and outrank everything queued below.
    *Harvested 2026-09-10 from the course notes (Markdown files with
    hundreds of editorial `<!-- -->` comments and CriticMarkup):*
-   - Done: HTML blocks and comments are hidden islands (the dash
+   - Done: HTML blocks and comments are islands shown as code (the dash
      normalizer was turning `<!--` into `<!–`); frontmatter lines with no
      Plass field ride along verbatim; indented code blocks and link titles
-     survive; list continuations indent once.
+     survive; list continuations indent once. Code blocks are now a
+     calibrated rail (Typst's raw block metrics, DejaVu Sans Mono), so a
+     document full of comment islands keeps exact page starts; a page
+     break *inside* a wrapped island still moves it whole (PAGE-PORT
+     Phase 5, breakable blocks).
    - **Open, top: straight quotes.** Typst prints `'`/`"` as smart quotes;
      the document holds them straight. The oracle's text matcher rejects
      every paragraph with an apostrophe (`expected 'shouldn't' got
@@ -140,10 +144,10 @@ the push is ordered by what those files hit, not by feature size:
       course-notes folder byte-identical except for the decided
       normalizations, and `MD_FILE=… npx playwright test
       tests/md-comments.spec.ts` passes on a sample through the live editor.
-2. **The one rule for the source view** (SOURCE-VIEW.md step 5): typed
-   Typst is kept, never run. Islands become inert everywhere, the island
-   compile pipeline is retired, and the page marks islands the way it marks
-   hidden Markdown. Small, and it simplifies the layout code.
+2. ~~The one rule for the source view~~ — done 2026-09-11: islands (raw
+   Typst, raw Markdown) are kept verbatim, shown as code blocks in the
+   page, printed as the same code blocks, never run. The island compile
+   pipeline is gone.
 3. **Tables as daily tools** — item 3 above (rule weights, insets,
    span-aware ops, rich-cell editing), since "clunky to edit" was the
    stated reason tables went unused.
@@ -171,7 +175,6 @@ Deferred on purpose: PAGE-PORT Phase 6, multiple columns, offline PWA.
 
 ## Standing backlog
 
-- Raw-Typst-island compiled previews (same pattern as tables/math/bib).
 - **Source view, step 4** — steps 0–3b shipped (SOURCE-VIEW.md). Left:
   the writing niceties — focus mode, typewriter scrolling, ⌘B/⌘I wrapping
   markup, mode memory per format, optionally `.md` opening in source.
