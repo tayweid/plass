@@ -60,8 +60,6 @@ export interface SourceEditorOptions {
   scroller?: HTMLElement | null;
   /** Start in focus mode. */
   focusMode?: boolean;
-  /** `Mod-Shift-f` in the editor. */
-  onFocusToggle?: () => void;
 }
 
 // ---------- writing niceties (SOURCE-VIEW.md, step 4) ----------
@@ -365,7 +363,6 @@ export function mountSourceEditor(host: HTMLElement, opts: SourceEditorOptions):
         drawSelection(),
         search({ top: true }),
         markupKeys(opts.format),
-        keymap.of([{ key: 'Mod-Shift-f', run: () => (opts.onFocusToggle?.(), true) }]),
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
         EditorView.lineWrapping,
         opts.format === '.md'

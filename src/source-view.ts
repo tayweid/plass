@@ -266,6 +266,14 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
     active.editor.focus();
   };
   const toggleFocus = () => applyFocus(!focusOn);
+  // Mod-Shift-f anywhere in the source view (the sheet, its button, the
+  // editor): a document listener keyed on the physical key, so it does not
+  // depend on the editor holding focus or on how a platform names Shift-F.
+  const onFocusKey = (e: KeyboardEvent) => {
+    if (!active || e.altKey || !e.shiftKey || !(e.metaKey || e.ctrlKey) || e.code !== 'KeyF') return;
+    e.preventDefault();
+    toggleFocus();
+  };
 
   const mount = async (text: string | null, format: SourceFormat): Promise<void> => {
     const [{ mountSourceEditor }] = await Promise.all([
@@ -306,7 +314,6 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
       preambleEnd: preambleEnd(initial, format, text === null ? offsets : null),
       scroller: document.getElementById('scroll'),
       focusMode: focusOn,
-      onFocusToggle: () => toggleFocus(),
       onChange() {
         clearTimeout(persistTimer);
         persistTimer = window.setTimeout(persistSession, 400);
@@ -314,6 +321,7 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
       },
     });
     active = { editor, host, format, offsets, stackHeight, islands };
+    document.addEventListener('keydown', onFocusKey);
     host.classList.toggle('focus-mode', focusOn);
     persistSession();
     rememberMode(format, 'source');
@@ -356,6 +364,7 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
       editor.destroy();
       host.remove();
       active = null;
+      document.removeEventListener('keydown', onFocusKey);
       clearTimeout(persistTimer);
       sessionStorage.removeItem(SOURCE_SESSION_KEY);
       rememberMode(format, 'page');
@@ -434,6 +443,7 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
         editor.destroy();
         host.remove();
         active = null;
+        document.removeEventListener('keydown', onFocusKey);
         stack.classList.remove('source-mode');
         void mount(null, format);
         return;
