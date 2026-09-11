@@ -144,25 +144,32 @@ console.log('collapse-spaces:');
 }
 
 {
-  // A lone nbsp against an inline atom is the browser's artifact for a
-  // typed space and becomes a plain space; a run of two stays as glue.
+  // The browser writes a space typed against an inline atom as a lone
+  // nbsp. Recognized by how it arrives — a typing transaction inserting
+  // exactly one nbsp — it becomes a plain space once a character follows;
+  // the same character imported from a `~` in the file is glue and stays.
   const math = schema.nodes.math_inline.create({ src: 'x' });
-  const para = schema.nodes.paragraph.create(null, [schema.text('area '), math, schema.text('\u00a0done')]);
+  const para = schema.nodes.paragraph.create(null, [schema.text('area '), math]);
   const s = EditorState.create({ doc: schema.nodes.doc.create(null, [para]), plugins: [collapseSpaces()] });
-  const after = s.apply(s.tr.insertText('!', s.doc.content.size - 1));
-  check('a lone nbsp after a formula becomes a space', after.doc.firstChild!.child(2).text === ' done!', JSON.stringify(after.doc.firstChild!.child(2).text));
-  const before = schema.nodes.paragraph.create(null, [schema.text('see\u00a0'), math, schema.text(' now')]);
-  const s2 = EditorState.create({ doc: schema.nodes.doc.create(null, [before]), plugins: [collapseSpaces()] });
-  const after2 = s2.apply(s2.tr.insertText('!', 1));
-  check('a lone nbsp before a formula becomes a space', after2.doc.firstChild!.child(0).text === '!see ', JSON.stringify(after2.doc.firstChild!.child(0).text));
+  const end = s.doc.content.size - 1;
+  const typedNbsp = s.apply(s.tr.insertText('\u00a0', end));
+  check('a typed nbsp waits while it is trailing', typedNbsp.doc.firstChild!.child(2).text === '\u00a0', JSON.stringify(typedNbsp.doc.firstChild!.textContent));
+  const typedWord = typedNbsp.apply(typedNbsp.tr.insertText('d', typedNbsp.doc.content.size - 1));
+  check('a typed nbsp after a formula becomes a space once a character follows', typedWord.doc.firstChild!.child(2).text === ' d', JSON.stringify(typedWord.doc.firstChild!.child(2).text));
+  const imported = schema.nodes.paragraph.create(null, [schema.text('area '), math, schema.text('\u00a0done')]);
+  const s2 = EditorState.create({ doc: schema.nodes.doc.create(null, [imported]), plugins: [collapseSpaces()] });
+  const edited = s2.apply(s2.tr.insertText('!', s2.doc.content.size - 1));
+  check('an imported nbsp after a formula is glue and stays', edited.doc.firstChild!.child(2).text === '\u00a0done!', JSON.stringify(edited.doc.firstChild!.child(2).text));
+  const loaded = s2.apply(s2.tr.replaceWith(0, s2.doc.content.size, imported).setMeta('addToHistory', false));
+  check('a document load never touches a lone nbsp', loaded.doc.firstChild!.child(2).text === '\u00a0done', JSON.stringify(loaded.doc.firstChild!.textContent));
+  const beforeAtom = EditorState.create({ doc: schema.nodes.doc.create(null, [schema.nodes.paragraph.create(null, [schema.text('see'), math])]), plugins: [collapseSpaces()] });
+  const typedBefore = beforeAtom.apply(beforeAtom.tr.insertText('\u00a0', 4));
+  const typedMore = typedBefore.apply(typedBefore.tr.insertText('x', 5));
+  check('a typed nbsp before a formula becomes a space once a character follows', typedMore.doc.firstChild!.child(0).text === 'see x', JSON.stringify(typedMore.doc.firstChild!.child(0).text));
   const glue = schema.nodes.paragraph.create(null, [schema.text('a'), math, schema.text('\u00a0\u00a0b')]);
   const s3 = EditorState.create({ doc: schema.nodes.doc.create(null, [glue]), plugins: [collapseSpaces()] });
   const after3 = s3.apply(s3.tr.insertText('!', 1));
   check('a pure nbsp run after a formula stays', after3.doc.firstChild!.child(2).text === '\u00a0\u00a0b', JSON.stringify(after3.doc.firstChild!.child(2).text));
-  const mid = schema.nodes.paragraph.create(null, [schema.text('a\u00a0b')]);
-  const s4 = EditorState.create({ doc: schema.nodes.doc.create(null, [mid]), plugins: [collapseSpaces()] });
-  const after4 = s4.apply(s4.tr.insertText('!', 1));
-  check('a lone nbsp inside text stays', after4.doc.firstChild!.textContent === '!a\u00a0b', JSON.stringify(after4.doc.firstChild!.textContent));
 }
 
 if (failures) {

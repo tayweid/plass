@@ -2,7 +2,8 @@
 // module so it stays importable without the editor's worker-backed imports —
 // the unit suite (collapse-spaces.test.ts) runs it under plain node.
 
-import { Plugin } from 'prosemirror-state';
+import { Plugin, PluginKey, type Transaction } from 'prosemirror-state';
+import { ReplaceStep } from 'prosemirror-transform';
 import type { Mark, Node as PMNode } from 'prosemirror-model';
 import { beforeAfterNode, createQuoteState, smartenText } from './smart-quotes';
 
@@ -47,9 +48,64 @@ export function trimSpaceBeforeMarker(out: PMNode[]): void {
   else out.pop();
 }
 
+/**
+ * Positions of non-breaking spaces the BROWSER wrote for a typed space.
+ * Under the editor's `white-space: normal` a plain space at the end of a
+ * text node is collapsible, so when a space is typed against an inline atom
+ * (a formula, a citation, a reference) Chrome inserts U+00A0 instead. Left
+ * in the document it exports as `~` and welds the formula to the next word.
+ * The same character typed deliberately, or imported from a `~` in a .typ
+ * file, is intentional glue and must survive — so the artifact is
+ * recognized by how it arrives (a typing transaction inserting exactly one
+ * nbsp next to an atom), not by what it is, and is turned into a plain
+ * space once a character follows it (a trailing plain space is the one
+ * Chrome cannot keep, and is why it wrote the nbsp).
+ */
+const typedNbspKey = new PluginKey<number[]>('typed-nbsp');
+
+function typedNbspInsertions(tr: Transaction): number[] {
+  const ui = tr.getMeta('uiEvent') as string | undefined;
+  if (ui === 'paste' || ui === 'drop' || tr.getMeta('addToHistory') === false) return [];
+  const found: number[] = [];
+  tr.steps.forEach((step, i) => {
+    if (!(step instanceof ReplaceStep) || step.from !== step.to) return;
+    const text = step.slice.content.firstChild;
+    if (step.slice.content.childCount !== 1 || !text?.isText || text.text !== '\u00a0') return;
+    const pos = tr.mapping.slice(i + 1).map(step.from, 1);
+    const $pos = tr.doc.resolve(pos);
+    if (!$pos.parent.isTextblock) return;
+    const before = $pos.nodeBefore;
+    const after = tr.doc.resolve(pos + 1).nodeAfter;
+    const atom = (n: PMNode | null) => !!n && !n.isText && n.isInline;
+    // The nbsp is the whole of a fresh text run next to an atom, or ends a
+    // run right before one: the browser's artifact, not a run of glue.
+    if ((atom(before) || (before?.isText && !before.text!.endsWith('\u00a0') && atom(after))) && !after?.isText) found.push(pos);
+    else if (atom(before) && after?.isText && !after.text!.startsWith('\u00a0')) found.push(pos);
+  });
+  return found;
+}
+
 export function collapseSpaces(): Plugin {
-  return new Plugin({
+  return new Plugin<number[]>({
+    key: typedNbspKey,
+    state: {
+      init: () => [],
+      apply(tr, positions) {
+        const mapped = positions
+          .map((p) => tr.mapping.map(p, 1))
+          .filter((p) => p < tr.doc.content.size && tr.doc.textBetween(p, p + 1) === '\u00a0');
+        return [...new Set([...mapped, ...typedNbspInsertions(tr)])];
+      },
+    },
     appendTransaction(trs, _old, state) {
+      // Browser-written non-breaking spaces become plain spaces once a
+      // character follows them (see typedNbspKey).
+      const nbspSwaps: Array<[number, number, string, readonly Mark[]]> = [];
+      for (const p of typedNbspKey.getState(state) ?? []) {
+        const $p = state.doc.resolve(p);
+        const next = state.doc.textBetween(p + 1, Math.min(p + 2, $p.end()));
+        if (next && !/[\s\u00a0]/.test(next)) nbspSwaps.push([p, p + 1, ' ', $p.marks()]);
+      }
       // Only the edited textblocks can hold new collapsible runs — every
       // other block was normalized by the transaction that last wrote it.
       // Map each step's replacement range forward to the final document and
@@ -70,8 +126,8 @@ export function collapseSpaces(): Plugin {
           });
         });
       }
-      if (!ranges.length) return null;
-      const swaps: Array<[number, number, string, readonly Mark[]]> = [];
+      if (!ranges.length && !nbspSwaps.length) return null;
+      const swaps: Array<[number, number, string, readonly Mark[]]> = [...nbspSwaps];
       const scanBlock = (node: PMNode, pos: number) => {
         // Smart quotes are decided per paragraph, looking back over every
         // inline node (smart-quotes.ts mirrors Typst's quoter).
@@ -114,27 +170,6 @@ export function collapseSpaces(): Plugin {
             if (!m[0].includes(' ')) continue;
             const base = pos + 1 + offset + m.index;
             swaps.push([base, base + m[0].length, ' ', child.marks]);
-          }
-          // A space typed against an inline atom (a formula, a citation, a
-          // reference) arrives as a LONE nbsp: the browser writes it that
-          // way because, under the editor's `white-space: normal`, a plain
-          // space at the end of a text node is collapsible and Chrome eats
-          // it on the next keystroke. Left alone it exports as `~` and welds
-          // the formula to the next word. A single nbsp touching an atom is
-          // that artifact and becomes a plain space — once a character
-          // follows it, so the space is never the trailing one Chrome
-          // cannot keep. A run of two or more is still intentional glue.
-          const prevAtom = index > 0 && !node.child(index - 1).isText;
-          const nextNode = index + 1 < node.childCount ? node.child(index + 1) : null;
-          const nextAtom = !!nextNode && !nextNode.isText && nextNode.type.name !== 'footnote';
-          if (prevAtom && text[0] === '\u00a0' && text.length > 1 && !/[ \u00a0]/.test(text[1])) {
-            const base = pos + 1 + offset;
-            swaps.push([base, base + 1, ' ', child.marks]);
-          }
-          const last = text.length - 1;
-          if (nextAtom && last > 0 && text[last] === '\u00a0' && !/[ \u00a0]/.test(text[last - 1])) {
-            const base = pos + 1 + offset + last;
-            swaps.push([base, base + 1, ' ', child.marks]);
           }
           // Typst dash shorthands print differently than they type: the
           // document holds the printed glyphs (--- em, -- en — including

@@ -94,7 +94,9 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      a spec. What the check found instead was a document-wide bug: a space
      typed right after any inline formula was stored as a non-breaking
      space (Chrome's artifact under `white-space: normal`) and exported as
-     `~`, welding the formula to the next word. Fixed in the normalizer.
+     `~`, welding the formula to the next word. Fixed in the normalizer,
+     which recognizes the artifact by how it arrives (a typing transaction
+     inserting one nbsp) so a `~` written in the file stays glue.
    - ~~Per-selection cell fills~~ — done 2026-09-11: a Fill control cycles
      a preset (gray / yellow / blue — verified colours, not a picker) over
      the selected cells; exported as `table.cell(fill: …)`, read back, and
