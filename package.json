@@ -46,7 +46,7 @@
     "@myriaddreamin/typst-ts-renderer": "0.7.0",
     "@myriaddreamin/typst-ts-web-compiler": "0.7.0",
     "@myriaddreamin/typst.ts": "0.7.0",
-    "dompurify": "^3.4.13",
+    "dompurify": "^3.4.14",
     "hyphenated-en-us": "^1.2.0",
     "hypher": "^0.2.5",
     "katex": "^0.16.11",
