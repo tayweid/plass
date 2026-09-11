@@ -1256,9 +1256,14 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
       i++;
       continue;
     }
-    // Typst dash shorthands (unescaped): --- em, -- en, and a hyphen
-    // before a digit after whitespace prints as a minus sign. The
-    // document holds the printed characters.
+    // Typst text shorthands (unescaped): --- em, -- en, a hyphen before a
+    // digit after whitespace prints as a minus sign, and ... is an
+    // ellipsis. The document holds the printed characters.
+    if (ch === '.' && src.startsWith('...', i)) {
+      buf += '\u2026';
+      i += 3;
+      continue;
+    }
     if (ch === '-') {
       if (src.startsWith('---', i)) {
         buf += '\u2014';

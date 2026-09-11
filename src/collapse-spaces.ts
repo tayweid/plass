@@ -85,6 +85,19 @@ function typedNbspInsertions(tr: Transaction): number[] {
   return found;
 }
 
+/** Typst text shorthands (--- em, -- en — including the "–-" state
+ * mid-way through typing an em dash — a whitespace-preceded hyphen before
+ * a digit, and ...) and the glyphs Typst prints for them. The document
+ * holds the printed glyph: the importers apply this at read time and the
+ * normalizer as text is typed. */
+export const PRINTED_FORM_RE = /---|\u2013-|--|(?<=^|\s)-(?=\d)|\.\.\./g;
+export function printedGlyph(shorthand: string): string {
+  return shorthand === '--' ? '\u2013' : shorthand === '-' ? '\u2212' : shorthand === '...' ? '\u2026' : '\u2014';
+}
+export function printedForm(text: string): string {
+  return text.replace(PRINTED_FORM_RE, printedGlyph);
+}
+
 export function collapseSpaces(): Plugin {
   return new Plugin<number[]>({
     key: typedNbspKey,
@@ -171,15 +184,12 @@ export function collapseSpaces(): Plugin {
             const base = pos + 1 + offset + m.index;
             swaps.push([base, base + m[0].length, ' ', child.marks]);
           }
-          // Typst dash shorthands print differently than they type: the
-          // document holds the printed glyphs (--- em, -- en — including
-          // the "–-" state mid-way through typing an em dash — and a
-          // whitespace-preceded hyphen before a digit is a minus sign).
-          const dashRe = /---|\u2013-|--|(?<=^|\s)-(?=\d)/g;
+          // Typst text shorthands print differently than they type: the
+          // document holds the printed glyphs (PRINTED_FORM_RE).
+          const dashRe = new RegExp(PRINTED_FORM_RE.source, 'g');
           while ((m = dashRe.exec(text))) {
             const base = pos + 1 + offset + m.index;
-            const glyph = m[0] === '--' ? '\u2013' : m[0] === '-' ? '\u2212' : '\u2014';
-            swaps.push([base, base + m[0].length, glyph, child.marks]);
+            swaps.push([base, base + m[0].length, printedGlyph(m[0]), child.marks]);
           }
         });
       };

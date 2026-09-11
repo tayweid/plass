@@ -37,6 +37,10 @@ console.log('collapse-spaces:');
   const s2 = state(p('x -'));
   const minus = s2.apply(s2.tr.insertText('5', 4));
   check('space-hyphen-digit becomes minus', minus.doc.firstChild!.textContent === 'x −5', JSON.stringify(minus.doc.firstChild!.textContent));
+  // Three dots print as an ellipsis (Typst's `...` shorthand).
+  const s3 = state(p('wait..'));
+  const dots = s3.apply(s3.tr.insertText('.', 7));
+  check('... becomes an ellipsis', dots.doc.firstChild!.textContent === 'wait…', JSON.stringify(dots.doc.firstChild!.textContent));
 }
 
 {

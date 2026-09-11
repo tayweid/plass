@@ -532,6 +532,7 @@ function firstDiff(a: string, b: string): string {
   check('minus before digit imports', t('B = -1, C') === 'B = \u22121, C', JSON.stringify(t('B = -1, C')));
   check('hyphen mid-word stays', t('x-1 and 3-4') === 'x-1 and 3-4', JSON.stringify(t('x-1 and 3-4')));
   check('hyphen after paren stays', t('(-1)') === '(-1)', JSON.stringify(t('(-1)')));
+  check('... imports as an ellipsis', t('wait... go') === 'wait\u2026 go', JSON.stringify(t('wait... go')));
   const rt = docToTyp(typToDoc('B = -1 and a --- b').doc);
   check('printed glyphs export literally', rt.includes('B = \u22121 and a \u2014 b'), rt.slice(0, 140));
   const again = docToTyp(typToDoc(rt).doc);

@@ -30,6 +30,7 @@ import { DEFAULT_SETTINGS, type DocSettings } from './settings';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 import { trimSpaceBeforeMarker } from './collapse-spaces';
 import { smartenInline } from './smart-quotes';
+import { printedForm } from './collapse-spaces';
 
 export interface MdImport {
   doc: PMNode;
@@ -215,7 +216,10 @@ export function mdToDoc(src: string): MdImport {
   let bib: { name: string; content: string } | null = null;
   let sawBibNode = false;
 
-  function textWithRefs(text: string, marks: readonly Mark[]): PMNode[] {
+  function textWithRefs(raw: string, marks: readonly Mark[]): PMNode[] {
+    // Prose holds what Typst prints (doctrine): the dash and ellipsis
+    // shorthands become their glyphs at import, as the .typ importer does.
+    const text = printedForm(raw);
     const out: PMNode[] = [];
     const re = new RegExp(
       `${S}M(\\d+)${S}|` + String.raw`\[@([\w:.-]+)\]|(?<![\w@])@([A-Za-z][\w-]*:[\w-]+(?:\.[\w-]+)*)`,
