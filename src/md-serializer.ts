@@ -56,27 +56,50 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
 
   const inline = (node: PMNode): string => {
     let md = '';
+    // Text and inline math sharing strong/em/strike marks form one wrapped
+    // run (`**$2$ drinks**`), as the .typ exporter does; other atoms close
+    // the run.
+    let run = '';
+    let sig = '';
+    const signature = (child: PMNode) =>
+      ['strong', 'em', 'strike'].filter((n) => child.marks.some((m: Mark) => m.type.name === n)).join(',');
+    const flush = () => {
+      if (run) {
+        let t = run;
+        if (sig.includes('strong')) t = `**${t}**`;
+        if (sig.includes('em')) t = `*${t}*`;
+        if (sig.includes('strike')) t = `~~${t}~~`;
+        md += t;
+      }
+      run = '';
+    };
     node.forEach((child) => {
       if (child.isText && child.text) {
-        let t = '';
         const marks = child.marks;
         const has = (name: string) => marks.some((m: Mark) => m.type.name === name);
-        if (has('code')) t = '`' + child.text + '`';
-        else {
-          t = esc(child.text);
-          if (has('strong')) t = `**${t}**`;
-          if (has('em')) t = `*${t}*`;
-          if (has('strike')) t = `~~${t}~~`;
+        const s = signature(child);
+        if (s !== sig) {
+          flush();
+          sig = s;
         }
+        let t = has('code') ? '`' + child.text + '`' : esc(child.text);
         const link = marks.find((m: Mark) => m.type.name === 'link');
         if (link) t = `[${t}](${link.attrs.href as string})`;
-        md += t;
+        run += t;
         return;
       }
+      if (child.type.name === 'math_inline') {
+        const s = signature(child);
+        if (s !== sig) {
+          flush();
+          sig = s;
+        }
+        run += `$${child.attrs.src as string}$`;
+        return;
+      }
+      flush();
+      sig = '';
       switch (child.type.name) {
-        case 'math_inline':
-          md += `$${child.attrs.src as string}$`;
-          break;
         // Pandoc's raw-attribute syntax: standard markdown that other
         // tools understand as "Typst-only", and round-trips here.
         case 'typst_inline':
@@ -101,6 +124,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           md += esc(child.textContent);
       }
     });
+    flush();
     return md;
   };
 

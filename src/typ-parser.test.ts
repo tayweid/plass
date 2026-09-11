@@ -568,6 +568,45 @@ function firstDiff(a: string, b: string): string {
   check('solution round-trips byte-identically', t1 === t2, firstDiff(t1, t2));
 }
 
+// --- 19. inline math inside a mark keeps the span one run ---
+{
+  const rt = (src: string) => {
+    const out = docToTyp(typToDoc(src + '\n').doc);
+    return out.slice(out.lastIndexOf('\n\n', out.length - 3) + 2).trimEnd();
+  };
+  check('bold math exports inside the strong run', rt('Have *$2$ drinks* now.') === 'Have *#mi(`2`) drinks* now.', rt('Have *$2$ drinks* now.'));
+  check('bold math import carries the strong mark', (() => {
+    const p = typToDoc('Have *$2$ drinks* now.\n').doc.firstChild!;
+    let ok = false;
+    p.forEach((n) => { if (n.type.name === 'math_inline') ok = n.marks.some((m) => m.type.name === 'strong'); });
+    return ok;
+  })());
+  check('emphasis and strike runs keep math inside', rt('Mix _a $x$ b_ and #strike[c $y$ d].') === 'Mix _a #mi(`x`) b_ and #strike[c #mi(`y`) d].', rt('Mix _a $x$ b_ and #strike[c $y$ d].'));
+  check('a footnote still closes the run', rt('Bold *a#footnote[n] b* here.') === 'Bold *a*#footnote[n]* b* here.', rt('Bold *a#footnote[n] b* here.'));
+  const once = docToTyp(typToDoc('Have *$2$ drinks* now.\n').doc);
+  const twice = docToTyp(typToDoc(once).doc);
+  check('bold math round-trip is idempotent', once === twice, firstDiff(once, twice));
+}
+
+// --- 20. raw islands: a multi-line call survives a blank line inside it ---
+{
+  const src = 'Intro.\n\n#grid(\n  columns: 2,\n  [first para\n\n  second para],\n  [b],\n)\n\nAfter.\n';
+  const { doc, warnings } = typToDoc(src);
+  const kinds: string[] = [];
+  doc.forEach((n) => kinds.push(n.type.name + (n.attrs.params === 'typst-raw' ? ':raw' : '')));
+  check('grid with a blank line inside a cell is one island', JSON.stringify(kinds) === JSON.stringify(['paragraph', 'code_block:raw', 'paragraph']), JSON.stringify(kinds));
+  check('island keeps the whole call', doc.child(1).textContent.endsWith('[b],\n)'), JSON.stringify(doc.child(1).textContent));
+  check('one island warning only', warnings.length === 1, warnings.join('; '));
+  const out = docToTyp(doc);
+  const again = docToTyp(typToDoc(out).doc);
+  check('multi-line island round-trip is idempotent', out === again, firstDiff(out, again));
+  // An island that calls #mi itself carries the mitex import for its
+  // own preview compile.
+  const island = schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text('#grid(columns: 2, [a #mi(`x`)], [b])')]);
+  const solo = docToTyp(schema.nodes.doc.create(null, [island]));
+  check('island with #mi gets the mitex import', solo.includes('#import "@preview/mitex:0.2.5"'), solo.slice(0, 200));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

@@ -9,6 +9,8 @@ import katex from 'katex';
 import type { Node as PMNode } from 'prosemirror-model';
 import { TextSelection, type Command } from 'prosemirror-state';
 import type { EditorView, NodeView } from 'prosemirror-view';
+import type { EditorState } from 'prosemirror-state';
+import type { Mark } from 'prosemirror-model';
 import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
 import { wrapAligned } from './math-src';
@@ -37,10 +39,24 @@ function renderInto(el: HTMLElement, src: string, displayMode: boolean, macros: 
  * settles the width hold through it (see MathView.beginWidthHold). */
 const mathViews = new WeakMap<Node, MathView>();
 
+/** Inline math inside a strong span compiles as bold ink (see `inkKey`). */
+function isBoldMath(node: PMNode): boolean {
+  return node.type.name === 'math_inline' && node.marks.some((m) => m.type.name === 'strong');
+}
+
+/** The marks a new inline formula inherits from its insertion point: the
+ * ones that change Typst's print (strong widens the math) or the ink
+ * (strike). Code and link marks do not apply to a formula. */
+function inheritedMathMarks(state: EditorState): readonly Mark[] {
+  const marks = state.storedMarks ?? state.selection.$from.marks();
+  return marks.filter((m) => m.type.name === 'strong' || m.type.name === 'em' || m.type.name === 'strike');
+}
+
 export class MathView implements NodeView {
   dom: HTMLElement;
   private lastMacros: string;
   private display: boolean;
+  private bold: boolean;
   private inkApplied = '';
   private stopInk: () => void;
   /**
@@ -64,6 +80,7 @@ export class MathView implements NodeView {
   ) {
     const display = node.type.name === 'math_display';
     this.display = display;
+    this.bold = isBoldMath(node);
     this.dom = document.createElement(display ? 'div' : 'span');
     this.dom.className = display ? 'math-display' : 'math-inline';
     this.dom.setAttribute('data-math', node.attrs.src);
@@ -96,7 +113,7 @@ export class MathView implements NodeView {
   beginWidthHold() {
     const src = this.node.attrs.src as string;
     if (!src.trim()) return;
-    const key = inkKey(src, this.display, getSettings(this.view.state));
+    const key = inkKey(src, this.display, getSettings(this.view.state), this.bold);
     const ink = getInk(key);
     if (!ink) return;
     this.holdKey = key;
@@ -108,7 +125,7 @@ export class MathView implements NodeView {
    * ends at the next render with settled ink. */
   settleWidthHold() {
     if (this.holdKey === null) return;
-    const key = inkKey(this.node.attrs.src as string, this.display, getSettings(this.view.state));
+    const key = inkKey(this.node.attrs.src as string, this.display, getSettings(this.view.state), this.bold);
     if (getInk(key)) this.endWidthHold();
   }
 
@@ -126,7 +143,7 @@ export class MathView implements NodeView {
       renderInto(this.dom, src, this.display);
       return;
     }
-    const key = inkKey(src, this.display, settings);
+    const key = inkKey(src, this.display, settings, this.bold);
     const ink = getInk(key);
     if (ink) {
       this.endWidthHold();
@@ -155,7 +172,7 @@ export class MathView implements NodeView {
     // the surrounding line re-breaks once, when that compile settles.
     if (this.holdKey !== null) {
       if (getInk(this.holdKey) && !inkFailed(key)) {
-        requestInk(key, src, this.display, settings);
+        requestInk(key, src, this.display, settings, this.bold);
         return;
       }
       // New source failed to compile, or the held ink was evicted: abandon
@@ -168,21 +185,28 @@ export class MathView implements NodeView {
       this.dom.classList.remove('math-ink');
     }
     renderInto(this.dom, src, this.display, parseMathMacros(this.lastMacros));
-    requestInk(key, src, this.display, settings);
+    requestInk(key, src, this.display, settings, this.bold);
   }
 
   update(node: PMNode): boolean {
     if (node.type !== this.node.type) return false;
     const macros = getSettings(this.view.state).mathMacros;
+    const bold = isBoldMath(node);
     if (node.attrs.src !== this.node.attrs.src || macros !== this.lastMacros) {
       this.lastMacros = macros;
       this.node = node;
+      this.bold = bold;
       this.dom.setAttribute('data-math', node.attrs.src);
-      forgetInk(inkKey(node.attrs.src as string, this.display, getSettings(this.view.state)));
+      forgetInk(inkKey(node.attrs.src as string, this.display, getSettings(this.view.state), bold));
       this.render();
       return true;
     }
     this.node = node;
+    if (bold !== this.bold) {
+      // Bolded or unbolded in place: a different ink (and advance).
+      this.bold = bold;
+      this.render();
+    }
     return true;
   }
 
@@ -362,7 +386,7 @@ export function insertMath(display: boolean): Command {
     const type = display ? schema.nodes.math_display : schema.nodes.math_inline;
     const { from, to, empty } = state.selection;
     const src = empty ? '' : state.doc.textBetween(from, to, ' ');
-    const node = type.create({ src });
+    const node = type.create({ src }, null, display ? undefined : inheritedMathMarks(state));
     if (dispatch) dispatch(state.tr.replaceSelectionWith(node).scrollIntoView());
     return true;
   };
@@ -370,7 +394,11 @@ export function insertMath(display: boolean): Command {
 
 /** `$...$` becomes inline math as you type the closing dollar. */
 export const mathInlineRule = new InputRule(/\$([^$\s](?:[^$]*[^$\s])?)\$$/, (state, match, start, end) => {
-  return state.tr.replaceWith(start, end, schema.nodes.math_inline.create({ src: match[1] }));
+  const marks = state.doc
+    .resolve(start)
+    .marks()
+    .filter((m) => m.type.name === 'strong' || m.type.name === 'em' || m.type.name === 'strike');
+  return state.tr.replaceWith(start, end, schema.nodes.math_inline.create({ src: match[1] }, null, marks));
 });
 
 /** `$$` on an empty line becomes a display-math block. */

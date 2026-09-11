@@ -25,12 +25,18 @@ type Listener = () => void;
 
 const cache = new Map<string, MathInk | 'pending' | 'failed'>();
 const listeners = new Set<Listener>();
-let queue: Array<{ key: string; src: string; display: boolean; sizePt: number; macros: string }> = [];
+let queue: Array<{ key: string; src: string; display: boolean; sizePt: number; macros: string; bold: boolean }> = [];
 let timer = 0;
 let inflight = false;
 
-export function inkKey(src: string, display: boolean, s: DocSettings): string {
-  return `${display ? 'D' : 'I'}|${s.sizePt}|${s.mathMacros}|${src}`;
+/** `bold`: the inline formula sits inside a strong span, and the export
+ * prints it inside `*…*`. The ink compiles in that same context so the
+ * editor's advance equals the print whatever the compiler does with it:
+ * the pinned Typst leaves math under `strong` unchanged, newer releases
+ * embolden and widen it (~15% for `2x`). `emph`/`strike` never change
+ * math ink and need no key of their own. */
+export function inkKey(src: string, display: boolean, s: DocSettings, bold = false): string {
+  return `${display ? 'D' : bold ? 'B' : 'I'}|${s.sizePt}|${s.mathMacros}|${src}`;
 }
 
 /** Cached Typst ink for a formula, if it has arrived. */
@@ -45,10 +51,10 @@ export function inkFailed(key: string): boolean {
 }
 
 /** Schedule a compile for this formula (deduped; notifies on arrival). */
-export function requestInk(key: string, src: string, display: boolean, s: DocSettings) {
+export function requestInk(key: string, src: string, display: boolean, s: DocSettings, bold = false) {
   if (cache.has(key)) return;
   cache.set(key, 'pending');
-  queue.push({ key, src, display, sizePt: s.sizePt, macros: s.mathMacros });
+  queue.push({ key, src, display, sizePt: s.sizePt, macros: s.mathMacros, bold: bold && !display });
   clearTimeout(timer);
   timer = window.setTimeout(() => void flush(), 120);
 }
@@ -92,7 +98,7 @@ async function flush() {
 }
 
 async function compileOne(
-  item: { src: string; display: boolean; sizePt: number; macros: string },
+  item: { src: string; display: boolean; sizePt: number; macros: string; bold: boolean },
   compileSvg: (s: string) => Promise<string | null>,
   typstQuery: <T>(s: string, sel: string) => Promise<T[] | null>,
 ): Promise<MathInk | null> {
@@ -107,7 +113,8 @@ async function compileOne(
     '#import "@preview/mitex:0.2.5": mi, mitex\n\n' +
     (item.display
       ? `#mitex(\`\n${latex}\n\`)\n`
-      : `#mi(\`${latex}\`)#context metadata(here().position());#box()\n`);
+      : (item.bold ? `#strong[#mi(\`${latex}\`)]` : `#mi(\`${latex}\`)`) +
+        '#context metadata(here().position());#box()\n');
 
   const svg = await compileSvg(src);
   if (!svg) return null;

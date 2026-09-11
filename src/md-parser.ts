@@ -184,7 +184,12 @@ export function mdToDoc(src: string): MdImport {
     let m: RegExpExecArray | null;
     while ((m = re.exec(text))) {
       if (m.index > last) out.push(schema.text(text.slice(last, m.index), marks));
-      if (m[1] !== undefined) out.push(schema.nodes.math_inline.create({ src: inlineMath[+m[1]] }));
+      if (m[1] !== undefined) {
+        // Strong emboldens (and widens) Typst math, so the formula keeps
+        // the span's marks; a link or code mark does not apply to it.
+        const mathMarks = marks.filter((mk) => ['strong', 'em', 'strike'].includes(mk.type.name));
+        out.push(schema.nodes.math_inline.create({ src: inlineMath[+m[1]] }, null, mathMarks));
+      }
       else if (m[2] !== undefined) out.push(schema.nodes.citation.create({ key: m[2] }));
       else out.push(schema.nodes.eq_ref.create({ label: m[3] }));
       last = m.index + m[0].length;

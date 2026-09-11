@@ -2056,8 +2056,8 @@ class TypesetView {
     // ink cache holds Typst's own SVG for each formula — its text layer IS
     // that rendering. Absent ink (still compiling) falls back to the
     // unknown-atom heuristic.
-    const inkText = (src: string): string | undefined => {
-      const ink = getInk(inkKey(src, false, settings));
+    const inkText = (src: string, bold: boolean): string | undefined => {
+      const ink = getInk(inkKey(src, false, settings, bold));
       if (!ink) return undefined;
       const div = parseTypstSvg(ink.svg);
       const text = [...div.querySelectorAll('.tsel')]
@@ -2088,11 +2088,13 @@ class TypesetView {
     };
     return (child) => {
       switch (child.type.name) {
-        case 'math_inline':
-          return {
-            markup: '#mi(`' + expandMacrosWith(child.attrs.src as string, macros) + '`)',
-            text: inkText(child.attrs.src as string),
-          };
+        case 'math_inline': {
+          // Inside a strong span the formula compiles bold (wider) — the
+          // same context the exporter's `*…*` run and the ink use.
+          const bold = child.marks.some((m) => m.type.name === 'strong');
+          const mi = '#mi(`' + expandMacrosWith(child.attrs.src as string, macros) + '`)';
+          return { markup: bold ? `#strong[${mi}]` : mi, text: inkText(child.attrs.src as string, bold) };
+        }
         // Raw Typst passes through verbatim — it IS Typst markup. Its
         // printed text is unknown (usually none: rules, spacers), so the
         // matcher treats it as an unknown atom.

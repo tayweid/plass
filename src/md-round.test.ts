@@ -181,6 +181,18 @@ check('round-trip converges', md1 === md2);
 check('round-trip keeps doc shape', second.doc.childCount === doc.childCount,
   `${doc.childCount} vs ${second.doc.childCount}`);
 
+// Inline math inside a bold/italic span stays inside the span (Typst's
+// strong emboldens math, so the run must survive as one span).
+{
+  const md = 'Have **$2$ drinks** now, *and $x$ too*.\n';
+  const out = docToMd(mdToDoc(md).doc);
+  check('bold math keeps its span in Markdown', out.trim() === md.trim(), out);
+  const p = mdToDoc(md).doc.firstChild!;
+  let bold = false;
+  p.forEach((n) => { if (n.type.name === 'math_inline' && n.attrs.src === '2') bold = n.marks.some((m) => m.type.name === 'strong'); });
+  check('markdown import marks math inside bold', bold);
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

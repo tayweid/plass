@@ -217,32 +217,70 @@ function portableTableLabel(label: unknown): string {
   return ` <${value}>`;
 }
 
+/** Marks that wrap a run of inline content on export, outermost last. */
+const RUN_MARKS = ['strong', 'em', 'strike'] as const;
+
+function runSignature(child: PMNode): string {
+  const names = new Set(child.marks.map((m) => m.type.name));
+  return RUN_MARKS.filter((n) => names.has(n)).join(',');
+}
+
+function wrapRun(t: string, sig: string): string {
+  if (sig.includes('strong')) t = `*${t}*`;
+  if (sig.includes('em')) t = `_${t}_`;
+  if (sig.includes('strike')) t = `#strike[${t}]`;
+  return t;
+}
+
+/**
+ * Inline content -> Typst markup. Text and inline math sharing the same
+ * strong/em/strike marks form one run wrapped once (`*#mi(\`2\`) drinks*`):
+ * Typst's strong emboldens math, and the editor compiles such a formula's
+ * ink in that context, so the printed span must stay one span. Every other
+ * atom (raw Typst, refs, citations, footnotes, images) closes the run and
+ * is emitted bare — their print does not follow the surrounding marks.
+ */
 function inlineToTyp(node: PMNode, tableCell = false): string {
   let out = '';
+  let run = '';
+  let sig = '';
+  const flush = () => {
+    if (run) out += wrapRun(run, sig);
+    run = '';
+  };
   node.forEach((child) => {
     if (child.isText && child.text) {
-      const marks = new Set(child.marks.map((m) => m.type.name));
-      if (marks.has('code')) {
+      const s = runSignature(child);
+      if (s !== sig) {
+        flush();
+        sig = s;
+      }
+      if (child.marks.some((m) => m.type.name === 'code')) {
         // Typst has no variable-length inline raw fence. Use its string form
         // for certified table cells when a literal backtick would close `...`.
-        out += tableCell && child.text.includes('`')
+        run += tableCell && child.text.includes('`')
           ? `#raw(${JSON.stringify(child.text)}, block: false)`
           : '`' + child.text + '`';
-        return;
+      } else {
+        run += tableCell ? escapeTableCellText(child.text) : escapeTyp(child.text);
       }
-      let t = tableCell ? escapeTableCellText(child.text) : escapeTyp(child.text);
-      if (marks.has('strong')) t = `*${t}*`;
-      if (marks.has('em')) t = `_${t}_`;
-      if (marks.has('strike')) t = `#strike[${t}]`;
-      out += t;
-    } else if (child.type.name === 'typst_inline') {
+      return;
+    }
+    if (child.type.name === 'math_inline') {
+      const s = runSignature(child);
+      if (s !== sig) {
+        flush();
+        sig = s;
+      }
+      const source = expandMacros(child.attrs.src);
+      run += tableCell ? `#mi(raw(${JSON.stringify(source)}, block: false))` : `#mi(\`${source}\`)`;
+      return;
+    }
+    flush();
+    sig = '';
+    if (child.type.name === 'typst_inline') {
       // Raw Typst: the source IS the export.
       out += child.attrs.src;
-    } else if (child.type.name === 'math_inline') {
-      const source = expandMacros(child.attrs.src);
-      out += tableCell
-        ? `#mi(raw(${JSON.stringify(source)}, block: false))`
-        : `#mi(\`${source}\`)`;
     } else if (child.type.name === 'eq_ref') {
       // Equation refs render as "(1)" to match the editor (Typst's default
       // would be "Equation 1"); figure refs keep "Figure 1".
@@ -264,6 +302,7 @@ function inlineToTyp(node: PMNode, tableCell = false): string {
       out += `#image("${imageSrc(child.attrs.src)}")`;
     }
   });
+  flush();
   return out;
 }
 
@@ -643,10 +682,15 @@ function blockToTyp(node: PMNode, indent = ''): string {
   }
 }
 
+/** Whether the export needs the mitex import: a math node, or a raw island
+ * (block or inline) that calls `#mi(`/`#mitex(` itself — an island is
+ * compiled on its own for its live preview, and would fail without it. */
 function containsMath(doc: PMNode): boolean {
   let found = false;
   doc.descendants((n) => {
     if (n.type.name === 'math_inline' || n.type.name === 'math_display') found = true;
+    else if (n.type.name === 'code_block' && n.attrs.params === 'typst-raw' && /#mi(?:tex)?\(/.test(n.textContent)) found = true;
+    else if (n.type.name === 'typst_inline' && /#mi(?:tex)?\(/.test(n.attrs.src as string)) found = true;
     return !found;
   });
   return found;

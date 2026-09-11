@@ -675,7 +675,19 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
 
     // unknown directive / scripting: preserve verbatim as a raw island
     if (t.startsWith('#')) {
-      const body: string[] = [];
+      const body: string[] = [lines[i++]];
+      // A call whose parentheses span lines (#grid(…) with a blank line
+      // inside a cell) is one island to its closing paren; the blank-line
+      // rule applies after that. `matchParen` skips strings, comments,
+      // and bracketed content.
+      const callOpen = /^#[\w.-]+\(/.test(t) ? body[0].indexOf('(') : -1;
+      if (callOpen >= 0) {
+        let whole = body[0];
+        while (i < n && matchParen(whole, callOpen) < 0) {
+          whole += '\n' + lines[i];
+          body.push(lines[i++]);
+        }
+      }
       while (i < n && lines[i].trim() !== '') body.push(lines[i++]);
       warnings.push(`kept as raw Typst: ${body[0].trim().slice(0, 48)}`);
       out.push(schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text(body.join('\n'))]));
@@ -1160,6 +1172,11 @@ function typstExprLength(src: string, start: number): number {
   return i - start;
 }
 
+// Inline math inside `*…*`/`_…_`/`#strike[…]` carries those marks (Typst
+// emboldens math under strong, so the span must stay one run on export —
+// `*#mi(\`2\`) drinks*`, never `#mi(\`2\`)* drinks*`). Other atoms (raw
+// Typst, citations, footnote markers) stay unmarked: their print does not
+// follow the span, and the exporter closes the run around them as before.
 function scanInline(src: string, marks: Mark[], out: PMNode[]) {
   let i = 0;
   let buf = '';
@@ -1246,7 +1263,7 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
     const safeMath = parseRawMathCall(src, i);
     if (safeMath) {
       flush();
-      out.push(schema.nodes.math_inline.create({ src: safeMath.src }));
+      out.push(schema.nodes.math_inline.create({ src: safeMath.src }, null, marks));
       i = safeMath.end;
       continue;
     }
@@ -1255,7 +1272,7 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
       const end = src.indexOf('`)', i + 5);
       if (end >= 0) {
         flush();
-        out.push(schema.nodes.math_inline.create({ src: src.slice(i + 5, end) }));
+        out.push(schema.nodes.math_inline.create({ src: src.slice(i + 5, end) }, null, marks));
         i = end + 2;
         continue;
       }
@@ -1331,7 +1348,7 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
       const end = findClose(src, i + 1, '$');
       if (end > i + 1) {
         flush();
-        out.push(schema.nodes.math_inline.create({ src: src.slice(i + 1, end) }));
+        out.push(schema.nodes.math_inline.create({ src: src.slice(i + 1, end) }, null, marks));
         i = end + 1;
         continue;
       }
