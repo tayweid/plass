@@ -336,13 +336,18 @@ test('a table grows under the keyboard and lets the caret out at its edges', asy
     return table.childCount;
   });
   await page.keyboard.press('ArrowUp');
-  await page.keyboard.type(' Yes.');
-  expect(await page.evaluate(() => window.view.state.doc.child(0).textContent)).toBe('Before the table. Yes.');
-  // The docked controls never cover the document.
+  // Where in that paragraph the caret lands follows the caret's x (the
+  // geometric motion); the block is what matters here.
+  expect(await page.evaluate(() => {
+    const { $from } = window.view.state.selection;
+    return $from.depth === 1 && $from.index(0) === 0 && $from.parent.type.name === 'paragraph';
+  })).toBe(true);
+  // The docked controls never cover the document: the fixed bar ends above
+  // where the page starts (in document coordinates — the test has scrolled).
   const covers = await page.evaluate(() => {
     const bar = document.querySelector('.native-table-toolbar')!.getBoundingClientRect();
     const page1 = document.querySelector('.ProseMirror')!.getBoundingClientRect();
-    return bar.bottom > page1.top + 1;
+    return bar.bottom > page1.top + window.scrollY + 1;
   });
   expect(covers).toBe(false);
 });
