@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test';
+import { settleLocal } from './settle';
 
 declare global {
   interface Window {
@@ -6,6 +7,7 @@ declare global {
     __pagLog: () => string[];
     __pagCount: () => number;
     __pageOracle: unknown;
+    __audit: () => Promise<{ pages: { agree: boolean; typst: Array<{ unit: string; line: number }> } } | null>;
     __nativeTableProofGeometry: () => Promise<{ widthPt: number; heightPt: number }>;
     __tableHotPathProbe?: {
       afterFirstPaint: boolean;
@@ -727,19 +729,11 @@ test('focused caption and label fields stay synchronized through undo and redo',
   expect(await page.evaluate(() => window.view.state.doc.child(0).attrs.label)).toBe('tab:undoable');
 });
 
-test('tables keep exact pagination when they fit and break between rows when they cross a page', async ({ page }) => {
+test('tables stay whole when they fit and break between rows when they cross a page', async ({ page }) => {
   test.setTimeout(90_000);
 
   const fitLogStart = await installPaginationTable(page, 4);
-  await expect
-    .poll(
-      () => page.evaluate((start) => {
-        const fresh = Math.min(window.__pagCount() - start, 40);
-        return fresh > 0 && window.__pagLog().slice(-fresh).some((entry) => entry.startsWith('exact['));
-      }, fitLogStart),
-      { timeout: 30_000, intervals: [500, 1_000, 2_000] },
-    )
-    .toBe(true);
+  await settleLocal(page, fitLogStart);
   expect(await page.evaluate(() => document.querySelectorAll('.ProseMirror table tr.ts-table-break').length)).toBe(0);
 
   const consoleIssues: string[] = [];
@@ -751,27 +745,17 @@ test('tables keep exact pagination when they fit and break between rows when the
   });
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
-  // Keep the same app instance and exact basis from the fitting table. A
-  // later mid-table oracle answer (PAGE-PORT.md Phase 7) is installed as a
-  // row-boundary widget inside the one editable table node — the retained
-  // basis from the fitting table must neither block nor resurrect it.
+  // Keep the same app instance and basis from the fitting table. The
+  // crossing table is broken between rows by the local paginator
+  // (PAGE-PORT.md Phase 7) as a row-boundary widget inside the one
+  // editable table node — the retained basis from the fitting table must
+  // neither block nor resurrect it.
   const crossingLogStart = await installPaginationTable(page, 45, false);
-  await expect
-    .poll(
-      () => page.evaluate(() => {
-        const oracle = window.__pageOracle as { results?: Map<string, { status: string; pageStarts?: Array<{ unit: string; line: number }> }> };
-        return [...(oracle.results?.values() ?? [])].some(
-          (entry) => entry.status === 'ok' && entry.pageStarts?.some((start) => start.unit === 'table' && start.line > 0),
-        );
-      }),
-      { timeout: 45_000, intervals: [500, 1_000, 2_000] },
-    )
-    .toBe(true);
   await expect
     .poll(
       () => page.evaluate((start) => {
         if (window.__pagCount() <= start) return false;
-        return window.__pagLog().at(-1)?.startsWith('exact[') ?? false;
+        return window.__pagLog().at(-1)?.startsWith('local[') ?? false;
       }, crossingLogStart),
       { timeout: 15_000, intervals: [250, 500, 1_000] },
     )
@@ -797,7 +781,7 @@ test('tables keep exact pagination when they fit and break between rows when the
         const after = read();
         return (
           JSON.stringify(before) === JSON.stringify(after) &&
-          after.entry.startsWith('exact[') &&
+          after.entry.startsWith('local[') &&
           after.tables === 1 &&
           after.breaks === 1
         );
@@ -807,4 +791,10 @@ test('tables keep exact pagination when they fit and break between rows when the
     .toBe(true);
   expect(pageErrors).toEqual([]);
   expect(consoleIssues).toEqual([]);
+  // Typst breaks the same table between rows too. Whether it is the SAME
+  // row is the port audit's question (tests/port-audit.spec.ts carries this
+  // table as a fixture); the verification suite checks the editor's own
+  // behaviour.
+  const report = await page.evaluate(() => window.__audit());
+  expect(report?.pages.typst.some((start) => start.unit === 'table' && start.line > 0)).toBe(true);
 });

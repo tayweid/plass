@@ -1,4 +1,5 @@
 import { expect, test, type Page } from 'playwright/test';
+import { settleLocal } from './settle';
 
 interface SuffixPaginationStats {
   attempts: number;
@@ -43,20 +44,7 @@ function prefixSignature(signature: string, beforePos: number): string[] {
  * long soak would wait forever on entries that were pushed (and shifted)
  * just fine. The monotone push counter says how many tail entries are new. */
 async function waitForTerminalPagination(page: Page, logStart: number) {
-  await expect
-    .poll(
-      () =>
-        page.evaluate((start) => {
-          const fresh = window.__pagCount() - start;
-          if (fresh <= 0) return false;
-          return window
-            .__pagLog()
-            .slice(-Math.min(fresh, 40))
-            .some((entry) => entry.startsWith('exact[') || entry.includes('[entry=fail'));
-        }, logStart),
-      { timeout: 30_000, intervals: [200, 400, 800] },
-    )
-    .toBe(true);
+  await settleLocal(page, logStart);
 }
 
 async function latestPagination(page: Page) {
@@ -76,21 +64,6 @@ test('a late edit in a 40–50-page document recomputes only a stable suffix', a
   test.setTimeout(60_000);
   await page.goto('/?new=1');
 
-  // The suffix planner and comparator are FALLBACK-engine machinery: when the
-  // page oracle answers, a late edit paginates on the exact/held path and the
-  // shadow comparison never runs. Pin the oracle to fail so every pass runs
-  // the fallback engine deterministically.
-  await page.evaluate(() => {
-    const oracle = window.__pageOracle as unknown as {
-      clear: () => void;
-      request: (sig: string) => void;
-      results: Map<string, { status: string; reason: string }>;
-    };
-    oracle.clear();
-    oracle.request = (sig: string) => {
-      oracle.results.set(sig, { status: 'fail', reason: 'test: page oracle disabled' });
-    };
-  });
 
   const initialLogLength = await page.evaluate(() => window.__pagCount());
   await page.evaluate(

@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test';
+import { settleLocal } from './settle';
 
 // SOURCE-VIEW.md: the source view is a second editor for the same rails.
 // Entering serializes the document in its own format, leaving parses the
@@ -226,7 +227,7 @@ test('the toolbar button and the shortcut toggle from either view', async ({ pag
   await expect(btn).toHaveAttribute('aria-pressed', 'false');
 });
 
-test('the layout sleeps in the source and wakes into exact pagination', async ({ page }) => {
+test('the layout sleeps in the source and wakes into its pagination', async ({ page }) => {
   await boot(page);
   const sentence =
     'The committee reconvened after lunch to weigh the revised proposal against the earlier draft. ';
@@ -240,12 +241,7 @@ test('the layout sleeps in the source and wakes into exact pagination', async ({
     const doc = schema.nodes.doc.create(state.doc.attrs, blocks);
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
   }, sentence);
-  await expect
-    .poll(() => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('exact[') ?? false), {
-      timeout: 30_000,
-      intervals: [250, 500, 1_000],
-    })
-    .toBe(true);
+  await settleLocal(page);
   await expect
     .poll(() => page.evaluate(async () => {
       const s = await window.__compilerLifecycleStats();
@@ -272,12 +268,7 @@ test('the layout sleeps in the source and wakes into exact pagination', async ({
 
   await exit(page);
   expect(await page.evaluate(() => window.view.state.doc.lastChild!.textContent)).toBe('Typed while the page view slept.');
-  await expect
-    .poll(
-      () => page.evaluate((above) => window.__pagCount() > above && (window.__pagLog().at(-1)?.startsWith('exact[') ?? false), before.passes),
-      { timeout: 30_000, intervals: [250, 500, 1_000] },
-    )
-    .toBe(true);
+  await settleLocal(page, before.passes);
   expect((await page.evaluate(() => window.__layoutDispatchStats())).lines).toBeGreaterThan(0);
 });
 

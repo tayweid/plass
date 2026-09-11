@@ -1,5 +1,26 @@
 # PAGE-PORT: porting Typst's page breaker
 
+## Status (2026-09-11)
+
+- **One renderer.** The whole-document compile no longer runs while
+  editing and its page starts are never installed; the local paginator is
+  the authority and Typst is the printer. The parity telemetry
+  (`__pageParityStats`, capture points (a)/(b)) is replaced by the port
+  audit: `npm run audit` compiles a document once and reports, block by
+  block, where the port's line breaks differ from Typst's and the first
+  page start that differs (`src/layout/port-audit.ts`, `auditSvg` in
+  page-oracle.ts, tests/port-audit.spec.ts; the strict fixtures run in CI
+  as a non-blocking step). Why: after every pause the compile's 2.7 MB SVG
+  was sanitized and laid out on the main thread — 550–750 ms of blocked
+  paint on a 33-page file — and its answers hid the local paginator's own
+  bugs. The audit's first run found them; they are listed in ROADMAP.md
+  and are this document's open phases in practice: a page ending inside a
+  paragraph fits one line more locally than in Typst (prose fixture:
+  11-line paragraph, local 3 lines / Typst 2, the third line's box 11 px
+  past the content bottom); list items break differently from the port
+  (measure or hyphenation); a 45-row table breaks one row earlier locally
+  (row 32 vs 33); a rowspan row Typst splits is declared, not mirrored.
+
 ## Status (2026-09-02)
 
 - Phase 3 (sticky blocks): **landed** (this commit). The sticky-heading

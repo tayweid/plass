@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test';
+import { settleLocal } from './settle';
 
 declare global {
   interface Window {
@@ -55,14 +56,8 @@ test('inline math inside a bold span compiles bold ink and stays exact', async (
   // Never narrower than the regular ink; equal under the pinned compiler.
   expect(bold.width).toBeGreaterThanOrEqual(regular.width - 0.01);
 
-  // The compiled page oracle still takes authority with the bold formula
-  // in the flow (its fragment markup and the export agree on the context).
-  await expect
-    .poll(() => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('exact[') ?? false), {
-      timeout: 30_000,
-      intervals: [500, 1_000, 2_000],
-    })
-    .toBe(true);
+  // Pagination settles with the bold formula in the flow.
+  await settleLocal(page);
 
   // The exporter keeps the span one run around the formula.
   const typ = await page.evaluate(async () => {

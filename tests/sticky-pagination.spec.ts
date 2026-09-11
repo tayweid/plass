@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test';
+import { settleLocal as waitSettled } from './settle';
 
 // PAGE-PORT Phase 3: sticky blocks (Typst's `Distributor::frame` snapshot /
 // `finalize` restore, vendor/typst typst-layout/src/flow/distribute.rs
@@ -8,26 +9,35 @@ import { expect, test } from 'playwright/test';
 // migrate (the `may_progress` guard, distribute.rs:48-63).
 //
 // Every scenario drives the app's own instances (`window.view`) and reads
-// the local paginator's verdict through the DEV parity telemetry: on each
-// settled exact publication the local pass is diffed against Typst's page
-// starts (`__pageParityStats` — a fallback-window prediction when one was
-// captured, plus one shadow prediction per publication). Zero disagreements
-// means the local rule reproduced Typst's decision exactly; the exact log
-// entry then tells us WHERE both of them broke the page.
+// the local paginator's verdict through the port audit: after each settled
+// local pass the document is compiled once and the local page starts are
+// diffed against Typst's (`__audit`, never installed). Agreement means the
+// local rule reproduced Typst's decision exactly; the pagination log entry
+// then tells us WHERE both of them broke the page.
 
-interface ParityStats {
-  predictions: number;
-  agreements: number;
-  disagreements: number;
-  byCause: Record<string, number>;
-  last: { firstDiffPage: number; cause: string } | null;
+interface StartDiff {
+  firstDiffPage: number;
+  cause: string;
+  localStart: { pos: number; unit: string } | null;
+  exactStart: { pos: number; unit: string } | null;
+}
+
+interface Settled {
+  /** Spacer positions of the settled local pagination. */
+  starts: number[];
+  /** `__pagCount()` after it, for the next wait. */
+  count: number;
+  /** The port audit's page comparison against Typst for this revision. */
+  agree: boolean;
+  diff: StartDiff | null;
 }
 
 declare global {
   interface Window {
     view: import('prosemirror-view').EditorView;
     __pagLog: () => string[];
-    __pageParityStats: (reset?: boolean) => ParityStats;
+    __pagCount: () => number;
+    __audit: () => Promise<{ pages: { agree: boolean; firstDiff: StartDiff | null } } | null>;
   }
 }
 
@@ -36,25 +46,19 @@ type Page = import('playwright/test').Page;
 const SENTENCE =
   'The committee reconvened after lunch to weigh the revised proposal against the earlier draft. ';
 
-/** Wait for the compiled page oracle to take authority for the current
- * document AND for its parity comparison(s) to land, then return the exact
- * publication's spacer positions with the cumulative stats. */
-async function settleExact(page: Page, predictionsBefore: number): Promise<{ starts: number[]; stats: ParityStats }> {
-  await expect
-    .poll(
-      () =>
-        page.evaluate((before) => {
-          const log = window.__pagLog();
-          return window.__pageParityStats().predictions > before && (log.at(-1)?.startsWith('exact[') ?? false);
-        }, predictionsBefore),
-      { timeout: 30_000, intervals: [250, 500, 1_000] },
-    )
-    .toBe(true);
-  return page.evaluate(() => {
+/** Wait for the local pagination of the current revision to settle, then
+ * measure it against Typst with the port audit (one compile, never
+ * installed) and return the spacer positions with the comparison. */
+async function settleLocal(page: Page, countBefore: number): Promise<Settled> {
+  await waitSettled(page, countBefore);
+  return page.evaluate(async () => {
     const entry = window.__pagLog().at(-1)!;
     const list = entry.slice(entry.indexOf(']:') + 2);
     const starts = list ? list.split(',').map((s) => Number(s.split('@')[0])) : [];
-    return { starts, stats: window.__pageParityStats() };
+    const count = window.__pagCount();
+    const report = await window.__audit();
+    if (!report) throw new Error('port audit: Typst compile failed');
+    return { starts, count, agree: report.pages.agree, diff: report.pages.firstDiff };
   });
 }
 
@@ -72,12 +76,7 @@ async function blockPositions(page: Page): Promise<number[]> {
  * widow/orphan and page-top spacing residuals PAGE-PORT.md's Status block
  * tracks under Phases 2 and 6. Anything touching the heading run or its
  * paragraph, or classified `sticky`, fails the test. */
-function residualOutsideSite(stats: ParityStats, fillerPos: number): boolean {
-  const last = stats.last as unknown as {
-    cause: string;
-    localStart: { pos: number; unit: string } | null;
-    exactStart: { pos: number; unit: string } | null;
-  } | null;
+function residualOutsideSite(last: StartDiff | null, fillerPos: number): boolean {
   if (!last || last.cause === 'sticky') return false;
   const inFiller = (e: { pos: number; unit: string } | null) => !!e && e.pos === fillerPos && e.unit === 'line';
   return inFiller(last.localStart) || inFiller(last.exactStart);
@@ -115,25 +114,24 @@ test('a heading that would be last on a page migrates with its paragraph', async
       p(sentence.repeat(8).trim()),
     ]);
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
-    window.__pageParityStats(true);
   }, SENTENCE);
-  let { stats } = await settleExact(page, 0);
+  let settled = await settleLocal(page, 0);
+  let stickyDiffs = 0;
 
   let agreedMigrations = 0;
   for (let step = 0; step < 12; step++) {
     await growFiller(page);
-    const before = stats.disagreements;
-    const settled = await settleExact(page, stats.predictions);
-    stats = settled.stats;
+    settled = await settleLocal(page, settled.count);
     const { starts } = settled;
+    if (settled.diff?.cause === 'sticky') stickyDiffs++;
     const [, fillerPos, h2Pos, bodyPos] = await blockPositions(page);
 
     // The heading never ends a page: no page starts at the body paragraph's
     // block start or at its first line.
     expect(starts, `step ${step}: page starts ${starts}`).not.toContain(bodyPos);
     expect(starts, `step ${step}: page starts ${starts}`).not.toContain(bodyPos + 1);
-    if (stats.disagreements > before) {
-      expect(residualOutsideSite(stats, fillerPos), `step ${step}: ${JSON.stringify(stats.last)}`).toBe(true);
+    if (!settled.agree) {
+      expect(residualOutsideSite(settled.diff, fillerPos), `step ${step}: ${JSON.stringify(settled.diff)}`).toBe(true);
     } else if (starts.includes(h2Pos)) {
       agreedMigrations++;
     }
@@ -141,7 +139,7 @@ test('a heading that would be last on a page migrates with its paragraph', async
   // At least one step pushed the heading onto the next page, locally and
   // in Typst alike; no disagreement was ever a sticky one.
   expect(agreedMigrations).toBeGreaterThan(0);
-  expect(stats.byCause.sticky ?? 0).toBe(0);
+  expect(stickyDiffs).toBe(0);
 });
 
 // Two consecutive headings are ONE sticky run: the checkpoint sits at the
@@ -164,30 +162,29 @@ test('two consecutive headings migrate together', async ({ page }) => {
       p(sentence.repeat(8).trim()),
     ]);
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
-    window.__pageParityStats(true);
   }, SENTENCE);
-  let { stats } = await settleExact(page, 0);
+  let settled = await settleLocal(page, 0);
+  let stickyDiffs = 0;
 
   let agreedMigrations = 0;
   for (let step = 0; step < 14; step++) {
     await growFiller(page);
-    const before = stats.disagreements;
-    const settled = await settleExact(page, stats.predictions);
-    stats = settled.stats;
+    settled = await settleLocal(page, settled.count);
     const { starts } = settled;
+    if (settled.diff?.cause === 'sticky') stickyDiffs++;
     const [, fillerPos, h1Pos, h2Pos, bodyPos] = await blockPositions(page);
 
     expect(starts, `step ${step}: page starts ${starts}`).not.toContain(h2Pos);
     expect(starts, `step ${step}: page starts ${starts}`).not.toContain(bodyPos);
     expect(starts, `step ${step}: page starts ${starts}`).not.toContain(bodyPos + 1);
-    if (stats.disagreements > before) {
-      expect(residualOutsideSite(stats, fillerPos), `step ${step}: ${JSON.stringify(stats.last)}`).toBe(true);
+    if (!settled.agree) {
+      expect(residualOutsideSite(settled.diff, fillerPos), `step ${step}: ${JSON.stringify(settled.diff)}`).toBe(true);
     } else if (starts.includes(h1Pos)) {
       agreedMigrations++;
     }
   }
   expect(agreedMigrations).toBeGreaterThan(0);
-  expect(stats.byCause.sticky ?? 0).toBe(0);
+  expect(stickyDiffs).toBe(0);
 });
 
 // A heading run that already starts a page cannot migrate: `stickable` is
@@ -263,9 +260,8 @@ test('a heading run already at a page top does not migrate', async ({ page }) =>
   await page.evaluate(() => {
     const { state } = window.view;
     window.view.dispatch(state.tr.insertText(' Done.', state.doc.content.size - 1));
-    window.__pageParityStats(true);
   });
-  const { starts, stats } = await settleExact(page, 0);
+  const { starts, agree, diff } = await settleLocal(page, 0);
   const [, , , h1Pos, , keepPos] = await blockPositions(page);
 
   // Page 2 starts at the run (the explicit break); page 3 at the keep block
@@ -273,5 +269,5 @@ test('a heading run already at a page top does not migrate', async ({ page }) =>
   // into a blank page (that would repeat the run's position and add a page).
   expect(starts).toEqual([h1Pos, keepPos]);
   expect(await page.locator('.page-box').count()).toBe(3);
-  expect(stats.disagreements, JSON.stringify(stats.last)).toBe(0);
+  expect(agree, JSON.stringify(diff)).toBe(true);
 });

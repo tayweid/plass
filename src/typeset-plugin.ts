@@ -39,9 +39,9 @@ import { buildSpec, type TypstOracle, type AtomResolver, type SpecKind } from '.
 import { portBreaks } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
 import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdict } from './environment-check';
-import type { PageOracle, PageOracleEntry } from './layout/page-oracle';
+import type { PageOracle } from './layout/page-oracle';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
-import { docToTyp, escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
+import { escapeTyp, expandMacrosWith, pageTopAdjustEm } from './typ-serializer';
 import {
   containerPageTopDropEm,
   footnoteEmptyFrameAction,
@@ -129,13 +129,8 @@ import {
   ForcedLayoutAuditor,
   type ForcedLayoutAuditReport,
 } from './layout/forced-layout-audit';
-import {
-  diffPageStarts,
-  emptyPageParityStats,
-  recordParityDiff,
-  type PageParityStats,
-  type PageStartEntry,
-} from './layout/page-parity';
+import type { PageStartEntry } from './layout/page-parity';
+import { buildPortAudit, type PortAuditReport } from './layout/port-audit';
 
 /** Islands never flex: nothing in the document takes a line's slack. */
 const noFill = () => false;
@@ -462,7 +457,6 @@ export function typesetPlugin(
 
 class TypesetView {
   private cache = new BlockLayoutCache();
-  private docSig = new WeakMap<PMNode, string>();
   private measurer: Measurer;
   private oracles: OracleCoordinator;
   private scheduler!: LayoutScheduler;
@@ -474,10 +468,9 @@ class TypesetView {
    *  run (already O(document)) computes it only when it needs the compare. */
   private lastDecoSigSource: DecorationSet | null = null;
   private lastLiveDoc: PMNode | null = null;
-  private lastPageCount = 0;
   private pendingPageMarks: DecorationSet | null = null;
   /** Which source produced the last pagination (diagnostics). */
-  private pagPath: 'exact' | 'held' | 'fallback' = 'exact';
+  private pagPath: 'local' = 'local';
   private pagLog: string[] = [];
   /**
    * Startup probe (environment-check.ts): the browser's width for a prose
@@ -521,19 +514,6 @@ class TypesetView {
   private paginationSnapshotStats = { captures: 0, spacerScans: 0, heightQueries: 0 };
   private suffixPaginationStats = emptySuffixPaginationStats();
   private suffixControl = new SuffixPaginationControl();
-  /** PAGE-PORT.md Phase 0 (DEV only): parity telemetry between the local
-   * fallback paginator's page starts and Typst's exact answer for the same
-   * document revision. Never read outside `__pageParityStats`; every write
-   * site is gated on `import.meta.env.DEV` so this costs nothing in
-   * production. */
-  private pageParityStats = emptyPageParityStats();
-  /** The most recent local fallback prediction awaiting an exact answer for
-   * the same doc signature (capture point (a): a fallback window). */
-  private lastLocalPagePrediction: { sig: string; entries: PageStartEntry[] } | null = null;
-  /** Doc signature of the last exact publication a shadow prediction ran
-   * against — throttles capture point (b) to at most one shadow run per
-   * settled exact publication. */
-  private lastParityShadowSig: string | null = null;
   /** Monotone pagination-pass id: any later pass invalidates a pending
    * verification ticket (the installed geometry it describes is gone). */
   private paginationPassCounter = 0;
@@ -625,7 +605,6 @@ class TypesetView {
           heightQueries: number;
         };
         __suffixPaginationStats?: (reset?: boolean) => SuffixPaginationStatsReport;
-        __pageParityStats?: (reset?: boolean) => PageParityStats;
         __suffixPaginationControl?: (opts?: {
           mode?: SuffixPaginationMode;
           revive?: boolean;
@@ -640,6 +619,7 @@ class TypesetView {
       };
       w.__oracle = this.oracles.paragraph;
       w.__pageOracle = this.oracles.page;
+      (w as unknown as { __audit: () => Promise<PortAuditReport | null> }).__audit = () => this.audit();
       (w as unknown as { __comparePort: () => unknown }).__comparePort = () => {
         const state = this.view.state;
         const settings = getSettings(state);
@@ -778,20 +758,6 @@ class TypesetView {
           // Restart the deterministic verification sample with the stats
           // window, so its first install is verified. Kill state persists.
           this.suffixControl.resetSampling();
-        }
-        return stats;
-      };
-      w.__pageParityStats = (reset = false) => {
-        const stats: PageParityStats = {
-          ...this.pageParityStats,
-          byCause: { ...this.pageParityStats.byCause },
-          skipped: { ...this.pageParityStats.skipped },
-          last: this.pageParityStats.last ? { ...this.pageParityStats.last } : null,
-        };
-        if (reset) {
-          this.pageParityStats = emptyPageParityStats();
-          this.lastLocalPagePrediction = null;
-          this.lastParityShadowSig = null;
         }
         return stats;
       };
@@ -2209,17 +2175,12 @@ class TypesetView {
       if (node.type.name === 'paragraph' && node.attrs.align) return;
       const atomWidth = makeAtomWidth(this.view, settings, pos);
 
-      // Ask the Typst oracle for this block's authoritative breaks.
+      // One renderer: nothing compiles while editing, so no compiled breaks
+      // ever arrive here and the port lays out every block. The oracle
+      // lookup stays only until the compiled-authority plumbing is removed.
       const spec = resolveAtom ? buildSpec(node, resolveAtom) : null;
       const okey = spec ? blockOracleKey(settingsSig, keyTag, measure, spec.key) : null;
       const oentry = okey ? this.oracles.paragraph.get(okey) : undefined;
-      if (spec && okey && !oentry) {
-        const indented = skind.kind === 'body' && !!extra.firstLineIndent;
-        // The block identity lets a newer spec for the same block supersede
-        // an older in-flight or queued compile (positions shifting between
-        // passes only cost a wasted-compile worst case, never correctness).
-        this.oracles.paragraph.request(okey, spec, measure, settings, skind, indented, `${skind.kind}@${pos}`);
-      }
       const ostatus = oentry?.status ?? 'none';
 
       const indent = extra.firstLineIndent ?? 0;
@@ -2478,72 +2439,36 @@ class TypesetView {
     });
   }
 
-  /** PAGE-PORT.md Phase 0 (DEV only), capture point (a): remember the local
-   * fallback pass's page starts for the document revision it ran against, so
-   * that if an exact answer for the SAME revision later arrives, it can be
-   * diffed against what the local paginator predicted while Typst was still
-   * compiling. A no-op outside DEV and whenever the document has no oracle
-   * signature yet (nothing will ever arrive to compare against). */
-  private recordLocalPagePrediction(
-    anchors: Array<{ pos: number; page: number; kind: Spacer['kind'] }>,
-  ): void {
-    if (!import.meta.env.DEV) return;
-    const sig = this.docSig.get(this.view.state.doc);
-    if (!sig) return;
-    this.lastLocalPagePrediction = { sig, entries: this.anchorsToPageStartEntries(anchors) };
-  }
-
-  /** PAGE-PORT.md Phase 0 (DEV only): fold one local-vs-exact page-start
-   * comparison into `pageParityStats`, given entries already normalized to
-   * the oracle's `{pos, line, unit}` vocabulary. */
-  private recordPageParity(local: PageStartEntry[], exact: PageStartEntry[]): void {
-    const diff = diffPageStarts(local, exact, { doc: this.view.state.doc });
-    recordParityDiff(this.pageParityStats, diff);
-  }
-
-  /** PAGE-PORT.md Phase 0 (DEV only): called whenever a fresh Typst exact
-   * page answer just installed for `sig`. Drives both telemetry capture
-   * points:
-   *  (a) fallback windows — if a local fallback prediction was captured for
-   *      this same revision while the oracle was still compiling, diff it
-   *      against the now-arrived exact answer.
-   *  (b) predict-always shadow — on a healthy document the exact path
-   *      installs directly and the local paginator never runs, so run it
-   *      once per settled exact publication as a PREDICTION-ONLY pass
-   *      purely to feed the same telemetry. Never installs its result: no
-   *      spacers or dispatches reach the document. Skipped for documents
-   *      over ~50 pages, to bound the shadow work. */
-  private observeExactPageAnswer(
-    sig: string,
-    snapshot: PaginationGeometrySnapshot,
-    entry: PageOracleEntry,
-  ): void {
-    if (!entry.pageStarts) return;
-    const exactEntries: PageStartEntry[] = entry.pageStarts.map((ps) => ({
-      pos: ps.pos,
-      line: ps.line,
-      unit: ps.unit,
-    }));
-
-    if (this.lastLocalPagePrediction && this.lastLocalPagePrediction.sig === sig) {
-      this.recordPageParity(this.lastLocalPagePrediction.entries, exactEntries);
-      this.lastLocalPagePrediction = null;
-    }
-
-    if (this.lastParityShadowSig === sig) return;
-    this.lastParityShadowSig = sig;
-    const pageCount = entry.pageCount ?? entry.pageStarts.length + 1;
-    if (pageCount > 50) {
-      this.pageParityStats.skipped.tooLarge++;
-      return;
-    }
-    // Table documents are sampled like any other (PAGE-PORT.md Phase 7):
-    // the local pass breaks tables between rows from painted heights, and
-    // its row starts diff against Typst's in the same {table, row}
-    // vocabulary. `skipped.tables` stays in the stats shape, now always 0.
-    // Prediction-only: the return value is diffed and discarded.
-    const shadow = this.runFallbackPass(snapshot);
-    this.recordPageParity(this.anchorsToPageStartEntries(shadow.anchors), exactEntries);
+  /**
+   * Port audit (tests/port-audit.spec.ts, `npm run audit`): compile the
+   * document once with Typst and report where the port's line breaks and
+   * the local paginator's page starts differ from it. The measurement
+   * lives here, outside the edit loop: the editor itself never compiles.
+   * Development only.
+   */
+  private async audit(): Promise<PortAuditReport | null> {
+    const { compileDocSvg } = await import('./pdf');
+    const { auditSvg } = await import('./layout/page-oracle');
+    const state = this.view.state;
+    const settings = getSettings(state);
+    const t0 = performance.now();
+    const svg = await compileDocSvg(state.doc);
+    const compileMs = performance.now() - t0;
+    if (!svg || state.doc !== this.view.state.doc) return null;
+    const t1 = performance.now();
+    const typst = auditSvg(svg, state.doc, settings, this.atomResolver());
+    const analyzeMs = performance.now() - t1;
+    // The local paginator's answer for the document as painted: a
+    // prediction-only pass, identical to the one that installed the pages.
+    const local = this.runFallbackPass(this.capturePaginationSnapshot());
+    return buildPortAudit({
+      doc: state.doc,
+      typst,
+      local: { starts: this.anchorsToPageStartEntries(local.anchors), count: local.count },
+      entryFor: (node) => this.cache.get(node),
+      compileMs,
+      analyzeMs,
+    });
   }
 
   /**
@@ -2557,103 +2482,13 @@ class TypesetView {
     // Any pagination pass supersedes the geometry a pending verification
     // ticket describes; the stale ticket is dropped at verification time.
     this.paginationPassCounter++;
-    const view = this.view;
-    const s = snapshot.settings;
     if (snapshot.contentHeight < 120) return { spacers: [], count: 1 };
 
-    // Page-break oracle: when Typst has told us where its pages break for
-    // exactly this document, obey; otherwise paginate ourselves and ask.
-    if (effectiveFont(s.font).exact) {
-      let sig = this.docSig.get(view.state.doc);
-      if (!sig) {
-        try {
-          sig = docToTyp(view.state.doc);
-          this.docSig.set(view.state.doc, sig);
-        } catch {
-          sig = undefined;
-        }
-      }
-      if (sig) {
-        const entry = this.oracles.page.get(sig);
-        if (!entry) this.oracles.page.request(sig, view.state.doc, s, this.atomResolver());
-        if (entry?.status === 'ok' && entry.pageStarts) {
-          const forced = this.paginateForced(
-            snapshot,
-            entry.pageStarts,
-            entry.pageCount ?? entry.pageStarts.length + 1,
-          );
-          if (forced) {
-            this.pagPath = 'exact';
-            this.pagWhy = 'entry=exact';
-            // Persist the starts as mapped markers for the next edit burst.
-            this.lastPageCount = entry.pageCount ?? entry.pageStarts.length + 1;
-            this.exactPageBasisDoc = view.state.doc;
-            this.exactPageBasisEpoch = this.paginationGeometryEpoch;
-            this.exactPageBasisWidth = view.dom.clientWidth;
-            // Basis-coordinate copies for the suffix planner: page
-            // ordinals are the contiguous marker indices, and the spacers are
-            // the exact requested heights (not the painted, tolerance-held
-            // ones), so a later re-force reproduces them bit-for-bit.
-            this.exactPageBasisMarkers = entry.pageStarts.map((ps, index) => ({
-              pos: ps.pos,
-              line: ps.line,
-              unit: ps.unit,
-              page: index + 1,
-            }));
-            this.exactPageBasisSpacers = forced.spacers.map((sp) => ({ ...sp }));
-            this.clearFallbackPageBasis();
-            this.pendingPageMarks = DecorationSet.create(
-              view.state.doc,
-              entry.pageStarts.map((ps) =>
-                Decoration.widget(ps.pos, () => document.createElement('span'), {
-                  psLine: ps.line,
-                  psUnit: ps.unit,
-                }),
-              ),
-            );
-            if (import.meta.env.DEV) this.observeExactPageAnswer(sig, snapshot, entry);
-            return { spacers: forced.spacers, count: forced.count };
-          }
-        }
-        // Oracle still compiling for this revision: reuse the LAST starts,
-        // mapped through the edits — pages hold still instead of falling
-        // back to a local guess that disagrees by a line. Only while
-        // PENDING: a failed match must not hold stale geometry forever.
-        const confidence = this.oracles.observePageEntry(entry);
-        const marks = confidence.hold
-          ? (typesetKey.getState(view.state)?.pageMarks.find() ?? [])
-          : [];
-        this.pagWhy = `entry=${confidence.status} marks=${marks.length}` +
-          (entry?.status === 'fail' ? ` streak=${confidence.failureStreak}` : '');
-        if (marks.length) {
-          const stale = marks
-            .map((m) => ({
-              pos: m.from,
-              line: (m.spec as { psLine: number }).psLine,
-              unit: (m.spec as { psUnit: string }).psUnit,
-            }))
-            .sort((a, b) => a.pos - b.pos);
-          const forced = this.paginateForced(
-            snapshot,
-            stale,
-            this.lastPageCount || stale.length + 1,
-            true,
-          );
-          if (forced) {
-            this.pagPath = 'held';
-            return { spacers: forced.spacers, count: forced.count };
-          }
-        }
-      }
-    }
-
-    this.pagPath = 'fallback';
-    // The exact-font branch rewrites pagWhy every pass; when it was skipped
-    // (non-exact font, or an unserializable doc) reset the stale value so
-    // the suffix-install annotation below cannot accumulate across passes.
-    if (!effectiveFont(s.font).exact || !this.docSig.get(view.state.doc)) {
-      this.pagWhy = 'entry=local';
-    }
+    // One renderer: the local paginator is the authority. Typst's pages are
+    // measured against it by the port audit (tests/port-audit.spec.ts),
+    // never installed over it.
+    this.pagPath = 'local';
+    this.pagWhy = 'entry=local';
     const runFallback = (seed?: PaginationFallbackSeed) => this.runFallbackPass(snapshot, seed);
 
     this.suffixPaginationStats.attempts++;
@@ -2730,7 +2565,6 @@ class TypesetView {
           ...suffix.anchors,
         ];
         this.rememberFallbackBasis({ ...suffix, anchors: installedAnchors });
-        if (import.meta.env.DEV) this.recordLocalPagePrediction(installedAnchors);
         return { spacers: suffix.spacers, count: suffix.count };
       }
 
@@ -2799,7 +2633,6 @@ class TypesetView {
       // affect telemetry, never page geometry. The exact basis is NOT
       // cleared: page starts above the seed boundary stay valid across
       // fallback repaginations of the suffix.
-      if (import.meta.env.DEV) this.recordLocalPagePrediction(full.anchors);
       return { spacers: full.spacers, count: full.count };
     }
 
@@ -2842,7 +2675,6 @@ class TypesetView {
       this.suffixPaginationStats.lastAnchorPos = null;
     }
     this.rememberFallbackBasis(fallback);
-    if (import.meta.env.DEV) this.recordLocalPagePrediction(fallback.anchors);
     return { spacers: fallback.spacers, count: fallback.count };
   }
 
@@ -3692,7 +3524,6 @@ class TypesetView {
             : null;
         if (!model || !(rowEl instanceof HTMLElement)) {
           this.pendingPageMarks = DecorationSet.empty;
-          this.lastPageCount = 0;
           this.clearExactPageBasis();
           return null;
         }

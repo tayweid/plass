@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from 'playwright/test';
+import { settleLocal } from './settle';
 
 declare global {
   interface Window {
@@ -58,10 +59,9 @@ test('Markdown islands survive the editor and show as code blocks', async ({ pag
   for (const c of comments) expect(result.islands.some((i) => i.text === c || i.text.includes(c))).toBe(true);
   if (!process.env.MD_FILE) expect(result.out).toBe(src);
 
-  // The compiled page oracle still takes authority with islands in the
-  // flow: they print as the same code blocks the page shows.
+  // Pagination settles with islands in the flow.
   await expect
-    .poll(() => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('exact[') ?? false), {
+    .poll(() => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('local[') ?? false), {
       timeout: 30_000,
       intervals: [500, 1_000, 2_000],
     })

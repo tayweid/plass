@@ -4,7 +4,7 @@ The next milestone is not a feature: **write a real document in Plass** — a
 problem set or lecture note with math, figures, and citations — and let the
 frictions found there reorder everything below. The ordering here is a
 pre-dogfood guess (value ÷ effort for academic writing); parity notes flag
-where a feature touches the oracle machinery. Completed work lives in git
+where a feature touches the port and its audit. Completed work lives in git
 history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN.md).
 
 ## Session queue
@@ -45,6 +45,36 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      manifest to take effect. With several Plass windows open, the launch
      lands in the last-focused one and names the window that has the
      file — no web API can focus another independent window.
+   - Done 2026-09-11: **one renderer.** The 50-page announcements file
+     lagged 250–750 ms every few keystrokes; measured, the typing path was
+     2–9 ms and the freeze was the whole-document Typst compile's result
+     being sanitized and laid out on the main thread after every pause
+     (and failing every time on a `...` the document did not hold as
+     `…`). Taylor's call: Plass is an exact port, not two renderers. The
+     compile no longer runs while editing and Typst's page starts are
+     never installed; the port audit (`npm run audit`, `AUDIT=<path>`)
+     measures the port and the local paginator against Typst on demand.
+     `...` now imports and types as an ellipsis. `.md` windows show `.md`
+     in the title.
+   - **Open — port divergences the first audit found** (each a port bug;
+     fix one at a time, fixture first):
+     1. A page that ends inside a paragraph fits one line more locally
+        than in Typst (prose fixture: 11-line paragraph, local 3 lines /
+        Typst 2; the third line's box ends 11 px past the content bottom;
+        also `_Announcements.md` page 9 and the fingerprint fixture).
+        Most visible; fix first.
+     2. List items break differently (bullet and ordered items: the port
+        breaks `s218` where Typst hyphenates `h223`; a later line off by
+        five characters) — a list-item measure or hyphenation input.
+     3. Paragraphs opening with bold or a link break their first line
+        4 characters later in Typst (`Funwork …`, `Homework 4 Demo …`);
+        one plain paragraph differs at its second line.
+     4. An inline-math-plus-footnote paragraph differs from its first
+        line (atom width or marker glue).
+     5. A 45-row booktabs table breaks one row earlier locally (row 32 vs
+        Typst's 33); the 40-row fixture agrees.
+     6. Headings are browser-laid (ragged, no port breaks): the audit
+        reports them as `no-port`; a wrapped heading is unmeasured.
    - Open, smaller: multi-paragraph footnotes flatten; tight/loose list
      spacing normalizes; a `.typ` save has no home for the Markdown-only
      carry (frontmatter extras) and drops it silently.

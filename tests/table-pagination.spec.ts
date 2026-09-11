@@ -1,4 +1,5 @@
 import { expect, test, type Page } from 'playwright/test';
+import { settleLocal } from './settle';
 
 declare global {
   interface Window {
@@ -15,13 +16,7 @@ declare global {
       lastStartPos: number | null;
       reasons: Record<string, number>;
     };
-    __pageParityStats: (reset?: boolean) => {
-      predictions: number;
-      agreements: number;
-      disagreements: number;
-      skipped: { tables: number; tooLarge: number };
-      last: unknown;
-    };
+    __audit: () => Promise<{ pages: { agree: boolean; typst: Array<{ unit: string; line: number }> } } | null>;
   }
 }
 
@@ -88,16 +83,8 @@ async function installDoc(page: Page, opts: TableOptions, navigate = true): Prom
 }
 
 /** Wait until a pagination entry after `logStart` has the given prefix. */
-async function expectPagination(page: Page, logStart: number, prefix: 'exact[' | 'fallback[') {
-  await expect
-    .poll(
-      () => page.evaluate(([start, p]) => {
-        const fresh = Math.min(window.__pagCount() - (start as number), 40);
-        return fresh > 0 && (window.__pagLog().at(-1)?.startsWith(p as string) ?? false);
-      }, [logStart, prefix] as const),
-      { timeout: 45_000, intervals: [500, 1_000, 2_000] },
-    )
-    .toBe(true);
+async function expectPagination(page: Page, logStart: number, _prefix: 'local[' = 'local[') {
+  await settleLocal(page, logStart);
 }
 
 function readBreak(page: Page) {
@@ -140,7 +127,7 @@ function readBreak(page: Page) {
 test('a 40-row table crossing a page boundary paginates exactly, breaking between rows with the header repeated', async ({ page }) => {
   test.setTimeout(90_000);
   const logStart = await installDoc(page, { rows: 40 });
-  await expectPagination(page, logStart, 'exact[');
+  await expectPagination(page, logStart, 'local[');
 
   const result = await readBreak(page);
   expect(result.tables).toBe(1);
@@ -191,13 +178,10 @@ test('a 40-row table crossing a page boundary paginates exactly, breaking betwee
   expect(Math.abs(paint.painted - paint.requested)).toBeLessThan(1);
   expect(Math.abs(paint.painted - paint.gapPlusHeader)).toBeLessThan(1);
 
-  // The exact page start Typst reported is the same row boundary.
-  const oracleRow = await page.evaluate(() => {
-    const oracle = window.__pageOracle as { results?: Map<string, { status: string; pageStarts?: Array<{ unit: string; line: number }> }> };
-    const entry = [...(oracle.results?.values() ?? [])].find((e) => e.status === 'ok');
-    return entry?.pageStarts?.find((ps) => ps.unit === 'table')?.line ?? -1;
-  });
-  expect(oracleRow).toBe(Number(nextRow![1]));
+  // Typst breaks the same table at the same row boundary (port audit).
+  const report = await page.evaluate(() => window.__audit());
+  expect(report?.pages.typst.find((ps) => ps.unit === 'table')?.line ?? -1).toBe(Number(nextRow![1]));
+  expect(report?.pages.agree, JSON.stringify(report?.pages)).toBe(true);
 });
 
 test('a merged cell across the boundary keeps the table atomic (fail open)', async ({ page }) => {
@@ -205,7 +189,7 @@ test('a merged cell across the boundary keeps the table atomic (fail open)', asy
   // Learn where Typst breaks this document, then put a rowspan across
   // exactly that boundary.
   const first = await installDoc(page, { rows: 30 });
-  await expectPagination(page, first, 'exact[');
+  await expectPagination(page, first, 'local[');
   const breakRow = await page.evaluate(() => {
     const next = document.querySelector('.ProseMirror table tr.ts-table-break')?.nextElementSibling;
     return Number(/Alpha (\d+)/.exec(next?.querySelector('td')?.textContent ?? '')?.[1] ?? -1);
@@ -213,21 +197,10 @@ test('a merged cell across the boundary keeps the table atomic (fail open)', asy
   expect(breakRow).toBeGreaterThan(1);
 
   const second = await installDoc(page, { rows: 30, rowspanAt: breakRow - 1 }, false);
-  // Typst itself splits the rowspan (a compiled start inside the table)...
-  await expect
-    .poll(
-      () => page.evaluate(() => {
-        const oracle = window.__pageOracle as { results?: Map<string, { status: string; pageStarts?: Array<{ unit: string; line: number }> }> };
-        return [...(oracle.results?.values() ?? [])].some(
-          (entry) => entry.status === 'ok' && entry.pageStarts?.some((start) => start.unit === 'table' && start.line > 0),
-        );
-      }),
-      { timeout: 45_000, intervals: [500, 1_000, 2_000] },
-    )
-    .toBe(true);
-  // ...which the editor declines: the table stays one atomic block on the
-  // local path, with no widget row inside it.
-  await expectPagination(page, second, 'fallback[');
+  // The editor keeps the table one atomic block, with no widget row inside
+  // it (Typst itself splits the rowspan — the audit below shows the
+  // declared disagreement — which the editor does not mirror).
+  await expectPagination(page, second, 'local[');
   const result = await readBreak(page);
   expect(result.tables).toBe(1);
   expect(result.widget).toBeNull();
@@ -238,6 +211,11 @@ test('a merged cell across the boundary keeps the table atomic (fail open)', asy
     return { inOne, pages: boxes.length };
   });
   expect(geometry.inOne).toBe(true);
+  // The port audit records this as a declared disagreement: Typst's text
+  // layer splits the merged row across the pages, which the row matcher
+  // cannot follow, and Typst's page starts differ from the local ones.
+  const report = await page.evaluate(() => window.__audit());
+  expect(report?.pages.agree, JSON.stringify(report?.pages)).toBe(false);
   const rowspan = await page.evaluate((r) => window.view.state.doc.child(2).child(r).child(0).attrs.rowspan, breakRow - 1);
   expect(rowspan).toBe(2);
 });
@@ -245,7 +223,7 @@ test('a merged cell across the boundary keeps the table atomic (fail open)', asy
 test('editing a cell of a split table keeps one table node and returns to exact pagination', async ({ page }) => {
   test.setTimeout(120_000);
   const logStart = await installDoc(page, { rows: 40 });
-  await expectPagination(page, logStart, 'exact[');
+  await expectPagination(page, logStart, 'local[');
   expect((await readBreak(page)).widget).not.toBeNull();
 
   // Place the caret at the end of a cell's paragraph through the editor's
@@ -277,12 +255,12 @@ test('editing a cell of a split table keeps one table node and returns to exact 
   await expect
     .poll(() => page.evaluate((b) => window.__pagCount() > b, before), { timeout: 20_000 })
     .toBe(true);
-  await expectPagination(page, before, 'exact[');
+  await expectPagination(page, before, 'local[');
 
   await caretAtEndOfCell(39);
   const afterSecond = await page.evaluate(() => window.__pagCount());
   await page.keyboard.type(' too');
-  await expectPagination(page, afterSecond, 'exact[');
+  await expectPagination(page, afterSecond, 'local[');
 
   const shape = await page.evaluate(() => {
     const doc = window.view.state.doc;
@@ -307,7 +285,7 @@ test('editing a cell of a split table keeps one table node and returns to exact 
 test('a captioned table is a figure and stays whole', async ({ page }) => {
   test.setTimeout(90_000);
   const logStart = await installDoc(page, { rows: 30, caption: 'Thirty rows' });
-  await expectPagination(page, logStart, 'exact[');
+  await expectPagination(page, logStart, 'local[');
   const result = await readBreak(page);
   expect(result.widget).toBeNull();
   const inOne = await page.evaluate(() => {
@@ -318,33 +296,21 @@ test('a captioned table is a figure and stays whole', async ({ page }) => {
   expect(inOne).toBe(true);
 });
 
-test('a split table seeds suffix pagination and agrees with Typst in the parity shadow', async ({ page }) => {
+test('a split table seeds suffix pagination and agrees with Typst', async ({ page }) => {
   test.setTimeout(120_000);
   const logStart = await installDoc(page, { rows: 40, trailingPage: true });
-  await expectPagination(page, logStart, 'exact[');
+  await expectPagination(page, logStart, 'local[');
   expect((await readBreak(page)).widget).not.toBeNull();
 
-  // The DEV parity shadow samples table documents now (Phase 7 step 5) and
-  // the local row walk lands on Typst's own row boundary.
-  const parity = await page.evaluate(() => window.__pageParityStats());
-  expect(parity.skipped.tables).toBe(0);
-  expect(parity.predictions).toBeGreaterThanOrEqual(1);
-  expect(parity.disagreements).toBe(0);
+  // The local row walk lands on Typst's own row boundary (port audit).
+  const report = await page.evaluate(() => window.__audit());
+  expect(report?.pages.agree, JSON.stringify(report?.pages)).toBe(true);
 
   // Editing on the last page (a block-level page start after the table
   // anchors the seed) restarts local pagination there: the prefix —
   // including the table's row spacer — is validated and kept, not
-  // recomputed. The page oracle is switched off for later revisions so the
-  // edit ends up on the local path (the held path maps the settled starts
-  // through the first few edits, then abandons the failing revisions).
+  // recomputed.
   const before = await page.evaluate(() => {
-    const oracle = window.__pageOracle as unknown as {
-      request: (sig: string) => void;
-      results: Map<string, { status: string; reason: string }>;
-    };
-    oracle.request = (sig: string) => {
-      oracle.results.set(sig, { status: 'fail', reason: 'test: page oracle disabled' });
-    };
     const { state } = window.view;
     const last = state.doc.child(state.doc.childCount - 1);
     if (last.type.name !== 'paragraph') throw new Error('fixture changed shape');
@@ -355,17 +321,15 @@ test('a split table seeds suffix pagination and agrees with Typst in the parity 
     window.__suffixPaginationStats(true);
     return { signature: window.__pagLog().at(-1)?.split(':').slice(1).join(':') ?? '', count: window.__pagCount() };
   });
-  // Slow keystrokes: each settles into its own (failed) revision, so the
-  // held path gives up after its failure streak and the local pass runs.
   await page.keyboard.type(' Typed here.', { delay: 500 });
   await expect
     .poll(() => page.evaluate(() => window.__suffixPaginationStats().eligible), { timeout: 20_000 })
     .toBeGreaterThanOrEqual(1);
-  await expectPagination(page, before.count, 'fallback[');
+  await expectPagination(page, before.count, 'local[');
   const stats = await page.evaluate(() => window.__suffixPaginationStats());
   expect(stats.mismatches).toBe(0);
-  expect(stats.bySource.exact.eligible).toBeGreaterThanOrEqual(1);
-  expect(stats.reasons['exact-ineligible-block'] ?? 0).toBe(0);
+  expect(stats.bySource.fallback.eligible).toBeGreaterThanOrEqual(1);
+  expect(stats.reasons['ineligible-block'] ?? 0).toBe(0);
   const tablePos = await page.evaluate(() => {
     let pos = 0;
     window.view.state.doc.forEach((node, offset) => {
@@ -376,7 +340,7 @@ test('a split table seeds suffix pagination and agrees with Typst in the parity 
   expect(stats.lastAnchorPos).not.toBeNull();
   expect(stats.lastAnchorPos!).toBeGreaterThan(tablePos);
   // The prefix (the row break inside the table, the forced page break)
-  // is byte-identical to the settled exact pagination.
+  // is byte-identical to the settled pagination.
   const after = await page.evaluate(() => window.__pagLog().at(-1)?.split(':').slice(1).join(':') ?? '');
   expect(after).toBe(before.signature);
   expect((await readBreak(page)).widget).not.toBeNull();

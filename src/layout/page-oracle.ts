@@ -15,6 +15,7 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { buildSpec, matchParagraph, type AtomResolver, type SvgLine, type ParagraphSpec } from './typst-oracle';
+import type { ForcedBreak } from './paragraph';
 import { formatPageNumber, pageSize, type DocSettings } from '../settings';
 import { parseTypstSvg } from '../safe-svg';
 import { tableRowModel, type TableRowModel } from './table-rows';
@@ -395,7 +396,7 @@ export function stripFootnoteLines(lines: PagedLine[], heads: string[]): PagedLi
   return lines.filter((_, i) => !drop.has(i));
 }
 
-function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver): PageOracleEntry {
+function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver, audit?: UnitAudit[]): PageOracleEntry {
   const pitch = settings.lineHeight * settings.sizePt;
   const pageHPt = pageSize(settings).h * 0.75;
   const raw = extractPages(svg, pitch / 2, pageHPt);
@@ -429,8 +430,8 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
 
   const units = buildUnits(doc, resolveAtom);
   const lines = stripFootnoteLines(all, footnoteHeads(doc));
-  const matched = matchPageStarts(units, lines);
-  return matched.status === 'ok' ? { ...matched, pageCount } : matched;
+  const matched = matchPageStarts(units, lines, audit);
+  return { ...matched, pageCount };
 }
 
 /**
@@ -439,7 +440,16 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
  * matcher's unit rules (paragraph lines, opaque resync, table rows) are
  * testable without a compiled SVG.
  */
-export function matchPageStarts(units: Unit[], lines: PagedLine[]): PageOracleEntry {
+export interface UnitAudit {
+  pos: number;
+  type: string;
+  status: 'ok' | 'fail';
+  /** Typst's line breaks inside the unit (exact units only). */
+  breaks?: ForcedBreak[];
+  reason?: string;
+}
+
+export function matchPageStarts(units: Unit[], lines: PagedLine[], audit?: UnitAudit[]): PageOracleEntry {
   const pageStarts: PageStart[] = [];
   let cursor = 0;
   let lastPage = 0;
@@ -508,8 +518,21 @@ export function matchPageStarts(units: Unit[], lines: PagedLine[]): PageOracleEn
       const slice = lines.slice(cursor).map((l, i) => (i === 0 ? { ...l, text: stripListMarker(l.text, unit.marker) } : l));
       const res = matchParagraph(unit.spec, slice, 0);
       if (res.status !== 'ok') {
-        return { status: 'fail', reason: `unit@${unit.pos} (${unit.type}): ${res.entry.reason}` };
+        if (!audit) return { status: 'fail', reason: `unit@${unit.pos} (${unit.type}): ${res.entry.reason}` };
+        // Audit: record the disagreement and resync on the next unit's
+        // anchor, exactly as an opaque block would, so one bad paragraph
+        // does not hide the rest of the document.
+        audit.push({ pos: unit.pos, type: unit.type, status: 'fail', reason: res.entry.reason });
+        const anchor = anchorFor(ui + 1);
+        let consumed = 0;
+        while (cursor < lines.length && !(consumed > 0 && matchesAnchor(lines[cursor].text, anchor))) {
+          notePage(cursor, unit, consumed);
+          cursor++;
+          consumed++;
+        }
+        continue;
       }
+      audit?.push({ pos: unit.pos, type: unit.type, status: 'ok', breaks: res.entry.breaks ?? [] });
       for (let k = 0; k < res.next; k++) notePage(cursor + k, unit, k);
       cursor += res.next;
     } else if (unit.kind === 'table' && unit.rows && unit.model) {
@@ -525,7 +548,11 @@ export function matchPageStarts(units: Unit[], lines: PagedLine[]): PageOracleEn
         if (page > lastPage) {
           if (r > 0 && rep !== null && r > rep) {
             const next = matchRow(unit, rep, cursor, 'repeated header before row');
-            if (typeof next !== 'number') return { status: 'fail', reason: next.fail };
+            if (typeof next !== 'number') {
+              if (!audit) return { status: 'fail', reason: next.fail };
+              audit.push({ pos: unit.pos, type: 'table', status: 'fail', reason: next.fail });
+              break;
+            }
             cursor = next;
           }
           while (lastPage < page) {
@@ -534,9 +561,14 @@ export function matchPageStarts(units: Unit[], lines: PagedLine[]): PageOracleEn
           }
         }
         const next = matchRow(unit, r, cursor, 'row');
-        if (typeof next !== 'number') return { status: 'fail', reason: next.fail };
+        if (typeof next !== 'number') {
+          if (!audit) return { status: 'fail', reason: next.fail };
+          audit.push({ pos: unit.pos, type: 'table', status: 'fail', reason: next.fail });
+          break;
+        }
         cursor = next;
       }
+      if (audit && !audit.some((a) => a.pos === unit.pos)) audit.push({ pos: unit.pos, type: 'table', status: 'ok' });
     } else {
       // Opaque block: consume lines until the next exact unit's anchor.
       const anchor = anchorFor(ui + 1);
@@ -562,9 +594,37 @@ export function matchPageStarts(units: Unit[], lines: PagedLine[]): PageOracleEn
   // a row-boundary spacer, declining anything it cannot mirror.
   for (const ps of pageStarts) {
     if (ps.line > 0 && ps.unit !== 'line' && ps.unit !== 'table') {
-      return { status: 'fail', reason: `page splits inside atomic block @${ps.pos} (${ps.unit})` };
+      return { status: 'fail', reason: `page splits inside atomic block @${ps.pos} (${ps.unit})`, pageStarts };
     }
   }
 
   return { status: 'ok', pageStarts };
+}
+
+export interface SvgAudit {
+  /** Typst's page starts, present even when a unit disagreed (audit mode
+   * resyncs); `status` says whether the whole match was clean. */
+  status: 'ok' | 'fail';
+  reason?: string;
+  pageStarts: PageStart[];
+  pageCount: number;
+  units: UnitAudit[];
+}
+
+/**
+ * Measure the compiled document against the editor's units: every exact
+ * unit's Typst line breaks and the page starts, in one pass that keeps
+ * going past disagreements. The port audit (tests/port-audit.spec.ts) is
+ * the only caller; nothing in the edit loop compiles.
+ */
+export function auditSvg(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver): SvgAudit {
+  const units: UnitAudit[] = [];
+  const entry = analyze(svg, doc, settings, resolveAtom, units);
+  return {
+    status: entry.status,
+    reason: entry.reason,
+    pageStarts: entry.pageStarts ?? [],
+    pageCount: entry.pageCount ?? 1,
+    units,
+  };
 }

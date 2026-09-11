@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test';
+import { settleLocal } from './settle';
 
 declare global {
   interface Window {
@@ -14,7 +15,7 @@ declare global {
 // that source space rather than rendering it. The oracle's spec builder
 // predicted a space there, so the very first footnote-bearing paragraph
 // typed this way permanently lost exact pagination for the whole document.
-test('page oracle reaches exact pagination for a footnote marker typed with a leading space', async ({ page }) => {
+test('pagination settles for a footnote marker typed with a leading space', async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto('/?new=1');
   await page.evaluate(() => {
@@ -33,18 +34,13 @@ test('page oracle reaches exact pagination for a footnote marker typed with a le
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
   });
 
-  await expect
-    .poll(
-      () => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('exact[') ?? false),
-      { timeout: 30_000, intervals: [500, 1_000, 2_000] },
-    )
-    .toBe(true);
+  await settleLocal(page);
 });
 
 // Two footnote-bearing paragraphs on the page, each with a leading space
 // before its marker — the pattern most likely to appear across a real
 // document once one such paragraph exists.
-test('page oracle reaches exact pagination for two footnote-bearing paragraphs', async ({ page }) => {
+test('pagination settles for two footnote-bearing paragraphs', async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto('/?new=1');
   await page.evaluate(() => {
@@ -68,10 +64,5 @@ test('page oracle reaches exact pagination for two footnote-bearing paragraphs',
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
   });
 
-  await expect
-    .poll(
-      () => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('exact[') ?? false),
-      { timeout: 30_000, intervals: [500, 1_000, 2_000] },
-    )
-    .toBe(true);
+  await settleLocal(page);
 });

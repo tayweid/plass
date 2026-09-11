@@ -77,6 +77,9 @@ jobs:
         timeout-minutes: 10
         run: npx --no-install playwright install-deps chromium firefox webkit
       - run: npm run test:browser
+      - name: Port audit (a measurement — reported, never blocking)
+        run: npm run audit
+        continue-on-error: true
       # Failure reports (error-context.md, screenshots) are unreachable in a
       # log; publish them so a parity failure on this runner can be read.
       - name: Publish the browser test results when they fail

@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test';
+import { settleLocal } from './settle';
 
 declare global {
   interface Window {
@@ -12,7 +13,7 @@ declare global {
 // document. The fallback paginator masked it for plain paragraphs (it splits
 // them at line boundaries) but moves list items whole — a long bullet
 // crossing a page boundary left a large gap instead of splitting mid-item.
-test('page oracle splits a long bullet across the page boundary', async ({ page }) => {
+test('a long bullet splits across the page boundary', async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto('/?new=1');
   await page.evaluate(() => {
@@ -34,13 +35,7 @@ test('page oracle splits a long bullet across the page boundary', async ({ page 
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
   });
 
-  // The compiled page oracle must take authority (not the local fallback).
-  await expect
-    .poll(
-      () => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('exact[') ?? false),
-      { timeout: 30_000, intervals: [500, 1_000, 2_000] },
-    )
-    .toBe(true);
+  await settleLocal(page);
 
   // Typst splits the long bullets mid-item: every page spacer must sit
   // INSIDE a list-item paragraph, and the bullets stay on consecutive pages
@@ -66,7 +61,7 @@ test('page oracle splits a long bullet across the page boundary', async ({ page 
 // separating space. The oracle's marker-strip regex happened to work for
 // bullet glyphs but silently no-op'd on a leading digit, so every document
 // containing an ordered_list permanently lost exact pagination.
-test('page oracle reaches exact pagination for an ordered list', async ({ page }) => {
+test('an ordered list paginates', async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto('/?new=1');
   await page.evaluate(() => {
@@ -85,12 +80,7 @@ test('page oracle reaches exact pagination for an ordered list', async ({ page }
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
   });
 
-  await expect
-    .poll(
-      () => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('exact[') ?? false),
-      { timeout: 30_000, intervals: [500, 1_000, 2_000] },
-    )
-    .toBe(true);
+  await settleLocal(page);
 });
 
 // Regression: an opaque block (code_block, figure, table, …) resyncs past
@@ -103,7 +93,7 @@ test('page oracle reaches exact pagination for an ordered list', async ({ page }
 // page boundary fell inside that over-consumed span, the atomic-block guard
 // failed closed permanently ("page splits inside atomic block @… (code_block)"),
 // on every recompile thereafter (fail-closed, but for the wrong reason).
-test('page oracle reaches exact pagination for a code block immediately followed by an ordered list', async ({
+test('a code block immediately followed by an ordered list paginates', async ({
   page,
 }) => {
   test.setTimeout(60_000);
@@ -131,12 +121,7 @@ test('page oracle reaches exact pagination for a code block immediately followed
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
   });
 
-  await expect
-    .poll(
-      () => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('exact[') ?? false),
-      { timeout: 30_000, intervals: [500, 1_000, 2_000] },
-    )
-    .toBe(true);
+  await settleLocal(page);
 });
 
 // The oracle is not always the one answering — a long document, a timeout, or
@@ -145,18 +130,6 @@ test('page oracle reaches exact pagination for a code block immediately followed
 // has to split inside the item too.
 async function fallbackOnly(page: import('playwright/test').Page) {
   await page.goto('/?new=1');
-  // Pin the page oracle to fail so the fallback engine is what runs.
-  await page.evaluate(() => {
-    const oracle = window.__pageOracle as unknown as {
-      clear: () => void;
-      request: (sig: string) => void;
-      results: Map<string, { status: string; reason: string }>;
-    };
-    oracle.clear();
-    oracle.request = (sig: string) => {
-      oracle.results.set(sig, { status: 'fail', reason: 'test: page oracle disabled' });
-    };
-  });
 }
 
 const SENTENCE =

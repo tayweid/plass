@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test';
+import { settleLocal } from './settle';
 
 // SOURCE-VIEW.md step 0, decision 6: the page machinery sleeps while the
 // ProseMirror view is mounted but hidden behind the (future) source view.
@@ -26,7 +27,6 @@ declare global {
       spacerScans: number;
       heightQueries: number;
     };
-    __pageParityStats: (reset?: boolean) => { predictions: number };
     __compilerLifecycleStats: () => Promise<CompilerStats>;
   }
 }
@@ -50,19 +50,9 @@ async function buildMultiPageDocument(page: Page): Promise<void> {
   }, SENTENCE);
 }
 
-/** Wait until Typst's page answer for the current document is installed. */
+/** Wait until a settled local pagination pass has landed. */
 async function settleExact(page: Page, pagCountAbove: number): Promise<string> {
-  await expect
-    .poll(
-      () =>
-        page.evaluate((above) => {
-          const log = window.__pagLog();
-          return window.__pagCount() > above && (log.at(-1)?.startsWith('exact[') ?? false);
-        }, pagCountAbove),
-      { timeout: 30_000, intervals: [250, 500, 1_000] },
-    )
-    .toBe(true);
-  return page.evaluate(() => window.__pagLog().at(-1)!);
+  return settleLocal(page, pagCountAbove);
 }
 
 /** Pages implied by a pagination log entry: one spacer per page break. */
@@ -80,7 +70,6 @@ async function quietCounters(page: Page) {
       lastEntry: window.__pagLog().at(-1) ?? null,
       dispatches: window.__layoutDispatchStats(),
       snapshot: window.__paginationSnapshotStats(),
-      parityPredictions: window.__pageParityStats().predictions,
       compilerTasks: compiler.tasksPosted,
     };
   });
@@ -127,7 +116,7 @@ async function passesAfterTwoFrames(page: Page): Promise<number> {
   );
 }
 
-test('a hidden, suspended editor runs no pass, compiles nothing, and resumes into exact pagination', async ({ page }) => {
+test('a hidden, suspended editor runs no pass, compiles nothing, and resumes into its pagination', async ({ page }) => {
   await buildMultiPageDocument(page);
   const exactBefore = await settleExact(page, 0);
   const pagesBefore = pagesInEntry(exactBefore);
@@ -152,7 +141,6 @@ test('a hidden, suspended editor runs no pass, compiles nothing, and resumes int
   expect(during.lastEntry).toBe(before.lastEntry);
   expect(during.dispatches).toEqual({ lines: 0, pageMarks: 0 });
   expect(during.snapshot).toEqual({ captures: 0, spacerScans: 0, heightQueries: 0 });
-  expect(during.parityPredictions).toBe(before.parityPredictions);
   expect(during.compilerTasks).toBe(before.compilerTasks);
   // The edit itself landed in the document; only its layout waited.
   expect(await page.evaluate(() => window.view.state.doc.firstChild!.textContent)).toContain('Typed while the page view slept.');
@@ -161,19 +149,17 @@ test('a hidden, suspended editor runs no pass, compiles nothing, and resumes int
   expect(await page.evaluate(() => window.__layoutSuspend(false))).toBe(false);
   // Exactly one full pass on resume — the same pass an opened document gets.
   expect(await passesAfterTwoFrames(page)).toBe(before.passes + 1);
-  const resumed = await page.evaluate(() => window.__pagLog().at(-1)!);
-  expect(resumed.startsWith('exact[')).toBe(false);
   expect(await page.evaluate(() => window.__paginationSnapshotStats().captures)).toBeGreaterThanOrEqual(1);
 
-  // The re-armed oracle answers for the edited document.
+  // The resumed pass paginated the edited document; nothing compiled.
   const exactAfter = await settleExact(page, before.passes);
   expect(pagesInEntry(exactAfter)).toBeGreaterThanOrEqual(2);
   await expect.poll(() => page.locator('.page-box').count()).toBe(pagesInEntry(exactAfter));
   const after = await quietCounters(page);
-  expect(after.compilerTasks).toBeGreaterThan(before.compilerTasks);
+  expect(after.compilerTasks).toBe(before.compilerTasks);
 });
 
-test('resuming an unchanged document lands back on its exact pagination in one pass', async ({ page }) => {
+test('resuming an unchanged document lands back on the same pagination in one pass', async ({ page }) => {
   await buildMultiPageDocument(page);
   const exactBefore = await settleExact(page, 0);
   await drainBackgroundWork(page);
@@ -189,8 +175,7 @@ test('resuming an unchanged document lands back on its exact pagination in one p
   await showEditor(page);
   await page.evaluate(() => window.__layoutSuspend(false));
   expect(await passesAfterTwoFrames(page)).toBe(before.passes + 1);
-  // The oracle cache survived sleep: the one resumed pass is already exact,
-  // with the same page breaks, and no compile was needed to get there.
+  // The one resumed pass reproduces the same page breaks, with no compile.
   expect(await page.evaluate(() => window.__pagLog().at(-1))).toBe(exactBefore);
   await page.waitForTimeout(1_000);
   const after = await quietCounters(page);

@@ -1,16 +1,11 @@
 import { expect, test } from 'playwright/test';
+import { settleLocal } from './settle';
 
 declare global {
   interface Window {
     view: import('prosemirror-view').EditorView;
     __pagLog: () => string[];
-    __pageParityStats: (reset?: boolean) => {
-      predictions: number;
-      agreements: number;
-      disagreements: number;
-      byCause: Record<string, number>;
-      last: unknown;
-    };
+    __audit: () => Promise<{ pages: { agree: boolean } } | null>;
   }
 }
 
@@ -43,7 +38,7 @@ async function loadProblemSet(page: import('playwright/test').Page) {
   }, FILLER);
 }
 
-test('solution block paginates under Typst authority with local parity', async ({ page }) => {
+test('solution block paginates locally and agrees with Typst', async ({ page }) => {
   test.setTimeout(60_000);
   await loadProblemSet(page);
 
@@ -71,12 +66,7 @@ test('solution block paginates under Typst authority with local parity', async (
   expect(paint[2].color).not.toBe('rgb(192, 0, 0)');
 
   // The compiled page oracle must take authority (not the local fallback).
-  await expect
-    .poll(() => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('exact[') ?? false), {
-      timeout: 30_000,
-      intervals: [500, 1_000, 2_000],
-    })
-    .toBe(true);
+  await settleLocal(page);
 
   // Typst splits the long solution mid-block (block is breakable): a page
   // spacer sits INSIDE the second solution block, with no moved-whole gap.
@@ -117,14 +107,11 @@ test('solution block paginates under Typst authority with local parity', async (
   await page.evaluate(() => document.querySelector('blockquote[data-kind="solution"] .ts-pagegap')?.scrollIntoView({ block: 'center' }));
   await page.screenshot({ path: test.info().outputPath('solution-page-gap.png') });
 
-  // Vertical parity: the local paginator (editor block heights) predicted
-  // the same page starts Typst produced — the solution block's box equals
-  // its compiled height. `predictions` may lag the exact result; poll.
-  await expect
-    .poll(() => page.evaluate(() => window.__pageParityStats().predictions), { timeout: 15_000 })
-    .toBeGreaterThan(0);
-  const parity = await page.evaluate(() => window.__pageParityStats());
-  expect(parity.disagreements, JSON.stringify(parity)).toBe(0);
+  // Vertical parity: the local paginator (editor block heights) lands on
+  // the page starts Typst produces — the solution block's box equals its
+  // compiled height. Measured by the port audit, never installed.
+  const report = await page.evaluate(() => window.__audit());
+  expect(report?.pages.agree, JSON.stringify(report?.pages)).toBe(true);
 });
 
 test('block flyout wraps into a solution, re-kinds, and lifts back out', async ({ page }) => {

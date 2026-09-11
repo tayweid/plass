@@ -4,7 +4,7 @@ declare global {
   interface Window {
     view: import('prosemirror-view').EditorView;
     __pagLog: () => string[];
-    __pageParityStats: (reset?: boolean) => { predictions: number; agreements: number; disagreements: number; byCause: Record<string, number>; last: unknown };
+    __audit: () => Promise<{ summary: Record<string, number | boolean>; pages: { firstDiff: unknown } } | null>;
   }
 }
 
@@ -32,7 +32,6 @@ test('environment fingerprint (diagnostic, never fails)', async ({ page }) => {
       ...Array.from({ length: 30 }, () => schema.nodes.paragraph.create(null, schema.text(sentence.repeat(5).trim()))),
     ]);
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
-    window.__pageParityStats(true);
     await new Promise((r) => setTimeout(r, 12_000));
 
     const measure = (el: Element | null) => {
@@ -73,7 +72,7 @@ test('environment fingerprint (diagnostic, never fails)', async ({ page }) => {
       },
       lines: [...pm.querySelectorAll('p')].slice(0, 3).map((p) => Math.round(p.getBoundingClientRect().height / 25)),
       pagLog: window.__pagLog().slice(-3),
-      parity: window.__pageParityStats(),
+      audit: await window.__audit().then((r) => (r ? { ...r.summary, firstDiff: r.pages.firstDiff } : null)),
     };
   });
   console.log('ENVIRONMENT FINGERPRINT ' + JSON.stringify(report, null, 1));

@@ -17,10 +17,10 @@ and glance at a preview — you are always looking at a representation of the
 document, never the document. WYSIWYG editors (Typora, Word, Docs) let you work
 in the document itself but top out at browser-grade layout: greedy line
 breaking, no real pagination. Plass threads the needle by keeping the document
-in the DOM — native selection, IME, accessibility — and demoting the
-typesetting engine to a *layout oracle* whose decisions are imposed as
-presentation-only decorations. The browser becomes a rasterizer following
-instructions rather than a layout engine making its own, worse ones. The
+in the DOM — native selection, IME, accessibility — and imposing the
+decisions of a port of Typst's layout as presentation-only decorations. The
+browser becomes a rasterizer following instructions rather than a layout
+engine making its own, worse ones. The
 original design argument is preserved in
 [`docs/archive/wysiwyg-typeset-editor-spec.md`](./docs/archive/wysiwyg-typeset-editor-spec.md);
 the fidelity contract and architecture below describe the current
@@ -55,9 +55,9 @@ reuses already-compiled break offsets when they are available; otherwise it
 runs a TypeScript mirror of Typst's breaker against version-pinned ICU,
 hyphenation, shaping, and font primitives from a small Rust/WASM sidecar. A
 direct translator imposes those authoritative offsets on the DOM without
-running syllabification or break search a second time. The background Typst
-compile remains the verifier and authority, and an identical result is a
-no-op rather than a second visual correction.
+running syllabification or break search a second time. There is one
+renderer: nothing compiles while you type. Typst is the printer, and the
+port audit (`npm run audit`) is how the port is measured against it.
 
 That exact contract is deliberately narrow: New Computer Modern is currently
 the only selectable body family, with all four faces registered across the
@@ -114,11 +114,11 @@ rails can always be finished in Typst itself, because the file is Typst.
 
 ## What works today
 
-- **Oracle layout** (spec §1.3): the document lives in the DOM — native
-  selection, cursor, IME, spell-check, screen readers — while a layout oracle
-  imposes Typst-selected break offsets, hyphens, and per-line justification.
-  The fast local port and the compiled Typst verifier share pinned shaping and
-  font inputs within the supported contract.
+- **Ported layout** (spec §1.3): the document lives in the DOM — native
+  selection, cursor, IME, spell-check, screen readers — while the port of
+  Typst's breaker imposes break offsets, hyphens, and per-line
+  justification. The port and Typst share pinned shaping and font inputs
+  within the supported contract.
 - **Real pages**: content flows across painted page boxes (US Letter/A4 from
   document settings) with margins, inter-page gaps, and page numbers.
   Paragraphs split across page boundaries at oracle-chosen line breaks while
@@ -133,16 +133,17 @@ rails can always be finished in Typst itself, because the file is Typst.
   boundary (inside a paragraph, a block-in-inline spacer replaces the line's
   `<br>`, so it forces the break and adds precisely the gap height). Print
   CSS zeroes the spacers — line breaks survive, gaps vanish — and `@page`
-  takes over for the printed artifact. Whole-document Typst page starts are
-  used when they compile and map safely; otherwise the full local paginator is
-  authoritative. A suffix-only paginator is currently development shadow
-  telemetry: it is compared with the full result, but never installed.
+  takes over for the printed artifact. The local paginator is the
+  authority; `npm run audit` compiles a document once and reports where its
+  page starts differ from Typst's. A suffix-only paginator is currently
+  development shadow telemetry: it is compared with the full result, but
+  never installed.
 - **Fast**: the edit path discovers and rebuilds only changed body, caption,
   and footnote blocks, while unchanged block geometry stays cached. The direct
   forced-break translator avoids the legacy path's repeated DOM measurement,
   and pagination captures spacer/table geometry once per pass behind a
   prefix-sum index. Browser tests enforce one line-decoration dispatch for a
-  normal edit and no redundant reinstall when the compiled verifier agrees.
+  normal edit and no redundant reinstall when nothing moved.
   Live diagnostic timings remain available in development, but wall-clock
   values are not treated as portable performance promises.
 - **Editing**: ProseMirror core. Markdown-style input rules (`#` headings,
@@ -348,14 +349,14 @@ ProseMirror transaction → native DOM echo
 
 Current architecture notes:
 
-1. **The fast certified path is a TypeScript mirror of Typst; Typst-WASM stays
-   the verifier and authority.** The legacy Knuth–Plass implementation remains
+1. **The certified path is a TypeScript mirror of Typst, and it is the only
+   renderer.** Typst-WASM prints (PDF export) and measures (`npm run audit`,
+   never in the edit loop). The legacy Knuth–Plass implementation remains
    available for unsupported or degraded cases, not as the exactness claim.
-2. **Pagination has explicit exact, held, and fallback states.** Exact starts
-   come from the whole-document compiler; held starts stabilize a pending edit
-   burst; the full local paginator fails closed when exact mapping is not
-   available. The conservative suffix candidate runs only in development and
-   the full result is always installed.
+2. **Pagination is local.** The full local paginator decides every page
+   start; the port audit reports where Typst would have broken differently.
+   The conservative suffix candidate runs only in development and the full
+   result is always installed.
 3. **Math is LaTeX/KaTeX, not Typst syntax** — friendlier to most academics;
    the `.typ` export bridges via mitex.
 

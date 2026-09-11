@@ -2,6 +2,9 @@ import { defineConfig } from 'playwright/test';
 
 export default defineConfig({
   testDir: './tests',
+  // The port audit (tests/port-audit.spec.ts) is a measurement run on
+  // purpose with `npm run audit`, not part of the verification suite.
+  testIgnore: process.env.PLASS_AUDIT ? [] : ['**/port-audit.spec.ts'],
   timeout: 30_000,
   use: {
     baseURL: 'http://127.0.0.1:5199',
