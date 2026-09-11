@@ -114,7 +114,9 @@ const mathDisplay: NodeSpec = {
 const figure: NodeSpec = {
   group: 'block',
   content: 'inline*',
-  attrs: { src: { default: '' }, label: { default: '' }, name: { default: '' } },
+  // `title`: a Markdown image title (`![alt](src "title")`), carried for
+  // the .md round trip; Typst has no use for it.
+  attrs: { src: { default: '' }, label: { default: '' }, name: { default: '' }, title: { default: '' } },
   draggable: true,
   isolating: true,
   parseDOM: [
@@ -150,20 +152,29 @@ const figure: NodeSpec = {
 // Inline raw Typst: an escape hatch mid-sentence, the inline twin of the
 // raw-Typst island block. Renders as its compiled self; the source is the
 // document's truth and exports verbatim. `#h(1fr)` and other fr content is
-// Inline raw Typst (`#h(1fr)` in a .typ file). An island: kept verbatim in
-// the file, shown and printed as inline code, never run (Typst on rails).
+// Inline island: raw Typst (`#h(1fr)` in a .typ file) or inline HTML
+// (`<sub>2</sub>`, an inline `<!-- comment -->` in a .md file; `lang:
+// 'html'`). Kept verbatim in its own file, shown and printed as inline
+// code, never run (Typst on rails).
 const typstInline: NodeSpec = {
   group: 'inline',
   inline: true,
   atom: true,
-  attrs: { src: { default: '' } },
+  attrs: { src: { default: '' }, lang: { default: 'typst' } },
   parseDOM: [
     {
       tag: 'span[data-typst]',
-      getAttrs: (el) => ({ src: (el as HTMLElement).getAttribute('data-typst') ?? '' }),
+      getAttrs: (el) => ({
+        src: (el as HTMLElement).getAttribute('data-typst') ?? '',
+        lang: (el as HTMLElement).getAttribute('data-lang') ?? 'typst',
+      }),
     },
   ],
-  toDOM: (node) => ['span', { 'data-typst': node.attrs.src, class: 'ts-inline-raw' }, node.attrs.src],
+  toDOM: (node) => [
+    'span',
+    { 'data-typst': node.attrs.src, 'data-lang': node.attrs.lang === 'typst' ? null : node.attrs.lang, class: 'ts-inline-raw' },
+    node.attrs.src,
+  ],
 };
 
 // of the page the marker lands on (positioned by the paginator). The

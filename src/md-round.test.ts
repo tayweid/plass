@@ -257,6 +257,17 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount,
   check('h4–h6 round-trip', docToMd(doc) === md, docToMd(doc));
 }
 
+// Inline HTML and image titles are carried, not stripped.
+{
+  const md = 'Water is H<sub>2</sub>O <!-- inline note -- keep --> and <span class="x">x</span>.\n\n![A figure](fig.png "Its title")\n';
+  const { doc, warnings } = mdToDoc(md);
+  const kinds: string[] = [];
+  doc.firstChild!.forEach((n) => kinds.push(n.type.name + (n.type.name === 'typst_inline' ? `:${n.attrs.lang}` : '')));
+  check('inline HTML becomes inline islands', kinds.filter((k) => k === 'typst_inline:html').length === 5 && warnings.length === 0, JSON.stringify([kinds, warnings]));
+  check('inline HTML and image titles round-trip', docToMd(doc) === md, docToMd(doc));
+  check('an inline HTML island prints as inline raw', docToTyp(doc, { islands: 'print' }).includes('#raw("<sub>")') && docToTyp(doc).includes('#raw("<!-- inline note -- keep -->")'), docToTyp(doc));
+}
+
 // Fill-in blanks, brackets, and a comment's spacing come back as written.
 {
   const blank = 'Between \\_________\\_ and \\_________\\_ per unit.\n';

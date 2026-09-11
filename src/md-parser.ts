@@ -19,8 +19,8 @@
 // tagged as Markdown), shown and printed as code, verbatim in and verbatim
 // out on save. (Left as prose it would be normalized like prose: the `--`
 // of a comment turns into an en dash and the comment stops being one.)
-// Inline HTML degrades to plain text with a warning. Nothing is dropped:
-// what the page cannot render is carried, not stripped.
+// Inline HTML is an inline island the same way. Nothing is dropped: what
+// the page cannot render is carried, not stripped.
 
 import MarkdownIt from 'markdown-it';
 import footnotePlugin from 'markdown-it-footnote';
@@ -286,7 +286,7 @@ export function mdToDoc(src: string): MdImport {
           break;
         case 'image': {
           const cap = t.children?.length ? parseInline(t.children) : t.content ? [schema.text(t.content)] : [];
-          pendingFigures.push(schema.nodes.figure.create({ src: t.attrGet('src') ?? '' }, cap));
+          pendingFigures.push(schema.nodes.figure.create({ src: t.attrGet('src') ?? '', title: t.attrGet('title') ?? '' }, cap));
           break;
         }
         case 'footnote_ref': {
@@ -296,10 +296,10 @@ export function mdToDoc(src: string): MdImport {
           break;
         }
         case 'html_inline':
-          if (t.content.trim()) {
-            warnings.push('inline HTML kept as plain text');
-            out.push(schema.text(t.content, marks));
-          }
+          // An inline island: verbatim in the file, inline code in the
+          // page and the print. (As prose it would be dash-normalized and
+          // an inline `<!-- comment -->` would stop being one.)
+          if (t.content) out.push(schema.nodes.typst_inline.create({ src: t.content, lang: 'html' }));
           break;
         default:
           if (t.content) out.push(...textWithRefs(t.content, marks));

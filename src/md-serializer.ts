@@ -117,7 +117,9 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         // Pandoc's raw-attribute syntax: standard markdown that other
         // tools understand as "Typst-only", and round-trips here.
         case 'typst_inline':
-          md += `\`${child.attrs.src as string}\`{=typst}`;
+          // Inline HTML is the file's own text; raw Typst uses pandoc's
+          // raw-attribute form.
+          md += child.attrs.lang === 'html' ? (child.attrs.src as string) : `\`${child.attrs.src as string}\`{=typst}`;
           break;
         case 'citation':
           md += `[@${child.attrs.key as string}]`;
@@ -228,7 +230,8 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         const src = node.attrs.src as string;
         if (src.startsWith('data:')) warn('embedded figure written as a data: URL — consider a project folder');
         if (node.attrs.label as string) warn(`figure label @${node.attrs.label as string} is not representable in Markdown`);
-        return `![${inline(node)}](${src})`;
+        const title = node.attrs.title as string;
+        return `![${inline(node)}](${src}${title ? ` "${title.replace(/"/g, '\\"')}"` : ''})`;
       }
       case 'table':
         return table(node);

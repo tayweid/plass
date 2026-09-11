@@ -315,7 +315,9 @@ function inlineToTyp(node: PMNode, tableCell = false): string {
     sig = '';
     if (child.type.name === 'typst_inline') {
       // Raw Typst: verbatim in the file; printed as inline raw, never run.
-      out += exportOpts.islands === 'print' ? `#raw(${JSON.stringify(child.attrs.src as string)})` : child.attrs.src;
+      // Inline HTML has no Typst form and is inline raw in the file too.
+      const raw = exportOpts.islands === 'print' || child.attrs.lang === 'html';
+      out += raw ? `#raw(${JSON.stringify(child.attrs.src as string)})` : child.attrs.src;
     } else if (child.type.name === 'eq_ref') {
       // Equation refs render as "(1)" to match the editor (Typst's default
       // would be "Equation 1"); figure refs keep "Figure 1".
