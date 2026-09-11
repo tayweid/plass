@@ -62,4 +62,15 @@ test('the APA style paints author-year citations that the compiler agrees with',
     window.view.dispatch(state.tr.setDocAttribute('settings', { ...state.doc.attrs.settings, citationStyle: 'ieee' }));
   });
   expect(await painted()).toEqual(['[1]', '[2]', '[1]']);
+
+  // Chicago author-date: no comma, "and", the same compiler check.
+  await page.evaluate(() => {
+    const { state } = window.view;
+    window.view.dispatch(state.tr.setDocAttribute('settings', { ...state.doc.attrs.settings, citationStyle: 'chicago-author-date' }));
+  });
+  expect(await painted()).toEqual(['(Knuth and Plass 1981)', '(Lamport 1994)', '(Knuth and Plass 1981)']);
+  const runs = await page.evaluate(() => window.__citationOracle.runs());
+  await expect.poll(() => page.evaluate(() => window.__citationOracle.runs()), { timeout: 40_000 }).toBeGreaterThan(runs);
+  expect(await page.evaluate(() => [...window.__citationOracle.overrides().keys()])).toEqual([]);
+  expect(await painted()).toEqual(['(Knuth and Plass 1981)', '(Lamport 1994)', '(Knuth and Plass 1981)']);
 });

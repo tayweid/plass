@@ -58,7 +58,7 @@ export function typToDoc(src: string): TypImport {
         importBibKeys = new Set(parseBibTeX(content).map((e) => e.key));
         // The citation style is a document setting; only ported styles
         // are offered, anything else falls back to the default.
-        if (m[2] === 'apa' || m[2] === 'ieee') settings.citationStyle = m[2];
+        if (m[2] === 'apa' || m[2] === 'ieee' || m[2] === 'chicago-author-date') settings.citationStyle = m[2];
       } catch (error) {
         warnings.push(
           error instanceof Error && error.message.includes("Plass's")

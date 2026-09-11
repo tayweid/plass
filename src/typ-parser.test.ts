@@ -654,7 +654,7 @@ function firstDiff(a: string, b: string): string {
   const out = docToTyp(doc);
   check('the style exports back on the bibliography line', out.includes('title: "References", style: "apa")'), out);
   check('a style round-trip is idempotent', docToTyp(typToDoc(out).doc) === out, firstDiff(docToTyp(typToDoc(out).doc), out));
-  const unknown = typToDoc(src.replace('"apa"', '"chicago-author-date"')).doc;
+  const unknown = typToDoc(src.replace('"apa"', '"mla"')).doc;
   check('an unported style falls back to the default', unknown.attrs.settings.citationStyle === 'ieee', JSON.stringify(unknown.attrs.settings.citationStyle));
 }
 

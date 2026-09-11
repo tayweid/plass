@@ -150,7 +150,7 @@ export function normalizeSettings(raw: Partial<DocSettings> | null | undefined):
   if (typeof source.parIndent === 'boolean') merged.parIndent = source.parIndent;
   if (typeof source.numberEquations === 'boolean') merged.numberEquations = source.numberEquations;
   if (typeof source.numberSections === 'boolean') merged.numberSections = source.numberSections;
-  if (oneOf(source.citationStyle, ['ieee', 'apa'])) merged.citationStyle = source.citationStyle;
+  if (oneOf(source.citationStyle, ['ieee', 'apa', 'chicago-author-date'])) merged.citationStyle = source.citationStyle;
   if (typeof source.pageNumShow === 'boolean') merged.pageNumShow = source.pageNumShow;
   if (oneOf(source.pageNumFormat, ['1', '— 1 —', 'i', '1 / 1'])) merged.pageNumFormat = source.pageNumFormat;
   if (oneOf(source.pageNumAlign, ['left', 'center', 'right'])) merged.pageNumAlign = source.pageNumAlign;

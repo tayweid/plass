@@ -137,9 +137,11 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
    `n.d.`, `a`/`b` suffixes — and the References compile now also
    renders every citation on a marked line; a compiled string that
    differs from the formatter's is logged and painted in its place
-   (`__citationOracle` in dev). Chicago author-date was probed (no
-   comma, "and", editors by full name) and is not offered yet. The
-   original plan follows for the record.
+   (`__citationOracle` in dev). Chicago author-date joined the same day
+   after a wider probe (thirty-one entries, both styles): no comma,
+   "and", editors by full name comma-joined, a standing-in title in
+   curly quotes for short works. The original plan follows for the
+   record.
    The line-breaker pattern, not a CSL engine: hand-write per-style
    formatters in TS and offer ONLY ported styles in a document-settings
    dropdown. IEEE numeric is the existing first-use counter in

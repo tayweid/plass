@@ -241,8 +241,9 @@ rails can always be finished in Typst itself, because the file is Typst.
   (`#bibliography(bytes(...), style: "ieee")`), keeping files fully
   self-contained. Cite with the same `@` picker (searchable by key, author,
   or title); citations render live in the document's **citation style**
-  (Settings → Citations: IEEE numeric `[n]` in first-use order, or APA
-  author–year `(Knuth & Plass, 1981)`) — the in-text string comes from a
+  (Settings → Citations: IEEE numeric `[n]` in first-use order, APA
+  author–year `(Knuth & Plass, 1981)`, or Chicago author–date
+  `(Knuth and Plass 1981)`) — the in-text string comes from a
   ported formatter that the References block's own compile checks against
   Typst, so it matches the PDF — and a generated References block lists
   cited works, renumbering as citations move. Typed `@key ` auto-converts when the
