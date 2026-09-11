@@ -135,12 +135,15 @@ either serializer, or a code editor dependency.
    languages, toolbar and status changes, print rule.
 3. **Mapping and feedback (1 day).** Block-level caret and scroll mapping
    both ways; island toast; export from source mode.
-4. **Writing niceties (1–2 days, optional, any order).** Focus mode (dim all
-   but the current paragraph), typewriter scrolling, `Mod-b`/`Mod-i`
-   wrapping markup in source, ~~mode memory per format~~ (applied
-   2026-09-11: a document opened in a format last left in the source view
-   opens in the source view; `afterSetDoc`), a "simpler files" default
-   for `.md` if wanted.
+4. ~~Writing niceties~~ — landed 2026-09-11: focus mode (a quiet toggle in
+   the sheet's corner and ⌘⇧F; every paragraph but the caret's dims;
+   remembered), typewriter scrolling (an edit that leaves the scroller's
+   middle band brings the caret's line back to the middle), `Mod-b` /
+   `Mod-i` wrapping the selection or the word under the caret in the
+   format's markup (again unwraps), and mode memory per format (a
+   document opened in a format last left in the source view opens there;
+   `afterSetDoc`). Not done: a "simpler files" default for `.md` — the
+   decision stands that `.md` does not default to the source view.
 5. **The one rule: typed Typst does not run.** Landed 2026-09-11. Islands
    are inert everywhere: `docToTyp` takes `{ islands: 'file' | 'print' }`
    — the file save keeps raw Typst verbatim, the page oracle and the PDF

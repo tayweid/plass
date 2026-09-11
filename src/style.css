@@ -879,6 +879,39 @@ body {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+/* Focus mode: the paragraph you are in stays; the rest recedes. */
+#source .cm-line.cm-dim {
+  opacity: 0.3;
+  transition: opacity 160ms ease;
+}
+
+#source .source-focus {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  z-index: 2;
+  font: 11px var(--sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+  opacity: 0.45;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--ink) 25%, transparent);
+  border-radius: 999px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+#source .source-focus:hover,
+#source .source-focus[aria-pressed='true'] {
+  opacity: 0.9;
+}
+
+#source .source-focus[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 #source .cm-searchMatch {
   background: color-mix(in srgb, #d9a441 35%, transparent);
 }

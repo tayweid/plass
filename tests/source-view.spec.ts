@@ -412,6 +412,55 @@ test('a format last left in the source view opens in the source view', async ({ 
   expect(await page.evaluate(() => window.__sourceView.isActive())).toBe(false);
 });
 
+test('writing niceties: markup keys, focus mode, and typewriter scrolling', async ({ page }) => {
+  await loadDemo(page);
+  await enter(page);
+  // Mod-b / Mod-i wrap the selection in the format's markup; again unwraps.
+  await page.evaluate(() => window.__sourceView.setText('alpha beta\n\nsecond paragraph here\n\nthird one\n'));
+  await page.evaluate(() => window.__sourceView.setCaret(0));
+  await page.keyboard.press('Shift+End');
+  await page.keyboard.press('ControlOrMeta+b');
+  expect(await page.evaluate(() => window.__sourceView.text()!.split('\n')[0])).toBe('*alpha beta*');
+  await page.keyboard.press('ControlOrMeta+b');
+  expect(await page.evaluate(() => window.__sourceView.text()!.split('\n')[0])).toBe('alpha beta');
+  await page.evaluate(() => window.__sourceView.setCaret(2)); // inside "alpha"
+  await page.keyboard.press('ControlOrMeta+i');
+  expect(await page.evaluate(() => window.__sourceView.text()!.split('\n')[0])).toBe('_alpha_ beta');
+
+  // Focus mode dims every paragraph but the caret's, and persists.
+  await page.evaluate(() => window.__sourceView.setCaret(20)); // second paragraph
+  expect(await page.evaluate(() => window.__sourceView.focusMode())).toBe(false);
+  await page.locator('#source .source-focus').click();
+  expect(await page.evaluate(() => window.__sourceView.focusMode())).toBe(true);
+  const dimmed = await page.evaluate(() => [...document.querySelectorAll('#source .cm-line')].map((l) => l.classList.contains('cm-dim')));
+  expect(dimmed.filter(Boolean).length).toBeGreaterThan(0);
+  const caretLineDim = await page.evaluate(() => {
+    const lines = [...document.querySelectorAll('#source .cm-line')];
+    return lines.find((l) => l.textContent?.startsWith('second'))?.classList.contains('cm-dim');
+  });
+  expect(caretLineDim).toBe(false);
+  expect(await page.evaluate(() => localStorage.getItem('typeset-source-focus'))).toBe('1');
+  await page.keyboard.press('ControlOrMeta+Shift+f');
+  expect(await page.evaluate(() => window.__sourceView.focusMode())).toBe(false);
+
+  // Typewriter scrolling: after many lines the caret's line sits in the
+  // scroller's middle band, not at its bottom.
+  await page.evaluate(() => window.__sourceView.setCaret(window.__sourceView.text()!.length));
+  for (let i = 0; i < 40; i++) await page.keyboard.type(`line ${i}\n`, { delay: 0 });
+  const band = await page.evaluate(() => {
+    const scroller = document.getElementById('scroll')!;
+    const r = scroller.getBoundingClientRect();
+    const caret = document.querySelector('#source .cm-cursor') as HTMLElement | null;
+    const lines = [...document.querySelectorAll('#source .cm-line')];
+    const last = lines[lines.length - 1].getBoundingClientRect();
+    const y = (caret ? caret.getBoundingClientRect().top : last.top) - r.top;
+    return { y: y / r.height, scrolled: scroller.scrollTop > 0 };
+  });
+  expect(band.scrolled).toBe(true);
+  expect(band.y).toBeGreaterThan(0.2);
+  expect(band.y).toBeLessThan(0.75);
+});
+
 test('PDF export from the source runs on the parsed text', async ({ page }) => {
   await boot(page);
   let downloads = 0;

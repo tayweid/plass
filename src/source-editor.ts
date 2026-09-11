@@ -10,8 +10,8 @@
 // (source-typst-mode.ts) emits the same standard tags lang-markdown does.
 // The sheet, measure and fonts are CSS (#source in style.css).
 
-import { EditorState, StateField, type Extension } from '@codemirror/state';
-import { Decoration, EditorView, WidgetType, drawSelection, keymap, type DecorationSet } from '@codemirror/view';
+import { Compartment, EditorSelection, EditorState, RangeSetBuilder, StateField, type Extension } from '@codemirror/state';
+import { Decoration, EditorView, ViewPlugin, WidgetType, drawSelection, keymap, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { search, searchKeymap } from '@codemirror/search';
 import {
@@ -31,6 +31,8 @@ import { typstRails } from './source-typst-mode';
 export type SourceFormat = '.md' | '.typ';
 
 export interface SourceEditor {
+  /** Focus mode: dim every paragraph but the caret's (step 4). */
+  setFocusMode(on: boolean): void;
   /** The text as typed, verbatim. */
   text(): string;
   /** Replace the whole text (a document arriving from disk while the
@@ -53,7 +55,115 @@ export interface SourceEditorOptions {
    *  Settings panel edits), folded away on mount so the source opens on
    *  the body. 0 or undefined: nothing to fold. */
   preambleEnd?: number;
+  /** The element that scrolls the sheet (typewriter scrolling keeps the
+   *  caret's line in its middle band while typing). */
+  scroller?: HTMLElement | null;
+  /** Start in focus mode. */
+  focusMode?: boolean;
+  /** `Mod-Shift-f` in the editor. */
+  onFocusToggle?: () => void;
 }
+
+// ---------- writing niceties (SOURCE-VIEW.md, step 4) ----------
+
+/** Wrap the selection — or the word under the caret, or nothing but the
+ *  caret — in a pair of markup delimiters; unwrap when it already is. */
+function wrapWith(open: string, close: string) {
+  return (view: EditorView): boolean => {
+    const { state } = view;
+    const spec = state.changeByRange((range) => {
+      const before = state.sliceDoc(Math.max(0, range.from - open.length), range.from);
+      const after = state.sliceDoc(range.to, range.to + close.length);
+      if (range.from - open.length >= 0 && before === open && after === close) {
+        return {
+          changes: [
+            { from: range.from - open.length, to: range.from },
+            { from: range.to, to: range.to + close.length },
+          ],
+          range: EditorSelection.range(range.from - open.length, range.to - open.length),
+        };
+      }
+      let from = range.from;
+      let to = range.to;
+      if (range.empty) {
+        const line = state.doc.lineAt(range.head);
+        while (from > line.from && /\w/.test(state.sliceDoc(from - 1, from))) from--;
+        while (to < line.to && /\w/.test(state.sliceDoc(to, to + 1))) to++;
+        if (from === to) {
+          return { changes: { from: range.head, insert: open + close }, range: EditorSelection.cursor(range.head + open.length) };
+        }
+      }
+      return {
+        changes: [
+          { from, insert: open },
+          { from: to, insert: close },
+        ],
+        range: EditorSelection.range(from + open.length, to + open.length),
+      };
+    });
+    view.dispatch(spec, { scrollIntoView: true, userEvent: 'input' });
+    return true;
+  };
+}
+
+function markupKeys(format: SourceFormat): Extension {
+  const [bOpen, bClose, iOpen, iClose] = format === '.md' ? ['**', '**', '*', '*'] : ['*', '*', '_', '_'];
+  return keymap.of([
+    { key: 'Mod-b', run: wrapWith(bOpen, bClose) },
+    { key: 'Mod-i', run: wrapWith(iOpen, iClose) },
+  ]);
+}
+
+/** Typewriter scrolling: after an edit, if the caret's line has left the
+ *  middle band of the scroller, bring it back to the middle. Measured in
+ *  a read phase; a scroll write follows. */
+function typewriter(view: EditorView, scroller: HTMLElement) {
+  view.requestMeasure({
+    read: (v) => {
+      const c = v.coordsAtPos(v.state.selection.main.head);
+      if (!c) return null;
+      const r = scroller.getBoundingClientRect();
+      const y = c.top - r.top;
+      return y < r.height * 0.35 || y > r.height * 0.6 ? y - r.height / 2 : null;
+    },
+    write: (delta) => {
+      if (delta !== null) scroller.scrollTop += delta;
+    },
+  });
+}
+
+/** Focus mode: every line outside the caret's paragraph (blank-line
+ *  delimited) is dimmed. */
+const focusDim = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = this.compute(view);
+    }
+    update(u: ViewUpdate) {
+      if (u.docChanged || u.selectionSet || u.viewportChanged) this.decorations = this.compute(u.view);
+    }
+    compute(view: EditorView): DecorationSet {
+      const { doc } = view.state;
+      const head = doc.lineAt(view.state.selection.main.head);
+      let first = head.number;
+      let last = head.number;
+      while (first > 1 && doc.line(first - 1).text.trim() !== '') first--;
+      while (last < doc.lines && doc.line(last + 1).text.trim() !== '') last++;
+      const builder = new RangeSetBuilder<Decoration>();
+      const dim = Decoration.line({ class: 'cm-dim' });
+      for (const { from, to } of view.visibleRanges) {
+        for (let pos = from; pos <= to; ) {
+          const line = doc.lineAt(pos);
+          if (line.number < first || line.number > last) builder.add(line.from, line.from, dim);
+          pos = line.to + 1;
+        }
+      }
+      return builder.finish();
+    }
+  },
+  { decorations: (v) => v.decorations },
+);
 
 // ---------- the folded preamble ----------
 //
@@ -244,6 +354,7 @@ const railsHighlight = HighlightStyle.define([
 ]);
 
 export function mountSourceEditor(host: HTMLElement, opts: SourceEditorOptions): SourceEditor {
+  const focus = new Compartment();
   const view = new EditorView({
     parent: host,
     state: EditorState.create({
@@ -253,14 +364,20 @@ export function mountSourceEditor(host: HTMLElement, opts: SourceEditorOptions):
         history(),
         drawSelection(),
         search({ top: true }),
+        markupKeys(opts.format),
+        keymap.of([{ key: 'Mod-Shift-f', run: () => (opts.onFocusToggle?.(), true) }]),
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
         EditorView.lineWrapping,
         opts.format === '.md'
           ? markdown({ base: markdownLanguage, extensions: plassMarkdown })
           : StreamLanguage.define(typstRails),
         syntaxHighlighting(railsHighlight),
+        focus.of(opts.focusMode ? focusDim : []),
         EditorView.updateListener.of((update) => {
-          if (update.docChanged) opts.onChange();
+          if (update.docChanged) {
+            opts.onChange();
+            if (opts.scroller) typewriter(update.view, opts.scroller);
+          }
         }),
       ],
     }),
@@ -280,6 +397,9 @@ export function mountSourceEditor(host: HTMLElement, opts: SourceEditorOptions):
       view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
     },
     focus: () => view.focus(),
+    setFocusMode(on) {
+      view.dispatch({ effects: focus.reconfigure(on ? focusDim : []) });
+    },
     destroy: () => view.destroy(),
   };
 }

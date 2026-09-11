@@ -264,6 +264,16 @@ rails can always be finished in Typst itself, because the file is Typst.
   are painted via decorations (never stored), so the document model stays
   clean. Exports as Typst `#set math.equation(numbering: "(1)")` +
   `<label>`/`@label`.
+- **Source view** (the `<>` button or ⌘/): the same document as its own
+  text, `.typ` or `.md`, in a quiet wide-margined sheet in the spirit of iA
+  Writer — a second editor for the same rails, not an escape hatch. The
+  caret and scroll position map across by block; the generated Typst
+  preamble is folded; Typst typed there is kept but never run (it comes
+  back as an island shown as code). Writing niceties: **Focus** (a toggle
+  in the sheet's corner, ⌘⇧F) dims every paragraph but the one you are in,
+  typewriter scrolling keeps your line in the middle of the screen, ⌘B/⌘I
+  wrap the selection in the format's markup, and a format you last left
+  in the source view opens there next time.
 - **Document settings** (⚙ in the toolbar): font (New Computer Modern — the
   TeX face — is the sole certified public choice, with the same family and
   styles feeding live layout and PDF export), size, line spacing,

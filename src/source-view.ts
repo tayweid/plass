@@ -58,6 +58,9 @@ export interface SourceView {
   persist: () => void;
   /** Focus whichever editor is the truth. */
   focus: () => void;
+  /** Focus mode (step 4): dim every paragraph but the caret's. */
+  focusMode: () => boolean;
+  setFocusMode: (on: boolean) => void;
   /** Test hooks (DEV only): the raw text and caret of the source editor. */
   text: () => string | null;
   setText: (text: string) => void;
@@ -73,6 +76,8 @@ export const SOURCE_SESSION_KEY = 'typeset-doc-source';
  *  default stays the page view for both formats (decisions taken,
  *  2026-09-02; applied 2026-09-11). */
 const MODE_MEMORY_KEY = 'typeset-source-mode';
+/** Origin-wide: focus mode on or off. */
+const FOCUS_KEY = 'typeset-source-focus';
 
 interface SourceSession {
   mode: 'source';
@@ -241,6 +246,27 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
     }
   };
 
+  let focusOn = false;
+  try {
+    focusOn = localStorage.getItem(FOCUS_KEY) === '1';
+  } catch {
+    /* the memory is a convenience */
+  }
+  const applyFocus = (on: boolean) => {
+    focusOn = on;
+    try {
+      localStorage.setItem(FOCUS_KEY, on ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+    if (!active) return;
+    active.editor.setFocusMode(on);
+    active.host.classList.toggle('focus-mode', on);
+    active.host.querySelector<HTMLButtonElement>('.source-focus')?.setAttribute('aria-pressed', String(on));
+    active.editor.focus();
+  };
+  const toggleFocus = () => applyFocus(!focusOn);
+
   const mount = async (text: string | null, format: SourceFormat): Promise<void> => {
     const [{ mountSourceEditor }] = await Promise.all([
       import('./source-editor'),
@@ -264,10 +290,23 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
     const host = document.createElement('div');
     host.id = 'source';
     stack.appendChild(host);
+    // Focus mode: a quiet toggle in the sheet's corner, and Mod-Shift-f.
+    const focusBtn = document.createElement('button');
+    focusBtn.type = 'button';
+    focusBtn.className = 'source-focus';
+    focusBtn.textContent = 'Focus';
+    focusBtn.title = 'Focus mode — dim every paragraph but the one you are in (⌘⇧F)';
+    focusBtn.setAttribute('aria-pressed', String(focusOn));
+    focusBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    focusBtn.addEventListener('click', () => toggleFocus());
+    host.appendChild(focusBtn);
     const editor = mountSourceEditor(host, {
       text: initial,
       format,
       preambleEnd: preambleEnd(initial, format, text === null ? offsets : null),
+      scroller: document.getElementById('scroll'),
+      focusMode: focusOn,
+      onFocusToggle: () => toggleFocus(),
       onChange() {
         clearTimeout(persistTimer);
         persistTimer = window.setTimeout(persistSession, 400);
@@ -275,6 +314,7 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
       },
     });
     active = { editor, host, format, offsets, stackHeight, islands };
+    host.classList.toggle('focus-mode', focusOn);
     persistSession();
     rememberMode(format, 'source');
     hooks.onMode(true);
@@ -369,6 +409,8 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
         return view.state.doc;
       }
     },
+    focusMode: () => focusOn,
+    setFocusMode: (on) => applyFocus(on),
     wordCount() {
       const text = active
         ? active.editor.text()
