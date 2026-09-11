@@ -116,16 +116,15 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      each file and classify the first differing line; worth keeping as
      `scripts/md-corpus.ts` with a folder argument.
 2. **Finish the started features** — each is one short session:
-   - *Keep-together*: machinery exists (⌘⌥K, atomic pagination,
-     `block(breakable: false)` emission/import). Open: a discoverable UI
-     control and "keep heading with next block."
    - *Running headers/footers*: header text, alignment, `{page}`
      substitution, first-page suppression, and emission/import are done.
      Open: custom footer content, section-aware values via `context`, a
      first-page behavior control in the settings UI, and moving the ordinary
      folio into the header.
-   - *Draft niceties*: 1.5 spacing exists. Open: double spacing, DRAFT
-     watermark/background, margin line numbers.
+   - Dropped 2026-09-11 (Taylor): a keep-together control and "keep heading
+     with next block" (⌘⌥K and the atomic pagination stay as they are);
+     the draft niceties (double spacing, DRAFT watermark, margin line
+     numbers).
 3. **Tables as daily tools.** Done 2026-09-11 — every item below landed
    in one day of slices. First slice — what
    made them "clunky to edit": the floating control bar covered the
@@ -168,9 +167,8 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      tall cell split by Typst, or a captioned (figure) table still places
      the table whole.
 4. **Citations** (see the worked plan below — the largest planned feature).
-5. **Paragraph typography odds and ends** — hyphenation language selection,
-   per-document justification toggle, heading font pairing (sans headings
-   over serif body).
+5. ~~Paragraph typography odds and ends~~ — dropped 2026-09-11 (Taylor):
+   hyphenation language, a justification toggle, sans headings.
 
 ## Citations (worked plan)
 
@@ -265,29 +263,31 @@ answered from the bottom edge on 2026-09-11 — see "the divergences".)
 
 ## Needs its own design session
 
-- **Multiple columns** — `#set page(columns: 2)`. The big one, flagged
-  honestly: this reshapes the whole oracle pipeline. The line-break
-  oracle needs the per-column measure; the page oracle needs per-column
-  line extraction (tsel geometry per column region); the editor's
-  continuous-flow-with-spacers model needs a two-column rendering
-  strategy (CSS columns fight the decoration/pagination model — likely
-  needs oracle-driven column-break spacers analogous to page breaks).
-  Design session first; don't start it as a side quest.
+- ~~Multiple columns~~ — not needed (Taylor, 2026-09-11). What the
+  page-wide `columns: 2` was standing in for are two narrower things,
+  each its own rail when its turn comes:
+  - **A text block beside a figure or table** — one atomic side-by-side
+    block (text | figure), never split across pages; a grid with two
+    cells, not page columns.
+  - **Printing notes on half-sheets** — an output concern (a paper size,
+    or a 2-up imposition at print/export time), not an editing layout.
 
 ## Standing backlog
 
 - ~~Source view, step 4~~ — done 2026-09-11 (focus mode, typewriter
   scrolling, ⌘B/⌘I markup keys, mode memory per format).
-- **Incremental pagination activation for 50+ page documents.** The suffix
+- **Parked until speed has been tested more (Taylor, 2026-09-11):
+  incremental pagination activation for 50+ page documents.** The suffix
   planner and full-versus-suffix comparator exist, and the 40–50-page browser
   fixture requires a late-edit candidate to visit less than 25% of the full
   top-level units while preserving selection, undo, spellcheck, and caret/
   scroll position within 2 px. It remains development shadow telemetry: the
-  full result is always installed. Promotion requires a production-mode
-  exact-source fixture proving mapped page-marker and painted-spacer
-  provenance with zero corrections.
-- Table/figure float placement (`placement: auto` — drift to page top).
-- **Offline launch for the installed PWA.** There is no service worker, so
+  full result is always installed. With the compile out of the edit loop a
+  50-page settle is still a full walk, but it no longer shows as lag.
+- Table/figure float placement (`placement: auto` — drift to page top) —
+  do it if it is easy (Taylor, 2026-09-11).
+- **Parked until things are more settled (Taylor, 2026-09-11): offline
+  launch for the installed PWA.** There is no service worker, so
   the installed app is a standalone window that fetches plass.tayweid.io on
   every launch and cannot open without a network — an odd gap for an editor
   whose documents already live in IndexedDB and whose privacy claim is that
@@ -297,8 +297,12 @@ answered from the bottom edge on 2026-09-11 — see "the divergences".)
   types immediately, with compiled-oracle features degrading until the
   compiler is available. Pages serves everything `max-age=600`, so a worker
   also decides how an update reaches an already-open app.
-- Custom paper dimensions; inside/outside (two-sided) margins; footnote
-  per-page vs continuous numbering and separator options.
+- Custom paper dimensions; footnote per-page vs continuous numbering and
+  separator options — next, quick (Taylor, 2026-09-11). Two-sided
+  inside/outside margins dropped.
+- The oracle-class removal — the last piece of the second renderer
+  (`TypstOracle`, `PageOracle`, the coordinator, the compiled authority
+  branches and page-mark holding state in the plugin).
 - ~~Environment check for text metrics~~ — done 2026-09-11
   (`src/environment-check.ts`). CI's Linux Chromium hinted the bundled
   fonts and rounded every advance to a whole pixel (225px vs 212.6px for
