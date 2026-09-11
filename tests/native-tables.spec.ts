@@ -136,7 +136,7 @@ test('rich table cells edit directly, navigate with Tab, and undo without flatte
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).child(0).textContent)).toContain('!');
 });
 
-test('native table keystrokes map numbering and defer contextual geometry past first paint', async ({ page }) => {
+test('native table keystrokes map numbering and read no contextual geometry', async ({ page }) => {
   await installRichTable(page);
   const paragraph = page.locator('.ProseMirror td').first().locator('p').first();
   await paragraph.click();
@@ -261,22 +261,90 @@ test('native table keystrokes map numbering and defer contextual geometry past f
 
   await page.keyboard.type('Z');
   await expect.poll(() => page.evaluate(() => window.__tableHotPathProbe?.afterFirstPaint)).toBe(true);
-  await expect.poll(() => page.evaluate(() => window.__tableHotPathProbe?.geometryAfterPaint ?? 0)).toBeGreaterThan(0);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   const snapshot = await page.evaluate(() => window.__tableHotPathProbe!.finish());
 
   expect(snapshot.labelsReused).toBe(true);
-  // ProseMirror may read the table itself to keep the native caret scrolled
-  // into view. The contextual controls and main toolbar must add no layout
-  // read to that first-paint path.
-  expect(snapshot.geometryBeforePaint.filter((entry) =>
-    entry.startsWith('native-controls:') || entry.startsWith('main-toolbar:'),
-  )).toEqual([]);
+  // The contextual controls are docked chrome: a keystroke in a cell reads
+  // no geometry for them or the main toolbar, before or after the paint,
+  // and publishes no position. (ProseMirror may still read the table to
+  // keep the caret scrolled into view.)
+  const chrome = (entries: string[]) => entries.filter((entry) => entry.startsWith('native-controls:') || entry.startsWith('main-toolbar:'));
+  expect(chrome(snapshot.geometryBeforePaint)).toEqual([]);
+  expect(chrome(snapshot.geometryAfterPaint)).toEqual([]);
   expect(snapshot.publicationsBeforePaint).toEqual([]);
-  expect(snapshot.geometryAfterPaint).toEqual(expect.arrayContaining([
-    'native-table:getBoundingClientRect',
-    'native-controls:offsetWidth',
-    'native-controls:offsetHeight',
-  ]));
+  expect(snapshot.publicationsAfterPaint).toEqual([]);
+});
+
+test('a table grows under the keyboard and lets the caret out at its edges', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    window.view.dispatch(state.tr.insertText('Before the table.', 1));
+    window.view.focus();
+  });
+  await page.keyboard.press('End');
+  await page.keyboard.press('Meta+Alt+t');
+  await expect(page.locator('.ProseMirror table')).toHaveCount(1);
+  // The first header's placeholder is selected: typing replaces it.
+  await page.keyboard.type('Name');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('Score');
+  // Enter moves down a row, same column; Tab from the last cell adds a row.
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('12');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('x');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('y');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('z');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('new row');
+  const shape = await page.evaluate(() => {
+    const table = window.view.state.doc.child(1);
+    const rows: string[][] = [];
+    table.forEach((row) => {
+      const cells: string[] = [];
+      row.forEach((cell) => cells.push(cell.textContent));
+      rows.push(cells);
+    });
+    return rows;
+  });
+  expect(shape).toEqual([
+    ['Name', 'Score', 'Column 3'],
+    ['', '12', 'x'],
+    ['y', 'z', 'new row'],
+  ]);
+  // Enter on the last row adds one more; ArrowDown from it leaves the table
+  // into a fresh paragraph (the table ended the document).
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('last');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.type('After the table.');
+  const blocks = await page.evaluate(() => {
+    const out: string[] = [];
+    window.view.state.doc.forEach((n) => out.push(`${n.type.name}:${n.type.name === 'table' ? n.childCount : n.textContent}`));
+    return out;
+  });
+  expect(blocks).toEqual(['paragraph:Before the table.', 'table:4', 'paragraph:After the table.']);
+  // ArrowUp from the first row goes back to the paragraph before it.
+  await page.evaluate(() => {
+    const table = window.view.state.doc.child(1);
+    const pos = window.view.state.doc.child(0).nodeSize + 3;
+    window.view.dispatch(window.view.state.tr.setSelection(window.view.state.selection.constructor.near(window.view.state.doc.resolve(pos), 1)));
+    return table.childCount;
+  });
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.type(' Yes.');
+  expect(await page.evaluate(() => window.view.state.doc.child(0).textContent)).toBe('Before the table. Yes.');
+  // The docked controls never cover the document.
+  const covers = await page.evaluate(() => {
+    const bar = document.querySelector('.native-table-toolbar')!.getBoundingClientRect();
+    const page1 = document.querySelector('.ProseMirror')!.getBoundingClientRect();
+    return bar.bottom > page1.top + 1;
+  });
+  expect(covers).toBe(false);
 });
 
 test('default native table uses the intrinsic centered Typst box model', async ({ page }) => {

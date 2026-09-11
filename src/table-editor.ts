@@ -18,6 +18,8 @@ import {
   deleteColumn,
   deleteRow,
   deleteTable,
+  goToNextCell,
+  isInTable,
   mergeCells,
   selectedRect,
   setCellAttr,
@@ -93,10 +95,88 @@ export function insertStructuredTable(view: EditorView): void {
   const tr = view.state.tr.insert(insertPos, node);
   const inserted = tr.doc.nodeAt(insertPos);
   if (!inserted) return;
+  // The first header's placeholder is selected, like every cell Tab lands
+  // in: typing replaces "Column 1" instead of prepending to it.
   const firstCell = TableMap.get(inserted).map[0];
-  tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 1 + firstCell + 1), 1));
+  const cellPos = insertPos + 1 + firstCell;
+  const firstNode = tr.doc.nodeAt(cellPos)!;
+  tr.setSelection(TextSelection.between(tr.doc.resolve(cellPos + 1), tr.doc.resolve(cellPos + firstNode.nodeSize - 1)));
   view.dispatch(tr.scrollIntoView());
   view.focus();
+}
+
+/** Select a cell's whole content, as Tab does when it lands in one. */
+function selectCell(tr: Transaction, cellPos: number): Transaction {
+  const cell = tr.doc.nodeAt(cellPos);
+  if (!cell) return tr;
+  return tr.setSelection(TextSelection.between(tr.doc.resolve(cellPos + 1), tr.doc.resolve(cellPos + cell.nodeSize - 1)));
+}
+
+/** Tab in a table: the next cell; from the last cell, a new row — the
+ *  spreadsheet habit, so a table grows under the fingers. */
+export const tabInTable: Command = (state, dispatch, view) => {
+  if (!isInTable(state)) return false;
+  if (goToNextCell(1)(state, dispatch)) return true;
+  if (!addRowAfter(state, dispatch)) return false;
+  if (view) goToNextCell(1)(view.state, view.dispatch);
+  return true;
+};
+
+/** Enter in a cell: the cell below, in the same column; from the last row,
+ *  a new row. (A line break inside a cell is Shift-Enter.) */
+export const enterInTable: Command = (state, dispatch, view) => {
+  if (!isInTable(state)) return false;
+  let rect: ReturnType<typeof selectedRect>;
+  try {
+    rect = selectedRect(state);
+  } catch {
+    return false;
+  }
+  const { map, tableStart } = rect;
+  if (rect.bottom >= map.height) {
+    if (!addRowAfter(state, dispatch)) return false;
+    if (view) {
+      const next = selectedRect(view.state);
+      const below = next.map.map[(next.bottom) * next.map.width + next.left];
+      view.dispatch(selectCell(view.state.tr, next.tableStart + below).scrollIntoView());
+    }
+    return true;
+  }
+  const below = map.map[rect.bottom * map.width + rect.left];
+  if (dispatch) dispatch(selectCell(state.tr, tableStart + below).scrollIntoView());
+  return true;
+};
+
+/** ArrowDown from the last row (ArrowUp from the first) with nowhere to go:
+ *  step out of the table into the block after (before) it, creating a
+ *  paragraph when the table ends the document. Runs after the geometric
+ *  caret motion has found no line to land on. */
+export function exitTableVertically(dir: -1 | 1): Command {
+  return (state, dispatch) => {
+    if (!isInTable(state)) return false;
+    let rect: ReturnType<typeof selectedRect>;
+    try {
+      rect = selectedRect(state);
+    } catch {
+      return false;
+    }
+    if (dir > 0 ? rect.bottom < rect.map.height : rect.top > 0) return false;
+    const tablePos = rect.tableStart - 1;
+    const table = state.doc.nodeAt(tablePos);
+    if (!table) return false;
+    const edge = dir > 0 ? tablePos + table.nodeSize : tablePos;
+    if (!dispatch) return true;
+    const $edge = state.doc.resolve(edge);
+    const neighbour = dir > 0 ? $edge.nodeAfter : $edge.nodeBefore;
+    if (neighbour?.isTextblock) {
+      const pos = dir > 0 ? edge + 1 : edge - 1;
+      dispatch(state.tr.setSelection(TextSelection.near(state.doc.resolve(pos), dir)).scrollIntoView());
+      return true;
+    }
+    const tr = state.tr.insert(edge, schema.nodes.paragraph.create());
+    dispatch(tr.setSelection(TextSelection.create(tr.doc, edge + 1)).scrollIntoView());
+    return true;
+  };
 }
 
 // The editor enforces the same lossless subset as the Typst serializer.
@@ -416,10 +496,6 @@ class NativeTableControls {
   private detailsOpen = false;
   private controlsRevision = -1;
   private selectionSignature = '';
-  private positionFrame = 0;
-  private positionAfterPaint = false;
-  private positionGeneration = 0;
-  private destroyed = false;
 
   constructor(private readonly view: EditorView) {
     this.root = document.createElement('div');
@@ -510,7 +586,6 @@ class NativeTableControls {
       this.detailsOpen = !this.detailsOpen;
       this.root.classList.toggle('show-details', this.detailsOpen);
       detailsButton.setAttribute('aria-expanded', String(this.detailsOpen));
-      this.schedulePosition(false);
     });
     appearance.appendChild(detailsButton);
     commandButton(appearance, 'Delete', 'Delete table', deleteTable, true);
@@ -560,13 +635,14 @@ class NativeTableControls {
     this.advanced.textContent = 'Custom Typst options are exact in Proof/export; native cells show the base style';
     details.appendChild(this.advanced);
 
+    // Docked under the main toolbar (CSS), never over the document: a bar
+    // floating beside the table covered the paragraph above it, and moved
+    // on every keystroke.
     document.body.appendChild(this.root);
-    window.addEventListener('resize', this.scheduleViewportPosition);
-    document.addEventListener('scroll', this.scheduleViewportPosition, true);
     this.update(view);
   }
 
-  update = (view: EditorView, prevState?: EditorState): void => {
+  update = (view: EditorView): void => {
     const context = tableContext(view.state);
     if (!context) {
       this.currentTable = null;
@@ -586,10 +662,7 @@ class NativeTableControls {
     // An ordinary text transaction can change the table's rendered height,
     // but it cannot change any control semantics. Retain every control DOM
     // value and move the optional geometry read past the first text paint.
-    if (!refreshControls) {
-      if (prevState && prevState.doc !== view.state.doc) this.schedulePosition(true);
-      return;
-    }
+    if (!refreshControls) return;
     const dom = view.nodeDOM(context.pos);
     const element = dom instanceof HTMLElement
       ? dom.matches('table') ? dom : dom.querySelector<HTMLElement>('table')
@@ -619,7 +692,6 @@ class NativeTableControls {
       button.classList.toggle('is-active', alignment === value);
       button.setAttribute('aria-pressed', String(alignment === value));
     }
-    this.schedulePosition(false);
   };
 
   private syncMetadataInputs(context: TableContext, force = false): void {
@@ -637,73 +709,7 @@ class NativeTableControls {
     return handled;
   }
 
-  /** Queue geometry outside ProseMirror's dispatch. Text edits take the
-   * two-frame path: the character gets one rendering opportunity before the
-   * contextual chrome reads layout and publishes its next position. */
-  private schedulePosition(afterPaint: boolean): void {
-    if (this.destroyed) return;
-    if (!afterPaint) {
-      if (this.positionFrame) cancelAnimationFrame(this.positionFrame);
-      this.positionAfterPaint = false;
-      const generation = ++this.positionGeneration;
-      this.positionFrame = requestAnimationFrame(() => {
-        this.positionFrame = 0;
-        if (generation !== this.positionGeneration) return;
-        this.positionNow();
-      });
-      return;
-    }
-    if (this.positionAfterPaint) return;
-    if (this.positionFrame) cancelAnimationFrame(this.positionFrame);
-    this.positionAfterPaint = true;
-    const generation = ++this.positionGeneration;
-    this.positionFrame = requestAnimationFrame(() => {
-      this.positionFrame = 0;
-      // A task posted from rAF runs after that rendering opportunity. This is
-      // the same paint boundary used by the editor's latency probes and keeps
-      // contextual chrome out of the frame which presents the character.
-      const channel = new MessageChannel();
-      channel.port1.onmessage = () => {
-        channel.port1.close();
-        channel.port2.close();
-        if (generation !== this.positionGeneration || this.destroyed) return;
-        this.positionAfterPaint = false;
-        this.positionNow();
-      };
-      channel.port2.postMessage(null);
-    });
-  }
-
-  private scheduleViewportPosition = (): void => {
-    // ProseMirror may scroll a selection as part of the same native input
-    // transaction. Do not let that scroll event promote a post-paint table
-    // update back into the first-frame lane.
-    this.schedulePosition(this.positionAfterPaint);
-  };
-
-  private positionNow(): void {
-    if (this.root.hidden || !this.currentTable) return;
-    const rect = this.currentTable.getBoundingClientRect();
-    if (rect.bottom < 0 || rect.top > window.innerHeight) {
-      this.root.style.visibility = 'hidden';
-      return;
-    }
-    this.root.style.visibility = 'hidden';
-    const width = this.root.offsetWidth;
-    const height = this.root.offsetHeight;
-    const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + (rect.width - width) / 2));
-    const top = rect.top > height + 18 ? rect.top - height - 8 : Math.min(window.innerHeight - height - 12, rect.bottom + 8);
-    this.root.style.left = `${Math.round(left)}px`;
-    this.root.style.top = `${Math.round(Math.max(12, top))}px`;
-    this.root.style.visibility = 'visible';
-  }
-
   destroy(): void {
-    this.destroyed = true;
-    this.positionGeneration++;
-    if (this.positionFrame) cancelAnimationFrame(this.positionFrame);
-    window.removeEventListener('resize', this.scheduleViewportPosition);
-    document.removeEventListener('scroll', this.scheduleViewportPosition, true);
     this.root.remove();
   }
 }

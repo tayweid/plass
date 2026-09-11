@@ -418,7 +418,13 @@ body {
 /* Native table controls. Cells remain the actual ProseMirror content; this
    compact chrome only dispatches structural commands against that document. */
 .native-table-toolbar {
+  /* Docked under the tools pill, centered: a second row of chrome while
+     the caret is in a table. It never covers the document and never
+     moves with the table, so a keystroke reads no geometry for it. */
   position: fixed;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 180;
   width: max-content;
   max-width: calc(100vw - 24px);

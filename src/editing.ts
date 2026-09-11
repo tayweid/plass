@@ -16,6 +16,7 @@ import { closeHistory, redo, undo } from 'prosemirror-history';
 import { ReplaceStep } from 'prosemirror-transform';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
 import { goToNextCell } from 'prosemirror-tables';
+import { enterInTable, exitTableVertically, tabInTable } from './table-editor';
 import { Slice, type MarkType } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
 import { schema } from './schema';
@@ -236,7 +237,7 @@ export function buildKeymap(): Plugin {
     'Mod-Alt-5': setBlockType(schema.nodes.heading, { level: 5 }),
     'Mod-Alt-6': setBlockType(schema.nodes.heading, { level: 6 }),
     'Ctrl->': wrapIn(schema.nodes.blockquote),
-    'Enter': chainCommands(exitFootnote, exitFigure, exitFrontMatter, splitListItem(schema.nodes.list_item)),
+    'Enter': chainCommands(exitFootnote, exitFigure, exitFrontMatter, enterInTable, splitListItem(schema.nodes.list_item)),
     'Mod-Alt-f': insertFootnote,
     'Mod-Enter': (state, dispatch) => {
       const { $from } = state.selection;
@@ -262,8 +263,8 @@ export function buildKeymap(): Plugin {
     },
     'ArrowRight': skipFootnote(1),
     'ArrowLeft': skipFootnote(-1),
-    'ArrowUp': verticalCaret(-1),
-    'ArrowDown': verticalCaret(1),
+    'ArrowUp': chainCommands(verticalCaret(-1), exitTableVertically(-1)),
+    'ArrowDown': chainCommands(verticalCaret(1), exitTableVertically(1)),
     'Mod-Alt-t': (_state, dispatch, view) => {
       if (dispatch && view) {
         void import('./table-editor').then(({ insertStructuredTable }) => insertStructuredTable(view));
@@ -275,11 +276,10 @@ export function buildKeymap(): Plugin {
       if (dispatch && view) pickAndInsertFigure(view);
       return true;
     },
-    // In a table, Tab is spreadsheet navigation. Outside one it keeps the
-    // existing list-indent behavior. The final cell deliberately falls
-    // through instead of manufacturing an implicit row; structure changes
-    // stay visible in the contextual table controls.
-    'Tab': chainCommands(goToNextCell(1), sinkListItem(schema.nodes.list_item)),
+    // In a table, Tab and Enter are spreadsheet navigation (the last cell
+    // and the last row grow the table). Outside one they keep the list
+    // behavior.
+    'Tab': chainCommands(tabInTable, sinkListItem(schema.nodes.list_item)),
     'Shift-Tab': chainCommands(goToNextCell(-1), liftListItem(schema.nodes.list_item)),
     'Shift-Enter': chainCommands(exitCode, (state, dispatch) => {
       if (dispatch) {

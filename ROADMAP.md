@@ -65,7 +65,14 @@ history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN
      folio into the header.
    - *Draft niceties*: 1.5 spacing exists. Open: double spacing, DRAFT
      watermark/background, margin line numbers.
-3. **Table styling remainder:**
+3. **Tables as daily tools.** Done 2026-09-11, the first slice — what
+   made them "clunky to edit": the floating control bar covered the
+   paragraph above the table (now docked under the toolbar); typing into
+   a fresh table prepended to "Column 1" (the placeholder is selected);
+   Tab from the last cell did nothing (adds a row); Enter split a cell
+   into paragraphs (moves down a row, adds one at the bottom); a table
+   that ended the document could not be left by keyboard (ArrowDown and
+   ArrowUp step out, creating a paragraph if needed). Styling remainder:
    - *Rule weights* — light/heavy midrule choice (booktabs toprule vs
      midrule); maybe a click-cycle on an active rule.
    - *Cell insets* — density presets (compact / normal / roomy) → `inset:`.

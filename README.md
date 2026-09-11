@@ -194,9 +194,13 @@ rails can always be finished in Typst itself, because the file is Typst.
   (the PDF gets true Typst footnotes); in browser print, bodies degrade to
   inline notes.
 - **Tables** (⊞ in the toolbar or ⌘⌥T): a 3×3 table with a header row
-  lands in the document as **native editable cells** — the caret goes
-  straight into the first cell, Tab/Shift-Tab move between cells, and
-  shift-click/drag selects a range. Cells hold ordinary rich text (marks,
+  lands in the document as **native editable cells** — the first header's
+  placeholder is selected so typing replaces it, Tab/Shift-Tab move between
+  cells (Tab from the last cell adds a row), Enter moves down a row (and
+  adds one from the last row; Shift-Enter is a line break inside a cell),
+  ArrowUp/ArrowDown leave the table at its edges, and shift-click/drag
+  selects a range. The table controls dock under the toolbar while the
+  caret is in a table, never over the text. Cells hold ordinary rich text (marks,
   inline math, citations, `@` references); an edit that would leave that
   lossless subset is refused with a notice rather than flattened. While the
   caret is inside a table a floating control bar appears: add/delete rows
