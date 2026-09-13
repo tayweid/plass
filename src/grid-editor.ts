@@ -14,7 +14,7 @@ import { Fragment, type Node as PMNode } from 'prosemirror-model';
 import { Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
 import type { EditorView, NodeView, ViewMutationRecord } from 'prosemirror-view';
 import { schema } from './schema';
-import { getSettings, type DocSettings } from './settings';
+import { getSettings } from './settings';
 import { blockFrameSlackEm } from './typ-serializer';
 
 export const DEFAULT_GRID_GUTTER_EM = 1;
