@@ -68,7 +68,7 @@
   "devDependencies": {
     "@types/markdown-it": "^14.2.0",
     "@types/node": "^26.5.1",
-    "knip": "^6.32.2",
+    "knip": "^6.35.1",
     "playwright": "^1.61.1",
     "tsx": "^4.23.13",
     "typescript": "^5.6.2",
