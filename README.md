@@ -104,10 +104,11 @@ tier is always visible to the writer.
   features; adding one means adding a rail, with its local mirror and its
   an audit fixture, one at a time.
 
-Two consequences follow. Styling is offered as presets the layout engine
-has been verified on, not as free parameters. And the source view is a
-second editor for the same rails, not a way around them: a
-plain-text surface in the spirit of iA Writer for simpler files, editing
+Styling uses verified presets, with a supported numeric rail for table column
+widths and cell padding: fit-content, fractional, or point-sized columns,
+and uniform padding in points. These values are shared by the local layout
+and Typst export and checked by the audit. The source view is a second
+editor for the same rails: a plain-text surface in the spirit of iA Writer for simpler files, editing
 the same headings, lists, math, and notes as text. It does not admit
 constructs the page view cannot show. A document that needs more than the
 rails can always be finished in Typst itself, because the file is Typst.
@@ -155,7 +156,10 @@ rails can always be finished in Typst itself, because the file is Typst.
   beside a figure or table, three columns of notes, a two-row layout.
   Column widths are fraction shares typed into the grid bar (`2 : 1`),
   the gutter is em; Tab moves between cells, Tab from the last cell adds
-  a row, Unwrap puts the blocks back in the flow. Typst's `#grid(columns:
+  a row, Unwrap puts the blocks back in the flow. Click a cell and choose
+  **Figure in cell** to insert an image; **+ Row** adds a row and focuses
+  its first cell. Click an existing image to show its replacement and size
+  controls. Typst's `#grid(columns:
   (2fr, 1fr), gutter: 1em, [...], [...])`, cells unbreakable, the grid
   breaking between rows; a `.md` file carries it as a ```typst fence the
   importer reads back. Cells are normalized to the paragraph's frame so a
@@ -194,6 +198,16 @@ rails can always be finished in Typst itself, because the file is Typst.
   image path when compiling with Typst. Project-relative images are watched
   by lightweight metadata polling every four seconds and on window focus, so
   regenerating a plot on disk refreshes the editor without reopening it.
+  **Click the image itself** to open Image controls:
+  **Replace image** keeps its grid cell, surrounding text, caption, and
+  size. **Fit to cell** (or **Fit to text width**) fills the available
+  width; **Width (%)** accepts 25–100, and **Auto size** resets it.
+  For an embedded SVG, choose **Save SVG to project** and select a project
+  folder if prompted. Plass saves the original drawing in `figures/` and
+  links the image to that file. Edit its lines and labels in another app,
+  save, then return to Plass; the image refreshes automatically. Plass
+  edits the image's placement and caption; the drawing itself stays in
+  the SVG file.
 - **Footnotes** (type `^[` Pandoc-style or `\footnote{` LaTeX-style — the
   matching `]`/`}` or Enter hops back out, with a bracket-balance check so
   literal "[1]" still types inside a note; also † in the toolbar or ⌘⌥F):
@@ -229,9 +243,20 @@ rails can always be finished in Typst itself, because the file is Typst.
   boundary, where the style's own rule yields to it), a **Fill** control
   that cycles a preset colour behind the selected cells (gray / yellow /
   blue, exported as `table.cell(fill: …)`), and **Details** for a caption
-  and a reference label. A captioned or labelled table gets a painted "Table N:" caption
+  and a reference label.
+  **Click a cell → Layout** to change its column sizing: **Fit content**,
+  **Share remaining space** (a weight of 2 gets twice the space of 1), or
+  **Fixed width** in points. Shift-click to apply a width to several
+  columns; a merged cell covers all columns in its span. **Padding (pt)**
+  sets uniform padding for the whole table (0–72pt); choosing a density
+  preset resets that override. Press Enter or leave a numeric field to
+  apply it; Escape restores its current value. The same panel sets
+  **Vertical align** and **Cell fill** for the selected cells, including
+  gray for a shaded header. For a skillsheet, set Code and Practice to
+  Fit content, Skill to Share remaining space, and Padding to 9pt.
+  A captioned or labelled table gets a painted "Table N:" caption
   that renumbers live and is listed in the `@` picker. The editor table
-  uses Typst's own box model (intrinsic width, centered, 5pt insets), so it
+  defaults to Typst's intrinsic centered box with 5pt insets, so it
   sits where the PDF puts it. Long tables **break between rows with the
   header repeated** on the next page, laid out locally and matched against
   Typst's page starts row by row; a rowspan across the break, a tall split
@@ -240,11 +265,11 @@ rails can always be finished in Typst itself, because the file is Typst.
   `table.hline()` rules, alignment the `align: (…)` tuple with per-cell
   overrides, merges `table.cell(colspan/rowspan)`, captions
   `#figure(table(…), caption: [...]) <label>` — and all of it round-trips.
-  Named `#table` arguments Plass has no control for (`inset`, fill
-  functions, `columns` widths, positioned rules) survive import verbatim
-  on the table and are re-emitted, additive with the preset — exact in the
-  PDF, while the editor shows the base style; rule layouts that no preset
-  can reconstruct stay raw-Typst islands rather than being simplified.
+  Supported imported column widths, uniform point insets, alignment, and
+  header shading become the same editable settings. Remaining custom
+  table options are preserved and flagged in the control bar when the
+  page cannot show them; rule layouts that no preset can reconstruct
+  stay raw-Typst islands rather than being simplified.
 - **Citations & bibliography** (hover the References block → Edit, or
   Document → Bib → Import .bib): the BibTeX is editable in-app (live entry
   count, ⌘Enter to save, Download .bib to get it back out; saves are

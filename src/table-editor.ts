@@ -11,11 +11,11 @@ import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import {
   CellSelection,
   TableMap,
-  addColumnAfter,
-  addColumnBefore,
+  addColumnAfter as addColumnAfterNative,
+  addColumnBefore as addColumnBeforeNative,
   addRowAfter,
   addRowBefore,
-  deleteColumn,
+  deleteColumn as deleteColumnNative,
   deleteRow,
   deleteTable,
   addRow,
@@ -30,11 +30,12 @@ import {
   splitCell,
   toggleHeaderRow,
 } from 'prosemirror-tables';
-import { isHistoryTransaction, redo, undo } from 'prosemirror-history';
+import { closeHistory, isHistoryTransaction, redo, undo } from 'prosemirror-history';
 import { isPortableCitationKey } from './bibtex';
 import { ROW_RULE_CYCLE, type RowRule } from './table-rules';
 import { CELL_FILL_CYCLE, type CellFill } from './table-fills';
 import { schema } from './schema';
+import { normalizeTableColumns, tableInsetPt } from './table-geometry';
 import {
   transactionChangesDerivedStructure,
   type DerivedStructureRules,
@@ -51,10 +52,12 @@ function tableContext(state: Pick<EditorState, 'selection'>): TableContext | nul
   return null;
 }
 
-function dispatchTableAttrs(view: EditorView, attrs: Record<string, unknown>): boolean {
+function dispatchTableAttrs(view: EditorView, attrs: Record<string, unknown>, separateHistory = false): boolean {
   const context = tableContext(view.state);
   if (!context) return false;
-  view.dispatch(view.state.tr.setNodeMarkup(context.pos, undefined, { ...context.node.attrs, ...attrs }).scrollIntoView());
+  if (Object.entries(attrs).every(([name, value]) => JSON.stringify(context.node.attrs[name]) === JSON.stringify(value))) return true;
+  const tr = view.state.tr;
+  view.dispatch((separateHistory ? closeHistory(tr) : tr).setNodeMarkup(context.pos, undefined, { ...context.node.attrs, ...attrs }).scrollIntoView());
   return true;
 }
 
@@ -64,6 +67,51 @@ export function setTableStyle(style: 'booktabs' | 'grid' | 'plain'): Command {
     if (!context) return false;
     if (dispatch && context.node.attrs.style !== style) {
       dispatch(state.tr.setNodeMarkup(context.pos, undefined, { ...context.node.attrs, style }));
+    }
+    return true;
+  };
+}
+
+/** Column widths address logical columns, including columns covered by a merge. */
+function explicitColumnWidths(table: PMNode, count: number): string[] | null {
+  const stored = normalizeTableColumns(table.attrs.columnWidths);
+  if (!stored) return null;
+  return Array.from({ length: count }, (_, index) => String(stored[index] ?? 'auto'));
+}
+
+function insertColumnWithWidth(side: 'before' | 'after'): Command {
+  const command = side === 'before' ? addColumnBeforeNative : addColumnAfterNative;
+  return (state, dispatch) => {
+    if (!dispatch) return command(state);
+    if (!isInTable(state)) return false;
+    const rect = selectedRect(state);
+    const widths = explicitColumnWidths(rect.table, rect.map.width);
+    return command(state, (tr) => {
+      if (widths) {
+        widths.splice(side === 'before' ? rect.left : rect.right, 0, 'auto');
+        const pos = rect.tableStart - 1;
+        const table = tr.doc.nodeAt(pos)!;
+        tr.setNodeMarkup(pos, undefined, { ...table.attrs, columnWidths: widths });
+      }
+      dispatch(tr);
+    });
+  };
+}
+
+const addColumnBefore = insertColumnWithWidth('before');
+export const addColumnAfter = insertColumnWithWidth('after');
+
+/** Set every selected logical column; a caret in a merged cell selects its span. */
+function setSelectedColumnWidth(width: string): Command {
+  return (state, dispatch) => {
+    if (!isInTable(state) || !normalizeTableColumns([width])) return false;
+    const rect = selectedRect(state);
+    if (dispatch) {
+      const widths = explicitColumnWidths(rect.table, rect.map.width) ?? Array(rect.map.width).fill('auto');
+      for (let index = rect.left; index < rect.right; index++) widths[index] = width;
+      if (JSON.stringify(widths) !== JSON.stringify(rect.table.attrs.columnWidths)) {
+        dispatch(closeHistory(state.tr).setNodeMarkup(rect.tableStart - 1, undefined, { ...rect.table.attrs, columnWidths: widths }));
+      }
     }
     return true;
   };
@@ -199,12 +247,35 @@ function deleteSpanAware(axis: 'row' | 'col'): Command {
       if (axis === 'row') removeRow(tr, live, i);
       else removeColumn(tr, live, i);
     }
+    if (axis === 'col') {
+      const widths = explicitColumnWidths(rect.table, rect.map.width);
+      if (widths) {
+        widths.splice(from, to - from);
+        const table = tr.doc.nodeAt(rect.tableStart - 1)!;
+        tr.setNodeMarkup(rect.tableStart - 1, undefined, { ...table.attrs, columnWidths: widths });
+      }
+    }
     dispatch(tr.scrollIntoView());
     return true;
   };
 }
 export const deleteSelectedRows = deleteSpanAware('row');
 export const deleteSelectedColumns = deleteSpanAware('col');
+
+export const deleteColumn: Command = (state, dispatch) => {
+  if (!dispatch) return deleteColumnNative(state);
+  if (!isInTable(state)) return false;
+  const rect = selectedRect(state);
+  const widths = explicitColumnWidths(rect.table, rect.map.width);
+  return deleteColumnNative(state, (tr) => {
+    if (widths && rect.right - rect.left < rect.map.width) {
+      widths.splice(rect.left, rect.right - rect.left);
+      const table = tr.doc.nodeAt(rect.tableStart - 1)!;
+      tr.setNodeMarkup(rect.tableStart - 1, undefined, { ...table.attrs, columnWidths: widths });
+    }
+    dispatch(tr);
+  });
+};
 
 /** A row added below the selection. Below a header row it is a body row —
  *  the library would clone the header type and stack a second header. */
@@ -459,11 +530,11 @@ const tableControlsKey = new PluginKey<NativeTablePluginState>('native-table-con
 // commands and table metadata remain explicit, transaction-local revisions.
 const TABLE_CONTROL_STRUCTURE: DerivedStructureRules = {
   table: {
-    attrs: ['style', 'params', 'caption', 'label', 'fontSize', 'density'],
+    attrs: ['style', 'params', 'caption', 'label', 'fontSize', 'density', 'columnWidths', 'insetPt'],
     structure: {
       table_row: ['rule'],
-      table_cell: ['colspan', 'rowspan', 'colwidth', 'align', 'fill'],
-      table_header: ['colspan', 'rowspan', 'colwidth', 'align', 'fill'],
+      table_cell: ['colspan', 'rowspan', 'colwidth', 'align', 'valign', 'fill'],
+      table_header: ['colspan', 'rowspan', 'colwidth', 'align', 'valign', 'fill'],
     },
   },
 };
@@ -619,8 +690,16 @@ class NativeTableControls {
   private readonly styleSelect: HTMLSelectElement;
   private readonly fontSelect: HTMLSelectElement;
   private readonly densitySelect: HTMLSelectElement;
+  private readonly customDensity: HTMLOptionElement;
   private readonly ruleButton: HTMLButtonElement;
   private readonly fillButton: HTMLButtonElement;
+  private readonly columnMode: HTMLSelectElement;
+  private readonly columnValue: HTMLInputElement;
+  private readonly columnValueLabel: HTMLSpanElement;
+  private readonly columnLabel: HTMLSpanElement;
+  private readonly paddingInput: HTMLInputElement;
+  private readonly verticalSelect: HTMLSelectElement;
+  private readonly fillSelect: HTMLSelectElement;
   private readonly captionInput: HTMLInputElement;
   private readonly labelInput: HTMLInputElement;
   private readonly advanced: HTMLSpanElement;
@@ -628,6 +707,7 @@ class NativeTableControls {
   private readonly alignButtons = new Map<string, HTMLButtonElement>();
   private currentTable: HTMLElement | null = null;
   private detailsOpen = false;
+  private layoutOpen = false;
   private controlsRevision = -1;
   private selectionSignature = '';
 
@@ -722,10 +802,30 @@ class NativeTableControls {
       option.textContent = label;
       this.densitySelect.appendChild(option);
     }
+    this.customDensity = document.createElement('option');
+    this.customDensity.value = 'custom';
+    this.customDensity.textContent = 'Custom';
+    this.customDensity.disabled = true;
+    this.customDensity.hidden = true;
+    this.densitySelect.appendChild(this.customDensity);
     this.densitySelect.addEventListener('change', () => {
-      dispatchTableAttrs(this.view, { density: this.densitySelect.value });
+      dispatchTableAttrs(this.view, { density: this.densitySelect.value, insetPt: null });
+      this.syncLayoutInputs(true);
     });
     appearance.appendChild(this.densitySelect);
+
+    const layoutButton = document.createElement('button');
+    layoutButton.type = 'button';
+    layoutButton.textContent = 'Layout';
+    layoutButton.title = 'Column widths, cell padding, vertical alignment, and fill';
+    layoutButton.setAttribute('aria-expanded', 'false');
+    layoutButton.addEventListener('mousedown', (event) => event.preventDefault());
+    layoutButton.addEventListener('click', () => {
+      this.layoutOpen = !this.layoutOpen;
+      this.root.classList.toggle('show-layout', this.layoutOpen);
+      layoutButton.setAttribute('aria-expanded', String(this.layoutOpen));
+    });
+    appearance.appendChild(layoutButton);
 
     const detailsButton = document.createElement('button');
     detailsButton.type = 'button';
@@ -740,6 +840,97 @@ class NativeTableControls {
     });
     appearance.appendChild(detailsButton);
     commandButton(appearance, 'Delete', 'Delete table', deleteTable, true);
+
+    const layout = document.createElement('div');
+    layout.className = 'native-table-toolbar-layout';
+    this.root.appendChild(layout);
+    const layoutField = (label: string) => {
+      const wrapper = document.createElement('label');
+      const text = document.createElement('span');
+      text.textContent = label;
+      wrapper.appendChild(text);
+      layout.appendChild(wrapper);
+      return { wrapper, text };
+    };
+    const select = (label: string, values: readonly (readonly [string, string])[]) => {
+      const element = document.createElement('select');
+      element.setAttribute('aria-label', label);
+      for (const [value, text] of values) element.add(new Option(text, value));
+      return element;
+    };
+    const numericInput = (label: string, min: string, step: string) => {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.setAttribute('aria-label', label);
+      input.min = min;
+      input.step = step;
+      return input;
+    };
+    const columnField = layoutField('Selected column');
+    this.columnLabel = columnField.text;
+    this.columnMode = select('Selected column sizing', [
+      ['auto', 'Fit content'], ['fr', 'Share remaining space'], ['pt', 'Fixed width'], ['mixed', 'Mixed widths'],
+    ]);
+    this.columnMode.options[3].disabled = true;
+    columnField.wrapper.appendChild(this.columnMode);
+    const columnValueField = layoutField('Weight');
+    this.columnValueLabel = columnValueField.text;
+    this.columnValue = numericInput('Column width value', '0', 'any');
+    this.columnValue.max = '1440';
+    columnValueField.wrapper.appendChild(this.columnValue);
+    const paddingField = layoutField('Padding (pt)');
+    this.paddingInput = numericInput('Cell padding in points', '0', 'any');
+    this.paddingInput.max = '72';
+    paddingField.wrapper.appendChild(this.paddingInput);
+    const verticalField = layoutField('Vertical align');
+    this.verticalSelect = select('Selected cells vertical alignment', [
+      ['', 'Default (top)'], ['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom'], ['mixed', 'Mixed'],
+    ]);
+    this.verticalSelect.options[4].disabled = true;
+    verticalField.wrapper.appendChild(this.verticalSelect);
+    const fillField = layoutField('Cell fill');
+    this.fillSelect = select('Selected cells fill', [
+      ['', 'None'], ['gray', 'Light gray'], ['gray-dark', 'Gray'], ['yellow', 'Yellow'], ['blue', 'Blue'], ['mixed', 'Mixed'],
+    ]);
+    this.fillSelect.options[5].disabled = true;
+    fillField.wrapper.appendChild(this.fillSelect);
+    this.columnMode.addEventListener('change', () => {
+      const mode = this.columnMode.value;
+      this.run(setSelectedColumnWidth(mode === 'auto' ? 'auto' : mode === 'fr' ? '1fr' : '72pt'), false);
+      this.syncLayoutInputs(true);
+    });
+    const commitColumnValue = () => {
+      const mode = this.columnMode.value;
+      const number = this.columnValue.valueAsNumber;
+      if ((mode !== 'fr' && mode !== 'pt') || !this.columnValue.validity.valid || !Number.isFinite(number) || (mode === 'fr' && number <= 0)) {
+        this.syncLayoutInputs(true);
+        return;
+      }
+      if (!this.run(setSelectedColumnWidth(`${number}${mode}`), false)) this.syncLayoutInputs(true);
+    };
+    const commitPadding = () => {
+      const number = this.paddingInput.valueAsNumber;
+      if (!this.paddingInput.validity.valid || !Number.isFinite(number)) {
+        this.syncLayoutInputs(true);
+        return;
+      }
+      dispatchTableAttrs(this.view, { insetPt: number }, true);
+    };
+    for (const [input, commit] of [[this.columnValue, commitColumnValue], [this.paddingInput, commitPadding]] as const) {
+      input.addEventListener('change', commit);
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          commit();
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          this.syncLayoutInputs(true);
+          this.view.focus();
+        }
+      });
+    }
+    this.verticalSelect.addEventListener('change', () => this.run(setCellAttr('valign', this.verticalSelect.value || null), false));
+    this.fillSelect.addEventListener('change', () => this.run(setCellAttr('fill', this.fillSelect.value), false));
 
     const details = document.createElement('div');
     details.className = 'native-table-toolbar-details';
@@ -770,7 +961,7 @@ class NativeTableControls {
       if (normalized !== this.labelInput.value) this.labelInput.value = normalized;
       dispatchTableAttrs(this.view, { label: normalized });
     });
-    for (const input of [this.captionInput, this.labelInput]) input.addEventListener('keydown', (event) => {
+    for (const input of [this.captionInput, this.labelInput, this.columnValue, this.paddingInput]) input.addEventListener('keydown', (event) => {
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
       const isUndo = mod && key === 'z' && !event.shiftKey;
@@ -779,12 +970,15 @@ class NativeTableControls {
       event.preventDefault();
       if (!this.run(isRedo ? redo : undo, false)) return;
       const context = tableContext(this.view.state);
-      if (context) this.syncMetadataInputs(context, true);
+      if (context) {
+        this.syncMetadataInputs(context, true);
+        this.syncLayoutInputs(true);
+      }
     });
     this.advanced = document.createElement('span');
     this.advanced.className = 'native-table-advanced';
-    this.advanced.textContent = 'Custom Typst options are exact in the PDF; native cells show the base style';
-    details.appendChild(this.advanced);
+    this.advanced.textContent = 'Custom table styling is preserved in the file and PDF, but is not shown here.';
+    this.root.appendChild(this.advanced);
 
     // Docked under the main toolbar (CSS), never over the document: a bar
     // floating beside the table covered the paragraph above it, and moved
@@ -819,7 +1013,7 @@ class NativeTableControls {
     this.ruleButton.textContent = rule ? `Rule: ${rule}` : 'Rule';
     this.ruleButton.disabled = !cycleRowRule(view.state);
     const fill = selectedCellFill(view.state);
-    this.fillButton.textContent = fill ? `Fill: ${fill}` : 'Fill';
+    this.fillButton.textContent = fill ? `Fill: ${fill === 'gray-dark' ? 'dark gray' : fill}` : 'Fill';
     this.fillButton.disabled = fill === null;
     if (!refreshControls) return;
     const dom = view.nodeDOM(context.pos);
@@ -836,9 +1030,16 @@ class NativeTableControls {
     this.root.hidden = false;
     this.styleSelect.value = String(context.node.attrs.style || 'booktabs');
     this.fontSelect.value = String(context.node.attrs.fontSize || '');
-    this.densitySelect.value = String(context.node.attrs.density || '');
+    const customParams = String(context.node.attrs.params ?? '').trim();
+    const customInset = /(?:^|,)\s*inset\s*:/.test(customParams);
+    const numericInset = typeof context.node.attrs.insetPt === 'number';
+    this.customDensity.hidden = !customInset && !numericInset;
+    this.densitySelect.disabled = customInset;
+    this.densitySelect.value = customInset || numericInset ? 'custom' : String(context.node.attrs.density || '');
+    this.paddingInput.disabled = customInset;
+    this.syncLayoutInputs();
     this.syncMetadataInputs(context);
-    this.advanced.hidden = !String(context.node.attrs.params ?? '').trim();
+    this.advanced.hidden = !customParams;
     for (const { button, command } of this.commandButtons) button.disabled = !command(view.state);
 
     let alignment: string | null = null;
@@ -853,6 +1054,34 @@ class NativeTableControls {
       button.setAttribute('aria-pressed', String(alignment === value));
     }
   };
+
+  private syncLayoutInputs(force = false): void {
+    if (!isInTable(this.view.state)) return;
+    const rect = selectedRect(this.view.state);
+    const widths = explicitColumnWidths(rect.table, rect.map.width) ?? Array(rect.map.width).fill('auto');
+    const selectedWidths = widths.slice(rect.left, rect.right);
+    const width = selectedWidths.every((value) => value === selectedWidths[0]) ? selectedWidths[0] : 'mixed';
+    const mode = width === 'auto' || width === 'mixed' ? width : width.endsWith('fr') ? 'fr' : 'pt';
+    this.columnMode.value = mode;
+    this.columnLabel.textContent = rect.right - rect.left === 1 ? `Column ${rect.left + 1}` : `Columns ${rect.left + 1}–${rect.right}`;
+    this.columnValue.parentElement!.hidden = mode === 'auto' || mode === 'mixed';
+    this.columnValueLabel.textContent = mode === 'pt' ? 'Width (pt)' : 'Weight';
+    this.columnValue.min = '0';
+    this.columnValue.setAttribute('aria-label', mode === 'pt' ? 'Column width in points' : 'Column share weight');
+    if (force || document.activeElement !== this.columnValue) this.columnValue.value = mode === 'fr' || mode === 'pt' ? String(Number.parseFloat(width)) : '';
+    if (force || document.activeElement !== this.paddingInput) {
+      const attrs = rect.table.attrs;
+      this.paddingInput.value = String(tableInsetPt(attrs));
+    }
+    const cells = new Set<number>();
+    for (let row = rect.top; row < rect.bottom; row++) {
+      for (let column = rect.left; column < rect.right; column++) cells.add(rect.map.map[row * rect.map.width + column]);
+    }
+    for (const [name, select] of [['valign', this.verticalSelect], ['fill', this.fillSelect]] as const) {
+      const values = [...cells].map((offset) => String(rect.table.nodeAt(offset)?.attrs[name] ?? ''));
+      select.value = values.every((value) => value === values[0]) ? values[0] : 'mixed';
+    }
+  }
 
   private syncMetadataInputs(context: TableContext, force = false): void {
     if (force || document.activeElement !== this.captionInput) {
@@ -911,9 +1140,7 @@ export function structuredTablePlugin(): Plugin {
 
 export {
   CellSelection,
-  addColumnAfter,
   addRowAfter,
-  deleteColumn,
   deleteRow,
   deleteTable,
   mergeCells,

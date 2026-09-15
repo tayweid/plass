@@ -137,6 +137,26 @@ test('rich table cells edit directly, navigate with Tab, and undo without flatte
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).child(0).textContent)).toContain('!');
 });
 
+test('unsupported table styling is visible without opening Details and custom insets cannot masquerade as a preset', async ({ page }) => {
+  await installRichTable(page);
+  const params = 'columns: (auto, 1fr),\ninset: 9pt,\nfill: (x, y) => if y == 0 { luma(220) }';
+  await page.evaluate((params) => {
+    const { state } = window.view;
+    const table = state.doc.firstChild!;
+    window.view.dispatch(state.tr.setNodeMarkup(0, undefined, { ...table.attrs, params }));
+  }, params);
+  await page.locator('.ProseMirror td').first().locator('p').first().click();
+  const controls = page.getByRole('toolbar', { name: 'Table controls' });
+  await expect(controls.locator('.native-table-toolbar-details')).toBeHidden();
+  await expect(controls.locator('.native-table-advanced')).toBeVisible();
+  await expect(controls.locator('.native-table-advanced')).toContainText('not shown here');
+  await expect(controls.getByRole('combobox', { name: 'Table cell density' })).toHaveValue('custom');
+  await expect(controls.getByRole('combobox', { name: 'Table cell density' })).toBeDisabled();
+  await page.keyboard.press('End');
+  await page.keyboard.type(' edited');
+  expect(await page.evaluate(() => window.view.state.doc.firstChild!.attrs.params)).toBe(params);
+});
+
 test('native table keystrokes map numbering and read no contextual geometry', async ({ page }) => {
   await installRichTable(page);
   const paragraph = page.locator('.ProseMirror td').first().locator('p').first();

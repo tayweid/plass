@@ -21,6 +21,7 @@ import {
 } from './table-editor.ts';
 import { schema } from './schema.ts';
 import { docToTyp } from './typ-serializer.ts';
+import { allocateTableColumns, normalizeInsetPt, normalizeTableColumns, tableInsetPt } from './table-geometry.ts';
 
 let failures = 0;
 function check(name: string, condition: boolean, detail = '') {
@@ -280,6 +281,31 @@ function hasInline(node: PMNode, type: string): boolean {
   run(deleteSelectedRows);
   run(deleteSelectedRows);
   check('deleting the last row deletes the table', state.doc.childCount === 1 && state.doc.child(0).type.name !== 'table', state.doc.child(0).type.name);
+}
+
+// Column widths are measured in CSS px, with explicit points converted at
+// 96dpi. Check concrete layout contracts rather than reproducing the solver.
+{
+  const close = (actual: number[], expected: number[]) => actual.length === expected.length && actual.every((value, i) => Math.abs(value - expected[i]) < 1e-9);
+  const mixed = allocateTableColumns(['75pt', 'auto', '1fr', '3fr'], [999, 80, 999, 999], 500);
+  check('fixed and content columns reserve space before fractional sharing', close(mixed, [100, 80, 80, 240]), JSON.stringify(mixed));
+  const crowded = allocateTableColumns(['auto', 'auto', 'auto', '1fr'], [40, 500, 200, 20], 300);
+  check('oversized content columns keep the small column and share remaining room', close(crowded, [40, 130, 130, 0]), JSON.stringify(crowded));
+  const overflow = allocateTableColumns(['90pt', 'auto', '1fr'], [0, 60, 40], 100);
+  check('explicit fixed widths remain fixed when wider than their container', close(overflow, [120, 0, 0]), JSON.stringify(overflow));
+  const zero = allocateTableColumns(['0pt', 'auto', '1fr'], [100, 0, 100], 200);
+  check('zero fixed and empty content widths leave space for fractional columns', close(zero, [0, 0, 200]), JSON.stringify(zero));
+  const noRoom = allocateTableColumns(['0pt', 'auto', '1fr'], [100, 80, 100], 0);
+  check('a zero-width container yields finite zero flexible widths', close(noRoom, [0, 0, 0]), JSON.stringify(noRoom));
+  const fractional = allocateTableColumns(['1fr', '3fr'], [0, 0], 412.8);
+  check('fractional page widths remain fractional without pixel rounding', close(fractional, [103.2, 309.6]), JSON.stringify(fractional));
+  check('zero point widths remain valid but zero fraction shares do not', normalizeTableColumns(['0pt'])?.[0] === '0pt' && normalizeTableColumns(['0fr']) === null);
+  for (const value of [['NaNpt'], ['Infinityfr'], ['-1pt'], ['1441pt'], ['1e3pt'], [Number.NaN], [Infinity]]) {
+    check(`invalid column dimensions are rejected: ${String(value)}`, normalizeTableColumns(value) === null);
+  }
+  check('numeric padding includes its zero and maximum boundaries', normalizeInsetPt(0) === 0 && normalizeInsetPt(72) === 72);
+  check('invalid padding never becomes document geometry', [-1, 72.1, NaN, Infinity, -Infinity, '9', null].every((value) => normalizeInsetPt(value) === null));
+  check('numeric padding takes precedence over density without losing zero', tableInsetPt({ insetPt: 0, density: 'roomy' }) === 0 && tableInsetPt({ insetPt: NaN, density: 'compact' }) === 3);
 }
 
 declare const process: { exitCode?: number };

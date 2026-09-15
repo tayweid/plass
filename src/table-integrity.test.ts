@@ -80,7 +80,10 @@ const richTable = table.create(
   check('rich table imports as structured table', !!backCell, imported.warnings.join('; '));
   check('table caption with comment opener survives', backTableNode?.attrs.caption === 'Rich // results');
   check('multiple table-cell paragraphs survive', backCell?.childCount === 2, String(backCell?.childCount));
-  check('rich table-cell JSON survives', JSON.stringify(backCell?.toJSON()) === JSON.stringify(richCell.toJSON()), JSON.stringify(backCell?.toJSON()));
+  // Export now makes the default left alignment explicit, preventing a
+  // neighboring selected cell from changing an otherwise-default column.
+  const expectedCell = richCell.type.create({ ...richCell.attrs, align: 'left' }, richCell.content);
+  check('rich table-cell JSON survives with explicit default alignment', JSON.stringify(backCell?.toJSON()) === JSON.stringify(expectedCell.toJSON()), JSON.stringify(backCell?.toJSON()));
   const emittedAgain = docToTyp(imported.doc);
   check('rich table export is idempotent', emittedAgain === emitted, firstDiff(emitted, emittedAgain));
 }

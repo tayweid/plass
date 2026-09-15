@@ -70,7 +70,8 @@ test('Install Plass uses the browser installation prompt when offered', async ({
     window.dispatchEvent(event);
   });
 
-  await page.getByRole('button', { name: 'Install Plass' }).click();
+  await page.getByRole('button', { name: 'Extras', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Install Plass' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-install-prompted', 'yes');
 });
 
@@ -84,13 +85,15 @@ test('Install Plass explains Safari installation when no prompt is available', a
   });
   await page.goto('/?new=1');
 
-  await page.getByRole('button', { name: 'Install Plass' }).click();
+  await page.getByRole('button', { name: 'Extras', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Install Plass' }).click();
   await expect(page.locator('#toast')).toContainText('File → Add to Dock');
 });
 
 test('installed app state removes the redundant Install action', async ({ page }) => {
   await page.goto('/?new=1');
-  const install = page.getByRole('button', { name: 'Install Plass' });
+  await page.getByRole('button', { name: 'Extras', exact: true }).click();
+  const install = page.getByRole('menuitem', { name: 'Install Plass' });
   await expect(install).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new Event('appinstalled')));
   await expect(install).toBeHidden();

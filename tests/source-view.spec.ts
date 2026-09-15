@@ -205,20 +205,33 @@ test('a Markdown document shows Markdown and a Typst document shows Typst', asyn
   await exit(page);
 });
 
-test('the toolbar button and the shortcut toggle from either view', async ({ page }) => {
+test('the visible view switch and the shortcut toggle from either view', async ({ page }) => {
   await loadDemo(page);
   const btn = page.locator('.tb-source');
+  await expect(btn).toBeVisible();
   await expect(btn).toHaveAttribute('aria-pressed', 'false');
   await btn.click();
+  await expect(btn).toBeVisible();
   await expect(btn).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#source .cm-content')).toBeFocused();
   // Formatting tools rest while the text is the truth.
-  expect(await page.locator('.tb-tools button:disabled').count()).toBeGreaterThan(3);
+  await expect(page.locator('.tb-tools > button:disabled')).toHaveCount(6);
+  await expect(page.getByRole('button', { name: 'Document settings', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Document settings', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Extras', exact: true }).click();
+  await expect(page.getByTitle('Insert table (⌘⌥T)', { exact: true })).toBeDisabled();
+  await expect(page.getByTitle('Side-by-side grid — any blocks in columns; the grid bar sets the split', { exact: true })).toBeDisabled();
+  await expect(page.getByTitle('Edit bibliography', { exact: true })).toBeDisabled();
+  await expect(page.getByTitle('Markdown & shortcuts', { exact: true })).toBeEnabled();
+  await expect(page.getByTitle('Export — PDF, .typ, .tex', { exact: true })).toBeEnabled();
+  await page.keyboard.press('Escape');
+  await page.locator('#source .cm-content').focus();
   // The shortcut from inside CodeMirror (it must not swallow it).
   await page.keyboard.press('ControlOrMeta+/');
   await expect(btn).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('.ProseMirror[contenteditable="true"]')).toBeFocused();
   expect(await page.locator('.tb-tools button:disabled').count()).toBe(0);
+  await expect(page.getByRole('button', { name: 'Document settings', exact: true })).toBeEnabled();
   // And from the page view.
   await page.keyboard.press('ControlOrMeta+/');
   await expect(btn).toHaveAttribute('aria-pressed', 'true');
@@ -465,12 +478,12 @@ test('PDF export from the source runs on the parsed text', async ({ page }) => {
     const sv = window.__sourceView;
     sv.setText(sv.text()!.trimEnd() + '\n\n= Written in the source\n\nA paragraph the page view never saw.\n');
   });
+  await page.getByTitle('Export — PDF, .typ, .tex', { exact: true }).click();
   const result = await page.evaluate(async () => {
     const toast = document.getElementById('toast')!;
     const messages: string[] = [];
     const observer = new MutationObserver(() => messages.push(toast.textContent ?? ''));
     observer.observe(toast, { childList: true, characterData: true, subtree: true });
-    (document.querySelector('[title="Export — PDF, .typ, .tex"]') as HTMLElement).click();
     (document.querySelector('[title="Export PDF via Typst"]') as HTMLElement).click();
     const deadline = Date.now() + 25_000;
     while (Date.now() < deadline && !messages.some((m) => m.startsWith('Exported '))) {
@@ -489,7 +502,7 @@ test('PDF export from the source runs on the parsed text', async ({ page }) => {
     }
     return { messages, header, size, stillSource: window.__sourceView.isActive() };
   });
-  expect(result.header).toBe('%PDF-');
+  expect(result.header, JSON.stringify(result.messages)).toBe('%PDF-');
   expect(result.size).toBeGreaterThan(1_000);
   expect(result.stillSource).toBe(true);
   expect(downloads).toBe(0);

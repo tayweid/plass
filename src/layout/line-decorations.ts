@@ -6,6 +6,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { Decoration, type DecorationSet } from 'prosemirror-view';
 import type { LineLayout } from './paragraph';
 import { tableBreakWidget } from './table-break-widget';
+import { tableRowModel } from './table-rows';
 
 /** Semantic roles owned by the typesetting layer. These tags are deliberately
  * independent of widget keys: callers can select layout decorations without
@@ -27,6 +28,8 @@ export interface TypesetDecorationSpec {
   hy?: boolean;
   /** row-page-gap: the repeated table header's share of `h` (px). */
   hdr?: number;
+  /** row-page-gap: immutable header content and repetition-rule identity. */
+  headerSig?: string;
 }
 
 /** A current, mapped ProseMirror node range. Ownership is range-based rather
@@ -177,15 +180,51 @@ export function blockSpacerDecoration(spacer: Spacer): Decoration {
   });
 }
 
+const headerNodeIds = new WeakMap<PMNode, number>();
+const tableHeaderSignatures = new WeakMap<PMNode, string>();
+let nextHeaderNodeId = 1;
+
+/** Geometry alone cannot identify a repeated header: edits to its fill,
+ * alignment, or same-size text must rebuild the cloned DOM too. Immutable
+ * node identity keeps this cheap and remains stable across body-row edits. */
+function repeatedHeaderSignature(doc: PMNode | undefined, pos: number): string {
+  if (!doc) return '';
+  let table: PMNode;
+  try {
+    table = doc.resolve(pos).parent;
+  } catch {
+    return '';
+  }
+  if (table.type.name !== 'table') return '';
+  const cached = tableHeaderSignatures.get(table);
+  if (cached !== undefined) return cached;
+  const model = tableRowModel(table);
+  let signature = '';
+  if (model.repeatRow !== null) {
+    const header = table.child(model.repeatRow);
+    let id = headerNodeIds.get(header);
+    if (id === undefined) {
+      id = nextHeaderNodeId++;
+      headerNodeIds.set(header, id);
+    }
+    // The same final header can follow a different header run, changing
+    // whether the continuation paints a booktabs rule beneath the copy.
+    signature = `h${id}-${model.headerRun}`;
+  }
+  tableHeaderSignatures.set(table, signature);
+  return signature;
+}
+
 /**
  * A page break between two rows of a native table: a widget `<tr>` holding
  * the gap plus the repeated header copy (table-break-widget.ts). `pos` is
  * the position before the row that starts the next page; `height` is the
  * whole insertion, `hdr` the header copy's share of it.
  */
-export function rowSpacerDecoration(spacer: Spacer): Decoration {
+export function rowSpacerDecoration(spacer: Spacer, doc?: PMNode): Decoration {
   const hdr = spacer.hdr ?? 0;
-  const key = `pgr:${spacer.pos}:${Math.round(spacer.height)}:${Math.round(hdr)}`;
+  const headerSig = hdr > 0 ? repeatedHeaderSignature(doc, spacer.pos) : '';
+  const key = `pgr:${spacer.pos}:${Math.round(spacer.height)}:${Math.round(hdr)}${headerSig ? `:${headerSig}` : ''}`;
   return Decoration.widget(
     spacer.pos,
     (view) => tableBreakWidget(view, { pos: spacer.pos, height: spacer.height, hdr, key }),
@@ -194,6 +233,7 @@ export function rowSpacerDecoration(spacer: Spacer): Decoration {
       key,
       h: spacer.height,
       hdr,
+      headerSig,
       tsKind: 'row-page-gap',
     },
   );
@@ -307,7 +347,7 @@ function semanticEntry(decoration: Decoration, relativeTo: number): DecorationSe
       identity = String(spec?.h ?? '');
       break;
     case 'row-page-gap':
-      identity = `${spec?.h ?? ''}:${spec?.hdr ?? ''}`;
+      identity = `${spec?.h ?? ''}:${spec?.hdr ?? ''}${spec?.headerSig ? `:${spec.headerSig}` : ''}`;
       break;
     case 'word-spacing':
     case 'no-spell':

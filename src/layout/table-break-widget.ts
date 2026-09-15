@@ -94,8 +94,21 @@ export function tableBreakWidget(view: EditorView, spec: TableBreakSpec): HTMLEl
       // wraps to.
       hdr.style.height = `${spec.hdr.toFixed(2)}px`;
       if (headerCell) {
+        const fill = headerCell.dataset.fill;
+        if (fill) hdr.dataset.fill = fill;
         const align = headerCell.style.textAlign;
         if (align) hdr.style.textAlign = align;
+        const alignLast = headerCell.style.textAlignLast;
+        if (alignLast) hdr.style.textAlignLast = alignLast;
+        // A short header can sit halfway down (or at the bottom of) a
+        // taller row. Preserve that measured offset in the fixed-height
+        // copy; vertical-align itself has no effect on a div.
+        const first = headerCell.firstElementChild;
+        if (first instanceof HTMLElement) {
+          const offset = first.getBoundingClientRect().top - headerCell.getBoundingClientRect().top;
+          const margin = parseFloat(getComputedStyle(first).marginTop) || 0;
+          hdr.style.paddingTop = `${Math.max(0, offset - margin)}px`;
+        }
         for (const child of headerCell.childNodes) {
           const copy = child.cloneNode(true);
           if (copy instanceof HTMLElement) {

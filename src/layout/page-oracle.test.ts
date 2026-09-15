@@ -206,4 +206,42 @@ import { buildTableUnit, matchPageStarts, type PagedLine } from './page-oracle';
   check('an opaque block hands off to the table on its first row', resync.status === 'ok' && resync.pageStarts?.[0]?.line === 3);
 }
 
+// Vertically centered single-line cells sit halfway between a neighbor's
+// wrapped lines. The SVG visits cells in reading order, so the short cell,
+// the two Skill lines, and the last cell are separate extracted lines.
+{
+  const cell = (text: string, header = false) =>
+    (header ? schema.nodes.table_header : schema.nodes.table_cell).create(
+      { valign: 'middle' }, paragraph(text),
+    );
+  const table = schema.nodes.table.create({ columnWidths: ['auto', '1fr', 'auto'], insetPt: 9 }, [
+    schema.nodes.table_row.create(null, [cell('Code', true), cell('Skill', true), cell('Practice', true)]),
+    schema.nodes.table_row.create(null, [cell('B4.1'), cell('Efficiency & Total Surplus'), cell('Exercise B4')]),
+    schema.nodes.table_row.create(null, [cell('B4.2'), cell('Price Controls'), cell('Exercise B4')]),
+  ]);
+  const heading = schema.nodes.heading.create({ level: 3 }, schema.text('B1.1 | Demand'));
+  const units = buildUnits(schema.nodes.doc.create(null, [table, heading]), noAtoms);
+  const line = (page: number, text: string, y: number): PagedLine => ({ page, text, y, yFrac: 0.5 });
+  const lines = [
+    line(0, 'CodeSkillPractice', 100),
+    line(1, 'CodeSkillPractice', 100),
+    line(1, 'B4.1', 135.914),
+    line(1, 'Efficiency & Total Sur\u00ad', 126.538),
+    line(1, 'plus', 145.290),
+    line(1, 'Exercise B4', 135.914),
+    line(1, 'B4.2Price ControlsExercise B4', 171.828),
+    line(1, 'B1.1 | Demand', 220),
+  ];
+  const audit: import('./page-oracle').UnitAudit[] = [];
+  const result = matchPageStarts(units, lines, audit);
+  check('vertically centered cells match a wrapped neighbor and following heading', result.status === 'ok' && audit.length === 2 && audit.every((unit) => unit.status === 'ok'));
+  check('the centered row keeps its exact repeated-header page start', result.pageStarts?.length === 1 && result.pageStarts[0].pos === 0 && result.pageStarts[0].line === 1);
+  const wrong = matchPageStarts(units, lines.map((l) => l.text === 'plus' ? { ...l, text: 'place' } : l));
+  check('a wrong wrapped-cell suffix still fails closed', wrong.status === 'fail' && /suffix mismatch/.test(wrong.reason ?? ''));
+  const blank = matchPageStarts(units, lines.map((l) => l.text === 'plus' ? { ...l, text: '' } : l));
+  check('a missing wrapped-cell suffix still fails closed', blank.status === 'fail' && /empty line/.test(blank.reason ?? ''));
+  const split = matchPageStarts(units, lines.map((l) => l.text === 'Exercise B4' ? { ...l, page: 2 } : l));
+  check('a centered row cannot hide a page split inside its cells', split.status === 'fail' && /inside table row/.test(split.reason ?? ''));
+}
+
 console.log('all page-oracle tests passed');

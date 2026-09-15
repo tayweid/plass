@@ -11,11 +11,12 @@
 // call (md-parser recognizes it).
 
 import { Fragment, type Node as PMNode } from 'prosemirror-model';
-import { Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
-import type { EditorView, NodeView, ViewMutationRecord } from 'prosemirror-view';
+import { NodeSelection, Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
+import { Decoration, DecorationSet, type EditorView, type NodeView, type ViewMutationRecord } from 'prosemirror-view';
 import { schema } from './schema';
 import { getSettings } from './settings';
 import { blockFrameSlackEm } from './typ-serializer';
+import { pickAndInsertFigure } from './figures';
 
 export const DEFAULT_GRID_GUTTER_EM = 1;
 
@@ -40,6 +41,23 @@ export function gridContext(state: EditorState): { pos: number; node: PMNode; de
     if (node.type === schema.nodes.grid) return { pos: $from.before(d), node, depth: d };
   }
   return null;
+}
+
+function selectedCell(state: EditorState, ctx: NonNullable<ReturnType<typeof gridContext>>) {
+  const { $from } = state.selection;
+  if ($from.depth < ctx.depth + 2) return null;
+  return {
+    row: $from.index(ctx.depth),
+    column: $from.index(ctx.depth + 1),
+    offset: $from.pos - $from.start(ctx.depth + 2),
+  };
+}
+
+function cellPosition(grid: PMNode, pos: number, row: number, column: number): number {
+  let at = pos + 2;
+  for (let i = 0; i < row; i++) at += grid.child(i).nodeSize;
+  for (let i = 0; i < column; i++) at += grid.child(row).child(i).nodeSize;
+  return at;
 }
 
 const emptyCell = () => schema.nodes.grid_cell.create(null, schema.nodes.paragraph.create());
@@ -68,7 +86,15 @@ function replaceGrid(state: EditorState, pos: number, attrs: Record<string, unkn
   const old = state.doc.nodeAt(pos)!;
   const node = schema.nodes.grid.create(attrs, rows.map((cells) => schema.nodes.grid_row.create(null, cells)));
   const tr = state.tr.replaceWith(pos, pos + old.nodeSize, node);
-  const target = Math.min(state.selection.from, pos + node.nodeSize - 2);
+  const ctx = gridContext(state);
+  const selected = ctx && selectedCell(state, ctx);
+  let target = pos + 3;
+  if (selected) {
+    const row = Math.min(selected.row, node.childCount - 1);
+    const column = Math.min(selected.column, node.child(row).childCount - 1);
+    const cell = node.child(row).child(column);
+    target = cellPosition(node, pos, row, column) + 1 + Math.min(selected.offset, cell.content.size);
+  }
   tr.setSelection(TextSelection.near(tr.doc.resolve(Math.max(pos + 3, target))));
   return tr;
 }
@@ -124,7 +150,11 @@ export function addGridRow(view: EditorView): boolean {
   const columns = ctx.node.attrs.columns as number[];
   const rows = cellMatrix(ctx.node);
   rows.push(columns.map(() => emptyCell()));
-  view.dispatch(replaceGrid(view.state, ctx.pos, ctx.node.attrs, rows));
+  const tr = replaceGrid(view.state, ctx.pos, ctx.node.attrs, rows);
+  const grid = tr.doc.nodeAt(ctx.pos)!;
+  const firstCell = cellPosition(grid, ctx.pos, grid.childCount - 1, 0);
+  tr.setSelection(TextSelection.near(tr.doc.resolve(firstCell + 1)));
+  view.dispatch(tr.scrollIntoView());
   view.focus();
   return true;
 }
@@ -171,14 +201,7 @@ export const tabInGrid = (dir: 1 | -1): Command => (state, dispatch, view) => {
   const target = idx + dir;
   if (target < 0) return true;
   if (target >= cells.length) {
-    if (view && addGridRow(view)) {
-      const next = gridContext(view.state);
-      if (next) {
-        const lastRow = next.node.child(next.node.childCount - 1);
-        const rowPos = next.pos + next.node.nodeSize - 1 - lastRow.nodeSize;
-        view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(rowPos + 2))));
-      }
-    }
+    if (dispatch && view) addGridRow(view);
     return true;
   }
   if (dispatch) {
@@ -271,6 +294,10 @@ export class GridCellView implements NodeView {
     const bottom = `${marginBottom.toFixed(3)}px`;
     if (this.dom.style.marginTop !== top) this.dom.style.marginTop = top;
     if (this.dom.style.marginBottom !== bottom) this.dom.style.marginBottom = bottom;
+    // Editing guides use the normalized frame, including margins that
+    // take a first/last block's extra spacing out of this cell's box.
+    if (this.dom.style.getPropertyValue('--grid-cell-margin-top') !== top) this.dom.style.setProperty('--grid-cell-margin-top', top);
+    if (this.dom.style.getPropertyValue('--grid-cell-margin-bottom') !== bottom) this.dom.style.setProperty('--grid-cell-margin-bottom', bottom);
   }
 }
 
@@ -285,6 +312,8 @@ class GridBar {
   private gutterInput: HTMLInputElement;
   private removeColumn: HTMLButtonElement;
   private removeRow: HTMLButtonElement;
+  private position: HTMLElement;
+  private hint: HTMLElement;
   private signature = '';
 
   constructor(private view: EditorView) {
@@ -360,7 +389,16 @@ class GridBar {
     button(g2, '+ Row', 'Add a row at the bottom', () => addGridRow(this.view));
     this.removeRow = button(g2, '− Row', 'Remove the bottom row (its content is dropped)', () => removeGridRow(this.view));
     const g3 = group();
+    button(g3, 'Figure in cell', 'Choose an image for the current cell; Enter in its caption adds text below it', () => pickAndInsertFigure(this.view));
     button(g3, 'Unwrap', 'Replace the grid by its blocks, in reading order', () => unwrapGrid(this.view));
+    const help = document.createElement('div');
+    help.className = 'grid-toolbar-help';
+    this.position = document.createElement('span');
+    this.position.className = 'grid-toolbar-position';
+    this.hint = document.createElement('span');
+    this.hint.className = 'grid-toolbar-hint';
+    help.append(this.position, this.hint);
+    this.root.appendChild(help);
     document.body.appendChild(this.root);
     this.update(view);
   }
@@ -374,6 +412,12 @@ class GridBar {
     }
     const columns = ctx.node.attrs.columns as number[];
     const gutter = ctx.node.attrs.gutter as number;
+    const selected = selectedCell(view.state, ctx);
+    this.position.textContent = selected ? `Row ${selected.row + 1} of ${ctx.node.childCount} · Column ${selected.column + 1} of ${columns.length}` : '';
+    const imageSelected = view.state.selection instanceof NodeSelection && view.state.selection.node.type === schema.nodes.image;
+    this.hint.textContent = imageSelected
+      ? 'Image selected · → then Enter adds text below · Tab / Shift-Tab move between cells'
+      : 'Click a cell to edit · Tab / Shift-Tab move between cells · Enter adds text below a figure';
     const signature = `${ctx.pos}:${columns.join(',')}:${gutter}:${ctx.node.childCount}`;
     this.root.hidden = false;
     if (signature === this.signature) return;
@@ -392,6 +436,25 @@ class GridBar {
 export function gridPlugin(): Plugin {
   return new Plugin({
     key: gridBarKey,
+    props: {
+      decorations(state) {
+        const ctx = gridContext(state);
+        if (!ctx) return null;
+        const selected = selectedCell(state, ctx);
+        const decorations = [Decoration.node(ctx.pos, ctx.pos + ctx.node.nodeSize, { class: 'ts-grid-editing' })];
+        ctx.node.forEach((row, rowOff, rowIndex) => {
+          row.forEach((cell, cellOff, columnIndex) => {
+            const attrs: Record<string, string> = {};
+            if (selected?.row === rowIndex && selected.column === columnIndex) attrs.class = 'ts-grid-cell-active';
+            if (cell.childCount === 1 && cell.firstChild?.type === schema.nodes.paragraph && !cell.firstChild.content.size) attrs['data-grid-empty'] = 'true';
+            if (!Object.keys(attrs).length) return;
+            const pos = ctx.pos + 2 + rowOff + cellOff;
+            decorations.push(Decoration.node(pos, pos + cell.nodeSize, attrs));
+          });
+        });
+        return DecorationSet.create(state.doc, decorations);
+      },
+    },
     view(view) {
       const bar = new GridBar(view);
       return { update: (v) => bar.update(v), destroy: () => bar.destroy() };

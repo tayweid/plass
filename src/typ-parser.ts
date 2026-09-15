@@ -9,7 +9,8 @@
 // unchanged, so opening and saving a file never destroys what we don't
 // understand.
 
-import type { Mark, Node as PMNode } from 'prosemirror-model';
+import { Fragment, type Mark, type Node as PMNode } from 'prosemirror-model';
+import { TableMap } from 'prosemirror-tables';
 import { schema } from './schema';
 import { unwrapAligned } from './math-src';
 import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings, FOOTNOTE_NUMBERINGS, type FootnoteNumbering } from './settings';
@@ -18,6 +19,7 @@ import { beforeAfterNode, createQuoteState, feedGlyph, lastVisible, smartQuote, 
 import { densityFromInsetPt, type TableDensity } from './table-density';
 import { parseRowRuleArg } from './table-rules';
 import { cellFillFromTypst, type CellFill } from './table-fills';
+import { normalizeTableColumns } from './table-geometry';
 import { parseBibTeX } from './bibtex';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 import { RUNNING_PAGE_TYP, RUNNING_SECTION_TYP } from './typ-serializer';
@@ -337,7 +339,9 @@ function fuseDecimalColumns(table: PMNode, logicalDecimals: number[]): PMNode {
     }
     return `columns: (${fused.join(', ')})`;
   });
-  return table.type.create({ ...table.attrs, params }, rows);
+  const widths = table.attrs.columnWidths as string[] | null;
+  const columnWidths = widths?.filter((_width, index) => !expanded.some((start) => index === start + 1)) ?? null;
+  return table.type.create({ ...table.attrs, params, columnWidths }, rows);
 }
 
 function unescapeTypText(t: string): string {
@@ -717,24 +721,24 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     }
 
     // figure: #figure(image("src"), caption: [ … ]) <label>
-    m = /^#figure\(image\("([^"]*)"\)\s*,\s*caption:\s*\[/.exec(t);
+    m = /^#figure\(image\("([^"]*)"(?:\s*,\s*width:\s*(\d+(?:\.\d+)?)%)?\)\s*,\s*caption:\s*\[/.exec(t);
     if (m) {
       const capStart = m[0].length - 1; // index of '['
       const capEnd = matchBracket(t, capStart);
-      if (capEnd > 0) {
+      if (capEnd > 0 && (m[2] === undefined || (+m[2] > 0 && +m[2] <= 100))) {
         const caption = t.slice(capStart + 1, capEnd);
         const rest = t.slice(capEnd + 1);
         const label = /^\)\s*<([^>]+)>/.exec(rest)?.[1] ?? '';
-        out.push(schema.nodes.figure.create({ src: m[1], label }, parseInline(caption)));
+        out.push(schema.nodes.figure.create({ src: m[1], label, widthPct: m[2] === undefined ? null : +m[2] }, parseInline(caption)));
         i++;
         continue;
       }
     }
 
     // standalone image
-    m = /^#image\("([^"]+)"\)$/.exec(t);
-    if (m) {
-      out.push(schema.nodes.paragraph.create(null, [schema.nodes.image.create({ src: m[1] })]));
+    m = /^#image\("([^"]+)"(?:\s*,\s*width:\s*(\d+(?:\.\d+)?)%)?\)$/.exec(t);
+    if (m && (m[2] === undefined || (+m[2] > 0 && +m[2] <= 100))) {
+      out.push(schema.nodes.paragraph.create(null, [schema.nodes.image.create({ src: m[1], widthPct: m[2] === undefined ? null : +m[2] })]));
       i++;
       continue;
     }
@@ -833,7 +837,114 @@ interface ParsedCell {
   rowspan: number;
   header: boolean;
   align: string | null;
+  valign: string | null;
   fill: CellFill;
+}
+
+interface CellAlignment {
+  align: string | null;
+  valign: string | null;
+}
+
+/** The table rail supports one horizontal and one vertical alignment,
+ * never arbitrary Typst expressions. `auto` resolves to the rail's left. */
+function parseCellAlignment(value: string): CellAlignment | null {
+  const parts = value.trim().split(/\s*\+\s*/);
+  let align: string | null = null;
+  let valign: string | null = null;
+  for (const part of parts) {
+    if (['left', 'center', 'right', 'auto'].includes(part) && align === null) align = part === 'auto' ? 'left' : part;
+    else if (['top', 'horizon', 'bottom'].includes(part) && valign === null) valign = part === 'horizon' ? 'middle' : part;
+    else return null;
+  }
+  return { align, valign };
+}
+
+type TableGeometryArg =
+  | { key: 'columns'; widths: string[] }
+  | { key: 'inset'; pt: number }
+  | { key: 'align'; columns: CellAlignment[] }
+  | { key: 'fill'; firstRow: CellFill };
+
+/** Shared by source import and the lossless migration of saved JSON. */
+function parseTableGeometryArg(arg: string): TableGeometryArg | null {
+  const columns = /^columns\s*:\s*\((.*)\)$/s.exec(arg);
+  if (columns) {
+    const widths = normalizeTableColumns(splitTopArgs(columns[1]));
+    return widths ? { key: 'columns', widths } : null;
+  }
+  const inset = /^inset\s*:\s*(\d+(?:\.\d+)?|\.\d+)pt$/.exec(arg);
+  if (inset) {
+    const pt = Number(inset[1]);
+    return Number.isFinite(pt) && pt >= 0 && pt <= 72 ? { key: 'inset', pt } : null;
+  }
+  if (/^align\s*:/.test(arg)) {
+    const tuple = /^align\s*:\s*\(([^)]*)\)$/.exec(arg);
+    const value = arg.slice(arg.indexOf(':') + 1).trim();
+    const values = (tuple ? splitTopArgs(tuple[1]) : [value]).map(parseCellAlignment);
+    return values.length && values.every((v) => v !== null) ? { key: 'align', columns: values } : null;
+  }
+  // Match this literal function without evaluating Typst. Other functions
+  // remain preserved source and visibly unsupported.
+  const fill = /^fill:\(x,y\)=>ify==0\{(.+)\}$/.exec(arg.replace(/\s+/g, ''));
+  const preset = fill ? cellFillFromTypst(fill[1]) : null;
+  return preset ? { key: 'fill', firstRow: preset } : null;
+}
+
+/** Upgrade only the now-supported geometry held in old table `params`.
+ * Content, marks, other attrs, unknown source, and existing cell overrides
+ * survive unchanged. The unchanged tree is returned by identity. */
+export function migrateLegacyTableGeometry(node: PMNode): PMNode {
+  const children: PMNode[] = [];
+  let changedChildren = false;
+  node.forEach((child) => {
+    const next = migrateLegacyTableGeometry(child);
+    changedChildren ||= next !== child;
+    children.push(next);
+  });
+  let result = changedChildren ? node.copy(Fragment.fromArray(children)) : node;
+  const params = result.type.name === 'table' ? String(result.attrs.params || '') : '';
+  if (!params) return result;
+  const map = TableMap.get(result);
+  // Ambiguous legacy geometry must stay untouched rather than be guessed.
+  if (map.problems?.length) return result;
+  const attrs = { ...result.attrs };
+  let alignment: CellAlignment[] | null = null;
+  let firstRowFill: CellFill = '';
+  let changed = false;
+  const remaining = splitTopArgs(params, false).filter((raw) => {
+    const arg = parseTableGeometryArg(raw.trim());
+    if (!arg || (arg.key === 'columns' && arg.widths.length !== map.width)) return true;
+    changed = true;
+    if (arg.key === 'columns' && attrs.columnWidths == null) attrs.columnWidths = arg.widths;
+    if (arg.key === 'inset' && attrs.insetPt == null) {
+      const density = densityFromInsetPt(arg.pt);
+      if (density === null) attrs.insetPt = arg.pt;
+      else attrs.density = density;
+    }
+    if (arg.key === 'align') alignment = arg.columns;
+    if (arg.key === 'fill') firstRowFill = arg.firstRow;
+    return false;
+  });
+  if (!changed) return result;
+  attrs.params = remaining.some((part) => part.trim()) ? remaining.join(',') : '';
+  const rows: PMNode[] = [];
+  result.forEach((row, rowOffset, rowIndex) => {
+    const cells: PMNode[] = [];
+    let changedRow = false;
+    row.forEach((cell, cellOffset) => {
+      const col = map.findCell(rowOffset + cellOffset + 1).left;
+      const inherited = alignment?.[col % alignment.length];
+      const align = cell.attrs.align ?? inherited?.align ?? null;
+      const valign = cell.attrs.valign ?? inherited?.valign ?? null;
+      const fill = cell.attrs.fill || (rowIndex === 0 ? firstRowFill : '');
+      const different = align !== cell.attrs.align || valign !== cell.attrs.valign || fill !== cell.attrs.fill;
+      changedRow ||= different;
+      cells.push(different ? cell.type.create({ ...cell.attrs, align, valign, fill }, cell.content, cell.marks) : cell);
+    });
+    rows.push(changedRow ? row.copy(Fragment.fromArray(cells)) : row);
+  });
+  return result.type.create(attrs, rows, result.marks);
 }
 
 export interface TableSourceParts {
@@ -978,7 +1089,7 @@ function matchParen(src: string, open: number): number {
 }
 
 /** Split a Typst argument list at depth-0 commas. */
-function splitTopArgs(inner: string): string[] {
+function splitTopArgs(inner: string, trim = true): string[] {
   const args: string[] = [];
   let parens = 0;
   let braces = 0;
@@ -1015,7 +1126,7 @@ function splitTopArgs(inner: string): string[] {
     }
   }
   args.push(inner.slice(start));
-  return args.map((a) => a.trim()).filter(Boolean);
+  return trim ? args.map((a) => a.trim()).filter(Boolean) : args;
 }
 
 /** Parse one positional cell argument: [content] or table.cell(args)[content]. */
@@ -1023,7 +1134,7 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
   if (arg.startsWith('[')) {
     const end = matchBracket(arg, 0);
     if (end !== arg.length - 1) return null;
-    return { content: arg.slice(1, end), colspan: 1, rowspan: 1, header, align: null, fill: '' };
+    return { content: arg.slice(1, end), colspan: 1, rowspan: 1, header, align: null, valign: null, fill: '' };
   }
   if (arg.startsWith('table.cell(')) {
     const argsStart = 'table.cell('.length;
@@ -1033,6 +1144,9 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
     const end = matchBracket(arg, bracket);
     if (end !== arg.length - 1) return null;
     const a = arg.slice(argsStart, argsEnd);
+    const alignArg = splitTopArgs(a).find((part) => /^align\s*:/.test(part));
+    const alignment = alignArg ? parseCellAlignment(alignArg.slice(alignArg.indexOf(':') + 1)) : null;
+    if (alignArg && !alignment) return null;
     // A fill is a preset or the table is not native (table-fills.ts).
     let fill: CellFill = '';
     const fillM = /(?:^|,)\s*fill:\s*([^,]+(?:\([^)]*\))?[^,]*)/.exec(a);
@@ -1046,7 +1160,8 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
       colspan: parseInt(/colspan:\s*(\d+)/.exec(a)?.[1] ?? '1', 10),
       rowspan: parseInt(/rowspan:\s*(\d+)/.exec(a)?.[1] ?? '1', 10),
       header,
-      align: /align:\s*(left|center|right)/.exec(a)?.[1] ?? null,
+      align: alignment?.align ?? null,
+      valign: alignment?.valign ?? null,
       fill,
     };
   }
@@ -1116,15 +1231,19 @@ export function parseTable(src: string): PMNode | null {
 
   const args = splitTopArgs(src.slice(open + 1, close));
   let columns = 0;
+  let columnWidths: string[] | null = null;
   let strokeNone = false;
-  let alignTuple: string | null = null;
+  let alignments: CellAlignment[] | null = null;
   let density: TableDensity = '';
+  let insetPt: number | null = null;
+  let firstRowFill: CellFill = '';
   let hlines = 0;
   const userHlines: string[] = [];
   const customParams: string[] = [];
   const cells: ParsedCell[] = [];
 
   for (const arg of args) {
+    const geometry = parseTableGeometryArg(arg);
     if (/^columns\s*:/.test(arg)) {
       const num = /^columns\s*:\s*(\d+)$/.exec(arg);
       if (num) {
@@ -1132,21 +1251,24 @@ export function parseTable(src: string): PMNode | null {
       } else {
         const tup = /^columns\s*:\s*\((.*)\)$/s.exec(arg);
         if (!tup) return null;
-        columns = splitTopArgs(tup[1]).length;
-        customParams.push(arg); // non-numeric column spec round-trips verbatim
+        const widths = splitTopArgs(tup[1]);
+        columns = widths.length;
+        if (geometry?.key === 'columns') columnWidths = geometry.widths;
+        else customParams.push(arg);
       }
     } else if (/^align\s*:/.test(arg)) {
-      const tup = /^align\s*:\s*\(([^)]*)\)$/.exec(arg);
-      const vals = tup ? tup[1].split(',').map((s) => s.trim()) : null;
-      if (vals && vals.every((v) => ['left', 'center', 'right', 'auto'].includes(v))) alignTuple = tup![1];
+      if (geometry?.key === 'align') alignments = geometry.columns;
       else customParams.push(arg);
     } else if (/^stroke\s*:\s*none$/.test(arg)) {
       strokeNone = true;
-    } else if (/^inset\s*:\s*\d+(?:\.\d+)?pt$/.test(arg)) {
-      // A uniform inset that matches a density preset is the preset; any
-      // other inset stays a custom parameter, exact in the export.
-      const preset = densityFromInsetPt(parseFloat(arg.split(':')[1]));
-      if (preset !== null) density = preset;
+    } else if (/^inset\s*:\s*(?:\d+(?:\.\d+)?|\.\d+)pt$/.test(arg)) {
+      if (geometry?.key === 'inset') {
+        const preset = densityFromInsetPt(geometry.pt);
+        if (preset !== null) density = preset;
+        else insetPt = geometry.pt;
+      } else customParams.push(arg);
+    } else if (/^fill\s*:/.test(arg)) {
+      if (geometry?.key === 'fill') firstRowFill = geometry.firstRow;
       else customParams.push(arg);
     } else if (arg.startsWith('table.hline(')) {
       // Explicit-position rules (y:) are user midrules — carried in params;
@@ -1202,13 +1324,6 @@ export function parseTable(src: string): PMNode | null {
     // A custom stroke without preset markers: keep style neutral.
     style = 'plain';
   }
-  const colAligns: Array<string | null> = new Array(columns).fill(null);
-  if (alignTuple) {
-    alignTuple.split(',').forEach((a, i) => {
-      const v = a.trim();
-      if (i < columns && (v === 'left' || v === 'center' || v === 'right')) colAligns[i] = v;
-    });
-  }
 
   // Chunk the flat cell list into rows, honoring col/rowspans.
   const { table, table_row, table_cell, table_header } = schema.nodes;
@@ -1229,8 +1344,10 @@ export function parseTable(src: string): PMNode | null {
       const type = c.header ? table_header : table_cell;
       const content = parseTableCellContent(c.content);
       if (!content) return null;
+      const alignment = alignments?.[col % alignments.length];
       rowCells.push(
-        type.create({ colspan: c.colspan, rowspan: c.rowspan, align: c.align ?? colAligns[col], fill: c.fill }, content),
+        type.create({ colspan: c.colspan, rowspan: c.rowspan, align: c.align ?? alignment?.align ?? null,
+          valign: c.valign ?? alignment?.valign ?? null, fill: c.fill || (!rows.length ? firstRowFill : '') }, content),
       );
       for (let k = col; k < Math.min(columns, col + c.colspan); k++) {
         if (c.rowspan > 1) pending[k] += c.rowspan - 1;
@@ -1275,7 +1392,7 @@ export function parseTable(src: string): PMNode | null {
     if (hlines !== expected) return null;
   }
   try {
-    return table.create({ style, params, density }, rows);
+    return table.create({ style, params, density, columnWidths, insetPt }, rows);
   } catch {
     return null;
   }
@@ -1482,11 +1599,11 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
       }
     }
     if (src.startsWith('#image("', i)) {
-      const end = src.indexOf('")', i + 8);
-      if (end >= 0) {
+      const image = /^#image\("([^"]+)"(?:\s*,\s*width:\s*(\d+(?:\.\d+)?)%)?\)/.exec(src.slice(i));
+      if (image && (image[2] === undefined || (+image[2] > 0 && +image[2] <= 100))) {
         flush();
-        out.push(schema.nodes.image.create({ src: src.slice(i + 8, end) }));
-        i = end + 2;
+        out.push(schema.nodes.image.create({ src: image[1], widthPct: image[2] === undefined ? null : +image[2] }));
+        i += image[0].length;
         continue;
       }
     }

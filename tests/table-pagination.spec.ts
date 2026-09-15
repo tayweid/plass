@@ -27,6 +27,9 @@ declare global {
 
 interface TableOptions {
   rows: number;
+  style?: 'booktabs' | 'grid';
+  density?: '' | 'compact' | 'roomy';
+  decoratedHeader?: boolean;
   /** Row index (0-based, content rows start at 1) whose first cell spans
    * two rows — a merged cell across the boundary below it. */
   rowspanAt?: number;
@@ -43,7 +46,10 @@ async function installDoc(page: Page, opts: TableOptions, navigate = true): Prom
     const s = state.schema;
     const paragraph = (text: string) => s.nodes.paragraph.create(null, s.text(text));
     const cell = (text: string, attrs: Record<string, unknown> = {}) => s.nodes.table_cell.create(attrs, paragraph(text));
-    const header = (text: string) => s.nodes.table_header.create(null, paragraph(text));
+    const header = (text: string) => s.nodes.table_header.create(
+      o.decoratedHeader ? { fill: 'blue', align: 'center' } : null,
+      o.decoratedHeader ? [paragraph(text), paragraph('Continued')] : paragraph(text),
+    );
     const tableRows = [
       s.nodes.table_row.create(null, [header('Item'), header('Value'), header('Note')]),
       ...Array.from({ length: o.rows - 1 }, (_, index) => {
@@ -57,7 +63,7 @@ async function installDoc(page: Page, opts: TableOptions, navigate = true): Prom
       }),
     ];
     const table = s.nodes.table.create(
-      { style: 'booktabs', caption: o.caption ?? '', label: '', params: '', fontSize: '' },
+      { style: o.style ?? 'booktabs', density: o.density ?? '', caption: o.caption ?? '', label: '', params: '', fontSize: '' },
       tableRows,
     );
     const doc = s.nodes.doc.create(state.doc.attrs, [
@@ -157,7 +163,7 @@ test('a 40-row table crossing a page boundary paginates exactly, breaking betwee
     const hdr = widget.querySelector<HTMLElement>('.ts-table-hdr')!;
     const width = (el: Element, pseudo: string, side: 'borderTopWidth' | 'borderBottomWidth') =>
       parseFloat(getComputedStyle(el, pseudo)[side]);
-    const requested = Number(/^pgr:\d+:(\d+):(\d+)$/.exec(widget.dataset.tsGapKey ?? '')?.[1] ?? NaN);
+    const requested = Number(/^pgr:\d+:(\d+):(\d+)(?::.*)?$/.exec(widget.dataset.tsGapKey ?? '')?.[1] ?? NaN);
     return {
       classes: [...widget.classList],
       closingRule: width(td, '::before', 'borderTopWidth'),
@@ -181,6 +187,74 @@ test('a 40-row table crossing a page boundary paginates exactly, breaking betwee
   const report = await page.evaluate(() => window.__audit());
   expect(report?.pages.typst.find((ps) => ps.unit === 'table')?.line ?? -1).toBe(Number(nextRow![1]));
   expect(report?.pages.agree, JSON.stringify(report?.pages)).toBe(true);
+});
+
+for (const density of ['compact', 'roomy'] as const) {
+  test(`grid table page gaps have no cell strokes and repeat the ${density} header faithfully`, async ({ page }) => {
+    const before = await installDoc(page, { rows: 60, style: 'grid', density, decoratedHeader: true });
+    await settleLocal(page, before);
+    const paint = await page.evaluate(() => {
+      const table = document.querySelector('.ProseMirror table')!;
+      const original = table.querySelector('th')!;
+      const spacer = table.querySelector('.ts-table-break > td')!;
+      const header = spacer.querySelector('.ts-table-hdr')!;
+      const originalRect = original.getBoundingClientRect();
+      const spacerRect = spacer.getBoundingClientRect();
+      const headerRect = header.getBoundingClientRect();
+      const textOffset = (el: Element, selector = 'p') => {
+        const r = el.querySelector(selector)!.getBoundingClientRect();
+        const box = el.getBoundingClientRect();
+        return { left: r.left - box.left, top: r.top - box.top };
+      };
+      return {
+        spacerShadow: getComputedStyle(spacer).boxShadow,
+        originalShadow: getComputedStyle(original).boxShadow,
+        repeatedShadow: getComputedStyle(header).boxShadow,
+        originalFill: getComputedStyle(original).backgroundColor,
+        repeatedFill: getComputedStyle(header).backgroundColor,
+        alignment: [getComputedStyle(original).textAlign, getComputedStyle(header).textAlign],
+        widths: [originalRect.width, spacerRect.width, headerRect.width],
+        heights: [originalRect.height, headerRect.height],
+        originalText: textOffset(original),
+        repeatedText: textOffset(header),
+        originalLastText: textOffset(original, 'p:last-child'),
+        repeatedLastText: textOffset(header, 'p:last-child'),
+      };
+    });
+    expect(paint.spacerShadow).toBe('none');
+    expect(paint.repeatedShadow).toBe(paint.originalShadow);
+    expect(paint.repeatedFill).toBe(paint.originalFill);
+    expect(paint.alignment).toEqual(['center', 'center']);
+    expect(paint.widths[1]).toBeCloseTo(paint.widths[0], 1);
+    expect(paint.widths[2]).toBeCloseTo(paint.widths[0], 1);
+    expect(paint.heights[1]).toBeCloseTo(paint.heights[0], 1);
+    expect(paint.repeatedText.left).toBeCloseTo(paint.originalText.left, 1);
+    expect(paint.repeatedText.top).toBeCloseTo(paint.originalText.top, 1);
+    expect(paint.repeatedLastText.top).toBeCloseTo(paint.originalLastText.top, 1);
+  });
+}
+
+test('repeated headers update after fill and alignment edits that keep the same row height', async ({ page }) => {
+  const before = await installDoc(page, { rows: 60, style: 'grid', decoratedHeader: true });
+  await settleLocal(page, before);
+  const repeated = page.locator('.ts-table-break .ts-table-hdr').first();
+  await expect(repeated).toHaveAttribute('data-fill', 'blue');
+  const heightBefore = await repeated.evaluate((el) => el.getBoundingClientRect().height);
+  const changed = await page.evaluate(() => {
+    const { state } = window.view;
+    let headerPos = -1;
+    state.doc.descendants((node, pos) => {
+      if (headerPos < 0 && node.type.name === 'table_header') headerPos = pos;
+    });
+    const header = state.doc.nodeAt(headerPos)!;
+    const count = window.__pagCount();
+    window.view.dispatch(state.tr.setNodeMarkup(headerPos, undefined, { ...header.attrs, fill: 'yellow', align: 'right' }));
+    return count;
+  });
+  await settleLocal(page, changed);
+  await expect(repeated).toHaveAttribute('data-fill', 'yellow');
+  expect(await repeated.evaluate((el) => getComputedStyle(el).textAlignLast)).toBe('right');
+  expect(await repeated.evaluate((el) => el.getBoundingClientRect().height)).toBeCloseTo(heightBefore, 1);
 });
 
 test('a merged cell across the boundary keeps the table atomic (fail open)', async ({ page }) => {

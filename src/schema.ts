@@ -3,17 +3,30 @@ import { schema as base } from 'prosemirror-schema-basic';
 import { addListNodes } from 'prosemirror-schema-list';
 import { tableNodes } from 'prosemirror-tables';
 import { DEFAULT_SETTINGS } from './settings';
+import { normalizeInsetPt, normalizeTableColumns } from './table-geometry';
+
+function imageWidthPct(value: unknown): number | null {
+  const n = typeof value === 'string' && value ? Number(value) : value;
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 && n <= 100 ? n : null;
+}
+
+function columnsFromDOM(el: HTMLElement): string[] | null {
+  try { return normalizeTableColumns(JSON.parse(el.getAttribute('data-column-widths') || 'null')); }
+  catch { return null; }
+}
 
 /** DOM serialization is used for clipboard copies as well as rendering.
  * Keep path/remote/SVG sources in inert data attributes so creating a
  * detached clipboard <img> cannot itself trigger document-controlled I/O. */
-function serializedImageAttrs(node: { attrs: { src?: unknown; alt?: unknown; title?: unknown } }) {
+function serializedImageAttrs(node: { attrs: { src?: unknown; alt?: unknown; title?: unknown; widthPct?: unknown } }) {
   const src = String(node.attrs.src ?? '');
   const attrs: Record<string, string> = {
     'data-image-src': src,
     alt: String(node.attrs.alt ?? ''),
   };
   if (node.attrs.title) attrs.title = String(node.attrs.title);
+  const width = imageWidthPct(node.attrs.widthPct);
+  if (width !== null) attrs['data-width-pct'] = String(width);
   if (/^data:image\/(?:png|jpe?g|gif|webp);/i.test(src) || /^blob:/i.test(src)) attrs.src = src;
   return attrs;
 }
@@ -116,7 +129,7 @@ const figure: NodeSpec = {
   content: 'inline*',
   // `title`: a Markdown image title (`![alt](src "title")`), carried for
   // the .md round trip; Typst has no use for it.
-  attrs: { src: { default: '' }, label: { default: '' }, name: { default: '' }, title: { default: '' } },
+  attrs: { src: { default: '' }, label: { default: '' }, name: { default: '' }, title: { default: '' }, widthPct: { default: null } },
   draggable: true,
   isolating: true,
   parseDOM: [
@@ -131,6 +144,7 @@ const figure: NodeSpec = {
           '',
         label: (el as HTMLElement).getAttribute('data-label') ?? '',
         name: (el as HTMLElement).getAttribute('data-name') ?? '',
+        widthPct: imageWidthPct((el as HTMLElement).getAttribute('data-width-pct')),
       }),
     },
   ],
@@ -141,9 +155,10 @@ const figure: NodeSpec = {
       'data-image-src': node.attrs.src,
       'data-label': node.attrs.label,
       'data-name': node.attrs.name,
+      'data-width-pct': imageWidthPct(node.attrs.widthPct),
       class: 'ts-figure',
     },
-    ['img', serializedImageAttrs({ attrs: { src: node.attrs.src, alt: '' } })],
+    ['img', serializedImageAttrs({ attrs: { src: node.attrs.src, alt: '', widthPct: node.attrs.widthPct } })],
     ['figcaption', 0],
   ],
 };
@@ -234,11 +249,21 @@ const tables = tableNodes({
   tableGroup: 'block',
   cellContent: 'block+',
   cellAttributes: {
+    valign: {
+      default: null,
+      getFromDOM: (dom) => ['top', 'middle', 'bottom'].includes((dom as HTMLElement).style.verticalAlign) ? (dom as HTMLElement).style.verticalAlign : null,
+      setDOMAttr: (value, attrs) => {
+        if (typeof value === 'string' && ['top', 'middle', 'bottom'].includes(value)) attrs.style = ((attrs.style as string) ?? '') + `vertical-align:${value};`;
+      },
+    },
     align: {
       default: null,
       getFromDOM: (dom) => (dom as HTMLElement).style.textAlign || null,
       setDOMAttr: (value, attrs) => {
-        if (value) attrs.style = ((attrs.style as string) ?? '') + `text-align:${value};`;
+        // Cell alignment controls the last line while the paragraph keeps
+        // Typst's justification on wrapped lines. Paragraphs set their own
+        // text-align, but inherit text-align-last from the cell.
+        if (value) attrs.style = ((attrs.style as string) ?? '') + `text-align:${value};text-align-last:${value === 'decimal' ? 'right' : value};`;
       },
     },
     // A fill preset (table-fills.ts): '' | 'gray' | 'yellow' | 'blue'.
@@ -396,6 +421,7 @@ const nodes = listNodes
   })
   .update('image', {
     ...base.spec.nodes.get('image')!,
+    attrs: { ...base.spec.nodes.get('image')!.attrs, widthPct: { default: null } },
     parseDOM: [
       {
         tag: 'img[src], img[data-image-src]',
@@ -405,6 +431,7 @@ const nodes = listNodes
             src: el.getAttribute('data-image-src') ?? el.getAttribute('src') ?? '',
             alt: el.getAttribute('alt'),
             title: el.getAttribute('title'),
+            widthPct: imageWidthPct(el.getAttribute('data-width-pct')),
           };
         },
       },
@@ -440,6 +467,8 @@ const nodes = listNodes
       // Cell inset preset: '' (Typst's 5pt), 'compact' (3pt), 'roomy'
       // (8pt) — table-density.ts.
       density: { default: '' },
+      columnWidths: { default: null },
+      insetPt: { default: null },
     },
     parseDOM: [
       {
@@ -451,6 +480,8 @@ const nodes = listNodes
           label: (el as HTMLElement).getAttribute('data-label') || '',
           fontSize: (el as HTMLElement).getAttribute('data-font-size') || '',
           density: (el as HTMLElement).getAttribute('data-density') || '',
+          columnWidths: columnsFromDOM(el as HTMLElement),
+          insetPt: (el as HTMLElement).hasAttribute('data-inset-pt') ? normalizeInsetPt(Number((el as HTMLElement).getAttribute('data-inset-pt'))) : null,
         }),
       },
     ],
@@ -463,6 +494,9 @@ const nodes = listNodes
         'data-label': node.attrs.label,
         'data-font-size': node.attrs.fontSize,
         'data-density': (node.attrs.density as string) || null,
+        'data-column-widths': node.attrs.columnWidths ? JSON.stringify(node.attrs.columnWidths) : null,
+        'data-inset-pt': normalizeInsetPt(node.attrs.insetPt),
+        style: normalizeInsetPt(node.attrs.insetPt) !== null ? `--cell-inset:${node.attrs.insetPt}pt` : null,
         class: `ts-table-${node.attrs.style}`,
       },
       ['tbody', 0],

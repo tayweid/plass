@@ -1,7 +1,7 @@
 // Round-trip and import tests for the .typ parser. Run: npm test
 import { demoDoc } from './demo-doc.ts';
 import { docToTyp } from './typ-serializer.ts';
-import { typToDoc } from './typ-parser.ts';
+import { migrateLegacyTableGeometry, typToDoc } from './typ-parser.ts';
 import { schema } from './schema.ts';
 
 let failures = 0;
@@ -331,8 +331,8 @@ function firstDiff(a: string, b: string): string {
   const { doc, warnings } = typToDoc(src + '\n');
   const tbl = doc.child(0);
   check('custom-arg table still parses as a table', tbl.type.name === 'table', warnings.join('; '));
-  check('custom params captured', /inset: 6pt/.test(tbl.attrs.params) && /fill: \(x, y\)/.test(tbl.attrs.params));
-  check('fractional columns captured', /columns: \(2fr, 1fr, 1fr\)/.test(tbl.attrs.params));
+  check('supported inset is typed and unknown fill remains preserved', tbl.attrs.insetPt === 6 && /fill: \(x, y\)/.test(tbl.attrs.params));
+  check('fractional columns captured as typed widths', JSON.stringify(tbl.attrs.columnWidths) === '["2fr","1fr","1fr"]');
   const out = docToTyp(doc);
   check('custom params re-emitted', out.includes('inset: 6pt,') && out.includes('columns: (2fr, 1fr, 1fr)'));
   check('no duplicate columns arg', (out.match(/columns\s*:/g) ?? []).length === 1);
@@ -450,6 +450,11 @@ function firstDiff(a: string, b: string): string {
   check('cell text rejoined', t2n?.child(1)?.child(1)?.textContent === '12.5');
   const again = docToTyp(back.doc);
   check('decimal round-trip idempotent', out === again, firstDiff(out, again));
+  const sized = t.type.create({ ...t.attrs, columnWidths: ['2fr', '1fr'], insetPt: 9 }, t.content);
+  const sizedOut = docToTyp(docType.create(null, sized));
+  const sizedBack = typToDoc(sizedOut).doc.firstChild!;
+  check('decimal split fuses typed widths back to logical columns', JSON.stringify(sizedBack.attrs.columnWidths) === '["2fr","1fr"]');
+  check('decimal typed widths round-trip stably', docToTyp(docType.create(null, sizedBack)) === sizedOut);
 }
 
 // --- 13d. table font size + vlines round-trip ---
@@ -658,7 +663,7 @@ function firstDiff(a: string, b: string): string {
   const t = doc.child(0);
   check('preset fills import onto the cells', t.type.name === 'table' && t.child(1).child(0).attrs.fill === 'gray' && t.child(2).child(1).attrs.fill === 'yellow' && t.child(2).child(1).attrs.align === 'right', JSON.stringify([t.type.name, t.child(1).child(0).attrs, t.child(2).child(1).attrs]));
   const out = docToTyp(doc);
-  check('fills export as table.cell(fill:)', out.includes('table.cell(fill: luma(240))[1]') && out.includes('table.cell(fill: rgb("#fff3b0"))[4]') && out.includes('align: (auto, right)'), out);
+  check('fills and selected-cell alignment export on their cells', out.includes('table.cell(fill: luma(240))[1]') && out.includes('table.cell(align: right, fill: rgb("#fff3b0"))[4]') && out.includes('align: (left, left)'), out);
   check('a filled table round-trips byte-identically', docToTyp(typToDoc(out).doc) === out, firstDiff(docToTyp(typToDoc(out).doc), out));
   const other = typToDoc(src.replace('luma(240)', 'red')).doc;
   check('a non-preset fill keeps the table as a raw island', other.child(0).type.name === 'code_block' && other.child(0).attrs.params === 'typst-raw', other.child(0).type.name);
@@ -804,6 +809,86 @@ function firstDiff(a: string, b: string): string {
   const out = docToTyp(doc);
   check('the page line is written back the same', out.includes(src.split('\n')[0]), out.split('\n')[1]);
   check('chrome round-trips byte for byte', out === docToTyp(typToDoc(out).doc), firstDiff(out, docToTyp(typToDoc(out).doc)));
+}
+
+// The Skillsheet's measured table controls are editable attributes, with no
+// hidden source override that could win against later toolbar edits.
+{
+  const source = '#table(columns: (auto, 1fr, auto), inset: 9pt, align: (center + horizon, left + horizon, center + horizon), fill: (x, y) => if y == 0 { luma(220) }, table.header([Code], [Skill], [Practice]), [B1.1], [Demand], [Exercise B1])';
+  const { doc } = typToDoc(source);
+  const table = doc.firstChild!;
+  check('Skillsheet widths and padding are editable attributes', table.type.name === 'table' && JSON.stringify(table.attrs.columnWidths) === '["auto","1fr","auto"]' && table.attrs.insetPt === 9 && table.attrs.params === '', JSON.stringify(table.attrs));
+  check('Skillsheet alignments import by axis', table.child(1).child(0).attrs.align === 'center' && table.child(1).child(1).attrs.align === 'left' && table.child(1).child(2).attrs.valign === 'middle');
+  check('Skillsheet header fill becomes explicit cells only on first row', table.child(0).child(0).attrs.fill === 'gray-dark' && table.child(0).child(2).attrs.fill === 'gray-dark' && table.child(1).child(0).attrs.fill === '');
+  const output = docToTyp(doc);
+  check('Skillsheet emits real widths padding and vertical alignment', output.includes('columns: (auto, 1fr, auto)') && output.includes('inset: 9pt') && output.includes('align: (center + horizon, left + horizon, center + horizon)') && output.includes('table.cell(fill: luma(220))') && !output.includes('(x, y) =>'));
+  check('Skillsheet controls round-trip stably', docToTyp(typToDoc(output).doc) === output);
+  const fixed = typToDoc(source.replace('(auto, 1fr, auto)', '(24pt, 2fr, 0pt)')).doc.firstChild!;
+  check('fixed point widths import without approximation', JSON.stringify(fixed.attrs.columnWidths) === '["24pt","2fr","0pt"]');
+  for (const unsupported of ['columns: (auto, calc.max(1fr, 2fr), auto)', 'inset: (x: 9pt, y: 5pt)', 'align: (x, y) => center', 'fill: (x, y) => if calc.odd(y) { luma(220) }']) {
+    const custom = typToDoc(`#table(columns: 3, ${unsupported}, [A], [B], [C])`).doc.firstChild!;
+    check(`unknown table expression is preserved: ${unsupported}`, String(custom.attrs.params).includes(unsupported));
+  }
+  const hex = typToDoc('#table(columns: 1, table.cell(fill: rgb("#dcdcdc"))[A])').doc.firstChild!;
+  check('equivalent gray hex imports into the verified palette', hex.firstChild!.firstChild!.attrs.fill === 'gray-dark');
+}
+
+// Existing sessions may still hold these supported properties in params.
+// Migrate attributes only, preserving arbitrary cell content and source.
+{
+  const rich = schema.nodes.paragraph.create(null, [schema.text('Untouched *text* ', [schema.marks.strong.create()]), schema.nodes.math_inline.create({ src: 'x^2' })]);
+  const cell = (attrs = {}) => schema.nodes.table_cell.create(attrs, rich);
+  const unknown = '\n  stroke: 0.8pt + rgb("#123456"),\n  fill-extra: (x, y) => if calc.odd(y) { [Keep, exactly] }';
+  const legacy = schema.nodes.table.create({ caption: 'Keep caption', params: 'columns: (auto, 1fr), inset: 9pt, align: (center + horizon, left + bottom), fill: (x, y) => if y == 0 { luma(220) },' + unknown }, [
+    schema.nodes.table_row.create({ rule: 'heavy' }, [cell({ align: 'right', fill: 'blue' }), cell()]),
+    schema.nodes.table_row.create(null, [cell(), cell({ valign: 'top' })]),
+  ]);
+  const grid = schema.nodes.grid.create({ columns: [1, 1] }, schema.nodes.grid_row.create(null, [schema.nodes.grid_cell.create(null, legacy), schema.nodes.grid_cell.create(null, rich)]));
+  const original = schema.nodes.doc.create(null, [grid, rich]);
+  const migrated = migrateLegacyTableGeometry(original);
+  const table = migrated.firstChild!.firstChild!.firstChild!.firstChild!;
+  check('session migration reaches tables in grid cells', JSON.stringify(table.attrs.columnWidths) === '["auto","1fr"]' && table.attrs.insetPt === 9 && table.attrs.caption === 'Keep caption');
+  check('session migration preserves unknown params exactly', table.attrs.params === unknown, JSON.stringify(table.attrs.params));
+  check('session migration preserves explicit cell overrides', table.child(0).child(0).attrs.align === 'right' && table.child(0).child(0).attrs.fill === 'blue' && table.child(1).child(1).attrs.valign === 'top');
+  check('session migration applies inherited alignment and header shading', table.child(0).child(1).attrs.fill === 'gray-dark' && table.child(1).child(0).attrs.align === 'center' && table.child(1).child(0).attrs.valign === 'middle' && table.child(0).child(1).attrs.valign === 'bottom');
+  check('session migration preserves text math marks and row attrs by identity', table.child(0).child(0).firstChild === rich && table.child(1).child(1).firstChild === rich && table.child(0).attrs.rule === 'heavy' && migrated.child(1) === rich);
+  check('session migration is idempotent by identity', migrateLegacyTableGeometry(migrated) === migrated);
+  const unsupported = schema.nodes.table.create({ params: 'columns: (calc.max(1fr, 2fr), auto), inset: (x: 9pt), align: (x, y) => right, fill: (x, y) => if y > 0 { luma(220) }' }, legacy.content);
+  check('unsupported session expressions leave the original table untouched', migrateLegacyTableGeometry(unsupported) === unsupported);
+  const wrongWidth = schema.nodes.table.create({ params: 'columns: (1fr, 1fr, 1fr)' }, legacy.content);
+  check('session migration preserves mismatched legacy column counts', migrateLegacyTableGeometry(wrongWidth) === wrongWidth);
+  check('a document without legacy params remains identical', migrateLegacyTableGeometry(schema.nodes.doc.create(null, rich)).firstChild === rich);
+}
+
+// Selected-cell alignment must leave null/default cells left aligned,
+// including when the explicitly aligned cell is first in its column.
+{
+  const cell = (text: string, align: string | null) => schema.nodes.table_cell.create({ align }, schema.nodes.paragraph.create(null, schema.text(text)));
+  for (const cells of [[cell('A', null), cell('B', 'right')], [cell('A', 'right'), cell('B', null)]]) {
+    const table = schema.nodes.table.create(null, cells.map((c) => schema.nodes.table_row.create(null, c)));
+    const original = schema.nodes.doc.create(null, table);
+    const roundTrip = typToDoc(docToTyp(original)).doc.firstChild!;
+    check(`cell alignment stays local when ${cells[0].attrs.align ?? 'default'} comes first`, roundTrip.child(0).firstChild!.attrs.align === (cells[0].attrs.align ?? 'left') && roundTrip.child(1).firstChild!.attrs.align === (cells[1].attrs.align ?? 'left'));
+  }
+}
+
+// Image resizing survives save/reopen, including inside grid cells.
+{
+  const source = '#grid(columns: (1fr, 1fr), gutter: 1em, [\n#image("axes.svg", width: 75%)\n], [\n#figure(image("curve.svg", width: 100%), caption: [A curve]) <fig:curve>\n])';
+  const { doc } = typToDoc(source);
+  const row = doc.firstChild!.firstChild!;
+  check('inline image width imports inside a grid', row.child(0).firstChild!.firstChild!.attrs.widthPct === 75);
+  check('figure width imports without losing its label or caption', row.child(1).firstChild!.attrs.widthPct === 100 && row.child(1).firstChild!.attrs.label === 'fig:curve' && row.child(1).firstChild!.textContent === 'A curve');
+  const output = docToTyp(doc);
+  check('image width exports on the image call', output.includes('#image("axes.svg", width: 75%)') && output.includes('image("curve.svg", width: 100%)'));
+  check('sized grid images round-trip stably', docToTyp(typToDoc(output).doc) === output);
+  const inline = typToDoc('Before #image("axes.svg", width: 50%) after.').doc.firstChild!;
+  check('width imports on images surrounded by prose', inline.child(1).type.name === 'image' && inline.child(1).attrs.widthPct === 50);
+  for (const expr of ['12pt', 'calc.max(20%, 30%)', '120%']) {
+    const source = `#image("axes.svg", width: ${expr})`;
+    const parsed = typToDoc(source).doc;
+    check(`unsupported image width stays verbatim: ${expr}`, parsed.firstChild!.type.name === 'code_block' && parsed.firstChild!.textContent === source);
+  }
 }
 
 declare const process: { exitCode?: number };

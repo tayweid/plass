@@ -271,6 +271,10 @@ export function applySettings(state: EditorState) {
   // while the editor's line box is line-height tall; the difference is the
   // half-leading on each side (style.css, `--cell-inset`).
   root.setProperty('--half-leading', `${(((s.lineHeight - parityMetrics(s.font).extent) / 2) * bodyPx).toFixed(4)}px`);
+  // Typst's paragraph leading/spacing are absolute lengths. Reducing a
+  // table's text size changes its glyph extent, not those two gaps.
+  root.setProperty('--table-text-extent', `${(parityMetrics(s.font).extent * bodyPx).toFixed(4)}px`);
+  root.setProperty('--table-par-gap', `${(s.parIndent ? 0 : 0.9 * bodyPx).toFixed(4)}px`);
   root.setProperty('--code-line', `${(code.lineEm * bodyPx).toFixed(4)}px`);
   root.setProperty('--fn-top-inset', `${(footnoteFrameInsetsEm(s).top * bodyPx).toFixed(4)}px`);
   root.setProperty('--fn-sep-width', s.footnoteSeparator === 'full' ? '100%' : '30%');

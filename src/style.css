@@ -566,9 +566,9 @@ body {
 }
 
 .native-table-advanced {
-  max-width: 145px;
-  align-self: center;
-  font: 9.5px/1.25 var(--sans);
+  display: block;
+  padding: 4px 8px 2px;
+  font: 11px/1.4 var(--sans);
   color: var(--ink-soft);
 }
 
@@ -1424,13 +1424,48 @@ body {
 
 .ProseMirror .ts-grid-cell {
   min-width: 0;
+  position: relative;
 }
 
-/* A whisper of structure while editing: a dashed edge on the cell the
-   caret is in (outline — no layout cost). Never printed. */
-.ProseMirror .ts-grid-cell:focus-within {
-  outline: 1px dashed rgba(140, 140, 150, 0.45);
-  outline-offset: 3px;
+/* The editor owns focus, so its selection decorations identify the grid
+   being edited. Paint every cell edge to make empty later rows visible. */
+.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell::after {
+  content: '';
+  position: absolute;
+  top: calc(var(--half-leading, 0.42em) - var(--grid-cell-margin-top, 0px));
+  bottom: calc(var(--half-leading, 0.42em) - var(--grid-cell-margin-bottom, 0px));
+  inset-inline: -3px;
+  border: 1px dashed rgba(140, 140, 150, 0.45);
+  pointer-events: none;
+}
+
+.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell-active::after {
+  border: 1px solid var(--accent);
+}
+
+.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell[data-grid-empty='true']::before {
+  content: 'Type here or insert a figure';
+  position: absolute;
+  inset: 0;
+  color: color-mix(in srgb, var(--ink) 40%, transparent);
+  font: 400 11px var(--sans);
+  line-height: inherit;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.grid-toolbar-position {
+  padding: 0 6px;
+  font: 600 10.5px/1 var(--sans);
+  white-space: nowrap;
+}
+
+.grid-toolbar-help {
+  padding: 4px 8px 2px;
+  font: 400 11px/1.4 var(--sans);
+  opacity: 0.7;
 }
 
 .grid-toolbar .grid-toolbar-name {
@@ -1885,6 +1920,7 @@ body {
      (table-density.ts). */
   --cell-inset: 5pt;
   --table-scale: 1;
+  line-height: calc(var(--table-text-extent, 11.4px) * var(--table-scale) + 2 * var(--half-leading, 6.81px));
 }
 
 .ProseMirror table[data-density='compact'] {
@@ -1893,6 +1929,11 @@ body {
 
 .ProseMirror table[data-density='roomy'] {
   --cell-inset: 8pt;
+}
+
+.ProseMirror table.ts-table-sized {
+  table-layout: fixed;
+  max-width: none;
 }
 
 .ProseMirror th,
@@ -1947,18 +1988,26 @@ body {
 }
 
 /* Cell fill presets (table-fills.ts): the same colours Typst prints. */
+.ProseMirror th[data-fill='gray-dark'],
+.ProseMirror td[data-fill='gray-dark'],
+.ProseMirror .ts-table-hdr[data-fill='gray-dark'] {
+  background-color: #dcdcdc;
+}
 .ProseMirror th[data-fill='gray'],
-.ProseMirror td[data-fill='gray'] {
+.ProseMirror td[data-fill='gray'],
+.ProseMirror .ts-table-hdr[data-fill='gray'] {
   background-color: #f0f0f0;
 }
 
 .ProseMirror th[data-fill='yellow'],
-.ProseMirror td[data-fill='yellow'] {
+.ProseMirror td[data-fill='yellow'],
+.ProseMirror .ts-table-hdr[data-fill='yellow'] {
   background-color: #fff3b0;
 }
 
 .ProseMirror th[data-fill='blue'],
-.ProseMirror td[data-fill='blue'] {
+.ProseMirror td[data-fill='blue'],
+.ProseMirror .ts-table-hdr[data-fill='blue'] {
   background-color: #e6f0ff;
 }
 
@@ -1988,12 +2037,12 @@ body {
 
 .ProseMirror th > p:first-child,
 .ProseMirror td > p:first-child {
-  margin-top: calc(var(--cell-inset) - var(--half-leading, 6.81px) * var(--table-scale));
+  margin-top: calc(var(--cell-inset) - var(--half-leading, 6.81px));
 }
 
 .ProseMirror th > p:last-child,
 .ProseMirror td > p:last-child {
-  margin-bottom: calc(var(--cell-inset) - var(--half-leading, 6.81px) * var(--table-scale));
+  margin-bottom: calc(var(--cell-inset) - var(--half-leading, 6.81px));
 }
 
 /* An empty cell has no glyph box: its height is the two insets alone. */
@@ -2014,7 +2063,7 @@ body {
 
 .ProseMirror th p + p,
 .ProseMirror td p + p {
-  margin-top: 0.45em;
+  margin-top: var(--table-par-gap, 0.9em);
 }
 
 .ProseMirror th:hover,
@@ -2031,8 +2080,9 @@ body {
    bottom rule closes the interrupted page, and the continuation page opens
    with the top rule, the repeated header, and the rule under it. */
 .ProseMirror table tr.ts-table-break > td {
-  padding: 0 5pt;
+  padding: 0;
   border: none;
+  box-shadow: none;
   vertical-align: top;
   position: relative;
 }
@@ -2044,11 +2094,25 @@ body {
 }
 
 .ts-table-hdr {
+  box-sizing: border-box;
+  padding: 0 var(--cell-inset);
   overflow: hidden;
 }
 
-.ts-table-hdr p {
+.ProseMirror .ts-table-hdr p {
   margin: 0;
+}
+
+.ProseMirror .ts-table-hdr > p:first-child {
+  margin-top: calc(var(--cell-inset) - var(--half-leading, 6.81px));
+}
+
+.ProseMirror .ts-table-hdr > p:last-child {
+  margin-bottom: calc(var(--cell-inset) - var(--half-leading, 6.81px));
+}
+
+.ProseMirror .ts-table-hdr p + p {
+  margin-top: var(--table-par-gap, 0.9em);
 }
 
 /* Rules span each cell's padding box (cells abut under border-collapse),
@@ -2061,11 +2125,6 @@ body {
   left: 0;
   right: 0;
   pointer-events: none;
-}
-
-.ProseMirror table tr.ts-table-break .ts-table-gap::after {
-  left: -5pt;
-  right: -5pt;
 }
 
 /* booktabs: the closing rule at the interrupted page's bottom (the table's
@@ -2087,22 +2146,11 @@ body {
   border-bottom: 0.05em solid var(--ink);
 }
 
-/* grid: the real rows' collapsed cell strokes already close and open the
-   pages; only the header copy needs its cell strokes, painted inside its
-   fixed box so nothing grows. */
+/* grid: only the header copy carries cell strokes. Its box spans the
+   full column width, and its ring matches the real cells. The spacer
+   cells themselves must never draw lines through the page margins. */
 .ProseMirror table.ts-table-grid tr.ts-table-break .ts-table-hdr {
-  box-shadow:
-    inset 1pt 0 0 0 var(--ink),
-    inset 0 1pt 0 0 var(--ink),
-    inset 0 -1pt 0 0 var(--ink);
-}
-
-.ProseMirror table.ts-table-grid tr.ts-table-break > td:last-child .ts-table-hdr {
-  box-shadow:
-    inset 1pt 0 0 0 var(--ink),
-    inset -1pt 0 0 0 var(--ink),
-    inset 0 1pt 0 0 var(--ink),
-    inset 0 -1pt 0 0 var(--ink);
+  box-shadow: 0 0 0 0.5pt var(--ink);
 }
 
 /* The header copy is presentation: no cell hover/selection affordances. */
@@ -2886,6 +2934,11 @@ body {
      row (gap + header copy) must not print. */
   tr.ts-table-break {
     display: none !important;
+  }
+
+  .ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell::after,
+  .ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell[data-grid-empty='true']::before {
+    display: none;
   }
 
   /* Screen footnote positions are meaningless in print flow; show bodies as

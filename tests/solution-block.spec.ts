@@ -113,7 +113,7 @@ test('solution block paginates locally and agrees with Typst', async ({ page }) 
   expect(report?.pages.agree, JSON.stringify(report?.pages)).toBe(true);
 });
 
-test('block flyout wraps into a solution, re-kinds, and lifts back out', async ({ page }) => {
+test('Extras menu wraps into a solution, re-kinds, and lifts back out', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const { state } = window.view;
@@ -129,24 +129,29 @@ test('block flyout wraps into a solution, re-kinds, and lifts back out', async (
   const solutionBtn = page.locator('button[title^="Solution block"]');
   const quoteBtn = page.locator('button[title^="Block quote"]');
   const plainBtn = page.locator('button[title^="Plain body text"]');
-  const wrap = page.locator('.tb-flyout-wrap', { has: solutionBtn });
+  const extras = page.getByRole('button', { name: 'Extras', exact: true });
+  const blocks = page.locator('.tb-flyout-wrap', { has: page.getByRole('menuitem', { name: 'Blocks', exact: true }) });
 
-  await wrap.hover();
+  await extras.click();
+  await blocks.hover();
   await solutionBtn.click();
   await expect(page.locator('.ProseMirror blockquote[data-kind="solution"] p')).toHaveText('Solution body.');
   await expect(page.locator('.ProseMirror > p', { hasText: 'Solution body.' })).toHaveCount(0);
 
   // Re-kind in place: the same container becomes a plain quote.
-  await wrap.hover();
+  await extras.click();
+  await blocks.hover();
   await quoteBtn.click();
   await expect(page.locator('.ProseMirror blockquote:not([data-kind]) p')).toHaveText('Solution body.');
   await expect(page.locator('.ProseMirror blockquote[data-kind="solution"]')).toHaveCount(0);
 
   // And back to a solution, then lifted out to body text.
-  await wrap.hover();
+  await extras.click();
+  await blocks.hover();
   await solutionBtn.click();
   await expect(page.locator('.ProseMirror blockquote[data-kind="solution"]')).toHaveCount(1);
-  await wrap.hover();
+  await extras.click();
+  await blocks.hover();
   await plainBtn.click();
   await expect(page.locator('.ProseMirror blockquote')).toHaveCount(0);
   await expect(page.locator('.ProseMirror > p', { hasText: 'Solution body.' })).toHaveCount(1);

@@ -4,6 +4,7 @@
 // mitex Typst package, which compiles LaTeX math inside Typst documents.
 
 import type { Node as PMNode } from 'prosemirror-model';
+import { TableMap } from 'prosemirror-tables';
 import { normalizeSettings, parseMathMacros, type DocSettings, paperInches, DEFAULT_SETTINGS } from './settings';
 import { wrapAligned } from './math-src';
 import { isPortableCitationKey, parseBibTeX } from './bibtex';
@@ -322,6 +323,11 @@ function imageSrc(src: string): string {
   return exportOpts.resolveImage ? exportOpts.resolveImage(src) : src;
 }
 
+function imageWidthArg(node: PMNode): string {
+  const width = node.attrs.widthPct;
+  return typeof width === 'number' && Number.isFinite(width) && width > 0 && width <= 100 ? `, width: ${width}%` : '';
+}
+
 export function escapeTyp(text: string): string {
   // A literal ~ must escape — Typst reads a bare ~ as a non-breaking
   // space, silently gluing the words around it. A real U+00A0 in the text
@@ -432,7 +438,7 @@ function inlineToTyp(node: PMNode, tableCell = false): string {
     } else if (child.type.name === 'hard_break') {
       out += ' \\\n';
     } else if (child.type.name === 'image') {
-      out += `#image("${imageSrc(child.attrs.src)}")`;
+      out += `#image("${imageSrc(child.attrs.src)}"${imageWidthArg(child)})`;
     }
   });
   flush();
@@ -615,7 +621,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
       // src is emitted verbatim (even data: URLs) so our own files round-trip
       // losslessly; swap in a real image path for Typst compilation.
       const label = node.attrs.label ? ` <${node.attrs.label}>` : '';
-      return indent + `#figure(image("${imageSrc(node.attrs.src)}"), caption: [${inlineToTyp(node)}])${label}\n\n`;
+      return indent + `#figure(image("${imageSrc(node.attrs.src)}"${imageWidthArg(node)}), caption: [${inlineToTyp(node)}])${label}\n\n`;
     }
     case 'bullet_list':
     case 'ordered_list': {
@@ -673,18 +679,21 @@ function blockToTyp(node: PMNode, indent = ''): string {
         columns += (cell.attrs.colspan as number) ?? 1;
       });
 
-      // Per-column alignment: first non-null cell alignment wins.
-      const colAligns: Array<string | null> = new Array(columns).fill(null);
-      node.forEach((row) => {
-        let col = 0;
-        row.forEach((cell) => {
-          const span = (cell.attrs.colspan as number) ?? 1;
-          const a = cell.attrs.align as string | null;
-          if (a && col < columns && colAligns[col] === null) colAligns[col] = a;
-          col += span;
+      // A column default is an optimization; every differing cell overrides
+      // it. Null means left, so a selected cell never aligns untouched peers.
+      const tableMap = TableMap.get(node);
+      const colValues: Array<Set<string>> = Array.from({ length: columns }, () => new Set());
+      const colVerticals: Array<Set<string>> = Array.from({ length: columns }, () => new Set());
+      node.forEach((row, rowOffset) => {
+        row.forEach((cell, cellOffset) => {
+          const col = tableMap.findCell(rowOffset + cellOffset + 1).left;
+          colValues[col]?.add((cell.attrs.align as string) || 'left');
+          colVerticals[col]?.add((cell.attrs.valign as string) || 'top');
         });
       });
-      const anyAlign = colAligns.some(Boolean);
+      const colAligns = colValues.map((values) => values.has('decimal') ? 'decimal' : [...values][0] || 'left');
+      const colValigns = colVerticals.map((values) => [...values][0] || 'top');
+      const aligned = (horizontal: string, vertical: string) => `${horizontal}${vertical === 'top' ? '' : ` + ${vertical === 'middle' ? 'horizon' : vertical}`}`;
 
       // Decimal columns split into paired sub-columns at the point (integer
       // part right-aligned, fraction left-aligned, zero inner inset so the
@@ -697,11 +706,11 @@ function blockToTyp(node: PMNode, indent = ''): string {
 
       let hasHeader = false;
       const rows: string[] = [];
-      node.forEach((row, _rowOffset, rowIndex) => {
+      node.forEach((row, rowOffset, rowIndex) => {
         const cells: string[] = [];
         let allHeader = row.childCount > 0;
-        let col = 0;
-        row.forEach((cell, _cellOffset, cellIndex) => {
+        row.forEach((cell, cellOffset, cellIndex) => {
+          const col = tableMap.findCell(rowOffset + cellOffset + 1).left;
           if (cell.type.name !== 'table_header') allHeader = false;
           let content = tableCellContentToTyp(cell, rowIndex, cellIndex);
           if (exportOpts.cellLinks) {
@@ -710,7 +719,8 @@ function blockToTyp(node: PMNode, indent = ''): string {
           const body = tableCellBrackets(content);
           const colspan = (cell.attrs.colspan as number) ?? 1;
           const rowspan = (cell.attrs.rowspan as number) ?? 1;
-          const align = cell.attrs.align as string | null;
+          const align = (cell.attrs.align as string) || 'left';
+          const valign = (cell.attrs.valign as string) || 'top';
           const fill = ((cell.attrs.fill as CellFill) || '') as CellFill;
           const fillArg = fill ? `fill: ${CELL_FILL_TYPST[fill]}` : '';
 
@@ -723,17 +733,16 @@ function blockToTyp(node: PMNode, indent = ''): string {
               const intPart = numM[1] ?? '';
               const fracPart = numM[2] ?? '';
               const rs = (rowspan > 1 ? `, rowspan: ${rowspan}` : '') + (fillArg ? `, ${fillArg}` : '');
-              cells.push(`table.cell(align: right, inset: (right: 0pt)${rs})[${escapeTyp(intPart)}]`);
-              cells.push(`table.cell(align: left, inset: (left: 0pt)${rs})[${escapeTyp(fracPart)}]`);
+              cells.push(`table.cell(align: ${aligned('right', valign)}, inset: (right: 0pt)${rs})[${escapeTyp(intPart)}]`);
+              cells.push(`table.cell(align: ${aligned('left', valign)}, inset: (left: 0pt)${rs})[${escapeTyp(fracPart)}]`);
             } else {
               // Headers, empties, and non-numeric content span the pair.
               const args = [`colspan: 2`];
               if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
-              args.push(`align: ${isHeader ? 'center' : 'right'}`);
+              args.push(`align: ${aligned(isHeader ? 'center' : 'right', valign)}`);
               if (fillArg) args.push(fillArg);
               cells.push(`table.cell(${args.join(', ')})${body}`);
             }
-            col += colspan;
             return;
           }
 
@@ -741,10 +750,13 @@ function blockToTyp(node: PMNode, indent = ''): string {
           const args: string[] = [];
           if (emitSpan > 1) args.push(`colspan: ${emitSpan}`);
           if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
-          if (align && align !== colAligns[col]) args.push(`align: ${align}`);
+          if (align !== colAligns[col] || valign !== colValigns[col]) {
+            // Include top when overriding a column with a vertical default.
+            const value = aligned(align, valign);
+            args.push(`align: ${value}${valign === 'top' && colValigns[col] !== 'top' ? ' + top' : ''}`);
+          }
           if (fillArg) args.push(fillArg);
           cells.push(args.length ? `table.cell(${args.join(', ')})${body}` : body);
-          col += colspan;
         });
         if (allHeader) hasHeader = true;
         rows.push(allHeader ? `  table.header(${cells.join(', ')}),` : `  ${cells.join(', ')},`);
@@ -794,17 +806,26 @@ function blockToTyp(node: PMNode, indent = ''): string {
       }
 
       const params: string[] = [];
-      if (!customHas('columns')) params.push(`  columns: ${columns + decimalCols.length},`);
+      if (!customHas('columns')) {
+        const widths = node.attrs.columnWidths as string[] | null;
+        const expanded = widths?.length === columns
+          ? widths.flatMap((width, index) => decimalCols.includes(index) ? [width, 'auto'] : [width]) : null;
+        params.push(`  columns: ${expanded ? `(${expanded.join(', ')}${expanded.length === 1 ? ',' : ''})` : columns + decimalCols.length},`);
+      }
       // Density preset: a uniform cell inset (Typst's default 5pt is implicit).
       const density = ((node.attrs.density as string) || '') as TableDensity;
-      if (density && !customHas('inset')) params.push(`  inset: ${TABLE_DENSITY_INSET_PT[density]}pt,`);
-      if (anyAlign && !customHas('align')) {
+      const insetPt = node.attrs.insetPt;
+      if (!customHas('inset')) {
+        if (typeof insetPt === 'number' && Number.isFinite(insetPt) && insetPt >= 0 && insetPt <= 72) params.push(`  inset: ${insetPt}pt,`);
+        else if (density) params.push(`  inset: ${TABLE_DENSITY_INSET_PT[density]}pt,`);
+      }
+      if (!customHas('align')) {
         const emitted: string[] = [];
         colAligns.forEach((a, i) => {
-          if (decimalCols.includes(i)) emitted.push('right', 'left');
-          else emitted.push(a === 'decimal' ? 'right' : (a ?? 'auto'));
+          if (decimalCols.includes(i)) emitted.push(aligned('right', colValigns[i]), aligned('left', colValigns[i]));
+          else emitted.push(aligned(a, colValigns[i]));
         });
-        params.push(`  align: (${emitted.join(', ')}),`);
+        params.push(`  align: (${emitted.join(', ')}${emitted.length === 1 ? ',' : ''}),`);
       }
       // Style preset and custom params are ADDITIVE: the preset renders
       // unless a custom key overrides it (stroke overrides the preset
@@ -861,7 +882,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
     case 'horizontal_rule':
       return indent + '#line(length: 100%)\n\n';
     case 'image':
-      return indent + `#image("${imageSrc(node.attrs.src)}")\n\n`;
+      return indent + `#image("${imageSrc(node.attrs.src)}"${imageWidthArg(node)})\n\n`;
     default:
       return node.isTextblock ? indent + inlineToTyp(node) + '\n\n' : '';
   }

@@ -453,7 +453,7 @@ export function typesetPlugin(
                 const spec = d.spec as { key: string; h: number; hy?: boolean; hdr?: number };
                 const pos = Math.min(tr.mapping.map(d.from, -1), tr.doc.content.size);
                 if (spec.key.startsWith('pgr:')) {
-                  return rowSpacerDecoration({ pos, height: spec.h, kind: 'row', hdr: spec.hdr ?? 0 });
+                  return rowSpacerDecoration({ pos, height: spec.h, kind: 'row', hdr: spec.hdr ?? 0 }, tr.doc);
                 }
                 return Decoration.widget(pos, () => pageGapWidget(spec.h, !!spec.hy, spec.key), {
                   side: -1,
@@ -1219,7 +1219,7 @@ class TypesetView {
       spec.tsKind === 'block-page-gap'
         ? blockSpacerDecoration({ pos: next.from, height: newH, kind: 'block' })
         : spec.tsKind === 'row-page-gap'
-          ? rowSpacerDecoration({ pos: next.from, height: newH, kind: 'row', hdr: spec.hdr ?? 0 })
+          ? rowSpacerDecoration({ pos: next.from, height: newH, kind: 'row', hdr: spec.hdr ?? 0 }, state.doc)
           : pageSpacerDecoration(next.from, newH, !!spec.hy);
     return decos.remove([next]).add(state.doc, [replacement]);
   }
@@ -2211,8 +2211,23 @@ class TypesetView {
     };
 
     state.doc.descendants((node, pos) => {
-      // Table cells keep browser layout (narrow measures justify badly).
-      if (node.type.name === 'table') return false;
+      if (node.type.name === 'table') {
+        // Explicit column tracks use the same breaker as Typst. Browser
+        // wrapping alone can change a row's height and its page boundary.
+        if (node.attrs.columnWidths) {
+          node.descendants((paragraph, offset) => {
+            if (paragraph.type.name !== 'paragraph' || !paragraph.content.size) return true;
+            const paragraphPos = pos + 1 + offset;
+            const el = this.view.nodeDOM(paragraphPos);
+            if (!(el instanceof HTMLElement)) return false;
+            const measure = this.blockMeasure(el, true, true);
+            const scale = parseFloat(getComputedStyle(el).fontSize) / bodyPx;
+            if (measure > 1) layoutInto(paragraph, paragraphPos, measure, { kind: 'body' }, { scale }, 'tc');
+            return false;
+          });
+        }
+        return false;
+      }
       if (node.type.name === 'figure') {
         figNo++;
         if (node.content.size === 0) return false;
@@ -2274,7 +2289,7 @@ class TypesetView {
     });
 
     for (const sp of blockSpacers) {
-      decos.push(sp.kind === 'row' ? rowSpacerDecoration(sp) : blockSpacerDecoration(sp));
+      decos.push(sp.kind === 'row' ? rowSpacerDecoration(sp, state.doc) : blockSpacerDecoration(sp));
     }
 
     const sig = decorationSignature(decos);

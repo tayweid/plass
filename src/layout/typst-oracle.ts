@@ -215,12 +215,14 @@ export function matchParagraph(
     if (stripFirst && li === cursor) text = text.replace(stripFirst, '');
     const lineStartTi = ti;
     let brokeWithHyphen = false;
+    let consumedSuffix = false;
 
     while (text.length) {
       if (pendingSuffix) {
         if (text.startsWith(pendingSuffix)) {
           text = text.slice(pendingSuffix.length).trimStart();
           pendingSuffix = null;
+          consumedSuffix = true;
           continue;
         }
         return fail(`suffix mismatch: expected '${pendingSuffix}' got '${text.slice(0, 24)}'`);
@@ -290,7 +292,11 @@ export function matchParagraph(
     // Line consumed. If the paragraph continues, this boundary is a break.
     const more = ti < tokens.length || pendingSuffix !== null;
     if (more && !brokeWithHyphen) {
-      if (ti === lineStartTi) return fail('empty line inside paragraph');
+      // The previous line already advanced past a hyphenated word's
+      // token. A line containing only its remaining suffix still consumed
+      // real text — common when a wrapped table cell is followed by a
+      // vertically centered neighbor on another extracted line.
+      if (ti === lineStartTi && !consumedSuffix) return fail('empty line inside paragraph');
       const prev = tokens[ti - 1];
       // Hard breaks cut by themselves — no forced break needed. The hard
       // token is consumed at the start of the NEXT line's walk, so at this

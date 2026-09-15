@@ -106,3 +106,21 @@ const footnoteResolver: AtomResolver = (child) => {
   check('no compiled break sits on the hard break', !breaks.includes(hardAt) && !breaks.includes(hardAt + 1));
   check('the soft break after the hard break is recorded', breaks.length === 1 && breaks[0] === hardAt + 1 + 'after the break the committee'.length);
 }
+
+
+{
+  const node = schema.nodes.paragraph.create(null, schema.text('Surplus after'));
+  const spec = buildSpec(node, () => null)!;
+  const lines: SvgLine[] = [
+    { text: 'Sur\u00ad', y: 0 },
+    { text: 'plus', y: 25 },
+    { text: 'after', y: 50 },
+  ];
+  const res = matchParagraph(spec, lines, 0);
+  check('a suffix-only line counts as consumed text before later tokens', res.status === 'ok' && res.next === 3);
+  check('a suffix-only line records a break at the completed word', res.status === 'ok' && JSON.stringify(res.entry.breaks) === JSON.stringify([{ at: 3, hyphen: true }, { at: 7, hyphen: false }]));
+  const blank = matchParagraph(spec, [lines[0], { text: ' ', y: 25 }, lines[1], lines[2]], 0);
+  check('an empty line before the suffix remains a failure', blank.status === 'fail' && blank.entry.reason === 'empty line inside paragraph');
+  const wrong = matchParagraph(spec, [lines[0], { text: 'place', y: 25 }, lines[2]], 0);
+  check('the suffix must still match its exact expected text', wrong.status === 'fail' && !!wrong.entry.reason?.startsWith('suffix mismatch:'));
+}

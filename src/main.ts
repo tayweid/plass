@@ -7,6 +7,7 @@ import { history } from 'prosemirror-history';
 import { tableEditing } from 'prosemirror-tables';
 import { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
+import { migrateLegacyTableGeometry } from './typ-parser';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
 import { collapseSpaces } from './collapse-spaces';
 import { listIndent } from './list-indent';
@@ -15,6 +16,8 @@ import { MathView } from './math';
 import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
 import { structuredTablePlugin } from './table-editor';
+import { TableView } from './table-view';
+import './table-controls.css';
 import { equationsPlugin } from './equations';
 import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
@@ -82,7 +85,7 @@ function loadDoc(): PMNode {
     const own = sessionStorage.getItem(SESSION_KEY);
     if (own) {
       restoredSessionDoc = true;
-      return PMNode.fromJSON(schema, JSON.parse(own));
+      return migrateLegacyTableGeometry(PMNode.fromJSON(schema, JSON.parse(own)));
     }
   } catch (e) {
     console.warn('Could not restore tab session.', e);
@@ -95,7 +98,7 @@ function loadDoc(): PMNode {
   if (standalone) return schema.nodes.doc.createAndFill()!;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return PMNode.fromJSON(schema, JSON.parse(raw));
+    if (raw) return migrateLegacyTableGeometry(PMNode.fromJSON(schema, JSON.parse(raw)));
   } catch (e) {
     console.warn('Could not restore saved document, starting fresh.', e);
   }
@@ -295,6 +298,7 @@ window.addEventListener('vite:preloadError', () => {
 const view = new EditorView(editorEl, {
   state: makeState(loadDoc(), onStats),
   nodeViews: {
+    table: (node, v, getPos) => new TableView(node, v, getPos),
     math_inline: (node, v, getPos) => new MathView(node, v, getPos),
     math_display: (node, v, getPos) => new MathView(node, v, getPos),
     image: (node, v, getPos) => new ImageView(node, v, getPos),
@@ -422,7 +426,7 @@ async function openLaunched(files: ReadonlyArray<FileSystemFileHandle>): Promise
     }
     let needsFolder = false;
     view.state.doc.descendants((n) => {
-      if (n.type.name === 'figure' && isPathSrc(n.attrs.src as string)) needsFolder = true;
+      if ((n.type.name === 'figure' || n.type.name === 'image') && isPathSrc(n.attrs.src as string)) needsFolder = true;
       return !needsFolder;
     });
     if (needsFolder && !fileManager.inFolder) {
@@ -561,10 +565,16 @@ declare global {
   interface Window {
     view: EditorView;
     __nativeTableProofGeometry: () => Promise<{ widthPt: number; heightPt: number }>;
+    __tableProofSvg: () => Promise<string | null>;
   }
 }
 if (import.meta.env.DEV) {
   window.view = view;
+  window.__tableProofSvg = async () => {
+    const [{ compileDocSvg }, { parseTypstSvg }] = await Promise.all([import('./pdf'), import('./safe-svg')]);
+    const svg = await compileDocSvg(view.state.doc);
+    return svg ? parseTypstSvg(svg).innerHTML : null;
+  };
   window.__nativeTableProofGeometry = async () => {
     const [{ compileDocSvg }, { parseTypstSvg }] = await Promise.all([
       import('./pdf'),

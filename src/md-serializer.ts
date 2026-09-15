@@ -129,6 +129,16 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         case 'hard_break':
           md += '\\\n';
           break;
+        case 'image': {
+          const src = String(child.attrs.src ?? '');
+          const alt = String(child.attrs.alt ?? '').replace(/([\\\[\]])/g, '\\$1');
+          const title = String(child.attrs.title ?? '');
+          if (src.startsWith('data:')) warn('embedded image written as a data: URL — consider a project folder');
+          if (child.attrs.widthPct != null) warn('image size is not stored in Markdown — save as .typ to keep it');
+          const destination = src.replace(/([\\()\s])/g, (c) => c === ' ' ? '%20' : `\\${c}`);
+          md += `![${alt}](${destination}${title ? ` "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ''})`;
+          break;
+        }
         case 'footnote': {
           const n = footnotes.length + 1;
           footnotes.push(inline(child));
@@ -144,7 +154,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
   };
 
   const table = (node: PMNode): string => {
-    if ((node.attrs.params as string) || (node.attrs.caption as string) || (node.attrs.label as string) || (node.attrs.density as string)) {
+    if ((node.attrs.params as string) || (node.attrs.caption as string) || (node.attrs.label as string) || (node.attrs.density as string) || node.attrs.columnWidths || node.attrs.insetPt != null) {
       warn('table styling/captions are not representable in Markdown — simplified to a plain table');
     }
     const rows: string[][] = [];
@@ -152,6 +162,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     node.forEach((row) => {
       const cells: string[] = [];
       row.forEach((cell) => {
+        if (cell.attrs.valign || cell.attrs.fill) warn('table cell shading and vertical alignment are not stored in Markdown — save as .typ to keep them');
         let text = '';
         cell.forEach((p) => {
           if (text) text += ' ';
@@ -230,6 +241,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         const src = node.attrs.src as string;
         if (src.startsWith('data:')) warn('embedded figure written as a data: URL — consider a project folder');
         if (node.attrs.label as string) warn(`figure label @${node.attrs.label as string} is not representable in Markdown`);
+        if (node.attrs.widthPct != null) warn('image size is not stored in Markdown — save as .typ to keep it');
         const title = node.attrs.title as string;
         return `![${inline(node)}](${src}${title ? ` "${title.replace(/"/g, '\\"')}"` : ''})`;
       }

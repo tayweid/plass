@@ -52,7 +52,8 @@ test('insert a grid from the toolbar, tab between cells, set the split from the 
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, [p]));
   });
   await page.click('.ProseMirror p');
-  await page.click('.tb-btn[title^="Side-by-side grid"]');
+  await page.getByRole('button', { name: 'Extras', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Grid', exact: true }).click();
   await expect(page.locator('.ProseMirror .ts-grid')).toHaveCount(1);
   await expect(page.locator('.grid-toolbar')).toBeVisible();
   await page.keyboard.type('Left cell');
@@ -92,6 +93,96 @@ test('insert a grid from the toolbar, tab between cells, set the split from the 
   await expect(page.locator('.ProseMirror .ts-grid')).toHaveCount(0);
   const texts = await page.locator('.ProseMirror p').allTextContents();
   expect(texts.slice(0, 3)).toEqual(['Before the grid.', 'Left cell again', 'Right cell']);
+});
+
+test('adding a row focuses it and its cells accept figures and caption-following text', async ({ page }) => {
+  await openTyp(page, HEAD('paper: "us-letter", margin: 1.25in') + '#grid(columns: (1fr, 1fr), [First row], [])');
+  const grid = page.locator('.ProseMirror .ts-grid');
+  await grid.locator('.ts-grid-cell').first().locator('p').click();
+  await page.getByRole('button', { name: '+ Row', exact: true }).click();
+  const secondRow = grid.locator('.ts-grid-row').nth(1);
+  await expect(secondRow.locator('.ts-grid-cell').first()).toHaveClass(/ts-grid-cell-active/);
+  await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 1 of 2');
+  await settleLocal(page);
+  const cues = await grid.evaluate((element) => {
+    const cells = [...element.querySelectorAll<HTMLElement>('.ts-grid-cell')];
+    const first = cells[0], active = cells[2];
+    const firstBorder = getComputedStyle(first, '::after'), activeBorder = getComputedStyle(active, '::after');
+    return {
+      firstStyle: firstBorder.borderTopStyle,
+      activeStyle: activeBorder.borderTopStyle,
+      firstBottom: first.getBoundingClientRect().bottom - parseFloat(firstBorder.bottom),
+      activeTop: active.getBoundingClientRect().top + parseFloat(activeBorder.top),
+      placeholder: getComputedStyle(active, '::before').content,
+    };
+  });
+  expect(cues.firstStyle).toBe('dashed');
+  expect(cues.activeStyle).toBe('solid');
+  expect(cues.firstBottom).toBeLessThanOrEqual(cues.activeTop);
+  expect(cues.placeholder).toContain('Type here or insert a figure');
+  await page.emulateMedia({ media: 'print' });
+  expect(await secondRow.locator('.ts-grid-cell').first().evaluate((cell) => ['::before', '::after'].map((pseudo) => getComputedStyle(cell, pseudo).display))).toEqual(['none', 'none']);
+  await page.emulateMedia({ media: 'screen' });
+  await page.keyboard.type('Second row');
+  await expect(secondRow.locator('.ts-grid-cell').first()).toHaveText('Second row');
+  await expect(grid.locator('.ts-grid-row').first()).toHaveText('First row');
+  await page.keyboard.press('Tab');
+  const rightCell = secondRow.locator('.ts-grid-cell').nth(1);
+  await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 2 of 2');
+  await expect(rightCell).toHaveAttribute('data-grid-empty', 'true');
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Figure in cell', exact: true }).click();
+  await (await chooser).setFiles({
+    name: 'grid-figure.svg',
+    mimeType: 'image/svg+xml',
+    buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><rect width="120" height="60" fill="#38786d"/></svg>'),
+  });
+  await expect(rightCell.locator('.ts-figure')).toHaveCount(1);
+  await expect(rightCell).not.toHaveAttribute('data-grid-empty');
+  await page.keyboard.type('A caption');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('Below the figure');
+  await expect(rightCell.locator('figcaption')).toContainText('A caption');
+  await expect(rightCell.locator('p')).toHaveText('Below the figure');
+  // Adding a column must retain the logical cell and its cursor, even
+  // though earlier rows gain nodes and shift this cell's document position.
+  await page.getByRole('button', { name: '+ Column', exact: true }).click();
+  await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 2 of 3');
+  await page.keyboard.type(' here');
+  await expect(rightCell.locator('p')).toHaveText('Below the figure here');
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 1 of 3');
+  await page.keyboard.type(' edited');
+  await expect(secondRow.locator('.ts-grid-cell').first()).toHaveText('Second row edited');
+});
+
+test('an imported inline image explains how to add text below it in the same grid cell', async ({ page }) => {
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="250" height="165"><path d="M18 8V147H242" fill="none" stroke="#999"/></svg>').toString('base64');
+  await openTyp(page, HEAD('paper: "us-letter", margin: 1.25in') + `#grid(columns: (1.65fr, 1fr), gutter: 1em, [Questions], [#image("data:image/svg+xml;base64,${svg}")])`);
+  const cells = page.locator('.ProseMirror .ts-grid-cell');
+  const rightCell = cells.nth(1);
+  await rightCell.locator('.ts-inline-image img').click();
+  await expect(page.locator('.grid-toolbar-hint')).toContainText('Image selected · → then Enter adds text below');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('Notes below the graph.');
+  await expect(rightCell.locator('.ts-inline-image')).toHaveCount(1);
+  await expect(rightCell.locator('p')).toHaveCount(2);
+  await expect(rightCell.locator('p').last()).toHaveText('Notes below the graph.');
+  await expect(cells.first()).toHaveText('Questions');
+  // Selecting the old image and choosing a replacement uses the existing
+  // figure controls, preserving the rest of the cell's text.
+  await rightCell.locator('.ts-inline-image img').click();
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Figure in cell', exact: true }).click();
+  await (await chooser).setFiles({ name: 'replacement.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(svg, 'base64') });
+  await expect(rightCell.locator('.ts-figure')).toHaveCount(1);
+  await expect(rightCell.locator('.ts-inline-image')).toHaveCount(0);
+  await expect(rightCell.locator(':scope > *')).toHaveCount(2);
+  await expect(rightCell.locator('p')).toHaveText('Notes below the graph.');
+  await page.keyboard.type('New graph');
+  await expect(rightCell.locator('figcaption')).toContainText('New graph');
+  await expect(cells.first()).toHaveText('Questions');
 });
 
 test('cells align at their Typst frames, rows break between pages, and Typst agrees', async ({ page }) => {

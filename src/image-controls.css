@@ -1,0 +1,56 @@
+/* Image controls stay out of document flow, including inside a grid. */
+.image-toolbar {
+  position: fixed;
+  z-index: 185;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 24px);
+  width: max-content;
+  padding: 7px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--chrome) 96%, transparent);
+  border: 1px solid var(--chrome-border);
+  border-radius: 11px;
+  box-shadow: 0 6px 26px #0002;
+  backdrop-filter: blur(14px);
+  font: 12px var(--ui-font, sans-serif);
+}
+
+.image-toolbar[hidden],
+.image-toolbar [hidden] { display: none; }
+
+.image-toolbar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.image-toolbar button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  padding: 7px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+.image-toolbar button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.image-toolbar label { display: flex; align-items: center; gap: 6px; padding: 0 6px; }
+.image-toolbar input {
+  width: 54px;
+  border: 1px solid var(--chrome-border);
+  border-radius: 4px;
+  padding: 4px;
+  color: inherit;
+  background: var(--chrome);
+  font: inherit;
+}
+.image-toolbar :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.image-toolbar-source {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: min(620px, calc(100vw - 50px));
+  padding: 3px 9px 1px;
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+@media print { .image-toolbar { display: none; } }

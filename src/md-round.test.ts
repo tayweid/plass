@@ -4,6 +4,7 @@
 import { mdToDoc } from './md-parser';
 import { docToMd } from './md-serializer';
 import { docToTyp } from './typ-serializer';
+import { schema } from './schema';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = '') {
@@ -336,6 +337,20 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount,
   check('a grid round-trips byte for byte', docToMd(doc) === md, docToMd(doc));
   const other = 'Intro.\n\n```typst\n#grid(columns: (auto, 1fr), [a], [b])\n```\n';
   check('a grid off the rail stays a raw fence', mdToDoc(other).doc.child(1).type.name === 'code_block' && docToMd(mdToDoc(other).doc) === other, docToMd(mdToDoc(other).doc));
+}
+
+{
+  const image = schema.nodes.image.create({ src: 'axes.svg', alt: 'Axes [graph]', title: 'Demand', widthPct: 75 });
+  const doc = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.text('Before '), image, schema.text(' after.')]));
+  const warnings: string[] = [];
+  const md = docToMd(doc, (warning) => warnings.push(warning));
+  check('inline images retain source alt and title in Markdown', md.includes('Before ![Axes \\[graph\\]](axes.svg "Demand") after.'), md);
+  check('Markdown image sizing loss is visible', warnings.some((warning) => warning.includes('image size')), warnings.join('; '));
+  const table = schema.nodes.table.create({ columnWidths: ['1fr'], insetPt: 9 }, schema.nodes.table_row.create(null,
+    schema.nodes.table_header.create({ valign: 'middle', fill: 'gray-dark' }, schema.nodes.paragraph.create(null, schema.text('A')))));
+  const tableWarnings: string[] = [];
+  docToMd(schema.nodes.doc.create(null, table), (warning) => tableWarnings.push(warning));
+  check('Markdown warns when table geometry is simplified', tableWarnings.some((warning) => warning.includes('table styling')) && tableWarnings.some((warning) => warning.includes('vertical alignment')), tableWarnings.join('; '));
 }
 
 declare const process: { exitCode?: number };
