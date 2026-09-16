@@ -847,14 +847,19 @@ interface CellAlignment {
 }
 
 /** The table rail supports one horizontal and one vertical alignment,
- * never arbitrary Typst expressions. `auto` resolves to the rail's left. */
+ * never arbitrary Typst expressions. The generated comment distinguishes
+ * implicit left from an explicitly chosen left without changing the print.
+ * `auto` resolves to the rail's left. */
 function parseCellAlignment(value: string): CellAlignment | null {
   const parts = value.trim().split(/\s*\+\s*/);
   let align: string | null = null;
   let valign: string | null = null;
+  let hasHorizontal = false;
   for (const part of parts) {
-    if (['left', 'center', 'right', 'auto'].includes(part) && align === null) align = part === 'auto' ? 'left' : part;
-    else if (['top', 'horizon', 'bottom'].includes(part) && valign === null) valign = part === 'horizon' ? 'middle' : part;
+    if ((['left', 'center', 'right', 'auto'].includes(part) || part === 'left /* typeset:default */') && !hasHorizontal) {
+      align = part === 'left /* typeset:default */' ? null : part === 'auto' ? 'left' : part;
+      hasHorizontal = true;
+    } else if (['top', 'horizon', 'bottom'].includes(part) && valign === null) valign = part === 'horizon' ? 'middle' : part;
     else return null;
   }
   return { align, valign };

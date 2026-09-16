@@ -281,8 +281,9 @@ test('project image cache never crosses directory boundaries', async ({ page }) 
       return stat && candidate === path ? { ...stat, mtime } : stat;
     };
     await app.__fm.adoptFolder(app.__assetDirs.b, 'save');
-    const { refreshAssets } = await import('/src/figures.ts');
-    refreshAssets();
+    // Drive the app's registered watcher. Importing figures.ts here creates
+    // a second module instance whose refresh hook has never been wired.
+    window.dispatchEvent(new Event('focus'));
   }, { path: assetPath, mtime: firstMtime });
 
   await expect.poll(() => image.getAttribute('src'), { timeout: 2_000 }).not.toBe(firstUrl);

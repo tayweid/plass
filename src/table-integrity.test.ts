@@ -80,12 +80,26 @@ const richTable = table.create(
   check('rich table imports as structured table', !!backCell, imported.warnings.join('; '));
   check('table caption with comment opener survives', backTableNode?.attrs.caption === 'Rich // results');
   check('multiple table-cell paragraphs survive', backCell?.childCount === 2, String(backCell?.childCount));
-  // Export now makes the default left alignment explicit, preventing a
-  // neighboring selected cell from changing an otherwise-default column.
-  const expectedCell = richCell.type.create({ ...richCell.attrs, align: 'left' }, richCell.content);
-  check('rich table-cell JSON survives with explicit default alignment', JSON.stringify(backCell?.toJSON()) === JSON.stringify(expectedCell.toJSON()), JSON.stringify(backCell?.toJSON()));
+  check('rich table-cell JSON survives unchanged', JSON.stringify(backCell?.toJSON()) === JSON.stringify(richCell.toJSON()), JSON.stringify(backCell?.toJSON()));
   const emittedAgain = docToTyp(imported.doc);
   check('rich table export is idempotent', emittedAgain === emitted, firstDiff(emitted, emittedAgain));
+}
+
+// Markdown keeps a grid in a standalone Typst fence. A nested table must
+// carry its defaults without relying on a whole-document export header.
+{
+  const cell = (text: string, attrs = {}) => table_cell.create(attrs, paragraph.create(null, schema.text(text)));
+  const nestedTable = table.create(null, [
+    table_row.create(null, [cell('Default'), cell('Right middle', { align: 'right', valign: 'middle' })]),
+    table_row.create(null, [cell('Left top', { align: 'left', valign: 'top' }), cell('Another default')]),
+  ]);
+  const grid = schema.nodes.grid.create({ columns: [1, 1], gutter: 1 }, schema.nodes.grid_row.create(null, [
+    schema.nodes.grid_cell.create(null, nestedTable),
+    schema.nodes.grid_cell.create(null, paragraph.create(null, schema.text('Alongside the table'))),
+  ]));
+  const markdown = docToMd(docType.create(null, grid));
+  const imported = mdToDoc(markdown).doc.firstChild;
+  check('standalone Markdown grid retains exact nested table alignment', JSON.stringify(imported?.toJSON()) === JSON.stringify(grid.toJSON()), markdown);
 }
 
 // The generated-source inspector must extract the balanced table(...) call,

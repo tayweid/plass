@@ -24,10 +24,12 @@ function firstDiff(a: string, b: string): string {
 
 // --- 1. our own output round-trips exactly: export -> import -> export ---
 {
-  const t1 = docToTyp(demoDoc());
+  const original = demoDoc();
+  const t1 = docToTyp(original);
   const { doc, warnings } = typToDoc(t1);
   const t2 = docToTyp(doc);
   check('demo doc round-trips byte-identically', t1 === t2, firstDiff(t1, t2));
+  check('demo document JSON survives unchanged', JSON.stringify(doc.toJSON()) === JSON.stringify(original.toJSON()));
   check('demo doc imports without warnings', warnings.length === 0, warnings.join('; '));
 }
 
@@ -663,7 +665,8 @@ function firstDiff(a: string, b: string): string {
   const t = doc.child(0);
   check('preset fills import onto the cells', t.type.name === 'table' && t.child(1).child(0).attrs.fill === 'gray' && t.child(2).child(1).attrs.fill === 'yellow' && t.child(2).child(1).attrs.align === 'right', JSON.stringify([t.type.name, t.child(1).child(0).attrs, t.child(2).child(1).attrs]));
   const out = docToTyp(doc);
-  check('fills and selected-cell alignment export on their cells', out.includes('table.cell(fill: luma(240))[1]') && out.includes('table.cell(align: right, fill: rgb("#fff3b0"))[4]') && out.includes('align: (left, left)'), out);
+  check('fills and selected-cell alignment export on their cells', out.includes('table.cell(fill: luma(240))[1]') && out.includes('table.cell(align: right, fill: rgb("#fff3b0"))[4]'), out);
+  check('filled table retains default alignment attrs', JSON.stringify(typToDoc(out).doc.firstChild!.toJSON()) === JSON.stringify(t.toJSON()));
   check('a filled table round-trips byte-identically', docToTyp(typToDoc(out).doc) === out, firstDiff(docToTyp(typToDoc(out).doc), out));
   const other = typToDoc(src.replace('luma(240)', 'red')).doc;
   check('a non-preset fill keeps the table as a raw island', other.child(0).type.name === 'code_block' && other.child(0).attrs.params === 'typst-raw', other.child(0).type.name);
@@ -860,16 +863,70 @@ function firstDiff(a: string, b: string): string {
   check('a document without legacy params remains identical', migrateLegacyTableGeometry(schema.nodes.doc.create(null, rich)).firstChild === rich);
 }
 
-// Selected-cell alignment must leave null/default cells left aligned,
-// including when the explicitly aligned cell is first in its column.
+// Default alignment is distinct from explicitly choosing left/top. Source
+// view must retain both axes exactly, regardless of which cell comes first.
 {
-  const cell = (text: string, align: string | null) => schema.nodes.table_cell.create({ align }, schema.nodes.paragraph.create(null, schema.text(text)));
-  for (const cells of [[cell('A', null), cell('B', 'right')], [cell('A', 'right'), cell('B', null)]]) {
-    const table = schema.nodes.table.create(null, cells.map((c) => schema.nodes.table_row.create(null, c)));
-    const original = schema.nodes.doc.create(null, table);
-    const roundTrip = typToDoc(docToTyp(original)).doc.firstChild!;
-    check(`cell alignment stays local when ${cells[0].attrs.align ?? 'default'} comes first`, roundTrip.child(0).firstChild!.attrs.align === (cells[0].attrs.align ?? 'left') && roundTrip.child(1).firstChild!.attrs.align === (cells[1].attrs.align ?? 'left'));
+  const states = [null, 'left', 'center', 'right'].flatMap((align) =>
+    [null, 'top', 'middle', 'bottom'].map((valign) => ({ align, valign })),
+  );
+  const mismatches: string[] = [];
+  for (const first of states) {
+    for (const second of states) {
+      const cells = [first, second].map((attrs, index) =>
+        schema.nodes.table_cell.create(attrs, schema.nodes.paragraph.create(null, schema.text(String(index)))),
+      );
+      const table = schema.nodes.table.create(null, cells.map((cell) => schema.nodes.table_row.create(null, cell)));
+      const roundTrip = typToDoc(docToTyp(schema.nodes.doc.create(null, table))).doc.firstChild!;
+      if (JSON.stringify(roundTrip.toJSON()) !== JSON.stringify(table.toJSON())) {
+        mismatches.push(`${JSON.stringify(first)} then ${JSON.stringify(second)}`);
+      }
+    }
   }
+  check('every pair of default and explicit cell alignments retains exact JSON', !mismatches.length, mismatches.join('\n'));
+
+  const cells = [
+    { text: 'Default', attrs: {} },
+    { text: 'Explicit left', attrs: { align: 'left' } },
+    { text: 'Explicit top', attrs: { valign: 'top' } },
+  ].map(({ text, attrs }) => schema.nodes.table_row.create(null,
+    schema.nodes.table_cell.create(attrs, schema.nodes.paragraph.create(null, schema.text(text))),
+  ));
+  const source = docToTyp(schema.nodes.doc.create(null, schema.nodes.table.create(null, cells)));
+  check('implicit defaults print left while explicit left and top stay distinguishable',
+    source.includes('align: (left /* typeset:default */,)') &&
+    source.includes('table.cell(align: left)[Explicit left]') &&
+    source.includes('table.cell(align: left /* typeset:default */ + top)[Explicit top]') &&
+    !source.includes('align: auto'), source);
+}
+
+// Logical columns must account for both kinds of span when deciding which
+// alignment may be shared without changing another cell's attributes.
+{
+  const cell = (text: string, attrs = {}) => schema.nodes.table_cell.create(attrs, schema.nodes.paragraph.create(null, schema.text(text)));
+  const row = (...cells: import('prosemirror-model').Node[]) => schema.nodes.table_row.create(null, cells);
+  const table = schema.nodes.table.create(null, [
+    row(cell('Spanning heading', { colspan: 2, align: 'center', valign: 'middle' }), cell('Third', { align: 'right', valign: 'top' })),
+    row(cell('Spanning rows', { rowspan: 2, align: 'left', valign: 'bottom' }), cell('Default'), cell('Centered', { align: 'center' })),
+    row(cell('Right middle', { align: 'right', valign: 'middle' }), cell('Top', { valign: 'top' })),
+  ]);
+  const roundTrip = typToDoc(docToTyp(schema.nodes.doc.create(null, table))).doc.firstChild!;
+  check('spanned cells retain exact alignment JSON', JSON.stringify(roundTrip.toJSON()) === JSON.stringify(table.toJSON()), JSON.stringify(roundTrip.toJSON()));
+}
+
+// Decimal splitting must leave neighboring default columns and nullable
+// vertical alignment unchanged when the sub-columns are fused on import.
+{
+  const cell = (text: string, attrs = {}, header = false) =>
+    (header ? schema.nodes.table_header : schema.nodes.table_cell).create(attrs, schema.nodes.paragraph.create(null, schema.text(text)));
+  const row = (...cells: import('prosemirror-model').Node[]) => schema.nodes.table_row.create(null, cells);
+  const table = schema.nodes.table.create({ style: 'booktabs', columnWidths: ['auto', '1fr', 'auto'], insetPt: 9 }, [
+    row(cell('Item', {}, true), cell('Value', { align: 'decimal' }, true), cell('Notes', {}, true)),
+    ...[null, 'top', 'middle', 'bottom'].map((valign, index) =>
+      row(cell(`Item ${index}`), cell(`${index + 1}.25`, { align: 'decimal', valign }), cell('Unaligned')),
+    ),
+  ]);
+  const roundTrip = typToDoc(docToTyp(schema.nodes.doc.create(null, table))).doc.firstChild!;
+  check('decimal columns preserve adjacent defaults and exact vertical attrs', JSON.stringify(roundTrip.toJSON()) === JSON.stringify(table.toJSON()), JSON.stringify(roundTrip.toJSON()));
 }
 
 // Image resizing survives save/reopen, including inside grid cells.

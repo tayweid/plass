@@ -680,20 +680,26 @@ function blockToTyp(node: PMNode, indent = ''): string {
       });
 
       // A column default is an optimization; every differing cell overrides
-      // it. Null means left, so a selected cell never aligns untouched peers.
+      // it. Keep unspecified axes distinct from explicit left/top so a trip
+      // through source does not change the document or mark it dirty. If any
+      // cell leaves an axis unset, the column must leave that axis unset too.
       const tableMap = TableMap.get(node);
-      const colValues: Array<Set<string>> = Array.from({ length: columns }, () => new Set());
-      const colVerticals: Array<Set<string>> = Array.from({ length: columns }, () => new Set());
+      const colValues: Array<Set<string | null>> = Array.from({ length: columns }, () => new Set());
+      const colVerticals: Array<Set<string | null>> = Array.from({ length: columns }, () => new Set());
       node.forEach((row, rowOffset) => {
         row.forEach((cell, cellOffset) => {
           const col = tableMap.findCell(rowOffset + cellOffset + 1).left;
-          colValues[col]?.add((cell.attrs.align as string) || 'left');
-          colVerticals[col]?.add((cell.attrs.valign as string) || 'top');
+          colValues[col]?.add((cell.attrs.align as string) || null);
+          colVerticals[col]?.add((cell.attrs.valign as string) || null);
         });
       });
-      const colAligns = colValues.map((values) => values.has('decimal') ? 'decimal' : [...values][0] || 'left');
-      const colValigns = colVerticals.map((values) => [...values][0] || 'top');
-      const aligned = (horizontal: string, vertical: string) => `${horizontal}${vertical === 'top' ? '' : ` + ${vertical === 'middle' ? 'horizon' : vertical}`}`;
+      const columnDefault = (values: Set<string | null>) => values.has(null) ? null : [...values][0] ?? null;
+      const colAligns = colValues.map((values) => values.has('decimal') ? 'decimal' : columnDefault(values));
+      const colValigns = colVerticals.map(columnDefault);
+      // Typst's auto inherits the centered table wrapper. Write physical
+      // left with a preservation comment for the editor's implicit default.
+      const aligned = (horizontal: string | null, vertical: string | null) =>
+        `${horizontal ?? 'left /* typeset:default */'}${vertical === null ? '' : ` + ${vertical === 'middle' ? 'horizon' : vertical}`}`;
 
       // Decimal columns split into paired sub-columns at the point (integer
       // part right-aligned, fraction left-aligned, zero inner inset so the
@@ -719,8 +725,8 @@ function blockToTyp(node: PMNode, indent = ''): string {
           const body = tableCellBrackets(content);
           const colspan = (cell.attrs.colspan as number) ?? 1;
           const rowspan = (cell.attrs.rowspan as number) ?? 1;
-          const align = (cell.attrs.align as string) || 'left';
-          const valign = (cell.attrs.valign as string) || 'top';
+          const align = (cell.attrs.align as string) || null;
+          const valign = (cell.attrs.valign as string) || null;
           const fill = ((cell.attrs.fill as CellFill) || '') as CellFill;
           const fillArg = fill ? `fill: ${CELL_FILL_TYPST[fill]}` : '';
 
@@ -751,9 +757,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
           if (emitSpan > 1) args.push(`colspan: ${emitSpan}`);
           if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
           if (align !== colAligns[col] || valign !== colValigns[col]) {
-            // Include top when overriding a column with a vertical default.
-            const value = aligned(align, valign);
-            args.push(`align: ${value}${valign === 'top' && colValigns[col] !== 'top' ? ' + top' : ''}`);
+            args.push(`align: ${aligned(align, valign)}`);
           }
           if (fillArg) args.push(fillArg);
           cells.push(args.length ? `table.cell(${args.join(', ')})${body}` : body);
