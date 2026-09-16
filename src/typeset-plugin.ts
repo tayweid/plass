@@ -495,6 +495,36 @@ class TypesetView {
   /** Which source produced the last pagination (diagnostics). */
   private pagPath: 'local' = 'local';
   private pagLog: string[] = [];
+  /** Browser fonts and sidecar primitives arrive independently. Only judge
+   * the environment after the actual browser face has finished loading, then
+   * replace any fallback layout cached while the sidecar was unavailable. */
+  private async initializePort(): Promise<void> {
+    await loadPrimitives();
+    if (this.destroyed) return;
+    const probeFont = () => {
+      const s = getSettings(this.view.state);
+      return `normal 400 ${(s.sizePt * 4) / 3}px ${cssFontStack(s.font)}`;
+    };
+    let requestedFont: string;
+    do {
+      requestedFont = probeFont();
+      // fonts.ready can already be resolved before the face is requested.
+      // Load it explicitly, including if the document changed during startup.
+      await document.fonts.load(requestedFont, PROBE_TEXT).catch((error) => {
+        // A failed face still needs the probe: its fallback metrics must not
+        // silently receive the exact-layout guarantee.
+        console.warn('browser font failed to load for environment check', error);
+      });
+      if (this.destroyed) return;
+    } while (requestedFont !== probeFont());
+
+    this.checkEnvironment();
+    this.measurer.invalidate();
+    this.cache.clear();
+    this.invalidatePages();
+    this.requestRun();
+  }
+
   /**
    * Startup probe (environment-check.ts): the browser's width for a prose
    * run in the document's font and size against the port's shaped width.
@@ -580,14 +610,7 @@ class TypesetView {
     this.measurer = new Measurer(view.dom);
     // The ported Typst line breaker (PORT.md): loads the sidecar WASM +
     // fonts in the background; until ready, liveRun uses the legacy path.
-    loadPrimitives().then(
-      () => {
-        if (this.destroyed) return;
-        this.checkEnvironment();
-        this.requestRun();
-      },
-      (e) => console.warn('sidecar primitives failed to load', e),
-    );
+    void this.initializePort().catch((e) => console.warn('exact layout initialization failed', e));
     if (import.meta.env.DEV) {
       const w = window as unknown as {
         __breakSig?: () => string;
