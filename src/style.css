@@ -180,16 +180,7 @@ body {
   height: 17px;
 }
 
-/* Hover flyouts: a pill of the group's icons, laid over its trigger so
-   the cursor never crosses a gap. */
-.tb-flyout-wrap {
-  position: relative;
-  display: inline-flex;
-}
-
-/* Both pills carry backdrop-filter (a stacking context), so a flyout's
-   z-index is trapped inside its own pill and a LATER sibling pill paints
-   over it. Lift whichever pill the cursor is in above its neighbors. */
+/* Keep the active toolbar group above its neighbors. */
 #toolbar > * {
   position: relative;
 }
@@ -198,70 +189,6 @@ body {
 #toolbar > *:focus-within {
   z-index: 20;
 }
-
-/* A flyout item that has nothing to act on where the caret is (the list
-   pitch outside a list): dimmed, still a button. */
-.tb-flyout .tb-btn.tb-idle {
-  opacity: 0.45;
-}
-
-.tb-flyout {
-  position: absolute;
-  /* Centered on the trigger; the items are ordered so the
-     representative icon is the MIDDLE one, landing on the trigger. */
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 2px;
-  padding: 5px 8px;
-  /* A step bigger and a shade lighter than the pill it covers: the
-     flyout reads as a card sitting ON TOP of the bar. */
-  background: color-mix(in srgb, #3a3840 94%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 999px;
-  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.45);
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.14s ease;
-  z-index: 30;
-}
-
-/* Dynamic flyouts position via measured inline left (the centered option
-   changes); only the vertical transform applies. */
-.tb-flyout-dyn {
-  transform: translateY(-50%);
-}
-
-/* The caret block's CURRENT format in the cycler flyout. */
-.tb-flyout .tb-flyout-cur .tico {
-  color: var(--accent);
-}
-
-/* Flyout buttons at full rail size, even when the trigger is one of the
-   compact title-pill buttons — the open state is the bigger object. */
-.tb-flyout .tb-btn {
-  height: 40px;
-  min-width: 40px;
-  padding: 0 8px;
-}
-
-.tb-flyout .tb-btn .ico {
-  width: 22px;
-  height: 22px;
-}
-
-.tb-flyout-wrap:hover .tb-flyout,
-.tb-flyout-wrap:focus-within .tb-flyout {
-  opacity: 1;
-  visibility: visible;
-}
-
-
 
 .doc-title .tb-file {
   font: 15px/1.5 'New Computer Modern', var(--serif);
@@ -1003,8 +930,6 @@ body {
   transform: none;
 }
 
-.tb-tools.tb-resting .tb-flyout-wrap:hover .tb-flyout,
-.tb-tools.tb-resting .tb-flyout-wrap:focus-within .tb-flyout,
 .tb-tools.tb-resting .tb-btn:hover .lbl {
   opacity: 0;
   visibility: hidden;
@@ -2650,20 +2575,38 @@ body {
 
 /* ---------- settings panel ---------- */
 
+.tb-menu-extras,
 .settings-panel {
-  position: absolute;
+  --bar-glass: rgba(27, 26, 30, 0.94);
+  --bar-ink: rgba(240, 238, 233, 0.9);
+  --bar-ink-soft: rgba(240, 238, 233, 0.5);
+  --bar-hairline: rgba(255, 255, 255, 0.1);
+  --bar-press: rgba(255, 255, 255, 0.09);
+  --accent: #9db8d6;
+  color-scheme: dark;
+}
+
+.settings-panel {
+  position: fixed;
   z-index: 100;
   background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
-  border-radius: 20px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 18px 50px rgba(0, 0, 0, 0.45);
-  padding: 14px 16px;
-  width: 284px;
+  border-radius: 13px;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 16px 40px rgba(0, 0, 0, 0.28);
+  padding: 12px 14px;
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.settings-row[hidden] {
+  display: none;
 }
 
 .settings-row {
@@ -2674,6 +2617,30 @@ body {
   font: 12.5px var(--sans);
   color: var(--bar-ink);
   cursor: pointer;
+}
+
+.settings-row > span:first-child {
+  flex-shrink: 0;
+}
+
+.settings-row input[type='text'] {
+  width: 170px;
+  min-width: 0;
+  font: 12px var(--sans);
+  color: var(--bar-ink);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 6px;
+  padding: 5px 7px;
+}
+
+.settings-row input::placeholder {
+  color: var(--bar-ink-soft);
+}
+
+.settings-panel :is(button, input):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .settings-row select {
@@ -2720,16 +2687,20 @@ body {
 .ts-select-btn {
   font: 12px var(--sans);
   color: var(--bar-ink);
-  background: rgba(0, 0, 0, 0.045);
+  background: rgba(255, 255, 255, 0.045);
   border: 1px solid var(--bar-hairline);
-  border-radius: 8px;
-  padding: 3px 22px 3px 8px;
+  border-radius: 6px;
+  padding: 5px 22px 5px 8px;
   max-width: 170px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
   position: relative;
+}
+
+.ts-select-btn:hover {
+  background: var(--bar-press);
 }
 
 .ts-select-btn::after {
@@ -2759,6 +2730,8 @@ body {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .ts-select-item {
@@ -2825,7 +2798,7 @@ body {
   width: 34px;
   font: 11px var(--sans);
   color: var(--bar-ink);
-  background: rgba(0, 0, 0, 0.045);
+  background: rgba(255, 255, 255, 0.045);
   border: 1px solid var(--bar-hairline);
   border-radius: 6px;
   padding: 2px 3px;
@@ -2842,10 +2815,10 @@ body {
 
 .settings-macros-btn {
   font: 12.5px var(--sans);
-  color: #fff;
-  background: var(--accent);
-  border: none;
-  border-radius: 999px;
+  color: var(--bar-ink);
+  background: var(--bar-press);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 6px;
   padding: 6px 12px;
   cursor: pointer;
   margin-top: 4px;

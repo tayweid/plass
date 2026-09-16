@@ -75,18 +75,17 @@ test('toolbar and open menus fit a narrow window with a long filename', async ({
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(375);
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(812);
-  for (const name of ['Alignment', 'Blocks', 'Code']) {
-    await page.mouse.move(8, 400);
-    const group = menu.locator('.tb-flyout-wrap', { has: page.getByRole('menuitem', { name, exact: true }) });
-    await group.hover();
-    const flyout = group.locator('.tb-flyout');
-    await expect(flyout).toBeVisible();
-    const flyoutBounds = await flyout.boundingBox();
-    expect(flyoutBounds).not.toBeNull();
-    expect(flyoutBounds!.x).toBeGreaterThanOrEqual(0);
-    expect(flyoutBounds!.x + flyoutBounds!.width).toBeLessThanOrEqual(375);
-    expect(flyoutBounds!.y + flyoutBounds!.height).toBeLessThanOrEqual(812);
+  for (const name of ['Insert', 'Alignment', 'Blocks', 'Code', 'Document']) {
+    const group = menu.getByRole('group', { name, exact: true });
+    await expect(group).toBeVisible();
+    for (const button of await group.locator('button:visible').all()) {
+      const buttonBounds = await button.boundingBox();
+      expect(buttonBounds).not.toBeNull();
+      expect(buttonBounds!.x).toBeGreaterThanOrEqual(bounds!.x);
+      expect(buttonBounds!.x + buttonBounds!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width);
+    }
   }
+  await expect(menu.locator('[aria-haspopup]')).toHaveCount(0);
   await page.mouse.click(8, 790);
   await expect(menu).toBeHidden();
 });
@@ -111,6 +110,32 @@ test('Extras keeps glyph controls with hover captions', async ({ page }) => {
   await page.keyboard.press('ArrowUp');
   await expect(grid).toBeFocused();
   await expect.poll(() => caption.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+});
+
+test('Settings stays inside a narrow window and its lower dropdowns remain usable', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 650 });
+  await page.goto('/?new=1');
+  const trigger = page.getByRole('button', { name: 'Document settings', exact: true });
+  await trigger.click();
+  const panel = page.getByRole('dialog', { name: 'Document settings', exact: true });
+  const bounds = (await panel.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(8);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(367);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(642);
+  await expect(panel.locator('.settings-row').filter({ hasText: 'Custom size (in)' })).toBeHidden();
+
+  const rule = panel.locator('.settings-row').filter({ hasText: 'Footnote rule' });
+  await rule.locator('.ts-select-btn').click();
+  const choices = rule.locator('.ts-select-menu');
+  await expect(choices).toBeVisible();
+  const menuBounds = (await choices.boundingBox())!;
+  expect(menuBounds.y).toBeGreaterThanOrEqual(bounds.y);
+  expect(menuBounds.y + menuBounds.height).toBeLessThanOrEqual(bounds.y + bounds.height);
+  await choices.getByRole('button', { name: 'Full width', exact: true }).click();
+  expect(await page.evaluate(() => window.view.state.doc.attrs.settings.footnoteSeparator)).toBe('full');
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
 });
 
 test('the plain text switch stays visible in the lower-left corner in either view', async ({ page }) => {
@@ -163,20 +188,15 @@ test('menus open, navigate, and close from the keyboard', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Extras', exact: true }).click();
   const extras = page.getByRole('menu', { name: 'Extras', exact: true });
-  const alignment = extras.getByRole('menuitem', { name: 'Alignment', exact: true });
+  const alignment = extras.getByRole('menuitemcheckbox', { name: 'Justified', exact: true });
   await alignment.focus();
   await page.keyboard.press('ArrowRight');
-  await expect(alignment).toHaveAttribute('aria-expanded', 'true');
-  const flyout = extras.getByRole('menu', { name: 'Alignment', exact: true });
-  await expect(flyout).toBeVisible();
-  await expect(flyout.locator('button:not(:disabled)').first()).toBeFocused();
-  await page.keyboard.press('Escape');
-  await expect(flyout).toBeHidden();
-  await expect(alignment).toHaveAttribute('aria-expanded', 'false');
+  await expect(extras.getByRole('menuitemcheckbox', { name: 'Center', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
   await expect(alignment).toBeFocused();
-  await expect(extras).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(extras).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Extras', exact: true })).toBeFocused();
 });
 
 test('Headings and Extras apply headings and alignment to a whole-document selection', async ({ page }) => {
@@ -202,7 +222,6 @@ test('Headings and Extras apply headings and alignment to a whole-document selec
   await page.getByTitle('Body text (⌘⌥0)', { exact: true }).click();
   await expect(page.locator('.ProseMirror > p').filter({ hasText: /paragraph\./ })).toHaveText(['First paragraph.', 'Second paragraph.']);
   await page.getByRole('button', { name: 'Extras', exact: true }).click();
-  await page.locator('.tb-flyout-wrap', { has: page.getByRole('menuitem', { name: 'Alignment', exact: true }) }).hover();
   const center = page.getByTitle('Center text', { exact: true });
   await expect(center).toBeEnabled();
   await center.click();

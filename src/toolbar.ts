@@ -160,7 +160,10 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       if (!label) return;
       label.style.marginLeft = '0px';
       const rect = label.getBoundingClientRect();
-      const shift = Math.max(0, 8 - rect.left) - Math.max(0, rect.right - window.innerWidth + 8);
+      const panel = button.closest('.tb-menu-extras')?.getBoundingClientRect();
+      const left = panel ? panel.left + 6 : 8;
+      const right = panel ? panel.right - 6 : window.innerWidth - 8;
+      const shift = Math.max(0, left - rect.left) - Math.max(0, rect.right - right);
       if (shift) label.style.marginLeft = `${shift}px`;
     };
     const hide = () => {
@@ -221,18 +224,8 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     refresh?: () => void;
   }
   let openMenu: Menu | null = null;
-  let openGroup: { element: HTMLElement; trigger: HTMLButtonElement; flyout: HTMLElement } | null = null;
   let sourceActive = false;
-  const closeGroup = (restoreFocus = false) => {
-    if (!openGroup) return;
-    const { trigger, flyout } = openGroup;
-    flyout.hidden = true;
-    trigger.setAttribute('aria-expanded', 'false');
-    openGroup = null;
-    if (restoreFocus) trigger.focus({ preventScroll: true });
-  };
   const closeMenu = (restoreFocus = false) => {
-    closeGroup();
     if (!openMenu) return;
     const { element, anchor } = openMenu;
     element.hidden = true;
@@ -241,7 +234,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     if (restoreFocus) anchor.focus({ preventScroll: true });
   };
   const menuButtons = (menu: Menu) =>
-    [...(openGroup?.flyout ?? menu.element).querySelectorAll<HTMLButtonElement>('button:not(:disabled):not([hidden])')]
+    [...menu.element.querySelectorAll<HTMLButtonElement>('button:not(:disabled):not([hidden])')]
       .filter((button) => !button.closest('[hidden]'));
   const showMenu = (menu: Menu, focus = false) => {
     closeMenu();
@@ -302,8 +295,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
-      if (openGroup) closeGroup(true);
-      else closeMenu(true);
+      closeMenu(true);
       return;
     }
     if (e.key === 'Tab') {
@@ -313,13 +305,12 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     if (!openMenu.element.contains(e.target as Node) && e.target !== openMenu.anchor) return;
     const buttons = menuButtons(openMenu);
     const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
-    if (e.key === 'ArrowLeft' && openGroup) {
+    const horizontal = openMenu === extras && ['ArrowLeft', 'ArrowRight'].includes(e.key);
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key) || horizontal) {
       e.preventDefault();
-      closeGroup(true);
-    } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key) || (e.key === 'ArrowRight' && openGroup)) {
-      e.preventDefault();
+      const previous = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
       const next = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1
-        : (index + (e.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length;
+        : (index + (previous ? -1 : 1) + buttons.length) % buttons.length;
       buttons[next]?.focus();
     } else if (e.key === 'ArrowLeft' && openMenu.parent) {
       e.preventDefault();
@@ -421,49 +412,6 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   };
   const commandItem = (parent: HTMLElement, label: string, command: Command, options: ItemOptions = {}) =>
     item(parent, label, runCmd(command), { editing: true, enabled: () => command(view.state), ...options });
-  const flyout = (parent: HTMLElement, name: string, glyph: string) => {
-    const element = document.createElement('span');
-    element.className = 'tb-flyout-wrap tb-extra-group';
-    const button = trigger(element, name, glyph);
-    button.setAttribute('role', 'menuitem');
-    button.tabIndex = -1;
-    const fly = document.createElement('span');
-    fly.className = 'tb-flyout';
-    fly.id = `tb-flyout-${name.toLowerCase()}`;
-    fly.setAttribute('role', 'menu');
-    fly.setAttribute('aria-label', name);
-    fly.hidden = true;
-    button.setAttribute('aria-controls', fly.id);
-    element.append(fly);
-    parent.append(element);
-    const show = (focus = false) => {
-      if (button.disabled) return;
-      closeGroup();
-      openGroup = { element, trigger: button, flyout: fly };
-      button.setAttribute('aria-expanded', 'true');
-      fly.hidden = false;
-      fly.style.left = '50%';
-      // Same overlapping flyout as the old bar, clamped at window edges.
-      const rect = fly.getBoundingClientRect();
-      const shift = Math.max(0, 8 - rect.left) - Math.max(0, rect.right - window.innerWidth + 8);
-      if (shift) fly.style.left = `calc(50% + ${shift}px)`;
-      if (focus) fly.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
-    };
-    element.addEventListener('mouseenter', () => show());
-    element.addEventListener('mouseleave', () => {
-      if (openGroup?.element === element) closeGroup(fly.contains(document.activeElement));
-    });
-    button.addEventListener('click', () => show(true));
-    button.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-        e.preventDefault();
-        e.stopPropagation();
-        show(true);
-      }
-    });
-    refreshItems.push(() => { button.disabled = sourceActive; });
-    return fly;
-  };
   const ancestor = (...names: string[]) => {
     const { $from } = view.state.selection;
     for (let depth = $from.depth; depth > 0; depth--) {
@@ -471,20 +419,25 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     }
     return null;
   };
-  const row = (name: string) => {
-    const div = document.createElement('div');
-    div.className = 'tb-extra-row';
-    div.setAttribute('role', 'group');
-    div.setAttribute('aria-label', name);
-    extras.element.append(div);
-    return div;
+  const extraGroup = (name: string) => {
+    const group = document.createElement('div');
+    group.className = 'tb-extra-section';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', name);
+    const label = document.createElement('span');
+    label.className = 'tb-extra-heading';
+    label.textContent = name;
+    const row = document.createElement('div');
+    row.className = 'tb-extra-row';
+    group.append(label, row);
+    extras.element.append(group);
+    return row;
   };
-  const insertRow = row('Insert');
-  const blockRow = row('Block formatting');
-  const documentRow = row('Document');
-  const alignmentFlyout = flyout(blockRow, 'Alignment', icon('aligncenter'));
-  const blocksFlyout = flyout(blockRow, 'Blocks', icon('quote'));
-  const codeFlyout = flyout(blockRow, 'Code', icon('code'));
+  const insertRow = extraGroup('Insert');
+  const alignmentRow = extraGroup('Alignment');
+  const blocksRow = extraGroup('Blocks');
+  const codeRow = extraGroup('Code');
+  const documentRow = extraGroup('Document');
   const textColumn = format.element;
   for (const level of [null, 1, 2, 3]) {
     const command = level ? setBlockType(schema.nodes.heading, { level }) : setBlockType(schema.nodes.paragraph);
@@ -542,7 +495,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     ['Center', 'center', 'Center text'],
     ['Right', 'right', 'Align right'],
   ] as const) {
-    item(alignmentFlyout, label, () => setAlign(align), {
+    item(alignmentRow, label, () => setAlign(align), {
       title, editing: true, enabled: alignmentEnabled,
       glyph: icon(align === 'center' ? 'aligncenter' : align === 'right' ? 'alignright' : 'alignleft'),
       checked: () => alignmentEnabled() && selectedParagraphs().every(({ node }) => (node.attrs.align ?? null) === align),
@@ -572,17 +525,17 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     wrapIn(schema.nodes.blockquote, { kind })(state, view.dispatch);
     view.focus();
   };
-  item(blocksFlyout, 'Block quote', () => setBlockKind(null), {
+  item(blocksRow, 'Block quote', () => setBlockKind(null), {
     title: 'Block quote (⌃>) — or type > at a line start', editing: true,
     glyph: icon('quote'),
     checked: () => !!ancestor('blockquote') && !ancestor('blockquote')!.attrs.kind,
   });
-  item(blocksFlyout, 'Solution', () => setBlockKind('solution'), {
+  item(blocksRow, 'Solution', () => setBlockKind('solution'), {
     title: 'Solution block — red text with a red rule on the left', editing: true,
     glyph: icon('solution'),
     checked: () => ancestor('blockquote')?.attrs.kind === 'solution',
   });
-  commandItem(blocksFlyout, 'Remove quote', lift, {
+  commandItem(blocksRow, 'Remove quote', lift, {
     title: 'Plain body text — lift out of the quote or solution block',
     glyph: icon('paragraph'),
     enabled: () => !!ancestor('blockquote') && lift(view.state),
@@ -625,13 +578,13 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     dispatch(state.tr.insert(pos, schema.nodes.page_break.create()).scrollIntoView());
     view.focus();
   }, { title: 'Page break (⌘⏎)', shortcut: '⌘⏎', editing: true, glyph: icon('pagebreak') });
-  commandItem(codeFlyout, 'Code block', setBlockType(schema.nodes.code_block, { params: '' }), {
+  commandItem(codeRow, 'Code block', setBlockType(schema.nodes.code_block, { params: '' }), {
     title: 'Code block — monospaced source listing', glyph: icon('code'),
   });
-  commandItem(codeFlyout, 'Raw Typst block', setBlockType(schema.nodes.code_block, { params: 'typst-raw' }), {
+  commandItem(codeRow, 'Raw Typst block', setBlockType(schema.nodes.code_block, { params: 'typst-raw' }), {
     title: 'Raw Typst block — kept in the file as Typst, shown and printed as code, never run', glyph: '<span class="ico tico">#</span>',
   });
-  item(codeFlyout, 'Inline raw Typst', () => void import('./inline-raw').then(({ insertTypstInline }) => insertTypstInline(view)), {
+  item(codeRow, 'Inline raw Typst', () => void import('./inline-raw').then(({ insertTypstInline }) => insertTypstInline(view)), {
     title: 'Inline raw Typst — kept in the file verbatim, shown and printed as inline code, never run', editing: true,
     glyph: '<span class="ico tico">#·</span>',
   });

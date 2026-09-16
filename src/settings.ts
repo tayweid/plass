@@ -317,6 +317,11 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
 
   const panel = document.createElement('div');
   panel.className = 'settings-panel';
+  panel.id = 'document-settings';
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-label', 'Document settings');
+  anchor.setAttribute('aria-expanded', 'true');
+  anchor.setAttribute('aria-controls', panel.id);
   openPanel = panel;
 
   const patch = (p: Partial<DocSettings>) => {
@@ -381,6 +386,18 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
         menu.appendChild(item);
       }
       wrap.appendChild(menu);
+      // Keep the dropdown inside the scrolling panel, opening upward when
+      // its control is near the bottom of the available space.
+      const bounds = panel.getBoundingClientRect();
+      const control = btn.getBoundingClientRect();
+      const below = bounds.bottom - control.bottom - 10;
+      const above = control.top - bounds.top - 10;
+      const opensUp = menu.offsetHeight > below && above > below;
+      if (opensUp) {
+        menu.style.top = 'auto';
+        menu.style.bottom = 'calc(100% + 4px)';
+      }
+      menu.style.maxHeight = `${Math.max(40, opensUp ? above : below)}px`;
       document.addEventListener('mousedown', onOutside, true);
     });
     // Value setter for callers that patch it programmatically.
@@ -621,8 +638,10 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
 
   document.body.appendChild(panel);
   const rect = anchor.getBoundingClientRect();
-  panel.style.top = `${rect.bottom + 8 + window.scrollY}px`;
-  panel.style.left = `${Math.max(8, rect.right - panel.offsetWidth) + window.scrollX}px`;
+  const top = rect.bottom + 10;
+  panel.style.top = `${top}px`;
+  panel.style.maxHeight = `${Math.max(80, window.innerHeight - top - 8)}px`;
+  panel.style.left = `${Math.max(8, Math.min(rect.right - panel.offsetWidth, window.innerWidth - panel.offsetWidth - 8))}px`;
 
   const onDown = (e: MouseEvent) => {
     if (!panel.contains(e.target as Node) && e.target !== anchor && !anchor.contains(e.target as Node)) closePanel();
@@ -632,13 +651,16 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   };
   document.addEventListener('mousedown', onDown, true);
   document.addEventListener('keydown', onKey, true);
+  window.addEventListener('resize', closePanel);
 
   function closePanel() {
     panel.remove();
+    anchor.setAttribute('aria-expanded', 'false');
     openPanel = null;
     closeOpen = null;
     document.removeEventListener('mousedown', onDown, true);
     document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('resize', closePanel);
   }
   closeOpen = closePanel;
 }
