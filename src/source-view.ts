@@ -421,9 +421,15 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
     focusMode: () => focusOn,
     setFocusMode: (on) => applyFocus(on),
     wordCount() {
-      const text = active
-        ? active.editor.text()
-        : view.state.doc.textBetween(0, view.state.doc.content.size, ' ', ' ');
+      // Editorial comments are not printed words.
+      let text = '';
+      if (active) text = active.editor.text();
+      else {
+        view.state.doc.forEach((node, offset) => {
+          if (node.type.name === 'editor_comment') return;
+          text += ' ' + view.state.doc.textBetween(offset, offset + node.nodeSize, ' ', ' ');
+        });
+      }
       return text.split(/\s+/).filter(Boolean).length;
     },
     afterSetDoc() {

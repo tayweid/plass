@@ -313,6 +313,9 @@ function blockToTex(node: PMNode, s: DocSettings): string {
       return tableToTex(node, s);
     case 'bibliography':
       return `\\bibliographystyle{unsrt}\n\\bibliography{refs}\n\n`;
+    case 'editor_comment':
+      // Editorial notes are not part of the manuscript.
+      return '';
     case 'page_break':
       return '\\clearpage\n\n';
     case 'numbering_restart':

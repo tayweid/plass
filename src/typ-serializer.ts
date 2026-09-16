@@ -13,6 +13,7 @@ import { TABLE_DENSITY_INSET_PT, type TableDensity } from './table-density';
 import { rowRuleArg, type RowRule } from './table-rules';
 import { CELL_FILL_TYPST, type CellFill } from './table-fills';
 import type { CitationStyle } from './citation-styles';
+import { commentToTyp } from './editor-comments-format';
 
 export interface TypExportOptions {
   /** When given, receives the text offset at which each top-level block's
@@ -589,6 +590,12 @@ function blockToTyp(node: PMNode, indent = ''): string {
         );
       }
       return indent + '#quote(block: true)[\n' + blocksToTyp(node, indent + '  ') + indent + ']\n\n';
+    case 'editor_comment':
+      // The working file keeps the note in its comment frame; the print
+      // compile (PDF, the audit) omits it whole — no separator, no trace —
+      // so the printed body equals that of the same document without it.
+      if (exportOpts.islands === 'print') return '';
+      return indent + commentToTyp(node.textContent) + '\n\n';
     case 'code_block':
       // Islands: a raw-Typst block stays verbatim in the .typ file and is
       // printed as a raw block; a Markdown block has no Typst form and is

@@ -361,6 +361,22 @@ const gridSpecs: Record<string, NodeSpec> = {
   },
 };
 
+// An editorial comment (editor-comments.ts): plain text between top-level
+// blocks, shown on the page as a strip that is visibly not paper, kept in
+// the working file, absent from every rendered export. Not in the `block`
+// group on purpose: only the document accepts it, never a list item, a
+// quote, a cell, or a footnote. `code` keeps input rules and the printed-
+// form normalizer out of it; the note holds exactly what was typed.
+const editorComment: NodeSpec = {
+  content: 'text*',
+  marks: '',
+  code: true,
+  defining: true,
+  isolating: true,
+  parseDOM: [{ tag: 'div[data-editor-comment]', contentElement: '.editor-comment-text', preserveWhitespace: 'full' }],
+  toDOM: () => ['div', { 'data-editor-comment': '', class: 'editor-comment' }, ['div', { class: 'editor-comment-text' }, 0]],
+};
+
 const nodes = listNodes
   .update('bullet_list', withTight('bullet_list'))
   .update('ordered_list', withTight('ordered_list'))
@@ -503,7 +519,8 @@ const nodes = listNodes
     ],
   })
   .update('doc', {
-    content: 'block+',
+    // Editorial comments are accepted here and nowhere else.
+    content: '(block | editor_comment)+',
     attrs: {
       settings: { default: DEFAULT_SETTINGS },
       // { name: string, content: string } | null — the document's BibTeX data
@@ -555,7 +572,8 @@ const nodes = listNodes
   .addToEnd('doc_title', docTitle)
   .addToEnd('doc_authors', docAuthors)
   .addToEnd('doc_date', docDate)
-  .addToEnd('abstract', abstract);
+  .addToEnd('abstract', abstract)
+  .addToEnd('editor_comment', editorComment);
 
 // Strikethrough is not in schema-basic; Typst has it natively (#strike),
 // so it round-trips through both formats. Paint-only — line-through never

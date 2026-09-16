@@ -26,6 +26,7 @@ import MarkdownIt from 'markdown-it';
 import footnotePlugin from 'markdown-it-footnote';
 import type { Node as PMNode, Mark } from 'prosemirror-model';
 import { schema } from './schema';
+import { readMdComment } from './editor-comments-format';
 import { DEFAULT_SETTINGS, type DocSettings } from './settings';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 import { trimSpaceBeforeMarker } from './collapse-spaces';
@@ -428,6 +429,15 @@ export function mdToDoc(src: string): MdImport {
           break;
         }
         case 'html_block': {
+          // The tagged frame is an editorial comment of Plass's own; any
+          // other HTML block (a plain `<!-- comment -->`, a <div>) stays a
+          // raw island exactly as before.
+          const note = readMdComment(t.content);
+          if (note !== null) {
+            nodes.push(schema.nodes.editor_comment.create(null, note ? [schema.text(note)] : []));
+            i++;
+            break;
+          }
           // Which sides had no blank line, so the save keeps the file's
           // spacing (`# Title` directly over its editorial comment).
           const prev = tokens.slice(0, i).reverse().find((k) => k.map)?.map;

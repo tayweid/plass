@@ -171,7 +171,11 @@ export function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
       units.push({ kind: 'opaque', pos, type: node.type.name });
     }
   };
-  doc.forEach((node, offset) => push(node, offset));
+  // Editorial comments are not printed: the compile omits them, so the
+  // matcher must never expect a unit for one.
+  doc.forEach((node, offset) => {
+    if (node.type.name !== 'editor_comment') push(node, offset);
+  });
   return units;
 }
 

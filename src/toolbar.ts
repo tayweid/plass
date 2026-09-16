@@ -15,6 +15,7 @@ import { insertFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
 import { insertStructuredTable } from './table-editor';
 import { insertGrid } from './grid-editor';
+import { insertEditorComment } from './editor-comments';
 import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
 import { isPwaInstalled, onPwaInstallState, requestPwaInstall } from './pwa-install';
@@ -59,6 +60,7 @@ const ICONS: Record<string, string> = {
   list: '<circle cx="4" cy="6" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="4" cy="18" r="1.2" fill="currentColor"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>',
   sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
   code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  comment: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/>',
 };
 
 function icon(name: string): string {
@@ -534,6 +536,10 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     title: 'Solution block — red text with a red rule on the left', editing: true,
     glyph: icon('solution'),
     checked: () => ancestor('blockquote')?.attrs.kind === 'solution',
+  });
+  commandItem(blocksRow, 'Comment', insertEditorComment, {
+    title: 'Editorial comment — a note on the page and in the file, never printed',
+    glyph: icon('comment'),
   });
   commandItem(blocksRow, 'Remove quote', lift, {
     title: 'Plain body text — lift out of the quote or solution block',

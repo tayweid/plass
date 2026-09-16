@@ -104,6 +104,15 @@ tier is always visible to the writer.
   features; adding one means adding a rail, with its local mirror and its
   an audit fixture, one at a time.
 
+One thing the page shows that the printer never does, on purpose:
+**editorial comments** (Extras → Comment). A comment is a plain-text note
+between blocks, drawn as a full-width strip labeled "Comment · Not
+printed" so it can never be mistaken for the page. It lives in the working
+file (a `// plass:comment` frame in `.typ`, a `<!-- plass:comment -->`
+block in `.md`), it is omitted from the PDF and the TeX export, and it has
+no printed height: adding, editing, or deleting one moves no line break
+and no page start — the displayed sheet simply grows by the note's height.
+
 Styling uses verified presets, with a supported numeric rail for table column
 widths and cell padding: fit-content, fractional, or point-sized columns,
 and uniform padding in points. These values are shared by the local layout

@@ -17,6 +17,7 @@
 import type { Node as PMNode, Mark } from 'prosemirror-model';
 import { DEFAULT_SETTINGS, type DocSettings } from './settings';
 import { blockToTypStandalone } from './typ-serializer';
+import { commentToMd } from './editor-comments-format';
 
 /** Serialize to Markdown. `offsets`, when given, receives the text offset
  *  at which each top-level block's serialization begins (index = position
@@ -202,6 +203,9 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         const label = (node.attrs.label as string) ? ` {#${node.attrs.label as string}}` : '';
         return `$$\n${node.attrs.src as string}\n$$${label}`;
       }
+      case 'editor_comment':
+        // The tagged HTML comment: kept in the file, never rendered.
+        return commentToMd(node.textContent);
       case 'code_block': {
         const params = node.attrs.params as string;
         // A Markdown island is the file's own text: back verbatim.

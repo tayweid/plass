@@ -144,6 +144,28 @@ tiers, always visible to the writer, never silent:
   an audit fixture, one at a time (PAGE-PORT's phase discipline,
   generalized).
 
+- **Editorial comments** (2026-09-16) — the one approved exception to "the
+  page shows only printed content": an `editor_comment` node between
+  top-level blocks (never nested; `(block | editor_comment)+` on the doc),
+  plain text, shown as a full-sheet-width warm strip labeled "Comment ·
+  Not printed" (`editor-comments.ts`/`.css`), kept in the working file
+  (`.typ`: a `// plass:comment` … `// | line` … `// /plass:comment` frame;
+  `.md`: a `<!-- plass:comment` … `-->` HTML comment with `&`/`--` escaped
+  — `editor-comments-format.ts`), and absent from every rendered export
+  (`docToTyp` with `islands: 'print'` returns nothing for it, TeX likewise).
+  Zero printed height: the paginator subtracts each note's painted height
+  when it recovers print geometry (`commentHeights` in the snapshot, keyed
+  at the note's END position) and skips notes in its block walk, so no
+  line break or page start moves; the displayed sheet holding a note grows
+  by exactly the note's height (`layout/page-geometry.ts`: `PageInfo.pages`
+  is per-sheet `top`/`height`, never `k * (pageH + gap)`; `printPageAt`
+  maps a position to its PRINT page). A note follows the printed block
+  before it; after an explicit page break it opens the new page. The
+  audit skips notes (`buildUnits`, `canonicalStart`). Plain `//` remarks
+  and plain HTML comments keep their old meanings (dropped; md-raw island).
+  This authorizes no other hidden content, second renderer, or font
+  substitution.
+
 Consequences: styling ships as verified presets, with the numeric exception
 for table column widths and uniform cell padding above. The source view
 (SOURCE-VIEW.md) is a second editor for the SAME rails
@@ -191,6 +213,7 @@ items against this before scope.
   Plass field ride in `doc.attrs.frontmatter`. A `.typ` save writes the
   island as a plain raw block and has no home for the frontmatter.
 - `.tex` export is semantic (journals reformat); `.pdf` via Typst.
+  Editorial comments are in both editable files and in neither export.
 
 ## Working style
 

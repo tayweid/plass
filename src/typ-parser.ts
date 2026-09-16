@@ -12,6 +12,7 @@
 import { Fragment, type Mark, type Node as PMNode } from 'prosemirror-model';
 import { TableMap } from 'prosemirror-tables';
 import { schema } from './schema';
+import { TYP_COMMENT_OPEN, readTypComment } from './editor-comments-format';
 import { unwrapAligned } from './math-src';
 import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings, FOOTNOTE_NUMBERINGS, type FootnoteNumbering } from './settings';
 import { trimSpaceBeforeMarker } from './collapse-spaces';
@@ -96,8 +97,10 @@ export function typToDoc(src: string): TypImport {
       i++;
       continue;
     }
-    // Body directives (attached to specific blocks) end the header.
+    // Body directives (attached to specific blocks) end the header, as
+    // does an editorial comment frame — a comment, but the document's.
     if (/^\/\/ typeset:decimal-columns /.test(line)) break;
+    if (line === TYP_COMMENT_OPEN) break;
     if (!line || line.startsWith('//')) {
       i++;
       continue;
@@ -366,6 +369,15 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     if (dm) {
       pendingDecimals = dm[1].split(',').map(Number);
       i++;
+      continue;
+    }
+    // An editorial comment frame (editor-comments-format.ts) is read
+    // before the ordinary comment skip: it is the one `//` run that is
+    // document content, not a discarded remark.
+    const frame = readTypComment(lines, i);
+    if (frame) {
+      out.push(schema.nodes.editor_comment.create(null, frame.text ? [schema.text(frame.text)] : []));
+      i = frame.next;
       continue;
     }
     if (!t || t.startsWith('//')) {
@@ -773,7 +785,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
           body.push(lines[i++]);
         }
       }
-      while (i < n && lines[i].trim() !== '') body.push(lines[i++]);
+      while (i < n && lines[i].trim() !== '' && lines[i].trimEnd() !== TYP_COMMENT_OPEN) body.push(lines[i++]);
       warnings.push(`kept as raw Typst: ${body[0].trim().slice(0, 48)}`);
       out.push(schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text(body.join('\n'))]));
       continue;
@@ -783,7 +795,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     const para: string[] = [];
     while (i < n) {
       const pt = lines[i].trim();
-      if (!pt || /^(```|={1,6} |[-+] |#)/.test(pt)) break;
+      if (!pt || /^(```|={1,6} |[-+] |#)/.test(pt) || pt === TYP_COMMENT_OPEN) break;
       para.push(lines[i++]);
     }
     out.push(schema.nodes.paragraph.create(null, parseParagraph(para)));

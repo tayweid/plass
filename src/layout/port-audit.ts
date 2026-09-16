@@ -70,6 +70,13 @@ export function canonicalStart(doc: PMNode, entry: PageStartEntry): PageStartEnt
   if (entry.line !== 0 || entry.unit !== 'block') return entry;
   let pos = entry.pos;
   let node = doc.nodeAt(pos);
+  // A page that starts at an editorial comment (a note right after an
+  // explicit page break) starts, in print, at the next printed block: the
+  // compile never sees the note.
+  while (node && node.type.name === 'editor_comment') {
+    pos += node.nodeSize;
+    node = doc.nodeAt(pos);
+  }
   while (node && !node.isTextblock && !node.isAtom && node.type.name !== 'table' && node.type.name !== 'grid_row' && node.firstChild) {
     pos += 1;
     node = node.firstChild;

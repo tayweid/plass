@@ -109,8 +109,10 @@ import { LayoutScheduler } from './layout/layout-scheduler';
 import {
   HeightIndex,
   createPaginationSnapshot,
+  type PaginationHeightSample,
   type PaginationSnapshot as HeightSnapshot,
 } from './layout/pagination-snapshot';
+import { displayPages, printPageIndex, type DisplayPage } from './layout/page-geometry';
 import {
   planSuffixPagination,
   type SuffixPageMarker,
@@ -132,6 +134,17 @@ import { buildPortAudit, type PortAuditReport } from './layout/port-audit';
 
 /** Islands never flex: nothing in the document takes a line's slack. */
 const noFill = () => false;
+
+/** The first top-level block at or after `pos` that print has: editorial
+ *  comments (editor-comments.ts) are skipped. Null past the last one. */
+function firstPrintedBlock(doc: PMNode, pos: number): PMNode | null {
+  let found: PMNode | null = null;
+  doc.forEach((node, offset) => {
+    if (found || offset < pos || node.type.name === 'editor_comment') return;
+    found = node;
+  });
+  return found;
+}
 
 /** The footnote separator's reserved height for a document: Typst's 0.5pt
  * line, or nothing when the setting removes it. */
@@ -215,6 +228,8 @@ interface PaginationGeometrySnapshot {
   spacers: CurrentSpacers;
   heights: HeightSnapshot;
   spacerHeights: HeightIndex;
+  /** Editorial comments' painted heights, keyed at each note's end. */
+  comments: readonly PaginationHeightSample[];
 }
 
 interface PaginationPassResult {
@@ -400,6 +415,15 @@ export function isLayoutSuspended(view: EditorView): boolean {
   return viewRegistry.get(view)?.isSuspended() ?? false;
 }
 
+/** The PRINT page (zero-based) the document position paints on, by the
+ *  paginator's own geometry: the painted coordinate less the editorial
+ *  comment heights above it, over uniform print pages. Callers must never
+ *  divide a painted coordinate by the print page height themselves — a
+ *  displayed sheet holding a note is taller than the print page. */
+export function printPageAt(view: EditorView, pos: number): number {
+  return viewRegistry.get(view)?.printPageOf(pos) ?? 0;
+}
+
 export function typesetPlugin(
   opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo) => void; onEnvironment?: (v: EnvironmentVerdict) => void } = {},
 ) {
@@ -576,6 +600,10 @@ class TypesetView {
   private fallbackPageBasisMarkers: FallbackBasisMarker[] = [];
   private paginationGeometryEpoch = 0;
   private lastPaginationWidth = 0;
+  /** Editorial comment heights as of the last snapshot, keyed at each
+   *  note's end (page-geometry.ts): painted → print-stack coordinates. */
+  private lastCommentIndex = new HeightIndex([]);
+  private lastPageCount = 1;
   /**
    * Epoch for memoized per-element geometry reads (block measure widths,
    * line-heights, body font size). Bumped by every event that can move
@@ -930,7 +958,17 @@ class TypesetView {
         break;
       }
     }
-    if (!blocks.length) return;
+    if (!blocks.length) {
+      // An edit inside an editorial comment changes no print geometry,
+      // only the height of the sheet holding it: republish the sheets
+      // now, so the page below the note follows the keystroke instead of
+      // the settled pass.
+      if ($from.depth >= 1 && $from.node(1).type.name === 'editor_comment') {
+        this.lastCommentIndex = new HeightIndex(this.commentHeights());
+        this.refreshDisplayGeometry();
+      }
+      return;
+    }
     // One geometry read: an editor-width change no epoch event described
     // must not serve stale cached measures.
     this.syncDomGeometryWidth();
@@ -1353,7 +1391,9 @@ class TypesetView {
     const marginTop = settings.marginTop * 96;
     const marginBottom = settings.marginBottom * 96;
     const spacers = this.currentSpacers();
-    const heights = createPaginationSnapshot({ spacers: spacers.sorted, tableExtras: [] });
+    const comments = this.commentHeights();
+    const heights = createPaginationSnapshot({ spacers: spacers.sorted, tableExtras: [], comments });
+    this.lastCommentIndex = heights.commentHeights;
     this.paginationSnapshotStats.captures++;
     this.paginationSnapshotStats.spacerScans++;
     return {
@@ -1367,7 +1407,85 @@ class TypesetView {
       spacers,
       heights,
       spacerHeights: new HeightIndex(heights.spacers),
+      comments: heights.comments,
     };
+  }
+
+  /** Every top-level editorial comment's painted height, keyed at the
+   *  note's END position so `heightAbove(note.pos)` excludes the note
+   *  itself and `heightAbove(nextBlock.pos)` includes it. A note has no
+   *  printed height: the paginator subtracts these to recover print
+   *  geometry, and the page painter adds them back per sheet. */
+  private commentHeights(): PaginationHeightSample[] {
+    const samples: PaginationHeightSample[] = [];
+    this.view.state.doc.forEach((node, offset) => {
+      if (node.type.name !== 'editor_comment') return;
+      const el = this.view.nodeDOM(offset);
+      if (!(el instanceof HTMLElement)) return;
+      const height = el.getBoundingClientRect().height;
+      if (height > 0) samples.push({ pos: offset + node.nodeSize, height });
+    });
+    return samples;
+  }
+
+  /** Print-stack y of a painted client top at document position `pos`:
+   *  the painted offset from the stack top less the note heights above.
+   *  Page spacers stay in — they ARE the print stack's page strides. */
+  private printStackY(clientTop: number, pos: number): number {
+    const host = this.view.dom.parentElement ?? this.view.dom;
+    return clientTop - host.getBoundingClientRect().top - this.lastCommentIndex.heightAbove(pos);
+  }
+
+  printPageOf(pos: number): number {
+    const s = getSettings(this.view.state);
+    const size = pageSize(s);
+    let top: number;
+    try {
+      top = this.view.coordsAtPos(pos).top;
+    } catch {
+      return 0;
+    }
+    return printPageIndex(this.printStackY(top, pos), size.h, PAGE_GAP, this.lastPageCount);
+  }
+
+  /** The displayed sheets for `count` print pages: each note is assigned
+   *  to the print page its painted top falls on, and its sheet grows by
+   *  the note's height. Read after the final spacer dispatch, so the
+   *  painted tops are the ones the page stack will show. */
+  private displayGeometry(count: number): DisplayPage[] {
+    const s = getSettings(this.view.state);
+    const size = pageSize(s);
+    const extras = new Array<number>(count).fill(0);
+    this.view.state.doc.forEach((node, offset) => {
+      if (node.type.name !== 'editor_comment') return;
+      const el = this.view.nodeDOM(offset);
+      if (!(el instanceof HTMLElement)) return;
+      const r = el.getBoundingClientRect();
+      if (!(r.height > 0)) return;
+      extras[printPageIndex(this.printStackY(r.top, offset), size.h, PAGE_GAP, count)] += r.height;
+    });
+    return displayPages(count, size.h, PAGE_GAP, extras);
+  }
+
+  /** Republish the page geometry and footnote positions for the current
+   *  page count: what a note edit changes (sheet heights), without a
+   *  pagination pass (print geometry is untouched by a note). */
+  private refreshDisplayGeometry(): void {
+    const count = this.lastPageCount;
+    const pages = this.displayGeometry(count);
+    this.placeFootnotes(count, pages);
+    const s = getSettings(this.view.state);
+    const size = pageSize(s);
+    this.opts.onPages?.({
+      count,
+      pageW: size.w,
+      pageH: size.h,
+      gap: PAGE_GAP,
+      pages,
+      marginBottom: s.marginBottom * 96,
+      marginLeft: s.marginLeft * 96,
+      marginRight: s.marginRight * 96,
+    });
   }
 
   private heightAbove(snapshot: PaginationGeometrySnapshot, pos: number, spacersOnly = false): number {
@@ -1731,7 +1849,7 @@ class TypesetView {
     const host = this.view.dom.parentElement;
     if (!host) return;
     const s = getSettings(this.view.state);
-    const adj = this.blockTopAdjustPx(this.view.state.doc.firstChild, s, this.bodyPx());
+    const adj = this.blockTopAdjustPx(firstPrintedBlock(this.view.state.doc, 0), s, this.bodyPx());
     host.style.paddingTop = `${(s.marginTop * 96 + adj).toFixed(2)}px`;
   }
 
@@ -1828,8 +1946,13 @@ class TypesetView {
       lineLayoutMs += performance.now() - secondLineStart;
     }
 
+    // The comment index was captured before the spacer dispatch; note
+    // heights do not depend on spacers, but the notes' painted tops do,
+    // so the sheets are read now, from the final geometry.
+    this.lastPageCount = count;
+    const pages = this.displayGeometry(count);
     const footnoteStart = performance.now();
-    this.placeFootnotes(count);
+    this.placeFootnotes(count, pages);
     const footnoteMs = performance.now() - footnoteStart;
 
     const s = getSettings(this.view.state);
@@ -1839,6 +1962,7 @@ class TypesetView {
       pageW: size.w,
       pageH: size.h,
       gap: PAGE_GAP,
+      pages,
       marginBottom: s.marginBottom * 96,
       marginLeft: s.marginLeft * 96,
       marginRight: s.marginRight * 96,
@@ -2876,7 +3000,9 @@ class TypesetView {
       // grid places the row frame flush at the region top); the repeated
       // header's reservation is passed separately by the caller.
       if (kind === 'row') return 0;
-      const node = view.state.doc.nodeAt(pos);
+      // A break landing on a note (after an explicit page break) lands
+      // the printed block that follows it.
+      const node = view.state.doc.nodeAt(pos)?.type.name === 'editor_comment' ? firstPrintedBlock(view.state.doc, pos) : view.state.doc.nodeAt(pos);
       // A later grid row at a page top: Typst drops the gutter above it,
       // the editor's row keeps its margin-top — take it back, as a table's
       // block margin is.
@@ -3444,6 +3570,9 @@ class TypesetView {
 
     view.state.doc.forEach((node, offset) => {
       if (offset < (seed?.startPos ?? 0)) return;
+      // An editorial comment has no printed height: its painted height is
+      // already subtracted by `stackY`, and it holds no footnotes.
+      if (node.type.name === 'editor_comment') return;
       visitedUnits++;
       switch (node.type.name) {
         case 'page_break':
@@ -3498,7 +3627,7 @@ class TypesetView {
    * reserved area and rises above it. Page STARTS (the parity target) are
    * correct; the visual is not, until split painting lands.
    */
-  private placeFootnotes(count: number) {
+  private placeFootnotes(count: number, pages: readonly DisplayPage[]) {
     const view = this.view;
     const s = getSettings(view.state);
     const size = pageSize(s);
@@ -3517,7 +3646,9 @@ class TypesetView {
       const body = dom instanceof HTMLElement ? dom.querySelector<HTMLElement>('.fn-body') : null;
       if (body) {
         const c = view.coordsAtPos(pos, 1);
-        const page = Math.min(count - 1, Math.max(0, Math.floor((c.top - stackTop) / (size.h + PAGE_GAP))));
+        // The marker's PRINT page: its painted top less the note heights
+        // above it, over uniform print pages.
+        const page = printPageIndex(c.top - stackTop - this.lastCommentIndex.heightAbove(pos), size.h, PAGE_GAP, count);
         let list = groups.get(page);
         if (!list) groups.set(page, (list = []));
         list.push({ el: body, height: Math.max(0, body.offsetHeight - fnInsets.leading * F) });
@@ -3529,7 +3660,9 @@ class TypesetView {
     // ink adjustment shifts it away from exactly one margin).
     const pmOffset = view.dom.getBoundingClientRect().top - stackTop;
     for (const [page, list] of groups) {
-      const bottomEdge = page * (size.h + PAGE_GAP) + size.h - marginBottom;
+      // The DISPLAYED sheet's bottom: the print page plus its notes.
+      const sheet = pages[page] ?? { top: page * (size.h + PAGE_GAP), height: size.h, extra: 0 };
+      const bottomEdge = sheet.top + sheet.height - marginBottom;
       // Same formula the fit test reserves against (footnoteAreaHeight):
       // clearance + separator once, then (gap + height) per entry — so the
       // painted stack can never drift from what pagination assumed fit.

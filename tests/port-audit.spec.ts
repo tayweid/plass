@@ -283,6 +283,44 @@ FIXTURES.push({
     '\n',
 });
 
+// Editorial comments (editor-comments.ts): notes at every kind of seam —
+// leading, between paragraphs, before a heading, stacked, beside a list,
+// beside a footnote, after an explicit page break, trailing. The compile
+// never sees them; every break and page start must still agree.
+{
+  const typNote = (t: string) => '// plass:comment\n' + t.split('\n').map((l) => '// | ' + l).join('\n') + '\n// /plass:comment';
+  const mdNote = (t: string) => '<!-- plass:comment\n' + t + '\n-->';
+  const body = (note: (t: string) => string, heading: (t: string, level: number) => string, pageBreak: string, footnote: (t: string) => string) =>
+    [
+      note('Leading note: a place to stand first.'),
+      heading('Comments', 1),
+      FILLER.repeat(3).trimEnd(),
+      note('Between paragraphs.\nA second line.\n\nAfter a blank line.'),
+      FILLER.repeat(4).trimEnd(),
+      FILLER.repeat(2).trimEnd() + ' With a note' + footnote('The entry at the foot of the page, long enough to wrap onto a second line of the entry area.') + ' beside it.',
+      note('Before a heading.'),
+      note('Stacked: a second note right after the first.'),
+      heading('Lists and breaks', 2),
+      '- ' + FILLER.repeat(1).trimEnd() + '\n- ' + FILLER.repeat(1).trimEnd() + '\n- ' + FILLER.repeat(1).trimEnd(),
+      note('After a list.'),
+      ...Array.from({ length: 5 }, () => FILLER.repeat(4).trimEnd()),
+      pageBreak,
+      note('After the explicit page break.'),
+      ...Array.from({ length: 3 }, () => FILLER.repeat(3).trimEnd()),
+      note('Trailing note.'),
+    ].join('\n\n') + '\n';
+  FIXTURES.push(
+    {
+      name: 'comments.typ',
+      text: TYP_HEAD('paper: "us-letter", margin: 1.25in, numbering: "1", number-align: center') + body(typNote, (t, l) => '='.repeat(l) + ' ' + t, '#pagebreak()', (t) => `#footnote[${t}]`),
+    },
+    {
+      name: 'comments.md',
+      text: body(mdNote, (t, l) => '#'.repeat(l) + ' ' + t, '```typst\n#pagebreak()\n```', (t) => `^[${t}]`),
+    },
+  );
+}
+
 FIXTURES.push({
   name: 'table-bare.md',
   text: ['| Item | Value |', '| --- | --- |', ...Array.from({ length: TABLE_ROWS - 1 }, (_, i) => `| Row ${i + 1} | ${i + 1} |`), ''].join('\n'),

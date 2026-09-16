@@ -124,11 +124,15 @@ export function blockOracleKey(settingsKey: string, keyTag: string, measure: num
   return `${settingsKey}|${keyTag}|w${measure.toFixed(1)}|${specKey}`;
 }
 
-/** Whether the paragraph at `pos` directly follows a sibling paragraph. */
+/** Whether the paragraph at `pos` directly follows a sibling paragraph.
+ *  Editorial comments between the two are invisible to print (Typst never
+ *  sees them), so they do not break the run; style.css's `p + p` chain
+ *  paints the same indent across them. */
 export function consecutiveParagraph(doc: PMNode, pos: number): boolean {
   const $pos = doc.resolve(pos);
-  const index = $pos.index();
-  return index > 0 && $pos.parent.child(index - 1).type.name === 'paragraph';
+  let index = $pos.index() - 1;
+  while (index >= 0 && $pos.parent.child(index).type.name === 'editor_comment') index--;
+  return index >= 0 && $pos.parent.child(index).type.name === 'paragraph';
 }
 
 /** Body-paragraph context tag used by the compiled-oracle cache. */

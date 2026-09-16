@@ -199,7 +199,9 @@ export function collapseSpaces(): Plugin {
         const from = Math.max(0, Math.min(rawFrom, size));
         const to = Math.min(Math.max(rawTo, from), size);
         state.doc.nodesBetween(from, to, (node, pos) => {
-          if (node.type.name === 'code_block') return false;
+          // Code keeps its spaces (raw preserves them in Typst too); an
+          // editorial comment is never printed and holds what was typed.
+          if (node.type.name === 'code_block' || node.type.name === 'editor_comment') return false;
           if (!node.isTextblock) return true;
           if (!scanned.has(pos)) {
             scanned.add(pos);

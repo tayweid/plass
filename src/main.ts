@@ -11,19 +11,22 @@ import { migrateLegacyTableGeometry } from './typ-parser';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
 import { collapseSpaces } from './collapse-spaces';
 import { listIndent } from './list-indent';
-import { typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugin';
+import { printPageAt, typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugin';
+import { stackHeight } from './layout/page-geometry';
 import { MathView } from './math';
 import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
 import { structuredTablePlugin } from './table-editor';
 import { TableView } from './table-view';
 import './table-controls.css';
+import './editor-comments.css';
 import { equationsPlugin } from './equations';
 import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { TypstInlineView } from './inline-raw';
 import { GridCellView, gridPlugin } from './grid-editor';
+import { EditorCommentView, editorCommentKeymap, editorCommentPaste } from './editor-comments';
 import { refAutocomplete } from './ref-autocomplete';
 import { applySettings, formatPageNumber, getSettings, runningPageFormat, runningText, type DocSettings } from './settings';
 import { FileManager } from './file-manager';
@@ -128,6 +131,9 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       // Before the keymaps: the popup must see Enter/Tab/arrows first.
       refAutocomplete(),
       buildInputRules(),
+      // Before the editing keymap: its Mod-Enter is the page break.
+      editorCommentKeymap(),
+      editorCommentPaste(),
       buildKeymap(),
       baseKeys,
       history(),
@@ -173,7 +179,9 @@ let pageSignature = '';
 
 /** Paint the page boxes + numbers behind the editor. */
 function renderPages(info: PageInfo) {
-  stackEl.style.height = `${info.count * (info.pageH + info.gap) - info.gap}px`;
+  // Sheets are the print pages grown by the editorial comments they hold
+  // (page-geometry.ts): never `k * (pageH + gap)`.
+  stackEl.style.height = `${stackHeight(info.pages)}px`;
   pageCount = info.count;
   const s = getSettings(view.state);
   // A numbering-restart marker splits the document: roman front matter,
@@ -186,10 +194,7 @@ function renderPages(info: PageInfo) {
     });
     if (markerPos >= 0) {
       try {
-        const host = view.dom.parentElement ?? view.dom;
-        const stackTop = host.getBoundingClientRect().top;
-        const c = view.coordsAtPos(markerPos + 1);
-        restartPage = Math.min(info.count - 1, Math.max(0, Math.round((c.top - stackTop) / (info.pageH + info.gap))));
+        restartPage = printPageAt(view, markerPos + 1);
       } catch {
         restartPage = -1;
       }
@@ -211,13 +216,10 @@ function renderPages(info: PageInfo) {
   // the header's own location).
   const sections: Array<{ page: number; text: string }> = [];
   if (/\{section\}/.test(s.headerText + s.footerText)) {
-    const host = view.dom.parentElement ?? view.dom;
-    const stackTop = host.getBoundingClientRect().top;
     view.state.doc.forEach((node, offset) => {
       if (node.type.name !== 'heading' || node.attrs.level !== 1) return;
       try {
-        const c = view.coordsAtPos(offset + 1);
-        sections.push({ page: Math.max(0, Math.floor((c.top - stackTop) / (info.pageH + info.gap))), text: node.textContent });
+        sections.push({ page: printPageAt(view, offset + 1), text: node.textContent });
       } catch {
         /* an unmeasurable heading has no page */
       }
@@ -233,16 +235,19 @@ function renderPages(info: PageInfo) {
     s.pageNumShow, s.pageNumFormat, s.pageNumAlign, s.pageNumPlace, s.pageNumStart,
     s.headerText, s.headerAlign, s.headerFirstPage, s.footerText, s.footerAlign, s.footerFirstPage,
     restartPage, sections.map((h) => `${h.page}=${h.text}`).join('\u0001'),
+    info.pages.map((p) => `${p.top.toFixed(2)}+${p.height.toFixed(2)}`).join(','),
   ].join(':');
   if (sig !== pageSignature) {
     pageSignature = sig;
     const frag = document.createDocumentFragment();
     const em = s.sizePt * (4 / 3);
     for (let k = 0; k < info.count; k++) {
-      const top = k * (info.pageH + info.gap);
+      const sheet = info.pages[k];
+      const top = sheet.top;
       const box = document.createElement('div');
       box.className = 'page-box';
       box.style.top = `${top}px`;
+      box.style.height = `${sheet.height}px`;
       frag.appendChild(box);
       // Typst's header: its block bottom sits header-ascent (30%) above the
       // content area, i.e. at 0.7 × top margin; its footer one third of the
@@ -255,7 +260,7 @@ function renderPages(info: PageInfo) {
         el.style.top =
           edge === 'header'
             ? `${top + 0.7 * (s.marginTop * 96) - 1.2 * em}px`
-            : `${top + info.pageH - (2 / 3) * info.marginBottom - 0.55 * em}px`;
+            : `${top + sheet.height - (2 / 3) * info.marginBottom - 0.55 * em}px`;
         el.style.textAlign = align;
         el.style.padding = `0 ${info.marginRight}px 0 ${info.marginLeft}px`;
         el.textContent = text;
@@ -307,6 +312,7 @@ const view = new EditorView(editorEl, {
     bibliography: (node, v) => new BibliographyView(node, v),
     typst_inline: (node, v, getPos) => new TypstInlineView(node, v, getPos),
     grid_cell: (node, v) => new GridCellView(node, v),
+    editor_comment: (node, v, getPos) => new EditorCommentView(node, v, getPos),
   },
   attributes: { spellcheck: 'true' },
   handleClick: (v, _pos, event) => footnoteMarkerClick(v, event),
