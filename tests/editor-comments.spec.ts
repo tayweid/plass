@@ -280,7 +280,7 @@ test('editing a note: newlines, exit, live sheet growth, insert, delete, undo', 
   expect(settled.words).toBe(before.words);
 
   // Mod-Enter leaves the note for the next block; no page break appears.
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   const after = await caretParent(page);
   expect(after.parent).toBe('paragraph');
   expect(after.offset).toBe(0);
@@ -323,7 +323,7 @@ test('editing a note: newlines, exit, live sheet growth, insert, delete, undo', 
   const noteEls = page.locator('.ProseMirror .editor-comment');
   await noteEls.nth(2).locator('.editor-comment-delete').click();
   expect(await page.evaluate(() => window.view.state.doc.childCount)).toBe(kidsAfter.length - 1);
-  await page.keyboard.press('Meta+z');
+  await page.keyboard.press('ControlOrMeta+z');
   const restored = await page.evaluate(() => {
     const n = window.view.state.doc.child(5);
     return { type: n.type.name, text: n.textContent, count: window.view.state.doc.childCount };
