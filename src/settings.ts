@@ -9,6 +9,7 @@ import type { EditorView } from 'prosemirror-view';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 import { DEFAULT_FONT, cssFontStack, effectiveFont, parityMetrics, selectableFonts, codeBlockMetricsEm, footnoteFrameInsetsEm, FN_LEADING_EM, FN_SCALE } from './font-registry';
 import { CITATION_STYLES, type CitationStyle } from './citation-styles';
+import { APPEARANCES, applyAppearance, currentAppearance, type Appearance } from './appearance';
 
 export interface DocSettings {
   font: string;
@@ -635,6 +636,22 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   hint.className = 'settings-hint';
   hint.textContent = 'Applied live and to the .typ export. Undo works.';
   panel.appendChild(hint);
+
+  // Editor appearance is a device preference, not a document setting: it
+  // dispatches no transaction, marks nothing dirty, and exports nothing.
+  const appearanceRow = document.createElement('label');
+  appearanceRow.className = 'settings-row settings-row-appearance';
+  const appearanceLabel = document.createElement('span');
+  appearanceLabel.textContent = 'Appearance';
+  appearanceRow.append(
+    appearanceLabel,
+    select([...APPEARANCES] as Array<[string, string]>, currentAppearance(), (v) => applyAppearance(v as Appearance)),
+  );
+  panel.appendChild(appearanceRow);
+  const appearanceHint = document.createElement('div');
+  appearanceHint.className = 'settings-hint';
+  appearanceHint.textContent = 'Screen colors only. Saved on this device.';
+  panel.appendChild(appearanceHint);
 
   document.body.appendChild(panel);
   const rect = anchor.getBoundingClientRect();

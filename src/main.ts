@@ -1,5 +1,8 @@
 import 'katex/dist/katex.min.css';
 import './style.css';
+import { applyAppearance, loadAppearance } from './appearance';
+// The screen palette, before anything paints: no flash of the other one.
+applyAppearance(loadAppearance());
 
 import { EditorState } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';

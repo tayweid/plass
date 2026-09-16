@@ -4,6 +4,12 @@ Date: 2026-09-16. Investigated against local commit `d6e5dc5`.
 
 ## Status and user intent
 
+Update 2026-09-16: feature 1 (editorial comments) and the first increment of
+feature 2 (the Warm paper screen palette) are implemented in two local
+commits; see AGENTS.md ("Editorial comments", "Editor appearance") for the
+shipped design. The typography investigation (TeX Gyre Pagella
+certification) has not been started. The text below is the original plan.
+
 This is an implementation plan, not a record of shipped features. The user
 approved the comment concept and requested this handoff instead of proceeding
 with implementation in the current task. Neither feature has been implemented.

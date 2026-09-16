@@ -59,6 +59,17 @@
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
 }
 
+/* Warm paper (appearance.ts): a device preference for the screen only —
+   cream sheet, charcoal ink — read by the page, the page chrome, the
+   footnotes, and the source view through the tokens above. Colors only:
+   no rule here may change a width, a metric, or a margin, and print
+   (below) restores the publication palette. */
+:root[data-appearance='warm'] {
+  --sheet: #fcfbf7;
+  --ink: #2c2b26;
+  --ink-soft: #746f65;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -731,7 +742,7 @@ body {
   text-align: center;
   /* Same face, size, and ink as the PDF's folio. */
   font: var(--doc-size, 12.5pt) / 1 var(--doc-font, serif);
-  color: #1a1a1a;
+  color: var(--ink);
 }
 
 #editor {
@@ -960,7 +971,7 @@ body {
   font-family: var(--doc-font, var(--serif));
   font-size: var(--doc-size, 12.5pt);
   line-height: var(--doc-line, 1.5);
-  color: #1a1a1a;
+  color: var(--ink);
   /* The oracle owns layout: no browser justification, no browser hyphens. */
   text-align: left;
   hyphens: none;
@@ -1438,7 +1449,7 @@ body {
   /* Typst renders captions at full body size and ink, justified with a
      centered last line. Oracle-laid lines end in <br> (exempt from CSS
      justify); while being edited, CSS takes over with the same shape. */
-  color: #1a1a1a;
+  color: var(--ink);
   text-align: justify;
   text-align-last: center;
 }
@@ -1487,8 +1498,8 @@ body {
   border: 1px solid var(--accent);
   border-radius: 10px;
   padding: 2px 8px;
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--sheet);
+  color: var(--ink);
 }
 
 .fig-label-input:focus {
@@ -1529,7 +1540,7 @@ body {
   /* Typst's entry line pitch: cap height plus a 0.5em leading of the entry
      size (measured 12.57pt at the default size), published by settings. */
   line-height: var(--fn-line, 1.183);
-  color: #1a1a1a;
+  color: var(--ink);
   /* Oracle-laid lines end in <br> (CSS justify skips them; word-spacing
      decos do the work); while being edited, decos are stripped and CSS
      justification takes over. */
@@ -1553,7 +1564,7 @@ body {
   left: 0;
   width: var(--fn-sep-width, 30%);
   display: var(--fn-sep-display, block);
-  border-top: 0.5pt solid #1a1a1a;
+  border-top: 0.5pt solid var(--ink);
 }
 
 .fn-num {
@@ -2771,6 +2782,13 @@ body {
   margin-top: 2px;
 }
 
+/* The device preference sits apart from the document's settings. */
+.settings-row-appearance {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--bar-hairline);
+}
+
 .settings-font-compat {
   font: 10.5px/1.35 var(--sans);
   color: var(--bar-ink-soft);
@@ -2834,6 +2852,14 @@ body {
 /* ---------- print: the sheet is the artifact ---------- */
 
 @media print {
+  /* The screen palette is not the publication's. */
+  :root,
+  :root[data-appearance='warm'] {
+    --sheet: #ffffff;
+    --ink: #1a1a1a;
+    --ink-soft: #6b6b6b;
+  }
+
   #toolbar,
   #hud,
   #toast,
