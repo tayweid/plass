@@ -172,7 +172,7 @@
   font: 600 10px/1.2 var(--sans);
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: #77756e;
+  color: var(--bar-ink-soft);
 }
 
 .tb-menu-item {
@@ -193,19 +193,17 @@
   cursor: pointer;
 }
 
+/* Hover and keyboard focus share one quiet highlight — the same press
+   tint the pills use — instead of a drawn ring. */
 .tb-menu-item:hover:not(:disabled),
 .tb-menu-item:focus-visible {
   background: var(--bar-press);
-}
-
-.tb-menu-item:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline: none;
 }
 
 .tb-menu-item[aria-checked='true'] {
   color: var(--accent);
-  background: rgba(48, 92, 138, 0.09);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .tb-menu-item[aria-checked='true'] .tb-menu-label::after {
@@ -220,7 +218,7 @@
 
 .tb-menu-item kbd {
   flex: none;
-  color: #86837c;
+  color: var(--bar-ink-soft);
   font: 11px var(--sans);
 }
 
@@ -233,7 +231,7 @@
 .tb-menu-hint {
   padding: 10px;
   font: 12px/1.5 var(--sans);
-  color: var(--ink-soft);
+  color: var(--bar-ink-soft);
 }
 
 .tb-menu-label {

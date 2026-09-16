@@ -2586,7 +2586,9 @@ body {
 
 /* ---------- settings panel ---------- */
 
-.tb-menu-extras,
+/* Every floating panel is the pills' dark glass: the dropdowns (File,
+   Headings, Text style, Lists, Extras and its submenus) and Settings. */
+.tb-menu,
 .settings-panel {
   --bar-glass: rgba(27, 26, 30, 0.94);
   --bar-ink: rgba(240, 238, 233, 0.9);
