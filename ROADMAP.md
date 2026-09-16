@@ -63,6 +63,17 @@ two-sided margins; page-wide multiple columns (the grid rail and the
 half-letter paper size cover the two real needs); per-page footnote
 numbering (Typst has none either).
 
+## Not planned (Taylor, 2026-09-16)
+
+A warm "bookish" editor look — the cream-paper mockup set in Iowan Old
+Style. The palette alone was tried and dropped the same day: without the
+typeface it is not the look, and the typeface is a certification job (a
+warmer serif made exact for layout and export: TeX Gyre Pagella or
+Libertinus Serif, both bundled, neither calibrated — parity metrics, the
+compiler's font set, the audit fixtures under the new face), not a
+screen-only swap, which would break the editor/Typst contract. Iowan
+itself is Apple's and cannot be bundled.
+
 ## Not on this roadmap
 
 The formal-release gate — replacing the precompiled Typst binaries with an

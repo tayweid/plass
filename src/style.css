@@ -59,17 +59,6 @@
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
 }
 
-/* Warm paper (appearance.ts): a device preference for the screen only —
-   cream sheet, charcoal ink — read by the page, the page chrome, the
-   footnotes, and the source view through the tokens above. Colors only:
-   no rule here may change a width, a metric, or a margin, and print
-   (below) restores the publication palette. */
-:root[data-appearance='warm'] {
-  --sheet: #fcfbf7;
-  --ink: #2c2b26;
-  --ink-soft: #746f65;
-}
-
 * {
   box-sizing: border-box;
 }
@@ -2784,13 +2773,6 @@ body {
   margin-top: 2px;
 }
 
-/* The device preference sits apart from the document's settings. */
-.settings-row-appearance {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--bar-hairline);
-}
-
 .settings-font-compat {
   font: 10.5px/1.35 var(--sans);
   color: var(--bar-ink-soft);
@@ -2854,14 +2836,6 @@ body {
 /* ---------- print: the sheet is the artifact ---------- */
 
 @media print {
-  /* The screen palette is not the publication's. */
-  :root,
-  :root[data-appearance='warm'] {
-    --sheet: #ffffff;
-    --ink: #1a1a1a;
-    --ink-soft: #6b6b6b;
-  }
-
   #toolbar,
   #hud,
   #toast,

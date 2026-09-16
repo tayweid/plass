@@ -104,10 +104,6 @@ tier is always visible to the writer.
   features; adding one means adding a rail, with its local mirror and its
   an audit fixture, one at a time.
 
-Settings → Appearance offers a **Warm paper** screen palette (cream sheet,
-charcoal ink) that is remembered on the device. Colors only: it moves
-nothing, is not part of the document, and never reaches the PDF.
-
 One thing the page shows that the printer never does, on purpose:
 **editorial comments** (Extras → Comment). A comment is a plain-text note
 between blocks, drawn as a full-width strip labeled "Comment · Not

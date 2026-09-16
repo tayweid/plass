@@ -100,12 +100,6 @@
   text-indent: var(--par-indent, 0em);
 }
 
-/* Warm paper (appearance.ts) tunes the strip to its palette. */
-:root[data-appearance='warm'] .ProseMirror .editor-comment {
-  --comment-bg: #ebe6d8;
-  --comment-border: #c9bb9e;
-}
-
 /* The printer never sees a note: the browser print drops it whole, with
    the display-only space it took. */
 @media print {

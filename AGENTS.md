@@ -198,15 +198,6 @@ items against this before scope.
 - Internal storage keys keep the old "typeset" names on purpose
   (`typeset-doc-v1`, IDB `typeset-files`, session keys) — renaming
   orphans users' sessions and recents.
-- Editor appearance (`src/appearance.ts`, 2026-09-16): Settings →
-  Appearance, Standard / Warm paper. A device preference under
-  `typeset-appearance`, painted as `:root[data-appearance]` before the
-  editor mounts; `style.css` tokens only (`--sheet`, `--ink`, `--ink-soft`,
-  which every document-ink rule now reads), restored to the publication
-  palette under `@media print`. It dispatches no transaction, changes no
-  width or metric, and exports nothing. Document fonts are not part of it:
-  a warmer face is a certification job (`font-registry.ts`; TeX Gyre
-  Pagella is the bundled candidate), never a browser-only substitution.
 
 ## Formats
 
