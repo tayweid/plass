@@ -23,41 +23,50 @@
   text-indent: 0;
 }
 
+/* Header: a comment glyph and "Comment" on the left; "NOT PRINTED" and
+   the delete on the right. Chrome, not content (contenteditable=false). */
 .ProseMirror .editor-comment-header {
   display: flex;
-  align-items: baseline;
-  gap: 0.6em;
-  margin-bottom: 0.35em;
-  font: 600 10.5px/1.4 var(--sans);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--comment-ink) 80%, transparent);
+  align-items: center;
+  gap: 0.5em;
+  margin-bottom: 0.4em;
+  font: 500 12px/1.4 var(--sans);
+  color: var(--comment-ink);
   user-select: none;
   -webkit-user-select: none;
 }
 
-.ProseMirror .editor-comment-tag {
-  font-weight: 500;
-  opacity: 0.75;
+.ProseMirror .editor-comment-header svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
 }
 
-.ProseMirror .editor-comment-tag::before {
-  content: '·';
-  margin-right: 0.6em;
+.ProseMirror .editor-comment-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.ProseMirror .editor-comment-tag {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.8;
 }
 
 .ProseMirror .editor-comment-delete {
-  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
   border: 0;
-  padding: 0 0.35em;
+  padding: 2px;
   background: none;
   color: inherit;
-  font: inherit;
-  font-size: 14px;
-  line-height: 1;
   cursor: pointer;
-  opacity: 0.55;
-  border-radius: 3px;
+  opacity: 0.7;
+  border-radius: 4px;
 }
 
 .ProseMirror .editor-comment-delete:hover,

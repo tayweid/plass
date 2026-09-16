@@ -17,6 +17,11 @@ import { schema } from './schema';
 
 const type = () => schema.nodes.editor_comment;
 
+const svg = (paths: string) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const ICON_COMMENT = svg('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>');
+const ICON_TRASH = svg('<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>');
+
 /** The note enclosing the selection's head, as (node, position), or null. */
 function enclosingNote(state: EditorState): { node: PMNode; pos: number } | null {
   const { $from } = state.selection;
@@ -41,7 +46,7 @@ export class EditorCommentView implements NodeView {
     this.header.contentEditable = 'false';
     const label = document.createElement('span');
     label.className = 'editor-comment-label';
-    label.textContent = 'Comment';
+    label.innerHTML = `${ICON_COMMENT}<span>Comment</span>`;
     const tag = document.createElement('span');
     tag.className = 'editor-comment-tag';
     tag.textContent = 'Not printed';
@@ -50,7 +55,7 @@ export class EditorCommentView implements NodeView {
     remove.className = 'editor-comment-delete';
     remove.title = 'Delete comment (undo restores it)';
     remove.setAttribute('aria-label', 'Delete comment');
-    remove.textContent = '×';
+    remove.innerHTML = ICON_TRASH;
     remove.addEventListener('mousedown', (e) => e.preventDefault());
     remove.addEventListener('click', () => {
       const pos = getPos();
