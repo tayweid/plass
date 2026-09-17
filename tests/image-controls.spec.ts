@@ -6,11 +6,28 @@ const AXES = '<svg xmlns="http://www.w3.org/2000/svg" width="250" height="165" v
 const SOURCE = `data:image/svg+xml;base64,${Buffer.from(AXES).toString('base64')}`;
 const REPLACEMENT = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#38786d"/></svg>';
 
+/** A file chooser's change event carries no click, so an import into a
+ *  folderless document asks for the folder from a toast. */
+async function chooseFolderIfAsked(page: Page) {
+  await page.locator('.toast-action', { hasText: 'Choose folder' }).click({ timeout: 1500 }).catch(() => {});
+}
+
+const IMPORTED = /^figures\/replacement-.+\.svg$/;
+
+async function readProjectFile(page: Page, path: string) {
+  return page.evaluate(async (path) => {
+    const asset = await (window.__fm as any).readAsset(path);
+    return asset ? new TextDecoder().decode(asset.data) : null;
+  }, path);
+}
+
 async function openImages(page: Page) {
   await page.goto('/?new=1');
   await page.waitForFunction(() => Boolean(window.__fm && window.view));
   await page.evaluate(async (source) => {
     const root = await navigator.storage.getDirectory();
+    // Imports need a project folder; the document's own folder is OPFS.
+    window.showDirectoryPicker = async () => root;
     const h = await root.getFileHandle('images.typ', { create: true });
     const w = await h.createWritable();
     await w.write(`#grid(columns: (1.65fr, 1fr), gutter: 1em, [Question text], [#image("${source}")\n\nNotes below the graph.])\n\n#figure(image("${source}"), caption: [Keep this caption.]) <fig:axes>`);
@@ -20,7 +37,7 @@ async function openImages(page: Page) {
   await settleLocal(page);
 }
 
-test('replace a selected embedded image directly, preserving its grid, notes, kind and attributes', async ({ page }) => {
+test('replacing a fixed image imports the file into the project, preserving its grid, notes, kind and attributes', async ({ page }) => {
   await openImages(page);
   await page.evaluate(() => {
     window.view.state.doc.descendants((node, pos) => {
@@ -33,11 +50,15 @@ test('replace a selected embedded image directly, preserving its grid, notes, ki
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Replace image', exact: true }).click();
   await (await chooser).setFiles({ name: 'replacement.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(REPLACEMENT) });
+  await chooseFolderIfAsked(page);
   await expect.poll(() => page.evaluate(() => {
     let src = '';
     window.view.state.doc.descendants((node) => { if (node.type.name === 'image') src = node.attrs.src; });
     return src;
-  })).not.toBe(SOURCE);
+  })).toMatch(IMPORTED);
+  const imported = await page.evaluate(() => (window.view.state.selection as any).node.attrs.src as string);
+  expect(await readProjectFile(page, imported)).toBe(REPLACEMENT);
+  await expect(cell.locator('.ts-inline-image img')).toHaveJSProperty('naturalWidth', 200);
   await expect(cell.locator('.ts-inline-image')).toHaveCount(1);
   await expect(cell.locator('.ts-figure')).toHaveCount(0);
   await expect(cell.locator('p').last()).toHaveText('Notes below the graph.');
@@ -69,7 +90,8 @@ test('figure replacement retains caption, label, size and position; width contro
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Replace image', exact: true }).click();
   await (await chooser).setFiles({ name: 'replacement.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(REPLACEMENT) });
-  await expect.poll(() => page.evaluate((pos) => window.view.state.doc.nodeAt(pos)?.attrs.src, before.pos)).not.toBe(SOURCE);
+  await chooseFolderIfAsked(page);
+  await expect.poll(() => page.evaluate((pos) => window.view.state.doc.nodeAt(pos)?.attrs.src, before.pos)).toMatch(IMPORTED);
   const after = await page.evaluate((pos) => window.view.state.doc.nodeAt(pos)!.toJSON(), before.pos);
   expect(after).toEqual({ ...before.json, attrs: { ...before.json.attrs, src: after.attrs.src, name: 'replacement.svg' } });
   await expect(figure.locator('figcaption')).toContainText('Keep this caption.');
@@ -90,11 +112,12 @@ test('an open picker follows its original image through edits and ignores a late
   await page.evaluate(() => window.view.dispatch(window.view.state.tr.insertText('Updated ', 4)));
   await page.locator('.ts-figure img').click();
   await picker.setFiles({ name: 'replacement.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(REPLACEMENT) });
+  await chooseFolderIfAsked(page);
   await expect.poll(() => page.evaluate(() => {
     const sources: string[] = [];
     window.view.state.doc.descendants((node) => { if (node.type.name === 'image' || node.type.name === 'figure') sources.push(node.attrs.src); });
     return sources;
-  })).toEqual([`data:image/svg+xml;base64,${Buffer.from(REPLACEMENT).toString('base64')}`, SOURCE]);
+  })).toEqual([expect.stringMatching(IMPORTED), SOURCE]);
   await expect(page.locator('.ts-grid-cell').first()).toHaveText('Updated Question text');
   await expect(page.locator('figcaption')).toContainText('Keep this caption.');
 });
@@ -120,13 +143,10 @@ test('a canceled picker and a deleted target leave remaining document content in
   await expect(page.locator('figcaption')).toContainText('Keep this caption.');
 });
 
-test('saving the embedded SVG attaches its project, links original bytes, and refreshes external edits', async ({ page }) => {
+test('saving a fixed SVG attaches its project, links original bytes, and refreshes external edits', async ({ page }) => {
   await openImages(page);
-  await page.evaluate(() => {
-    window.showDirectoryPicker = async () => navigator.storage.getDirectory();
-  });
   await page.locator('.ts-inline-image img').click();
-  await page.getByRole('button', { name: 'Save SVG to project', exact: true }).click();
+  await page.getByRole('button', { name: 'Save to project', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window.view.state.selection as any).node?.attrs.src)).toMatch(/^figures\/.+\.svg$/);
   const path = await page.evaluate(() => (window.view.state.selection as any).node.attrs.src as string);
   const saved = await page.evaluate(async (path) => {
@@ -150,7 +170,6 @@ test('project replacement references an existing file in place and handles a can
   await openImages(page);
   await page.evaluate(async (replacement) => {
     const root = await navigator.storage.getDirectory();
-    window.showDirectoryPicker = async () => root;
     await (window.__fm as any).attachFolder();
     const handle = await root.getFileHandle('replacement.svg', { create: true });
     const writable = await handle.createWritable();
@@ -168,4 +187,59 @@ test('project replacement references an existing file in place and handles a can
   });
   await page.getByRole('button', { name: 'Replace image', exact: true }).click();
   expect(await page.evaluate(() => window.view.state.doc.toJSON())).toEqual(before);
+});
+
+test('Fix image copies the file into the document; Save to project writes it back out', async ({ page }) => {
+  await openImages(page);
+  await page.evaluate(async (axes) => {
+    await (window.__fm as any).attachFolder();
+    await (window.__fm as any).writeAsset('figures/axes.svg', new Blob([axes], { type: 'image/svg+xml' }));
+    window.view.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'figure') window.view.dispatch(window.view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: 'figures/axes.svg' }));
+    });
+  }, AXES);
+  const figure = page.locator('.ts-figure');
+  await expect(figure.locator('img')).toHaveJSProperty('naturalWidth', 250);
+  await figure.locator('img').click();
+  await expect(page.locator('.image-toolbar-source')).toContainText('figures/axes.svg');
+  await expect(page.getByRole('button', { name: 'Save to project', exact: true })).toBeHidden();
+  await page.getByRole('button', { name: 'Fix image', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window.view.state.selection as any).node?.attrs.src)).toBe(SOURCE);
+  await expect(figure.locator('.fig-path-chip')).toHaveText('fixed');
+  await expect(page.locator('.image-toolbar-source')).toContainText('Fixed in the document');
+  await expect(page.getByRole('button', { name: 'Fix image', exact: true })).toBeHidden();
+  // A fixed image no longer follows the file.
+  await page.evaluate(async (replacement) => {
+    await (window.__fm as any).writeAsset('figures/axes.svg', new Blob([replacement], { type: 'image/svg+xml' }));
+    window.dispatchEvent(new Event('focus'));
+  }, REPLACEMENT);
+  await page.waitForTimeout(400);
+  await expect(figure.locator('img')).toHaveJSProperty('naturalWidth', 250);
+  await page.getByRole('button', { name: 'Save to project', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window.view.state.selection as any).node?.attrs.src)).toMatch(/^figures\/.+\.svg$/);
+  const path = await page.evaluate(() => (window.view.state.selection as any).node.attrs.src as string);
+  expect(await readProjectFile(page, path)).toBe(AXES);
+  await page.keyboard.press('ControlOrMeta+z');
+  expect(await page.evaluate(() => (window.view.state.selection as any).node.attrs.src)).toBe(SOURCE);
+});
+
+test('a pasted image into a folderless document is imported once a folder is chosen', async ({ page }) => {
+  await openImages(page);
+  await page.locator('figcaption').click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await page.evaluate((replacement) => {
+    const data = new DataTransfer();
+    data.items.add(new File([replacement], 'pasted.svg', { type: 'image/svg+xml' }));
+    window.view.dom.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  }, REPLACEMENT);
+  await chooseFolderIfAsked(page);
+  await expect.poll(() => page.evaluate(() => {
+    const sources: string[] = [];
+    window.view.state.doc.descendants((node) => { if (node.type.name === 'figure') sources.push(node.attrs.src); });
+    return sources;
+  })).toEqual(expect.arrayContaining([SOURCE, expect.stringMatching(/^figures\/pasted-.+\.svg$/)]));
+  expect(await page.evaluate(() => (window.__fm as any).inFolder)).toBe(true);
+  await expect(page.locator('.ts-figure')).toHaveCount(2);
+  await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('.ts-figure img')].map((img) => (img as HTMLImageElement).naturalWidth))).toContain(200);
 });

@@ -28,7 +28,8 @@ export interface FileHooks {
   /** Toast with a click action. */
   messageAction?: (text: string, action: { label: string; run: () => void }) => void;
   /** The current document just became a fresh project (folder adopted,
-   *  document kept) — migrate embedded figures etc. */
+   *  document kept). Images fixed in the document stay fixed: importing
+   *  happens when an image is inserted, not here. */
   onProjectKept?: () => void;
   /** Whether boot restored this tab's own crash/reload session. */
   hasSessionDoc?: () => boolean;

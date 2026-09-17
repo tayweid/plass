@@ -22,6 +22,7 @@ import './table-controls.css';
 import './editor-comments.css';
 import { equationsPlugin } from './equations';
 import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
+import { fitStandaloneWindowToPage } from './pwa-window';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { TypstInlineView } from './inline-raw';
@@ -169,6 +170,8 @@ function syncToolbarInset() {
 }
 window.addEventListener('resize', syncToolbarInset);
 requestAnimationFrame(syncToolbarInset);
+// An installed app's window is the page's width, no wider (pwa-window.ts).
+if (standalone) fitStandaloneWindowToPage(document.getElementById('stack')!, scrollEl);
 const hudEl = document.getElementById('hud')!;
 const toastEl = document.getElementById('toast')!;
 const stackEl = document.getElementById('stack')!;
@@ -393,7 +396,6 @@ const fileManager = new FileManager({
   },
   message: showMessage,
   messageAction: showMessage,
-  onProjectKept: () => void migrateEmbeddedFigures(view),
   hasSessionDoc: () => restoredSessionDoc,
 });
 
