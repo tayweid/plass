@@ -37,10 +37,18 @@ async function openTyp(page: Page, text: string) {
       await w.write(text);
       await w.close();
       await window.__fm.loadHandle(h);
+      // Inserted images are imported into a project folder: OPFS here.
+      window.showDirectoryPicker = async () => root;
     },
     { text },
   );
   await settleLocal(page);
+}
+
+/** A file chooser's change event carries no click, so importing into a
+ *  folderless document asks for the folder from a toast. */
+async function chooseFolderIfAsked(page: Page) {
+  await page.locator('.toast-action', { hasText: 'Choose folder' }).click({ timeout: 1500 }).catch(() => {});
 }
 
 test('insert a grid from the toolbar, tab between cells, set the split from the bar', async ({ page }) => {
@@ -137,6 +145,7 @@ test('adding a row focuses it and its cells accept figures and caption-following
     mimeType: 'image/svg+xml',
     buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><rect width="120" height="60" fill="#38786d"/></svg>'),
   });
+  await chooseFolderIfAsked(page);
   await expect(rightCell.locator('.ts-figure')).toHaveCount(1);
   await expect(rightCell).not.toHaveAttribute('data-grid-empty');
   await page.keyboard.type('A caption');
@@ -176,6 +185,7 @@ test('an imported inline image explains how to add text below it in the same gri
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Figure in cell', exact: true }).click();
   await (await chooser).setFiles({ name: 'replacement.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(svg, 'base64') });
+  await chooseFolderIfAsked(page);
   await expect(rightCell.locator('.ts-figure')).toHaveCount(1);
   await expect(rightCell.locator('.ts-inline-image')).toHaveCount(0);
   await expect(rightCell.locator(':scope > *')).toHaveCount(2);
