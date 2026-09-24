@@ -36,6 +36,12 @@ let importBib: { name: string; content: string } | null = null;
 let importBibKeys = new Set<string>();
 let preserveImportBibLine = false;
 
+// Plass's own inline math, `#mi(`…`)`, can open a line: a paragraph (or a
+// wrapped line of one) that starts with math is exported that way. It is
+// prose, not an unknown directive, so it must not end a paragraph or become
+// a raw island.
+const INLINE_MATH_START = /^#mi\(`/;
+
 const BIB_LINE = /^#bibliography\(bytes\((".*")\)(?:,\s*title:\s*"[^"]*")?(?:,\s*style:\s*"([^"]*)")?\)$/;
 
 export function typToDoc(src: string): TypImport {
@@ -771,7 +777,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     }
 
     // unknown directive / scripting: preserve verbatim as a raw island
-    if (t.startsWith('#')) {
+    if (t.startsWith('#') && !INLINE_MATH_START.test(t)) {
       const body: string[] = [lines[i++]];
       // A call whose parentheses span lines (#grid(…) with a blank line
       // inside a cell) is one island to its closing paren; the blank-line
@@ -795,7 +801,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     const para: string[] = [];
     while (i < n) {
       const pt = lines[i].trim();
-      if (!pt || /^(```|={1,6} |[-+] |#)/.test(pt) || pt === TYP_COMMENT_OPEN) break;
+      if (!pt || (/^(```|={1,6} |[-+] |#)/.test(pt) && !INLINE_MATH_START.test(pt)) || pt === TYP_COMMENT_OPEN) break;
       para.push(lines[i++]);
     }
     out.push(schema.nodes.paragraph.create(null, parseParagraph(para)));

@@ -685,6 +685,27 @@ function firstDiff(a: string, b: string): string {
   check('an unported style falls back to the default', unknown.attrs.settings.citationStyle === 'ieee', JSON.stringify(unknown.attrs.settings.citationStyle));
 }
 
+// --- 19b. a paragraph that starts with inline math is prose, not an island ---
+{
+  // Export writes `$P^*$: …` as `#mi(`P^*`): …`; import must read it back.
+  const src = 'Intro.\n\n$P^*$: \\_\\_\\_\n\nPrice is\n$Delta$ now.\n\n#grid(\n  columns: (1fr, 1fr),\n  gutter: 1em,\n  [\n    $Q^*$: \\_\\_\\_\n  ],\n  [\n    b\n  ],\n)\n';
+  const once = docToTyp(typToDoc(src).doc);
+  check('leading math exports as #mi', once.includes('#mi(`P^*`): \\_\\_\\_'), once);
+  const { doc, warnings } = typToDoc(once);
+  check('leading #mi imports without warnings', warnings.length === 0, warnings.join('; '));
+  const kinds: string[] = [];
+  doc.forEach((n) => kinds.push(n.type.name + (n.attrs.params === 'typst-raw' ? ':raw' : '')));
+  check('leading #mi stays a paragraph', JSON.stringify(kinds) === JSON.stringify(['paragraph', 'paragraph', 'paragraph', 'grid']), JSON.stringify(kinds));
+  let math = 0;
+  doc.child(1).forEach((n) => { if (n.type.name === 'math_inline') math++; });
+  check('leading #mi is inline math', math === 1, JSON.stringify(doc.child(1).toJSON()));
+  check('a wrapped line starting with #mi joins its paragraph', doc.child(2).textContent.startsWith('Price is'), JSON.stringify(doc.child(2).toJSON()));
+  const twice = docToTyp(doc);
+  check('leading math round-trip is idempotent', once === twice, firstDiff(once, twice));
+  const other = typToDoc('#let x = 1\n');
+  check('other # lines are still islands', other.doc.firstChild!.attrs.params === 'typst-raw' && other.warnings.length === 1, other.warnings.join('; '));
+}
+
 // --- 20. raw islands: a multi-line call survives a blank line inside it ---
 {
   // A grid in the rail's form is native (grid-editor.ts): fraction or
