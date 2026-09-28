@@ -35,6 +35,19 @@ export default defineConfig({
       testMatch: /fallback\.spec\.ts/,
       use: { browserName: 'webkit' },
     },
+    // Plass.app's engine: the whole suite in WebKit with the app's file path
+    // (tests/fixture.ts stands in for the Swift shell). macOS only — Linux
+    // WebKit is another build with other font rendering, so parity there
+    // would say nothing about the app. The no-filesystem fallback is not
+    // the app's; webkit-fallback covers it.
+    ...(process.platform === 'darwin'
+      ? [{
+          name: 'webkit-app',
+          // A project's testIgnore replaces the top-level one: repeat the audit rule.
+          testIgnore: process.env.PLASS_AUDIT ? [/fallback\.spec\.ts/] : [/fallback\.spec\.ts/, /port-audit\.spec\.ts/],
+          use: { browserName: 'webkit' as const },
+        }]
+      : []),
   ],
   webServer: {
     command: 'npm run dev -- --host 127.0.0.1',

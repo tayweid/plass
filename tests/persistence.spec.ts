@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 
 test('autosave pauses instead of overwriting an externally changed file', async ({ page }) => {
   await page.goto('/?new=1');

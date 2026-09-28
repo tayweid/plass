@@ -1,4 +1,4 @@
-import { expect, test, type Page } from 'playwright/test';
+import { expect, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 declare global {
@@ -103,7 +103,9 @@ test('a late sidecar automatically replaces cached fallback layouts without a do
     await page.goto('/?new=1', { waitUntil: 'domcontentloaded' });
     const before = await insertStartupParagraph(page);
     await sidecar.requested;
-    await page.evaluate(() => document.fonts.ready);
+    // Not fonts.ready: WebKit holds that until the page finishes loading,
+    // and this test is holding the page's sidecar back.
+    await page.waitForFunction(() => document.fonts.status === 'loaded');
     await settleLocal(page);
     expect(await page.evaluate(() => window.__shapedWidthPt('Ready'))).toBeNull();
     expect(await page.evaluate(() => window.__blockAuthority(0)?.authority)).toBe('fallback');

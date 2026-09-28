@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 
 test('manifest has a stable install identity and reachable icons', async ({ request }) => {
   const response = await request.get('/manifest.webmanifest');

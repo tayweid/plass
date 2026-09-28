@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 import { settleLocal as waitSettled } from './settle';
 
 // PAGE-PORT Phase 3: sticky blocks (Typst's `Distributor::frame` snapshot /

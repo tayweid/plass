@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 
 declare global {
   interface Window {
@@ -17,7 +17,7 @@ declare global {
   }
 }
 
-test('exact live paragraph remains unchanged when layout settles', async ({ page }) => {
+test('exact live paragraph remains unchanged when layout settles', async ({ page, browserName }) => {
   await page.goto('/?new=1');
   const text =
     'The Knuth-Plass algorithm is based on the idea of cost. A line which has a very tight or ' +
@@ -53,8 +53,11 @@ test('exact live paragraph remains unchanged when layout settles', async ({ page
   expect(await paragraph.textContent()).toBe('Swiftly, ' + text);
 
   const perf = await page.evaluate(() => window.__layoutPerf());
-  expect(perf.live?.totalMs).toBeGreaterThan(0);
-  expect(perf.settle?.totalMs).toBeGreaterThan(0);
+  // WebKit's clock is coarse (whole milliseconds without cross-origin
+  // isolation): a one-paragraph pass can honestly measure 0.
+  const floor = browserName === 'webkit' ? -1 : 0;
+  expect(perf.live?.totalMs).toBeGreaterThan(floor);
+  expect(perf.settle?.totalMs).toBeGreaterThan(floor);
   expect(perf.settle?.paragraphs).toBe(1);
 });
 

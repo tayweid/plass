@@ -1,4 +1,4 @@
-import { test } from 'playwright/test';
+import { test } from './fixture';
 
 declare global {
   interface Window {

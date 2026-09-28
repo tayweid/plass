@@ -1,4 +1,4 @@
-import { expect, test, type Page } from 'playwright/test';
+import { expect, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // Page chrome: the running header and footer, the automatic page number

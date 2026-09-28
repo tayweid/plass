@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 
 test('document CSP blocks inline code, eval, and direct remote images', async ({ page }) => {
   let remoteRequests = 0;

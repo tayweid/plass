@@ -1,4 +1,4 @@
-import { expect, test, type Page } from 'playwright/test';
+import { expect, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // Editorial comments (editor-comments.ts): notes between blocks that the

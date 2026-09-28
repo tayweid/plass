@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 import { settleLocal } from './settle';
 
 // SOURCE-VIEW.md step 0, decision 6: the page machinery sleeps while the

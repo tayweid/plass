@@ -1,4 +1,4 @@
-import { expect, test, type Page } from 'playwright/test';
+import { expect, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // The grid rail: rows × fraction columns of any block content, rows

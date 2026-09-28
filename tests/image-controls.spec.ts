@@ -1,4 +1,4 @@
-import { expect, test, type Page } from 'playwright/test';
+import { expect, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // The embedded axes from Checkpoint_A_1, reduced to its containing grid.

@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 import { settleLocal } from './settle';
 
 test('auto columns follow late math ink and stop scheduling once its advance is stable', async ({ page }) => {

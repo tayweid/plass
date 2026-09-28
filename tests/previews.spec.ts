@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 
 // Raw islands and oracle batches share the serialized Typst worker. Native
 // tables stay directly editable and must never recreate the deleted per-table

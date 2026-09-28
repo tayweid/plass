@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 
 // PDF export lands next to the document, not in ~/Downloads. The Origin
 // Private File System stands in for a granted project folder: it is a real

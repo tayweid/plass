@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 import { settleLocal } from './settle';
 
 // SOURCE-VIEW.md: the source view is a second editor for the same rails.

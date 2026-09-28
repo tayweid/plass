@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { expect, test, type Page } from 'playwright/test';
+import { expect, test, type Page } from './fixture';
 
 // The port audit: Plass has one renderer (the ported line breaker and the
 // local paginator); Typst is the printer. This spec is how the two are kept

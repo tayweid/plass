@@ -265,17 +265,19 @@ export function takeLaunchFile(): FileSystemFileHandle | null {
 
 function install(): void {
   if (!isNativeShell()) return;
-  window.showOpenFilePicker = async (opts = {}) => {
+  // WebKit has no pickers of its own, so one already present is a test's
+  // stub standing in for the panel; keep it.
+  window.showOpenFilePicker ??= async (opts = {}) => {
     const reply = await call({ type: 'openPanel', extensions: extensions(opts.types), multiple: !!opts.multiple, ...startIn(opts.startIn) });
     if (reply.cancelled) throw aborted();
     return (reply.paths as string[]).map((p) => new NativeFileHandle(p)) as unknown as FileSystemFileHandle[];
   };
-  window.showSaveFilePicker = async (opts = {}) => {
+  window.showSaveFilePicker ??= async (opts = {}) => {
     const reply = await call({ type: 'savePanel', suggestedName: opts.suggestedName ?? '', ...startIn(opts.startIn) });
     if (reply.cancelled) throw aborted();
     return new NativeFileHandle(reply.path as string) as unknown as FileSystemFileHandle;
   };
-  window.showDirectoryPicker = async (opts = {}) => {
+  window.showDirectoryPicker ??= async (opts = {}) => {
     const reply = await call({ type: 'folderPanel', ...startIn(opts.startIn) });
     if (reply.cancelled) throw aborted();
     return new NativeDirectoryHandle(reply.path as string) as unknown as FileSystemDirectoryHandle;
