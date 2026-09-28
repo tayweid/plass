@@ -568,6 +568,21 @@ body {
   pointer-events: auto;
 }
 
+#toast.actionable:not([hidden]) {
+  display: flex;
+  align-items: center;
+}
+
+#toast .toast-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#toast .toast-action {
+  flex: none;
+}
+
 /* ---------- file menu ---------- */
 
 .file-menu {

@@ -285,6 +285,9 @@ export async function exportPdf(
   baseName: string,
   onMsg: (m: string) => void,
   sink: ExportSink = downloadSink,
+  // A failure must outlast the ordinary 3.5 s toast: the export can run a
+  // minute before failing, long after the writer stopped watching.
+  onFail: (m: string) => void = onMsg,
 ): Promise<void> {
   // Export is an explicit user action, so it may make one fresh attempt after
   // a background timeout. Another timeout reopens the circuit immediately.
@@ -321,6 +324,6 @@ export async function exportPdf(
     );
   } catch (e) {
     console.error('PDF export failed', e);
-    onMsg(`PDF export failed: ${e instanceof Error ? e.message : String(e)}`);
+    onFail(`PDF export failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 }

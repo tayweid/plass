@@ -619,11 +619,18 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     divider(menu.element);
   };
   heading(exports.element, 'Export');
-  item(exports.element, 'PDF', () => {
+  const exportPdfNow = () => {
     void import('./pdf').then(({ exportPdf }) =>
-      exportPdf(fm.currentDoc(), fm.name, (m) => fm.notify(m), (name, blob) => fm.saveBeside(name, blob)),
+      exportPdf(
+        fm.currentDoc(),
+        fm.name,
+        (m) => fm.notify(m),
+        (name, blob) => fm.saveBeside(name, blob),
+        (m) => fm.notifyAction(m, { label: 'Try again', run: exportPdfNow }),
+      ),
     );
-  }, { title: 'Export PDF via Typst' });
+  };
+  item(exports.element, 'PDF', exportPdfNow, { title: 'Export PDF via Typst' });
   item(exports.element, 'Typst (.typ)', () => void fm.exportCopy(), { title: 'Export a .typ copy' });
   item(exports.element, 'LaTeX (.tex)', () => fm.exportTexCopy(), { title: 'Export a .tex copy (vanilla LaTeX for journals)' });
   back(recent);

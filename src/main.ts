@@ -532,7 +532,14 @@ function refreshMathNodes() {
 
 let messageTimer = 0;
 function showMessage(text: string, action?: { label: string; run: () => void }) {
-  toastEl.textContent = text;
+  toastEl.textContent = '';
+  toastEl.title = text;
+  // The text truncates inside its own span so a long message never pushes
+  // the action button out of the pill.
+  const textEl = document.createElement('span');
+  textEl.className = 'toast-text';
+  textEl.textContent = text;
+  toastEl.appendChild(textEl);
   toastEl.classList.toggle('actionable', !!action);
   if (action) {
     const btn = document.createElement('button');
