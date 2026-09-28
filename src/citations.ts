@@ -87,7 +87,12 @@ async function verifyCitations(view: EditorView): Promise<void> {
     keys.map((k, i) => `K${i}Q #cite(<${k}>) ZZ\n\n`).join('') +
     `#place(hide[#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "${s.citationStyle}")])\n`;
   const svg = await compileSvg(src);
-  if (!svg || view.state !== state) return;
+  // Only a document change (text, bibliography, style — all in the doc)
+  // makes the answer stale. Comparing whole states also threw it away for
+  // meta-only transactions (a layout measurement landing mid-compile), and
+  // nothing re-runs the check until the References source changes, so under
+  // WebKit's timing it never ran at all.
+  if (!svg || view.state.doc !== state.doc) return;
   oracleRuns++;
   let changed = false;
   for (const line of extractLines(svg, 2)) {
