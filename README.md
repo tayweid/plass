@@ -52,7 +52,10 @@ Nothing else needs installing. `.typ` and `.md` files list Plass under
 **Open With**; choose it in a file's **Get Info** to make it the default.
 
 To build it yourself from a checkout (needs Apple's Command Line Tools and
-Node 22): `npm ci`, then `app/build.sh /Applications/Plass.app`.
+Node 22): `npm ci`, then `app/build.sh`, which installs your build in
+Applications. `app/build.sh --release` rewrites the committed
+`app/Plass.app.zip` that the install line downloads; commit that only when
+publishing an app update, since every committed copy stays in git history.
 
 ## Run it
 
