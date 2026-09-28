@@ -3,15 +3,16 @@
 //   node app/externalize.mjs <web root inside the bundle>
 //
 // The Typst compiler (27 MB) and the compile fonts (.otf/.ttf, ~8 MB) are
-// removed from the bundle and listed in runtime.json beside it. The app
-// fetches them on first launch (app/Sources/main.swift, Runtime) and keeps
-// them in ~/Library/Application Support/Plass/runtime/<sha256>. Every
-// source is immutable, so an old zip can still finish its first launch
-// after the site moves on:
+// removed from the bundle and listed in runtime.json beside it. The install
+// line fetches them (`Plass --fetch-runtime`; the app's setup window when
+// they are still missing at launch) and keeps them in
+// ~/Library/Application Support/Plass/runtime/<sha256>. Sources:
 //   - the compiler: its exact npm release tarball, checked against the
 //     integrity package-lock.json records;
-//   - a font: raw.githubusercontent.com at the commit that last changed it.
-// Each file is also checked against the sha256 of the bytes built here.
+//   - a font: raw.githubusercontent.com on main, which is where the zip is
+//     published too, so an install gets matching copies of both.
+// Each file is also checked against the sha256 of the bytes built here: a
+// font changed on main without a rebuilt zip fails the install, visibly.
 //
 // The files are copied into the runtime store on this Mac as well, so a
 // local build never needs the network.
@@ -61,13 +62,11 @@ entries.push({
 // The compile fonts: public/fonts, copied verbatim. The small .woff2 faces
 // the page paints with stay in the bundle.
 if (git('status', '--porcelain', '--', 'public/fonts')) {
-  die('public/fonts has uncommitted changes — commit them first: the app fetches fonts from GitHub by commit');
+  die('public/fonts has uncommitted changes — commit them first: installs fetch the fonts from GitHub');
 }
 for (const name of readdirSync(join(web, 'fonts')).sort()) {
   if (!/\.(otf|ttf)$/i.test(name)) continue;
-  const commit = git('log', '-1', '--format=%H', '--', `public/fonts/${name}`);
-  if (!commit) die(`public/fonts/${name} is not committed`);
-  entries.push({ path: `fonts/${name}`, source: { kind: 'url', url: `${GITHUB}/${commit}/public/fonts/${encodeURIComponent(name)}` } });
+  entries.push({ path: `fonts/${name}`, source: { kind: 'url', url: `${GITHUB}/main/public/fonts/${encodeURIComponent(name)}` } });
 }
 
 mkdirSync(store, { recursive: true });
