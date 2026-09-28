@@ -33,11 +33,23 @@ type Listener = () => void;
  * is not Typst's; the node view marks it (see MathView). */
 export type InkStatus = 'ready' | 'pending' | 'failed' | 'deferred' | 'absent';
 
+interface QueueItem {
+  key: string;
+  src: string;
+  display: boolean;
+  sizePt: number;
+  macros: string;
+  bold: boolean;
+}
+
 interface Deferred {
   deferred: true;
   /** The circuit epoch the attempt ran in; a later epoch may retry. */
   epoch: number;
   reason: string;
+  /** The compiler could not be loaded: any later successful compile shows
+   * it can be now, and the formula is asked for again at once. */
+  unavailable: QueueItem | null;
 }
 
 const cache = new Map<string, MathInk | 'pending' | 'failed' | Deferred>();
@@ -48,7 +60,7 @@ let deferredCount = 0;
 const ownTimeouts = new Map<string, number>();
 const MAX_OWN_TIMEOUTS = 2;
 const listeners = new Set<Listener>();
-let queue: Array<{ key: string; src: string; display: boolean; sizePt: number; macros: string; bold: boolean }> = [];
+let queue: QueueItem[] = [];
 let timer = 0;
 let inflight = false;
 
@@ -160,11 +172,13 @@ async function flush() {
     const { COMPILER_DEADLINES } = await import('./typst-worker-protocol');
     const run = <T extends string | unknown[] | null>(task: Parameters<typeof runCompilerTask>[0]) =>
       runCompilerTask<T>(task, { timeoutMs: COMPILER_DEADLINES.previewMs });
+    let compiled = false;
     for (const item of batch) {
       const epoch = compilerCircuitEpoch();
       try {
         const ink = await compileOne(item, run);
         setEntry(item.key, ink ?? 'failed');
+        compiled = true;
       } catch (error) {
         // Only a verdict on the formula itself is terminal. A compiler that
         // could not run (timeout, paused circuit, full queue, crash) says
@@ -176,8 +190,24 @@ async function flush() {
         if (!terminal) console.warn('math ink deferred', error);
         setEntry(
           item.key,
-          terminal ? 'failed' : { deferred: true, epoch, reason: error instanceof Error ? error.message : String(error) },
+          terminal
+            ? 'failed'
+            : {
+                deferred: true,
+                epoch,
+                reason: error instanceof Error ? error.message : String(error),
+                unavailable: code === 'unavailable' ? item : null,
+              },
         );
+      }
+    }
+    // The compiler ran: formulas that were refused only because it could
+    // not be loaded need no edit to try again.
+    if (compiled && deferredCount > 0) {
+      for (const [key, v] of cache) {
+        if (!isDeferred(v) || !v.unavailable) continue;
+        setEntry(key, 'pending');
+        queue.push(v.unavailable);
       }
     }
     if (cache.size > 2000) {

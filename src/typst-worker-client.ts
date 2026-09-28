@@ -11,6 +11,7 @@ import {
   openCompilerCircuit,
 } from './compiler-circuit';
 import {
+  COMPILER_DEADLINES,
   COMPILER_LIMITS,
   compilerTaskBytes,
   type CompilerRequest,
@@ -21,7 +22,15 @@ import {
 
 export class CompilerWorkerError extends Error {
   constructor(
-    public readonly code: 'invalid' | 'compile' | 'output-limit' | 'timeout' | 'crash' | 'queue-limit' | 'circuit-open',
+    public readonly code:
+      | 'invalid'
+      | 'compile'
+      | 'output-limit'
+      | 'unavailable'
+      | 'timeout'
+      | 'crash'
+      | 'queue-limit'
+      | 'circuit-open',
     message: string,
   ) {
     super(message);
@@ -108,6 +117,39 @@ function rejectCurrent(code: 'timeout' | 'crash', message: string) {
   queueMicrotask(pump);
 }
 
+/** The compiler could not be loaded (the worker said so, or loading ran
+ * past its own deadline). Nothing about the document is implicated, so the
+ * circuit stays closed; but every queued task would hit the same wall, so
+ * they fail now instead of each reloading in turn. Callers retry on their
+ * own boundary (math ink: the next edit). */
+function failUnavailable(request: QueuedRequest<unknown>, message: string) {
+  window.clearTimeout(timeoutId);
+  timeoutId = 0;
+  worker?.terminate();
+  worker = null;
+  current = null;
+  request.reject(new CompilerWorkerError('unavailable', message));
+  for (const queued of drainQueue()) queued.reject(new CompilerWorkerError('unavailable', message));
+}
+
+/** Arm the current request's watchdog. `loading` bounds the compiler's
+ * download and instantiation; otherwise it is the task's own deadline,
+ * which then starts from the moment Typst can actually run it. */
+function armDeadline(request: QueuedRequest<unknown>, loading: boolean) {
+  window.clearTimeout(timeoutId);
+  const ms = loading ? COMPILER_DEADLINES.loadMs : request.timeoutMs;
+  timeoutId = window.setTimeout(() => {
+    // A response could have won the event-loop race after this callback was
+    // queued. Never let an old deadline terminate the next request.
+    if (current !== request) return;
+    if (loading) {
+      failUnavailable(request, `The Typst compiler did not finish loading in ${(ms / 1000).toFixed(0)} seconds`);
+      return;
+    }
+    rejectCurrent('timeout', `Typst compilation exceeded ${(ms / 1000).toFixed(0)} seconds and was stopped`);
+  }, ms);
+}
+
 function handleResponse(source: Worker, response: CompilerResponse) {
   // Terminated workers can still have already-queued events. They must never
   // be allowed to reject a request running in the replacement worker.
@@ -117,7 +159,23 @@ function handleResponse(source: Worker, response: CompilerResponse) {
     rejectCurrent('crash', 'Compiler worker returned an unexpected response');
     return;
   }
+  if ('phase' in response) {
+    armDeadline(request, response.phase === 'loading');
+    if (response.phase === 'loading') {
+      try {
+        request.onMessage('Loading Typst compiler…');
+      } catch (error) {
+        console.warn('Compiler status callback failed', error);
+      }
+    }
+    return;
+  }
   window.clearTimeout(timeoutId);
+  if (!response.ok && response.code === 'unavailable') {
+    failUnavailable(request, response.message);
+    queueMicrotask(pump);
+    return;
+  }
   current = null;
   if (response.ok) request.resolve(response.value);
   else {
@@ -132,13 +190,8 @@ function handleResponse(source: Worker, response: CompilerResponse) {
   else scheduleIdleTermination();
 }
 
-function ensureWorker(onMessage: (message: string) => void): Worker {
+function ensureWorker(): Worker {
   if (worker) return worker;
-  try {
-    onMessage('Loading Typst compiler…');
-  } catch (error) {
-    console.warn('Compiler status callback failed', error);
-  }
   const instance = new CompilerWorker();
   workersCreated++;
   instance.onmessage = (event: MessageEvent<CompilerResponse>) => handleResponse(instance, event.data);
@@ -162,17 +215,12 @@ function pump() {
   current = request;
   let instance: Worker;
   try {
-    instance = ensureWorker(request.onMessage);
+    instance = ensureWorker();
   } catch {
     rejectCurrent('crash', 'Could not start the Typst compiler worker');
     return;
   }
-  timeoutId = window.setTimeout(() => {
-    // A response could have won the event-loop race after this callback was
-    // queued. Never let an old deadline terminate the next request.
-    if (current !== request) return;
-    rejectCurrent('timeout', `Typst compilation exceeded ${(request.timeoutMs / 1000).toFixed(0)} seconds and was stopped`);
-  }, request.timeoutMs);
+  armDeadline(request, false);
   const message: CompilerRequest = { id: request.id, task: request.task };
   try {
     instance.postMessage(message);
