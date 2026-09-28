@@ -13,8 +13,11 @@
 //                   result is printed to stdout and the app quits. The
 //                   body runs as an async function with `args` in scope.
 //   PLASS_ARGS      JSON handed to the self-test as `args`
+//   PLASS_SELFTEST_OUT  write the self-test result to this file instead
+//   PLASS_GRANT     a path granted at launch, as if chosen in a panel
 
 import AppKit
+import UniformTypeIdentifiers
 import WebKit
 
 let environment = ProcessInfo.processInfo.environment
@@ -124,15 +127,212 @@ final class AppSchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
 }
 
+// MARK: - Files on the page's behalf
+
+/// Paths the writer handed to Plass: files and folders chosen in a panel or
+/// opened from Finder. The page may read and write inside these and nowhere
+/// else. Kept across launches, so recents and a window's own file reopen
+/// without asking again (as Chrome's persisted permissions do).
+enum Grants {
+    private static let url = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/Plass/grants.json")
+    private static let limit = 400
+    private static var roots: [String] = {
+        guard let data = try? Data(contentsOf: url),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [String]
+        else { return [] }
+        return list
+    }()
+
+    /// Fold "." and ".." and nothing else. Foundation's standardizing also
+    /// drops a leading /private — but only for paths that exist, so a new
+    /// file and its granted folder would come out spelled differently.
+    static func normalize(_ path: String) -> String {
+        var parts: [Substring] = []
+        for part in path.split(separator: "/") {
+            if part == "." { continue }
+            if part == ".." { _ = parts.popLast(); continue }
+            parts.append(part)
+        }
+        return "/" + parts.joined(separator: "/")
+    }
+
+    static func add(_ path: String) {
+        let path = normalize(path)
+        roots.removeAll { $0 == path }
+        roots.insert(path, at: 0)
+        if roots.count > limit { roots.removeLast(roots.count - limit) }
+        save()
+    }
+
+    static func replace(_ old: String, with new: String) {
+        let old = normalize(old)
+        guard roots.contains(old) else { return }
+        roots = roots.map { $0 == old ? normalize(new) : $0 }
+        save()
+    }
+
+    static func allows(_ path: String) -> Bool {
+        let path = normalize(path)
+        return roots.contains { path == $0 || path.hasPrefix($0 == "/" ? "/" : $0 + "/") }
+    }
+
+    private static func save() {
+        guard let data = try? JSONSerialization.data(withJSONObject: roots) else { return }
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+    }
+}
+
+/// One reply per request. Failures carry a DOMException name, which the
+/// page rethrows as-is: the file manager tells a vanished file
+/// (NotFoundError) from other failures by it.
+enum FileOps {
+    static let maxReadBytes = 256 * 1024 * 1024
+
+    typealias Reply = [String: Any]
+
+    static func failure(_ name: String, _ message: String) -> Reply {
+        ["error": ["name": name, "message": message]]
+    }
+
+    private static func modified(_ path: String) -> Int {
+        let date = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        return Int((date ?? Date()).timeIntervalSince1970 * 1000)
+    }
+
+    private static func granted(_ value: Any?) -> (String?, Reply?) {
+        guard let raw = value as? String, raw.hasPrefix("/") else {
+            return (nil, failure("TypeError", "path must be absolute"))
+        }
+        let path = Grants.normalize(raw)
+        guard Grants.allows(path) else {
+            return (nil, failure("NotAllowedError", "Plass was not given access to \((path as NSString).lastPathComponent)"))
+        }
+        return (path, nil)
+    }
+
+    private static func kind(_ path: String) -> String? {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else { return nil }
+        return isDirectory.boolValue ? "directory" : "file"
+    }
+
+    static func permission(_ body: [String: Any]) -> Reply {
+        guard let raw = body["path"] as? String else { return ["granted": false] }
+        return ["granted": Grants.allows(raw)]
+    }
+
+    static func stat(_ body: [String: Any]) -> Reply {
+        let (path, problem) = granted(body["path"])
+        guard let path = path else { return problem! }
+        guard let kind = kind(path) else {
+            return failure("NotFoundError", "\((path as NSString).lastPathComponent) was not found")
+        }
+        let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int ?? 0
+        return ["kind": kind, "size": size, "modified": modified(path)]
+    }
+
+    static func read(_ body: [String: Any]) -> Reply {
+        let (path, problem) = granted(body["path"])
+        guard let path = path else { return problem! }
+        let name = (path as NSString).lastPathComponent
+        guard kind(path) == "file" else { return failure("NotFoundError", "\(name) was not found") }
+        guard let data = FileManager.default.contents(atPath: path) else {
+            return failure("NotReadableError", "\(name) could not be read")
+        }
+        if data.count > maxReadBytes { return failure("NotReadableError", "\(name) is too large") }
+        return ["data": data.base64EncodedString(), "size": data.count, "modified": modified(path)]
+    }
+
+    static func write(_ body: [String: Any]) -> Reply {
+        let (path, problem) = granted(body["path"])
+        guard let path = path else { return problem! }
+        let name = (path as NSString).lastPathComponent
+        guard let encoded = body["data"] as? String, let data = Data(base64Encoded: encoded) else {
+            return failure("TypeError", "data must be base64")
+        }
+        if kind(path) == "directory" { return failure("TypeMismatchError", "\(name) is a folder") }
+        guard kind((path as NSString).deletingLastPathComponent) == "directory" else {
+            return failure("NotFoundError", "the folder holding \(name) was not found")
+        }
+        do {
+            // .atomic stages beside the destination and renames into place.
+            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        } catch {
+            return failure("NoModificationAllowedError", "\(name) could not be saved: \(error.localizedDescription)")
+        }
+        return ["size": data.count, "modified": modified(path)]
+    }
+
+    /// A folder's child by name (getFileHandle / getDirectoryHandle).
+    static func child(_ body: [String: Any]) -> Reply {
+        let (path, problem) = granted(body["path"])
+        guard let path = path else { return problem! }
+        let name = (path as NSString).lastPathComponent
+        let wanted = body["kind"] as? String == "directory" ? "directory" : "file"
+        if let existing = kind(path) {
+            return existing == wanted ? ["path": path] : failure("TypeMismatchError", "\(name) is not a \(wanted)")
+        }
+        guard body["create"] as? Bool == true else { return failure("NotFoundError", "\(name) was not found") }
+        do {
+            if wanted == "directory" {
+                try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
+            } else if !FileManager.default.createFile(atPath: path, contents: Data()) {
+                return failure("NoModificationAllowedError", "\(name) could not be created")
+            }
+        } catch {
+            return failure("NoModificationAllowedError", "\(name) could not be created: \(error.localizedDescription)")
+        }
+        return ["path": path]
+    }
+
+    static func list(_ body: [String: Any]) -> Reply {
+        let (path, problem) = granted(body["path"])
+        guard let path = path else { return problem! }
+        guard kind(path) == "directory",
+              let names = try? FileManager.default.contentsOfDirectory(atPath: path)
+        else { return failure("NotFoundError", "\((path as NSString).lastPathComponent) was not found") }
+        let entries: [[String: String]] = names.sorted().compactMap { name in
+            guard let k = kind((path as NSString).appendingPathComponent(name)) else { return nil }
+            return ["name": name, "kind": k]
+        }
+        return ["entries": entries]
+    }
+
+    static func rename(_ body: [String: Any]) -> Reply {
+        let (path, problem) = granted(body["path"])
+        guard let path = path else { return problem! }
+        let name = (body["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+        if name.isEmpty || name == "." || name == ".." || name.contains("/") {
+            return failure("TypeError", "name must be a file name, not a path")
+        }
+        let target = ((path as NSString).deletingLastPathComponent as NSString).appendingPathComponent(name)
+        guard kind(path) != nil else { return failure("NotFoundError", "\((path as NSString).lastPathComponent) was not found") }
+        if target != path && kind(target) != nil { return failure("InvalidModificationError", "\(name) already exists") }
+        do {
+            if target != path { try FileManager.default.moveItem(atPath: path, toPath: target) }
+        } catch {
+            return failure("NoModificationAllowedError", "could not rename: \(error.localizedDescription)")
+        }
+        Grants.replace(path, with: target)
+        return ["path": target]
+    }
+}
+
 // MARK: - A document window
 
 final class DocumentWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate,
-    WKDownloadDelegate
+    WKDownloadDelegate, WKScriptMessageHandlerWithReply
 {
     let window: NSWindow
     let webView: WKWebView
     private var titleObservation: NSKeyValueObservation?
     private var selfTestStarted = false
+    /// The file the page says this window shows (native-fs announceDocument).
+    private(set) var documentPath: String?
+    private static let fileQueue = DispatchQueue(label: "io.tayweid.plass.files")
 
     init(url: URL) {
         let configuration = WKWebViewConfiguration()
@@ -149,6 +349,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WK
             backing: .buffered, defer: false)
         super.init()
 
+        configuration.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "plass")
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.autoresizingMask = [.width, .height]
@@ -168,9 +369,103 @@ final class DocumentWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WK
         window.makeKeyAndOrderFront(nil)
     }
 
+    // MARK: the page's file requests (src/native-fs.ts)
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage,
+                               replyHandler: @escaping (Any?, String?) -> Void)
+    {
+        guard let body = message.body as? [String: Any], let type = body["type"] as? String else {
+            return replyHandler(FileOps.failure("TypeError", "malformed request"), nil)
+        }
+        let disk: ((([String: Any]) -> FileOps.Reply))? = {
+            switch type {
+            case "permission": return FileOps.permission
+            case "stat": return FileOps.stat
+            case "read": return FileOps.read
+            case "write": return FileOps.write
+            case "child": return FileOps.child
+            case "list": return FileOps.list
+            case "rename": return FileOps.rename
+            default: return nil
+            }
+        }()
+        if let operation = disk {
+            // Disk work off the main thread, one request at a time, so a
+            // write and the watcher's stat never interleave.
+            DocumentWindow.fileQueue.async {
+                let result = operation(body)
+                DispatchQueue.main.async { replyHandler(result, nil) }
+            }
+            return
+        }
+        switch type {
+        case "openPanel":
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = body["multiple"] as? Bool ?? false
+            let extensions = body["extensions"] as? [String] ?? []
+            let types = extensions.compactMap { UTType(filenameExtension: $0) }
+            if !types.isEmpty { panel.allowedContentTypes = types }
+            present(panel, startIn: body["startIn"]) { answer in
+                guard answer == .OK else { return replyHandler(["cancelled": true], nil) }
+                panel.urls.forEach { Grants.add($0.path) }
+                replyHandler(["paths": panel.urls.map { $0.path }], nil)
+            }
+        case "savePanel":
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = body["suggestedName"] as? String ?? ""
+            panel.canCreateDirectories = true
+            present(panel, startIn: body["startIn"]) { answer in
+                guard answer == .OK, let url = panel.url else { return replyHandler(["cancelled": true], nil) }
+                Grants.add(url.path)
+                replyHandler(["path": url.path], nil)
+            }
+        case "folderPanel":
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.canCreateDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Choose"
+            present(panel, startIn: body["startIn"]) { answer in
+                guard answer == .OK, let url = panel.url else { return replyHandler(["cancelled": true], nil) }
+                Grants.add(url.path)
+                replyHandler(["path": url.path], nil)
+            }
+        case "document":
+            documentPath = (body["path"] as? String).map(Grants.normalize)
+            window.representedURL = documentPath.map { URL(fileURLWithPath: $0) }
+            replyHandler([:], nil)
+        default:
+            replyHandler(FileOps.failure("NotSupportedError", "unknown request \(type)"), nil)
+        }
+    }
+
+    private func present(_ panel: NSSavePanel, startIn: Any?, completion: @escaping (NSApplication.ModalResponse) -> Void) {
+        if let path = startIn as? String { panel.directoryURL = URL(fileURLWithPath: path, isDirectory: true) }
+        panel.beginSheetModal(for: window, completionHandler: completion)
+    }
+
     // MARK: navigation
 
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        log("navigation failed: \(error.localizedDescription)")
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        log("load failed: \(error.localizedDescription)")
+    }
+
+    /// The page's process died (memory, a WebKit crash): say so, and bring
+    /// the page back rather than leave a blank window.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        log("web content process ended for \(documentPath ?? "an untitled window"); reloading")
+        webView.reload()
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        log("loaded \(webView.url?.absoluteString.prefix(120) ?? "?")")
         guard !selfTestStarted, let path = environment["PLASS_SELFTEST"] else { return }
         selfTestStarted = true
         runSelfTest(path)
@@ -292,22 +587,31 @@ final class DocumentWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WK
         webView.callAsyncJavaScript(
             body, arguments: ["args": args], in: nil, in: .page
         ) { result in
+            var text: String
+            var status: Int32 = 0
             switch result {
             case .success(let value):
-                if let text = value as? String { print(text) }
+                if let string = value as? String { text = string }
                 else if JSONSerialization.isValidJSONObject(value),
                         let data = try? JSONSerialization.data(withJSONObject: value),
-                        let text = String(data: data, encoding: .utf8) { print(text) }
-                else { print(String(describing: value)) }
-                exit(0)
+                        let string = String(data: data, encoding: .utf8) { text = string }
+                else { text = String(describing: value) }
             case .failure(let error):
-                print(#"{"error":\#(String(reflecting: "\(error)"))}"#)
-                exit(1)
+                text = #"{"error":\#(String(reflecting: "\(error)"))}"#
+                status = 1
             }
+            if let out = environment["PLASS_SELFTEST_OUT"] {
+                try? text.write(toFile: out, atomically: true, encoding: .utf8)
+            } else {
+                print(text)
+            }
+            exit(status)
         }
     }
 
     func windowWillClose(_ notification: Notification) {
+        // The content controller holds its handler strongly.
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "plass", contentWorld: .page)
         (NSApp.delegate as? AppDelegate)?.forget(self)
     }
 }
@@ -322,6 +626,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let grant = environment["PLASS_GRANT"], grant.hasPrefix("/") { Grants.add(grant) }
         if environment["PLASS_URL"] == nil,
            bundledWebRoot.map({ FileManager.default.fileExists(atPath: $0.appendingPathComponent("index.html").path) }) != true {
             let alert = NSAlert()
@@ -332,7 +637,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         NSApp.activate(ignoringOtherApps: true)
-        openWindow(url: startURL())
+        // Files arriving at launch (a Finder double-click) land just before
+        // or after this; open the empty window only if none did.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+            if windows.isEmpty { openWindow(url: startURL()) }
+        }
+    }
+
+    /// Finder opens (double-click, Open With, a drop on the Dock icon). A
+    /// file already showing in a window just comes forward; any other gets
+    /// a window of its own. Opening a file grants Plass access to it.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.isFileURL {
+            let path = Grants.normalize(url.path)
+            Grants.add(path)
+            if let showing = windows.first(where: { $0.documentPath == path }) {
+                showing.window.makeKeyAndOrderFront(nil)
+                continue
+            }
+            openWindow(url: startURL(open: path))
+        }
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -342,9 +667,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    func startURL() -> URL {
-        if let override = environment["PLASS_URL"], let url = URL(string: override) { return url }
-        return URL(string: "\(appOrigin)/")!
+    func startURL(open path: String? = nil) -> URL {
+        let base = environment["PLASS_URL"].flatMap(URL.init(string:)) ?? URL(string: "\(appOrigin)/")!
+        guard let path = path, var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return base }
+        components.queryItems = (components.queryItems ?? []).filter { $0.name != "new" } + [URLQueryItem(name: "open", value: path)]
+        return components.url ?? base
     }
 
     func openWindow(url: URL) {

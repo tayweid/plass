@@ -11,6 +11,8 @@
 // exactly; inventing a path key instead would call two different files with
 // the same name in different folders the same file.
 
+import { announceDocument } from './native-fs';
+
 interface QueryMessage {
   type: 'query';
   id: string;
@@ -86,4 +88,5 @@ export function openInAnotherWindow(handle: FileSystemFileHandle): Promise<strin
 export function holdOpenFile(handle: FileSystemFileHandle | null): void {
   held = handle;
   if (handle) ensureChannel();
+  announceDocument(handle);
 }

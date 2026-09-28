@@ -2,7 +2,11 @@
 // (file handles are structured-cloneable, so directory and file handles
 // live here alongside plain records). The database keeps its original
 // "typeset" name on purpose — renaming it would orphan every user's
-// recents and sessions (CLAUDE.md, testing gotchas).
+// recents and sessions (CLAUDE.md, testing gotchas). In Plass.app the
+// handles are native-fs.ts stand-ins, which come back from the store as
+// plain data until revived.
+
+import { reviveNativeHandles } from './native-fs';
 
 const DB_NAME = 'typeset-files';
 const STORE = 'kv';
@@ -20,7 +24,7 @@ export async function kvGet(key: string): Promise<unknown> {
   const d = await db();
   return new Promise((resolve, reject) => {
     const req = d.transaction(STORE).objectStore(STORE).get(key);
-    req.onsuccess = () => resolve(req.result ?? null);
+    req.onsuccess = () => resolve(reviveNativeHandles(req.result ?? null));
     req.onerror = () => reject(req.error);
   });
 }

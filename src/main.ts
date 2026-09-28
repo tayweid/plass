@@ -7,6 +7,7 @@ import { history } from 'prosemirror-history';
 import { tableEditing } from 'prosemirror-tables';
 import { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
+import { isNativeShell, takeLaunchFile } from './native-fs';
 import { migrateLegacyTableGeometry } from './typ-parser';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
 import { collapseSpaces } from './collapse-spaces';
@@ -63,8 +64,9 @@ function tabFileKey(): string {
 let primaryTab = false;
 let restoredSessionDoc = false;
 
-/** Installed-app window (Finder launch or Dock open) vs plain browser tab. */
-const standalone = window.matchMedia('(display-mode: standalone)').matches;
+/** Installed-app window (Finder launch or Dock open) vs plain browser tab.
+ *  A Plass.app window is an app window too. */
+const standalone = window.matchMedia('(display-mode: standalone)').matches || isNativeShell();
 
 function loadDoc(): PMNode {
   // A "New" window starts empty. window.open COPIES the opener's
@@ -459,6 +461,12 @@ async function openLaunched(files: ReadonlyArray<FileSystemFileHandle>): Promise
 // touches must already be live. App windows start on an empty sheet (see
 // loadDoc), so the launched file renders into blank space.
 let launching = false;
+// Plass.app: a Finder open arrives as ?open=<path> on a fresh window.
+const nativeLaunch = takeLaunchFile();
+if (nativeLaunch) {
+  launching = true;
+  void openLaunched([nativeLaunch]);
+}
 window.launchQueue?.setConsumer((params) => {
   if (params.files.length) {
     // Chrome delivers queued launch files synchronously here, so this is set

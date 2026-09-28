@@ -26,6 +26,40 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Taylor J Weidman. MIT License.</string>
+	<!-- An alternate handler, never the default: installing must not take
+	     .md from the writer's editor. Promote Plass in Get Info to make it
+	     the default. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Typst document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>typ</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Markdown document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>net.daringfireball.markdown</string>
+			</array>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>md</string>
+			</array>
+		</dict>
+	</array>
 	<!-- PLASS_URL may point the window at the vite dev server. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
