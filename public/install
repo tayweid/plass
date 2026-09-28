@@ -1,8 +1,9 @@
 #!/bin/bash
 # Install or update Plass.app:
 #
-#   curl -fsSL https://raw.githubusercontent.com/tayweid/plass/main/app/install.sh | bash
+#   curl -fsSL https://plass.tayweid.io/install | bash
 #
+# This file ships with the site (public/install); the app is not built here.
 # Downloads the app (app/Plass.app.zip, committed to the repository — the
 # knuth model), puts it in /Applications (or ~/Applications when that is not
 # writable), and fetches the Typst compiler and fonts it keeps outside the

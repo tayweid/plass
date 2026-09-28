@@ -42,7 +42,7 @@ versions when it is opened online.
 Paste this into Terminal (in Applications → Utilities):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/tayweid/plass/main/app/install.sh | bash
+curl -fsSL https://plass.tayweid.io/install | bash
 ```
 
 It puts Plass in Applications and downloads the Typst compiler and fonts

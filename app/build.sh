@@ -63,7 +63,8 @@ echo "architectures: $(lipo -archs "$out/Contents/MacOS/Plass")"
 cp Info.plist "$out/Contents/Info.plist"
 printf 'APPL????' > "$out/Contents/PkgInfo"
 
-rsync -a ../dist/ "$out/Contents/Resources/web/"
+# The site's install script is not part of the page.
+rsync -a --exclude install ../dist/ "$out/Contents/Resources/web/"
 # The compiler and compile fonts come on first launch, not in the zip.
 node externalize.mjs "$out/Contents/Resources/web"
 
