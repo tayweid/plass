@@ -2397,6 +2397,14 @@ body {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+/* Typst never measured this formula (compile failed, or the compiler
+   could not run): it sits at KaTeX's width, and the lines around it may
+   break differently in print. Paint only — an outline moves nothing. */
+.math-unmeasured {
+  outline: 1px dashed color-mix(in srgb, #c77700 70%, transparent);
+  outline-offset: 1px;
+}
+
 .math-inline:hover,
 .math-display:hover {
   background: color-mix(in srgb, var(--accent) 8%, transparent);

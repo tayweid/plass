@@ -7,7 +7,7 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import { cssFontStack, effectiveFont } from '../font-registry';
-import { getInk, inkKey } from '../math-ink';
+import { getInk, inkKeyFor } from '../math-ink';
 import type { DocSettings } from '../settings';
 import type { ForcedBreak, LineLayout } from './paragraph';
 
@@ -151,7 +151,7 @@ export function makeAtomWidth(view: EditorView, settings: DocSettings, pos: numb
   return (offset, child) => {
     const isMath = child.type.name === 'math_inline';
     if (isMath) {
-      const ink = getInk(inkKey(child.attrs.src as string, false, settings));
+      const ink = getInk(inkKeyFor(child, settings));
       if (ink) return ink.widthPx;
     }
     const dom = view.nodeDOM(pos + 1 + offset);
