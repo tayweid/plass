@@ -17,6 +17,7 @@
 //   PLASS_GRANT     a path granted at launch, as if chosen in a panel
 
 import AppKit
+import CryptoKit
 import UniformTypeIdentifiers
 import WebKit
 
@@ -74,6 +75,202 @@ func enableRequiredFeatures(_ preferences: WKPreferences) {
     }
 }
 
+// MARK: - The runtime files (fetched once, kept)
+
+/// The Typst compiler and compile fonts are not in the zip (the knuth
+/// model: the committed download stays small). app/externalize.mjs lists
+/// them in Resources/runtime.json with an immutable source and the sha256
+/// of the bytes the build used; the app fetches each on first launch, checks
+/// it, and keeps it in Application Support by that hash. A later version
+/// fetches only what changed.
+struct RuntimeFile {
+    let path: String
+    let sha256: String
+    let size: Int
+    let kind: String
+    let url: URL
+    let integrity: String?
+    let member: String?
+}
+
+enum Runtime {
+    static let store = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/Plass/runtime")
+
+    static let files: [String: RuntimeFile] = {
+        guard let url = Bundle.main.resourceURL?.appendingPathComponent("runtime.json"),
+              let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = json["files"] as? [[String: Any]]
+        else { return [:] }
+        var out: [String: RuntimeFile] = [:]
+        for entry in list {
+            guard let path = entry["path"] as? String, let sha = entry["sha256"] as? String,
+                  let size = entry["size"] as? Int, let source = entry["source"] as? [String: Any],
+                  let kind = source["kind"] as? String, let raw = source["url"] as? String, let url = URL(string: raw)
+            else { continue }
+            out[path] = RuntimeFile(path: path, sha256: sha, size: size, kind: kind, url: url,
+                                    integrity: source["integrity"] as? String, member: source["member"] as? String)
+        }
+        return out
+    }()
+
+    static func stored(_ file: RuntimeFile) -> URL { store.appendingPathComponent(file.sha256) }
+
+    static var missing: [RuntimeFile] {
+        files.values.filter { !FileManager.default.fileExists(atPath: stored($0).path) }.sorted { $0.path < $1.path }
+    }
+
+    static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Fetch, check and keep one file. Throws a sentence for the writer.
+    static func fetch(_ file: RuntimeFile, progress: @escaping (Double) -> Void) throws {
+        let downloaded = try download(file.url, progress: progress)
+        defer { try? FileManager.default.removeItem(at: downloaded) }
+        var bytes: Data
+        if file.kind == "npm" {
+            // The release tarball, checked against package-lock's integrity,
+            // then the one file Plass uses taken out of it.
+            let tarball = try Data(contentsOf: downloaded)
+            let expected = file.integrity?.replacingOccurrences(of: "sha512-", with: "")
+            guard Data(SHA512.hash(data: tarball)).base64EncodedString() == expected else {
+                throw RuntimeError("the Typst compiler download did not match its published checksum")
+            }
+            let work = FileManager.default.temporaryDirectory.appendingPathComponent("plass-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: work) }
+            let tar = Process()
+            tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+            tar.arguments = ["-xzf", downloaded.path, "-C", work.path, file.member ?? ""]
+            try tar.run()
+            tar.waitUntilExit()
+            guard tar.terminationStatus == 0,
+                  let extracted = try? Data(contentsOf: work.appendingPathComponent(file.member ?? ""))
+            else { throw RuntimeError("the Typst compiler could not be unpacked") }
+            bytes = extracted
+        } else {
+            bytes = try Data(contentsOf: downloaded)
+        }
+        guard sha256(bytes) == file.sha256 else {
+            throw RuntimeError("\((file.path as NSString).lastPathComponent) did not match the copy this version of Plass was built with")
+        }
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        try bytes.write(to: stored(file), options: .atomic)
+    }
+
+    private static func download(_ url: URL, progress: @escaping (Double) -> Void) throws -> URL {
+        var result: Result<URL, Error> = .failure(RuntimeError("the download did not finish"))
+        let done = DispatchSemaphore(value: 0)
+        let task = URLSession.shared.downloadTask(with: url) { location, response, error in
+            defer { done.signal() }
+            if let error = error { return result = .failure(error) }
+            guard let location = location, (response as? HTTPURLResponse)?.statusCode == 200 else {
+                return result = .failure(RuntimeError("the server answered \((response as? HTTPURLResponse)?.statusCode ?? 0) for \(url.lastPathComponent)"))
+            }
+            // The temporary file is removed when this handler returns.
+            let kept = FileManager.default.temporaryDirectory.appendingPathComponent("plass-dl-\(UUID().uuidString)")
+            do {
+                try FileManager.default.moveItem(at: location, to: kept)
+                result = .success(kept)
+            } catch {
+                result = .failure(error)
+            }
+        }
+        let observation = task.progress.observe(\.fractionCompleted) { p, _ in progress(p.fractionCompleted) }
+        task.resume()
+        done.wait()
+        observation.invalidate()
+        return try result.get()
+    }
+}
+
+struct RuntimeError: Error, CustomStringConvertible {
+    let description: String
+    init(_ text: String) { description = text }
+}
+
+/// The first launch's one question for the network: a small window with a
+/// progress bar, and a way to try again when the Mac is offline.
+final class RuntimeSetup: NSObject {
+    private let window: NSWindow
+    private let label = NSTextField(labelWithString: "")
+    private let detail = NSTextField(labelWithString: "")
+    private let bar = NSProgressIndicator()
+    private let retry = NSButton(title: "Try Again", target: nil, action: nil)
+    private let quit = NSButton(title: "Quit", target: nil, action: nil)
+    private let onReady: () -> Void
+
+    init(onReady: @escaping () -> Void) {
+        self.onReady = onReady
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 150),
+                          styleMask: [.titled], backing: .buffered, defer: false)
+        super.init()
+        window.title = "Setting up Plass"
+        window.isReleasedWhenClosed = false
+        let view = NSView(frame: window.contentRect(forFrameRect: window.frame))
+        label.frame = NSRect(x: 20, y: 104, width: 420, height: 22)
+        label.font = .boldSystemFont(ofSize: 13)
+        bar.frame = NSRect(x: 20, y: 76, width: 420, height: 20)
+        bar.isIndeterminate = false
+        bar.minValue = 0
+        bar.maxValue = 1
+        detail.frame = NSRect(x: 20, y: 44, width: 420, height: 32)
+        detail.font = .systemFont(ofSize: 11)
+        detail.textColor = .secondaryLabelColor
+        detail.lineBreakMode = .byWordWrapping
+        detail.maximumNumberOfLines = 2
+        retry.frame = NSRect(x: 340, y: 10, width: 100, height: 30)
+        retry.bezelStyle = .rounded
+        retry.keyEquivalent = "\r"
+        retry.target = self
+        retry.action = #selector(start)
+        quit.frame = NSRect(x: 240, y: 10, width: 100, height: 30)
+        quit.bezelStyle = .rounded
+        quit.target = NSApp
+        quit.action = #selector(NSApplication.terminate(_:))
+        [label, bar, detail, retry, quit].forEach(view.addSubview)
+        window.contentView = view
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func start() {
+        let files = Runtime.missing
+        let total = Double(max(1, files.reduce(0) { $0 + $1.size }))
+        retry.isHidden = true
+        quit.isHidden = true
+        label.stringValue = "Downloading the Typst compiler and fonts…"
+        detail.stringValue = String(format: "%.0f MB, once. Plass works offline after this.", total / 1_048_576)
+        bar.doubleValue = 0
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            var done = 0.0
+            do {
+                for file in files {
+                    try Runtime.fetch(file) { fraction in
+                        DispatchQueue.main.async { self.bar.doubleValue = (done + fraction * Double(file.size)) / total }
+                    }
+                    done += Double(file.size)
+                    log("runtime: kept \(file.path)")
+                }
+                DispatchQueue.main.async { [self] in
+                    window.orderOut(nil)
+                    onReady()
+                }
+            } catch {
+                log("runtime download failed: \(error)")
+                DispatchQueue.main.async { [self] in
+                    label.stringValue = "Plass could not finish setting up"
+                    detail.stringValue = "\(error). Plass needs the internet once to finish installing."
+                    retry.isHidden = false
+                    quit.isHidden = false
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Serving the page from the bundle
 
 /// plass://app/<path> → Contents/Resources/web/<path>.
@@ -97,10 +294,14 @@ final class AppSchemeHandler: NSObject, WKURLSchemeHandler {
         guard let url = task.request.url else { return }
         var relative = url.path
         if relative.isEmpty || relative == "/" { relative = "/index.html" }
-        let file = root.appendingPathComponent(String(relative.dropFirst())).standardizedFileURL
-        guard file.path.hasPrefix(root.path + "/"),
-              let data = FileManager.default.contents(atPath: file.path)
-        else {
+        let requested = String(relative.dropFirst())
+        let inBundle = root.appendingPathComponent(requested).standardizedFileURL
+        var source: URL? = inBundle.path.hasPrefix(root.path + "/") ? inBundle : nil
+        // Not in the bundle: a runtime file, kept in Application Support.
+        if let found = source, !FileManager.default.fileExists(atPath: found.path), let kept = Runtime.files[requested] {
+            source = Runtime.stored(kept)
+        }
+        guard let file = source, let data = FileManager.default.contents(atPath: file.path) else {
             log("not in bundle: \(relative)")
             let response = HTTPURLResponse(
                 url: url, statusCode: 404, httpVersion: "HTTP/1.1",
@@ -110,7 +311,8 @@ final class AppSchemeHandler: NSObject, WKURLSchemeHandler {
             task.didFinish()
             return
         }
-        let type = AppSchemeHandler.contentTypes[file.pathExtension.lowercased()] ?? "application/octet-stream"
+        // By the requested name: a kept runtime file is stored under its hash.
+        let type = AppSchemeHandler.contentTypes[(requested as NSString).pathExtension.lowercased()] ?? "application/octet-stream"
         let response = HTTPURLResponse(
             url: url, statusCode: 200, httpVersion: "HTTP/1.1",
             headerFields: [
@@ -637,10 +839,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         NSApp.activate(ignoringOtherApps: true)
+        // First launch (or a version with new runtime files): fetch them
+        // before any page loads; Finder opens wait in `pending`.
+        if environment["PLASS_URL"] == nil, !Runtime.missing.isEmpty {
+            let setup = RuntimeSetup { [self] in becomeReady() }
+            self.setup = setup
+            setup.start()
+            return
+        }
+        becomeReady()
+    }
+
+    private var ready = false
+    private var pending: [String] = []
+    private var setup: RuntimeSetup?
+
+    private func becomeReady() {
+        ready = true
+        setup = nil
+        let waiting = pending
+        pending = []
+        for path in waiting { open(path) }
         // Files arriving at launch (a Finder double-click) land just before
         // or after this; open the empty window only if none did.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
             if windows.isEmpty { openWindow(url: startURL()) }
+        }
+    }
+
+    private func open(_ path: String) {
+        if let showing = windows.first(where: { $0.documentPath == path }) {
+            showing.window.makeKeyAndOrderFront(nil)
+        } else {
+            openWindow(url: startURL(open: path))
         }
     }
 
@@ -651,17 +882,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in urls where url.isFileURL {
             let path = Grants.normalize(url.path)
             Grants.add(path)
-            if let showing = windows.first(where: { $0.documentPath == path }) {
-                showing.window.makeKeyAndOrderFront(nil)
-                continue
-            }
-            openWindow(url: startURL(open: path))
+            if ready { open(path) } else { pending.append(path) }
         }
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { openWindow(url: startURL()) }
+        if !flag && ready { openWindow(url: startURL()) }
         return true
     }
 
@@ -687,6 +914,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func newWindow(_ sender: Any?) {
+        guard ready else { return }
         openWindow(url: startURL())
     }
 
@@ -748,6 +976,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.mainMenu = main
     }
+}
+
+// `Plass --fetch-runtime`: the install line's second half. Fetches and
+// checks the runtime files from the terminal, so the first launch opens
+// straight to a page; the setup window above is only the fallback (an
+// offline install, a cleared store).
+if CommandLine.arguments.contains("--fetch-runtime") {
+    setvbuf(stdout, nil, _IONBF, 0) // progress and lines in order when piped
+    let files = Runtime.missing
+    let total = files.reduce(0) { $0 + $1.size }
+    if files.isEmpty {
+        print("Plass: the Typst compiler and fonts are already in place.")
+        exit(0)
+    }
+    print(String(format: "Plass: downloading the Typst compiler and fonts (%.0f MB, once)…", Double(total) / 1_048_576))
+    var done = 0
+    var shown = -1
+    for file in files {
+        do {
+            try Runtime.fetch(file) { fraction in
+                let percent = Int((Double(done) + fraction * Double(file.size)) * 100 / Double(max(1, total)))
+                if percent != shown {
+                    shown = percent
+                    FileHandle.standardOutput.write("\r  \(percent)%".data(using: .utf8)!)
+                }
+            }
+        } catch {
+            print("\nPlass: \(error). Plass will try again when it first opens.")
+            exit(1)
+        }
+        done += file.size
+    }
+    print("\r  100%\nPlass: ready — it works offline from here.")
+    exit(0)
 }
 
 let app = NSApplication.shared

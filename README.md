@@ -37,6 +37,23 @@ or Edge, use **Install Plass** in the toolbar; in Safari on macOS, choose
 for `.typ` and `.md` files. The same hosted frontend continues to receive new
 versions when it is opened online.
 
+## Install the Mac app
+
+Paste this into Terminal (in Applications → Utilities):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tayweid/plass/main/app/install.sh | bash
+```
+
+It puts Plass in Applications and downloads the Typst compiler and fonts
+it keeps beside it (about 35 MB, once). Plass then works offline, and PDF
+export never waits on the network. Run the same line again to update.
+Nothing else needs installing. `.typ` and `.md` files list Plass under
+**Open With**; choose it in a file's **Get Info** to make it the default.
+
+To build it yourself from a checkout (needs Apple's Command Line Tools and
+Node 22): `npm ci`, then `app/build.sh /Applications/Plass.app`.
+
 ## Run it
 
 ```sh

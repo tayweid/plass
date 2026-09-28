@@ -1,9 +1,10 @@
 #!/bin/bash
 # Build Plass.app from app/Sources with the command-line tools alone: no
 # Xcode project, no package manager (the knuth pattern). The vite build
-# rides in the bundle, so the app runs with no network.
+# rides in the bundle; the Typst compiler and compile fonts are fetched once
+# on first launch (externalize.mjs), which keeps the committed zip small.
 #
-#   app/build.sh                   # -> app/build/Plass.app (runs the vite build)
+#   app/build.sh                   # -> app/build/Plass.app + app/Plass.app.zip
 #   PLASS_SKIP_WEB=1 app/build.sh  # reuse the existing dist/
 #   app/build.sh /Applications/Plass.app
 set -euo pipefail
@@ -63,6 +64,8 @@ cp Info.plist "$out/Contents/Info.plist"
 printf 'APPL????' > "$out/Contents/PkgInfo"
 
 rsync -a ../dist/ "$out/Contents/Resources/web/"
+# The compiler and compile fonts come on first launch, not in the zip.
+node externalize.mjs "$out/Contents/Resources/web"
 
 iconset="$(mktemp -d)/AppIcon.iconset"
 mkdir -p "$iconset"
@@ -80,3 +83,11 @@ rm -rf "$(dirname "$iconset")"
 # Ad-hoc signature: enough to run locally on Apple silicon.
 codesign --force --sign - "$out" >/dev/null 2>&1
 echo "built $out ($(du -sh "$out" | cut -f1 | tr -d ' '))"
+
+# The download is this zip, committed to the repo (the knuth model): a file
+# on GitHub, no release and no workflow. ditto keeps the bundle's metadata.
+if [ "$out" = "build/Plass.app" ]; then
+    rm -f Plass.app.zip
+    ditto -c -k --keepParent "$out" Plass.app.zip
+    echo "zipped app/Plass.app.zip ($(du -h Plass.app.zip | cut -f1 | tr -d ' '))"
+fi
