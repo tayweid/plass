@@ -9,6 +9,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 out="${1:-build/Plass.app}"
+# The target is replaced wholesale, so it must be an app bundle.
+case "$out" in
+    *.app) ;;
+    *) echo "build.sh: the target must end in .app (got $out)" >&2; exit 1 ;;
+esac
 icon_source="../public/icons/plass-512.png"
 
 if [ -z "${PLASS_SKIP_WEB:-}" ]; then
