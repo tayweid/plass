@@ -1,24 +1,24 @@
 #!/bin/bash
-# Build Plass.app from app/Sources with the command-line tools alone: no
-# Xcode project, no package manager (the knuth pattern). The vite build
-# rides in the bundle; the Typst compiler and compile fonts are fetched by
-# the install line (externalize.mjs), which keeps the committed zip small.
+# Build Plass.app and install it (the knuth pattern: one Swift file, swiftc
+# alone, no Xcode project).
 #
 #   app/build.sh                   # your own copy, into /Applications
-#   app/build.sh --release         # rewrite app/Plass.app.zip, to commit
 #   app/build.sh ~/Desktop/P.app   # anywhere else
 #   PLASS_SKIP_WEB=1 app/build.sh  # reuse the existing dist/
 #
-# Only --release touches the committed zip. Every rebuild changes its bytes
-# (timestamps) and every committed copy stays in git history, so the zip is
-# rewritten only when an app update is meant to be published.
+# The app is the site's page (the vite build, compiler and fonts included)
+# inside a small native shell. The shell's compiled program and icon are
+# committed in app/bin, because the site deploy runs on Linux and cannot
+# compile Swift: `npm run build` packs app/bin with the page into dist/app,
+# and plass.tayweid.io/install assembles the app from there. Nothing large
+# is committed; the page reaches installs with every deploy.
+#
+# app/bin is recompiled only when main.swift or the icon changes (their
+# hashes are in app/bin/sources.sha256) — commit it with that change. The
+# build check fails when they disagree, so a stale shell never ships.
 set -euo pipefail
 cd "$(dirname "$0")"
-release=""
-if [ "${1:-}" = "--release" ]; then
-    release=1
-    out="build/Plass.app"
-elif [ -n "${1:-}" ]; then
+if [ -n "${1:-}" ]; then
     out="$1"
 elif [ -w /Applications ]; then
     out="/Applications/Plass.app"
@@ -41,70 +41,57 @@ if [ ! -f ../dist/index.html ]; then
     exit 1
 fi
 
-# The command-line tools can ship an SDK newer than their own compiler,
-# which swiftc refuses. Pick the newest SDK the compiler accepts.
-sdk=""
-probe="$(mktemp -d)/probe.swift"
-echo 'import Foundation' > "$probe"
-for candidate in $(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX*.*.sdk 2>/dev/null | sort -rV); do
-    if swiftc -sdk "$candidate" -swift-version 5 -typecheck "$probe" >/dev/null 2>&1; then
-        sdk="$candidate"
-        break
-    fi
-done
-rm -rf "$(dirname "$probe")"
-[ -n "$sdk" ] || sdk="$(xcrun --show-sdk-path)"
-echo "sdk: $sdk"
+# ---- the shell (app/bin), refreshed only when its sources changed ----
+if ! shasum -a 256 -c bin/sources.sha256 >/dev/null 2>&1 || [ ! -x bin/Plass ] || [ ! -f bin/AppIcon.icns ]; then
+    echo "main.swift or the icon changed: recompiling app/bin (commit it with the change)"
+    # The command-line tools can ship an SDK newer than their own compiler,
+    # which swiftc refuses. Pick the newest SDK the compiler accepts.
+    sdk=""
+    probe="$(mktemp -d)/probe.swift"
+    echo 'import Foundation' > "$probe"
+    for candidate in $(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX*.*.sdk 2>/dev/null | sort -rV); do
+        if swiftc -sdk "$candidate" -swift-version 5 -typecheck "$probe" >/dev/null 2>&1; then
+            sdk="$candidate"
+            break
+        fi
+    done
+    rm -rf "$(dirname "$probe")"
+    [ -n "$sdk" ] || sdk="$(xcrun --show-sdk-path)"
 
+    work="$(mktemp -d)"
+    # One program for both Mac architectures.
+    for arch in arm64 x86_64; do
+        swiftc -O -swift-version 5 -sdk "$sdk" -target "$arch-apple-macos12.0" \
+            -framework AppKit -framework WebKit \
+            -o "$work/Plass-$arch" Sources/main.swift
+    done
+    mkdir -p bin
+    lipo -create "$work/Plass-arm64" "$work/Plass-x86_64" -output bin/Plass
+
+    iconset="$work/AppIcon.iconset"
+    mkdir -p "$iconset"
+    for size in 16 32 128 256 512; do
+        sips -z "$size" "$size" "$icon_source" --out "$iconset/icon_${size}x${size}.png" >/dev/null
+        double=$((size * 2))
+        if [ "$double" -le 512 ]; then
+            sips -z "$double" "$double" "$icon_source" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+        fi
+    done
+    cp "$icon_source" "$iconset/icon_512x512@2x.png"
+    iconutil -c icns "$iconset" -o bin/AppIcon.icns
+    rm -rf "$work"
+    shasum -a 256 Sources/main.swift "$icon_source" > bin/sources.sha256
+fi
+
+# ---- the app: the same assembly plass.tayweid.io/install does ----
 rm -rf "$out"
 mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"
-# One binary for both Mac architectures when the toolchain can build both.
-slices=()
-for arch in arm64 x86_64; do
-    if swiftc -O -swift-version 5 -sdk "$sdk" -target "$arch-apple-macos12.0" \
-        -framework AppKit -framework WebKit \
-        -o "$out/Contents/MacOS/Plass-$arch" Sources/main.swift 2>/dev/null; then
-        slices+=("$out/Contents/MacOS/Plass-$arch")
-    fi
-done
-if [ "${#slices[@]}" -eq 0 ]; then
-    swiftc -O -swift-version 5 -sdk "$sdk" \
-        -framework AppKit -framework WebKit \
-        -o "$out/Contents/MacOS/Plass" Sources/main.swift
-else
-    lipo -create "${slices[@]}" -output "$out/Contents/MacOS/Plass"
-    rm -f "${slices[@]}"
-fi
-echo "architectures: $(lipo -archs "$out/Contents/MacOS/Plass")"
+cp bin/Plass "$out/Contents/MacOS/Plass"
+cp bin/AppIcon.icns "$out/Contents/Resources/AppIcon.icns"
 cp Info.plist "$out/Contents/Info.plist"
 printf 'APPL????' > "$out/Contents/PkgInfo"
-
-# The site's install script is not part of the page.
-rsync -a --exclude install ../dist/ "$out/Contents/Resources/web/"
-# The compiler and compile fonts come on first launch, not in the zip.
-node externalize.mjs "$out/Contents/Resources/web"
-
-iconset="$(mktemp -d)/AppIcon.iconset"
-mkdir -p "$iconset"
-for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" "$icon_source" --out "$iconset/icon_${size}x${size}.png" >/dev/null
-    double=$((size * 2))
-    if [ "$double" -le 512 ]; then
-        sips -z "$double" "$double" "$icon_source" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
-    fi
-done
-cp "$icon_source" "$iconset/icon_512x512@2x.png"
-iconutil -c icns "$iconset" -o "$out/Contents/Resources/AppIcon.icns"
-rm -rf "$(dirname "$iconset")"
-
-# Ad-hoc signature: enough to run locally on Apple silicon.
+# The site's installer and app pieces are not part of the page.
+rsync -a --exclude /install --exclude /app ../dist/ "$out/Contents/Resources/web/"
+# Ad-hoc signature: enough to run on Apple silicon.
 codesign --force --sign - "$out" >/dev/null 2>&1
 echo "built $out ($(du -sh "$out" | cut -f1 | tr -d ' '))"
-
-# The download is this zip, committed to the repo (the knuth model): a file
-# on GitHub, no release and no workflow. ditto keeps the bundle's metadata.
-if [ -n "$release" ]; then
-    rm -f Plass.app.zip
-    ditto -c -k --keepParent "$out" Plass.app.zip
-    echo "zipped app/Plass.app.zip ($(du -h Plass.app.zip | cut -f1 | tr -d ' '))"
-fi

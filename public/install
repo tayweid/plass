@@ -3,16 +3,17 @@
 #
 #   curl -fsSL https://plass.tayweid.io/install | bash
 #
-# This file ships with the site (public/install); the app is not built here.
-# Downloads the app (app/Plass.app.zip, committed to the repository — the
-# knuth model), puts it in /Applications (or ~/Applications when that is not
-# writable), and fetches the Typst compiler and fonts it keeps outside the
-# zip, so the first launch opens straight to a page. Needs nothing but macOS.
+# This file ships with the site (public/install). It assembles the app from
+# pieces every deploy publishes beside it (scripts/pack-app.ts): the page
+# with its compiler and fonts, and the small native shell. So the app is
+# always the site's current version, and running this again updates it.
+# Needs nothing but macOS.
 #
-# Overrides, for testing: PLASS_ZIP (a URL or local path), PLASS_APP.
+# Overrides, for testing: PLASS_SITE (a URL or a local dist folder),
+# PLASS_APP (the .app to write).
 set -euo pipefail
 
-zip_source="${PLASS_ZIP:-https://raw.githubusercontent.com/tayweid/plass/main/app/Plass.app.zip}"
+site="${PLASS_SITE:-https://plass.tayweid.io}"
 
 die() { printf 'Plass install: %s\n' "$*" >&2; exit 1; }
 [ "$(uname -s)" = "Darwin" ] || die "Plass.app is for macOS."
@@ -28,19 +29,30 @@ fi
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-echo "Plass: downloading the app…"
-case "$zip_source" in
-    http*) curl -fsSL -o "$work/Plass.app.zip" "$zip_source" ;;
-    *) cp "$zip_source" "$work/Plass.app.zip" ;;
-esac
-ditto -x -k "$work/Plass.app.zip" "$work"
-[ -x "$work/Plass.app/Contents/MacOS/Plass" ] || die "the download did not contain Plass.app."
+fetch() {
+    case "$site" in
+        http*) curl -fsSL -o "$work/$1" "$site/app/$1" ;;
+        *) cp "$site/app/$1" "$work/$1" ;;
+    esac || die "could not download $1 — check the connection and run this again."
+}
+
+echo "Plass: downloading (about 20 MB)…"
+for piece in Plass AppIcon.icns Info.plist web.tar.gz; do fetch "$piece"; done
+
+bundle="$work/Plass.app"
+mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources/web"
+mv "$work/Plass" "$bundle/Contents/MacOS/Plass"
+chmod +x "$bundle/Contents/MacOS/Plass"
+mv "$work/AppIcon.icns" "$bundle/Contents/Resources/AppIcon.icns"
+mv "$work/Info.plist" "$bundle/Contents/Info.plist"
+printf 'APPL????' > "$bundle/Contents/PkgInfo"
+tar -xzf "$work/web.tar.gz" -C "$bundle/Contents/Resources/web"
+[ -f "$bundle/Contents/Resources/web/index.html" ] || die "the download was incomplete — run this again."
+# Ad-hoc signature, made on this Mac: enough to run on Apple silicon, and a
+# download by curl is never quarantined, so there is no Gatekeeper prompt.
+codesign --force --sign - "$bundle" >/dev/null 2>&1 || die "macOS could not sign the app."
 
 rm -rf "$app"
 mkdir -p "$(dirname "$app")"
-mv "$work/Plass.app" "$app"
-echo "Plass: installed $app"
-
-# A failure here is not fatal: the app fetches what is missing when it opens.
-"$app/Contents/MacOS/Plass" --fetch-runtime || true
-echo "Open Plass from $(dirname "$app")."
+mv "$bundle" "$app"
+echo "Plass: installed $app — open it from $(dirname "$app")."
