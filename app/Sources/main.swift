@@ -338,6 +338,9 @@ final class DocumentWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WK
         let configuration = WKWebViewConfiguration()
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
         enableRequiredFeatures(configuration.preferences)
+        // macOS predictive text would draw ghost words inside the lines the
+        // page lays out, and a Tab could accept them into the document.
+        if #available(macOS 14.0, *) { configuration.allowsInlinePredictions = false }
         if let webRoot = bundledWebRoot {
             configuration.setURLSchemeHandler(AppSchemeHandler(root: webRoot), forURLScheme: appScheme)
         }

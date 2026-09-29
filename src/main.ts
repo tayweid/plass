@@ -319,7 +319,10 @@ const view = new EditorView(editorEl, {
     grid_cell: (node, v) => new GridCellView(node, v),
     editor_comment: (node, v, getPos) => new EditorCommentView(node, v, getPos),
   },
-  attributes: { spellcheck: 'true' },
+  // No inline writing suggestions (macOS predictive text in WebKit, and the
+  // browsers' own): accepted ghost text would enter the document unasked,
+  // and while shown it sits in the line the layout measures.
+  attributes: { spellcheck: 'true', writingsuggestions: 'false' },
   handleClick: (v, _pos, event) => footnoteMarkerClick(v, event),
   dispatchTransaction(tr) {
     const prevAttrs = view.state.doc.attrs;
