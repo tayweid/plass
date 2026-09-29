@@ -7,7 +7,7 @@
 
 import katex from 'katex';
 import type { Node as PMNode } from 'prosemirror-model';
-import { TextSelection, type Command } from 'prosemirror-state';
+import { NodeSelection, TextSelection, type Command } from 'prosemirror-state';
 import type { EditorView, NodeView } from 'prosemirror-view';
 import type { EditorState } from 'prosemirror-state';
 import type { Mark } from 'prosemirror-model';
@@ -252,6 +252,15 @@ export function openMathEditor(view: EditorView, pos: number) {
   if (!node || (node.type !== schema.nodes.math_inline && node.type !== schema.nodes.math_display)) return;
   if (mathEditorOpen) return;
   mathEditorOpen = true;
+
+  // The formula being edited is the selection: a click on it opens the
+  // editor from its mousedown (no caret move), and without this the
+  // selection-driven UI (the table toolbar) would describe wherever the
+  // caret was before — another cell, another column.
+  const sel = view.state.selection;
+  if (!(sel instanceof NodeSelection && sel.from === pos)) {
+    view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)));
+  }
 
   // Anti-jitter width hold: the surrounding text keeps this formula's
   // compiled reservation for the whole editor session (see MathView).
