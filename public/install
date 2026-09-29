@@ -3,14 +3,13 @@
 #
 #   curl -fsSL https://plass.tayweid.io/install | bash
 #
-# This file ships with the site (public/install). It assembles the app from
-# pieces every deploy publishes beside it (scripts/pack-app.ts): the page
-# with its compiler and fonts, and the small native shell. So the app is
-# always the site's current version, and running this again updates it.
-# Needs nothing but macOS.
+# This file ships with the site (public/install). Every deploy builds the
+# app on a Mac and publishes it beside the site as app/Plass.app.zip
+# (.github/workflows/deploy.yml), so this always installs the site's current
+# version, and running it again updates. Needs nothing but macOS.
 #
-# Overrides, for testing: PLASS_SITE (a URL or a local dist folder),
-# PLASS_APP (the .app to write).
+# Overrides, for testing: PLASS_SITE (a URL or a local folder holding
+# app/Plass.app.zip), PLASS_APP (the .app to write).
 set -euo pipefail
 
 site="${PLASS_SITE:-https://plass.tayweid.io}"
@@ -29,30 +28,15 @@ fi
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-fetch() {
-    case "$site" in
-        http*) curl -fsSL -o "$work/$1" "$site/app/$1" ;;
-        *) cp "$site/app/$1" "$work/$1" ;;
-    esac || die "could not download $1 — check the connection and run this again."
-}
-
 echo "Plass: downloading (about 20 MB)…"
-for piece in Plass AppIcon.icns Info.plist web.tar.gz; do fetch "$piece"; done
-
-bundle="$work/Plass.app"
-mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources/web"
-mv "$work/Plass" "$bundle/Contents/MacOS/Plass"
-chmod +x "$bundle/Contents/MacOS/Plass"
-mv "$work/AppIcon.icns" "$bundle/Contents/Resources/AppIcon.icns"
-mv "$work/Info.plist" "$bundle/Contents/Info.plist"
-printf 'APPL????' > "$bundle/Contents/PkgInfo"
-tar -xzf "$work/web.tar.gz" -C "$bundle/Contents/Resources/web"
-[ -f "$bundle/Contents/Resources/web/index.html" ] || die "the download was incomplete — run this again."
-# Ad-hoc signature, made on this Mac: enough to run on Apple silicon, and a
-# download by curl is never quarantined, so there is no Gatekeeper prompt.
-codesign --force --sign - "$bundle" >/dev/null 2>&1 || die "macOS could not sign the app."
+case "$site" in
+    http*) curl -fsSL -o "$work/Plass.app.zip" "$site/app/Plass.app.zip" ;;
+    *) cp "$site/app/Plass.app.zip" "$work/Plass.app.zip" ;;
+esac || die "could not download Plass — check the connection and run this again."
+ditto -x -k "$work/Plass.app.zip" "$work"
+[ -x "$work/Plass.app/Contents/MacOS/Plass" ] || die "the download was incomplete — run this again."
 
 rm -rf "$app"
 mkdir -p "$(dirname "$app")"
-mv "$bundle" "$app"
+mv "$work/Plass.app" "$app"
 echo "Plass: installed $app — open it from $(dirname "$app")."

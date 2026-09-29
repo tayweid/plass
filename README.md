@@ -45,19 +45,17 @@ Paste this into Terminal (in Applications → Utilities):
 curl -fsSL https://plass.tayweid.io/install | bash
 ```
 
-It builds Plass.app from the current version of the site (about 20 MB,
-including the Typst compiler and fonts) and puts it in Applications. Plass
-then works offline, and PDF export never waits on the network. Run the same
-line again to update. Nothing else needs installing. `.typ` and `.md` files
-list Plass under **Open With**; choose it in a file's **Get Info** to make
-it the default.
+It downloads Plass.app (about 20 MB, including the Typst compiler and
+fonts) and puts it in Applications. Plass then works offline, and PDF export
+never waits on the network. Run the same line again to update. Nothing else
+needs installing. `.typ` and `.md` files list Plass under **Open With**;
+choose it in a file's **Get Info** to make it the default.
 
-To build it yourself from a checkout (needs Apple's Command Line Tools and
-Node 22): `npm ci`, then `app/build.sh`, which installs your build in
-Applications. Every deploy publishes the app with the site; the only
-committed binary is the small native shell in `app/bin`, recompiled by
-`app/build.sh` when `app/Sources/main.swift` changes — commit it with that
-change (the build check fails if you forget).
+Every deploy builds the app on a GitHub Mac from that deploy's site and
+publishes it beside the site, so the app and plass.tayweid.io are always the
+same version. To build it yourself from a checkout (needs Apple's Command
+Line Tools and Node 22): `npm ci`, then `app/build.sh`, which installs your
+build in Applications.
 
 ## Run it
 

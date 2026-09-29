@@ -7,15 +7,12 @@
 #   PLASS_SKIP_WEB=1 app/build.sh  # reuse the existing dist/
 #
 # The app is the site's page (the vite build, compiler and fonts included)
-# inside a small native shell. The shell's compiled program and icon are
-# committed in app/bin, because the site deploy runs on Linux and cannot
-# compile Swift: `npm run build` packs app/bin with the page into dist/app,
-# and plass.tayweid.io/install assembles the app from there. Nothing large
-# is committed; the page reaches installs with every deploy.
+# inside a small native shell. The deploy runs this on a GitHub Mac and
+# publishes the zipped result beside the site, where plass.tayweid.io/install
+# fetches it (.github/workflows/deploy.yml). Nothing is committed.
 #
-# app/bin is recompiled only when main.swift or the icon changes (their
-# hashes are in app/bin/sources.sha256) — commit it with that change. The
-# build check fails when they disagree, so a stale shell never ships.
+# The shell is recompiled only when main.swift or the icon changed since the
+# last build here (their hashes are kept in app/build/bin).
 set -euo pipefail
 cd "$(dirname "$0")"
 if [ -n "${1:-}" ]; then
@@ -41,9 +38,10 @@ if [ ! -f ../dist/index.html ]; then
     exit 1
 fi
 
-# ---- the shell (app/bin), refreshed only when its sources changed ----
-if ! shasum -a 256 -c bin/sources.sha256 >/dev/null 2>&1 || [ ! -x bin/Plass ] || [ ! -f bin/AppIcon.icns ]; then
-    echo "main.swift or the icon changed: recompiling app/bin (commit it with the change)"
+# ---- the shell, recompiled only when its sources changed ----
+bin="build/bin"
+if ! shasum -a 256 -c "$bin/sources.sha256" >/dev/null 2>&1 || [ ! -x "$bin/Plass" ] || [ ! -f "$bin/AppIcon.icns" ]; then
+    echo "compiling the shell"
     # The command-line tools can ship an SDK newer than their own compiler,
     # which swiftc refuses. Pick the newest SDK the compiler accepts.
     sdk=""
@@ -65,8 +63,8 @@ if ! shasum -a 256 -c bin/sources.sha256 >/dev/null 2>&1 || [ ! -x bin/Plass ] |
             -framework AppKit -framework WebKit \
             -o "$work/Plass-$arch" Sources/main.swift
     done
-    mkdir -p bin
-    lipo -create "$work/Plass-arm64" "$work/Plass-x86_64" -output bin/Plass
+    mkdir -p "$bin"
+    lipo -create "$work/Plass-arm64" "$work/Plass-x86_64" -output "$bin/Plass"
 
     iconset="$work/AppIcon.iconset"
     mkdir -p "$iconset"
@@ -78,19 +76,19 @@ if ! shasum -a 256 -c bin/sources.sha256 >/dev/null 2>&1 || [ ! -x bin/Plass ] |
         fi
     done
     cp "$icon_source" "$iconset/icon_512x512@2x.png"
-    iconutil -c icns "$iconset" -o bin/AppIcon.icns
+    iconutil -c icns "$iconset" -o "$bin/AppIcon.icns"
     rm -rf "$work"
-    shasum -a 256 Sources/main.swift "$icon_source" > bin/sources.sha256
+    shasum -a 256 Sources/main.swift "$icon_source" > "$bin/sources.sha256"
 fi
 
-# ---- the app: the same assembly plass.tayweid.io/install does ----
+# ---- the app ----
 rm -rf "$out"
 mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"
-cp bin/Plass "$out/Contents/MacOS/Plass"
-cp bin/AppIcon.icns "$out/Contents/Resources/AppIcon.icns"
+cp "$bin/Plass" "$out/Contents/MacOS/Plass"
+cp "$bin/AppIcon.icns" "$out/Contents/Resources/AppIcon.icns"
 cp Info.plist "$out/Contents/Info.plist"
 printf 'APPL????' > "$out/Contents/PkgInfo"
-# The site's installer and app pieces are not part of the page.
+# The site's installer and app download are not part of the page.
 rsync -a --exclude /install --exclude /app ../dist/ "$out/Contents/Resources/web/"
 # Ad-hoc signature: enough to run on Apple silicon.
 codesign --force --sign - "$out" >/dev/null 2>&1

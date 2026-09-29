@@ -19,7 +19,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "npm run verify:sidecar && npm run check:unused && npm run check:exports && npm run check:cycles && tsc --noEmit && vite build && node --import tsx scripts/pack-app.ts",
+    "build": "npm run verify:sidecar && npm run check:unused && npm run check:exports && npm run check:cycles && tsc --noEmit && vite build",
     "check:cycles": "node --import tsx scripts/check-import-cycles.ts",
     "check:unused": "node --import tsx scripts/check-unused.ts",
     "check:exports": "knip --include exports,types",
