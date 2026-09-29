@@ -62,7 +62,7 @@ import {
 } from './layout/flow-rules';
 import { citationLabelMap } from './citations';
 import { eqKey } from './equations';
-import { getInk, inkKey } from './math-ink';
+import { getInk, inkKey, inkKeyFor, inkStatus } from './math-ink';
 import { parseTypstSvg } from './safe-svg';
 import { recordLayoutPerf } from './layout/perf';
 import { COMMON_PORT_KEYS, effectiveFont, parityMetrics, cssFontStack, footnoteFrameInsetsEm } from './font-registry';
@@ -678,6 +678,19 @@ class TypesetView {
           out.push({ type: child.type.name, offset, domPt: px(offset, child) * 0.75, typstPt: pt(offset, child) });
         });
         return out;
+      };
+      // Ink statuses of the document's inline formulas (tests wait for
+      // none pending before measuring).
+      (w as unknown as { __mathInk: () => Record<string, number> }).__mathInk = () => {
+        const st = getSettings(this.view.state);
+        const counts: Record<string, number> = {};
+        this.view.state.doc.descendants((n) => {
+          if (n.type.name !== 'math_inline' || !(n.attrs.src as string).trim()) return true;
+          const status = inkStatus(inkKeyFor(n, st));
+          counts[status] = (counts[status] ?? 0) + 1;
+          return false;
+        });
+        return counts;
       };
       (w as unknown as { __shapedWidthPt: (text: string, style?: 'regular' | 'bold' | 'italic') => number | null }).__shapedWidthPt = (text, style = 'regular') => {
         const st = getSettings(this.view.state);
@@ -2551,6 +2564,16 @@ class TypesetView {
       local: { starts: this.anchorsToPageStartEntries(local.anchors), count: local.count },
       entryFor: (node) => this.cache.get(node),
       domBreaksFor: (node, pos) => this.domBreakSignature(node, pos),
+      unmeasuredFor: (node) => {
+        const out: string[] = [];
+        node.descendants((n) => {
+          if (n.type.name !== 'math_inline' || !(n.attrs.src as string).trim()) return true;
+          const status = inkStatus(inkKeyFor(n, settings));
+          if (status !== 'ready') out.push(status);
+          return false;
+        });
+        return out;
+      },
       // The chrome main.ts painted (number, running header/footer), by page.
       editorChrome: [...document.querySelectorAll<HTMLElement>('#pages .page-num')].map((el) => ({
         page: Number(el.dataset.page ?? -1),

@@ -15,7 +15,7 @@ import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
 import { wrapAligned } from './math-src';
 import { getSettings, parseMathMacros } from './settings';
-import { forgetInk, getInk, inkFailed, inkKey, onInk, requestInk } from './math-ink';
+import { forgetInk, getInk, inkDeferredReason, inkKey, inkStatus, isBoldMath, onInk, requestInk } from './math-ink';
 import { scheduleTypeset } from './typeset-plugin';
 import { mountTypstSvg } from './safe-svg';
 
@@ -38,11 +38,6 @@ function renderInto(el: HTMLElement, src: string, displayMode: boolean, macros: 
 /** NodeView lookup by document element — the editor popover starts and
  * settles the width hold through it (see MathView.beginWidthHold). */
 const mathViews = new WeakMap<Node, MathView>();
-
-/** Inline math inside a strong span compiles as bold ink (see `inkKey`). */
-function isBoldMath(node: PMNode): boolean {
-  return node.type.name === 'math_inline' && node.marks.some((m) => m.type.name === 'strong');
-}
 
 /** The marks a new inline formula inherits from its insertion point: the
  * ones that change Typst's print (strong widens the math) or the ink
@@ -140,6 +135,7 @@ export class MathView implements NodeView {
     if (!src.trim()) {
       this.endWidthHold();
       this.inkApplied = '';
+      this.markUnmeasured(null);
       renderInto(this.dom, src, this.display);
       return;
     }
@@ -147,6 +143,7 @@ export class MathView implements NodeView {
     const ink = getInk(key);
     if (ink) {
       this.endWidthHold();
+      this.markUnmeasured(null);
       if (this.inkApplied === key) return;
       this.inkApplied = key;
       mountTypstSvg(this.dom, ink.svg);
@@ -170,13 +167,13 @@ export class MathView implements NodeView {
     // document keeps the held compiled ink painted (geometry frozen; the
     // popover shows the live KaTeX echo) and only queues the new compile —
     // the surrounding line re-breaks once, when that compile settles.
+    requestInk(key, src, this.display, settings, this.bold);
+    const status = inkStatus(key);
     if (this.holdKey !== null) {
-      if (getInk(this.holdKey) && !inkFailed(key)) {
-        requestInk(key, src, this.display, settings, this.bold);
-        return;
-      }
-      // New source failed to compile, or the held ink was evicted: abandon
-      // the hold and fall back to the KaTeX echo (one re-layout).
+      if (getInk(this.holdKey) && status === 'pending') return;
+      // New source failed to compile (or could not be compiled now), or
+      // the held ink was evicted: abandon the hold and fall back to the
+      // KaTeX echo (one re-layout).
       this.endWidthHold();
       scheduleTypeset(this.view);
     }
@@ -185,7 +182,28 @@ export class MathView implements NodeView {
       this.dom.classList.remove('math-ink');
     }
     renderInto(this.dom, src, this.display, parseMathMacros(this.lastMacros));
-    requestInk(key, src, this.display, settings, this.bold);
+    this.markUnmeasured(status === 'failed' || status === 'deferred' ? key : null);
+  }
+
+  /**
+   * A formula left on its KaTeX echo has KaTeX's width, not Typst's: the
+   * lines around it may break differently in print. Say so on the page
+   * (paint only — an outline moves nothing) rather than lay out silently
+   * wrong. Pending ink is the ordinary echo and is not marked.
+   */
+  private markUnmeasured(key: string | null) {
+    const was = this.dom.classList.contains('math-unmeasured');
+    if (key === null) {
+      if (!was) return;
+      this.dom.classList.remove('math-unmeasured');
+      this.dom.removeAttribute('title');
+      return;
+    }
+    const reason = inkDeferredReason(key);
+    this.dom.classList.add('math-unmeasured');
+    this.dom.title = reason
+      ? `Typst has not measured this formula (${reason}). Line breaks around it are approximate until it compiles; editing the document retries.`
+      : 'Typst could not compile this formula. It is shown with an approximate width, and the print will differ.';
   }
 
   update(node: PMNode): boolean {

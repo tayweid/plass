@@ -26,6 +26,10 @@ export interface BlockAudit {
   typst?: string;
   authority?: string | null;
   reason?: string;
+  /** Inline formulas in the block laid out without Typst's width (their
+   * ink status: pending, deferred, failed). A mismatch here is expected
+   * and says nothing about the port. */
+  unmeasured?: string[];
 }
 
 /** A page whose margins Typst set differently from the editor's chrome
@@ -59,6 +63,8 @@ export interface PortAuditReport {
     browserMismatch: number;
     pagesAgree: boolean;
     chromeMismatch: number;
+    /** Inline formulas laid out at KaTeX's width, not Typst's. */
+    unmeasuredAtoms: number;
   };
 }
 
@@ -101,6 +107,8 @@ export function buildPortAudit(args: {
   domBreaksFor?: (node: PMNode, pos: number) => string | null;
   /** The chrome the editor painted, page by page. */
   editorChrome?: Array<{ page: number; text: string }>;
+  /** Ink statuses of the block's inline formulas that have no Typst width. */
+  unmeasuredFor?: (node: PMNode) => string[];
   compileMs: number;
   analyzeMs: number;
 }): PortAuditReport {
@@ -108,7 +116,8 @@ export function buildPortAudit(args: {
   const blocks: BlockAudit[] = typst.units.map((u) => {
     const node = doc.nodeAt(u.pos);
     const text = (node?.textContent ?? '').replace(/\s+/g, ' ').slice(0, 48);
-    const base = { pos: u.pos, type: u.type, text };
+    const unmeasured = node ? args.unmeasuredFor?.(node) ?? [] : [];
+    const base = { pos: u.pos, type: u.type, text, ...(unmeasured.length ? { unmeasured } : {}) };
     if (u.status === 'fail') return { ...base, status: 'typst-fail', reason: u.reason };
     if (u.type === 'table' || !u.breaks) return { ...base, status: 'rows' };
     const entry = node ? args.entryFor(node) : undefined;
@@ -158,6 +167,7 @@ export function buildPortAudit(args: {
       browserMismatch: count('browser-mismatch'),
       pagesAgree: agree,
       chromeMismatch: chrome.length,
+      unmeasuredAtoms: blocks.reduce((n, b) => n + (b.unmeasured?.length ?? 0), 0),
     },
   };
 }

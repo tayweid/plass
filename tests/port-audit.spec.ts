@@ -25,8 +25,8 @@ interface PortAuditReport {
     agree: boolean;
     firstDiff: { firstDiffPage: number; cause: string; localStart: unknown; exactStart: unknown } | null;
   };
-  blocks: Array<{ pos: number; type: string; text: string; status: string; port?: string; typst?: string; authority?: string | null; reason?: string }>;
-  summary: { blocks: number; match: number; mismatch: number; typstFail: number; noPort: number; browserMismatch: number; pagesAgree: boolean; chromeMismatch: number };
+  blocks: Array<{ pos: number; type: string; text: string; status: string; port?: string; typst?: string; authority?: string | null; reason?: string; unmeasured?: string[] }>;
+  summary: { blocks: number; match: number; mismatch: number; typstFail: number; noPort: number; browserMismatch: number; pagesAgree: boolean; chromeMismatch: number; unmeasuredAtoms: number };
 }
 
 declare global {
@@ -36,6 +36,7 @@ declare global {
     __pagCount: () => number;
     __blockAuthority: (pos: number) => { authority: string | null } | null;
     __audit: () => Promise<PortAuditReport | null>;
+    __mathInk: () => Record<string, number>;
   }
 }
 
@@ -375,6 +376,12 @@ async function openText(page: Page, name: string, text: string) {
       { timeout: 30_000, intervals: [250, 500, 1000] },
     )
     .toMatch(/port|none/);
+  // Every inline formula has settled: its Typst width arrived, or the
+  // compiler said it will not (the report lists those). Pagination can go
+  // quiet while formulas still sit at KaTeX's width.
+  await expect
+    .poll(() => page.evaluate(() => window.__mathInk().pending ?? 0), { timeout: 90_000, intervals: [250, 500, 1000] })
+    .toBe(0);
   let last = -1;
   await expect
     .poll(
@@ -394,10 +401,15 @@ function describe(report: PortAuditReport): string {
   const lines = [
     `blocks ${s.blocks}: match ${s.match}, mismatch ${s.mismatch}, browser-mismatch ${s.browserMismatch}, typst-fail ${s.typstFail}, no-port ${s.noPort}` +
       ` | pages local ${report.pages.localCount} typst ${report.typst.pageCount} ${s.pagesAgree ? 'agree' : 'DIFFER'}` +
-      ` | compile ${Math.round(report.compileMs)} ms, analyze ${Math.round(report.analyzeMs)} ms`,
+      ` | compile ${Math.round(report.compileMs)} ms, analyze ${Math.round(report.analyzeMs)} ms` +
+      (s.unmeasuredAtoms ? ` | ${s.unmeasuredAtoms} formula(s) without a Typst width` : ''),
   ];
   for (const b of report.blocks.filter((b) => b.status === 'mismatch' || b.status === 'browser-mismatch' || b.status === 'typst-fail' || b.status === 'no-port')) {
-    lines.push(`  ${b.status.padEnd(10)} ${b.type}@${b.pos} "${b.text}"` + (b.reason ? ` — ${b.reason}` : b.port ? ` port ${b.port} typst ${b.typst}` : ''));
+    lines.push(
+      `  ${b.status.padEnd(10)} ${b.type}@${b.pos} "${b.text}"` +
+        (b.reason ? ` — ${b.reason}` : b.port ? ` port ${b.port} typst ${b.typst}` : '') +
+        (b.unmeasured ? ` — formulas without a Typst width: ${b.unmeasured.join(', ')}` : ''),
+    );
   }
   for (const c of report.chrome) lines.push(`  chrome page ${c.page + 1}: typst ${JSON.stringify(c.typst)} editor ${JSON.stringify(c.editor)}`);
   if (!s.pagesAgree) {
@@ -426,6 +438,7 @@ for (const doc of docs) {
       expect(report!.summary.typstFail, 'blocks Typst could not be matched to').toBe(0);
       expect(report!.summary.pagesAgree, 'page starts differ from Typst').toBe(true);
       expect(report!.summary.chromeMismatch, 'page chrome differs from Typst').toBe(0);
+      expect(report!.summary.unmeasuredAtoms, 'formulas Typst never measured').toBe(0);
     }
   });
 }

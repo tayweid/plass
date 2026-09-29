@@ -223,6 +223,18 @@ function loadTypst(): Promise<TypstLike> {
   return typstPromise;
 }
 
+let compilerReady = false;
+
+/** Everything a task needs before Typst sees its source: network I/O and
+ * instantiation only, the same for every document. */
+async function warm(needsPackage: boolean): Promise<void> {
+  if (needsPackage) await loadPinnedPackage();
+  const typst = (await loadTypst()) as TypstLike & { getRenderer(): Promise<unknown> };
+  await typst.getCompiler();
+  await typst.getRenderer();
+  compilerReady = true;
+}
+
 async function installWorld(typst: TypstLike, source: string, assets: CompilerAsset[]) {
   await typst.resetShadow();
   for (const asset of assets) await typst.mapShadow(asset.path, asset.data);
@@ -291,6 +303,26 @@ async function handleRequest(request: CompilerRequest) {
     const response: CompilerResponse = { id: request.id, ok: false, code: 'invalid', message: invalid };
     scope.postMessage(response);
     return;
+  }
+  const task = request.task;
+  if (task.kind !== 'test-busy') {
+    const needsPackage = sourceNeedsPinnedTypstPackage(task.source);
+    if (!compilerReady || (needsPackage && !pinnedPackageBytes)) {
+      scope.postMessage({ id: request.id, phase: 'loading' } satisfies CompilerResponse);
+      try {
+        await warm(needsPackage);
+      } catch (error) {
+        const response: CompilerResponse = {
+          id: request.id,
+          ok: false,
+          code: 'unavailable',
+          message: `The Typst compiler could not be loaded: ${(error instanceof Error ? error.message : String(error)).slice(0, 400)}`,
+        };
+        scope.postMessage(response);
+        return;
+      }
+      scope.postMessage({ id: request.id, phase: 'running' } satisfies CompilerResponse);
+    }
   }
   try {
     const value = await runTask(request.task);

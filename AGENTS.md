@@ -75,6 +75,10 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   must not alter layout heights — paint-only shifts use `transform` or
   `box-shadow`; math atom advance = the Typst-exact compiled atom width
   (measured in Typst; atom widths are part of the block layout cache key).
+  A formula without that width (Typst rejected it: `failed`; the compiler
+  could not run it — timeout, paused circuit: `deferred`, retried at the
+  next circuit epoch; not loadable: retried after the next good compile) is outlined `.math-unmeasured` on the page and listed
+  by the audit (`unmeasured`). Read widths through `inkKeyFor` (bold key).
   The paginator fits Typst FRAMES, not browser boxes: a frame runs from
   the cap top (`pageTopAdjustEm` below the box top) to the last baseline
   (`pageBottomInsetEm` above the box bottom), footnote entries included

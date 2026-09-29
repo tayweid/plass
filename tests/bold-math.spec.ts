@@ -5,6 +5,7 @@ declare global {
   interface Window {
     view: import('prosemirror-view').EditorView;
     __pagLog: () => string[];
+    __portAtoms: (pos: number) => Array<{ type: string; domPt: number }> | null;
   }
 }
 
@@ -53,8 +54,22 @@ test('inline math inside a bold span compiles bold ink and stays exact', async (
   const regular = widths.find((w) => !w.inStrong)!;
   const bold = widths.find((w) => w.inStrong)!;
   expect(regular.width).toBeGreaterThan(0);
-  // Never narrower than the regular ink; equal under the pinned compiler.
+  // Never narrower than the regular ink; equal under the pinned compiler,
+  // and never the width of the source text (a markup-mode measure once
+  // returned the literal "mi(2x)").
   expect(bold.width).toBeGreaterThanOrEqual(regular.width - 0.01);
+  expect(bold.width).toBeLessThan(regular.width * 1.25);
+
+  // The layout reserves the bold ink's own width, not the node's DOM box
+  // (which carries the hover padding).
+  const reserved = await page.evaluate(() => {
+    let pos = -1;
+    window.view.state.doc.forEach((n, off) => {
+      if (pos < 0 && n.textContent.startsWith('Bold:')) pos = off;
+    });
+    return window.__portAtoms(pos)!.find((a) => a.type === 'math_inline')!.domPt * (4 / 3);
+  });
+  expect(reserved).toBeCloseTo(bold.width, 1);
 
   // Pagination settles with the bold formula in the flow.
   await settleLocal(page);
