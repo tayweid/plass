@@ -1,0 +1,19 @@
+{
+  "name": "Plass",
+  "id": "io.tayweid.plass",
+  "envPrefix": "PLASS",
+  "web": "../dist",
+  "pythons": ["browser"],
+  "openBy": "drop",
+  "scheme": "plass",
+  "site": "https://plass.tayweid.io",
+  "elsewhere": "Elsewhere, Plass runs in Chrome at https://plass.tayweid.io.",
+  "defaultDocument": "Untitled.typ",
+  "window": { "width": 1100, "height": 800, "minWidth": 520, "minHeight": 360 },
+  "icon": "../public/icons/plass-512.png",
+  "copyright": "© 2026 Taylor J Weidman. MIT License.",
+  "documentTypes": [
+    { "name": "Typst document", "role": "Editor", "rank": "Alternate", "extensions": ["typ"] },
+    { "name": "Markdown document", "role": "Editor", "rank": "Alternate", "extensions": ["md"] }
+  ]
+}
