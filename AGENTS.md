@@ -10,6 +10,29 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
 - `npm run build` — production build with host-independent relative paths (CI runs this);
   deploy = push `main`: `.github/workflows/deploy.yml` builds and
   publishes to plass.tayweid.io via GitHub Pages.
+- Plass.app (Mac; `docs/CLAERBOUT-SHELL.md`): the vite build inside the
+  Claerbout Electron shell, the shell Knuth ships on (`github.com/tayweid/
+  claerbout`, one tag for every app; the deploy clones it at
+  `CLAERBOUT_TAG`). `app/plass.json` configures it: no Python, the page
+  from `dist/` under `plass://app/`, `openBy: "drop"`. The window is
+  Chromium, so files go through the File System Access API exactly as in
+  a browser tab, and a handle stored in IndexedDB reopens after a relaunch
+  because the shell's permission handler grants what the page holds. A
+  Finder open arrives as `?open=<path>`; once the page sends `ready`, the
+  shell drops the file on it and the page holds a real handle
+  (`src/claerbout.ts`). `npm run app` runs the shell from the checkout
+  (needs `dist/` and the `claerbout` checkout beside this one, or
+  `CLAERBOUT_SHELL`); `npm run app:build` packages and installs it
+  (`--zip`, `--arch`, `--web` pass through to the shell's packager);
+  `npm run app:smoke` drives the built app with Playwright `_electron`
+  (open, typeset, ⌘S); `npm run app:install-script` renders
+  `public/install` from the shell's template. Log:
+  `~/Library/Logs/Plass.log`. The deploy's `app` job (macos-15) packages
+  both processors from the verified `dist`, installs through the install
+  line, smoke-tests, and publishes `app/Plass-<arch>.zip` and
+  `app/Plass.app.zip` beside the site; if it fails, the site still deploys
+  and keeps the live zips. The Swift/WKWebView shell it replaced was
+  retired 2026-09-30 (git history has it).
 - PWA: `public/manifest.webmanifest` registers Plass as a file handler
   for .typ/.md (installed app = macOS default-app candidate; Finder
   launches arrive via `launchQueue` in `main.ts`, folderless — the

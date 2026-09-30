@@ -33,43 +33,31 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
    - Citations: linking picker entries to local PDFs when keys match
      filenames.
 
-## Planned: Plass.app on the Claerbout shell (Electron)
+## Done: Plass.app on the Claerbout shell (Electron, 2026-09-30)
 
 Decided 2026-09-29 for the whole suite (ManimLive's `maniml/docs/app_plan.md`,
-"Claerbout: Electron for all three apps"); Plass moves when it opens to
-researchers. The work, in order, with what each step found, is
-`docs/CLAERBOUT-SHELL.md`: as of 2026-09-30 the file bridge question below
-is answered (the File System Access API works in the window and persisted
-handles reopen; `native-fs.ts` is gone), the page speaks the shell, and
-packaging waits on the shell's own repository. Knuth went first and shipped on it 2026-09-29/30: the shell is
-knuth's `app/shell/`, and knuth `docs/APP.md` ("What building it found") has
-the record. What that means here:
+"Claerbout: Electron for all three apps"); shipped 2026-09-30, the day
+after Knuth. The work, in order, with what each step found, is
+`docs/CLAERBOUT-SHELL.md`. What it settled:
 
-- **Chromium is Plass's reference engine**, so the in-app WebKit caveats go:
-  no `SubpixelInlineLayoutEnabled` private flag, no separate app-parity
-  story, and the `webkit-app` Playwright project and `tests/fixture.ts`'s
-  Swift-bridge stand-in are replaced by driving the app with Playwright's
-  `_electron`.
-- **The file bridge moves to the Claerbout protocol**
-  (`window.claerbout.request`), answered in Electron's main process.
-  `native-fs.ts` speaks the Swift shell's `plass` handler today
-  (`permission`, `stat`, `read`, `write`, `child`, `list`, `rename`,
-  `openPanel`, `savePanel`, `folderPanel`, `document`); those become
-  protocol messages, and the grants model (`grants.json`) comes along. Or,
-  since Electron is Chromium, the File System Access API may simply work
-  in the window and most of the bridge can go: to try first.
-- **Probably no engine.** The suite plan gave Plass a small one; Knuth's
-  shell already serves its page from a custom scheme and does file
-  operations itself, which is what Plass needs. OPEN until ported.
-- **Inherited as is**: the page served from `plass://app/` in the bundle
-  (compiler WASM and fonts included, so the zip stays ~20 MB plus a few
-  for the shell); the app shipping without Electron's framework and
-  completing itself on first launch (cloned from Knuth or ManimLive if
-  installed, else a one-time ~125 MB download), through the same compiled
-  launcher; the install line running the app's own `complete.sh`; ad-hoc
-  signing of the helpers and Electron's small frameworks, without which a
-  browser download is called "damaged"; no asar and no fuses, so the
-  framework stays clonable; macOS 13 or later.
+- **Chromium is Plass's reference engine.** The in-app WebKit caveats are
+  gone: no private flag, no separate app-parity story, no `webkit-app`
+  test project; the `chromium` project is the app's page, and
+  `app/smoke.mjs` drives the built app with Playwright's `_electron`.
+- **No file bridge.** The File System Access API works in the window and
+  handles stored in IndexedDB reopen after a relaunch (the shell's
+  permission handler grants what the page holds); a Finder open is dropped
+  on the page as a real handle. `native-fs.ts`, the grants model and the
+  Swift shell's whole file protocol retired with it.
+- **No engine.** The shell serves the page from `plass://app/` in the
+  bundle (compiler WASM and fonts included, 20 MB zips) and does the rest
+  itself.
+- **Inherited from Knuth**: the app ships without Electron's framework and
+  completes itself (cloned from an installed Claerbout app, else a
+  one-time download), the install line runs its `complete.sh`, ad-hoc
+  signing, no asar, macOS 13 or later. The shell is its own repository,
+  `github.com/tayweid/claerbout`, pinned by tag; a bump is one tag and one
+  pull request per app the same day.
 
 ## Parked (Taylor, 2026-09-11)
 

@@ -12,8 +12,8 @@
 //   own debugger: the page receives a real FileSystemFileHandle, like one
 //   from a picker. There is no other way from a path to a handle.
 // - Nothing else yet. `command` events (menu items acting in the page)
-//   are the shell's when a menu item needs one; the Swift shell's menu
-//   had none.
+//   are the shell's when a menu item needs one; the shell this replaced
+//   had no menu item that acted in the page.
 
 interface ClaerboutBridge {
   request(message: Record<string, unknown>): Promise<unknown>;
