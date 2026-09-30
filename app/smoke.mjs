@@ -34,6 +34,19 @@ const app = await electron.launch({
 });
 const fail = async (message) => {
   console.error(`smoke: ${message}`);
+  // What the window showed and what the shell logged, for a run one
+  // cannot watch (the deploy's Mac).
+  try {
+    const page = app.windows().find((window) => window.url().startsWith('plass://'));
+    if (page) {
+      console.error(`smoke: title "${await page.title()}", url ${page.url()}`);
+      console.error(`smoke: page text: ${(await page.evaluate(() => document.body.innerText)).slice(0, 600).replace(/\n+/g, ' | ')}`);
+    }
+    const log = path.join(os.homedir(), 'Library', 'Logs', 'Plass.log');
+    if (fs.existsSync(log)) console.error(`smoke: Plass.log:\n${fs.readFileSync(log, 'utf8').split('\n').slice(-12).join('\n')}`);
+  } catch (error) {
+    console.error(`smoke: (no diagnostics: ${error.message})`);
+  }
   await app.close().catch(() => {});
   process.exit(1);
 };
@@ -46,6 +59,7 @@ while (!page && Date.now() < deadline) {
 }
 if (!page) await fail(`no document window (${app.windows().map((window) => window.url())})`);
 page.on('pageerror', (error) => console.error(`smoke: page error: ${error.message}`));
+page.on('console', (message) => { if (message.type() === 'error') console.error(`smoke: console: ${message.text()}`); });
 
 // The document opens (the shell's drop) and typesets.
 await page.waitForFunction(() => document.title.startsWith('smoke'), null, { timeout: 30_000 })
