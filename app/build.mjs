@@ -9,8 +9,9 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { config, shell } from './shell-path.mjs';
 
-// The packager resolves --web against the config's folder; here it is
-// named from the checkout (`--web dist`), so it is made absolute first.
+// --web is named from the checkout (`--web dist`); absolute, it means the
+// same wherever the packager resolves it (shell 0.1.0 used the config's
+// folder, 0.1.1 the working directory).
 const args = process.argv.slice(2);
 const web = args.indexOf('--web');
 if (web !== -1 && args[web + 1]) args[web + 1] = path.resolve(args[web + 1]);
