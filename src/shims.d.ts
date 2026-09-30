@@ -74,6 +74,14 @@ interface Window {
   launchQueue?: LaunchQueue;
 }
 
+// Plass.app: the Claerbout shell's bridge (preload.js), see src/claerbout.ts.
+interface Window {
+  claerbout?: {
+    request(message: Record<string, unknown>): Promise<unknown>;
+    on(event: string, listener: (detail: unknown) => void): () => void;
+  };
+}
+
 interface FileSystemDirectoryHandle {
   values(): AsyncIterableIterator<FileSystemFileHandle | FileSystemDirectoryHandle>;
   resolve(handle: FileSystemHandle): Promise<string[] | null>;
