@@ -46,16 +46,22 @@ curl -fsSL https://plass.tayweid.io/install | bash
 ```
 
 It downloads Plass.app (about 20 MB, including the Typst compiler and
-fonts) and puts it in Applications. Plass then works offline, and PDF export
-never waits on the network. Run the same line again to update. Nothing else
+fonts) and puts it in Applications, then gets Electron (Chromium) once:
+cloned from another Claerbout app already installed, such as Knuth, or
+downloaded (about 130 MB). Plass then works offline, and PDF export never
+waits on the network. Run the same line again to update. Nothing else
 needs installing. `.typ` and `.md` files list Plass under **Open With**;
-choose it in a file's **Get Info** to make it the default.
+choose it in a file's **Get Info** to make it the default. Needs macOS 13
+or later.
 
-Every deploy builds the app on a GitHub Mac from that deploy's site and
+Every deploy packages the app on a GitHub Mac from that deploy's site and
 publishes it beside the site, so the app and plass.tayweid.io are always the
-same version. To build it yourself from a checkout (needs Apple's Command
-Line Tools and Node 22): `npm ci`, then `app/build.sh`, which installs your
-build in Applications.
+same version. The app is the site's page inside the Claerbout shell, the
+Electron shell Knuth ships on (`docs/CLAERBOUT-SHELL.md`). To build it
+yourself from a checkout (needs Apple's Command Line Tools, Node 22 and the
+`claerbout` repository beside this one): `npx vite build`, then
+`npm run app:build`, which installs your build in Applications;
+`npm run app` runs it from the checkout without installing.
 
 ## Run it
 

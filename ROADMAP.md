@@ -37,7 +37,11 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
 
 Decided 2026-09-29 for the whole suite (ManimLive's `maniml/docs/app_plan.md`,
 "Claerbout: Electron for all three apps"); Plass moves when it opens to
-researchers. Knuth went first and shipped on it 2026-09-29/30: the shell is
+researchers. The work, in order, with what each step found, is
+`docs/CLAERBOUT-SHELL.md`: as of 2026-09-30 the file bridge question below
+is answered (the File System Access API works in the window and persisted
+handles reopen; `native-fs.ts` is gone), the page speaks the shell, and
+packaging waits on the shell's own repository. Knuth went first and shipped on it 2026-09-29/30: the shell is
 knuth's `app/shell/`, and knuth `docs/APP.md` ("What building it found") has
 the record. What that means here:
 
