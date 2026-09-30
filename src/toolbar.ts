@@ -19,8 +19,14 @@ import { insertEditorComment } from './editor-comments';
 import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
 import { isPwaInstalled, onPwaInstallState, requestPwaInstall } from './pwa-install';
+import { isNativeShell } from './claerbout';
 import type { TypesetStats } from './typeset-plugin';
 import { DEFAULT_DOC_NAME, type FileManager } from './file-manager';
+
+// Every deploy publishes the Mac app beside this page (.github/workflows/
+// deploy.yml), so both links are this page's version.
+const APP_ZIP = 'https://plass.tayweid.io/app/Plass.app.zip';
+const APP_LINE = 'curl -fsSL https://plass.tayweid.io/install | bash';
 
 export interface Toolbar {
   update: (state: EditorState) => void;
@@ -287,6 +293,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   const fileMenu = createMenu('File', fileBtn);
   const exports = createMenu('Export', exportBtn);
   const recent = createMenu('Recent', fileBtn, fileMenu);
+  const get = createMenu('Get Plass', fileBtn, fileMenu);
 
   document.addEventListener('mousedown', (e) => {
     if (openMenu && !openMenu.element.contains(e.target as Node) && !openMenu.anchor.contains(e.target as Node)) closeMenu();
@@ -611,8 +618,16 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   });
   installButton.classList.add('pwa-install');
   installButton.setAttribute('aria-label', 'Install Plass');
-  installButton.hidden = isPwaInstalled();
-  onPwaInstallState((installed) => { installButton.hidden = installed; });
+  installButton.hidden = isNativeShell() || isPwaInstalled();
+  onPwaInstallState((installed) => { installButton.hidden = isNativeShell() || installed; });
+  // The Mac app, from a browser tab on a Mac: every deploy publishes it
+  // beside this page, so the download and the install line are this
+  // page's version. Inside Plass.app there is nothing to get.
+  const mac = /Mac/.test(navigator.platform) && navigator.maxTouchPoints < 2;
+  if (mac && !isNativeShell()) {
+    divider(fileMenu.element);
+    item(fileMenu.element, 'Get Plass for your Mac', () => {}, { title: 'Plass.app: the download, or the install line', submenu: get });
+  }
 
   const back = (menu: Menu) => {
     item(menu.element, '‹ File', () => showMenu(fileMenu, true));
@@ -633,6 +648,31 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   item(exports.element, 'PDF', exportPdfNow, { title: 'Export PDF via Typst' });
   item(exports.element, 'Typst (.typ)', () => void fm.exportCopy(), { title: 'Export a .typ copy' });
   item(exports.element, 'LaTeX (.tex)', () => fm.exportTexCopy(), { title: 'Export a .tex copy (vanilla LaTeX for journals)' });
+  back(get);
+  heading(get.element, 'Plass for your Mac');
+  const getHint = (text: string) => {
+    const hint = document.createElement('div');
+    hint.className = 'tb-menu-hint';
+    hint.textContent = text;
+    get.element.append(hint);
+  };
+  getHint('Opens .typ and .md from Finder and works offline. For Macs with Apple silicon; macOS 13 or later.');
+  item(get.element, 'Download Plass.app', () => window.open(APP_ZIP, '_blank', 'noopener'), {
+    title: 'Download Plass.app (a zip; unzip and drag to Applications)',
+  });
+  getHint('Unzip and drag to Applications. The first launch is refused once because the app is not signed with Apple: in System Settings → Privacy & Security click Open Anyway. It then gets Electron, the window it runs in — shared with Knuth if you have it, else a 130 MB download, once.');
+  item(get.element, 'Copy the install line', () => {
+    void navigator.clipboard.writeText(APP_LINE).then(
+      () => fm.notify('Install line copied — paste it in Terminal'),
+      () => fm.notify(APP_LINE),
+    );
+  }, { title: 'The terminal way: no Gatekeeper prompt, and the same line updates' });
+  getHint(APP_LINE);
+  divider(get.element);
+  const pwaItem = item(get.element, 'Install this page as an app', () => void requestPwaInstall((message) => fm.notify(message)), {
+    title: 'Install Plass from the browser (a window without the browser’s chrome; still the browser)',
+  });
+  onPwaInstallState((installed) => { pwaItem.hidden = installed; });
   back(recent);
   heading(recent.element, 'Recent papers');
   const recentEntries = document.createElement('div');
