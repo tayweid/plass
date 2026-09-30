@@ -176,10 +176,13 @@ checkout for development (`app/shell-path.mjs`, `CLAERBOUT_SHELL`
 overrides) and the deploy clones it at `CLAERBOUT_TAG`: the tag is the
 dependency. Not an npm dependency on purpose: that would put Electron in
 Plass's `node_modules` on every `npm ci`, the Linux verify job included,
-for a shell only the Mac app job runs. If it ever becomes one: the
-spec must be `git+https://github.com/tayweid/claerbout.git#v0.1.0`;
-`github:tayweid/claerbout#v0.1.0` locks as `git+ssh://` and a GitHub
-runner's `npm ci` fails on it with no SSH key (Knuth's first deploy).
+for a shell only the Mac app job runs. If it ever becomes one, the
+form is the tag's tarball, as Knuth uses:
+`https://github.com/tayweid/claerbout/archive/refs/tags/v0.1.0.tar.gz`.
+It resolves, carries an integrity hash and survives `npm install`;
+`github:tayweid/claerbout#v0.1.0` locks as `git+ssh://`, which a GitHub
+runner's `npm ci` cannot fetch, and a `git+https` entry is rewritten back
+to it (Knuth's first deploys).
 
 DECIDED in knuth (APP.md): the template leaves knuth when Plass is its
 second user. That is now. The repository (`claerbout`, or
