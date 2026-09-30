@@ -173,7 +173,14 @@ through each launch).
 DONE 2026-09-30: `github.com/tayweid/claerbout`, tagged `v0.1.0` the same
 day and `v0.1.1` hours later (`package.mjs --web` resolved against the
 config's folder; Plass's `app/build.mjs` had absolutized the path, Knuth's
-deploy had not). Plass builds on `v0.1.1`. Its README has the config keys. Plass finds it beside the main
+deploy had not). Then `v0.1.4`/`v0.1.5` the same evening: the deploy's first app jobs
+failed in the smoke test on the GitHub Mac, whose shell has no locale and
+whose bash 3.2 read `$version…` in `complete.sh` as a variable, so no
+framework was placed and the install line still said success (its EXIT
+trap ended in a successful `rm`). Found from the Knuth side; the install
+line now braces its variables and keeps its exit status. Plass builds on
+`v0.1.5`, verified here by installing under `env -i` with no sibling
+(Electron downloaded) and running the smoke test on the result. Its README has the config keys. Plass finds it beside the main
 checkout for development (`app/shell-path.mjs`, `CLAERBOUT_SHELL`
 overrides) and the deploy clones it at `CLAERBOUT_TAG`: the tag is the
 dependency. Not an npm dependency on purpose: that would put Electron in
