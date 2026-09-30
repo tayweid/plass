@@ -32,20 +32,26 @@ const app = await electron.launch({
   },
   timeout: 300_000,
 });
+// On GitHub Actions the step log needs a sign-in, but an ::error::
+// annotation is on the run's summary for anyone: say it there too.
+const report = (line) => {
+  console.error(line);
+  if (process.env.GITHUB_ACTIONS) console.log(`::error::${line.replace(/\n/g, '%0A')}`);
+};
 const fail = async (message) => {
-  console.error(`smoke: ${message}`);
+  report(`smoke: ${message}`);
   // What the window showed and what the shell logged, for a run one
   // cannot watch (the deploy's Mac).
   try {
     const page = app.windows().find((window) => window.url().startsWith('plass://'));
     if (page) {
-      console.error(`smoke: title "${await page.title()}", url ${page.url()}`);
-      console.error(`smoke: page text: ${(await page.evaluate(() => document.body.innerText)).slice(0, 600).replace(/\n+/g, ' | ')}`);
+      report(`smoke: title "${await page.title()}", url ${page.url()}`);
+      report(`smoke: page text: ${(await page.evaluate(() => document.body.innerText)).slice(0, 600).replace(/\n+/g, ' | ')}`);
     }
     const log = path.join(os.homedir(), 'Library', 'Logs', 'Plass.log');
-    if (fs.existsSync(log)) console.error(`smoke: Plass.log:\n${fs.readFileSync(log, 'utf8').split('\n').slice(-12).join('\n')}`);
+    if (fs.existsSync(log)) report(`smoke: Plass.log:\n${fs.readFileSync(log, 'utf8').split('\n').slice(-12).join('\n')}`);
   } catch (error) {
-    console.error(`smoke: (no diagnostics: ${error.message})`);
+    report(`smoke: (no diagnostics: ${error.message})`);
   }
   await app.close().catch(() => {});
   process.exit(1);
@@ -58,8 +64,8 @@ while (!page && Date.now() < deadline) {
   if (!page) await new Promise((resolve) => setTimeout(resolve, 300));
 }
 if (!page) await fail(`no document window (${app.windows().map((window) => window.url())})`);
-page.on('pageerror', (error) => console.error(`smoke: page error: ${error.message}`));
-page.on('console', (message) => { if (message.type() === 'error') console.error(`smoke: console: ${message.text()}`); });
+page.on('pageerror', (error) => report(`smoke: page error: ${error.message}`));
+page.on('console', (message) => { if (message.type() === 'error') report(`smoke: console: ${message.text()}`); });
 
 // The document opens (the shell's drop) and typesets.
 await page.waitForFunction(() => document.title.startsWith('smoke'), null, { timeout: 30_000 })
