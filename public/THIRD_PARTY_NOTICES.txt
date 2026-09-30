@@ -16,7 +16,7 @@ Packages:
 - @codemirror/lint@6.9.7 (MIT)
 - @codemirror/search@6.7.2 (MIT)
 - @codemirror/state@6.7.2 (MIT)
-- @codemirror/view@6.43.11 (MIT)
+- @codemirror/view@6.43.10 (MIT)
 License text source: LICENSE
 
 MIT License
@@ -1124,7 +1124,7 @@ Packages:
 - prosemirror-schema-list@1.5.1 (MIT)
 - prosemirror-state@1.4.4 (MIT)
 - prosemirror-transform@1.12.0 (MIT)
-- prosemirror-view@1.42.3 (MIT)
+- prosemirror-view@1.42.0 (MIT)
 License text source: LICENSE
 
 Copyright (C) 2015-2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
