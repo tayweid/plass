@@ -23,9 +23,26 @@ async function installTable(page: Page, merged = false) {
     return start;
   }, merged);
   await settleLocal(page, start);
-  await page.locator('.ProseMirror table td').first().locator('p').first().click();
+  if (!merged) {
+    // The formula's Typst ink replaces its KaTeX echo (a different width)
+    // after pagination can already look quiet; click only on final layout.
+    await expect(page.locator('.ProseMirror table td .math-inline.math-ink')).toHaveCount(1, { timeout: 30_000 });
+    await settleLocal(page);
+  }
+  // Click text, not the paragraph's center: the center sits a few pixels
+  // from the formula, and a click on the formula opens its editor instead.
+  const first = page.locator('.ProseMirror table td').first().locator('p').first();
+  await (merged ? first : first.locator('strong')).click();
+  await expect.poll(() => firstCellHoldsSelection(page)).toBe(true);
   await page.getByRole('button', { name: 'Layout', exact: true }).click();
 }
+
+const firstCellHoldsSelection = (page: Page) => page.evaluate(() => {
+  const { selection, doc } = window.view.state;
+  const cell = doc.firstChild!.firstChild!.firstChild!;
+  // table(0) > row(1) > first cell(2): the cell's content spans 3 .. 3 + content size.
+  return selection.from >= 3 && selection.to <= 3 + cell.content.size;
+});
 
 const widths = (page: Page) => page.evaluate(() => window.view.state.doc.firstChild!.attrs.columnWidths);
 const attrs = (page: Page) => page.evaluate(() => window.view.state.doc.firstChild!.attrs);
@@ -131,4 +148,19 @@ test('column insertion and deletion preserve logical width entries through merge
   await points.fill('50');
   await points.press('Enter');
   expect(await widths(page)).toEqual(['50pt', '50pt', '90pt']);
+});
+
+test('a formula clicked in a cell is the selection the table controls describe', async ({ page }) => {
+  await installTable(page);
+  // Put the caret in another column first, then click the formula in the first cell.
+  await page.locator('.ProseMirror table tr').first().locator('td').nth(2).locator('p').click();
+  const toolbar = page.getByRole('toolbar', { name: 'Table controls' });
+  const mode = toolbar.getByRole('combobox', { name: 'Selected column sizing' });
+  await expect(mode).toHaveValue('pt');
+  await page.locator('.ProseMirror table td .math-inline').click();
+  await expect(page.locator('.math-editor-input')).toBeFocused();
+  expect(await page.evaluate(() => window.view.state.selection.toJSON())).toEqual({ type: 'node', anchor: 9 });
+  await expect(mode).toHaveValue('auto');
+  await page.locator('.math-editor-input').press('Escape');
+  await expect.poll(() => firstCellHoldsSelection(page)).toBe(true);
 });
