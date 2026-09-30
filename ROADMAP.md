@@ -33,6 +33,40 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
    - Citations: linking picker entries to local PDFs when keys match
      filenames.
 
+## Planned: Plass.app on the Claerbout shell (Electron)
+
+Decided 2026-09-29 for the whole suite (ManimLive's `maniml/docs/app_plan.md`,
+"Claerbout: Electron for all three apps"); Plass moves when it opens to
+researchers. Knuth went first and shipped on it 2026-09-29/30: the shell is
+knuth's `app/shell/`, and knuth `docs/APP.md` ("What building it found") has
+the record. What that means here:
+
+- **Chromium is Plass's reference engine**, so the in-app WebKit caveats go:
+  no `SubpixelInlineLayoutEnabled` private flag, no separate app-parity
+  story, and the `webkit-app` Playwright project and `tests/fixture.ts`'s
+  Swift-bridge stand-in are replaced by driving the app with Playwright's
+  `_electron`.
+- **The file bridge moves to the Claerbout protocol**
+  (`window.claerbout.request`), answered in Electron's main process.
+  `native-fs.ts` speaks the Swift shell's `plass` handler today
+  (`permission`, `stat`, `read`, `write`, `child`, `list`, `rename`,
+  `openPanel`, `savePanel`, `folderPanel`, `document`); those become
+  protocol messages, and the grants model (`grants.json`) comes along. Or,
+  since Electron is Chromium, the File System Access API may simply work
+  in the window and most of the bridge can go: to try first.
+- **Probably no engine.** The suite plan gave Plass a small one; Knuth's
+  shell already serves its page from a custom scheme and does file
+  operations itself, which is what Plass needs. OPEN until ported.
+- **Inherited as is**: the page served from `plass://app/` in the bundle
+  (compiler WASM and fonts included, so the zip stays ~20 MB plus a few
+  for the shell); the app shipping without Electron's framework and
+  completing itself on first launch (cloned from Knuth or ManimLive if
+  installed, else a one-time ~125 MB download), through the same compiled
+  launcher; the install line running the app's own `complete.sh`; ad-hoc
+  signing of the helpers and Electron's small frameworks, without which a
+  browser download is called "damaged"; no asar and no fuses, so the
+  framework stays clonable; macOS 13 or later.
+
 ## Parked (Taylor, 2026-09-11)
 
 - **Incremental pagination** for 50+ page documents — until speed has been
