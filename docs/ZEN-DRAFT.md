@@ -107,11 +107,61 @@ if the other reading was meant.
 - *The smoke's zoom step*: main's (merged in): the zoom goes through the
   shell's View menu.
 
+**The reviewers' second look, fixed.** Both approved the look; these
+were the leftovers.
+
+- *No blur in the built app*: the stylesheets wrote `backdrop-filter`
+  and then `-webkit-backdrop-filter`. The build's minifier (lightningcss)
+  reads the two as one property and keeps the last, so `dist/` held only
+  the prefixed line, which Chromium does not read. In Plass.app the menus
+  and panels had no blur: the File menu was #1b1a1f over the room and
+  #28272b over the paper, a hard step at the paper's edge, with the
+  document's text readable through it. The `-webkit-` lines are gone
+  from all six rules (the menus in toolbar.css; the captions, the table
+  toolbar, the old file menu, the settings panel and its dropdown in
+  style.css). The minifier adds the prefix itself for Safari, so the
+  build now has both. Measured in the built app in the shell's
+  checkout: the File menu's `backdrop-filter` is `blur(18px)
+  saturate(1.4)` (was `none`), the step at the paper's edge is now a
+  gradient about 70 px wide, and over the document's text the glass is
+  even (a luminance spread of 0.5 against 4.7, its darkest point the
+  glass's own colour, not a letter's). Away from the edge the glass is
+  still a shade lighter over the paper than over the room (#28272b
+  against #1c1b1f). It is 94 % opaque, and the 6 % that shows through
+  is the paper's white whether blurred or not (open, below). The smoke
+  now fails if the built File menu has no `backdrop-filter`.
+- *Document settings under the fade*: in a short window the cut could
+  fall just after ⋯ (at 1100×560) and take Document settings out of
+  view with no cue. It is now pinned at the bottom with the view
+  switch, as Zen pins its bottom icons, so only tools scroll and only
+  tools go under the fade; *More* holds Extras alone. The groups are
+  447 px and the pinned pair 67 px, so every tool still shows down to a
+  window 588 px tall. The groups have `scroll-padding-block: 28px`, the
+  fade's height, so a tile reached with Tab scrolls clear of the fade.
+  `frame.spec` checks that the pair is whole, below the cut and inside
+  the window at 560, 480 and 360 px tall (360 is the app's minHeight),
+  and that a tile tabbed to under the fade comes clear of it.
+- *A caption left hanging*: Escape hands the focus back to the menu's
+  tile, with its ring and caption. A later mouse click on another tile
+  moved no focus, because the tiles swallow mousedown to keep the
+  editor's selection, and the settings panel takes no focus either. So
+  the old caption stayed beside the new panel. A mouse click on a tile
+  in the bar or the rail now first blurs the other tile that held the
+  focus. `toolbar.spec` checks this from Headings and from File.
+- *The File tile in a tab*: with the rail at 48 px, the File tile
+  (12 px in) centred 6 px right of the rail's glyphs. Wherever there is
+  no lights' room (a tab, the PWA, a native title bar) it is now 6 px
+  in, centred over the rail's column of tiles: the `env(titlebar-area-x,
+  -6px)` fallback undoes 6 of the 12. In the shell the padding is the
+  same 12 px past the lights. `frame.spec` checks that the two centres
+  agree.
+
 ## What moved where
 
 **The bar** (60 px, the window's title bar in Plass.app, a drag region
 but for its controls), left to right, padded on the left by the lights'
-room (`env(titlebar-area-x)`; 0 in a browser tab and in the PWA):
+room (`env(titlebar-area-x)`; none in a browser tab and in the PWA,
+where the File tile stands over the rail's column):
 
 - **File** — a bare 36 px tile, the folder glyph; its menu drops below
   as before: New document, Open… ⌘O, Recent papers ›, Save ⌘S, Get Plass
@@ -145,13 +195,14 @@ bar's old groups under hairlines:
 - *More*: **Extras ▸** (⋯), keeping Alignment (Justified, Center,
   Right), Code (Code block, Raw Typst block, Inline raw Typst) and
   Document (Bibliography, Markdown & shortcuts, Install Plass in a
-  browser) as the captioned glyph grid; **Document settings**, whose
-  panel flies out to the right.
-- Pinned at the bottom: the **Plain text / Paper** switch ⌘/, a tile
-  like the others, lit while the text is the truth.
+  browser) as the captioned glyph grid.
+- Pinned at the bottom, as Zen pins its bottom icons: **Document
+  settings**, whose panel flies out to the right, and below it the
+  **Plain text / Paper** switch ⌘/, a tile like the others, lit while
+  the text is the truth.
 
 The groups scroll as one (no scrollbar drawn, a fade at the cut) when
-the window is shorter than they are; the switch stays put.
+the window is shorter than they are; settings and the switch stay put.
 
 **The room**: a rounded panel a shade lighter than the frame, edged by
 it (above). The paper (816 px, unchanged) is centred in it and hovers
@@ -167,14 +218,16 @@ ArrowDown, ArrowUp or ArrowRight and closes on ArrowLeft or Escape; the
 glyph rows (Insert, Extras) still walk sideways with the arrows, so
 ArrowLeft there moves, Escape closes. A bar tile's menu opens on
 ArrowDown/Up as before; File's submenus still go back with ArrowLeft.
+Tab walks the rail's tiles, and one under the fade scrolls clear of it.
 
 **Source mode**: the six direct formatting tiles, the four Blocks tiles
 and Settings rest (disabled, dim); Insert ▸ and Extras ▸ stay open with
 their editing items disabled, as Extras did; Export and File are
 untouched.
 
-**Browser tab and PWA**: no overlay, so the File tile is 12 px from the
-left edge; the same rail; the manifest is unchanged (no
+**Browser tab and PWA**: no overlay, so the File tile is 6 px from the
+left edge, centred over the rail's tiles; the same rail; the manifest
+is unchanged (no
 `window-controls-overlay`, which would draw Chrome's own controls).
 
 **Shell**: `app/plass.json` unchanged (hiddenInset, lights at {20, 23},
@@ -223,6 +276,11 @@ are the same.
    tab; a table glyph instead?
 9. **The record's screenshots** are page captures without the native
    traffic lights; a window capture needs the screen-recording grant.
+10. **The glass over the paper.** With the blur back, a menu still reads
+    a shade lighter over the paper (#28272b) than over the room
+    (#1c1b1f): the glass is 94 % opaque, and the blurred paper behind it
+    is still white. At 97 % the paper's side would be about #222125;
+    fully opaque would end the glass.
 
 ## Checks (second pass)
 
@@ -238,3 +296,18 @@ are the same.
   with the title-bar option and follow-zoom): ok, through the View
   menu's zoom, with the bar's height checked against the lights' band
   while zoomed and the room's 8 px edge checked after.
+
+## Checks (the second look)
+
+- `npm test`: green. `npm run build`: green; the built stylesheet has
+  `-webkit-backdrop-filter` and `backdrop-filter` in every glass rule.
+- `CI=1 npx playwright test --project=chromium`: 174 passed. New
+  checks: in `frame.spec`, the File tile centred over the rail's tiles in
+  a tab, settings and the switch pinned whole below the cut at 560, 480
+  and 360 px, and a tile tabbed to under the fade coming clear of it; in
+  `toolbar.spec`, a mouse click after Escape leaving no focus or caption
+  on the old tile. Each fails on the source before this change, and the
+  Tab check fails without the scroll padding.
+- `node app/smoke.mjs`: ok, now with the File menu's blur checked in the
+  built app. On a build of the previous commit it fails with
+  `backdrop-filter: none`.

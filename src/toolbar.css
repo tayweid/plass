@@ -1,16 +1,18 @@
 /* Zen's shape. The bar beside the traffic lights holds the paper's way in
    and out: the File tile, the name pill with its save dot, the Export
    tile. Its row is padded on the left by the lights' room (the Window
-   Controls Overlay the shell publishes when it hides the title bar; 0 in
-   a browser, in the PWA and under a native title bar) and by nothing
-   else: nothing in the bar centres on the paper any more. The rail down
-   the left holds the tools in the bar's old groups under hairlines, with
-   the occasional ones behind Extras; its menus fly out to the right. The
-   app's window is no narrower than the row needs beside the lights
-   (app/plass.json, minWidth 740). */
+   Controls Overlay the shell publishes when it hides the title bar) and
+   by nothing else: nothing in the bar centres on the paper any more.
+   With no lights' room — a browser, the PWA, a native title bar — the
+   File tile stands over the rail's column of tiles instead, 6 px in
+   ((48 − 36) / 2: the env() fallback undoes 6 px of the 12). The rail
+   down the left holds the tools in the bar's old groups under
+   hairlines, with the occasional ones behind Extras; its menus fly out
+   to the right. The app's window is no narrower than the row needs
+   beside the lights (app/plass.json, minWidth 740). */
 #toolbar {
   gap: 6px;
-  padding-inline: calc(12px + env(titlebar-area-x, 0px)) 12px;
+  padding-inline: calc(12px + env(titlebar-area-x, -6px)) 12px;
 }
 
 #toolbar .doc-title {
@@ -63,9 +65,10 @@
 /* Under the bar, down the left edge, as narrow as Zen's: 32 px tiles with
    the frame's edge either side (style.css, --rail). The tool groups
    scroll as one when the window is short (no scrollbar drawn; the wheel
-   still scrolls, and a fade at the cut edge says there is more), and the
-   view switch stays pinned at the bottom, level with the room's bottom
-   edge. */
+   still scrolls, and a fade at the cut edge says there is more), and,
+   as Zen pins its bottom icons, Document settings and the view switch
+   stay pinned at the bottom, the switch level with the room's bottom
+   edge: only tools ever go under the fade. */
 #rail {
   position: fixed;
   top: var(--topbar);
@@ -91,6 +94,8 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: none;
+  /* A tile Tab reaches scrolls clear of the fade (its height, below). */
+  scroll-padding-block: 28px;
 }
 
 .tb-rail-groups::-webkit-scrollbar {
@@ -123,7 +128,8 @@
   background: linear-gradient(var(--frame) 15%, transparent);
 }
 
-.tb-rail-group {
+.tb-rail-group,
+.tb-rail-foot {
   flex: none;
   display: flex;
   flex-direction: column;
@@ -224,8 +230,10 @@
   border-radius: 13px;
   background: var(--bar-glass);
   color: var(--bar-ink);
+  /* Unprefixed only, here and in style.css: the build's minifier adds
+     -webkit- for Safari, and a hand-written -webkit- line after this one
+     was the only one it kept, so Plass.app's Chromium drew no blur. */
   backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 16px 40px rgba(0, 0, 0, 0.28);
 }
 
@@ -397,8 +405,9 @@
 }
 
 @media (max-width: 540px) {
+  /* Still 6 px in with no lights' room, over the rail's column. */
   #toolbar {
-    padding-inline: calc(8px + env(titlebar-area-x, 0px)) 8px;
+    padding-inline: calc(8px + env(titlebar-area-x, -2px)) 8px;
     gap: 4px;
   }
 

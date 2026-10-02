@@ -285,7 +285,6 @@ body {
   color: var(--bar-ink);
   background: var(--bar-glass);
   backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--bar-hairline);
   border-radius: 5px;
   padding: 2px 8px;
@@ -326,7 +325,6 @@ body {
   color: var(--ink);
   background: color-mix(in srgb, var(--chrome) 94%, transparent);
   backdrop-filter: blur(14px) saturate(1.25);
-  -webkit-backdrop-filter: blur(14px) saturate(1.25);
   border: 1px solid var(--chrome-border);
   border-radius: 11px;
   padding: 4px;
@@ -553,7 +551,6 @@ body {
   z-index: 100;
   background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
   border-radius: 16px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 18px 50px rgba(0, 0, 0, 0.45);
@@ -2571,7 +2568,6 @@ body {
   z-index: 100;
   background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
   border-radius: 13px;
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 16px 40px rgba(0, 0, 0, 0.28);
@@ -2703,7 +2699,6 @@ body {
   min-width: 100%;
   background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
   border-radius: 10px;
   padding: 4px;

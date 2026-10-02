@@ -39,7 +39,8 @@ interface Geometry {
   editorWidth: number;
   stack: { left: number; width: number; right: number };
   room: { left: number; clientWidth: number; scrollWidth: number };
-  bar: { left: number; fileLeft: number };
+  bar: { left: number; fileLeft: number; fileCentre: number };
+  railCentre: number;
   hud: { right: number; top: number };
   lastPage: { bottom: number };
 }
@@ -50,6 +51,7 @@ const geometry = (page: Page) =>
     const room = document.getElementById('scroll')!;
     const bar = document.getElementById('toolbar')!.getBoundingClientRect();
     const file = document.querySelector('#toolbar .tb-tile')!.getBoundingClientRect();
+    const tile = document.querySelector('#rail .tb-btn')!.getBoundingClientRect();
     const hud = document.getElementById('hud')!.getBoundingClientRect();
     const pages = document.querySelectorAll('.page-box');
     return {
@@ -58,7 +60,8 @@ const geometry = (page: Page) =>
       editorWidth: document.querySelector<HTMLElement>('.ProseMirror')!.clientWidth,
       stack: { left: stack.left, width: stack.width, right: stack.right },
       room: { left: room.getBoundingClientRect().left, clientWidth: room.clientWidth, scrollWidth: room.scrollWidth },
-      bar: { left: bar.left, fileLeft: file.left },
+      bar: { left: bar.left, fileLeft: file.left, fileCentre: file.left + file.width / 2 },
+      railCentre: tile.left + tile.width / 2,
       hud: { right: hud.right, top: hud.top },
       lastPage: { bottom: pages[pages.length - 1].getBoundingClientRect().bottom },
     };
@@ -79,14 +82,16 @@ test('the window is room around a fixed-width paper: a resize re-lays nothing an
   // Centered in the room (the room's content box: the window right of the
   // rail, less the scrollbar's gutter), the HUD just inside the paper's
   // right edge, and the bar's File tile at the bar's left, where the
-  // traffic lights' room ends (none in a tab: 12px in).
+  // traffic lights' room ends (none in a tab: there it stands over the
+  // rail's column of tiles, 6 px in).
   const axis = (g: Geometry) => g.room.left + g.room.clientWidth / 2;
   const onAxis = (g: Geometry) => {
     expect(Math.abs(g.stack.left + g.stack.width / 2 - axis(g))).toBeLessThan(1);
     expect(Math.abs(g.hud.right - (g.stack.right - 18))).toBeLessThan(1);
   };
   onAxis(before);
-  expect(before.bar.fileLeft).toBe(before.bar.left + 12);
+  expect(before.bar.fileLeft).toBe(before.bar.left + 6);
+  expect(before.bar.fileCentre).toBe(before.railCentre);
 
   // At the end of the document the last page ends above the HUD's row
   // (the room keeps it, --margin-bottom): the count never sits on the
@@ -174,7 +179,7 @@ test('the frame is Zen\'s: a dark edge all round a rounded room, the rail narrow
   expect(await appRegion(page, '.tb-menu:not([hidden])')).toBe('no-drag');
 });
 
-test('the rail and the panels it opens keep off the bar; a short window says the rail goes on', async ({ page }) => {
+test('the rail and the panels it opens keep off the bar; a short window says the tools go on and keeps settings and the switch', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
   await page.goto('/?new=1');
   await page.waitForFunction(() => Boolean(window.view));
@@ -195,15 +200,51 @@ test('the rail and the panels it opens keep off the bar; a short window says the
   expect(extras.y).toBeGreaterThan(barBottom);
   await page.keyboard.press('Escape');
 
-  // A tall window shows every tool; a short one cuts the groups, and a
-  // fade at the cut says which way the rest is.
+  // A tall window shows every tool; a short one cuts the tool groups, and
+  // a fade at the cut says which way the rest is. Document settings and
+  // the view switch are pinned below the groups, as Zen pins its bottom
+  // icons: whole and inside the window at any height (at 1100×560 the cut
+  // once fell just past Extras and took Document settings with it).
   const cue = () => page.evaluate(() => {
     const groups = document.querySelector('.tb-rail-groups')!;
     return { above: groups.classList.contains('tb-more-above'), below: groups.classList.contains('tb-more-below') };
   });
+  const pinned = () => page.evaluate(() => {
+    const groups = document.querySelector('.tb-rail-groups')!;
+    const cut = groups.getBoundingClientRect().bottom;
+    return ['Document settings', 'Plain text view'].map((name) => {
+      const tile = document.querySelector(`#rail [aria-label="${name}"]`)!;
+      const bounds = tile.getBoundingClientRect();
+      return { name, scrolls: groups.contains(tile), belowCut: bounds.top >= cut, inWindow: bounds.bottom <= innerHeight - 8 };
+    });
+  });
   await expect.poll(cue).toEqual({ above: false, below: false });
+  for (const height of [560, 480, 360]) {
+    await page.setViewportSize({ width: 1100, height });
+    await expect.poll(cue).toEqual({ above: false, below: true });
+    for (const tile of await pinned()) expect(tile).toEqual({ name: tile.name, scrolls: false, belowCut: true, inWindow: true });
+  }
+
+  // A tile Tab reaches under the fade scrolls clear of it (the groups'
+  // scroll padding is the fade's height).
   await page.setViewportSize({ width: 1100, height: 480 });
   await expect.poll(cue).toEqual({ above: false, below: true });
+  const target = await page.evaluate(() => {
+    const groups = document.querySelector('.tb-rail-groups')!;
+    const fade = groups.getBoundingClientRect().bottom - 28;
+    const tiles = [...groups.querySelectorAll<HTMLButtonElement>('.tb-btn:not(:disabled)')];
+    const index = tiles.findIndex((tile) => tile.getBoundingClientRect().bottom > fade);
+    return { name: tiles[index].getAttribute('aria-label')!, tabs: index };
+  });
+  await page.locator('#rail .tb-btn').first().focus();
+  for (let i = 0; i < target.tabs; i++) await page.keyboard.press('Tab');
+  await expect(page.locator(`#rail [aria-label="${target.name}"]`)).toBeFocused();
+  const clear = await page.evaluate(() => {
+    const groups = document.querySelector('.tb-rail-groups')!.getBoundingClientRect();
+    const tile = document.activeElement!.getBoundingClientRect();
+    return tile.top >= groups.top - 0.5 && tile.bottom <= groups.bottom - 28 + 0.5;
+  });
+  expect(clear).toBe(true);
   await page.evaluate(() => {
     const groups = document.querySelector('.tb-rail-groups')!;
     groups.scrollTop = groups.scrollHeight;

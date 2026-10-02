@@ -228,6 +228,30 @@ test('menus open, navigate, and close from the keyboard', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Extras', exact: true })).toBeFocused();
 });
 
+test('a mouse click after Escape leaves no ring or caption on the tile Escape went back to', async ({ page }) => {
+  await page.goto('/?new=1');
+  for (const name of ['Headings', 'File']) {
+    const tile = page.getByRole('button', { name, exact: true });
+    const caption = tile.locator('.lbl');
+    const opacity = () => caption.evaluate((el) => getComputedStyle(el).opacity);
+    await tile.click();
+    await expect(page.getByRole('menu', { name, exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(tile).toBeFocused();
+    await expect.poll(opacity).toBe('1');
+    // The tiles swallow mousedown, so the click on another tile moves no
+    // focus by itself; the settings panel takes none either.
+    const settings = page.getByRole('button', { name: 'Document settings', exact: true });
+    await settings.click();
+    const panel = page.getByRole('dialog', { name: 'Document settings', exact: true });
+    await expect(panel).toBeVisible();
+    await expect(tile).not.toBeFocused();
+    await expect.poll(opacity).toBe('0');
+    await settings.click();
+    await expect(panel).toHaveCount(0);
+  }
+});
+
 test('Headings and Extras apply headings and alignment to a whole-document selection', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {

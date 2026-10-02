@@ -158,11 +158,15 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   titleBar.append(fileLabel, dot);
 
   // The rail: the tools in groups under hairlines, scrolling as one when
-  // the window is short, the view switch pinned below them.
+  // the window is short; Document settings and the view switch pinned
+  // below them, as Zen pins its bottom icons, so a short window only
+  // ever cuts tools.
   rail.setAttribute('aria-label', 'Document tools');
   const railGroups = document.createElement('div');
   railGroups.className = 'tb-rail-groups';
-  rail.append(railGroups);
+  const railFoot = document.createElement('div');
+  railFoot.className = 'tb-rail-foot';
+  rail.append(railGroups, railFoot);
   const railGroup = (name: string) => {
     if (railGroups.childElementCount) {
       const rule = document.createElement('div');
@@ -284,7 +288,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   const insertBtn = trigger(insertGroup, 'Insert', icon('plus'));
   insertBtn.title = 'Insert — table, grid, display equation, title block, page break';
   const extrasBtn = trigger(moreGroup, 'Extras', '<span class="ico tico">⋯</span>');
-  const settingsBtn = glyphButton(moreGroup, 'Document settings', icon('sliders'));
+  const settingsBtn = glyphButton(railFoot, 'Document settings', icon('sliders'));
   // The formatting tools rest while the text is the truth (the Blocks
   // tiles rest through their own refresh, below).
   for (const button of [formatBtn, styleBtn, listBtn, figureBtn, mathBtn, noteBtn]) button.classList.add('tb-rests');
@@ -298,7 +302,18 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   attachCaption(sourceBtn);
   sourceBtn.addEventListener('mousedown', (e) => e.preventDefault());
   sourceBtn.addEventListener('click', () => { closeMenu(); actions.toggleSource(); });
-  rail.append(sourceBtn);
+  railFoot.append(sourceBtn);
+  // The tiles swallow mousedown (the editor keeps its selection), so a
+  // mouse click moves no focus: a tile that Escape handed the focus back
+  // to would keep its ring and its caption beside the panel the click
+  // opened. A click on a tile lets that other tile go first.
+  for (const frame of [container, rail]) {
+    frame.addEventListener('click', (e) => {
+      const clicked = (e.target as Element).closest('.tb-btn');
+      const held = document.activeElement;
+      if (e.detail > 0 && clicked && held !== clicked && held instanceof HTMLElement && held.matches('#toolbar .tb-btn, #rail .tb-btn')) held.blur();
+    }, true);
+  }
   settingsBtn.addEventListener('click', () => { closeMenu(); toggleSettingsPanel(view, settingsBtn); });
 
   interface Menu {

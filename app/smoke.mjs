@@ -2,8 +2,9 @@
 // the checkout (or a built app) on a .typ in a throwaway folder, see the
 // document open and typeset, edit it, save with ⌘S, and check the disk;
 // then drag the window wider and zoom (the window stays, the paper does
-// not re-lay), see the rail under the bar, and, on a shell that hides
-// the title bar, see the bar padded by the traffic lights' room.
+// not re-lay), see the rail under the bar and the menus' blur, and, on a
+// shell that hides the title bar, see the bar padded by the traffic
+// lights' room.
 //
 //   node app/smoke.mjs                 # the checkout: the shell on dist/
 //   node app/smoke.mjs path/to/Plass.app
@@ -159,6 +160,18 @@ if (frame.rail.left !== 0 || frame.rail.top !== frame.bar.bottom || frame.rail.b
   || frame.room.right !== frame.width - 8 || frame.room.bottom !== frame.height - 8) {
   await fail(`the rail is not under the bar down the left edge of the room: ${JSON.stringify(frame)}`);
 }
+
+// The menus are frosted glass over the paper (src/toolbar.css): the
+// built stylesheet must keep the unprefixed backdrop-filter, the one
+// Chromium reads. The minifier once kept only a hand-written -webkit-
+// line, and the paper showed through the File menu, its text readable.
+await page.click('#toolbar .tb-tile');
+const glass = await page.evaluate(() => {
+  const menu = document.querySelector('.tb-menu:not([hidden])');
+  return menu ? getComputedStyle(menu).backdropFilter : null;
+});
+await page.keyboard.press('Escape');
+if (!glass || glass === 'none') await fail(`the File menu draws no blur (backdrop-filter: ${glass})`);
 
 // A shell that hides the title bar (app/plass.json, titleBarStyle; the
 // shell's README) publishes the lights' room to the page as the Window
