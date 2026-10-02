@@ -12,7 +12,11 @@ reviewers' findings (below, *The second pass*); both are on main. The
 third pass (branch `ux/zen3`, the same afternoon) gives Plass Knuth's
 bar and makes the panel the paper, the window the zoom (below, *The
 third pass*), and then takes Knuth's new 44 px bar and holds the view
-still while typing (below, *The bar as tall as the rail is wide*). Run
+still while typing (below, *The bar as tall as the rail is wide*). The
+scroll rail (branch `ux/rail`, the same evening) maps the paper in a
+20 px gutter of the frame at the window's right (below, *The scroll
+rail*; its record is `docs/zen-rail-1100.png` and
+`docs/zen-rail-1500.png`). Run
 it from the worktree with `npm run app` (after `npx vite build`); the
 record is `docs/zen-draft-1100.png` and `docs/zen-draft-1500.png`, the
 shell from the checkout at 1100 and 1500 px wide, and
@@ -22,6 +26,159 @@ traffic lights are the window's own and are not in them —
 `screencapture` of the window needs a screen-recording grant this
 session does not have; their room is the empty 88 px at the bar's left,
 which the File tile sits 12 px past).
+
+## The scroll rail
+
+Taylor, after asking that the paper show its true corners: "and then
+maybe there's a scrollbar much like the history git page with points on
+it indicating the parts of the page and page breaks and such." Earlier,
+of the history view: "i like that scroll bar with the added detail
+vertically for the nodes." Three designers each built a mockup and two
+judges scored them (`docs/mockups/scroll-rail.md`); both judges
+recommended the outline mockup's resting rail, on the paper's right
+margin, and ranked the gutter second and last. Shown the three
+mockups' screenshots, Taylor: "i think i like gutter-hover.png the
+most." So this is the gutter mockup (`docs/mockups/scroll-rail-gutter.html`),
+ported: its DOM, CSS and script, in `src/scroll-rail.ts` with its CSS
+beside the HUD's in `src/style.css`.
+
+**What was built.** While a paper of two sheets or more runs past the
+panel in the page view, the frame's right edge widens from 8 px to a
+20 px gutter, and the rail lives in it, on the dark frame and outside
+the paper, as the history strip lives beside its river. The panel keeps
+its left, top and bottom edges and is 12 px narrower; the paper fills it
+by the usual rule. The rail stands for the whole paper, its track
+exactly the panel's height (the bar's bottom to the frame's edge above
+the window's bottom), so at the top of the paper the band's top is level
+with the panel's top and at the end its bottom is level with the
+panel's bottom. On it, in light marks on the dark:
+
+- a hairline across the rail at the middle of each page gap, the
+  page's number faint under it, thinned on a long paper (every 2nd,
+  5th, 10th … page) so the shown numbers stay 16 px apart, and a number
+  giving way to a heading, figure or table that falls just under its
+  hairline; the gap that is on screen draws a longer, stronger tick
+  (from the edge mockup);
+- headings as dots sized by level (the title 7 px, a section 5, a
+  subsection 3), figures as tiny filled squares and tables as open
+  ones;
+- the caret as a short bar in the focus blue, the one coloured mark;
+- the visible span as a lighter rounded band, and the marks outside it
+  a step quieter.
+
+The marks are there at rest, at the mockup's awake values: the one
+change from the mockup, which both judges asked for (the history strip's
+nodes are always there; the mockup showed them only with the pointer
+near). The band brightens while the pointer is in the gutter and for
+0.9 s after the paper moves.
+
+The pointer: the nearest mark within 7 px either side, across the
+gutter's whole width, grows and turns white, and one dark-glass label
+hangs to the rail's left over the paper's margin — the section number,
+the heading's own words in the bar's serif, "p. 3"; "Page 3 of 5" on a
+break; over empty track a faint line where a click would land, with its
+page — held inside the window at the track's ends. A click jumps (a
+heading, figure, table or the caret to an eighth of the way down the
+panel, a break to its sheet's top at the panel's top, empty track to
+that point in the panel's middle); a press that drags scrubs the band by
+the drag, from wherever it was pressed, and jumps nothing (the mockup
+centred empty track on the press; a drag from there now moves the band
+from where it is); the wheel over the gutter scrolls the paper, in
+lines or pages as it came. The keyboard: one tab stop, Up and Down,
+Home and End between the marks with the label following, Return or
+Space jumps. A press that began on the text (a selection dragged toward
+the edge) wakes nothing on the rail, and a gutter due under a held
+button waits for the release.
+
+**The mechanism.** The marks come from the settled layout pass: main.ts
+hands each settled pass's pages to the rail (the typeset plugin now
+says which `onPages` calls are settled; a keystroke in an editorial
+note republishes the sheets unsettled and the rail waits), and in the
+next frame the rail reads the sheets' tops from the pass and the
+headings', figures' and tables' from `offsetTop`, which is layout and so
+in the page's own 816 px, never divided by the scale. Each mark is a
+fraction of the stack's height, written once as `--f` and placed by CSS,
+so a resize or a zoom moves no mark, only the band. A scroll writes two
+custom properties on the rail in a frame, the visible span's top and
+bottom as fractions; CSS draws the band from them and works out, for
+each mark and gap, whether it is inside the band (the quieter marks and
+the stronger on-screen tick). The caret's bar moves at the settle and,
+in a frame, when the selection moves without an edit (a click, an
+arrow); typing writes nothing to the rail. The label is fixed to the
+window, its right edge 7 px left of the gutter, its middle level with
+the mark and clamped inside the window. The gutter is the `has-rail`
+class on the root, which sets `--edge-right` (split out of `--edge` as
+the one right-margin variable: the panel, the HUD and `--axis`, so the
+toast and the table and image toolbars, read it); it is asked for at
+each settle, resize and view switch, and whether the paper runs past is
+asked at the gutter's width whether or not the gutter is showing, so
+its own 12 px can never take it away again. It comes and goes at once,
+not animated: an animated edge would redraw the whole page at a new
+scale on every frame. The window's bottom edge stays 8 px and the
+rail's side 6 px; print and the PDF export are untouched (the rail is
+hidden in print, where the panel has no margin).
+
+| | no gutter (main's numbers) | with the gutter |
+|---|---|---|
+| the frame at the panel's right | 8 px | 20 px |
+| the panel at 1100 × 800 | (44, 44) to (1092, 792), 1048 × 748 | (44, 44) to (1080, 792), 1036 × 748 |
+| the page's scale at 868 | 1.0000 | 0.9853 (804 / 816) |
+| at 1100 | 1.2843 | 1.2696 (about 1 % smaller) |
+| at 1500 | 1.7745 | 1.7598 |
+
+The rail: 20 px wide, its track the panel's height (748 px at 800). The
+band 14 px wide (3 px in from each side), 4 px corners, at least 10 px
+tall, white 3.5 % over a 8 % edge at rest, 7.5 / 17 % lit, 11 / 24 %
+dragged. A break 12 × 1 px at white 17 %, on screen 16 px at 36 %,
+hovered 60 %; its number 8 px sans at rgba(240, 238, 233, .40), 3 px
+under it. Dots 7, 5 and 3 px at .86, .72 and .56; squares 5 px, a
+figure filled at .60, a table a 1.2 px line at .70; the caret 8 × 2 px
+#9db8d6; outside the band the marks at 60 %. The label: the menus' dark
+glass, rgba(27, 26, 30, .94) with a 10 % white hairline and 6 px
+corners, the heading 13 px STIX Two Text, its number 11 px sans at 50 %,
+its page 10.5 px at 42 %, at most 360 px or half the window wide.
+
+**The trade accepted.** The judges' objection to the gutter was that it
+takes paper width (the page about 1 % smaller: 1.270 against 1.284 at
+1100), makes the frame uneven (6 px beside the tiles, 8 at the bottom,
+20 at the right) against "an edge of the black all the way around", and
+ends the match with Knuth's room, so the HUD, the toast, `--axis`, the
+table toolbar, `frame.spec` and the smoke test all needed new numbers.
+Taylor chose it having seen the narrower page, and it is accepted as
+the price of a rail that lives on the frame, outside the paper. Two
+things limit it: the gutter is there only while it has something to
+map (a one-page note, a paper that fits and the source view keep the
+8 px edge, and the page main's scale), and the marks at rest answer the
+judges' other point, that the empty gutter read as a reserved
+scrollbar track. One cost the record did not name: a note that grows
+to a second sheet gets the gutter at that settle, so the page is drawn
+1 % smaller under the caret once (the line at the panel's top holds
+still, as on any resize; a caret near the panel's bottom moves up a few
+px), and back if it shrinks to one sheet again.
+
+**Knuth** keeps its 8 px edge. The two apps no longer claim the same
+panel box: Plass's matches Knuth's room only with no gutter (a one-page
+note, the source view). Knuth has no rail; if it wants one, the gutter
+and the module are the place to start.
+
+**Typing.** Unchanged: the rail writes nothing on a keystroke (a
+mutation observer over the page counted no rail writes in sixty keys but
+the band's, on the three scrolls ProseMirror made). A/B against main on
+a 29-page numbered paper at 1100, sixty keys at the end of a paragraph
+mid-document, medians of six alternated runs on a machine other agents
+were loading: in one set the live pass took 2.1 ms on main and 2.6 with
+the rail, the main thread 9.8 and 11.3 ms a key; in the next, with the
+rail hidden as a control, 1.6, 1.2 and 1.2 ms and 7.8, 5.7 and 5.4 ms
+(main, rail, rail hidden). The differences change sign between sets:
+noise, and the record's 2–3 ms a keystroke stands.
+
+**Open.** The unrolling outline (the outline mockup's contents view) is
+left for later, as something opened on purpose (a click or a key) once
+it can drop subsections on a long paper, as both judges said. On a long
+paper whose pages mostly open with a heading, the crowding rule hides
+most page numbers (Judge 1's 30-page note); the label still gives every
+page. The rail counts sheets, as the HUD does: "Page 3 of 5" is the
+third sheet even where the folio is roman front matter or restarts.
 
 ## The third pass
 
@@ -511,10 +668,9 @@ are the same.
 
 1. ~~**The bar's height.**~~ DECIDED: 44 px, as tall as the rail is
    wide, in both apps (above, *The bar as tall as the rail is wide*).
-2. **No scrollbar in the panel.** The paper runs to the panel's right
-   edge, so there is nowhere for a gutter; the wheel and the keys scroll
-   and the HUD counts pages. A thin thumb laid over the paper's right
-   margin, drawn on scroll, is the next step if one is wanted.
+2. ~~**No scrollbar in the panel.**~~ BUILT: the scroll rail, in a
+   20 px gutter at the window's right while a paper runs past the panel
+   (above, *The scroll rail*). The unrolling outline is still open.
 3. **Very wide windows.** The page is drawn at panel width / 816 with no
    cap: 2.3× in a 1920 px window, 3.1× at 2560. "Effectively zooming in"
    is read as no cap.
@@ -536,6 +692,8 @@ are the same.
    the tile, as `toolbar.spec` pins. Not copied.
 9. **Knuth's room.** Knuth keeps its grey room round a centred column;
    if the two apps are one system, its cells may want the same panel.
+   Knuth keeps its 8 px edge at the right; with the scroll rail's
+   gutter, Plass's panel no longer claims Knuth's box (above).
 10. **The frame's shade (the rail is 44 now), Alignment on the rail,
     the rail as a drag region, 'File' or 'Open', the Insert ▸ glyph**:
     as the second pass left them.
@@ -605,3 +763,35 @@ are the same.
   the lights' band.
 - Both apps measured in the same shell at 1100 and 1500 (above): the
   bars agree to the pixel.
+
+## Checks (the scroll rail)
+
+- `npm test`: green. `npm run build` (the sidecar, unused-code, exports
+  and cycle checks, tsc, vite): green.
+- `CI=1 npx playwright test --project=chromium` (on a spare port): 193 passed. New:
+  `tests/rail.spec.ts` (nine tests: the gutter and rail only for a
+  paper of two sheets or more that runs past the panel, none for a
+  one-page note, in the source view or in print, the 8 px edge back;
+  the panel's box and the scale with the gutter and without at 868,
+  1100 and 1500; every mark and page gap at its layout offset over the
+  stack's height, to under a pixel, and unmoved by a resize; the caret's
+  bar following a click; the label for a heading, a break and empty
+  track, inside the window at the track's ends; a click on a break and
+  on a heading; a 100 px drag moving the paper 100 / 748 of its height
+  and jumping nothing; the wheel; the band against the scroll; the
+  keyboard; a selection dragged into the gutter opening nothing and a
+  gutter due under a held button waiting for the release; the numbers
+  thinning on a thirty-page paper). Changed: `frame.spec` at the gutter's
+  numbers; `table-pagination.spec`'s break test reads its two-page
+  paper's rects at the drawn scale (804 / 816 at 868 now), where it had
+  assumed 1:1.
+- `node app/smoke.mjs` (the shell checkout beside the main one): ok. Its document now runs to two sheets,
+  and it checks the panel's right edge at the 20 px gutter and the rail
+  in the gutter beside the panel with its page breaks.
+- The record: `docs/zen-rail-1100.png` (mid-paper, the pointer on the
+  3.1 mark with its label) and `docs/zen-rail-1500.png` (at rest), the
+  shell checkout's Electron launched as `app/run.mjs` does, on a paper
+  under `~/Projects/week-3` (a symlink for the captures, removed after),
+  taken with the window's own capture: Playwright's page capture
+  overrides the viewport for a moment, and the panel's scroll does not
+  survive that.

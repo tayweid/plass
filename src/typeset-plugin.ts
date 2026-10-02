@@ -426,7 +426,7 @@ export function printPageAt(view: EditorView, pos: number): number {
 }
 
 export function typesetPlugin(
-  opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo) => void; onEnvironment?: (v: EnvironmentVerdict) => void } = {},
+  opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo, settled: boolean) => void; onEnvironment?: (v: EnvironmentVerdict) => void } = {},
 ) {
   return new Plugin<TypesetState>({
     key: typesetKey,
@@ -647,7 +647,7 @@ class TypesetView {
 
   constructor(
     private view: EditorView,
-    private opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo) => void; onEnvironment?: (v: EnvironmentVerdict) => void },
+    private opts: { onStats?: (s: TypesetStats) => void; onPages?: (p: PageInfo, settled: boolean) => void; onEnvironment?: (v: EnvironmentVerdict) => void },
   ) {
     viewRegistry.set(view, this);
     this.measurer = new Measurer(view.dom);
@@ -1530,6 +1530,8 @@ class TypesetView {
     this.placeFootnotes(count, pages);
     const s = getSettings(this.view.state);
     const size = pageSize(s);
+    // Not a settled pass (a keystroke in a note): the scroll rail reads
+    // its marks from the settled one that follows.
     this.opts.onPages?.({
       count,
       pageW: size.w,
@@ -1539,7 +1541,7 @@ class TypesetView {
       marginBottom: s.marginBottom * 96,
       marginLeft: s.marginLeft * 96,
       marginRight: s.marginRight * 96,
-    });
+    }, false);
   }
 
   private heightAbove(snapshot: PaginationGeometrySnapshot, pos: number, spacersOnly = false): number {
@@ -2020,7 +2022,7 @@ class TypesetView {
       marginBottom: s.marginBottom * 96,
       marginLeft: s.marginLeft * 96,
       marginRight: s.marginRight * 96,
-    });
+    }, true);
     const totalMs = performance.now() - t0;
     recordLayoutPerf('settle', {
       totalMs,

@@ -36,6 +36,7 @@ import { resetCompilerCircuit } from './compiler-circuit';
 import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
 import { describeVerdict } from './environment-check';
 import { attachPaper } from './paper-scale';
+import { attachScrollRail, type ScrollRail } from './scroll-rail';
 import { FROM_DISK, reloadTransaction } from './reload-in-place';
 
 const STORAGE_KEY = 'typeset-doc-v1';
@@ -178,9 +179,12 @@ attachPaper(scrollEl, document.getElementById('paper')!, stackEl);
 
 let pageCount = 0;
 let pageSignature = '';
+// The scroll rail in the frame's gutter (scroll-rail.ts), made once the
+// view exists: it reads its marks from each settled pass's pages.
+let scrollRail: ScrollRail | null = null;
 
 /** Paint the page boxes + numbers behind the editor. */
-function renderPages(info: PageInfo) {
+function renderPages(info: PageInfo, settled: boolean) {
   // Sheets are the print pages grown by the editorial comments they hold
   // (page-geometry.ts): never `k * (pageH + gap)`.
   stackEl.style.height = `${stackHeight(info.pages)}px`;
@@ -281,6 +285,7 @@ function renderPages(info: PageInfo) {
     }
     pagesEl.replaceChildren(frag);
   }
+  if (settled) scrollRail?.pages(info);
   updateStatus();
 }
 
@@ -336,6 +341,9 @@ const view = new EditorView(editorEl, {
       // Macro changes must re-render every math node view.
       if (getSettings(newState).mathMacros !== prevMacros) queueMicrotask(refreshMathNodes);
     }
+    // The caret's bar on the scroll rail follows a click or an arrow; typing
+    // leaves it to the settled pass, so a keystroke costs nothing here.
+    if (tr.selectionSet && !tr.docChanged) scrollRail?.selection();
     if (tr.docChanged) {
       scheduleSave(view);
       // A reload from disk is not an edit: the document matches the file.
@@ -344,6 +352,8 @@ const view = new EditorView(editorEl, {
     }
   },
 });
+
+scrollRail = attachScrollRail(view, scrollEl, stackEl);
 
 // Timers may never run once a tab is being discarded. Session storage is a
 // synchronous, local write, so take the latest editor snapshot at lifecycle
@@ -372,6 +382,7 @@ const sourceView = createSourceView({
   },
   onMode(active) {
     toolbar?.setSourceMode(active);
+    scrollRail?.mode(active);
     updateStatus();
   },
   message: showMessage,

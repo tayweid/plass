@@ -52,7 +52,15 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   the read, and a pass runs through `paperPass`, which holds a followed
   caret still on the screen (the panel has no browser scroll anchoring).
   On shell 0.2.1 (`followZoom` in `app/plass.json`) a zoom
-  step scales the window with it, which is just a wider window. With a shell
+  step scales the window with it, which is just a wider window. While a
+  paper of two sheets or more runs past the panel in the page view, the
+  frame at the panel's right is a 20 px gutter (`--edge-right`, the one
+  right-margin variable the panel, the HUD and `--axis` read) holding the
+  scroll rail (`src/scroll-rail.ts`): the paper's page breaks, headings,
+  figures, tables and caret as marks placed from the settled pass, the
+  visible span as a band, a hover label, click, drag, wheel and keys; the
+  page is drawn about 1 % smaller while it is there, and a one-page note
+  or the source view keeps the 8 px edge. With a shell
   past v0.2.0, `app/plass.json`'s `titleBarStyle: "hiddenInset"` makes
   the bar the window's title bar beside the traffic lights; the page
   learns the lights' room from the Window Controls Overlay

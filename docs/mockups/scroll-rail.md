@@ -251,3 +251,25 @@ from a finished layout pass in the page's own pixels. Rules: nothing opens
 or grows while a mouse button is down; the rail hides when the document
 fits the panel and in source view; it takes no paper width and the 8 px
 edge stays.
+
+**Built, 2026-10-02 (branch `ux/rail`).** Taylor, shown the three
+mockups' screenshots: "i think i like gutter-hover.png the most." So the
+gutter was built, not the judges' pick: the frame's right edge widens to
+a 20 px gutter while a paper of two sheets or more runs past the panel,
+and the rail lives there on the dark frame, outside the paper, as the
+history strip lives beside its river (`src/scroll-rail.ts`). The judges'
+objection to it — the gutter takes 12 px of the paper's width (the page
+drawn at 1.270 instead of 1.284 at 1100, about 1 % smaller), makes the
+frame's edge uneven and ends the match with Knuth's room — is accepted as
+the trade for that: Taylor chose it having seen the narrower page beside
+the full-width ones, the gutter is there only while it has a paper to
+map (a one-page note, a paper that fits and the source view keep the
+8 px edge and main's scale), and their other objection, a nearly empty
+column at rest that reads as a reserved scrollbar track, is answered by
+the change they both asked for: the marks are shown at rest. From their
+synthesis it keeps the rules (nothing opens or grows while a mouse button
+is down; no rail when the paper fits or in the source view); from the
+edge, the stronger tick for the page gap on screen and marks placed from
+a settled layout pass in the page's own px. The unrolling outline is left
+for later. The numbers, the mechanism and the checks are in
+`docs/ZEN-DRAFT.md`, *The scroll rail*.
