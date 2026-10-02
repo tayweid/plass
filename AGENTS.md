@@ -126,6 +126,12 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   in either format) = paragraph spacing, exported as a set/restore pair
   around the list; a paragraph followed by another block inside an item
   is at paragraph spacing.
+  Enter on an empty item exits the list (`src/list-enter.ts`): the
+  paragraph and whatever blocks follow it in the item leave the list one
+  level up, cutting it in half, and a lifted sub-list of the second
+  half's type joins it. Two adjacent lists reopen as ONE loose list in
+  both formats, and a `.md` save drops an empty paragraph between them
+  (an untouched gap reopens as one loose list; `.typ` keeps it as `~`).
   Code blocks (islands included) mirror Typst's raw block through
   `codeBlockMetricsEm` (`font-registry.ts`): DejaVu Sans Mono at 0.8em,
   line pitch = leading + raw top edge, padding/margin derived from the

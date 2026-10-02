@@ -187,6 +187,9 @@ rails can always be finished in Typst itself, because the file is Typst.
   code blocks), keyboard shortcuts, undo/redo, autosave to localStorage.
   A list is tight or loose (blank lines between its items in the file,
   paragraph spacing on the page); the List control or ⌘⇧7 flips it.
+  Enter on an empty item leaves the list: in the middle of one it cuts
+  the list in half around the new paragraph, and sub-items the item held
+  join the second half.
 - **Grids** (⊟ in the toolbar): rows × columns of any blocks — a paragraph
   beside a figure or table, three columns of notes, a two-row layout.
   Column widths are fraction shares typed into the grid bar (`2 : 1`),
