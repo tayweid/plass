@@ -495,7 +495,10 @@ const inPlassApp = (page: import('playwright/test').Page, focusAnswer: { focused
     w.claerbout = {
       request: async (message: { type: string }) => {
         w.__shell.push(message);
-        return message.type === 'focus' ? answer : null;
+        if (message.type !== 'focus') return null;
+        // As slow as fronting a minimized window: the shell restores it first.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return answer;
       },
       on: () => () => {},
     };

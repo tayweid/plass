@@ -15,8 +15,8 @@
 // holder can: in Plass.app the shell fronts a window on that window's own
 // request (claerbout.ts), and the shell knows windows while the pages know
 // handles, so the window that finds its file elsewhere cannot name the
-// holder to anyone. The claim says whether the holder was fronted, which is
-// what tells a launch window it may go away.
+// holder to anyone. The holder claims first and says afterwards whether it
+// was fronted, which is what tells a launch window it may go away.
 
 import { focusThisWindow } from './claerbout';
 
@@ -32,7 +32,15 @@ interface ClaimMessage {
   type: 'claim';
   id: string;
   name: string;
-  /** The holder asked its shell to front it, and the shell did. */
+}
+
+/** After its claim, a holder asked to `front` says whether its shell did.
+ *  Its own message because fronting a minimized window takes the shell
+ *  ~250 ms (macOS un-minimizes it before answering), longer than an asker
+ *  waits for silence. */
+interface FrontedMessage {
+  type: 'fronted';
+  id: string;
   focused: boolean;
 }
 
@@ -50,6 +58,10 @@ const CHANNEL_NAME = 'plass-open-files';
  *  file must never hang on a window that is wedged, so the wait is bounded
  *  and silence means "nobody has it". */
 const ANSWER_MS = 200;
+/** How long a claimed fronting may take: a shell round trip that, for a
+ *  minimized window, includes macOS restoring it. Waited only once a holder
+ *  has claimed, so a file nobody has still opens after ANSWER_MS. */
+const FRONT_MS = 2000;
 
 let channel: BroadcastChannel | null = null;
 /** The file THIS window has open, for answering other windows. */
@@ -70,14 +82,15 @@ async function answer(message: unknown): Promise<void> {
   if (query?.type !== 'query' || !mine) return;
   try {
     if (!(await mine.isSameEntry(query.handle))) return;
-    // Fronting is one shell round trip, well inside the asker's wait; a
-    // shell without the request, or none, answers false and the claim
-    // still goes out.
-    const focused = query.front === true ? await focusThisWindow() : false;
-    channel?.postMessage({ type: 'claim', id: query.id, name: mine.name, focused } satisfies ClaimMessage);
   } catch {
-    // A handle that can no longer be compared is not a claim on anything.
+    return; // A handle that can no longer be compared is not a claim on anything.
   }
+  channel?.postMessage({ type: 'claim', id: query.id, name: mine.name } satisfies ClaimMessage);
+  if (query.front !== true) return;
+  // A shell without the request, or none, answers false; the asker hears
+  // that and keeps its toast.
+  const focused = await focusThisWindow();
+  channel?.postMessage({ type: 'fronted', id: query.id, focused } satisfies FrontedMessage);
 }
 
 /** What another window already showing this file calls it, and whether that
@@ -89,16 +102,27 @@ export function openInAnotherWindow(handle: FileSystemFileHandle, front = false)
   if (!ch) return Promise.resolve(null);
   const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return new Promise((resolve) => {
+    let claimed: string | null = null;
+    let timer = 0;
     const done = (elsewhere: Elsewhere | null) => {
       window.clearTimeout(timer);
       ch.removeEventListener('message', onMessage);
       resolve(elsewhere);
     };
     const onMessage = (event: MessageEvent) => {
-      const claim = event.data as ClaimMessage | null;
-      if (claim?.type === 'claim' && claim.id === id) done({ name: claim.name, focused: claim.focused === true });
+      const reply = event.data as ClaimMessage | FrontedMessage | null;
+      if (reply?.id !== id) return;
+      if (reply.type === 'claim' && claimed === null) {
+        if (!front) return done({ name: reply.name, focused: false });
+        // Someone has it and is asking its shell: give that its own time.
+        claimed = reply.name;
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => done({ name: reply.name, focused: false }), FRONT_MS);
+      } else if (reply.type === 'fronted' && claimed !== null) {
+        done({ name: claimed, focused: reply.focused === true });
+      }
     };
-    const timer = window.setTimeout(() => done(null), ANSWER_MS);
+    timer = window.setTimeout(() => done(null), ANSWER_MS);
     ch.addEventListener('message', onMessage);
     try {
       ch.postMessage({ type: 'query', id, handle, front } satisfies QueryMessage);

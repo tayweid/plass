@@ -87,13 +87,17 @@ const fronted = await asker.openInAnotherWindow(asHandle(shared), true);
 check('front: the holder asks the shell to focus it', focusRequests() === 1 && JSON.stringify(asked.at(-1)) === '{"type":"focus"}');
 check('front: the claim says it was fronted', fronted?.name === 'Shared.typ' && fronted.focused === true);
 
+shellAnswers = () => new Promise((resolve) => setTimeout(() => resolve({ focused: true }), 400));
+const slow = await asker.openInAnotherWindow(asHandle(shared), true);
+check('front: a holder whose shell takes longer than ANSWER_MS (a minimized window) is still claimed, fronted', slow?.name === 'Shared.typ' && slow.focused === true);
+
 shellAnswers = async () => null;
 const older = await asker.openInAnotherWindow(asHandle(shared), true);
-check('front under an older shell: asked, not fronted, still claimed', focusRequests() === 2 && older?.name === 'Shared.typ' && older.focused === false);
+check('front under an older shell: asked, not fronted, still claimed', focusRequests() === 3 && older?.name === 'Shared.typ' && older.focused === false);
 
 shellAnswers = null;
 const browser = await asker.openInAnotherWindow(asHandle(shared), true);
-check('front in a browser tab: claimed, not fronted', focusRequests() === 2 && browser?.name === 'Shared.typ' && browser.focused === false);
+check('front in a browser tab: claimed, not fronted', focusRequests() === 3 && browser?.name === 'Shared.typ' && browser.focused === false);
 
 holder.holdOpenFile(null);
 check('the holder let go: null', (await asker.openInAnotherWindow(asHandle(shared), true)) === null);

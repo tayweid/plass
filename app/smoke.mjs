@@ -153,6 +153,12 @@ if (hidesTitleBar) {
 // checkout beside this one may predate it.
 const knows = await page.evaluate(() => window.claerbout.request({ type: 'focus' }));
 if (knows?.focused === true) {
+  // The document is in the Dock: how a second open most often finds it, and
+  // the slow path for the shell's focus answer (macOS restores the window
+  // first).
+  const first = await app.browserWindow(page);
+  await first.evaluate((window) => window.minimize());
+  await page.waitForTimeout(500);
   const opened = app.waitForEvent('window', { timeout: 30_000 });
   await app.evaluate(({ app: electronApp }, file) => electronApp.emit('open-file', { preventDefault() {} }, file), doc);
   const second = await opened;
@@ -162,6 +168,7 @@ if (knows?.focused === true) {
     await fail(`the second window on ${path.basename(doc)} stayed open (toast: "${toast}")`);
   }
   if (page.isClosed() || app.windows().length !== 1) await fail(`windows after the second open: ${app.windows().map((window) => window.url()).join(', ') || 'none'}`);
+  if (await first.evaluate((window) => window.isMinimized())) await fail('the first window was not restored from the Dock');
   const front = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.getTitle() ?? null);
   if (front === null) console.log('smoke: no window is focused here (the app is not active); the fronting is not checked');
   else if (!front.startsWith('smoke')) await fail(`after the second open the focused window is "${front}", not the first`);

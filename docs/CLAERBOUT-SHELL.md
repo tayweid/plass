@@ -402,14 +402,17 @@ prompted.
   file). So the pages decide, by handle: the new window asks the others as
   Open… always has (`open-files.ts`), with `front: true`; the holder asks
   the shell to focus it (`focusThisWindow` in `claerbout.ts` — a window may
-  only ask for itself, no window id crosses) and says in its claim whether
-  it was; the launch window then closes itself (`openLaunched` in
-  `main.ts`; `window.close()` closes a shell window). Open…, Recents and a
-  restore keep the toast and front nobody: those windows may hold their
-  own document. Under a shell without the request (v0.2.0 logs "unknown
-  shell message: focus" and answers null) the toast stays, as in a browser
-  tab, where no JS can focus another window. Known: the new window is
-  visible for the moment between its first paint and the claim; keeping a
-  `drop` window hidden until its page has decided would be a change in
-  the shell. `app/smoke.mjs` opens the document a second time and checks
-  the window closes and the first is the focused one.
+  only ask for itself, no window id crosses) and says whether it was in a
+  second message after its claim (`fronted`), since the shell's answer for
+  a minimized window (~250 ms: macOS restores it first) outlasts the 200 ms
+  an asker waits for a claim; the launch window then closes itself
+  (`openLaunched` in `main.ts`; `window.close()` closes a shell window).
+  Open…, Recents and a restore keep the toast and front nobody: those
+  windows may hold their own document. Under a shell without the request
+  (v0.2.0 logs "unknown shell message: focus" and answers null) the toast
+  stays, as in a browser tab, where no JS can focus another window. Known:
+  the new window is visible for the moment between its first paint and the
+  claim; keeping a `drop` window hidden until its page has decided would
+  be a change in the shell. `app/smoke.mjs` minimizes the first window,
+  opens the document a second time and checks the new window closes and
+  the first is back from the Dock and focused.
