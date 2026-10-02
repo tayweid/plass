@@ -1,4 +1,6 @@
-// Everyday writing stays on the glyph bar; occasional tools live in Extras.
+// Zen's shape: the paper's way in and out in the bar beside the traffic
+// lights (File, the name with its save dot, Export), the tools on a rail
+// down the left in the bar's old groups, the occasional ones behind Extras.
 // Menus preserve the editor selection and keep geometry reads off typing.
 
 import './toolbar.css';
@@ -18,6 +20,7 @@ import { insertGrid } from './grid-editor';
 import { insertEditorComment } from './editor-comments';
 import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
+import { placeFlyout } from './flyout';
 import { isPwaInstalled, onPwaInstallState, requestPwaInstall } from './pwa-install';
 import { checkForUpdate, installUpdate, isNativeShell, onUpdate } from './claerbout';
 import type { TypesetStats } from './typeset-plugin';
@@ -58,8 +61,10 @@ const ICONS: Record<string, string> = {
   aligncenter: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="6.5" y1="12" x2="17.5" y2="12"/><line x1="5" y1="18" x2="19" y2="18"/>',
   alignright: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="6" y1="18" x2="21" y2="18"/>',
   paragraph: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="15" y2="18"/>',
-  quote: '<line x1="3" y1="4" x2="3" y2="20" stroke-dasharray="2 2"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="16" y2="18"/>',
-  solution: '<line x1="3" y1="4" x2="3" y2="20" stroke-width="3"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="16" y2="18"/>',
+  // Quotation marks, so the Blocks group reads apart from Lists above it.
+  quote: '<circle cx="7.5" cy="14.5" r="2.6" fill="currentColor" stroke="none"/><path d="M4.9 14.4C4.9 10.6 6.7 8.1 10.2 6.8"/><circle cx="16.5" cy="14.5" r="2.6" fill="currentColor" stroke="none"/><path d="M13.9 14.4C13.9 10.6 15.7 8.1 19.2 6.8"/>',
+  // The solution block's own mark: its red rule beside the text.
+  solution: '<line x1="5" y1="4" x2="5" y2="20" stroke="#d9433a" stroke-width="2.8"/><line x1="10" y1="8" x2="20" y2="8"/><line x1="10" y1="12" x2="20" y2="12"/><line x1="10" y1="16" x2="16" y2="16"/>',
   open: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
@@ -67,13 +72,14 @@ const ICONS: Record<string, string> = {
   sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
   code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
   comment: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/>',
+  plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
 };
 
 function icon(name: string): string {
   return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 }
 
-export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileManager, actions: ToolbarActions): Toolbar {
+export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: EditorView, fm: FileManager, actions: ToolbarActions): Toolbar {
   const fileLabel = document.createElement('span');
   fileLabel.className = 'tb-file';
   fileLabel.textContent = DEFAULT_DOC_NAME;
@@ -150,13 +156,44 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   dot.className = 'doc-title-dot';
   dot.setAttribute('aria-hidden', 'true');
   titleBar.append(fileLabel, dot);
-  container.append(titleBar);
 
-  const toolsPill = document.createElement('div');
-  toolsPill.className = 'tb-pod tb-tools';
-  const documentPill = document.createElement('div');
-  documentPill.className = 'tb-pod';
-  container.append(toolsPill, documentPill);
+  // The rail: the tools in groups under hairlines, scrolling as one when
+  // the window is short; Document settings and the view switch pinned
+  // below them, as Zen pins its bottom icons, so a short window only
+  // ever cuts tools.
+  rail.setAttribute('aria-label', 'Document tools');
+  const railGroups = document.createElement('div');
+  railGroups.className = 'tb-rail-groups';
+  const railFoot = document.createElement('div');
+  railFoot.className = 'tb-rail-foot';
+  rail.append(railGroups, railFoot);
+  const railGroup = (name: string) => {
+    if (railGroups.childElementCount) {
+      const rule = document.createElement('div');
+      rule.className = 'tb-rule';
+      rule.setAttribute('role', 'separator');
+      railGroups.append(rule);
+    }
+    const group = document.createElement('div');
+    group.className = 'tb-rail-group';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', name);
+    railGroups.append(group);
+    return group;
+  };
+  const textGroup = railGroup('Text');
+  const insertGroup = railGroup('Insert');
+  const blocksGroup = railGroup('Blocks');
+  const moreGroup = railGroup('More');
+  // A short window cuts the groups: a fade at the cut edge says the rest
+  // is a scroll away (toolbar.css). Read on scroll and resize only.
+  const railCue = () => {
+    const { scrollTop, scrollHeight, clientHeight } = railGroups;
+    railGroups.classList.toggle('tb-more-above', scrollTop > 1);
+    railGroups.classList.toggle('tb-more-below', scrollTop + clientHeight < scrollHeight - 1);
+  };
+  railGroups.addEventListener('scroll', railCue, { passive: true });
+  new ResizeObserver(railCue).observe(railGroups);
 
   let captionButton: HTMLButtonElement | null = null;
   const attachCaption = (button: HTMLButtonElement) => {
@@ -166,12 +203,42 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       button.classList.add('tb-caption-active');
       const label = button.querySelector<HTMLElement>('.lbl');
       if (!label) return;
+      // (Reads on hover or focus, never on the typing path.)
+      if (button.closest('#rail')) {
+        // A rail tile's caption sits to its right, fixed to the window:
+        // the rail's groups scroll, and a scrolling box clips what hangs
+        // out of it.
+        const rect = button.getBoundingClientRect();
+        label.style.top = `${rect.top + rect.height / 2}px`;
+        label.style.left = `${rect.right + 12}px`;
+        return;
+      }
+      const panelElement = button.closest<HTMLElement>('.tb-menu-extras');
+      if (panelElement) {
+        // A glyph in a flyout: the same rule as the rail — the caption
+        // beside the panel, level with the glyph, covering no row of it;
+        // above the glyph when the window has no room beside the panel.
+        // The panel is the caption's containing block (toolbar.css).
+        const panel = panelElement.getBoundingClientRect();
+        const glyph = button.getBoundingClientRect();
+        const originX = panel.left + panelElement.clientLeft;
+        const originY = panel.top + panelElement.clientTop;
+        const width = label.offsetWidth;
+        if (panel.right + 8 + width <= window.innerWidth - 8) {
+          label.style.left = `${panel.right + 8 - originX}px`;
+          label.style.top = `${glyph.top + glyph.height / 2 - originY}px`;
+          label.style.transform = 'translateY(-50%)';
+        } else {
+          const middle = Math.max(8 + width / 2, Math.min(glyph.left + glyph.width / 2, window.innerWidth - 8 - width / 2));
+          label.style.left = `${middle - originX}px`;
+          label.style.top = `${glyph.top - 6 - originY}px`;
+          label.style.transform = 'translate(-50%, -100%)';
+        }
+        return;
+      }
       label.style.marginLeft = '0px';
       const rect = label.getBoundingClientRect();
-      const panel = button.closest('.tb-menu-extras')?.getBoundingClientRect();
-      const left = panel ? panel.left + 6 : 8;
-      const right = panel ? panel.right - 6 : window.innerWidth - 8;
-      const shift = Math.max(0, left - rect.left) - Math.max(0, rect.right - right);
+      const shift = Math.max(0, 8 - rect.left) - Math.max(0, rect.right - (window.innerWidth - 8));
       if (shift) label.style.marginLeft = `${shift}px`;
     };
     const hide = () => {
@@ -202,27 +269,51 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     button.setAttribute('aria-expanded', 'false');
     return button;
   };
-  const fileBtn = trigger(titleBar, 'File', icon('open'));
-  const formatBtn = trigger(toolsPill, 'Headings', '<span class="ico tico">H1</span>');
-  const styleBtn = trigger(toolsPill, 'Text style', '<span class="ico tico"><b>B</b></span>');
-  const listBtn = trigger(toolsPill, 'Lists', icon('list'));
-  const figureBtn = glyphButton(toolsPill, 'Insert figure', icon('image'));
-  const mathBtn = glyphButton(toolsPill, 'Inline math', '<span class="ico tico">Σ</span>');
-  const noteBtn = glyphButton(toolsPill, 'Footnote', '<span class="ico tico">†</span>');
-  const extrasBtn = trigger(documentPill, 'Extras', '<span class="ico tico">⋯</span>');
-  const settingsBtn = glyphButton(documentPill, 'Document settings', icon('sliders'));
-  const exportBtn = trigger(documentPill, 'Export', icon('download'));
+  // The bar, left to right: File, the name, Export — the paper's way in
+  // and out, beside the traffic lights.
+  const fileBtn = trigger(container, 'File', icon('open'));
+  fileBtn.classList.add('tb-tile');
+  container.append(titleBar);
+  const exportBtn = trigger(container, 'Export', icon('download'));
+  exportBtn.classList.add('tb-tile');
   exportBtn.title = 'Export — PDF, .typ, .tex';
+  // The rail, top to bottom, in the bar's old groups; the Blocks, once a
+  // row inside Extras, are tiles of their own.
+  const formatBtn = trigger(textGroup, 'Headings', '<span class="ico tico">H1</span>');
+  const styleBtn = trigger(textGroup, 'Text style', '<span class="ico tico"><b>B</b></span>');
+  const listBtn = trigger(textGroup, 'Lists', icon('list'));
+  const figureBtn = glyphButton(insertGroup, 'Insert figure', icon('image'));
+  const mathBtn = glyphButton(insertGroup, 'Inline math', '<span class="ico tico">Σ</span>');
+  const noteBtn = glyphButton(insertGroup, 'Footnote', '<span class="ico tico">†</span>');
+  const insertBtn = trigger(insertGroup, 'Insert', icon('plus'));
+  insertBtn.title = 'Insert — table, grid, display equation, title block, page break';
+  const extrasBtn = trigger(moreGroup, 'Extras', '<span class="ico tico">⋯</span>');
+  const settingsBtn = glyphButton(railFoot, 'Document settings', icon('sliders'));
+  // The formatting tools rest while the text is the truth (the Blocks
+  // tiles rest through their own refresh, below).
+  for (const button of [formatBtn, styleBtn, listBtn, figureBtn, mathBtn, noteBtn]) button.classList.add('tb-rests');
   const sourceBtn = document.createElement('button');
   sourceBtn.type = 'button';
-  sourceBtn.className = 'tb-source view-switch';
+  sourceBtn.className = 'tb-btn tb-source view-switch';
   sourceBtn.setAttribute('aria-label', 'Plain text view');
   sourceBtn.setAttribute('aria-pressed', 'false');
   sourceBtn.title = 'Switch to plain text (⌘/)';
-  sourceBtn.innerHTML = `${icon('code')}<span class="view-switch-label" aria-hidden="true">Plain text</span>`;
+  sourceBtn.innerHTML = `${icon('code')}<span class="lbl view-switch-label" aria-hidden="true">Plain text</span>`;
+  attachCaption(sourceBtn);
   sourceBtn.addEventListener('mousedown', (e) => e.preventDefault());
   sourceBtn.addEventListener('click', () => { closeMenu(); actions.toggleSource(); });
-  document.body.append(sourceBtn);
+  railFoot.append(sourceBtn);
+  // The tiles swallow mousedown (the editor keeps its selection), so a
+  // mouse click moves no focus: a tile that Escape handed the focus back
+  // to would keep its ring and its caption beside the panel the click
+  // opened. A click on a tile lets that other tile go first.
+  for (const frame of [container, rail]) {
+    frame.addEventListener('click', (e) => {
+      const clicked = (e.target as Element).closest('.tb-btn');
+      const held = document.activeElement;
+      if (e.detail > 0 && clicked && held !== clicked && held instanceof HTMLElement && held.matches('#toolbar .tb-btn, #rail .tb-btn')) held.blur();
+    }, true);
+  }
   settingsBtn.addEventListener('click', () => { closeMenu(); toggleSettingsPanel(view, settingsBtn); });
 
   interface Menu {
@@ -252,11 +343,16 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     menu.anchor.setAttribute('aria-expanded', 'true');
     menu.anchor.setAttribute('aria-controls', menu.element.id);
     // Read geometry only when a menu opens, never on the typing path.
-    const rect = menu.anchor.getBoundingClientRect();
-    const top = rect.bottom + 10;
-    menu.element.style.top = `${top}px`;
-    menu.element.style.maxHeight = `${Math.max(80, window.innerHeight - top - 8)}px`;
-    menu.element.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menu.element.offsetWidth - 8))}px`;
+    if (menu.anchor.closest('#rail')) placeFlyout(menu.element, menu.anchor);
+    else {
+      // A dropdown: under its tile in the bar.
+      const rect = menu.anchor.getBoundingClientRect();
+      const { style } = menu.element;
+      const top = rect.bottom + 10;
+      style.top = `${top}px`;
+      style.maxHeight = `${Math.max(80, window.innerHeight - top - 8)}px`;
+      style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menu.element.offsetWidth - 8))}px`;
+    }
     if (focus) menuButtons(menu)[0]?.focus();
   };
   const createMenu = (name: string, anchor: HTMLButtonElement, parent?: Menu): Menu => {
@@ -274,8 +370,11 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
         if (openMenu?.anchor === anchor) closeMenu(true);
         else showMenu(menu, true);
       });
+      // A rail tile's flyout also opens to the right (ArrowLeft, below,
+      // closes it).
+      const flyout = !!anchor.closest('#rail');
       anchor.addEventListener('keydown', (e) => {
-        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || (flyout && e.key === 'ArrowRight')) {
           e.preventDefault();
           e.stopPropagation();
           showMenu(menu, true);
@@ -288,6 +387,8 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   const format = createMenu('Headings', formatBtn);
   const textStyle = createMenu('Text style', styleBtn);
   const lists = createMenu('Lists', listBtn);
+  const insert = createMenu('Insert', insertBtn);
+  insert.element.classList.add('tb-menu-extras');
   const extras = createMenu('Extras', extrasBtn);
   extras.element.classList.add('tb-menu-extras');
   const fileMenu = createMenu('File', fileBtn);
@@ -314,7 +415,8 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     if (!openMenu.element.contains(e.target as Node) && e.target !== openMenu.anchor) return;
     const buttons = menuButtons(openMenu);
     const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
-    const horizontal = openMenu === extras && ['ArrowLeft', 'ArrowRight'].includes(e.key);
+    // The glyph rows (Extras, Insert) walk sideways with the arrows.
+    const horizontal = openMenu.element.classList.contains('tb-menu-extras') && ['ArrowLeft', 'ArrowRight'].includes(e.key);
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key) || horizontal) {
       e.preventDefault();
       const previous = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
@@ -327,6 +429,10 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       const parent = openMenu.parent;
       showMenu(parent);
       parent.element.querySelector<HTMLButtonElement>(`[aria-controls="${childId}"]`)?.focus();
+    } else if (e.key === 'ArrowLeft' && openMenu.anchor.closest('#rail')) {
+      // Back into the rail, the way the flyout came.
+      e.preventDefault();
+      closeMenu(true);
     } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey && e.key !== ' ') {
       const ordered = [...buttons.slice(index + 1), ...buttons.slice(0, index + 1)];
       const match = ordered.find((button) => (button.getAttribute('aria-label') ?? button.textContent)?.trim().toLowerCase().startsWith(e.key.toLowerCase()));
@@ -342,15 +448,27 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     submenu?: Menu;
     editing?: boolean;
     glyph?: string;
+    /** A rail tile rather than a menu item: a plain button, pressed rather
+     *  than checked, refreshed on every state change, not only while a
+     *  menu is open. */
+    tile?: boolean;
   };
   const refreshItems: Array<() => void> = [];
+  const refreshTiles: Array<() => void> = [];
+  // Written only on change: the tiles refresh on the typing path, and a
+  // same-value write is still a mutation the chrome must not publish.
+  const setAttr = (element: HTMLElement, name: string, value: string) => {
+    if (element.getAttribute(name) !== value) element.setAttribute(name, value);
+  };
   const item = (parent: HTMLElement, label: string, run: () => void, options: ItemOptions = {}) => {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'tb-menu-item';
-    button.tabIndex = -1;
+    button.className = options.tile ? 'tb-btn' : 'tb-menu-item';
+    if (!options.tile) {
+      button.tabIndex = -1;
+      button.setAttribute('role', options.checked ? 'menuitemcheckbox' : 'menuitem');
+    }
     button.title = options.title ?? label;
-    button.setAttribute('role', options.checked ? 'menuitemcheckbox' : 'menuitem');
     const text = document.createElement('span');
     text.className = options.glyph ? 'lbl' : 'tb-menu-label';
     text.textContent = label;
@@ -382,16 +500,17 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     button.addEventListener('click', () => {
       if (options.submenu) showMenu(options.submenu, true);
       else {
-        closeMenu(true);
+        closeMenu(!options.tile);
         run();
       }
     });
     if (options.checked || options.enabled || options.editing) {
       const refresh = () => {
-        if (options.checked) button.setAttribute('aria-checked', String(options.checked()));
-        button.disabled = !!(options.editing && sourceActive) || !!(options.enabled && !options.enabled());
+        if (options.checked) setAttr(button, options.tile ? 'aria-pressed' : 'aria-checked', String(options.checked()));
+        const disabled = !!(options.editing && sourceActive) || !!(options.enabled && !options.enabled());
+        if (button.disabled !== disabled) button.disabled = disabled;
       };
-      refreshItems.push(refresh);
+      (options.tile ? refreshTiles : refreshItems).push(refresh);
       refresh();
     }
     parent.append(button);
@@ -411,9 +530,11 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     parent.append(div);
   };
   const refresh = () => refreshItems.forEach((update) => update());
+  const refreshRail = () => refreshTiles.forEach((update) => update());
   format.refresh = refresh;
   textStyle.refresh = refresh;
   lists.refresh = refresh;
+  insert.refresh = refresh;
   extras.refresh = refresh;
   const runCmd = (command: Command) => () => {
     command(view.state, view.dispatch, view);
@@ -428,7 +549,7 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     }
     return null;
   };
-  const extraGroup = (name: string) => {
+  const extraGroup = (menu: Menu, name: string) => {
     const group = document.createElement('div');
     group.className = 'tb-extra-section';
     group.setAttribute('role', 'group');
@@ -439,14 +560,13 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     const row = document.createElement('div');
     row.className = 'tb-extra-row';
     group.append(label, row);
-    extras.element.append(group);
+    menu.element.append(group);
     return row;
   };
-  const insertRow = extraGroup('Insert');
-  const alignmentRow = extraGroup('Alignment');
-  const blocksRow = extraGroup('Blocks');
-  const codeRow = extraGroup('Code');
-  const documentRow = extraGroup('Document');
+  const insertRow = extraGroup(insert, 'Insert');
+  const alignmentRow = extraGroup(extras, 'Alignment');
+  const codeRow = extraGroup(extras, 'Code');
+  const documentRow = extraGroup(extras, 'Document');
   const textColumn = format.element;
   for (const level of [null, 1, 2, 3]) {
     const command = level ? setBlockType(schema.nodes.heading, { level }) : setBlockType(schema.nodes.paragraph);
@@ -534,23 +654,23 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
     wrapIn(schema.nodes.blockquote, { kind })(state, view.dispatch);
     view.focus();
   };
-  item(blocksRow, 'Block quote', () => setBlockKind(null), {
-    title: 'Block quote (⌃>) — or type > at a line start', editing: true,
+  item(blocksGroup, 'Block quote', () => setBlockKind(null), {
+    title: 'Block quote (⌃>) — or type > at a line start', editing: true, tile: true,
     glyph: icon('quote'),
     checked: () => !!ancestor('blockquote') && !ancestor('blockquote')!.attrs.kind,
   });
-  item(blocksRow, 'Solution', () => setBlockKind('solution'), {
-    title: 'Solution block — red text with a red rule on the left', editing: true,
+  item(blocksGroup, 'Solution', () => setBlockKind('solution'), {
+    title: 'Solution block — red text with a red rule on the left', editing: true, tile: true,
     glyph: icon('solution'),
     checked: () => ancestor('blockquote')?.attrs.kind === 'solution',
   });
-  commandItem(blocksRow, 'Comment', insertEditorComment, {
+  commandItem(blocksGroup, 'Comment', insertEditorComment, {
     title: 'Editorial comment — a note on the page and in the file, never printed',
-    glyph: icon('comment'),
+    glyph: icon('comment'), tile: true,
   });
-  commandItem(blocksRow, 'Remove quote', lift, {
+  commandItem(blocksGroup, 'Remove quote', lift, {
     title: 'Plain body text — lift out of the quote or solution block',
-    glyph: icon('paragraph'),
+    glyph: icon('paragraph'), tile: true,
     enabled: () => !!ancestor('blockquote') && lift(view.state),
   });
 
@@ -760,6 +880,9 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
 
   return {
     update() {
+      // The rail's tiles show the selection's state at all times; a menu's
+      // items only while it is open.
+      refreshRail();
       if (openMenu) refresh();
     },
     stats() {},
@@ -770,8 +893,8 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
       sourceBtn.title = active ? 'Switch to paper (⌘/)' : 'Switch to plain text (⌘/)';
       sourceBtn.querySelector('.view-switch-label')!.textContent = active ? 'Paper' : 'Plain text';
       settingsBtn.disabled = active;
-      for (const button of toolsPill.querySelectorAll<HTMLButtonElement>('button')) button.disabled = active;
-      toolsPill.classList.toggle('tb-resting', active);
+      for (const button of rail.querySelectorAll<HTMLButtonElement>('.tb-rests')) button.disabled = active;
+      refreshRail();
       refresh();
     },
     setFile(name, dirty) {

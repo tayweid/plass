@@ -44,7 +44,7 @@ test('Text style menu toggles strikethrough and preserves the selection', async 
   await expect(page.locator('.ProseMirror s')).toHaveText('cut this phrase');
 });
 
-test('toolbar and open menus fit a narrow window with a long filename', async ({ page }) => {
+test('the bar, the rail and the open menus fit a narrow window with a long filename', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto('/?new=1');
   await expect(page.getByRole('button', { name: 'Headings', exact: true })).toBeVisible();
@@ -54,48 +54,62 @@ test('toolbar and open menus fit a narrow window with a long filename', async ({
   });
   await expect(page.locator('.tb-file')).toHaveText('A very long manuscript title with tables and side-by-side grids');
 
-  const visibleButtons = page.locator('#toolbar button:visible');
-  await expect(visibleButtons).toHaveCount(10);
-  for (const name of ['File', 'Headings', 'Text style', 'Lists', 'Insert figure', 'Inline math', 'Footnote', 'Extras', 'Document settings', 'Export']) {
-    await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+  // The bar holds the paper's way in and out; the rail, every tool.
+  const barButtons = page.locator('#toolbar button:visible');
+  await expect(barButtons).toHaveCount(2);
+  for (const name of ['File', 'Export']) {
+    await expect(page.locator('#toolbar').getByRole('button', { name, exact: true })).toBeVisible();
   }
-  for (const button of await visibleButtons.all()) {
+  const railButtons = page.locator('#rail button:visible');
+  await expect(railButtons).toHaveCount(14);
+  for (const name of ['Headings', 'Text style', 'Lists', 'Insert figure', 'Inline math', 'Footnote', 'Insert', 'Block quote', 'Solution', 'Comment', 'Remove quote', 'Extras', 'Document settings', 'Plain text view']) {
+    await expect(page.locator('#rail').getByRole('button', { name, exact: true })).toBeVisible();
+  }
+  for (const button of [...(await barButtons.all()), ...(await railButtons.all())]) {
     const bounds = await button.boundingBox();
     expect(bounds).not.toBeNull();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(375);
+    expect(bounds!.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(812);
   }
 
-  const extras = page.getByRole('button', { name: 'Extras', exact: true });
-  await extras.click();
-  const menu = page.getByRole('menu', { name: 'Extras', exact: true });
-  await expect(menu).toBeVisible();
-  const bounds = await menu.boundingBox();
-  expect(bounds).not.toBeNull();
-  expect(bounds!.x).toBeGreaterThanOrEqual(0);
-  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(375);
-  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(812);
-  for (const name of ['Insert', 'Alignment', 'Blocks', 'Code', 'Document']) {
-    const group = menu.getByRole('group', { name, exact: true });
-    await expect(group).toBeVisible();
-    for (const button of await group.locator('button:visible').all()) {
-      const buttonBounds = await button.boundingBox();
-      expect(buttonBounds).not.toBeNull();
-      expect(buttonBounds!.x).toBeGreaterThanOrEqual(bounds!.x);
-      expect(buttonBounds!.x + buttonBounds!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width);
+  // The flyouts from the rail stay inside the window too.
+  const flyout = async (trigger: string, groups: string[]) => {
+    await page.getByRole('button', { name: trigger, exact: true }).click();
+    const menu = page.getByRole('menu', { name: trigger, exact: true });
+    await expect(menu).toBeVisible();
+    const bounds = await menu.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(375);
+    expect(bounds!.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(812);
+    await expect(menu.getByRole('group')).toHaveCount(groups.length);
+    for (const name of groups) {
+      const group = menu.getByRole('group', { name, exact: true });
+      await expect(group).toBeVisible();
+      for (const button of await group.locator('button:visible').all()) {
+        const buttonBounds = await button.boundingBox();
+        expect(buttonBounds).not.toBeNull();
+        expect(buttonBounds!.x).toBeGreaterThanOrEqual(bounds!.x);
+        expect(buttonBounds!.x + buttonBounds!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width);
+      }
     }
-  }
-  await expect(menu.locator('[aria-haspopup]')).toHaveCount(0);
-  await page.mouse.click(8, 790);
-  await expect(menu).toBeHidden();
+    await expect(menu.locator('[aria-haspopup]')).toHaveCount(0);
+    await page.mouse.click(200, 790);
+    await expect(menu).toBeHidden();
+  };
+  await flyout('Insert', ['Insert']);
+  await flyout('Extras', ['Alignment', 'Code', 'Document']);
 });
 
-test('Extras keeps glyph controls with hover captions', async ({ page }) => {
+test('the Insert flyout keeps glyph controls with hover captions', async ({ page }) => {
   await page.goto('/?new=1');
   const settings = page.getByRole('button', { name: 'Document settings', exact: true });
   await expect(settings).toBeVisible();
-  await page.getByRole('button', { name: 'Extras', exact: true }).click();
-  const menu = page.getByRole('menu', { name: 'Extras', exact: true });
+  await page.getByRole('button', { name: 'Insert', exact: true }).click();
+  const menu = page.getByRole('menu', { name: 'Insert', exact: true });
   const grid = menu.getByRole('menuitem', { name: 'Grid', exact: true });
   const caption = grid.locator('.lbl');
   await expect(grid.locator('.ico')).toBeVisible();
@@ -103,6 +117,13 @@ test('Extras keeps glyph controls with hover captions', async ({ page }) => {
   await expect.poll(() => caption.evaluate((el) => getComputedStyle(el).opacity)).toBe('0');
   await grid.hover();
   await expect.poll(() => caption.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+  // Beside the panel, level with the glyph, as a rail tile's caption sits
+  // beside the rail: it covers nothing in the panel.
+  const panel = (await menu.boundingBox())!;
+  const glyph = (await grid.boundingBox())!;
+  const label = (await caption.boundingBox())!;
+  expect(label.x).toBeGreaterThanOrEqual(panel.x + panel.width);
+  expect(Math.abs(label.y + label.height / 2 - (glyph.y + glyph.height / 2))).toBeLessThan(1.5);
   await page.mouse.move(8, 400);
   await expect.poll(() => caption.evaluate((el) => getComputedStyle(el).opacity)).toBe('0');
   await grid.focus();
@@ -186,6 +207,14 @@ test('menus open, navigate, and close from the keyboard', async ({ page }) => {
   await expect(menu).toBeHidden();
   await expect(headings).toBeFocused();
 
+  // A rail tile's flyout also opens to the right and closes back to the left.
+  await page.keyboard.press('ArrowRight');
+  await expect(menu).toBeVisible();
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await expect(menu).toBeHidden();
+  await expect(headings).toBeFocused();
+
   await page.getByRole('button', { name: 'Extras', exact: true }).click();
   const extras = page.getByRole('menu', { name: 'Extras', exact: true });
   const alignment = extras.getByRole('menuitemcheckbox', { name: 'Justified', exact: true });
@@ -197,6 +226,30 @@ test('menus open, navigate, and close from the keyboard', async ({ page }) => {
   await page.keyboard.press('Escape');
   await expect(extras).toBeHidden();
   await expect(page.getByRole('button', { name: 'Extras', exact: true })).toBeFocused();
+});
+
+test('a mouse click after Escape leaves no ring or caption on the tile Escape went back to', async ({ page }) => {
+  await page.goto('/?new=1');
+  for (const name of ['Headings', 'File']) {
+    const tile = page.getByRole('button', { name, exact: true });
+    const caption = tile.locator('.lbl');
+    const opacity = () => caption.evaluate((el) => getComputedStyle(el).opacity);
+    await tile.click();
+    await expect(page.getByRole('menu', { name, exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(tile).toBeFocused();
+    await expect.poll(opacity).toBe('1');
+    // The tiles swallow mousedown, so the click on another tile moves no
+    // focus by itself; the settings panel takes none either.
+    const settings = page.getByRole('button', { name: 'Document settings', exact: true });
+    await settings.click();
+    const panel = page.getByRole('dialog', { name: 'Document settings', exact: true });
+    await expect(panel).toBeVisible();
+    await expect(tile).not.toBeFocused();
+    await expect.poll(opacity).toBe('0');
+    await settings.click();
+    await expect(panel).toHaveCount(0);
+  }
 });
 
 test('Headings and Extras apply headings and alignment to a whole-document selection', async ({ page }) => {

@@ -182,7 +182,7 @@ test('native table keystrokes map numbering and read no contextual geometry', as
       if (element.matches('.native-table-toolbar') || element.closest('.native-table-toolbar')) {
         return 'native-controls';
       }
-      if (element.matches('#toolbar') || element.closest('#toolbar')) return 'main-toolbar';
+      if (element.matches('#toolbar, #rail') || element.closest('#toolbar, #rail')) return 'main-toolbar';
       if (element.matches('.ProseMirror table')) return 'native-table';
       return null;
     };
@@ -224,8 +224,10 @@ test('native table keystrokes map numbering and read no contextual geometry', as
     });
     const nativeControls = document.querySelector('.native-table-toolbar');
     const mainToolbar = document.querySelector('#toolbar');
+    const rail = document.querySelector('#rail');
     if (nativeControls) observer.observe(nativeControls, { attributes: true, subtree: true });
     if (mainToolbar) observer.observe(mainToolbar, { attributes: true, subtree: true });
+    if (rail) observer.observe(rail, { attributes: true, subtree: true });
 
     const begin = () => {
       if (started) return;

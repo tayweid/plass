@@ -7,8 +7,8 @@
   "scope": "./",
   "display": "standalone",
   "launch_handler": { "client_mode": ["focus-existing", "auto"] },
-  "background_color": "#111112",
-  "theme_color": "#111112",
+  "background_color": "#18181a",
+  "theme_color": "#18181a",
   "icons": [
     { "src": "icons/plass-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "icons/plass-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },

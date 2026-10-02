@@ -1,21 +1,24 @@
-/* The familiar glyph bar, with occasional tools behind Extras. The row
-   is padded by the traffic lights' room on both sides (the Window
-   Controls Overlay the shell publishes when it hides the title bar; 0 in
-   a browser and under a native title bar) and by the room's scrollbar on
-   the right (main.ts sets --room-scrollbar), so the pills center on the
-   page's axis. The app's window is no narrower than the row needs with
-   the lights' room on both sides (app/plass.json, minWidth 740). */
+/* Zen's shape. The bar beside the traffic lights holds the paper's way in
+   and out: the File tile, the name pill with its save dot, the Export
+   tile. Its row is padded on the left by the lights' room (the Window
+   Controls Overlay the shell publishes when it hides the title bar) and
+   by nothing else: nothing in the bar centres on the paper any more.
+   With no lights' room — a browser, the PWA, a native title bar — the
+   File tile stands over the rail's column of tiles instead, 6 px in
+   ((48 − 36) / 2: the env() fallback undoes 6 px of the 12). The rail
+   down the left holds the tools in the bar's old groups under
+   hairlines, with the occasional ones behind Extras; its menus fly out
+   to the right. The app's window is no narrower than the row needs
+   beside the lights (app/plass.json, minWidth 740). */
 #toolbar {
-  gap: 5px;
-  padding-inline: calc(12px + env(titlebar-area-x, 0px)) calc(12px + env(titlebar-area-x, 0px) + var(--room-scrollbar, 0px));
+  gap: 6px;
+  padding-inline: calc(12px + env(titlebar-area-x, -6px)) 12px;
 }
 
 #toolbar .doc-title {
   min-width: 0;
-  max-width: 320px;
+  max-width: min(420px, 45vw);
   flex: 0 1 auto;
-  padding: 0 8px 0 16px;
-  gap: 8px;
 }
 
 #toolbar .tb-file {
@@ -23,53 +26,197 @@
   max-width: 100%;
 }
 
-#toolbar .tb-pod {
+/* The bar's two tiles: bare, a little smaller than the rail's. */
+#toolbar .tb-tile {
   flex: none;
-  gap: 2px;
-  padding: 0 5px;
-}
-
-#toolbar .tb-btn {
-  height: 36px;
+  width: 36px;
   min-width: 36px;
-  padding: 0 7px;
-  color: rgba(240, 238, 233, 0.85);
-  opacity: 0.55;
+  height: 36px;
+  padding: 0;
+  border-radius: 10px;
+  color: rgba(240, 238, 233, 0.62);
 }
 
-#toolbar .doc-title .tb-btn {
-  flex: none;
-  height: 30px;
-  min-width: 30px;
-  padding: 0 5px;
+#toolbar .tb-tile .ico {
+  width: 20px;
+  height: 20px;
 }
 
-#toolbar:hover .tb-btn,
-#toolbar:focus-within .tb-btn,
-#toolbar .tb-btn[aria-expanded='true'] {
-  opacity: 1;
-}
-
-#toolbar .tb-btn[aria-expanded='true'] {
+#toolbar .tb-tile:hover,
+#toolbar .tb-tile:focus-visible {
   color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#toolbar .tb-tile[aria-expanded='true'] {
+  color: #fff;
+  background: var(--tile);
+}
+
+#toolbar button:focus-visible,
+#toolbar .tb-file:focus-visible,
+#rail button:focus-visible {
+  outline: 2px solid #9db8d6;
+  outline-offset: 2px;
+}
+
+/* ---------- the rail ---------- */
+
+/* Under the bar, down the left edge, as narrow as Zen's: 32 px tiles with
+   the frame's edge either side (style.css, --rail). The tool groups
+   scroll as one when the window is short (no scrollbar drawn; the wheel
+   still scrolls, and a fade at the cut edge says there is more), and,
+   as Zen pins its bottom icons, Document settings and the view switch
+   stay pinned at the bottom, the switch level with the room's bottom
+   edge: only tools ever go under the fade. */
+#rail {
+  position: fixed;
+  top: var(--topbar);
+  left: 0;
+  bottom: 0;
+  width: var(--rail);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 var(--edge);
+}
+
+.tb-rail-groups {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  /* A tile Tab reaches scrolls clear of the fade (its height, below). */
+  scroll-padding-block: 28px;
+}
+
+.tb-rail-groups::-webkit-scrollbar {
+  display: none;
+}
+
+/* The cue that the groups go on past the cut: the frame's colour laid
+   over the last (or first) tiles in view, held at the edge while the
+   groups scroll (toolbar.ts sets the classes on scroll and resize). */
+.tb-rail-groups.tb-more-below::after,
+.tb-rail-groups.tb-more-above::before {
+  content: '';
+  position: sticky;
+  z-index: 1;
+  flex: none;
+  width: 100%;
+  height: 28px;
+  pointer-events: none;
+}
+
+.tb-rail-groups.tb-more-below::after {
+  bottom: 0;
+  margin-top: -31px;
+  background: linear-gradient(transparent, var(--frame) 85%);
+}
+
+.tb-rail-groups.tb-more-above::before {
+  top: 0;
+  margin-bottom: -31px;
+  background: linear-gradient(var(--frame) 15%, transparent);
+}
+
+.tb-rail-group,
+.tb-rail-foot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.tb-rule {
+  flex: none;
+  width: 18px;
+  height: 1px;
+  margin: 3px 0;
   background: rgba(255, 255, 255, 0.1);
 }
 
-#toolbar .tb-btn[aria-expanded='true'] .lbl {
-  visibility: hidden;
+/* Tiles: Zen's rounded squares, always visible at soft ink, the open or
+   pressed one on a lighter tile. */
+#rail .tb-btn {
+  flex: none;
+  width: var(--rail-tile);
+  min-width: var(--rail-tile);
+  height: var(--rail-tile);
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(240, 238, 233, 0.64);
 }
 
-#toolbar .tb-btn:disabled {
-  opacity: 0.22;
+#rail .tb-btn .ico {
+  width: 18px;
+  height: 18px;
+}
+
+#rail .tb-btn .tico {
+  font-size: 14px;
+  line-height: 18px;
+  min-width: 18px;
+}
+
+#rail .tb-btn:hover:not(:disabled),
+#rail .tb-btn:focus-visible {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#rail .tb-btn[aria-expanded='true'],
+#rail .tb-btn[aria-pressed='true'] {
+  color: #fff;
+  background: var(--tile);
+}
+
+#rail .tb-btn:disabled {
+  opacity: 0.25;
   cursor: default;
   background: transparent;
 }
 
-#toolbar button:focus-visible,
-#toolbar .tb-file:focus-visible {
-  outline: 2px solid #9db8d6;
-  outline-offset: 2px;
+#rail .tb-btn:disabled .ico,
+#rail .tb-btn:disabled svg {
+  transform: none;
 }
+
+#rail .tb-btn:disabled .lbl {
+  opacity: 0;
+  visibility: hidden;
+}
+
+/* Every caption in the frame — a bar tile's, a rail tile's, a flyout
+   glyph's — is the menus' dark glass, Zen's tooltip on the dark frame. */
+#toolbar .tb-btn .lbl,
+#rail .tb-btn .lbl {
+  --bar-glass: rgba(27, 26, 30, 0.94);
+  --bar-ink: rgba(240, 238, 233, 0.9);
+  --bar-hairline: rgba(255, 255, 255, 0.1);
+}
+
+/* The caption to the tile's right, where nothing crowds it; fixed to
+   the window, since the groups scroll and would clip it (toolbar.ts
+   places it when the tile is hovered or focused). */
+#rail .tb-btn .lbl {
+  position: fixed;
+  top: auto;
+  left: auto;
+  transform: translateY(-50%);
+}
+
 
 .tb-menu {
   position: fixed;
@@ -83,8 +230,10 @@
   border-radius: 13px;
   background: var(--bar-glass);
   color: var(--bar-ink);
+  /* Unprefixed only, here and in style.css: the build's minifier adds
+     -webkit- for Safari, and a hand-written -webkit- line after this one
+     was the only one it kept, so Plass.app's Chromium drew no blur. */
   backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 16px 40px rgba(0, 0, 0, 0.28);
 }
 
@@ -93,6 +242,7 @@
   display: none;
 }
 
+/* The glyph panels: Extras, and the Insert flyout (one row of it). */
 .tb-menu-extras {
   width: 318px;
   padding: 10px;
@@ -154,6 +304,18 @@
   opacity: 0.25;
 }
 
+/* A glyph's caption, as on the rail: beside the panel, level with the
+   glyph, so it never covers a row of the panel (toolbar.ts places it,
+   above the glyph when the window has no room beside the panel). The
+   panel is the caption's containing block and lets it hang out. */
+.tb-menu-extras {
+  overflow: visible;
+}
+
+.tb-menu-extras .tb-btn {
+  position: static;
+}
+
 .tb-menu-extras .lbl {
   width: max-content;
   max-width: calc(100vw - 24px);
@@ -166,11 +328,6 @@
 
 .tb-menu-extras .tb-btn.tb-caption-active .lbl {
   opacity: 1;
-}
-
-.tb-extra-section:last-child .lbl {
-  top: auto;
-  bottom: calc(100% + 6px);
 }
 
 .tb-menu-heading {
@@ -247,112 +404,25 @@
   white-space: nowrap;
 }
 
-/* A view change belongs to the room, apart from the document tools: in
-   the room's corner, inside the frame's inset. */
-.view-switch {
-  position: fixed;
-  left: calc(var(--inset, 0px) + max(18px, env(safe-area-inset-left)));
-  bottom: calc(var(--inset, 0px) + max(18px, env(safe-area-inset-bottom)));
-  z-index: 10;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 50%;
-  background: rgba(32, 31, 35, 0.48);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  color: rgba(240, 238, 233, 0.65);
-  font: 12px/1 var(--sans);
-  cursor: pointer;
-  transition: background 0.16s, color 0.16s, border-color 0.16s;
-}
-
-.view-switch .ico {
-  width: 16px;
-  height: 16px;
-}
-
-.view-switch-label {
-  position: absolute;
-  left: calc(100% + 8px);
-  white-space: nowrap;
-  padding: 4px 8px;
-  border: 1px solid var(--bar-hairline);
-  border-radius: 5px;
-  background: var(--bar-glass);
-  color: var(--bar-ink);
-  font: 11px var(--sans);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.16s ease;
-}
-
-.view-switch:hover .view-switch-label,
-.view-switch:focus-visible .view-switch-label {
-  opacity: 1;
-}
-
-.view-switch:hover,
-.view-switch[aria-pressed='true'] {
-  color: #f0eee9;
-  border-color: rgba(255, 255, 255, 0.25);
-}
-
-.view-switch[aria-pressed='true'] {
-  background: rgba(75, 73, 81, 0.58);
-}
-
-.view-switch:hover {
-  background: rgba(45, 43, 49, 0.75);
-}
-
-.view-switch:focus-visible {
-  outline: 2px solid #9db8d6;
-  outline-offset: 3px;
-}
-
 @media (max-width: 540px) {
+  /* Still 6 px in with no lights' room, over the rail's column. */
   #toolbar {
-    padding-inline: calc(8px + env(titlebar-area-x, 0px)) calc(8px + env(titlebar-area-x, 0px) + var(--room-scrollbar, 0px));
+    padding-inline: calc(8px + env(titlebar-area-x, -2px)) 8px;
     gap: 4px;
-  }
-
-  #toolbar .tb-pod {
-    gap: 0;
-    padding-inline: 3px;
-  }
-
-  #toolbar .tb-btn {
-    height: 34px;
-    min-width: 28px;
-    padding-inline: 3px;
-  }
-
-  #toolbar .tb-btn .ico {
-    width: 20px;
-    height: 20px;
-    min-width: 20px;
   }
 
   #toolbar .doc-title {
-    padding-inline: 8px 4px;
-    gap: 4px;
+    padding-inline: 8px;
+    gap: 6px;
   }
-
-  #toolbar .doc-title .tb-btn {
-    min-width: 26px;
-    padding-inline: 3px;
-  }
-
 }
 
+/* Here, after the rail's own display: style.css's print block comes
+   before this file and would lose to it. */
 @media print {
   .tb-menu,
-  .view-switch {
+  .view-switch,
+  #rail {
     display: none;
   }
 }

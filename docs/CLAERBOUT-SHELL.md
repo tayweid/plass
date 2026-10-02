@@ -384,15 +384,21 @@ prompted.
   default place, `{x: 100, h: 60}` with `{x: 20, y: 23}` (the area is
   2·y + 14 px tall, so y = 23 centres the lights on Plass's 60 px bar);
   `hidden` + overlay `{x: 78, h: 32}`. The bar is `-webkit-app-region:
-  drag`, with `no-drag` on the pills, the menus and the view switch;
-  Electron handles the mouse over a drag region natively, so hovering
-  the bar's empty part no longer wakes every button (hovering a pill
-  does) and a click there does not reach the page's outside-click menu
-  closer. The bar pads its row by `env(titlebar-area-x)` on both sides,
-  so the pills keep the paper's axis; the app's `minWidth` is 740, the
-  row's width beside the lights. Plass.app from the deploy is built on
-  tag v0.2.0: the frame and the end of the window-fitting ship with the
-  next Plass deploy, the bar beside the lights with the next shell tag.
+  drag`, with `no-drag` on its tiles and the name pill, the menus, the
+  settings panel and the view switch; Electron handles the mouse over a
+  drag region natively, so a click on the bar's empty part does not
+  reach the page's outside-click menu closer. Since 2026-10-02 (the Zen
+  draft, `docs/ZEN-DRAFT.md`) the bar holds only the paper's way in and
+  out — File, the name with its save dot, Export — padded by
+  `env(titlebar-area-x)` on the left, so the File tile sits beside the
+  lights; the tools are on a narrow rail down the left under the bar,
+  which is no drag region (it scrolls); the bar and the rail are the
+  frame, which edges the room, a rounded panel, by 8 px all round. The
+  bar's height is the overlay's (`env(titlebar-area-height)`), so a zoom
+  step keeps its row on the lights. The app's `minWidth` stays 740. Plass.app from the deploy
+  is built on tag v0.2.0: the frame and the end of the window-fitting
+  ship with the next Plass deploy, the bar beside the lights with the
+  next shell tag.
 - ~~A Finder open of a file Plass.app already shows: a blank new window
   with a toast, or the window that has it.~~ The window that has it, since
   2026-10-01, on shell 0.2.1's `focus` request. The shell lands every

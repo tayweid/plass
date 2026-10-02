@@ -2,8 +2,9 @@
 // the checkout (or a built app) on a .typ in a throwaway folder, see the
 // document open and typeset, edit it, save with ⌘S, and check the disk;
 // then drag the window wider and zoom (the window stays, the paper does
-// not re-lay), and, on a shell that hides the title bar, see the bar
-// padded by the traffic lights' room.
+// not re-lay), see the rail under the bar and the menus' blur, and, on a
+// shell that hides the title bar, see the bar padded by the traffic
+// lights' room.
 //
 //   node app/smoke.mjs                 # the checkout: the shell on dist/
 //   node app/smoke.mjs path/to/Plass.app
@@ -129,6 +130,13 @@ await page.waitForTimeout(800);
 const zoomed = await bounds();
 const resizes = await page.evaluate(() => window.__resizes);
 const widthAfter = await editorWidth();
+// The bar is the lights' band at every zoom (src/style.css, --topbar is
+// the overlay's height in CSS px), so its row stays on the traffic lights.
+const band = await page.evaluate(() => {
+  const overlay = navigator.windowControlsOverlay;
+  return { lights: overlay?.visible ? overlay.getTitlebarAreaRect().height : null, bar: document.getElementById('toolbar').getBoundingClientRect().height };
+});
+if (band.lights !== null && Math.abs(band.lights - band.bar) > 0.5) await fail(`under a zoom step the lights' band is ${band.lights}px and the bar ${band.bar}px`);
 if (follows) await viewItem('Actual Size');
 else await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomLevel(0));
 const grew = zoomed.width / dragged.width;
@@ -138,11 +146,39 @@ if (follows ? grew < 1.09 || grew > 1.25 : zoomed.width !== dragged.width || zoo
 if (resizes < 1 || resizes > 4) await fail(`a zoom step fired ${resizes} resize events`);
 if (widthAfter !== widthBefore) await fail(`a zoom step changed the editor's width from ${widthBefore} to ${widthAfter}`);
 
+// Zen's shape (src/style.css): the bar across the top, the rail down the
+// left under it, the room — the paper's — in the rest, edged by the
+// frame's 8 px at the window's right and bottom, under any shell.
+const frame = await page.evaluate(() => {
+  const rect = (id) => document.getElementById(id).getBoundingClientRect();
+  const bar = rect('toolbar');
+  const rail = rect('rail');
+  const room = rect('scroll');
+  return { bar: { bottom: bar.bottom }, rail: { left: rail.left, top: rail.top, right: rail.right, bottom: rail.bottom }, room: { left: room.left, top: room.top, right: room.right, bottom: room.bottom }, width: innerWidth, height: innerHeight };
+});
+if (frame.rail.left !== 0 || frame.rail.top !== frame.bar.bottom || frame.rail.bottom !== frame.height || frame.room.left !== frame.rail.right || frame.room.top !== frame.bar.bottom
+  || frame.room.right !== frame.width - 8 || frame.room.bottom !== frame.height - 8) {
+  await fail(`the rail is not under the bar down the left edge of the room: ${JSON.stringify(frame)}`);
+}
+
+// The menus are frosted glass over the paper (src/toolbar.css): the
+// built stylesheet must keep the unprefixed backdrop-filter, the one
+// Chromium reads. The minifier once kept only a hand-written -webkit-
+// line, and the paper showed through the File menu, its text readable.
+await page.click('#toolbar .tb-tile');
+const glass = await page.evaluate(() => {
+  const menu = document.querySelector('.tb-menu:not([hidden])');
+  return menu ? getComputedStyle(menu).backdropFilter : null;
+});
+await page.keyboard.press('Escape');
+if (!glass || glass === 'none') await fail(`the File menu draws no blur (backdrop-filter: ${glass})`);
+
 // A shell that hides the title bar (app/plass.json, titleBarStyle; the
 // shell's README) publishes the lights' room to the page as the Window
-// Controls Overlay, and the bar pads its row by it. Plass.app is built
-// on a tag of the shell, which carries the key only from its next tag:
-// the check is for a shell that has it.
+// Controls Overlay, and the bar pads its row by it on the left, where
+// its File tile then sits. Plass.app is built on a tag of the shell,
+// which carries the key only from its next tag: the check is for a shell
+// that has it.
 const hidesTitleBar = process.platform === 'darwin' && fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('titleBarStyle');
 if (hidesTitleBar) {
   const bar = await page.evaluate(() => {
@@ -155,11 +191,13 @@ if (hidesTitleBar) {
       height: rect?.height ?? 0,
       barHeight: toolbar.getBoundingClientRect().height,
       padding: parseFloat(getComputedStyle(toolbar).paddingLeft),
+      fileLeft: toolbar.querySelector('.tb-tile').getBoundingClientRect().left,
     };
   });
   if (!bar.visible || bar.x <= 0) await fail(`the shell hides the title bar but the page sees no overlay (${JSON.stringify(bar)})`);
   if (bar.height !== bar.barHeight) await fail(`the lights' room is ${bar.height}px tall, the bar ${bar.barHeight}px`);
   if (bar.padding <= bar.x) await fail(`the bar is padded ${bar.padding}px, inside the lights' ${bar.x}px`);
+  if (bar.fileLeft < bar.x) await fail(`the File tile is at ${bar.fileLeft}px, under the lights' ${bar.x}px`);
 }
 
 // Finder opens the same file again: the shell lands a new window on it,

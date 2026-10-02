@@ -2,8 +2,9 @@
 .image-toolbar {
   position: fixed;
   z-index: 185;
-  left: 50%;
-  bottom: 24px;
+  /* On the paper's axis (style.css, --axis), in the HUD's row. */
+  left: var(--axis, 50vw);
+  bottom: calc(var(--edge, 8px) + 16px);
   transform: translateX(-50%);
   max-width: calc(100vw - 24px);
   width: max-content;

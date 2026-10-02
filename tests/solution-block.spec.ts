@@ -126,28 +126,30 @@ test('Extras menu wraps into a solution, re-kinds, and lifts back out', async ({
   });
   await page.click('.ProseMirror p:nth-child(2)');
 
-  const solutionBtn = page.locator('button[title^="Solution block"]');
-  const quoteBtn = page.locator('button[title^="Block quote"]');
-  const plainBtn = page.locator('button[title^="Plain body text"]');
-  const extras = page.getByRole('button', { name: 'Extras', exact: true });
+  // The Blocks tiles on the rail (once a row inside Extras).
+  const solutionBtn = page.locator('#rail button[title^="Solution block"]');
+  const quoteBtn = page.locator('#rail button[title^="Block quote"]');
+  const plainBtn = page.locator('#rail button[title^="Plain body text"]');
 
-  await extras.click();
+  await expect(plainBtn).toBeDisabled();
   await solutionBtn.click();
+  await expect(solutionBtn).toHaveAttribute('aria-pressed', 'true');
+  await expect(plainBtn).toBeEnabled();
   await expect(page.locator('.ProseMirror blockquote[data-kind="solution"] p')).toHaveText('Solution body.');
   await expect(page.locator('.ProseMirror > p', { hasText: 'Solution body.' })).toHaveCount(0);
 
   // Re-kind in place: the same container becomes a plain quote.
-  await extras.click();
   await quoteBtn.click();
+  await expect(quoteBtn).toHaveAttribute('aria-pressed', 'true');
+  await expect(solutionBtn).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('.ProseMirror blockquote:not([data-kind]) p')).toHaveText('Solution body.');
   await expect(page.locator('.ProseMirror blockquote[data-kind="solution"]')).toHaveCount(0);
 
   // And back to a solution, then lifted out to body text.
-  await extras.click();
   await solutionBtn.click();
   await expect(page.locator('.ProseMirror blockquote[data-kind="solution"]')).toHaveCount(1);
-  await extras.click();
   await plainBtn.click();
+  await expect(plainBtn).toBeDisabled();
   await expect(page.locator('.ProseMirror blockquote')).toHaveCount(0);
   await expect(page.locator('.ProseMirror > p', { hasText: 'Solution body.' })).toHaveCount(1);
 });
