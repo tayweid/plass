@@ -438,12 +438,18 @@ prompted.
   and the report's `name`, `size` and `modified` (the File's) are matched
   against them, the newest first, by name and the file's stat — reading
   the File in `reportDocument` is what makes the handle touch the file
-  first. A report that matches nothing is none, never a stale path. With it the shell sets the window's
+  first. A report that matches nothing (or carries no size and mtime) is
+  none, never a stale path or a same-named file, and a `path` is taken
+  only when it is an absolute path to an existing regular file. With it the shell sets the window's
   represented file and follows the file's project: one branch per
-  repository, `claerbout-autosave`, written with a temporary index and
-  plumbing (never the user's HEAD, index or working tree), committed on
-  a one-minute timer while a window is open and at the session's open
-  and close, `plass: timer`, `plass: session open`. A shell without
+  working tree, `claerbout-autosave` (`claerbout-autosave-<name>` in a
+  linked worktree), written with a temporary index and plumbing (never
+  the user's HEAD, branch or index; in the working tree it writes
+  `untracked/`, a `.gitignore` line and `.claerbout/untracked.json`, and
+  a repository is started only in a project's folder, never straight in
+  `~/Desktop` or `~/Documents`), committed on a one-minute timer while a
+  window is open and at the session's open and close, `plass: timer`,
+  `plass: session open`. A shell without
   `pathOf` (older than the record) is told nothing. `src/claerbout.test.ts`
   pins the report; `app/smoke.mjs` checks the `plass: session open`
   commit on the document's folder (a temporary one, which got a
