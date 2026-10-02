@@ -27,7 +27,15 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   `npm run app:smoke` drives the built app with Playwright `_electron`
   (open, typeset, ⌘S); `npm run app:install-script` renders
   `public/install` from the shell's template. Log:
-  `~/Library/Logs/Plass.log`. The deploy's `app` job (macos-15) packages
+  `~/Library/Logs/Plass.log`. The window is any size: the paper is a
+  fixed-width column in a rounded room under the bar (Zen's shape, the
+  frame in `src/style.css`), a wider window is room, a zoom scales the
+  paper in place, and nothing sizes the window to the paper. With a shell
+  past v0.2.0, `app/plass.json`'s `titleBarStyle: "hiddenInset"` makes
+  the bar the window's title bar beside the traffic lights; the page
+  learns the lights' room from the Window Controls Overlay
+  (`env(titlebar-area-x)`), nothing from the shell (`docs/
+  CLAERBOUT-SHELL.md`, OPEN). The deploy's `app` job (macos-15) packages
   both processors from the verified `dist`, installs through the install
   line, smoke-tests, and publishes `app/Plass-<arch>.zip` and
   `app/Plass.app.zip` beside the site; if it fails, the site still deploys

@@ -1,7 +1,13 @@
-/* The familiar glyph bar, with occasional tools behind Extras. */
+/* The familiar glyph bar, with occasional tools behind Extras. The row
+   is padded by the traffic lights' room on both sides (the Window
+   Controls Overlay the shell publishes when it hides the title bar; 0 in
+   a browser and under a native title bar) and by the room's scrollbar on
+   the right (main.ts sets --room-scrollbar), so the pills center on the
+   page's axis. The app's window is no narrower than the row needs with
+   the lights' room on both sides (app/plass.json, minWidth 740). */
 #toolbar {
   gap: 5px;
-  padding-inline: 12px;
+  padding-inline: calc(12px + env(titlebar-area-x, 0px)) calc(12px + env(titlebar-area-x, 0px) + var(--room-scrollbar, 0px));
 }
 
 #toolbar .doc-title {
@@ -241,11 +247,12 @@
   white-space: nowrap;
 }
 
-/* A view change belongs to the room, apart from the document tools. */
+/* A view change belongs to the room, apart from the document tools: in
+   the room's corner, inside the frame's inset. */
 .view-switch {
   position: fixed;
-  left: max(18px, env(safe-area-inset-left));
-  bottom: max(18px, env(safe-area-inset-bottom));
+  left: calc(var(--inset, 0px) + max(18px, env(safe-area-inset-left)));
+  bottom: calc(var(--inset, 0px) + max(18px, env(safe-area-inset-bottom)));
   z-index: 10;
   display: inline-flex;
   align-items: center;
@@ -310,7 +317,7 @@
 
 @media (max-width: 540px) {
   #toolbar {
-    padding-inline: 8px;
+    padding-inline: calc(8px + env(titlebar-area-x, 0px)) calc(8px + env(titlebar-area-x, 0px) + var(--room-scrollbar, 0px));
     gap: 4px;
   }
 

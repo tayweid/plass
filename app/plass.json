@@ -9,7 +9,14 @@
   "site": "https://plass.tayweid.io",
   "elsewhere": "Elsewhere, Plass runs in Chrome at https://plass.tayweid.io.",
   "defaultDocument": "Untitled.typ",
-  "window": { "width": 1100, "height": 800, "minWidth": 520, "minHeight": 360 },
+  "window": {
+    "width": 1100,
+    "height": 800,
+    "minWidth": 740,
+    "minHeight": 360,
+    "titleBarStyle": "hiddenInset",
+    "trafficLightPosition": { "x": 20, "y": 23 }
+  },
   "icon": "../public/icons/plass-512.png",
   "copyright": "© 2026 Taylor J Weidman. MIT License.",
   "documentTypes": [

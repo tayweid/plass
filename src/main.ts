@@ -23,7 +23,6 @@ import './table-controls.css';
 import './editor-comments.css';
 import { equationsPlugin } from './equations';
 import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
-import { fitStandaloneWindowToPage } from './pwa-window';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { TypstInlineView } from './inline-raw';
@@ -163,17 +162,18 @@ const editorEl = document.getElementById('editor')!;
 const toolbarEl = document.getElementById('toolbar')!;
 const scrollEl = document.getElementById('scroll')!;
 
-// The page centers inside the scroll area, which is the window minus the
-// scrollbar; the fixed toolbar spans the full window. Inset its right edge
-// by the scrollbar width so the pills center on the page's axis, not the
-// window's.
+// The page centers inside the room, which is inset from the window the
+// same on both sides but for the room's scrollbar; the fixed bar spans the
+// full window (it is the window's title bar in Plass.app, so it must). The
+// bar hands the scrollbar's width to its stylesheet, which pads the pills'
+// row by it on the right so they center on the page's axis, not the
+// window's. Nothing here sizes the window: the paper is a fixed-width
+// column, and a window of any width is room around it.
 function syncToolbarInset() {
-  toolbarEl.style.right = `${window.innerWidth - scrollEl.clientWidth}px`;
+  toolbarEl.style.setProperty('--room-scrollbar', `${scrollEl.offsetWidth - scrollEl.clientWidth}px`);
 }
 window.addEventListener('resize', syncToolbarInset);
 requestAnimationFrame(syncToolbarInset);
-// An installed app's window is the page's width, no wider (pwa-window.ts).
-if (standalone) fitStandaloneWindowToPage(document.getElementById('stack')!, scrollEl);
 const hudEl = document.getElementById('hud')!;
 const toastEl = document.getElementById('toast')!;
 const stackEl = document.getElementById('stack')!;
