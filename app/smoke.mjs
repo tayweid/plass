@@ -29,8 +29,9 @@ const bundle = process.argv[2];
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'plass-smoke-'));
 const doc = path.join(work, 'docs', 'smoke.typ');
 fs.mkdirSync(path.dirname(doc));
-// Two sheets and more, so the paper runs past the panel and the scroll
-// rail's gutter is there (src/scroll-rail.ts).
+// Two sheets, so the scroll rail in its gutter (src/scroll-rail.ts: there
+// while the paper runs past the panel, as any Letter page does here) has a
+// page break to show.
 const filler = 'The Knuth Plass algorithm evaluates a complete paragraph and preserves globally optimal line endings while editing without visible jitter. ';
 fs.writeFileSync(doc, `= Smoke\n\nA paragraph typeset inside the shell.\n\n${Array.from({ length: 12 }, () => filler.repeat(3).trimEnd()).join('\n\n')}\n`);
 

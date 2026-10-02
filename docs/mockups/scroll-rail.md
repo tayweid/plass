@@ -255,7 +255,7 @@ edge stays.
 **Built, 2026-10-02 (branch `ux/rail`).** Taylor, shown the three
 mockups' screenshots: "i think i like gutter-hover.png the most." So the
 gutter was built, not the judges' pick: the frame's right edge widens to
-a 20 px gutter while a paper of two sheets or more runs past the panel,
+a 20 px gutter while the paper runs past the panel (one sheet or many),
 and the rail lives there on the dark frame, outside the paper, as the
 history strip lives beside its river (`src/scroll-rail.ts`). The judges'
 objection to it — the gutter takes 12 px of the paper's width (the page
@@ -263,13 +263,24 @@ drawn at 1.270 instead of 1.284 at 1100, about 1 % smaller), makes the
 frame's edge uneven and ends the match with Knuth's room — is accepted as
 the trade for that: Taylor chose it having seen the narrower page beside
 the full-width ones, the gutter is there only while it has a paper to
-map (a one-page note, a paper that fits and the source view keep the
-8 px edge and main's scale), and their other objection, a nearly empty
+map (a paper that fits the panel and the source view keep the 8 px edge
+and main's scale; in the page view that is nearly every paper, since a
+Letter page runs past the panel at any usual window size, so typing a
+note onto its second sheet never rescales it), and their other
+objection, a nearly empty
 column at rest that reads as a reserved scrollbar track, is answered by
 the change they both asked for: the marks are shown at rest. From their
 synthesis it keeps the rules (nothing opens or grows while a mouse button
 is down; no rail when the paper fits or in the source view); from the
 edge, the stronger tick for the page gap on screen and marks placed from
 a settled layout pass in the page's own px. The unrolling outline is left
-for later. The numbers, the mechanism and the checks are in
-`docs/ZEN-DRAFT.md`, *The scroll rail*.
+for later. The verifiers' round (the same evening) closed five
+problems: the band's height after a resize at the top of the paper; a
+scroll that restyled every mark (the band now moves by a transform on
+its own layer, and only the marks it crosses change); page numbers
+hidden on a long paper whose pages open with headings (a number now
+moves over or past the mark in its place); and the first build's rule
+that kept one-page notes out of the gutter, which was not the brief's
+(the tests' window moved from 868 to 880 px so a paper with the gutter
+is still drawn at 1:1). The numbers, the mechanism and the checks are
+in `docs/ZEN-DRAFT.md`, *The scroll rail*.

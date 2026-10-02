@@ -109,8 +109,8 @@ function readBreak(page: Page) {
     const nextRect = next?.getBoundingClientRect();
     const hdrRect = hdr?.getBoundingClientRect();
     // The margin is the layout's px; the rects are drawn at the paper's
-    // scale (1 at 868 px, 804 / 816 once the scroll rail's gutter is
-    // there, as it is for this two-page paper).
+    // scale (1 at the tests' 880 px, with the scroll rail's gutter there,
+    // as it is for any Letter paper; read, so the test holds at any width).
     const stack = document.getElementById('stack')!;
     const scale = stack.getBoundingClientRect().width / stack.offsetWidth;
     const marginTop = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--page-margin-top')) * scale;

@@ -9,10 +9,11 @@ import { settleLocal } from './settle';
 // width is the same page. The zoom step (the shell scales the window) is
 // driven in the shell by app/smoke.mjs; a browser tab cannot zoom from
 // Playwright. The bar is Knuth's (knuth/src/main.ts and styles.css). A
-// paper of two sheets or more that runs past the panel has the scroll
-// rail's 20 px gutter at the window's right (src/scroll-rail.ts,
-// tests/rail.spec.ts), so the panel is the window less 64 px and the page
-// is drawn at (W − 64) / 816; a one-page note keeps the 8 px edge, W − 52.
+// paper that runs past the panel (any Letter page here, one sheet or
+// many) has the scroll rail's 20 px gutter at the window's right
+// (src/scroll-rail.ts, tests/rail.spec.ts), so the panel is the window
+// less 64 px and the page is drawn at (W − 64) / 816; a paper that fits
+// the panel keeps the 8 px edge, W − 52.
 
 type Hooks = {
   __fm: {
@@ -188,12 +189,12 @@ async function richDocument(page: Page) {
 
 test('the layout is the same at any width: a page drawn larger or smaller is laid out at its own size', async ({ page }) => {
   test.setTimeout(180_000);
-  // 868 px draws a one-page note at 1:1 (the panel is 816 px wide) and
-  // this paper, which runs past the panel and so has the rail's gutter, at
-  // 0.985; 1500 at 1.76 and 740 (the app's least width) at 0.83. Each
-  // loads afresh, so every read the layout makes is made at that scale.
+  // 880 px draws this paper at 1:1 (it runs past the panel, so the
+  // rail's gutter is there and the panel is 816 px wide); 1500 at 1.76 and
+  // 740 (the app's least width) at 0.83. Each loads afresh, so every read
+  // the layout makes is made at that scale.
   const signatures: Array<{ width: number; signature: Awaited<ReturnType<typeof layoutSignature>> }> = [];
-  for (const width of [868, 1500, 740]) {
+  for (const width of [880, 1500, 740]) {
     await page.setViewportSize({ width, height: 800 });
     await richDocument(page);
     signatures.push({ width, signature: await layoutSignature(page) });
@@ -267,7 +268,8 @@ test('the frame is Zen\'s: a dark edge all round one panel of paper, its sheets 
   // (knuth c6875a4). The panel starts where they end and keeps the
   // frame's 8 px to the window's bottom edge; at its right, while the
   // paper runs past it, the frame is the scroll rail's 20 px gutter (a
-  // one-page note keeps 8 px there too, Knuth's room's box; rail.spec).
+  // paper that fits the panel keeps 8 px there too, Knuth's room's box;
+  // rail.spec).
   expect(look.barLeft).toBe(0);
   expect(look.barRight).toBe(look.width);
   expect(look.rail).toEqual({ left: 0, top: look.barBottom, right: look.panel.left, bottom: look.height });
@@ -438,15 +440,19 @@ test('the paper\'s corners are rounded only where they are a sheet\'s, and the s
   expect(c.shadow.bottom[1]).toBeGreaterThan(11.5);
 
   // Scrolling writes nothing but the shadow's variables and the scroll
-  // rail's band (its two fractions, and the class that lights it while
-  // the paper moves), and lays nothing out: no pass, no attribute or node
-  // of the page touched but those.
+  // rail's (the band's two fractions, the class that lights it while the
+  // paper moves, and the class on a mark or gap the band passes), and lays
+  // nothing out: no pass, no attribute or node of the page touched but
+  // those.
   const passes = await page.evaluate(() => (window as unknown as Hooks).__pagCount());
   await page.evaluate(() => {
     const w = window as unknown as { __touched: string[] };
     w.__touched = [];
     new MutationObserver((records) => {
-      for (const r of records) w.__touched.push(`${(r.target as Element).id || (r.target as Element).nodeName}:${r.type}:${r.attributeName ?? ''}`);
+      for (const r of records) {
+        const el = r.target as Element;
+        w.__touched.push(`${el.closest?.('#scrollrail') ? 'scrollrail' : el.id || el.nodeName}:${r.type}:${r.attributeName ?? ''}`);
+      }
     }).observe(document.body, { subtree: true, attributes: true, childList: true, characterData: true });
   });
   await page.mouse.move(600, 400);
@@ -456,9 +462,9 @@ test('the paper\'s corners are rounded only where they are a sheet\'s, and the s
   expect(touched.filter((t) => !['paper-shadow:attributes:style', 'scrollrail:attributes:style', 'scrollrail:attributes:class'].includes(t))).toEqual([]);
   expect(await page.evaluate(() => (window as unknown as Hooks).__pagCount())).toBe(passes);
 
-  // Wider (1.76×) and at 868 (0.985× with the scroll rail's gutter): the
+  // Wider (1.76×) and at 880 (1:1 with the scroll rail's gutter): the
   // same 12 px on the screen, the same rule.
-  for (const size of [{ width: 1500, height: 900 }, { width: 868, height: 720 }]) {
+  for (const size of [{ width: 1500, height: 900 }, { width: 880, height: 720 }]) {
     await page.setViewportSize(size);
     await expect.poll(() => page.evaluate(() => document.getElementById('scroll')!.clientWidth)).toBe(size.width - RAIL - GUTTER);
     await scrollPanel(page, 0);

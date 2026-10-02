@@ -18,10 +18,14 @@
 // fraction in CSS (`top: calc(var(--f) * 100%)`), so a resize or a zoom,
 // which changes the drawing and not the layout, moves no mark: only the
 // band moves, because the panel's scroll range is the drawn height. The
-// band is two variables on the rail, the visible span's top and bottom as
-// fractions, written in a frame after a scroll; CSS places the band from
-// them and quiets the marks outside it, so a scroll writes those two and
-// nothing else.
+// band is the visible span drawn on its own layer: a scroll writes its
+// offset, a transform, in a frame (and its height, only when the paper's
+// scroll range or the panel changed), and the marks and gaps inside it
+// carry the class `in` (a mark a step brighter, the gap on screen a
+// longer tick), set only on those that crossed the band's edges since the
+// last frame, usually none. Nothing a scroll writes is inherited by the
+// marks or lays the rail out, so a scroll restyles the band and the few
+// that crossed, never the whole rail.
 //
 // The marks are read when a layout pass settles (main.ts hands over the
 // settled pass's pages), never on a keystroke: the sheets' tops come from
@@ -30,18 +34,20 @@
 // the scale. The caret also moves when the selection moves without an
 // edit (a click, an arrow), in a frame; typing leaves it for the settle.
 //
-// The gutter is there only while the paper runs past the panel in the page
-// view and has a second sheet: a one-page note, a paper that fits, and the
-// source view keep the frame's 8 px edge. The gutter takes 12 px from the
-// panel, so the page is drawn about 1 % smaller while it is there (the
-// window is the zoom, paper-scale.ts). Whether the paper runs past is asked
-// at the gutter's width whether or not the gutter is showing, so its own
-// 12 px can never take it away again. It comes and goes at once, not
-// animated: an animated edge would redraw the whole page at a new scale on
-// every frame of the animation. Nothing opens or grows while a mouse
-// button is down: a gutter due then waits for the button to come up, and a
-// press that began on the text (a selection dragged toward the edge)
-// wakes nothing on the rail.
+// The gutter is there while the paper runs past the panel in the page
+// view, whatever its number of sheets (a one-page note runs past it at any
+// usual window size): a paper that fits the panel and the source view
+// keep the frame's 8 px edge. So a note typed onto its second sheet keeps
+// its gutter and its scale. The gutter takes 12 px from the panel, so the
+// page is drawn about 1 % smaller while it is there (the window is the
+// zoom, paper-scale.ts). Whether the paper runs past is asked at the
+// gutter's width whether or not the gutter is showing, so its own 12 px
+// can never take it away again. It comes and goes at once, not animated:
+// an animated edge would redraw the whole page at a new scale on every
+// frame of the animation. Nothing opens or grows while a mouse button is
+// down: a gutter due then waits for the button to come up, and a press
+// that began on the text (a selection dragged toward the edge) wakes
+// nothing on the rail.
 
 import type { EditorView } from 'prosemirror-view';
 import type { PageInfo } from './typeset-plugin';
@@ -55,6 +61,14 @@ const DRAG = 3;
 /** Shown page numbers stay this far apart: every 1st, 2nd, 5th… page. */
 const NUMBER_ROOM = 16;
 const STRIDES = [1, 2, 5, 10, 20, 50, 100];
+/** A page number's box (style.css, .sr-num: 8 px type, line-height 1, the
+ *  digits' ink from 1.25 px into it to 1.15 px short of its bottom), this
+ *  far under its hairline's top unless a mark is there; lifted over a mark,
+ *  never nearer than NUMBER_LIFT, which leaves 1 px of frame between the
+ *  hairline and the digits. */
+const NUMBER_DROP = 3;
+const NUMBER_LIFT = 0.75;
+const NUMBER_H = 8;
 /** How long the band stays lit after the paper moves, and after the
  *  pointer leaves the gutter. */
 const MOVING_MS = 900;
@@ -64,8 +78,11 @@ type MarkKind = 'title' | 'section' | 'subsection' | 'figure' | 'table' | 'caret
 
 interface Mark {
   kind: MarkKind;
-  /** The stack's layout px. */
+  /** The stack's layout px, and that over the stack's height (its --f). */
   y: number;
+  f: number;
+  /** Inside the band (its class `in`), as last drawn. */
+  inside: boolean;
   page: number;
   /** The label's lead (a section's number, "Figure 2") and its words. */
   k: string;
@@ -75,8 +92,11 @@ interface Mark {
 
 interface Break {
   kind: 'page';
-  /** The middle of the gap above the sheet (0 for the first). */
+  /** The middle of the gap above the sheet (0 for the first), and that
+   *  over the stack's height. */
   y: number;
+  f: number;
+  inside: boolean;
   /** The sheet's top edge, where a click lands. */
   top: number;
   page: number;
@@ -94,6 +114,10 @@ export interface ScrollRail {
   /** The source view opened (true) or closed. */
   mode(source: boolean): void;
 }
+
+/** Half a mark's height in the rail (style.css): what a page number keeps
+ *  clear of. */
+const HALF: Record<MarkKind, number> = { title: 3.5, section: 2.5, subsection: 1.5, figure: 2.5, table: 2.5, caret: 1 };
 
 const CLASSES: Record<MarkKind, string> = {
   title: 'sr-title',
@@ -169,7 +193,7 @@ export function attachScrollRail(view: EditorView, panel: HTMLElement, stack: HT
   /* ---------- the gutter: there or not ---------- */
 
   function wanted(): boolean {
-    if (source || !info || info.count < 2) return false;
+    if (source || !info) return false;
     // At the gutter's width whether or not it is showing: the gutter's
     // 12 px over the edge's 8 are taken off while it is not there.
     const widen = on ? 0 : css('--gutter') - css('--edge');
@@ -221,8 +245,8 @@ export function attachScrollRail(view: EditorView, panel: HTMLElement, stack: HT
     const button = make('button', `sr-mark ${CLASSES[kind]}`);
     button.type = 'button';
     button.tabIndex = -1;
-    const m: Mark = { kind, y, page: pageOf(y), k, t, button };
-    button.style.setProperty('--f', fmt(fraction(y)));
+    const m: Mark = { kind, y, f: fraction(y), inside: false, page: pageOf(y), k, t, button };
+    button.style.setProperty('--f', fmt(m.f));
     button.setAttribute('aria-label', `${[k, t].filter(Boolean).join(' ')}, page ${m.page}`);
     // Enter or Space on the focused mark (the pointer is the rail's own,
     // below: the marks take no pointer events).
@@ -262,12 +286,13 @@ export function attachScrollRail(view: EditorView, panel: HTMLElement, stack: HT
       const above = info!.pages[i - 1];
       const y = above ? (above.top + above.height + sheet.top) / 2 : 0;
       const el = make('div', i === 0 ? 'sr-break first' : 'sr-break');
-      el.style.setProperty('--f', fmt(fraction(y)));
+      const f = fraction(y);
+      el.style.setProperty('--f', fmt(f));
       const num = make('span', 'sr-num');
       num.textContent = String(i + 1);
       el.append(num);
       frag.append(el);
-      breaks.push({ kind: 'page', y, top: sheet.top, page: i + 1, el, num });
+      breaks.push({ kind: 'page', y, f, inside: false, top: sheet.top, page: i + 1, el, num });
     });
 
     // Headings (their text's top: a heading's box carries padding above
@@ -319,10 +344,12 @@ export function attachScrollRail(view: EditorView, panel: HTMLElement, stack: HT
     const place = caretPlace();
     if (!place) return;
     caret.y = place.y;
+    caret.f = fraction(place.y);
     caret.t = place.t;
     caret.page = pageOf(place.y);
-    caret.button.style.setProperty('--f', fmt(fraction(place.y)));
+    caret.button.style.setProperty('--f', fmt(caret.f));
     caret.button.setAttribute('aria-label', `${['Caret', place.t].filter(Boolean).join(' ')}, page ${caret.page}`);
+    light(caret);
     marks.sort((a, b) => a.y - b.y);
     if (current === caret) showLabel(caret);
   }
@@ -330,33 +357,92 @@ export function attachScrollRail(view: EditorView, panel: HTMLElement, stack: HT
   /* ---------- the track's px: on a rebuild and a resize ---------- */
 
   function layoutRail(): void {
-    trackH = track.clientHeight || 1;
+    // Fractional: under a zoom step the track is not a whole number of px.
+    trackH = track.getBoundingClientRect().height || 1;
     const count = breaks.length || 1;
     const perPage = trackH / count;
     // A long paper thins its numbers so the shown ones stay 16 px apart,
     // and under 4 px a page its hairlines too, so the rail never turns to
-    // fur; a number gives way to a mark that falls just under its
-    // hairline (the caret, which moves, takes no number's place).
+    // fur. A number sits 3 px under its hairline. A heading, figure or
+    // table whose mark is in the number's own box there (a heading opening
+    // a page lands just under the hairline on a long paper, where the
+    // number is) moves the number: up over the mark if there is room under
+    // the hairline, else down past it, never past the next hairline; only
+    // a number with no room either way gives way. The caret, which moves,
+    // takes no number's place.
     const stride = STRIDES.find((s) => perPage * s >= NUMBER_ROOM) ?? STRIDES[STRIDES.length - 1];
-    const fixed = marks.filter((m) => m.kind !== 'caret').map((m) => inTrack(m.y));
-    for (const b of breaks) {
+    const held = marks
+      .filter((m) => m.kind !== 'caret')
+      .map((m) => ({ a: inTrack(m.y) - HALF[m.kind], z: inTrack(m.y) + HALF[m.kind] }))
+      .sort((p, q) => p.a - q.a);
+    let last = -Infinity;
+    breaks.forEach((b, i) => {
       const shown = (b.page - 1) % stride === 0;
       b.el.classList.toggle('thin', perPage < 4 && !shown);
-      const py = inTrack(b.y);
-      const crowded = fixed.some((my) => my > py - 1 && my < py + 13);
-      b.num.hidden = !shown || crowded;
-    }
+      // The hairline's box (1 px, its middle on the gap): the number's top
+      // is measured from its top edge.
+      const py = inTrack(b.y) - 0.5;
+      let top = py + NUMBER_DROP;
+      const hit = shown ? held.find((m) => m.a < top + NUMBER_H && m.z > top) : undefined;
+      if (hit) {
+        const lift = hit.a - NUMBER_H;
+        if (lift >= py + NUMBER_LIFT && !held.some((m) => m !== hit && m.a < hit.a && m.z > lift)) top = lift;
+        else {
+          for (const m of held) {
+            if (m.a >= top + NUMBER_H) break;
+            if (m.z > top) top = m.z;
+          }
+        }
+      }
+      // A moved number stays in its page's span, above the next hairline
+      // (the usual place is kept where it already crosses the next one, on
+      // a paper thinned to every 2nd page or more, as the mockup had it).
+      const next = i + 1 < breaks.length ? inTrack(breaks[i + 1].y) - 0.5 : trackH;
+      const room = Math.max(py + NUMBER_DROP + NUMBER_H, next);
+      const fits = shown && top + NUMBER_H <= room && top - last >= NUMBER_ROOM;
+      b.num.hidden = !fits;
+      if (!fits) return;
+      last = top;
+      const at = hit ? `${(top > py + NUMBER_DROP ? Math.ceil : Math.floor)((top - py) * 10) / 10}px` : '';
+      if (b.num.style.top !== at) b.num.style.top = at;
+    });
     drawBand();
   }
 
   /* ---------- the band: the visible span, after a scroll ---------- */
 
+  let span0 = 0;
+  let span1 = 1;
+  /** A mark or a gap inside the band carries `in`: written only when that
+   *  changes, so a scroll touches the few that crossed the band's edges. */
+  function light(t: Target): void {
+    const now = t.f >= span0 && t.f <= span1;
+    if (now === t.inside) return;
+    t.inside = now;
+    (t.kind === 'page' ? t.el : t.button).classList.toggle('in', now);
+  }
+
+  /** The band's height and offset as last written: a scroll moves it and
+   *  rewrites only the offset, a transform on the band's own layer, so the
+   *  frame neither lays out nor paints the rail. */
+  let bandH = '';
+  let bandY = '';
+  const px = (v: number) => `${Math.round(v * 100) / 100}px`;
+
   function drawBand(): void {
     bandFrame = 0;
     const H = panel.scrollHeight || 1;
     const top = panel.scrollTop;
-    rail.style.setProperty('--f0', fmt(top / H));
-    rail.style.setProperty('--f1', fmt((top + panel.clientHeight) / H));
+    span0 = top / H;
+    span1 = (top + panel.clientHeight) / H;
+    // Never under 10 px tall, never past the track's ends.
+    const h = Math.max(10, (span1 - span0) * trackH);
+    const height = px(h);
+    const y = `translateY(${px(Math.min(Math.max(0, span0 * trackH), trackH - h))})`;
+    if (height !== bandH) band.style.height = bandH = height;
+    if (y !== bandY) band.style.transform = bandY = y;
+    for (const m of marks) light(m);
+    for (const b of breaks) light(b);
   }
 
   let moving = false;
@@ -378,6 +464,22 @@ export function attachScrollRail(view: EditorView, panel: HTMLElement, stack: HT
     },
     { passive: true },
   );
+
+  // A resize that changes the paper's scale (the window's width, a zoom
+  // step, the gutter coming or going) changes the panel's scroll range.
+  // paper-scale.ts fits the clip box to the new scale in its own
+  // ResizeObserver of the panel, which runs after this frame's callbacks
+  // (the window's resize schedules refresh in one, which drew the band
+  // from the old range), and at the top of the paper no scroll follows to
+  // redraw it (lower down, fitPaper's keeping the same line at the top
+  // scrolls). This observer was made after that one (main.ts attaches the
+  // paper before the rail), so it runs after it in the same frame: the
+  // band is drawn again from the new range before the frame paints. The
+  // panel, not the clip box, which also grows while typing runs past the
+  // last page: a keystroke writes nothing here.
+  new ResizeObserver(() => {
+    if (on) drawBand();
+  }).observe(panel);
 
   /* ---------- hover: the nearest mark, and its label ---------- */
 

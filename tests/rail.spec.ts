@@ -3,13 +3,14 @@ import { settleLocal } from './settle';
 
 // The scroll rail (src/scroll-rail.ts; docs/mockups/scroll-rail.md, the
 // gutter mockup Taylor chose): the whole paper in a 20 px gutter of the
-// frame at the window's right, there only while the paper runs past the
-// panel in the page view and has a second sheet. The panel gives the
-// gutter 12 px of its width, so the page is drawn at (W − 64) / 816 while
-// it is there and at (W − 52) / 816, main's scale, while it is not. The
-// marks are placed from a settled layout pass in the stack's own px, so a
-// mark sits at its heading's, figure's, table's or page gap's offset over
-// the stack's height, down a track the panel's height.
+// frame at the window's right, there while the paper runs past the panel
+// in the page view, one sheet or many. The panel gives the gutter 12 px of
+// its width, so the page is drawn at (W − 64) / 816 while it is there and
+// at (W − 52) / 816, main's scale, while it is not (a paper that fits the
+// panel, the source view). The marks are placed from a settled layout pass
+// in the stack's own px, so a mark sits at its heading's, figure's,
+// table's or page gap's offset over the stack's height, down a track the
+// panel's height.
 
 type Hooks = {
   __fm: { loadHandle: (h: FileSystemFileHandle) => Promise<unknown> };
@@ -41,7 +42,11 @@ const PAPER = [
   para(6), '== Estimation', para(8), para(6), '= Results', para(7), para(7), para(5),
 ].join('\n\n') + '\n';
 
+/** One Letter sheet: it runs past the panel at any usual window size. */
 const NOTE = '= Notes\n\nA short note, one page.\n';
+/** A note on a 3 in page, drawn 366 px tall at 1100 and 507 at 1500:
+ *  it fits an 800 px window's 748 px panel. */
+const SHORT = '#set page(width: 8.5in, height: 3in, margin: 0.5in)\n\n= Notes\n\nA short note on a short page.\n';
 
 async function openTyp(page: Page, text: string, name = 'rail.typ') {
   await page.goto('/?new=1');
@@ -146,16 +151,26 @@ const label = (page: Page) =>
     };
   });
 
-test('the gutter and the rail are there only while a paper of two sheets or more runs past the panel, and never in the source view', async ({ page }) => {
+test('the gutter and the rail are there while the paper runs past the panel, one sheet or many, never when it fits or in the source view', async ({ page }) => {
   test.setTimeout(120_000);
   await page.setViewportSize({ width: 1100, height: 800 });
-  // A one-page note: the frame's 8 px edge, no rail, main's scale.
-  await openTyp(page, NOTE, 'note.typ');
+  // A paper that fits the panel: the frame's 8 px edge, no rail, main's
+  // scale.
+  await openTyp(page, SHORT, 'short.typ');
   let f = await frame(page);
   expect(f.gutter).toBe(false);
   expect(f.railShown).toBe(false);
   expect(f.panel).toEqual({ left: RAIL, top: 44, right: 1100 - EDGE, bottom: 800 - EDGE, width: 1100 - RAIL - EDGE });
   expect(f.scale).toBeCloseTo((1100 - RAIL - EDGE) / PAGE_W, 5);
+
+  // A one-page note runs past the panel (its sheet is drawn 1341 px
+  // tall): the gutter, as for any paper that does.
+  await openTyp(page, NOTE, 'note.typ');
+  await expect.poll(async () => (await frame(page)).gutter).toBe(true);
+  f = await frame(page);
+  expect(f.railShown).toBe(true);
+  expect(f.panel.right).toBe(1100 - GUTTER);
+  expect(f.scale).toBeCloseTo((1100 - RAIL - GUTTER) / PAGE_W, 5);
 
   // A six-sheet paper: the gutter, the rail in it, the panel 12 px
   // narrower; the left, top and bottom edges are where they were, and
@@ -191,12 +206,14 @@ test('the gutter and the rail are there only while a paper of two sheets or more
   expect((await frame(page)).panel.right).toBe(1100 - GUTTER);
 });
 
-test('the panel and the paper\'s scale with the gutter and without, at 868, 1100 and 1500', async ({ page }) => {
+test('the panel and the paper\'s scale with the gutter and without, at 868, 880, 1100 and 1500', async ({ page }) => {
   test.setTimeout(150_000);
   // With the gutter the panel is W − 64 wide and the page is drawn at
-  // (W − 64) / 816; without it, main's W − 52 and (W − 52) / 816.
+  // (W − 64) / 816; without it, main's W − 52 and (W − 52) / 816. 880 is
+  // the tests' window, where a paper with the gutter is drawn at 1:1.
   const sizes = [
     { width: 868, rail: 0.985294, bare: 1 },
+    { width: 880, rail: 1, bare: 1.014706 },
     { width: 1100, rail: 1.269608, bare: 1.284314 },
     { width: 1500, rail: 1.759804, bare: 1.77451 },
   ];
@@ -213,7 +230,7 @@ test('the panel and the paper\'s scale with the gutter and without, at 868, 1100
     expect(f.scale).toBeCloseTo(size.rail, 5);
   }
   await page.setViewportSize({ width: 1100, height: 800 });
-  await openTyp(page, NOTE, 'note.typ');
+  await openTyp(page, SHORT, 'short.typ');
   for (const size of sizes) {
     await page.setViewportSize({ width: size.width, height: 800 });
     await expect.poll(async () => (await frame(page)).panel.width).toBe(size.width - RAIL - EDGE);
@@ -492,9 +509,9 @@ test('nothing opens or grows while a mouse button is down: a selection dragged i
   await page.mouse.move(x, g.track.top + g.drawn.section[0]);
   await expect.poll(async () => (await rail()).label).toBe(true);
 
-  // A one-page note that grows to three sheets while a button is held on
-  // its text: the gutter waits for the release, then comes.
-  await openTyp(page, NOTE, 'grow.typ');
+  // A note that fits the panel and grows past it while a button is held
+  // on its text: the gutter waits for the release, then comes.
+  await openTyp(page, SHORT, 'grow.typ');
   expect((await frame(page)).gutter).toBe(false);
   await page.mouse.move(400, 200);
   await page.mouse.down();
@@ -502,11 +519,12 @@ test('nothing opens or grows while a mouse button is down: a selection dragged i
   await page.evaluate((text) => {
     const { view } = window as unknown as Hooks;
     const { state } = view;
-    const paragraphs = Array.from({ length: 16 }, () => state.schema.nodes.paragraph.create(null, state.schema.text(text)));
+    const paragraphs = Array.from({ length: 4 }, () => state.schema.nodes.paragraph.create(null, state.schema.text(text)));
     view.dispatch(state.tr.insert(state.doc.content.size, paragraphs));
   }, para(6));
   await settleLocal(page, before);
   expect(await page.evaluate(() => document.querySelectorAll('.page-box').length)).toBeGreaterThan(2);
+  expect(await page.evaluate(() => document.getElementById('scroll')!.scrollHeight)).toBeGreaterThan(800);
   let f = await frame(page);
   expect(f.gutter).toBe(false);
   expect(f.panel.right).toBe(1100 - EDGE);
@@ -548,5 +566,186 @@ test('page numbers under the breaks thin on a thirty-page paper so the shown one
     await expect.poll(async () => (await numbers()).shown.map((s) => s.page)).toEqual(want);
     n = await numbers();
     for (let i = 1; i < n.shown.length; i++) expect(n.shown[i].y - n.shown[i - 1].y).toBeGreaterThanOrEqual(16);
+  }
+});
+
+test('a one-page note typed onto its second sheet keeps its gutter and its scale', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await openTyp(page, NOTE, 'note.typ');
+  await expect.poll(async () => (await frame(page)).gutter).toBe(true);
+  const before = await frame(page);
+  await page.evaluate(() => {
+    const w = window as unknown as { __flips: number };
+    w.__flips = 0;
+    let last = document.documentElement.classList.contains('has-rail');
+    new MutationObserver(() => {
+      const now = document.documentElement.classList.contains('has-rail');
+      if (now !== last) w.__flips++;
+      last = now;
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+  });
+  const passes = await page.evaluate(() => (window as unknown as Hooks).__pagCount());
+  await page.evaluate((text) => {
+    const { view } = window as unknown as Hooks;
+    const { state } = view;
+    const paragraphs = Array.from({ length: 8 }, () => state.schema.nodes.paragraph.create(null, state.schema.text(text)));
+    view.dispatch(state.tr.insert(state.doc.content.size, paragraphs));
+  }, para(3));
+  await settleLocal(page, passes);
+  expect(await page.evaluate(() => document.querySelectorAll('.page-box').length)).toBeGreaterThanOrEqual(2);
+  const after = await frame(page);
+  expect(after.gutter).toBe(true);
+  expect(after.panel).toEqual(before.panel);
+  expect(after.scale).toBe(before.scale);
+  expect(await page.evaluate(() => (window as unknown as { __flips: number }).__flips)).toBe(0);
+});
+
+test('the band takes the new scale\'s height after a resize at the top of the paper, where nothing scrolls', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await openTyp(page, PAPER);
+  await expect.poll(async () => (await frame(page)).gutter).toBe(true);
+  // How far the band is from the visible span: its top from the scroll's
+  // fraction of the track, its height from the panel's over the paper's.
+  const off = () =>
+    page.evaluate(() => {
+      const p = document.getElementById('scroll')!;
+      const t = document.querySelector('#scrollrail .sr-track')!.getBoundingClientRect();
+      const b = document.querySelector('#scrollrail .sr-band')!.getBoundingClientRect();
+      return Math.max(
+        Math.abs(b.top - t.top - (p.scrollTop / p.scrollHeight) * t.height),
+        Math.abs(b.height - Math.max(10, (p.clientHeight / p.scrollHeight) * t.height)),
+      );
+    });
+  await expect.poll(off).toBeLessThan(0.6);
+  expect(await page.evaluate(() => document.getElementById('scroll')!.scrollTop)).toBe(0);
+  for (const size of [{ width: 1500, height: 800 }, { width: 868, height: 600 }, { width: 1100, height: 800 }]) {
+    await page.setViewportSize(size);
+    await expect.poll(async () => (await frame(page)).panel.width).toBe(size.width - RAIL - GUTTER);
+    await expect.poll(off, { message: `at ${size.width} × ${size.height}` }).toBeLessThan(0.6);
+  }
+});
+
+test('a scroll writes the band\'s span on the band, and marks only the marks and gaps that cross its edges', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await openTyp(page, PAPER);
+  await expect.poll(async () => (await frame(page)).gutter).toBe(true);
+  // Which marks and gaps carry `in`, against which lie inside the band's
+  // span (their --f between the span's two fractions).
+  const lit = () =>
+    page.evaluate(() => {
+      const p = document.getElementById('scroll')!;
+      const f0 = p.scrollTop / p.scrollHeight;
+      const f1 = (p.scrollTop + p.clientHeight) / p.scrollHeight;
+      const items = [...document.querySelectorAll<HTMLElement>('#scrollrail .sr-mark, #scrollrail .sr-break')];
+      const f = (el: HTMLElement) => parseFloat(el.style.getPropertyValue('--f'));
+      return {
+        wrong: items.filter((el) => Math.abs(f(el) - f0) > 1e-4 && Math.abs(f(el) - f1) > 1e-4 && (f(el) > f0 && f(el) < f1) !== el.classList.contains('in')).length,
+        lit: items.filter((el) => el.classList.contains('in')).length,
+        gapsLit: items.filter((el) => el.matches('.sr-break:not(.first).in')).length,
+      };
+    });
+  await page.evaluate(() => {
+    const w = window as unknown as { __rail: string[] };
+    w.__rail = [];
+    new MutationObserver((records) => {
+      for (const r of records) {
+        const el = r.target as HTMLElement;
+        w.__rail.push(`${el.id || el.className.replace(/ ?\b(in|hot|moving|awake)\b/g, '')}:${r.attributeName}`);
+      }
+    }).observe(document.getElementById('scrollrail')!, { subtree: true, attributes: true, attributeOldValue: true });
+  });
+  // Down the paper a step at a time: after each frame the `in` class is on
+  // exactly the marks and gaps in the band, and a gap in view draws its
+  // longer tick.
+  const { height, client } = await scroller(page);
+  let lit0 = 0;
+  let gaps0 = 0;
+  for (const at of [0.05, 0.1, 0.3, 0.55, 0.8, 1]) {
+    await page.evaluate((top) => (document.getElementById('scroll')!.scrollTop = top), (height - client) * at);
+    await expect.poll(async () => (await lit()).wrong, { message: `at ${at}` }).toBe(0);
+    const l = await lit();
+    lit0 += l.lit;
+    gaps0 += l.gapsLit;
+  }
+  expect(lit0).toBeGreaterThan(0);
+  expect(gaps0).toBeGreaterThan(0);
+  await page.evaluate((top) => (document.getElementById('scroll')!.scrollTop = top), height / 2 - client / 2);
+  await expect.poll(async () => (await lit()).wrong).toBe(0);
+  // Nothing the scroll wrote was on the rail itself but its `moving` class
+  // (a style written there is inherited by every mark): the band's style,
+  // and the class of a mark or gap the band passed.
+  const writes = await page.evaluate(() => [...new Set((window as unknown as { __rail: string[] }).__rail)]);
+  expect(writes).toContain('sr-band:style');
+  expect(writes.filter((w) => w !== 'sr-band:style' && w !== 'scrollrail:class' && !/^sr-(mark|break)\b.*:class$/.test(w))).toEqual([]);
+  // A small scroll that moves no edge past a mark writes the band alone.
+  await page.evaluate(() => ((window as unknown as { __rail: string[] }).__rail = []));
+  const quietStep = await page.evaluate(() => {
+    const p = document.getElementById('scroll')!;
+    const fs = [...document.querySelectorAll<HTMLElement>('#scrollrail .sr-mark, #scrollrail .sr-break')].map((el) => parseFloat(el.style.getPropertyValue('--f')));
+    for (let top = p.scrollTop; top < p.scrollHeight - p.clientHeight - 4; top += 2) {
+      const a = top / p.scrollHeight;
+      const b = (top + p.clientHeight) / p.scrollHeight;
+      const a2 = (top + 3) / p.scrollHeight;
+      const b2 = (top + 3 + p.clientHeight) / p.scrollHeight;
+      if (fs.every((f) => (f > a && f < b) === (f > a2 && f < b2) && Math.abs(f - a) > 1e-4 && Math.abs(f - b) > 1e-4)) return top;
+    }
+    return -1;
+  });
+  expect(quietStep).toBeGreaterThanOrEqual(0);
+  await page.evaluate((top) => (document.getElementById('scroll')!.scrollTop = top), quietStep);
+  await expect.poll(async () => (await lit()).wrong).toBe(0);
+  await page.evaluate(() => ((window as unknown as { __rail: string[] }).__rail = []));
+  await page.evaluate((top) => (document.getElementById('scroll')!.scrollTop = top), quietStep + 3);
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const quiet = await page.evaluate(() => [...new Set((window as unknown as { __rail: string[] }).__rail)]);
+  expect(quiet.filter((w) => w !== 'scrollrail:class')).toEqual(['sr-band:style']);
+});
+
+test('on a long paper whose pages open with headings, the page numbers stay: pushed past a mark in their place, page 1 among them, 16 px apart', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1100, height: 800 });
+  // Twenty sections, each with a subsection, about 1.8 sheets apiece:
+  // a heading falls at or near the top of most sheets.
+  const parts = ['#set heading(numbering: "1.")', '#align(center, text(size: 1.55em, weight: 700)[A Long Paper])'];
+  for (let k = 1; k <= 20; k++) parts.push(`= Section number ${k}`, para(4), para(5), para(3), `== Part ${k}.1 of the section`, para(5), para(4), para(4));
+  await openTyp(page, parts.join('\n\n') + '\n', 'long.typ');
+  await expect.poll(async () => (await frame(page)).gutter).toBe(true);
+  const read = () =>
+    page.evaluate(() => {
+      const track = document.querySelector('#scrollrail .sr-track')!.getBoundingClientRect();
+      const box = (el: Element) => {
+        const r = el.getBoundingClientRect();
+        return { top: r.top - track.top, bottom: r.bottom - track.top };
+      };
+      const breaks = [...document.querySelectorAll<HTMLElement>('#scrollrail .sr-break')];
+      return {
+        pages: document.querySelectorAll('.page-box').length,
+        hairlines: breaks.map((b) => box(b).top + 0.5),
+        shown: breaks
+          .map((b, i) => ({ page: i + 1, num: b.querySelector<HTMLElement>('.sr-num')! }))
+          .filter((n) => !n.num.hidden)
+          .map((n) => ({ page: n.page, ...box(n.num) })),
+        marks: [...document.querySelectorAll('#scrollrail .sr-mark:not(.sr-caret)')].map(box),
+      };
+    });
+  await expect.poll(async () => (await read()).shown.length).toBeGreaterThan(0);
+  const n = await read();
+  expect(n.pages).toBeGreaterThanOrEqual(30);
+  expect(n.hairlines.length).toBe(n.pages);
+  // Most sheets keep their number (the rule this replaces showed 6 of 36,
+  // page 1 never), and page 1 is one of them.
+  expect(n.shown.map((s) => s.page)).toContain(1);
+  expect(n.shown.length).toBeGreaterThanOrEqual(Math.ceil(n.pages * 0.85));
+  for (const [i, s] of n.shown.entries()) {
+    // Under its own hairline and above the next one.
+    expect(s.top).toBeGreaterThan(n.hairlines[s.page - 1]);
+    expect(s.bottom).toBeLessThanOrEqual(s.page < n.pages ? n.hairlines[s.page] : 748);
+    // Clear of every heading's, figure's and table's mark.
+    for (const m of n.marks) expect(Math.min(s.bottom, m.bottom) - Math.max(s.top, m.top), `page ${s.page}`).toBeLessThanOrEqual(0.15);
+    // 16 px from the one before.
+    if (i > 0) expect(s.top - n.shown[i - 1].top).toBeGreaterThanOrEqual(15.9);
   }
 });
