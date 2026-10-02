@@ -109,10 +109,13 @@ const snapshot = (page: Page): Promise<Snapshot> =>
       return `${idx}+${pos - printed[idx].off}@${sp.h}`;
     });
     const stack = document.getElementById('stack')!;
+    // Heights at the page's own size: the sheets are drawn at the panel's
+    // width (src/paper-scale.ts), and a client rect is the drawn one.
+    const scale = stack.getBoundingClientRect().width / stack.offsetWidth;
     return {
       spacers: mapped,
-      boxes: [...document.querySelectorAll<HTMLElement>('.page-box')].map((b) => ({ top: parseFloat(b.style.top), height: b.getBoundingClientRect().height })),
-      notes: [...document.querySelectorAll<HTMLElement>('.ProseMirror .editor-comment')].map((n) => n.getBoundingClientRect().height),
+      boxes: [...document.querySelectorAll<HTMLElement>('.page-box')].map((b) => ({ top: parseFloat(b.style.top), height: parseFloat(b.style.height) })),
+      notes: [...document.querySelectorAll<HTMLElement>('.ProseMirror .editor-comment')].map((n) => n.getBoundingClientRect().height / scale),
       chrome: [...document.querySelectorAll<HTMLElement>('#pages .page-num')].map((el) => ({
         page: Number(el.dataset.page),
         edge: el.classList.contains('page-header') ? 'header' : 'footer',
@@ -240,8 +243,8 @@ test('notes leave every printed break and page start where it was; sheets grow b
   expect(exports.tex).toBe(exports.texPlain);
   expect(exports.print).not.toContain('plass:comment');
 
-  // A narrower window: the sheet is a fixed-width page, so nothing
-  // re-lays; the relationship simply holds.
+  // A narrower window draws the sheets at another scale and lays nothing
+  // out again: at the page's own size the relationship simply holds.
   await page.setViewportSize({ width: 900, height: 700 });
   await page.waitForTimeout(600);
   const narrow = await snapshot(page);

@@ -7,6 +7,7 @@ import { scheduleTypeset } from './typeset-plugin';
 import { loadPrimitives, primitives } from './layout/primitives';
 import { shapedWidthPt } from './layout/port/adapter';
 import { allocateTableColumns, normalizeTableColumns, tableInsetPt } from './table-geometry';
+import { atPaperSize } from './paper-scale';
 
 /** Native table tree, with Typst's explicit column allocation. Measurements
  * run after the text paint; the editor and paginator use this one table. */
@@ -20,7 +21,7 @@ export class TableView implements NodeView {
   private observer = new ResizeObserver(() => this.schedule());
   private atoms = new Map<HTMLElement, number>();
   private observedNode: PMNode | null = null;
-  private atomObserver = new ResizeObserver((entries) => {
+  private atomObserver = new ResizeObserver((entries) => atPaperSize(() => {
     let changed = false;
     for (const entry of entries) {
       const element = entry.target as HTMLElement;
@@ -31,7 +32,7 @@ export class TableView implements NodeView {
       if (Math.abs(previous - width) > 0.01) changed = true;
     }
     if (changed) this.invalidate();
-  });
+  }));
   private measuredNode: PMNode | null = null;
   private measuredKey = '';
 
@@ -78,7 +79,8 @@ export class TableView implements NodeView {
 
   private schedule() {
     if (this.dead || this.frame) return;
-    this.frame = requestAnimationFrame(() => { this.frame = 0; this.measure(); });
+    // Measured on the paper at its own size (paper-scale.ts).
+    this.frame = requestAnimationFrame(() => { this.frame = 0; atPaperSize(() => this.measure()); });
   }
 
   private invalidate = () => {

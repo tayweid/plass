@@ -12,7 +12,8 @@
 // `pathOf` knows it (a File from a handle has none, and the shell matches
 // the name to the file the handle touched). A handle that cannot be read
 // reports nothing; a shell without `pathOf` and no shell at all are told
-// nothing.
+// nothing. It resolves to the file's path as the shell answers it, which
+// the page keeps to show the document's folder in the bar.
 import { focusThisWindow, isNativeShell, reportDocument } from './claerbout';
 
 let failed = 0;
@@ -27,12 +28,12 @@ function check(name: string, ok: boolean) {
 const asked: Record<string, unknown>[] = [];
 const global = globalThis as { window?: unknown };
 /** A shell bridge on `window`, answering every request the given way. */
-function shell(answer: () => Promise<unknown>): void {
+function shell(answer: (message: Record<string, unknown>) => Promise<unknown>): void {
   global.window = {
     claerbout: {
       request: (message: Record<string, unknown>) => {
         asked.push(message);
-        return answer();
+        return answer(message);
       },
       on: () => () => {},
     },
@@ -118,6 +119,24 @@ await reportDocument(handleAt('/p/e.typ')).catch(() => {
   threw = true;
 });
 check('a pathOf that throws: nothing asked, and the promise still settles', !threw && asked.length === 0);
+
+// The path the shell answers with is the page's to keep: the bar shows
+// its folder. What the shell took or matched; null for a match of
+// nothing, a refusal, a bridge that fails, or anything not a path.
+asked.length = 0;
+shell(async (message) => ({ path: (message as { name?: string }).name === 'f.typ' ? '/Users/someone/papers/f.typ' : null }));
+(global.window as { claerbout: Record<string, unknown> }).claerbout.pathOf = () => '';
+check('the shell matched the report: its path comes back', (await reportDocument(handleAt('/p/f.typ'))) === '/Users/someone/papers/f.typ');
+check('the shell matched nothing: null', (await reportDocument(handleAt('/p/g.typ'))) === null);
+check('no handle: null', (await reportDocument(null)) === null);
+shell(async () => ({ path: 'relative/f.typ' }));
+(global.window as { claerbout: Record<string, unknown> }).claerbout.pathOf = () => '';
+check('an answer that is not an absolute path: null', (await reportDocument(handleAt('/p/f.typ'))) === null);
+shell(() => Promise.reject(new Error('the bridge is down')));
+(global.window as { claerbout: Record<string, unknown> }).claerbout.pathOf = () => '';
+check('a failing bridge: null, never a rejection', (await reportDocument(handleAt('/p/f.typ'))) === null);
+delete global.window;
+check('a browser tab: null', (await reportDocument(handleAt('/p/f.typ'))) === null);
 
 if (failed) {
   console.error(`\n${failed} claerbout test(s) failed`);

@@ -35,6 +35,7 @@ import { FileManager } from './file-manager';
 import { resetCompilerCircuit } from './compiler-circuit';
 import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
 import { describeVerdict } from './environment-check';
+import { attachPaper } from './paper-scale';
 
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
@@ -164,22 +165,15 @@ const toolbarEl = document.getElementById('toolbar')!;
 const railEl = document.getElementById('rail')!;
 const scrollEl = document.getElementById('scroll')!;
 
-// The page centers inside the room, which runs from the rail to the
-// window's edge less the room's scrollbar; the chrome that keeps the
-// page's axis (the HUD, the toast, the table and image toolbars) is fixed
-// to the window, so the page hands the scrollbar's width to the
-// stylesheet, which works the axis out from the rail's width and it.
-// Nothing here sizes the window: the paper is a fixed-width column, and a
-// window of any width is room around it.
-function syncRoomScrollbar() {
-  document.documentElement.style.setProperty('--room-scrollbar', `${scrollEl.offsetWidth - scrollEl.clientWidth}px`);
-}
-window.addEventListener('resize', syncRoomScrollbar);
-requestAnimationFrame(syncRoomScrollbar);
 const hudEl = document.getElementById('hud')!;
 const toastEl = document.getElementById('toast')!;
 const stackEl = document.getElementById('stack')!;
 const pagesEl = document.getElementById('pages')!;
+
+// The paper is the panel (style.css): the pages fill its width by scaling,
+// never by re-flowing, so the window is the zoom (paper-scale.ts). Nothing
+// here sizes the window, and a resize lays nothing out.
+attachPaper(scrollEl, document.getElementById('paper')!, stackEl);
 
 let pageCount = 0;
 let pageSignature = '';
@@ -381,6 +375,7 @@ const sourceView = createSourceView({
   message: showMessage,
 });
 
+let reportedFile: FileSystemFileHandle | null = null;
 const fileManager = new FileManager({
   getDoc: () => sourceView.currentDoc(),
   getText: (format) => sourceView.textFor(format),
@@ -405,9 +400,17 @@ const fileManager = new FileManager({
   messageAction: showMessage,
   hasSessionDoc: () => restoredSessionDoc,
   // Plass.app: the shell follows this window's file (its represented file,
-  // and the project whose autosave record it keeps); a browser tab has
-  // nobody to tell.
-  onFile: (handle) => void reportDocument(handle),
+  // and the project whose autosave record it keeps), and answers with its
+  // path, which the bar shows the folder of; a browser tab has nobody to
+  // tell, and no path. The old file's folder goes at once, and an answer
+  // for a file this window has since left is dropped.
+  onFile: (handle) => {
+    if (handle !== reportedFile) toolbar?.setPath(null);
+    reportedFile = handle;
+    void reportDocument(handle).then((path) => {
+      if (fileManager.handle === handle) toolbar?.setPath(path);
+    });
+  },
 });
 
 toolbar = buildToolbar(toolbarEl, railEl, view, fileManager, { toggleSource: () => void sourceView.toggle() });

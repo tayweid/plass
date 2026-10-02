@@ -393,9 +393,15 @@ prompted.
   `env(titlebar-area-x)` on the left, so the File tile sits beside the
   lights; the tools are on a narrow rail down the left under the bar,
   which is no drag region (it scrolls); the bar and the rail are the
-  frame, which edges the room, a rounded panel, by 8 px all round. The
-  bar's height is the overlay's (`env(titlebar-area-height)`), so a zoom
-  step keeps its row on the lights. The app's `minWidth` stays 740. Plass.app from the deploy
+  frame, which edges one rounded panel by 8 px all round. Since the third
+  pass the bar is Knuth's (the name pill carries the folder, from the
+  shell's answer to the `document` report, below) and the panel is the
+  paper: the pages are laid out at their own width and drawn at the
+  panel's by a transform (`src/paper-scale.ts`), so the window is the
+  zoom, and `followZoom`'s scaled window is a wider window drawing the
+  page larger, with no layout. The bar's height is the overlay's
+  (`env(titlebar-area-height)`), so a zoom step keeps its row on the
+  lights. The app's `minWidth` stays 740. Plass.app from the deploy
   is built on tag v0.2.0: the frame and the end of the window-fitting
   ship with the next Plass deploy, the bar beside the lights with the
   next shell tag.
@@ -446,7 +452,10 @@ prompted.
   the File in `reportDocument` is what makes the handle touch the file
   first. A report that matches nothing (or carries no size and mtime) is
   none, never a stale path or a same-named file, and a `path` is taken
-  only when it is an absolute path to an existing regular file. With it the shell sets the window's
+  only when it is an absolute path to an existing regular file. The shell
+  answers `{path}`, the file it took or matched (null for none), and the
+  page keeps it: the bar's name pill shows its folder, home as ~
+  (`toolbar.ts`, Knuth's pill). With it the shell sets the window's
   represented file and follows the file's project: one branch per
   working tree, `claerbout-autosave` (`claerbout-autosave-<name>` in a
   linked worktree), written with a temporary index and plumbing (never

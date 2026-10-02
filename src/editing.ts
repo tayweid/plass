@@ -27,6 +27,7 @@ import { eqRefRule } from './equations';
 import { exitFigure } from './figures';
 import { exitFootnote, footnoteCloseRule, footnoteOpenRules, insertFootnote, skipFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
+import { paperScale } from './paper-scale';
 
 /**
  * `**bold**`, `_em_`, `` `code` `` style mark input rules.
@@ -145,7 +146,9 @@ function verticalCaret(dir: -1 | 1): Command {
     const domRef = view.domAtPos(sel.head);
     const el =
       domRef.node instanceof HTMLElement ? domRef.node : domRef.node.parentElement;
-    const lineH = (el && parseFloat(getComputedStyle(el).lineHeight)) || 24;
+    // The line pitch as drawn: the probes are client coordinates, and the
+    // paper is scaled to the panel's width (paper-scale.ts).
+    const lineH = ((el && parseFloat(getComputedStyle(el).lineHeight)) || 24) * paperScale();
     const yStart = dir < 0 ? c.top : c.bottom;
     // Probe in HALF-line steps — a full step can jump clean over a line
     // whose pitch is smaller than this block's (paragraph lines after a

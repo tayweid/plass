@@ -1,10 +1,11 @@
 // A smoke test of Plass.app on the Claerbout shell: launch the shell from
 // the checkout (or a built app) on a .typ in a throwaway folder, see the
 // document open and typeset, edit it, save with ⌘S, and check the disk;
-// then drag the window wider and zoom (the window stays, the paper does
-// not re-lay), see the rail under the bar and the menus' blur, and, on a
-// shell that hides the title bar, see the bar padded by the traffic
-// lights' room.
+// see the page fill the panel at its width, then drag the window wider
+// and zoom (the window stays, the page is drawn larger and nothing is
+// laid out again), see the rail under the bar and the menus' blur, and,
+// on a shell that hides the title bar, see Knuth's bar beside the
+// traffic lights, with the folder the shell knows the file by.
 //
 //   node app/smoke.mjs                 # the checkout: the shell on dist/
 //   node app/smoke.mjs path/to/Plass.app
@@ -90,31 +91,53 @@ for (let i = 0; i < 40 && !fs.readFileSync(doc, 'utf8').includes('Edited.'); i++
 const saved = fs.readFileSync(doc, 'utf8');
 if (!saved.includes('Edited.')) await fail(`⌘S did not reach the disk:\n${saved}`);
 
-// The window is room around a fixed-width paper (src/style.css, the
-// room): nothing sizes the window back to the paper, so a drag wider
-// stays wider — the page once resized itself to the paper 180 ms after
-// every resize, which snapped a drag back and, under a zoom (innerWidth
-// in zoomed px, resizeTo in screen px), walked the window to the zoomed
-// paper's width in four steps over a second. A zoom step now scales the
-// paper in place and the shell scales the window with it in one step
-// (app/plass.json followZoom, shell 0.2.1; an older shell leaves the
-// window alone): at most two resize events, the editor's width (in CSS
-// px) the same, so the layout never runs. The step is View → Zoom In as
-// a user takes it, through the shell's menu: the shell follows the zoom
-// from its menu items, not from a zoom level set behind its back, which
-// is what this once did (and never saw the window follow). One item is
-// a half step, ×1.2^0.5.
+// The paper is the panel (src/style.css, src/paper-scale.ts): the page is
+// laid out at its own width, 816 CSS px, and drawn at the panel's width by
+// a transform, so it meets the panel's edges at any window width, and a
+// resize or a zoom draws it larger or smaller without laying anything out
+// again. Every pagination pass writes its stats into the HUD's title (the
+// built page has no test hooks), so a pass is a mutation of that
+// attribute: there must be none across the drag and the zoom. The page
+// once resized the window to the paper 180 ms after every resize, which
+// snapped a drag back and, under a zoom, walked the window there in four
+// steps over a second; nothing sizes the window now. A zoom step goes
+// through View → Zoom In as a user takes it, where a shell that follows
+// the zoom (app/plass.json followZoom, shell 0.2.1) scales the window in
+// one step; a zoom level set from outside the menu is the page's alone.
+// One item is a half step, ×1.2^0.5.
 // The shell this runs on: the checkout's main.js, or the bundle's, read for what it can do.
 const shellMain = bundle ? path.join(bundle, 'Contents', 'Resources', 'app', 'main.js') : path.join(shell, 'main.js');
-const viewMenu = (label) => app.evaluate(({ Menu }, wanted) => {
-  const view = Menu.getApplicationMenu()?.items.find((item) => item.label === 'View');
-  const item = view?.submenu?.items.find((entry) => entry.label === wanted && entry.visible !== false);
-  if (!item) return false;
-  item.click();
-  return true;
-}, label);
 const bounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
+const paper = () => page.evaluate(() => {
+  const panel = document.getElementById('scroll').getBoundingClientRect();
+  const stack = document.getElementById('stack');
+  const drawn = stack.getBoundingClientRect();
+  return {
+    panel: { left: panel.left, right: panel.right, width: panel.width },
+    drawn: { left: drawn.left, right: drawn.right, width: drawn.width },
+    laid: stack.offsetWidth,
+    editor: document.querySelector('.ProseMirror').clientWidth,
+  };
+});
+const filled = (p) => p.laid === 816 && Math.abs(p.drawn.left - p.panel.left) < 0.05 && Math.abs(p.drawn.right - p.panel.right) < 0.05;
 const window0 = await bounds();
+const atRest = await paper();
+if (!filled(atRest)) await fail(`the page does not fill the panel: ${JSON.stringify(atRest)}`);
+await page.evaluate(() => {
+  window.__passes = 0;
+  window.__passAt = performance.now();
+  window.__resizes = 0;
+  new MutationObserver((records) => {
+    window.__passes += records.length;
+    window.__passAt = performance.now();
+  }).observe(document.getElementById('hud'), { attributes: true, attributeFilter: ['title'] });
+  window.addEventListener('resize', () => { window.__resizes += 1; });
+});
+// The edit's own settled pass first (it runs 250 ms after the last key):
+// a second without one, then count from nothing.
+await page.waitForFunction(() => performance.now() - window.__passAt > 1000, null, { timeout: 30_000 })
+  .catch(() => fail('the page never settled after the edit'));
+await page.evaluate(() => { window.__passes = 0; });
 await app.evaluate(({ BrowserWindow }, width) => {
   const window = BrowserWindow.getAllWindows()[0];
   window.setSize(width, window.getBounds().height);
@@ -122,15 +145,9 @@ await app.evaluate(({ BrowserWindow }, width) => {
 await page.waitForTimeout(600);
 const dragged = await bounds();
 if (dragged.width !== window0.width + 200) await fail(`a drag from ${window0.width} to ${window0.width + 200} wide was answered with ${dragged.width}`);
-const editorWidth = () => page.evaluate(() => document.querySelector('.ProseMirror').clientWidth);
-const widthBefore = await editorWidth();
-await page.evaluate(() => {
-  window.__resizes = 0;
-  window.addEventListener('resize', () => { window.__resizes += 1; });
-});
-// The zoom the way a person does it, through View → Zoom In (twice: level 1,
-// ×1.2), which is where a shell that follows the zoom scales the window;
-// a zoom level set from outside the menu is the page's alone.
+const wider = await paper();
+if (!filled(wider) || !(wider.drawn.width > atRest.drawn.width + 150)) await fail(`a wider window did not draw the page wider: ${JSON.stringify({ atRest, wider })}`);
+await page.evaluate(() => { window.__resizes = 0; });
 const follows = fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('followZoom');
 const viewItem = (label) => app.evaluate(({ Menu }, name) => {
   const view = Menu.getApplicationMenu().items.find((item) => item.label === 'View');
@@ -141,9 +158,10 @@ else await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].
 await page.waitForTimeout(800);
 const zoomed = await bounds();
 const resizes = await page.evaluate(() => window.__resizes);
-const widthAfter = await editorWidth();
-// The bar is the lights' band at every zoom (src/style.css, --topbar is
-// the overlay's height in CSS px), so its row stays on the traffic lights.
+const underZoom = await paper();
+// Knuth's bar (src/style.css, the name pill; knuth/src/styles.css): its
+// height is the lights' band at every zoom (--topbar is the overlay's
+// height in CSS px), so its row stays on the traffic lights.
 const band = await page.evaluate(() => {
   const overlay = navigator.windowControlsOverlay;
   return { lights: overlay?.visible ? overlay.getTitlebarAreaRect().height : null, bar: document.getElementById('toolbar').getBoundingClientRect().height };
@@ -151,26 +169,30 @@ const band = await page.evaluate(() => {
 if (band.lights !== null && Math.abs(band.lights - band.bar) > 0.5) await fail(`under a zoom step the lights' band is ${band.lights}px and the bar ${band.bar}px`);
 if (follows) await viewItem('Actual Size');
 else await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomLevel(0));
+await page.waitForTimeout(600);
+const passes = await page.evaluate(() => window.__passes);
 const grew = zoomed.width / dragged.width;
 if (follows ? grew < 1.09 || grew > 1.25 : zoomed.width !== dragged.width || zoomed.height !== dragged.height) {
   await fail(`a zoom step took the window from ${dragged.width}×${dragged.height} to ${zoomed.width}×${zoomed.height}${follows ? ' (the shell should have scaled it with the zoom, up to its display)' : ''}`);
 }
 if (resizes < 1 || resizes > 4) await fail(`a zoom step fired ${resizes} resize events`);
-if (widthAfter !== widthBefore) await fail(`a zoom step changed the editor's width from ${widthBefore} to ${widthAfter}`);
+if (!filled(underZoom)) await fail(`under a zoom step the page does not fill the panel: ${JSON.stringify(underZoom)}`);
+if (underZoom.editor !== atRest.editor || wider.editor !== atRest.editor) await fail(`the editor's width moved: ${atRest.editor}, ${wider.editor}, ${underZoom.editor} CSS px`);
+if (passes) await fail(`a drag and a zoom step ran ${passes} pagination pass(es); they should only draw the page at another scale`);
 
 // Zen's shape (src/style.css): the bar across the top, the rail down the
-// left under it, the room — the paper's — in the rest, edged by the
-// frame's 8 px at the window's right and bottom, under any shell.
+// left under it, the panel of paper in the rest, edged by the frame's 8 px
+// at the window's right and bottom, under any shell.
 const frame = await page.evaluate(() => {
   const rect = (id) => document.getElementById(id).getBoundingClientRect();
   const bar = rect('toolbar');
   const rail = rect('rail');
-  const room = rect('scroll');
-  return { bar: { bottom: bar.bottom }, rail: { left: rail.left, top: rail.top, right: rail.right, bottom: rail.bottom }, room: { left: room.left, top: room.top, right: room.right, bottom: room.bottom }, width: innerWidth, height: innerHeight };
+  const panel = rect('scroll');
+  return { bar: { bottom: bar.bottom }, rail: { left: rail.left, top: rail.top, right: rail.right, bottom: rail.bottom }, panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom }, paper: getComputedStyle(document.getElementById('scroll')).backgroundColor, width: innerWidth, height: innerHeight };
 });
-if (frame.rail.left !== 0 || frame.rail.top !== frame.bar.bottom || frame.rail.bottom !== frame.height || frame.room.left !== frame.rail.right || frame.room.top !== frame.bar.bottom
-  || frame.room.right !== frame.width - 8 || frame.room.bottom !== frame.height - 8) {
-  await fail(`the rail is not under the bar down the left edge of the room: ${JSON.stringify(frame)}`);
+if (frame.rail.left !== 0 || frame.rail.top !== frame.bar.bottom || frame.rail.bottom !== frame.height || frame.panel.left !== frame.rail.right || frame.panel.top !== frame.bar.bottom
+  || frame.panel.right !== frame.width - 8 || frame.panel.bottom !== frame.height - 8 || frame.paper !== 'rgb(255, 255, 255)') {
+  await fail(`the rail is not under the bar down the left edge of the panel of paper: ${JSON.stringify(frame)}`);
 }
 
 // The menus are frosted glass over the paper (src/toolbar.css): the
@@ -191,26 +213,50 @@ if (!glass || glass === 'none') await fail(`the File menu draws no blur (backdro
 // its File tile then sits. Plass.app is built on a tag of the shell,
 // which carries the key only from its next tag: the check is for a shell
 // that has it.
+// Knuth's bar, measured in the same shell on knuth main (a1703f5,
+// 2026-10-02): the bar the lights' band (60 px at rest), the File tile
+// 36 px square 12 px past the lights' room, the name pill 42 px tall and
+// centred on the band, Export beside it.
 const hidesTitleBar = process.platform === 'darwin' && fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('titleBarStyle');
 if (hidesTitleBar) {
   const bar = await page.evaluate(() => {
     const overlay = navigator.windowControlsOverlay;
     const rect = overlay?.getTitlebarAreaRect?.();
     const toolbar = document.getElementById('toolbar');
+    const box = (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    };
     return {
       visible: overlay?.visible === true,
       x: rect?.x ?? 0,
       height: rect?.height ?? 0,
       barHeight: toolbar.getBoundingClientRect().height,
       padding: parseFloat(getComputedStyle(toolbar).paddingLeft),
-      fileLeft: toolbar.querySelector('.tb-tile').getBoundingClientRect().left,
+      file: box(toolbar.querySelector('.tb-tile')),
+      pod: box(document.getElementById('doc-pod')),
     };
   });
   if (!bar.visible || bar.x <= 0) await fail(`the shell hides the title bar but the page sees no overlay (${JSON.stringify(bar)})`);
-  if (bar.height !== bar.barHeight) await fail(`the lights' room is ${bar.height}px tall, the bar ${bar.barHeight}px`);
-  if (bar.padding <= bar.x) await fail(`the bar is padded ${bar.padding}px, inside the lights' ${bar.x}px`);
-  if (bar.fileLeft < bar.x) await fail(`the File tile is at ${bar.fileLeft}px, under the lights' ${bar.x}px`);
+  if (bar.height !== bar.barHeight || bar.barHeight !== 60) await fail(`the lights' room is ${bar.height}px tall, the bar ${bar.barHeight}px (Knuth's is 60)`);
+  if (bar.padding !== bar.x + 12 || bar.file.x !== bar.x + 12) await fail(`the File tile is at ${bar.file.x}px, the bar padded ${bar.padding}px, the lights' room ${bar.x}px (Knuth's tile is 12 px past it)`);
+  if (bar.file.width !== 36 || bar.file.height !== 36 || bar.file.y !== 12) await fail(`the File tile is ${JSON.stringify(bar.file)} (Knuth's is 36 px square, 12 px down)`);
+  if (bar.pod.height !== 42 || bar.pod.y !== 9) await fail(`the name pill is ${JSON.stringify(bar.pod)} (Knuth's is 42 px tall, 9 px down)`);
 }
+
+// The folder beside the name: the shell answers the page's report of its
+// file with the path (src/claerbout.ts reportDocument), and the pill shows
+// its folder, home as ~. A shell without the record (older than 0.2.1)
+// answers nothing: said and skipped.
+const folder = await page.evaluate(() => {
+  const el = document.getElementById('doc-folder');
+  return { text: el.textContent, title: el.title, shown: getComputedStyle(el).display !== 'none' };
+});
+// (The shell keeps the path it was given; /var is /private/var.)
+const expectedFolder = [path.dirname(doc), fs.realpathSync(path.dirname(doc))];
+if (fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('autosave.js')) {
+  if (!folder.shown || !expectedFolder.includes(folder.title)) await fail(`the pill's folder is ${JSON.stringify(folder)}, not ${expectedFolder[0]}`);
+} else console.log('smoke: the shell answers no path; the folder is not checked');
 
 // Finder opens the same file again: the shell lands a new window on it,
 // which finds the file open here, has this window brought forward and

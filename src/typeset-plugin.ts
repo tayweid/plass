@@ -41,6 +41,7 @@ import { buildSpec, type AtomResolver, type SpecKind } from './layout/typst-orac
 import { portBreaks, shapedWidthPt } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
 import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdict } from './environment-check';
+import { atPaperSize } from './paper-scale';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { escapeTyp, expandMacrosWith, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
 import {
@@ -567,7 +568,7 @@ class TypesetView {
     for (const g of prim.shape(font.portKeys.regular, PROBE_TEXT)) em += g.xAdvance / upem;
     const portPx = em * sizePx;
     const host = this.view.dom.parentElement ?? document.body;
-    const browserPx = measureBrowserRun(host, cssFontStack(s.font), sizePx) * (simulateRatio ?? 1);
+    const browserPx = atPaperSize(() => measureBrowserRun(host, cssFontStack(s.font), sizePx)) * (simulateRatio ?? 1);
     const verdict = judgeEnvironment(browserPx, portPx, font.label, sizePx);
     environmentVerdict = verdict;
     if (!verdict.certified && USE_PORT) {
@@ -666,7 +667,7 @@ class TypesetView {
           verifyEvery: number;
         };
       };
-      (w as unknown as { __portAtoms: (pos: number) => unknown }).__portAtoms = (pos) => {
+      (w as unknown as { __portAtoms: (pos: number) => unknown }).__portAtoms = (pos) => atPaperSize(() => {
         const node = this.view.state.doc.nodeAt(pos);
         if (!node) return null;
         const st = getSettings(this.view.state);
@@ -678,7 +679,7 @@ class TypesetView {
           out.push({ type: child.type.name, offset, domPt: px(offset, child) * 0.75, typstPt: pt(offset, child) });
         });
         return out;
-      };
+      });
       // Ink statuses of the document's inline formulas (tests wait for
       // none pending before measuring).
       (w as unknown as { __mathInk: () => Record<string, number> }).__mathInk = () => {
@@ -805,9 +806,12 @@ class TypesetView {
         };
       };
     }
+    // Every pass reads the paper at its own size (paper-scale.ts): the
+    // client rects it measures are the laid-out ones, whatever the panel's
+    // width draws them at.
     this.scheduler = new LayoutScheduler(view.dom, {
-      runLive: () => this.liveRun(),
-      runSettled: () => this.run(),
+      runLive: () => atPaperSize(() => this.liveRun()),
+      runSettled: () => atPaperSize(() => this.run()),
       // Web fonts arriving change every browser metric.
       invalidateMetrics: () => {
         this.paginationGeometryEpoch++;
@@ -857,7 +861,7 @@ class TypesetView {
       view.state.doc !== prevState.doc ||
       typesetKey.getState(view.state)?.decos !== typesetKey.getState(prevState)?.decos
     ) {
-      this.syncSolutionBars();
+      atPaperSize(() => this.syncSolutionBars());
     }
   }
 
@@ -1452,13 +1456,15 @@ class TypesetView {
   printPageOf(pos: number): number {
     const s = getSettings(this.view.state);
     const size = pageSize(s);
-    let top: number;
-    try {
-      top = this.view.coordsAtPos(pos).top;
-    } catch {
-      return 0;
-    }
-    return printPageIndex(this.printStackY(top, pos), size.h, PAGE_GAP, this.lastPageCount);
+    return atPaperSize(() => {
+      let top: number;
+      try {
+        top = this.view.coordsAtPos(pos).top;
+      } catch {
+        return 0;
+      }
+      return printPageIndex(this.printStackY(top, pos), size.h, PAGE_GAP, this.lastPageCount);
+    });
   }
 
   /** The displayed sheets for `count` print pages: each note is assigned
@@ -2007,7 +2013,7 @@ class TypesetView {
         this.suffixVerifyScheduled = false;
         const ticket = this.pendingSuffixVerification;
         this.pendingSuffixVerification = null;
-        if (ticket && !this.destroyed && !this.suspended) this.runSuffixVerification(ticket);
+        if (ticket && !this.destroyed && !this.suspended) atPaperSize(() => this.runSuffixVerification(ticket));
       }, 0);
     });
   }
@@ -2552,35 +2558,38 @@ class TypesetView {
     const svg = await compileDocSvg(state.doc);
     const compileMs = performance.now() - t0;
     if (!svg || state.doc !== this.view.state.doc) return null;
-    const t1 = performance.now();
-    const typst = auditSvg(svg, state.doc, settings, this.atomResolver());
-    const analyzeMs = performance.now() - t1;
-    // The local paginator's answer for the document as painted: a
-    // prediction-only pass, identical to the one that installed the pages.
-    const local = this.runFallbackPass(this.capturePaginationSnapshot());
-    return buildPortAudit({
-      doc: state.doc,
-      typst,
-      local: { starts: this.anchorsToPageStartEntries(local.anchors), count: local.count },
-      entryFor: (node) => this.cache.get(node),
-      domBreaksFor: (node, pos) => this.domBreakSignature(node, pos),
-      unmeasuredFor: (node) => {
-        const out: string[] = [];
-        node.descendants((n) => {
-          if (n.type.name !== 'math_inline' || !(n.attrs.src as string).trim()) return true;
-          const status = inkStatus(inkKeyFor(n, settings));
-          if (status !== 'ready') out.push(status);
-          return false;
-        });
-        return out;
-      },
-      // The chrome main.ts painted (number, running header/footer), by page.
-      editorChrome: [...document.querySelectorAll<HTMLElement>('#pages .page-num')].map((el) => ({
-        page: Number(el.dataset.page ?? -1),
-        text: el.textContent ?? '',
-      })),
-      compileMs,
-      analyzeMs,
+    // From here on synchronous: the paper at its own size throughout.
+    return atPaperSize(() => {
+      const t1 = performance.now();
+      const typst = auditSvg(svg, state.doc, settings, this.atomResolver());
+      const analyzeMs = performance.now() - t1;
+      // The local paginator's answer for the document as painted: a
+      // prediction-only pass, identical to the one that installed the pages.
+      const local = this.runFallbackPass(this.capturePaginationSnapshot());
+      return buildPortAudit({
+        doc: state.doc,
+        typst,
+        local: { starts: this.anchorsToPageStartEntries(local.anchors), count: local.count },
+        entryFor: (node) => this.cache.get(node),
+        domBreaksFor: (node, pos) => this.domBreakSignature(node, pos),
+        unmeasuredFor: (node) => {
+          const out: string[] = [];
+          node.descendants((n) => {
+            if (n.type.name !== 'math_inline' || !(n.attrs.src as string).trim()) return true;
+            const status = inkStatus(inkKeyFor(n, settings));
+            if (status !== 'ready') out.push(status);
+            return false;
+          });
+          return out;
+        },
+        // The chrome main.ts painted (number, running header/footer), by page.
+        editorChrome: [...document.querySelectorAll<HTMLElement>('#pages .page-num')].map((el) => ({
+          page: Number(el.dataset.page ?? -1),
+          text: el.textContent ?? '',
+        })),
+        compileMs,
+        analyzeMs,
+      });
     });
   }
 

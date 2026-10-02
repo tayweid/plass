@@ -1,7 +1,8 @@
 // Zen's shape: the paper's way in and out in the bar beside the traffic
-// lights (File, the name with its save dot, Export), the tools on a rail
-// down the left in the bar's old groups, the occasional ones behind Extras.
-// Menus preserve the editor selection and keep geometry reads off typing.
+// lights (File, the name with its save dot and folder — Knuth's bar —
+// and Export), the tools on a rail down the left in the bar's old groups,
+// the occasional ones behind Extras. Menus preserve the editor selection
+// and keep geometry reads off typing.
 
 import './toolbar.css';
 import { TextSelection } from 'prosemirror-state';
@@ -35,6 +36,9 @@ export interface Toolbar {
   update: (state: EditorState) => void;
   stats: (s: TypesetStats) => void;
   setFile: (name: string, dirty: boolean) => void;
+  /** Where the open file lives, as Plass.app's shell knows it (claerbout.ts
+   *  reportDocument), or null: the bar shows its folder beside the name. */
+  setPath: (path: string | null) => void;
   /** The source view opened or closed: press the toggle, and rest the
    *  formatting tools while the text is the truth. */
   setSourceMode: (active: boolean) => void;
@@ -79,9 +83,19 @@ function icon(name: string): string {
   return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 }
 
+/** A folder as a person reads it: their home as ~ (Knuth's, src/main.ts).
+ *  The page has no way to ask for the home folder, so a home is what macOS
+ *  puts there — /Users/<name> — but not /Users/Shared, which is no one's. */
+function tilde(path: string): string {
+  return path.replace(/^\/(?:Users|home)\/(?!Shared(?:\/|$))[^/]+(?=\/|$)/, '~');
+}
+
 export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: EditorView, fm: FileManager, actions: ToolbarActions): Toolbar {
+  // The name pill, Knuth's (knuth/src/main.ts, #doc-pod): the document's
+  // name, its save dot and the folder it lives in.
   const fileLabel = document.createElement('span');
-  fileLabel.className = 'tb-file';
+  fileLabel.className = 'name';
+  fileLabel.id = 'file-name';
   fileLabel.textContent = DEFAULT_DOC_NAME;
   fileLabel.title = 'Click to rename';
   fileLabel.addEventListener('click', () => {
@@ -151,11 +165,34 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     }
   });
   const titleBar = document.createElement('div');
-  titleBar.className = 'doc-title';
+  titleBar.className = 'doc-pod';
+  titleBar.id = 'doc-pod';
   const dot = document.createElement('span');
-  dot.className = 'doc-title-dot';
+  dot.className = 'doc-mark';
+  dot.id = 'doc-mark';
   dot.setAttribute('aria-hidden', 'true');
-  titleBar.append(fileLabel, dot);
+  // The folder beside the name, in a sibling so the name's own text stays
+  // exactly the name: the file's folder (home as ~) where the shell knows
+  // the path, else a project folder's name (a browser tab working in a
+  // folder), else nothing — a tab with a bare file shows the name alone.
+  // It is what gives way when the pill is short, from its start, so the
+  // nearest folder stays (style.css).
+  const folder = document.createElement('span');
+  folder.className = 'doc-folder';
+  folder.id = 'doc-folder';
+  folder.hidden = true;
+  const folderText = document.createElement('span');
+  folderText.dir = 'ltr';
+  folder.append(folderText);
+  titleBar.append(fileLabel, dot, folder);
+  let documentPath: string | null = null;
+  const repaintFolder = () => {
+    const where = documentPath ? documentPath.slice(0, documentPath.lastIndexOf('/')) || '/' : null;
+    const text = where ? tilde(where) : fm.dir?.name ?? '';
+    if (folderText.textContent !== text) folderText.textContent = text;
+    folder.title = where ?? '';
+    folder.hidden = !text;
+  };
 
   // The rail: the tools in groups under hairlines, scrolling as one when
   // the window is short; Document settings and the view switch pinned
@@ -905,6 +942,12 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
       fileLabel.setAttribute('aria-label', `${name} — ${unsaved ? 'unsaved' : 'saved'}; rename document`);
       if (!fm.saved) fileLabel.title = 'Click to name and save — you pick the folder your paper lives in';
       else fileLabel.title = dirty ? `${name} — unsaved changes` : `${name} — click to rename`;
+      dot.title = !fm.saved ? 'Not saved yet — ⌘S picks its folder' : dirty ? 'Unsaved changes' : 'Saved';
+      repaintFolder();
+    },
+    setPath(path) {
+      documentPath = path;
+      repaintFolder();
     },
   };
 }

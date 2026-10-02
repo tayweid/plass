@@ -343,7 +343,7 @@ test('a fresh document names the tab after the app', async ({ page }) => {
   // Matches Knuth, whose tab reads Knuth.py for the same reason.
   await page.goto('/');
   await expect(page).toHaveTitle('Plass.typ');
-  await expect(page.locator('.tb-file')).toHaveText('Plass');
+  await expect(page.locator('#file-name')).toHaveText('Plass');
 });
 
 test('an untouched document downloads under the app name', async ({ page }) => {
@@ -370,7 +370,7 @@ test('a new document can be named on its first save', async ({ page }) => {
   await page.goto('/?new=1');
   await page.waitForFunction(() => !!(window as any).__fm);
 
-  const chip = page.locator('.tb-file');
+  const chip = page.locator('#file-name');
   await expect(chip).toHaveText('Plass');
   await chip.click();
   await page.keyboard.type('MiniExam');
@@ -392,7 +392,7 @@ test('Escape backs out of naming without saving', async ({ page }) => {
   await page.goto('/?new=1');
   await page.waitForFunction(() => !!(window as any).__fm);
 
-  const chip = page.locator('.tb-file');
+  const chip = page.locator('#file-name');
   await chip.click();
   await page.keyboard.type('Discarded');
   await page.keyboard.press('Escape');
@@ -629,13 +629,13 @@ test('a reloaded window comes back to its own file, not an untitled sheet', asyn
   }, dirName);
 
   expect(await page.evaluate(() => (window as any).__fm.name)).toBe('Block_Outline');
-  await expect(page.locator('.tb-file')).toHaveText('Block_Outline');
+  await expect(page.locator('#file-name')).toHaveText('Block_Outline');
 
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__fm);
 
   await expect.poll(() => page.evaluate(() => (window as any).__fm.name)).toBe('Block_Outline');
-  await expect(page.locator('.tb-file')).toHaveText('Block_Outline');
+  await expect(page.locator('#file-name')).toHaveText('Block_Outline');
   expect(await page.evaluate(() => (window as any).__fm.handle?.name ?? null)).toBe('Block_Outline.typ');
   expect(await page.evaluate(() => (window as any).__fm.dir?.name ?? null)).toBe(dirName);
 });
@@ -695,7 +695,7 @@ for (const verdict of ['prompt', 'denied'] as const) {
     await page.waitForFunction(() => !!(window as any).__fm);
 
     await expect.poll(() => page.evaluate(() => (window as any).__fm.name)).toBe('Block_Outline');
-    await expect(page.locator('.tb-file')).toHaveText('Block_Outline');
+    await expect(page.locator('#file-name')).toHaveText('Block_Outline');
   });
 }
 

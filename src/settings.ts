@@ -187,8 +187,12 @@ export function pageSize(s: Pick<DocSettings, 'page' | 'landscape' | 'pageWidthI
   return s.landscape ? { w: p.h, h: p.w } : p;
 }
 
-/** Visual gap between painted pages, px. */
-export const PAGE_GAP = 28;
+/** Visual gap between painted pages, px: a thin line of the frame between
+ *  sheets that fill the panel edge to edge, drawn at the panel's scale (7–8
+ *  screen px in the default 1100 px window, about the frame's 8 px edge).
+ *  It was 28 when the sheets floated in a room. Print and the PDF have no
+ *  gap; the paginator steps pages by the page height plus this. */
+export const PAGE_GAP = 6;
 
 /** Merge stored settings over defaults (migrating legacy fields). */
 export function normalizeSettings(raw: Partial<DocSettings> | null | undefined): DocSettings {
