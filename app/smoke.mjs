@@ -5,7 +5,9 @@
 // and zoom (the window stays, the page is drawn larger and nothing is
 // laid out again), see the rail under the bar and the menus' blur, and,
 // on a shell that hides the title bar, see Knuth's bar beside the
-// traffic lights, with the folder the shell knows the file by.
+// traffic lights, with the folder the shell knows the file by; and, on a
+// shell that keeps the autosave record and its history view, open File ›
+// History… and rewind the document to the session's opening commit.
 //
 //   node app/smoke.mjs                 # the checkout: the shell on dist/
 //   node app/smoke.mjs path/to/Plass.app
@@ -325,6 +327,78 @@ if (keepsRecord) {
   if (path.basename(represented) !== path.basename(doc)) await fail(`the window's represented file is "${represented}", not ${path.basename(doc)}`);
   console.log(`smoke: autosave record: ${subjects.join(' | ')}`);
 } else console.log('smoke: the shell keeps no autosave record; not checked');
+
+// A rewind (the shell's history view, its README; docs/CLAERBOUT-SHELL.md):
+// File › History… opens the History window on the document's project, and
+// a rewind from it to the session's opening commit, made while the window
+// has typing not yet autosaved, has the window answer the save step (so no
+// window is passed over as silent) with that typing on disk before "rewind
+// from" records it, then reload its paper to the opening text, in place,
+// saying so. The record gains "plass: rewind from <tip>" and "plass:
+// rewind to <sha>". A shell without the view is said and skipped.
+const hasHistory = keepsRecord && fs.readFileSync(shellMain, 'utf8').includes('history.js');
+if (hasHistory) {
+  const folder = path.dirname(doc);
+  const name = path.basename(doc);
+  const git = (...args) => execFileSync('git', ['-C', folder, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const log = () => git('log', '--format=%H %s', 'claerbout-autosave').split('\n').filter(Boolean).map((line) => ({ sha: line.slice(0, line.indexOf(' ')), subject: line.slice(line.indexOf(' ') + 1) }));
+  const opening = log().find((commit) => commit.subject === 'plass: session open');
+  const openingText = git('show', `${opening.sha}:${name}`);
+  if (openingText.includes('Unsaved.')) await fail(`the opening commit already holds the typing to come:\n${openingText}`);
+  const opened = app.waitForEvent('window', { timeout: 30_000 });
+  await page.click('#toolbar .tb-tile');
+  await page.getByRole('menuitem', { name: 'History…' }).click();
+  const history = await opened.catch(() => null);
+  if (!history) await fail('File › History… opened no window');
+  await history.waitForLoadState('domcontentloaded');
+  if (!history.url().endsWith('/_claerbout/history.html')) await fail(`File › History… opened ${history.url()}`);
+  const graph = await history.evaluate(() => {
+    window.__steps = [];
+    window.claerbout.on('rewind', (step) => window.__steps.push(step));
+    return window.claerbout.request({ type: 'history', action: 'graph' });
+  });
+  if (graph?.state !== 'on' || !graph.tip) await fail(`the History window's graph: ${JSON.stringify(graph && { state: graph.state, reason: graph.reason, tip: graph.tip })}`);
+  // Typed at the paragraph's end, put there by a click past its text (with
+  // the History window in front, End left the caret where a click had put
+  // it), and the rewind asked for at once, inside autosave's 1.2 s.
+  const end = await page.evaluate(() => {
+    const paragraph = document.querySelector('.ProseMirror p');
+    paragraph.scrollIntoView({ block: 'center' });
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    const line = [...range.getClientRects()].at(-1);
+    return { x: line.right + 4, y: line.top + line.height / 2 };
+  });
+  await page.mouse.click(end.x, end.y);
+  await page.keyboard.type(' Unsaved.');
+  const rewind = (tip) => history.evaluate(([sha, tip]) => window.claerbout.request({ type: 'rewind', sha, tip }), [opening.sha, tip]);
+  let result = await rewind(graph.tip);
+  // A timer commit between the graph and the click: asked again, as the page does.
+  if (result?.refused === 'moved') result = await rewind(result.tip);
+  if (!result?.ok) await fail(`the rewind was not made: ${JSON.stringify(result)}`);
+  const steps = await history.evaluate(() => window.__steps);
+  const silent = steps.filter((step) => step.state === 'done' && step.detail?.silent?.length);
+  if (silent.length || (result.silent ?? []).length) await fail(`a window did not answer the rewind: ${JSON.stringify({ steps, silent: result.silent })}`);
+  if (!steps.some((step) => step.step === 'save' && step.state === 'done')) await fail(`the rewind's steps had no save: ${JSON.stringify(steps)}`);
+  if (!result.from) await fail(`no "rewind from" was recorded (the save left nothing to record): ${JSON.stringify(result)}`);
+  const fromText = git('show', `${result.from}:${name}`);
+  if (!fromText.includes('Edited. Unsaved.')) await fail(`"rewind from" does not hold the typing the save should have written first:\n${fromText}`);
+  const short = opening.sha.slice(0, 7);
+  await page.waitForFunction((text) => document.getElementById('toast')?.textContent?.includes(text), `Rewound to ${short}`, { timeout: 10_000 })
+    .catch(async () => fail(`the window did not say it was rewound (toast: "${await page.evaluate(() => document.getElementById('toast')?.textContent ?? '')}")`));
+  const paper = await page.evaluate(() => document.querySelector('.ProseMirror').textContent);
+  if (paper.includes('Edited.') || paper.includes('Unsaved.') || !paper.includes('typeset inside the shell')) await fail(`the paper did not reload to the opening text: ${paper}`);
+  if (fs.readFileSync(doc, 'utf8') !== openingText) await fail(`the file is not the opening commit's:\n${fs.readFileSync(doc, 'utf8')}`);
+  const subjects = log().map((commit) => commit.subject);
+  const from = subjects.find((subject) => subject.startsWith('plass: rewind from '));
+  const to = subjects.find((subject) => subject === `plass: rewind to ${opening.sha}`);
+  if (!from || !to) await fail(`the record lacks the rewind: ${subjects.join(' | ')}`);
+  // Not an edit: nothing written back over what the rewind wrote.
+  await page.waitForTimeout(1600);
+  if (fs.readFileSync(doc, 'utf8') !== openingText) await fail(`the window wrote over the rewound file:\n${fs.readFileSync(doc, 'utf8')}`);
+  console.log(`smoke: rewind: ${steps.map((step) => `${step.step} ${step.state}`).join(', ')}; ${to}`);
+  await history.close();
+} else console.log('smoke: the shell has no history view; the rewind is not checked');
 
 await app.close();
 fs.rmSync(work, { recursive: true, force: true });

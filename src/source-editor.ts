@@ -386,7 +386,19 @@ export function mountSourceEditor(host: HTMLElement, opts: SourceEditorOptions):
   return {
     text: () => view.state.doc.toString(),
     setText(text) {
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+      // Only the span between the first and the last difference: the caret
+      // and the scroll stay where the text still allows (a reload from disk).
+      const old = view.state.doc.toString();
+      let from = 0;
+      while (from < old.length && from < text.length && old.charCodeAt(from) === text.charCodeAt(from)) from++;
+      let to = old.length;
+      let end = text.length;
+      while (to > from && end > from && old.charCodeAt(to - 1) === text.charCodeAt(end - 1)) {
+        to--;
+        end--;
+      }
+      if (from === to && from === end) return;
+      view.dispatch({ changes: { from, to, insert: text.slice(from, end) } });
     },
     caret: () => view.state.selection.main.head,
     setCaret(offset) {

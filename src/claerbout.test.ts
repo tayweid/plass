@@ -14,7 +14,14 @@
 // reports nothing; a shell without `pathOf` and no shell at all are told
 // nothing. It resolves to the file's path as the shell answers it, which
 // the page keeps to show the document's folder in the bar.
-import { focusThisWindow, isNativeShell, reportDocument } from './claerbout';
+//
+// A rewind (the shell's history view): `save {id}` is answered `{type:
+// 'saved', id, ok: true}` once the document is on disk, or `ok: false`
+// with why, which refuses the rewind; `reload {paths, to, app?}` reads the
+// file again only when this window's path is among the paths, however
+// /private spells it; File › History… asks `{type: 'history', action:
+// 'open'}`, and only `{opened: true}` is an opened window.
+import { focusThisWindow, isNativeShell, onShellReload, onShellSave, openHistory, reportDocument, rewoundText, samePath } from './claerbout';
 
 let failed = 0;
 function check(name: string, ok: boolean) {
@@ -27,18 +34,29 @@ function check(name: string, ok: boolean) {
 
 const asked: Record<string, unknown>[] = [];
 const global = globalThis as { window?: unknown };
+/** The page's listeners for the shell's events, as the preload keeps them. */
+const listeners = new Map<string, Set<(detail: unknown) => void>>();
+/** The shell sends an event to this window. */
+const fire = (event: string, detail: unknown) => listeners.get(event)?.forEach((listener) => listener(detail));
 /** A shell bridge on `window`, answering every request the given way. */
 function shell(answer: (message: Record<string, unknown>) => Promise<unknown>): void {
+  listeners.clear();
   global.window = {
     claerbout: {
       request: (message: Record<string, unknown>) => {
         asked.push(message);
         return answer(message);
       },
-      on: () => () => {},
+      on: (event: string, listener: (detail: unknown) => void) => {
+        if (!listeners.has(event)) listeners.set(event, new Set());
+        listeners.get(event)!.add(listener);
+        return () => listeners.get(event)?.delete(listener);
+      },
     },
   };
 }
+/** Every pending answer settled. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 console.log('focusThisWindow');
 
@@ -137,6 +155,113 @@ shell(() => Promise.reject(new Error('the bridge is down')));
 check('a failing bridge: null, never a rejection', (await reportDocument(handleAt('/p/f.typ'))) === null);
 delete global.window;
 check('a browser tab: null', (await reportDocument(handleAt('/p/f.typ'))) === null);
+
+console.log('save (a rewind saves first)');
+
+const saved = () => asked.filter((message) => message.type === 'saved');
+delete global.window;
+listeners.clear();
+check('no shell: nothing to listen to', typeof onShellSave(async () => null) === 'function' && listeners.size === 0);
+
+shell(async () => null);
+asked.length = 0;
+let saves = 0;
+const stopSave = onShellSave(async () => {
+  saves++;
+  return null;
+});
+fire('save', { id: 'a1', reason: 'rewind' });
+await settle();
+check('on disk: {type: saved, id, ok: true}', saves === 1 && JSON.stringify(saved().at(-1)) === '{"type":"saved","id":"a1","ok":true}');
+fire('save', { reason: 'rewind' });
+fire('save', null);
+await settle();
+check('a save without an id: nothing written, nothing answered', saves === 1 && saved().length === 1);
+stopSave();
+fire('save', { id: 'a2', reason: 'rewind' });
+await settle();
+check('unsubscribed: not heard', saves === 1 && saved().length === 1);
+
+shell(async () => null);
+asked.length = 0;
+onShellSave(async () => 'it changed on disk outside Plass, and Plass is keeping its own copy until you choose');
+fire('save', { id: 'b1', reason: 'rewind' });
+await settle();
+check('could not: {ok: false, error} in words, which refuses the rewind', JSON.stringify(saved().at(-1)) === '{"type":"saved","id":"b1","ok":false,"error":"it changed on disk outside Plass, and Plass is keeping its own copy until you choose"}');
+
+shell(async () => null);
+asked.length = 0;
+onShellSave(() => Promise.reject(new Error('the disk is full')));
+fire('save', { id: 'c1', reason: 'rewind' });
+await settle();
+check('a save that throws: still answered, ok: false with its message', JSON.stringify(saved().at(-1)) === '{"type":"saved","id":"c1","ok":false,"error":"the disk is full"}');
+
+shell(() => Promise.reject(new Error('the bridge is down')));
+onShellSave(async () => null);
+let unhandled = false;
+const onUnhandled = () => {
+  unhandled = true;
+};
+process.on('unhandledRejection', onUnhandled);
+fire('save', { id: 'd1', reason: 'rewind' });
+await settle();
+await settle();
+process.off('unhandledRejection', onUnhandled);
+check('a bridge that fails the answer: no unhandled rejection', !unhandled);
+
+console.log('reload (a rewind wrote the file)');
+
+check('the same path', samePath('/Users/t/p/a.typ', '/Users/t/p/a.typ'));
+check('/private/var is /var, either way round', samePath('/private/var/folders/x/docs/a.typ', '/var/folders/x/docs/a.typ') && samePath('/var/folders/x/a.typ', '/private/var/folders/x/a.typ'));
+check('/private/tmp is /tmp', samePath('/tmp/w/a.typ', '/private/tmp/w/a.typ'));
+check('another file is not', !samePath('/Users/t/p/a.typ', '/Users/t/p/b.typ') && !samePath('/private/Users/a.typ', '/Users/a.typ') && !samePath('/private/tmpx/a.typ', '/tmpx/a.typ'));
+
+delete global.window;
+listeners.clear();
+check('no shell: nothing to listen to', typeof onShellReload(() => '/p/a.typ', () => {}) === 'function' && listeners.size === 0);
+
+shell(async () => null);
+const reloads: Array<{ to: string | null; app: string | null }> = [];
+let mine: string | null = '/private/var/folders/x/docs/a.typ';
+onShellReload(() => mine, (rewound) => reloads.push(rewound));
+const sha = 'f00dfeed'.repeat(5);
+fire('reload', { id: 'r1', paths: ['/var/folders/x/docs/b.typ', '/var/folders/x/docs/a.typ'], reason: 'rewind', to: sha });
+check('its path among the paths: reloaded, with the commit', reloads.length === 1 && reloads[0].to === sha && reloads[0].app === null);
+fire('reload', { id: 'r2', paths: ['/var/folders/x/docs/b.typ'], reason: 'rewind', to: sha });
+check('its path not among them: nothing', reloads.length === 1);
+fire('reload', { id: sha, paths: ['/private/var/folders/x/docs/a.typ'], reason: 'rewind', to: sha, app: 'knuth' });
+check('another app\u2019s rewind: reloaded, with the app', reloads.length === 2 && reloads[1].app === 'knuth');
+mine = null;
+fire('reload', { id: 'r3', paths: ['/var/folders/x/docs/a.typ'], reason: 'rewind', to: sha });
+check('a window whose file the shell does not know: nothing', reloads.length === 2);
+mine = '/var/folders/x/docs/a.typ';
+fire('reload', { id: 'r4', paths: '/var/folders/x/docs/a.typ', reason: 'rewind', to: sha });
+fire('reload', null);
+check('paths that are not a list, or no detail: nothing', reloads.length === 2);
+check('the reload asks the shell nothing', !asked.some((message) => message.type === 'reload'));
+
+check('what the window says: Rewound to the first seven', rewoundText({ to: sha, app: null }) === 'Rewound to f00dfee');
+check('another app\u2019s: Rewound by Knuth', rewoundText({ to: sha, app: 'knuth' }) === 'Rewound by Knuth');
+check('neither known: Rewound', rewoundText({ to: null, app: null }) === 'Rewound');
+
+console.log('openHistory (File › History…)');
+
+delete global.window;
+check('no shell: false', (await openHistory()) === false);
+
+shell(async () => ({ opened: true }));
+check('the shell opened the History window: true', (await openHistory()) === true);
+check('what it was asked', JSON.stringify(asked.at(-1)) === '{"type":"history","action":"open"}');
+
+shell(async () => null);
+check('a shell without the history view answers null: false', (await openHistory()) === false);
+
+shell(async () => ({}));
+check('an answer without opened: false', (await openHistory()) === false);
+
+shell(() => Promise.reject(new Error('the bridge is down')));
+check('a failing bridge: false, never a rejection', (await openHistory()) === false);
+delete global.window;
 
 if (failed) {
   console.error(`\n${failed} claerbout test(s) failed`);
