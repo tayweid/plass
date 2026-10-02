@@ -445,9 +445,12 @@ prompted.
   working tree, `claerbout-autosave` (`claerbout-autosave-<name>` in a
   linked worktree), written with a temporary index and plumbing (never
   the user's HEAD, branch or index; in the working tree it writes
-  `untracked/`, a `.gitignore` line and `.claerbout/untracked.json`, and
-  a repository is started only in a project's folder, never straight in
-  `~/Desktop` or `~/Documents`), committed on a one-minute timer while a
+  `untracked/`, a `.gitignore` line and `.claerbout/untracked.json`, never
+  through a symbolic link, and a repository is started only in a
+  project's folder, never straight in `~/Desktop` or `~/Documents`; a
+  document in a hidden folder of the home folder such as `~/.config`, or
+  in a repository rooted at the home folder, gets no record at all),
+  committed on a one-minute timer while a
   window is open and at the session's open and close, `plass: timer`,
   `plass: session open`. A shell without
   `pathOf` (older than the record) is told nothing. `src/claerbout.test.ts`
