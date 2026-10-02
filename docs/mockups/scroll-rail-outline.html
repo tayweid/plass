@@ -1,0 +1,1042 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scroll rail, outline</title>
+    <!--
+      Plass's scroll rail, from one angle: the rail as the outline.
+
+      At rest a thin rail stands in the paper's right margin, hugging the
+      panel's right edge where the history view's strip hugs its room's:
+      a faint spine, a hairline for every page break, a dot for every
+      heading (larger for a section, smaller for a subsection), a hollow
+      square for a figure or a table, a blue tick for the caret, and over
+      them the visible span as a soft capsule. Hover it and the document's
+      outline slides out of it to the left, in the dark glass every
+      floating panel in Plass uses: heading names at their heights, joined
+      to their dots by dotted leaders, page numbers at the breaks, the
+      visible span as a band across it and the current heading lit. Click
+      a name or a dot to go there; press and drag anywhere on it to scrub
+      the paper; the wheel over it scrolls the paper. Leave it and it folds
+      back to the rail.
+
+      The frame is Plass's Zen frame on main eb4ea89, measured from
+      src/style.css and src/toolbar.css: #18181a, the 44 px bar with the
+      name pill, the 44 px rail of 32 px tiles, the elevated panel that is
+      the paper (pages 816 CSS px wide drawn at the panel's width by a
+      transform, 6 CSS px of frame between sheets, no scrollbar), the 8 px
+      edge, the HUD. The traffic lights are drawn where app/plass.json puts
+      them ({x: 14, y: 15}); in Plass.app they are the window's own.
+
+      Self-contained: no external assets. The document's face is New
+      Computer Modern in Plass; here it falls back to STIX Two Text.
+    -->
+    <style>
+      /* ================= Plass's frame (style.css, toolbar.css) ================= */
+      :root {
+        --frame: #18181a;
+        --pill: #232326;
+        --tile: #2e2e32;
+        --topbar: 44px; /* env(titlebar-area-height, 44px) in Plass */
+        --edge: 8px;
+        --rail-tile: 32px;
+        --rail-gap: 6px;
+        --rail: calc(var(--rail-tile) + 2 * var(--rail-gap));
+        --ink: #1a1a1a;
+        --accent: #305c8a;
+        --sheet: #ffffff;
+        --serif: 'STIX Two Text', 'Charter', 'Iowan Old Style', 'Palatino', 'Georgia', serif;
+        --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+        --doc-font: 'New Computer Modern', 'Latin Modern Roman', 'CMU Serif', 'STIX Two Text', 'Georgia', serif;
+        --doc-size: 12.5pt;
+        --page-w: 816px;
+        --page-h: 1056px;
+        --page-margin: 120px; /* 1.25in */
+
+        /* ================= the scroll rail ================= */
+        /* Its hit width; every mark centres on its spine, 8 px in. 16 px is
+           the history strip's width (claerbout/history/history.html #mini). */
+        --sr-w: 16px;
+        /* From the panel's right edge: the spine sits 12 px inside the
+           panel, 20 px from the window's right. The paper's right margin is
+           1.25in, drawn 101 px wide at the narrowest window (740) and 154 at
+           1100, so the rail lies on empty paper and takes none of its
+           width. */
+        --sr-inset: 4px;
+        /* Under the panel's top edge, clear of its 12 px corner. */
+        --sr-top: 12px;
+        /* Above the panel's bottom edge: the HUD's row (it sits 10 px in
+           and is 17 px tall), so the page count stands at the rail's foot. */
+        --sr-foot: 36px;
+        --sr-outline-w: 264px;
+        /* At rest the marks are the frame's own ink on the paper: the page
+           breaks are the frame showing through, as it does between sheets. */
+        --sr-spine: rgba(24, 24, 26, 0.07);
+        --sr-break: rgba(24, 24, 26, 0.3);
+        --sr-h2: rgba(24, 24, 26, 0.5);
+        --sr-h2-in: rgba(24, 24, 26, 0.8);
+        --sr-h3: rgba(24, 24, 26, 0.4);
+        --sr-h3-in: rgba(24, 24, 26, 0.66);
+        --sr-float: rgba(24, 24, 26, 0.3);
+        --sr-float-in: rgba(24, 24, 26, 0.52);
+        --sr-thumb: rgba(24, 24, 26, 0.045);
+        --sr-thumb-ring: rgba(24, 24, 26, 0.13);
+        --sr-caret: var(--accent);
+        /* The dark glass every floating panel in Plass is (.tb-menu,
+           .settings-panel). */
+        --glass: rgba(27, 26, 30, 0.94);
+        --glass-ink: rgba(240, 238, 233, 0.9);
+        --glass-ink-soft: rgba(240, 238, 233, 0.5);
+        --glass-hairline: rgba(255, 255, 255, 0.1);
+        --glass-accent: #9db8d6;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; overflow: hidden; }
+      body {
+        background: var(--frame);
+        font-family: var(--sans);
+        color: var(--ink);
+        display: flex;
+        flex-direction: column;
+      }
+      button { font: inherit; color: inherit; }
+
+      /* the traffic lights, where app/plass.json puts them */
+      #lights { position: fixed; left: 14px; top: 15px; display: flex; gap: 8px; z-index: 11; }
+      #lights i { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.18); }
+      #lights i:nth-child(1) { background: #ff5f57; }
+      #lights i:nth-child(2) { background: #febc2e; }
+      #lights i:nth-child(3) { background: #28c840; }
+
+      /* the bar */
+      #toolbar {
+        display: flex; align-items: center; gap: 6px;
+        position: fixed; top: 0; left: 0; right: 0; height: var(--topbar); z-index: 10;
+        /* calc(12px + env(titlebar-area-x)) in Plass.app: the lights' room is 88 px */
+        padding-inline: 100px var(--edge);
+      }
+      .tb-tile {
+        flex: none; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 9px;
+        background: transparent; color: rgba(240, 238, 233, 0.62);
+        display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+      }
+      .tb-tile:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+      .ico { width: 18px; height: 18px; flex: none; }
+      .doc-pod {
+        display: flex; align-items: center; gap: 9px; flex: 0 1 auto; min-width: 0;
+        max-width: min(560px, 50vw); height: 30px; padding: 0 10px;
+        background: var(--pill); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 9px;
+      }
+      .doc-pod .name {
+        font: 15px/1.5 var(--serif); letter-spacing: 0.09em; color: rgba(252, 252, 251, 0.8);
+        white-space: nowrap; padding: 1px 4px; border-radius: 5px;
+      }
+      .doc-mark { flex: none; width: 6px; height: 6px; border-radius: 50%; background: rgba(110, 165, 118, 0.9); }
+      .doc-folder { font: 12px/1.5 var(--sans); color: rgba(240, 238, 233, 0.55); white-space: nowrap; overflow: hidden; }
+
+      /* the tool rail */
+      #rail {
+        position: fixed; top: var(--topbar); left: 0; bottom: 0; width: var(--rail); z-index: 10;
+        display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0 0 var(--edge);
+      }
+      .rail-groups { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+      .rail-foot { flex: none; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+      .rule { flex: none; width: 18px; height: 1px; margin: 3px 0; background: rgba(255, 255, 255, 0.1); }
+      .rb {
+        flex: none; width: var(--rail-tile); height: var(--rail-tile); padding: 0; border: 0; border-radius: 9px;
+        background: transparent; color: rgba(240, 238, 233, 0.64);
+        display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+      }
+      .rb:hover:not(:disabled) { color: #fff; background: rgba(255, 255, 255, 0.08); }
+      .rb:disabled { opacity: 0.25; cursor: default; }
+      .rb .tico { font: 600 14px/18px var(--sans); min-width: 18px; text-align: center; }
+
+      /* the panel: the paper */
+      #scroll {
+        flex: 1; min-height: 0;
+        margin: var(--topbar) var(--edge) var(--edge) var(--rail);
+        border-radius: 12px;
+        background: var(--sheet);
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.05),
+          0 2px 6px rgba(0, 0, 0, 0.35),
+          0 12px 32px rgba(0, 0, 0, 0.45);
+        overflow: hidden auto;
+        scrollbar-width: none;
+        overflow-anchor: none;
+      }
+      #scroll::-webkit-scrollbar { display: none; }
+      #paper { overflow: clip; }
+      #stack { position: relative; width: var(--page-w); transform-origin: 0 0; }
+      #pages { position: absolute; inset: 0; background: var(--frame); }
+      .page-box { position: absolute; left: 0; width: var(--page-w); height: var(--page-h); background: var(--sheet); }
+      .page-body {
+        position: absolute; left: var(--page-margin); top: var(--page-margin);
+        width: calc(var(--page-w) - 2 * var(--page-margin));
+        font-family: var(--doc-font); font-size: var(--doc-size); line-height: 1.5; color: var(--ink);
+        text-align: left; font-kerning: normal;
+      }
+      .page-num {
+        position: absolute; left: 0; right: 0; top: calc(var(--page-h) - 78px);
+        text-align: center; font: var(--doc-size) / 1 var(--doc-font); color: var(--ink);
+      }
+
+      /* the document's typography (style.css, "document typography") */
+      .page-body p { margin: 0 0 0.9em; text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
+      .page-body p.split { text-align-last: justify; }
+      .page-body h1, .page-body h2, .page-body h3 { font-weight: 600; line-height: 1.25; margin: 0 0 0.5em; padding-top: 1.4em; }
+      .page-body h2 { font-size: 1.4em; }
+      .page-body h3 { font-size: 1.15em; }
+      .page-body .sec { margin-right: 0.5em; }
+      .ts-doctitle { font-size: 1.55em; font-weight: 700; text-align: center; line-height: 1.3; margin: 0.6em 0 0.6em; }
+      .ts-docdate { text-align: center !important; font-style: italic; margin: 0 0 1.2em !important; }
+      .ts-abstract { padding: 0 1.8em; margin: 0 0 0.9em; }
+      .ts-abstract::before { content: 'Abstract'; display: block; text-align: center; font-weight: 600; margin-bottom: 0.5em; }
+      .ts-abstract p { margin: 0; }
+      .eq { text-align: center !important; margin: 0.2em 0 1.1em !important; position: relative; }
+      .eq .eqn { position: absolute; right: 0; }
+      .eq sub { font-size: 0.7em; }
+      figure.ts-figure { margin: 0 0 0.9em; padding: 0.4em 0 0.2em; text-align: center; }
+      figure.ts-figure svg { display: block; margin: 0 auto; }
+      figcaption { margin-top: 0.55em; text-align: justify; text-align-last: center; }
+      .tbl { margin: 0.6em 0 1.1em; }
+      .tbl table { border-collapse: collapse; margin: 0 auto; font-size: 0.9em; line-height: 1.45; }
+      .tbl th, .tbl td { padding: 1px 9pt; text-align: right; font-weight: inherit; font-variant-numeric: tabular-nums; }
+      .tbl th:first-child, .tbl td:first-child { text-align: left; padding-left: 0; }
+      .tbl thead tr { border-top: 1.2px solid var(--ink); border-bottom: 0.6px solid var(--ink); }
+      .tbl tbody tr:last-child { border-bottom: 1.2px solid var(--ink); }
+      .tbl tr.se td { color: #444; padding-bottom: 4px; }
+      .tbl tr.sep td { border-top: 0.6px solid var(--ink); padding-top: 3px; }
+      .tbl .cap { margin: 0 0 0.5em; text-align: center; }
+      .page-body p.bib { padding-left: 1.6em; text-indent: -1.6em; text-align: left; margin-bottom: 0.45em; }
+
+      /* the caret (the mockup's only editing: a click in the text moves it) */
+      .caret { position: relative; display: inline-block; width: 0; height: 1em; vertical-align: -0.12em; }
+      .caret::after {
+        content: ''; position: absolute; left: -0.5px; top: -0.15em; bottom: -0.15em; width: 1.3px; background: var(--ink);
+        animation: blink 1.06s steps(1) infinite;
+      }
+      @keyframes blink { 50% { opacity: 0; } }
+
+      /* the HUD */
+      #hud {
+        position: fixed; right: calc(var(--edge) + 10px); bottom: calc(var(--edge) + 10px); z-index: 50;
+        padding: 2px 8px; font: 11px var(--sans); color: #6f6d68;
+        background: rgba(252, 252, 251, 0.82); backdrop-filter: blur(8px); border-radius: 7px;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06); opacity: 0.7; user-select: none;
+      }
+
+      /* ================= the scroll rail ================= */
+
+      /* One element holds the rail and its outline, so leaving both is one
+         pointerleave. It has no box of its own: both children are fixed to
+         the window, like the HUD, and sit over the panel without being in
+         its scroll (the panel's content scrolls; they must not). */
+      #sr { position: fixed; top: 0; left: 0; width: 0; height: 0; z-index: 60; }
+
+      /* The rail. Absolutely nothing here depends on the window's width,
+         and its height only through top and bottom: the marks are placed as
+         fractions of its height (top: calc(var(--f) * 100%)), so a resize
+         redraws nothing and runs no script but the thumb's one write. */
+      #sr-track {
+        position: fixed;
+        right: calc(var(--edge) + var(--sr-inset));
+        top: calc(var(--topbar) + var(--sr-top));
+        bottom: calc(var(--edge) + var(--sr-foot));
+        width: var(--sr-w);
+        z-index: 2;
+        cursor: pointer;
+        touch-action: none;
+        outline: none;
+      }
+      #sr-track::before { /* the spine */
+        content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; margin-left: -0.5px;
+        background: var(--sr-spine); transition: background 0.16s;
+      }
+      #sr-track:focus-visible::after {
+        content: ''; position: absolute; inset: -4px -2px; border-radius: 9px; box-shadow: 0 0 0 2px var(--glass-accent);
+      }
+
+      /* The visible span: a capsule as wide as a page break is short, under
+         the marks. It brightens while the hand is on the rail and for a
+         moment after the paper scrolls. */
+      #sr-thumb {
+        position: absolute; left: 50%; top: 0; width: 8px; margin-left: -4px; min-height: 14px;
+        border-radius: 4px; background: var(--sr-thumb); box-shadow: inset 0 0 0 1px var(--sr-thumb-ring);
+        transition: background 0.2s, box-shadow 0.2s; will-change: transform;
+      }
+      #sr.live #sr-thumb, #sr-track:hover #sr-thumb {
+        --sr-thumb: rgba(24, 24, 26, 0.07); --sr-thumb-ring: rgba(24, 24, 26, 0.24);
+      }
+
+      /* The marks. Centred on the spine; their kind is their shape: a
+         hairline across for a page break, a dot for a heading (5 px for a
+         section, 3 px for a subsection, a short bar for the title), a
+         hollow square for a figure or a table, a tick for the caret. Marks
+         inside the visible span are inked darker, so the capsule reads as
+         the paper you are looking at. */
+      .sr-m {
+        position: absolute; left: 50%; top: calc(var(--f) * 100%);
+        transform: translate(-50%, -50%); pointer-events: none;
+        transition: background 0.16s, box-shadow 0.16s, width 0.12s, height 0.12s;
+      }
+      .sr-break { width: 12px; height: 1px; background: var(--sr-break); }
+      .sr-title { width: 9px; height: 2.5px; border-radius: 1.25px; background: var(--sr-h2); }
+      .sr-h2 { width: 5px; height: 5px; border-radius: 50%; background: var(--sr-h2); }
+      .sr-h3 { width: 3px; height: 3px; border-radius: 50%; background: var(--sr-h3); }
+      .sr-float { width: 5px; height: 5px; border-radius: 1px; box-shadow: inset 0 0 0 1px var(--sr-float); }
+      .sr-caret { width: 10px; height: 1.5px; border-radius: 1px; background: var(--sr-caret); z-index: 1; }
+      .sr-title.in, .sr-h2.in { background: var(--sr-h2-in); }
+      .sr-h3.in { background: var(--sr-h3-in); }
+      .sr-float.in { box-shadow: inset 0 0 0 1px var(--sr-float-in); }
+
+      /* Open: the rail becomes the outline's spine, on the glass, and its
+         ink turns light. */
+      #sr.open {
+        --sr-spine: rgba(255, 255, 255, 0.09);
+        --sr-break: rgba(255, 255, 255, 0.32);
+        --sr-h2: rgba(240, 238, 233, 0.72);
+        --sr-h2-in: rgba(240, 238, 233, 0.9);
+        --sr-h3: rgba(240, 238, 233, 0.42);
+        --sr-h3-in: rgba(240, 238, 233, 0.62);
+        --sr-float: rgba(240, 238, 233, 0.34);
+        --sr-float-in: rgba(240, 238, 233, 0.55);
+        --sr-thumb: rgba(255, 255, 255, 0.07);
+        --sr-thumb-ring: rgba(255, 255, 255, 0.22);
+        --sr-caret: var(--glass-accent);
+      }
+      #sr.open #sr-thumb, #sr.open.live #sr-thumb, #sr.open #sr-track:hover #sr-thumb {
+        --sr-thumb: rgba(255, 255, 255, 0.07); --sr-thumb-ring: rgba(255, 255, 255, 0.22);
+      }
+      #sr.open .sr-m.cur { width: 7px; height: 7px; background: #fff; box-shadow: 0 0 0 2px rgba(157, 184, 214, 0.45); }
+      #sr.open .sr-m.hov:not(.cur) { width: 7px; height: 7px; background: #fff; }
+
+      /* The outline: the menus' dark glass, from just under the panel's top
+         to just above its bottom (4 px in, so its 8 px corners are
+         concentric with the panel's 12), its right edge the rail's. It
+         unrolls leftward out of the rail (clip-path), and rolls back into
+         it. The negative insets leave its shadow unclipped. */
+      #sr-outline {
+        position: fixed;
+        right: calc(var(--edge) + var(--sr-inset));
+        top: calc(var(--topbar) + 4px);
+        bottom: calc(var(--edge) + 4px);
+        width: var(--sr-outline-w);
+        z-index: 1;
+        border-radius: 8px;
+        background: var(--glass);
+        backdrop-filter: blur(18px) saturate(140%);
+        border: 1px solid var(--glass-hairline);
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 16px 40px rgba(0, 0, 0, 0.28);
+        color: var(--glass-ink);
+        clip-path: inset(-48px -48px -48px calc(100% - var(--sr-w)) round 8px);
+        opacity: 0;
+        visibility: hidden;
+        transition: clip-path 0.2s cubic-bezier(0.3, 0.7, 0.2, 1), opacity 0.14s ease, visibility 0s linear 0.2s;
+        cursor: pointer;
+        touch-action: none;
+        user-select: none;
+      }
+      #sr.open #sr-outline {
+        clip-path: inset(-48px -48px -48px -48px round 8px);
+        opacity: 1;
+        visibility: visible;
+        transition: clip-path 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.12s ease, visibility 0s;
+      }
+      .sr-o-layer { position: absolute; inset: 0; opacity: 0; transform: translateX(8px); transition: opacity 0.12s, transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
+      #sr.open .sr-o-layer { opacity: 1; transform: none; transition-delay: 0.05s; }
+
+      /* the visible span, as a band across the outline */
+      .sr-o-band {
+        position: absolute; left: 6px; right: 3px; border-radius: 6px;
+        background: rgba(255, 255, 255, 0.045); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+        will-change: transform;
+      }
+      /* page breaks: the rail's hairline carried across, the page that
+         begins numbered under it at the left */
+      .sr-o-break { position: absolute; left: 8px; right: 4px; height: 1px; background: rgba(255, 255, 255, 0.075); }
+      .sr-o-pg {
+        position: absolute; left: 9px; width: 16px; text-align: center;
+        font: 500 9.5px/12px var(--sans); font-variant-numeric: tabular-nums; letter-spacing: 0.02em;
+        color: rgba(240, 238, 233, 0.34);
+      }
+      .sr-o-pg.cur { color: rgba(240, 238, 233, 0.7); }
+      /* Rows: the document's own words in its own kind of face (as the
+         name pill sets the document's name in serif and the folder in
+         sans), the chrome's in sans. A row's hit box runs from the glass's
+         left to the rail, so the whole line, leader included, is the
+         target. */
+      .sr-o-row {
+        position: absolute; left: 4px; right: calc(var(--sr-w) + 2px);
+        display: flex; align-items: center; padding: 0 0 0 var(--ind); border: 0; border-radius: 5px;
+        background: transparent; color: rgba(240, 238, 233, 0.72); text-align: left; cursor: pointer;
+        transition: color 0.12s, background 0.12s;
+      }
+      .sr-o-row .lab { display: inline-flex; align-items: baseline; gap: 0.45em; max-width: calc(100% - 18px); white-space: nowrap; overflow: hidden; }
+      .sr-o-row .t { overflow: hidden; text-overflow: ellipsis; }
+      .sr-o-row .n { flex: none; color: rgba(240, 238, 233, 0.42); font-variant-numeric: tabular-nums; }
+      .sr-o-row.k-title { font: italic 13px/20px var(--serif); color: rgba(240, 238, 233, 0.82); height: 20px; }
+      .sr-o-row.k-h2 { font: 13px/18px var(--serif); height: 18px; letter-spacing: 0.01em; }
+      .sr-o-row.k-h3 { font: 12px/16px var(--serif); height: 16px; color: rgba(240, 238, 233, 0.52); }
+      .sr-o-row.k-float { font: 10.5px/14px var(--sans); height: 14px; color: rgba(240, 238, 233, 0.4); }
+      .sr-o-row.k-float .n { color: rgba(240, 238, 233, 0.4); }
+      .sr-o-row.k-float .lab::before {
+        content: ''; flex: none; align-self: center; width: 5px; height: 5px; border-radius: 1px;
+        box-shadow: inset 0 0 0 1px currentColor; margin-right: 1px;
+      }
+      .sr-o-row.hov { background: rgba(255, 255, 255, 0.07); color: #fff; }
+      .sr-o-row.hov .n { color: rgba(240, 238, 233, 0.7); }
+      /* the current heading: the one the reading line (a quarter down the
+         panel) is under, lit, with the accent bar beside it */
+      .sr-o-row.cur { color: #fff; }
+      .sr-o-row.cur .n { color: rgba(240, 238, 233, 0.75); }
+      .sr-o-row.cur::before {
+        content: ''; position: absolute; left: calc(var(--ind) - 8px); top: 3px; bottom: 3px; width: 2px; border-radius: 1px;
+        background: var(--glass-accent);
+      }
+      .sr-o-row:focus-visible, .sr-o-row.kbd { outline: 2px solid var(--glass-accent); outline-offset: -1px; }
+      .sr-o-lead { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+      .sr-o-lead path { fill: none; stroke: rgba(240, 238, 233, 0.2); stroke-width: 1.2; stroke-linecap: round; stroke-dasharray: 0 3.4; }
+      .sr-o-lead path.f { stroke: rgba(240, 238, 233, 0.13); }
+      .sr-o-lead path.cur { stroke: rgba(157, 184, 214, 0.75); }
+      .sr-o-lead path.hov { stroke: rgba(240, 238, 233, 0.6); }
+      /* where the hand is: a click lands here, a drag carries the paper */
+      .sr-o-scrub {
+        position: absolute; left: 8px; right: 4px; height: 1px; background: rgba(157, 184, 214, 0.5);
+        opacity: 0; transition: opacity 0.1s; pointer-events: none;
+      }
+      #sr.scrubbing .sr-o-scrub { opacity: 1; }
+      /* The foot: the outline covers the HUD, so it says the HUD's words,
+         with the page you are on. */
+      .sr-o-foot {
+        position: absolute; left: 12px; right: 12px; bottom: 8px; display: flex; justify-content: space-between;
+        font: 10.5px/14px var(--sans); color: rgba(240, 238, 233, 0.4); font-variant-numeric: tabular-nums;
+      }
+      .sr-o-foot b { font-weight: 500; color: rgba(240, 238, 233, 0.66); }
+
+      @media (prefers-reduced-motion: reduce) {
+        #sr-outline, #sr.open #sr-outline, .sr-o-layer, #sr.open .sr-o-layer, .sr-m, #sr-thumb { transition: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+
+    <header id="toolbar">
+      <button class="tb-tile" type="button" aria-label="File">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      </button>
+      <div class="doc-pod">
+        <span class="name">draft</span>
+        <span class="doc-mark"></span>
+        <span class="doc-folder">~/Projects/week-3</span>
+      </div>
+      <button class="tb-tile" type="button" aria-label="Export">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      </button>
+    </header>
+
+    <nav id="rail" aria-label="Tools">
+      <div class="rail-groups">
+        <button class="rb" type="button" aria-label="Headings"><span class="tico">H1</span></button>
+        <button class="rb" type="button" aria-label="Text style"><span class="tico"><b>B</b></span></button>
+        <button class="rb" type="button" aria-label="Lists"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="6" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="4" cy="18" r="1.2" fill="currentColor"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg></button>
+        <div class="rule"></div>
+        <button class="rb" type="button" aria-label="Insert figure"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></button>
+        <button class="rb" type="button" aria-label="Inline math"><span class="tico">Σ</span></button>
+        <button class="rb" type="button" aria-label="Footnote"><span class="tico">†</span></button>
+        <button class="rb" type="button" aria-label="Insert"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+        <div class="rule"></div>
+        <button class="rb" type="button" aria-label="Block quote"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="14.5" r="2.6" fill="currentColor" stroke="none"/><path d="M4.9 14.4C4.9 10.6 6.7 8.1 10.2 6.8"/><circle cx="16.5" cy="14.5" r="2.6" fill="currentColor" stroke="none"/><path d="M13.9 14.4C13.9 10.6 15.7 8.1 19.2 6.8"/></svg></button>
+        <button class="rb" type="button" aria-label="Solution"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="4" x2="5" y2="20" stroke="#d9433a" stroke-width="2.8"/><line x1="10" y1="8" x2="20" y2="8"/><line x1="10" y1="12" x2="20" y2="12"/><line x1="10" y1="16" x2="16" y2="16"/></svg></button>
+        <button class="rb" type="button" aria-label="Comment"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/></svg></button>
+        <button class="rb" type="button" aria-label="Paragraph" disabled><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="15" y2="18"/></svg></button>
+        <div class="rule"></div>
+        <button class="rb" type="button" aria-label="Extras"><span class="tico">⋯</span></button>
+      </div>
+      <div class="rail-foot">
+        <button class="rb" type="button" aria-label="Document settings"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></button>
+        <button class="rb" type="button" aria-label="Plain text view"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></button>
+      </div>
+    </nav>
+
+    <main id="scroll">
+      <div id="paper"><div id="stack"><div id="pages"></div></div></div>
+    </main>
+
+    <div id="hud"></div>
+
+    <!-- The scroll rail and its outline. -->
+    <nav id="sr" aria-label="Outline">
+      <div id="sr-outline">
+        <div class="sr-o-layer" id="sr-o-layer"></div>
+        <div class="sr-o-scrub" id="sr-o-scrub"></div>
+        <div class="sr-o-foot" id="sr-o-foot"></div>
+      </div>
+      <div id="sr-track" tabindex="0" role="scrollbar" aria-controls="scroll" aria-orientation="vertical"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="The document: hover for its outline">
+        <div id="sr-thumb"></div>
+      </div>
+    </nav>
+
+    <!-- The document, as a flow of blocks; the script lays it into pages. -->
+    <template id="flow">
+      <p class="ts-doctitle">Seasonal Demand and the Timing of Price Changes</p>
+      <p class="ts-docdate">Working draft, October 2026</p>
+      <div class="ts-abstract"><p>Using five years of weekly scanner data from 212 grocery stores, we show that the timing of regular price changes follows the seasonal cycle of demand: increases cluster in the weeks before demand peaks, and cuts follow its trough with a lag of about three weeks. A model with a fixed cost of repricing and predictable shifts in demand reproduces both patterns.</p></div>
+
+      <h2><span class="sec">1</span>Introduction</h2>
+      <p class="body">Most models of price setting treat the moment of a price change as a hazard that depends on how far the price has drifted from its target. That fits the frequency of adjustment well but says little about when in the year prices move. In retail food the calendar matters: demand rises and falls with the season, and stores know the cycle in advance.</p>
+      <p class="body">This paper documents how the timing of regular price changes lines up with predictable seasonal demand. We use weekly scanner data covering 212 stores in three regional chains from 2019 to 2023. Price increases are concentrated in the four weeks before a product's seasonal peak, while cuts arrive after the trough rather than at it.</p>
+      <p class="body">We interpret these facts through a model of state-dependent pricing with a known seasonal component of demand. Because the shift is anticipated, a firm facing a fixed cost of repricing prefers to raise its price ahead of the peak and to delay cuts until the loss from a high price covers the cost.</p>
+
+      <h2><span class="sec">2</span>Data</h2>
+      <p class="body">Our data come from the point-of-sale systems of three grocery chains operating in the same metropolitan region. Each record gives the weekly revenue and units sold for a product at a store, from which we compute a unit price.</p>
+      <h3><span class="sec">2.1</span>Sources</h3>
+      <p class="body">The sample covers 212 stores and 41,800 products observed weekly from January 2019 to December 2023. We keep products sold in at least 150 of the 260 weeks and in at least ten stores, which leaves 18,260 products and 87 percent of revenue.</p>
+      <h3><span class="sec">2.2</span>Measuring seasonality</h3>
+      <p class="body">For each product category we estimate a seasonal demand profile by regressing log units on week-of-year indicators, store fixed effects and a smooth trend. The profile has a clear peak and trough for 61 of the 74 categories; the other 13, mostly staples, serve as a comparison group.</p>
+      <p class="body">Figure 1 shows the profile for a representative seasonal category together with the share of products in that category whose regular price rises in each week. The two series are not aligned: across seasonal categories, increases lead the peak by 3.6 weeks on average, and cuts trail the trough by 2.9.</p>
+      <figure class="ts-figure" data-fig="1"><svg id="fig1" width="576" height="210" viewBox="0 0 576 210" aria-hidden="true"></svg><figcaption><span class="fig-num">Figure 1:</span> Seasonal demand index (line) and the share of regular prices raised each week (bars) for a representative category, averaged over 2019 to 2023.</figcaption></figure>
+
+      <h2><span class="sec">3</span>A model of timed adjustment</h2>
+      <h3><span class="sec">3.1</span>Demand</h3>
+      <p class="body">A store sells a product facing demand with a constant elasticity and a seasonal shifter known in advance. In week t, the quantity sold is</p>
+      <p class="eq"><i>log q</i><sub>t</sub> = α + <i>s</i><sub>t</sub> − ε <i>log p</i><sub>t</sub> + <i>u</i><sub>t</sub><span class="eqn">(1)</span></p>
+      <p class="body">where s is the seasonal profile estimated in Section 2.2, the elasticity ε exceeds one, and u is an idiosyncratic shock with persistence ρ. Marginal cost follows a random walk with drift, so the static optimal price rises over time and does not depend on the season.</p>
+      <h3><span class="sec">3.2</span>Price setting</h3>
+      <p class="body">Changing the price costs a fixed amount κ each time. The firm chooses when to reprice to maximise expected discounted profit. With a seasonal shifter in demand, the band of inaction around the optimal price is narrower when demand is high and wider when it is low.</p>
+      <p class="body">Two predictions follow. First, a firm whose price has drifted below target finds it worthwhile to close the gap just before demand rises, since the correction is then earned on the larger volumes of the peak. Second, a firm above target after the peak tolerates the gap through the trough and cuts once demand recovers.</p>
+
+      <h2><span class="sec">4</span>Results</h2>
+      <p class="body">We first report reduced-form estimates of how the timing of adjustment depends on the seasonal cycle, and then compare them with the model.</p>
+      <h3><span class="sec">4.1</span>Main estimates</h3>
+      <p class="body">Table 1 reports linear probability models of a regular price increase in a product-week. Column (1) includes only indicators for the weeks around the seasonal peak and trough; column (2) adds store and product fixed effects; column (3) adds the time since the product's last change.</p>
+      <div class="tbl" data-tbl="1">
+        <p class="cap"><span class="fig-num">Table 1:</span> Probability of a regular price increase, in percentage points.</p>
+        <table>
+          <thead><tr><th></th><th>(1)</th><th>(2)</th><th>(3)</th></tr></thead>
+          <tbody>
+            <tr><td>Four weeks before the peak</td><td>1.82</td><td>1.64</td><td>1.51</td></tr>
+            <tr class="se"><td></td><td>(0.21)</td><td>(0.19)</td><td>(0.18)</td></tr>
+            <tr><td>Four weeks after the peak</td><td>0.31</td><td>0.22</td><td>0.18</td></tr>
+            <tr class="se"><td></td><td>(0.17)</td><td>(0.16)</td><td>(0.15)</td></tr>
+            <tr><td>Weeks around the trough</td><td>−0.47</td><td>−0.41</td><td>−0.39</td></tr>
+            <tr class="se"><td></td><td>(0.14)</td><td>(0.13)</td><td>(0.13)</td></tr>
+            <tr class="sep"><td>Store and product effects</td><td>no</td><td>yes</td><td>yes</td></tr>
+            <tr><td>Time since last change</td><td>no</td><td>no</td><td>yes</td></tr>
+            <tr><td>Product-weeks (millions)</td><td>4.71</td><td>4.71</td><td>4.71</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="body">The probability of an increase is 1.5 to 1.8 percentage points higher in the four weeks before a peak than elsewhere in the year, against an unconditional weekly rate of 2.9 percent. After the peak the effect is small and cannot be told apart from zero. The pattern survives fixed effects and the age of the current price.</p>
+      <h3><span class="sec">4.2</span>Robustness</h3>
+      <p class="body">Non-seasonal categories provide a placebo. Assigning each of them the peak week of a randomly drawn seasonal category and repeating the analysis gives a lead of 0.2 weeks with a standard error of 0.4. Restricting the sample to the two chains that set prices centrally, or to the years before 2021, leaves the estimates within one standard error of the baseline.</p>
+
+      <h2><span class="sec">5</span>Conclusion</h2>
+      <p class="body">Stores time their regular price changes to the seasonal cycle of demand. Increases come before the peak and cuts after the trough, and a model with a fixed repricing cost and an anticipated seasonal shift accounts for both. The timing alone explains a sizeable part of the seasonal pattern in measured food inflation.</p>
+      <p class="body">Models of price setting used to read monthly inflation should let the value of adjusting vary with predictable demand.</p>
+
+      <h2>References</h2>
+      <p class="bib">Halvorsen, K., and P. Ibsen (2021). Menu costs and the calendar. <i>Journal of Retail Economics</i> 14(2), 101–128.</p>
+      <p class="bib">Marchetti, L. (2019). Sales, regular prices and the measurement of inflation. <i>Review of Price Dynamics</i> 7(1), 33–61.</p>
+      <p class="bib">Okafor, D., and R. Lindqvist (2022). Anticipated demand and the timing of adjustment. <i>Quarterly Notes in Applied Economics</i> 31(4), 412–439.</p>
+    </template>
+
+    <script>
+      'use strict';
+      const $ = (s, r = document) => r.querySelector(s);
+      const PAGE_W = 816, PAGE_H = 1056, GAP = 6; // Letter at 96 px/in; settings.ts PAGE_GAP
+      const MARGIN = 120, AREA_H = PAGE_H - 2 * MARGIN, LINE = 25; // 12.5pt × 1.5
+      const scroll = $('#scroll'), paper = $('#paper'), stack = $('#stack'), pagesEl = $('#pages');
+      const sr = $('#sr'), track = $('#sr-track'), thumb = $('#sr-thumb'), outline = $('#sr-outline');
+      const layer = $('#sr-o-layer'), scrubEl = $('#sr-o-scrub'), footEl = $('#sr-o-foot');
+      const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      let scale = 1, stackH = 0, nPages = 0, words = 0;
+
+      /* ================= the mockup's document ================= */
+
+      // Figure 1, drawn from two made-up seasonal curves.
+      function drawFigure() {
+        const svg = document.getElementById('fig1');
+        if (!svg) return;
+        const W = 576, H = 210, L = 36, R = 34, T = 10, B = 26, iw = W - L - R, ih = H - T - B;
+        const x = (w) => L + ((w - 0.5) / 52) * iw;
+        const dem = (w) => 100 + 15 * Math.cos((2 * Math.PI * (w - 47)) / 52) + 5 * Math.cos((4 * Math.PI * (w - 47)) / 52 + 0.7);
+        const yd = (v) => T + ((126 - v) / 52) * ih;
+        const noise = (w) => ((Math.sin(w * 12.9898) * 43758.5453) % 1 + 1) % 1;
+        const share = (w) => 1.4 + 4.6 * Math.exp(-((w - 43) ** 2) / 9) + 1.1 * Math.exp(-((w - 6) ** 2) / 12) + 0.7 * (noise(w) - 0.5);
+        const yb = (v) => T + ih - (v / 8) * ih * 0.62;
+        let s = '';
+        for (let w = 1; w <= 52; w++) {
+          const v = Math.max(0.2, share(w));
+          s += `<rect x="${(x(w) - 3.2).toFixed(1)}" y="${yb(v).toFixed(1)}" width="6.4" height="${(T + ih - yb(v)).toFixed(1)}" fill="#cfccc5"/>`;
+        }
+        let d = '';
+        for (let w = 1; w <= 52; w += 0.5) d += `${w === 1 ? 'M' : 'L'}${x(w).toFixed(1)} ${yd(dem(w)).toFixed(1)}`;
+        s += `<path d="${d}" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>`;
+        s += `<line x1="${x(47)}" x2="${x(47)}" y1="${T}" y2="${T + ih}" stroke="#1a1a1a" stroke-width="0.7" stroke-dasharray="3 3"/>`;
+        s += `<text x="${x(47) + 4}" y="${T + 11}" font-size="11" font-style="italic">peak</text>`;
+        s += `<line x1="${L}" x2="${L + iw}" y1="${T + ih}" y2="${T + ih}" stroke="#1a1a1a" stroke-width="0.8"/>`;
+        s += `<line x1="${L}" x2="${L}" y1="${T}" y2="${T + ih}" stroke="#1a1a1a" stroke-width="0.8"/>`;
+        s += `<line x1="${L + iw}" x2="${L + iw}" y1="${T}" y2="${T + ih}" stroke="#1a1a1a" stroke-width="0.8"/>`;
+        'JFMAMJJASOND'.split('').forEach((m, i) => {
+          s += `<text x="${x(i * 4.33 + 2.6).toFixed(1)}" y="${H - 8}" font-size="11" text-anchor="middle">${m}</text>`;
+        });
+        [80, 100, 120].forEach((v) => {
+          s += `<line x1="${L - 4}" x2="${L}" y1="${yd(v)}" y2="${yd(v)}" stroke="#1a1a1a" stroke-width="0.8"/><text x="${L - 7}" y="${yd(v) + 4}" font-size="11" text-anchor="end">${v}</text>`;
+        });
+        [0, 4, 8].forEach((v) => {
+          s += `<line x1="${L + iw}" x2="${L + iw + 4}" y1="${yb(v)}" y2="${yb(v)}" stroke="#1a1a1a" stroke-width="0.8"/><text x="${L + iw + 7}" y="${yb(v) + 4}" font-size="11">${v}%</text>`;
+        });
+        svg.setAttribute('font-family', getComputedStyle(document.documentElement).getPropertyValue('--doc-font'));
+        svg.innerHTML = s;
+      }
+
+      // A small paginator, standing in for Plass's layout: blocks fill a
+      // page's text area; a paragraph that runs over is split between two
+      // words (two lines at least on each side), anything else goes over
+      // whole, and a heading never ends a page.
+      function newPage(i) {
+        const box = document.createElement('div');
+        box.className = 'page-box';
+        box.style.top = i * (PAGE_H + GAP) + 'px';
+        box.innerHTML = `<div class="page-body"></div><div class="page-num">${i + 1}</div>`;
+        pagesEl.append(box);
+        return box.firstElementChild;
+      }
+      const bottomOf = (body) => { const l = body.lastElementChild; return l ? l.offsetTop + l.offsetHeight : 0; };
+      const isHead = (el) => /^H\d$/.test(el.tagName);
+      function split(body, p) {
+        const ws = p.textContent.trim().split(/\s+/);
+        let lo = 0, hi = ws.length;
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1;
+          p.textContent = ws.slice(0, mid).join(' ');
+          if (bottomOf(body) <= AREA_H) lo = mid; else hi = mid - 1;
+        }
+        // no line alone at the top of the next page: give it a second one
+        if (ws.length - lo < 18) lo = ws.length - 18;
+        p.textContent = ws.slice(0, Math.max(0, lo)).join(' ');
+        const lines = Math.round(p.offsetHeight / LINE);
+        if (lo <= 0 || lines < 2) { p.textContent = ws.join(' '); return null; }
+        p.classList.add('split');
+        const tail = document.createElement('p');
+        tail.className = 'body cont';
+        tail.textContent = ws.slice(lo).join(' ');
+        return tail;
+      }
+      function paginate() {
+        const queue = [...$('#flow').content.children].map((n) => n.cloneNode(true));
+        let n = 0, body = newPage(n++);
+        while (queue.length) {
+          const b = queue.shift();
+          body.append(b);
+          if (b.querySelector('#fig1')) drawFigure();
+          if (bottomOf(body) + (isHead(b) ? 3 * LINE : 0) <= AREA_H) continue;
+          if (b.matches('p.body')) {
+            const tail = split(body, b);
+            if (tail) { queue.unshift(tail); body = newPage(n++); continue; }
+          }
+          b.remove();
+          const prev = body.lastElementChild;
+          const carry = prev && isHead(prev) ? [prev] : [];
+          carry.forEach((c) => c.remove());
+          queue.unshift(...carry, b);
+          body = newPage(n++);
+        }
+        nPages = n;
+        stackH = n * PAGE_H + (n - 1) * GAP;
+        stack.style.height = stackH + 'px';
+        words = stack.innerText.split(/\s+/).filter((w) => /[\w\d]/.test(w)).length;
+        $('#hud').textContent = `${nPages} p · ${words} words`;
+      }
+
+      // The caret: one, placed in 2.2 to start; a click in the text moves it.
+      const caretEl = document.createElement('span');
+      caretEl.className = 'caret';
+      function placeCaretAt(text, after) {
+        const walker = document.createTreeWalker(stack, NodeFilter.SHOW_TEXT);
+        for (let t; (t = walker.nextNode()); ) {
+          const i = t.data.indexOf(text);
+          if (i >= 0) { const r = document.createRange(); r.setStart(t, i + after); r.insertNode(caretEl); return; }
+        }
+      }
+
+      /* ================= the panel: Plass's paper-scale.ts, in brief ================= */
+
+      // The page fills the panel's width by a transform, never by a
+      // re-flow; the clip box round it has the drawn height, so the panel
+      // scrolls exactly the drawn pages. The line at the panel's top stays
+      // where it was across a resize.
+      function fit() {
+        const atTop = scroll.scrollTop / scale;
+        scale = scroll.clientWidth / PAGE_W;
+        stack.style.transform = `scale(${scale})`;
+        paper.style.height = stackH * scale + 'px';
+        scroll.scrollTop = atTop * scale;
+        syncRail();
+        if (open) layoutOutline();
+      }
+
+      /* ================= the scroll rail ================= */
+
+      // The marks, in the stack's own CSS px (the layout's coordinates, the
+      // same at every window width). In Plass they come from the layout's
+      // page list and the heading, figure and table nodes after each pass
+      // (the typeset plugin knows every block's place already); here they
+      // are read off this mockup's DOM. Each is kept as a fraction of the
+      // document's height: the rail is the whole document, top to bottom.
+      let marks = [], heads = [], breaks = [], caretMark = null;
+      function stackY(el) { let y = 0; for (let e = el; e && e !== stack; e = e.offsetParent) y += e.offsetTop; return y; }
+      function collect() {
+        marks = []; heads = []; breaks = [];
+        for (let i = 1; i < nPages; i++) {
+          const m = { kind: 'break', y: i * (PAGE_H + GAP) - GAP / 2, page: i + 1 };
+          marks.push(m); breaks.push(m);
+        }
+        stack.querySelectorAll('.ts-doctitle, h2, h3, figure, .tbl').forEach((el, i) => {
+          const top = stackY(el);
+          const pad = parseFloat(getComputedStyle(el).paddingTop) || 0;
+          let m;
+          if (el.matches('.ts-doctitle')) m = { kind: 'title', text: el.textContent, num: '' };
+          else if (isHead(el)) {
+            const sec = el.querySelector('.sec');
+            m = { kind: el.tagName.toLowerCase(), num: sec ? sec.textContent : '', text: el.textContent.slice(sec ? sec.textContent.length : 0) };
+          } else {
+            const cap = el.querySelector('figcaption, .cap');
+            const lab = cap.querySelector('.fig-num').textContent.replace(':', '');
+            const rest = cap.textContent.slice(cap.querySelector('.fig-num').textContent.length).trim();
+            m = { kind: 'float', num: lab, text: rest };
+          }
+          m.el = el;
+          m.go = top + pad; // where a jump puts the panel's top (less some air)
+          m.y = m.kind === 'float' ? top + el.offsetHeight / 2 : top + pad + 0.6 * LINE; // the mark: a heading's line, a float's middle
+          m.page = Math.floor(m.y / (PAGE_H + GAP)) + 1;
+          m.id = 'm' + i;
+          marks.push(m);
+          if (m.kind !== 'float') heads.push(m);
+        });
+        caretMark = { kind: 'caret', y: 0 };
+        marks.push(caretMark);
+        measureCaret();
+      }
+      function measureCaret() {
+        if (!caretEl.isConnected) return;
+        // an inline-block's offsetTop inside its paragraph is its line's top
+        caretMark.y = stackY(caretEl) + LINE / 2;
+        if (caretMark.node) caretMark.node.style.setProperty('--f', (caretMark.y / stackH).toFixed(5));
+      }
+      function drawMarks() {
+        track.querySelectorAll('.sr-m').forEach((n) => n.remove());
+        // breaks first, so a heading's dot is drawn over a break's hairline
+        const order = [...marks].sort((a, b) => (a.kind === 'break' ? -1 : 0) - (b.kind === 'break' ? -1 : 0));
+        for (const m of order) {
+          const n = document.createElement('i');
+          n.className = 'sr-m sr-' + m.kind;
+          n.style.setProperty('--f', (m.y / stackH).toFixed(5));
+          m.node = n;
+          track.append(n);
+        }
+      }
+
+      // Where the panel is: the thumb and, while open, the band; which
+      // marks are in view; the current heading. One rAF per scroll; reads
+      // three numbers off the panel, writes two transforms and a handful
+      // of classes. A resize changes the track's height only: the marks
+      // follow by CSS, the thumb by this.
+      let cur = null, rafId = 0;
+      function syncRail() {
+        rafId = 0;
+        const H = track.clientHeight, sh = scroll.scrollHeight, ch = scroll.clientHeight, st = scroll.scrollTop;
+        const t = (st / sh) * H, h = Math.max(14, (ch / sh) * H);
+        thumb.style.transform = `translateY(${t.toFixed(2)}px)`;
+        thumb.style.height = h.toFixed(2) + 'px';
+        track.setAttribute('aria-valuenow', Math.round((st / Math.max(1, sh - ch)) * 100));
+        const top = st / scale, bottom = (st + ch) / scale, reading = top + (0.25 * ch) / scale;
+        for (const m of marks) if (m.node) m.node.classList.toggle('in', m.y >= top && m.y <= bottom);
+        // the current heading: the last one above the reading line, or the
+        // last one in view once the paper is at its end
+        let c = heads[0];
+        const atEnd = st + ch >= sh - 2;
+        for (const m of heads) if (m.y <= (atEnd ? bottom : reading)) c = m;
+        if (c !== cur) {
+          if (cur) { cur.node.classList.remove('cur'); cur.row && cur.row.classList.remove('cur'); }
+          cur = c;
+          cur.node.classList.add('cur');
+          if (cur.row) cur.row.classList.add('cur');
+          if (open) drawLeaders();
+        }
+        if (open) {
+          band.style.transform = `translateY(${(off + t).toFixed(2)}px)`;
+          band.style.height = h.toFixed(2) + 'px';
+          const page = Math.min(nPages, Math.floor(reading / (PAGE_H + GAP)) + 1);
+          layer.querySelectorAll('.sr-o-pg').forEach((n) => n.classList.toggle('cur', +n.dataset.page === page));
+          footEl.innerHTML = `<span>Page <b>${page}</b> of ${nPages}</span><span>${words.toLocaleString('en-US')} words</span>`;
+        }
+      }
+      const queueSync = () => { if (!rafId) rafId = requestAnimationFrame(syncRail); };
+      let liveTimer = 0;
+      scroll.addEventListener('scroll', () => {
+        queueSync();
+        sr.classList.add('live');
+        clearTimeout(liveTimer);
+        liveTimer = setTimeout(() => sr.classList.remove('live'), 900);
+      }, { passive: true });
+
+      /* ---------- the outline ---------- */
+
+      // Built when it opens and when the window resizes while it is open,
+      // never while the paper scrolls: a scroll moves the band and the
+      // lit row, nothing else.
+      let open = false, off = 0, band = null, rows = [];
+      const ROW_H = { title: 20, h2: 18, h3: 16, float: 14 };
+      const IND = { title: 30, h2: 30, h3: 44, float: 44 };
+
+      // Heading names sit at their marks' heights; where two would
+      // overlap they part around their common middle (a cluster is placed
+      // so its labels' displacements sum to zero, clusters that then touch
+      // merge), within the glass's height. Each keeps a leader to its own
+      // dot, so a name moved off its height still points at it.
+      function dodge(items, gap, lo, hi) {
+        const make = (its) => {
+          let o = 0; const offs = [];
+          for (const it of its) { offs.push(o + it.h / 2); o += it.h + gap; }
+          const h = o - gap;
+          let top = 0; its.forEach((it, k) => (top += it.want - offs[k]));
+          top = Math.min(Math.max(top / its.length, lo), hi - h);
+          return { its, offs, h, top };
+        };
+        let cl = items.map((it) => make([it]));
+        for (let again = true, guard = 0; again && guard < 200; guard++) {
+          again = false;
+          for (let i = 0; i < cl.length - 1; i++) {
+            if (cl[i].top + cl[i].h + gap > cl[i + 1].top) {
+              cl.splice(i, 2, make(cl[i].its.concat(cl[i + 1].its)));
+              again = true;
+              break;
+            }
+          }
+        }
+        for (const c of cl) c.its.forEach((it, k) => (it.y = c.top + c.offs[k]));
+      }
+
+      function layoutOutline() {
+        const H = track.clientHeight;
+        off = track.getBoundingClientRect().top - outline.getBoundingClientRect().top - outline.clientTop;
+        const innerH = outline.clientHeight;
+        for (const m of marks) m.row = null;
+        let html = `<div class="sr-o-band" id="sr-o-band"></div>`;
+        html += `<div class="sr-o-pg" data-page="1" style="top:${(off - 4).toFixed(1)}px">1</div>`;
+        for (const b of breaks) {
+          const y = off + (b.y / stackH) * H;
+          html += `<div class="sr-o-break" style="top:${y.toFixed(1)}px"></div><div class="sr-o-pg" data-page="${b.page}" style="top:${(y + 3).toFixed(1)}px">${b.page}</div>`;
+        }
+        html += `<svg class="sr-o-lead" id="sr-o-lead"></svg>`;
+        // headings first, every one of them; the figures and tables after,
+        // only where a gap between headings is free for them
+        const items = heads.map((m) => ({ m, want: (m.y / stackH) * H, h: ROW_H[m.kind] }));
+        dodge(items, 2, -off + 4, innerH - off - 28);
+        const placed = items.map((it) => [it.y - it.h / 2 - 1, it.y + it.h / 2 + 1]);
+        const floats = [];
+        for (const m of marks.filter((x) => x.kind === 'float')) {
+          const want = (m.y / stackH) * H, h = ROW_H.float;
+          for (const d of [0, 5, -5, 10, -10, 15, -15]) {
+            const y = want + d;
+            if (placed.every(([a, b]) => y + h / 2 < a || y - h / 2 > b)) {
+              floats.push({ m, want, h, y });
+              placed.push([y - h / 2 - 1, y + h / 2 + 1]);
+              break;
+            }
+          }
+        }
+        rows = [...items, ...floats];
+        for (const it of rows) {
+          const m = it.m;
+          html += `<button type="button" tabindex="-1" class="sr-o-row k-${m.kind}${m === cur ? ' cur' : ''}${m === hov ? ' hov' : ''}" data-id="${m.id}"
+            style="--ind:${IND[m.kind]}px;top:${(off + it.y - it.h / 2).toFixed(1)}px"><span class="lab">${m.num ? `<span class="n">${m.num}</span>` : ''}<span class="t">${m.text}</span></span></button>`;
+        }
+        layer.innerHTML = html;
+        band = $('#sr-o-band', layer);
+        if (handY !== null) { scrubEl.style.transform = `translateY(${(off + handY).toFixed(1)}px)`; sr.classList.toggle('scrubbing', !hov); }
+        for (const it of rows) { it.m.row = layer.querySelector(`[data-id="${it.m.id}"]`); it.m.labelY = it.y; }
+        drawLeaders();
+        syncRail();
+      }
+
+      // Dotted leaders, a table of contents' own, from the end of each name
+      // to its dot on the rail; one elbow where the name was moved off its
+      // dot's height.
+      function drawLeaders() {
+        const svg = $('#sr-o-lead', layer);
+        if (!svg) return;
+        const W = outline.clientWidth, x1 = W - 8 - 6, H = track.clientHeight;
+        let p = '';
+        for (const it of rows) {
+          const m = it.m, lab = m.row.querySelector('.lab');
+          const x0 = m.row.offsetLeft + lab.offsetLeft + lab.offsetWidth + 6;
+          const y0 = off + it.y + 0.5, y1 = off + (m.y / stackH) * H + 0.5;
+          const elbow = Math.abs(y1 - y0) > 1.5 ? ` L${(x1 - 9).toFixed(1)} ${y0.toFixed(1)} L${x1} ${y1.toFixed(1)}` : ` L${x1} ${y0.toFixed(1)}`;
+          if (x0 > x1 - 12) continue;
+          const cls = [m.kind === 'float' ? 'f' : '', m === cur ? 'cur' : '', m === hov ? 'hov' : ''].join(' ');
+          p += `<path class="${cls}" d="M${x0.toFixed(1)} ${y0.toFixed(1)}${elbow}"/>`;
+        }
+        svg.innerHTML = p;
+      }
+
+      let openTimer = 0, closeTimer = 0;
+      function openOutline() {
+        clearTimeout(closeTimer);
+        if (open) return;
+        open = true;
+        sr.classList.add('open');
+        layoutOutline();
+      }
+      function closeOutline() {
+        clearTimeout(openTimer);
+        if (!open) return;
+        open = false;
+        sr.classList.remove('open', 'scrubbing');
+        setHover(null);
+        kbd = -1;
+      }
+
+      // Hover: over a row, that row; over the rail, the nearest heading or
+      // float within 7 px of the hand. The row and its dot light together.
+      let hov = null;
+      function setHover(m) {
+        if (m === hov) return;
+        if (hov) { hov.node && hov.node.classList.remove('hov'); hov.row && hov.row.classList.remove('hov'); }
+        hov = m;
+        if (hov) { hov.node && hov.node.classList.add('hov'); hov.row && hov.row.classList.add('hov'); }
+        if (open) drawLeaders();
+      }
+      function nearest(yRail, within) {
+        const H = track.clientHeight;
+        let best = null, d = within;
+        for (const m of marks) {
+          if (m.kind === 'break' || m.kind === 'caret') continue;
+          const dm = Math.abs((m.y / stackH) * H - yRail);
+          if (dm <= d) { d = dm; best = m; }
+        }
+        return best;
+      }
+      const railY = (e) => e.clientY - track.getBoundingClientRect().top;
+
+      // Going somewhere. A mark: its heading's line comes to 40 px under
+      // the panel's top. A place: it comes to the panel's middle (the
+      // history strip's rule). A drag goes at once; a click glides.
+      function goToMark(m) {
+        const top = m.kind === 'float' ? m.y * scale - scroll.clientHeight / 2 : m.go * scale - 40;
+        scroll.scrollTo({ top, behavior: reduce ? 'auto' : 'smooth' });
+      }
+      function goToPlace(yRail, smooth) {
+        const f = Math.min(1, Math.max(0, yRail / track.clientHeight));
+        scroll.scrollTo({ top: f * scroll.scrollHeight - scroll.clientHeight / 2, behavior: smooth && !reduce ? 'smooth' : 'auto' });
+      }
+
+      // The hand. Hovering the rail opens the outline after 120 ms (a hand
+      // on its way past the panel's edge does not); leaving the rail and
+      // the outline folds it after 260 ms, unless the hand comes back.
+      track.addEventListener('pointerenter', () => { clearTimeout(closeTimer); openTimer = setTimeout(openOutline, 120); });
+      sr.addEventListener('pointerenter', () => clearTimeout(closeTimer));
+      sr.addEventListener('pointerleave', () => {
+        clearTimeout(openTimer);
+        handY = null;
+        sr.classList.remove('scrubbing');
+        if (!drag) closeTimer = setTimeout(closeOutline, 260);
+      });
+      let drag = null, handY = null;
+      sr.addEventListener('pointermove', (e) => {
+        const y = railY(e);
+        handY = y;
+        if (open) scrubEl.style.transform = `translateY(${(off + y).toFixed(1)}px)`;
+        if (drag) {
+          if (Math.abs(e.clientY - drag.y0) > 3) drag.moved = true;
+          if (drag.moved) { goToPlace(y, false); setHover(null); }
+        } else {
+          const row = e.target.closest && e.target.closest('.sr-o-row');
+          setHover(row ? rows.find((it) => it.m.row === row).m : e.target.closest('#sr-track') ? nearest(y, 7) : null);
+        }
+        // The line shows where a click lands when it lands on a place, and
+        // where the paper is while it is dragged; over a name the lit row
+        // says where a click goes, and a line through it would strike it.
+        sr.classList.toggle('scrubbing', open && (drag ? drag.moved : !hov));
+      });
+      sr.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault(); // the editor keeps its selection and focus
+        drag = { y0: e.clientY, moved: false, row: e.target.closest('.sr-o-row'), onTrack: !!e.target.closest('#sr-track') };
+        sr.setPointerCapture(e.pointerId);
+      });
+      sr.addEventListener('pointerup', (e) => {
+        if (!drag) return;
+        const d = drag;
+        drag = null;
+        sr.releasePointerCapture(e.pointerId);
+        if (!d.moved) {
+          const y = railY(e);
+          const m = d.row ? rows.find((it) => it.m.row === d.row).m : d.onTrack ? nearest(y, 7) : null;
+          if (m) goToMark(m); else goToPlace(y, true);
+        }
+        // released outside: fold, as a leave would have
+        const r = outline.getBoundingClientRect(), t = track.getBoundingClientRect();
+        const inside = (b) => e.clientX >= b.left && e.clientX <= b.right && e.clientY >= b.top && e.clientY <= b.bottom;
+        if (!inside(t) && !(open && inside(r))) closeTimer = setTimeout(closeOutline, 260);
+      });
+      // The wheel over the rail or the outline scrolls the paper, as it
+      // would anywhere else over the panel (they are not in its scroll).
+      sr.addEventListener('wheel', (e) => { e.preventDefault(); scroll.scrollTop += e.deltaY; }, { passive: false });
+
+      // The keyboard: Tab reaches the rail and opens the outline; ↑ ↓
+      // walk the headings, Return goes, Page Up and Down go a screen,
+      // Escape folds it and hands back the paper.
+      let kbd = -1;
+      track.addEventListener('focus', () => { if (!track.matches(':focus-visible')) return; openOutline(); });
+      track.addEventListener('blur', () => { if (!sr.matches(':hover')) closeOutline(); });
+      track.addEventListener('keydown', (e) => {
+        const list = rows.filter((it) => it.m.kind !== 'float').map((it) => it.m);
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          openOutline();
+          if (kbd < 0) kbd = Math.max(0, list.indexOf(cur));
+          else kbd = Math.min(list.length - 1, Math.max(0, kbd + (e.key === 'ArrowDown' ? 1 : -1)));
+          layer.querySelectorAll('.kbd').forEach((n) => n.classList.remove('kbd'));
+          list[kbd].row.classList.add('kbd');
+        } else if (e.key === 'Enter' && kbd >= 0) {
+          e.preventDefault(); goToMark(list[kbd]);
+        } else if (e.key === 'PageDown' || e.key === 'PageUp') {
+          e.preventDefault(); scroll.scrollBy({ top: (e.key === 'PageDown' ? 1 : -1) * scroll.clientHeight * 0.9, behavior: reduce ? 'auto' : 'smooth' });
+        } else if (e.key === 'Home' || e.key === 'End') {
+          e.preventDefault(); scroll.scrollTo({ top: e.key === 'Home' ? 0 : scroll.scrollHeight, behavior: reduce ? 'auto' : 'smooth' });
+        } else if (e.key === 'Escape') {
+          closeOutline(); track.blur();
+        }
+      });
+
+      // A click in the text moves the caret, and the rail's tick with it.
+      stack.addEventListener('click', (e) => {
+        const r = document.caretRangeFromPoint && document.caretRangeFromPoint(e.clientX, e.clientY);
+        if (!r || !r.startContainer.parentElement || !r.startContainer.parentElement.closest('.page-body')) return;
+        caretEl.remove();
+        r.insertNode(caretEl);
+        measureCaret();
+      });
+
+      /* ================= start ================= */
+      document.fonts.ready.then(() => {
+        paginate();
+        placeCaretAt('The two series are not aligned', 30);
+        collect();
+        drawMarks();
+        new ResizeObserver(fit).observe(scroll);
+        fit();
+        // for the record's screenshots and for poking at it from the console
+        window.__rail = { marks, heads, open: openOutline, close: closeOutline, scroll, track, stackH: () => stackH, scale: () => scale };
+        document.documentElement.dataset.ready = '1';
+      });
+    </script>
+  </body>
+</html>

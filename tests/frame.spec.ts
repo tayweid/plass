@@ -8,7 +8,12 @@ import { settleLocal } from './settle';
 // stays, no pagination pass runs — and a page laid out in a window of any
 // width is the same page. The zoom step (the shell scales the window) is
 // driven in the shell by app/smoke.mjs; a browser tab cannot zoom from
-// Playwright. The bar is Knuth's (knuth/src/main.ts and styles.css).
+// Playwright. The bar is Knuth's (knuth/src/main.ts and styles.css). A
+// paper that runs past the panel (any Letter page here, one sheet or
+// many) has the scroll rail's 20 px gutter at the window's right
+// (src/scroll-rail.ts, tests/rail.spec.ts), so the panel is the window
+// less 64 px and the page is drawn at (W − 64) / 816; a paper that fits
+// the panel keeps the 8 px edge, W − 52.
 
 type Hooks = {
   __fm: {
@@ -31,6 +36,8 @@ const PAGE_W = 816;
 /** The rail and the frame's edge: the panel is the window less these. */
 const RAIL = 44;
 const EDGE = 8;
+/** The frame at the panel's right while the scroll rail is there. */
+const GUTTER = 20;
 
 async function openTyp(page: Page, text: string, name = 'frame.typ') {
   await page.goto('/?new=1');
@@ -59,6 +66,7 @@ const drawing = (page: Page) =>
     };
     return {
       window: { width: innerWidth, height: innerHeight },
+      gutter: document.documentElement.classList.contains('has-rail'),
       panel: { ...box(panel), clientWidth: panel.clientWidth, scrollWidth: panel.scrollWidth, scrollHeight: panel.scrollHeight, scrollTop: panel.scrollTop },
       clip: box(clip),
       stack: { ...box(stack), laidWidth: stack.offsetWidth, laidHeight: stack.offsetHeight, transform: stack.style.transform },
@@ -74,8 +82,9 @@ type Drawing = Awaited<ReturnType<typeof drawing>>;
 
 /** The page meets the panel edge to edge, drawn at panel width / 816. */
 function expectFilled(d: Drawing) {
-  const scale = (d.window.width - RAIL - EDGE) / PAGE_W;
-  expect(d.panel.width).toBe(d.window.width - RAIL - EDGE);
+  const right = d.gutter ? GUTTER : EDGE;
+  const scale = (d.window.width - RAIL - right) / PAGE_W;
+  expect(d.panel.width).toBe(d.window.width - RAIL - right);
   expect(d.stack.laidWidth).toBe(PAGE_W);
   expect(d.stack.width / d.stack.laidWidth).toBeCloseTo(scale, 6);
   expect(parseFloat(d.stack.transform.replace(/^scale\(/, ''))).toBeCloseTo(scale, 5);
@@ -99,6 +108,7 @@ test('the paper is the panel: the pages fill its width by scaling, and a resize 
   });
   const before = await drawing(page);
   expect(before.pages).toBeGreaterThan(2);
+  expect(before.gutter).toBe(true);
   expectFilled(before);
   const place = (d: Drawing) => d.panel.scrollTop / d.clip.height;
 
@@ -106,9 +116,10 @@ test('the paper is the panel: the pages fill its width by scaling, and a resize 
   // layout drawn at each panel's width, and not one pass.
   for (const size of [{ width: 1500, height: 900 }, { width: 740, height: 600 }, { width: 1100, height: 800 }]) {
     await page.setViewportSize(size);
-    await expect.poll(() => page.evaluate(() => document.getElementById('scroll')!.clientWidth)).toBe(size.width - RAIL - EDGE);
+    await expect.poll(() => page.evaluate(() => document.getElementById('scroll')!.clientWidth)).toBe(size.width - RAIL - GUTTER);
     await page.waitForTimeout(500);
     const after = await drawing(page);
+    expect(after.gutter).toBe(true);
     expectFilled(after);
     expect(after.passes).toBe(before.passes);
     expect(after.breaks).toBe(before.breaks);
@@ -178,11 +189,12 @@ async function richDocument(page: Page) {
 
 test('the layout is the same at any width: a page drawn larger or smaller is laid out at its own size', async ({ page }) => {
   test.setTimeout(180_000);
-  // 868 px draws the page at 1:1 (the panel is 816 px wide); 1500 at 1.77
-  // and 740 (the app's least width) at 0.84. Each loads afresh, so every
-  // read the layout makes is made at that scale.
+  // 880 px draws this paper at 1:1 (it runs past the panel, so the
+  // rail's gutter is there and the panel is 816 px wide); 1500 at 1.76 and
+  // 740 (the app's least width) at 0.83. Each loads afresh, so every read
+  // the layout makes is made at that scale.
   const signatures: Array<{ width: number; signature: Awaited<ReturnType<typeof layoutSignature>> }> = [];
-  for (const width of [868, 1500, 740]) {
+  for (const width of [880, 1500, 740]) {
     await page.setViewportSize({ width, height: 800 });
     await richDocument(page);
     signatures.push({ width, signature: await layoutSignature(page) });
@@ -239,8 +251,8 @@ test('the frame is Zen\'s: a dark edge all round one panel of paper, its sheets 
   // with no white or shadow of its own: the sheets are the white, edge to
   // edge, each rounded 12 px on the screen at its corners, the shadow on
   // the frame is the paper's (the next test), and between the sheets a
-  // thin line of the frame (6 CSS px drawn at the panel's scale: 7.7 px
-  // here).
+  // thin line of the frame (6 CSS px drawn at the panel's scale: 7.6 px
+  // here, with the scroll rail's gutter).
   expect(look.frame).toBe('rgb(24, 24, 26)');
   expect(look.panelBackground).toBe('rgba(0, 0, 0, 0)');
   expect(look.radius).toBe('0px');
@@ -249,20 +261,22 @@ test('the frame is Zen\'s: a dark edge all round one panel of paper, its sheets 
   expect(look.sheet).toMatchObject({ background: 'rgb(255, 255, 255)', shadow: 'none' });
   expect(look.sheet.radius).toBeCloseTo(12, 3);
   expect(look.gapColour).toBe('rgb(24, 24, 26)');
-  expect(look.gap).toBeCloseTo((6 * (1100 - RAIL - EDGE)) / PAGE_W, 3);
+  expect(look.gap).toBeCloseTo((6 * (1100 - RAIL - GUTTER)) / PAGE_W, 3);
   // The bar spans the whole window (it is the window's title bar in
   // Plass.app); the rail runs under it down the left edge, as narrow as
   // Zen's: 32 px tiles with 6 px either side, 44 px, the bar's height
   // (knuth c6875a4). The panel starts where they end and keeps the
-  // frame's 8 px to the window's right and bottom edges: Knuth's room, to
-  // the pixel.
+  // frame's 8 px to the window's bottom edge; at its right, while the
+  // paper runs past it, the frame is the scroll rail's 20 px gutter (a
+  // paper that fits the panel keeps 8 px there too, Knuth's room's box;
+  // rail.spec).
   expect(look.barLeft).toBe(0);
   expect(look.barRight).toBe(look.width);
   expect(look.rail).toEqual({ left: 0, top: look.barBottom, right: look.panel.left, bottom: look.height });
   expect(look.tile).toEqual({ left: 6, width: 32, height: 32 });
   expect(look.rail.right).toBe(44);
   expect(look.barBottom).toBe(44);
-  expect(look.panel).toEqual({ left: 44, top: look.barBottom, right: look.width - 8, bottom: look.height - 8 });
+  expect(look.panel).toEqual({ left: 44, top: look.barBottom, right: look.width - GUTTER, bottom: look.height - 8 });
   // The page count and words: a quiet chip inside the panel's corner.
   expect(look.hud.right).toBe(look.panel.right - 10);
   expect(look.hud.bottom).toBe(look.panel.bottom - 10);
@@ -425,28 +439,34 @@ test('the paper\'s corners are rounded only where they are a sheet\'s, and the s
   expect(c.shadow.top).toEqual([12, 0]);
   expect(c.shadow.bottom[1]).toBeGreaterThan(11.5);
 
-  // Scrolling writes nothing but the shadow's variables, and lays nothing
-  // out: no pass, no attribute or node of the page touched but the
-  // shadow's style.
+  // Scrolling writes nothing but the shadow's variables and the scroll
+  // rail's (the band's two fractions, the class that lights it while the
+  // paper moves, and the class on a mark or gap the band passes), and lays
+  // nothing out: no pass, no attribute or node of the page touched but
+  // those.
   const passes = await page.evaluate(() => (window as unknown as Hooks).__pagCount());
   await page.evaluate(() => {
     const w = window as unknown as { __touched: string[] };
     w.__touched = [];
     new MutationObserver((records) => {
-      for (const r of records) w.__touched.push(`${(r.target as Element).id || (r.target as Element).nodeName}:${r.type}:${r.attributeName ?? ''}`);
+      for (const r of records) {
+        const el = r.target as Element;
+        w.__touched.push(`${el.closest?.('#scrollrail') ? 'scrollrail' : el.id || el.nodeName}:${r.type}:${r.attributeName ?? ''}`);
+      }
     }).observe(document.body, { subtree: true, attributes: true, childList: true, characterData: true });
   });
   await page.mouse.move(600, 400);
   for (let i = 0; i < 30; i++) await page.mouse.wheel(0, -180);
   await settled();
   const touched = await page.evaluate(() => [...new Set((window as unknown as { __touched: string[] }).__touched)]);
-  expect(touched.filter((t) => t !== 'paper-shadow:attributes:style')).toEqual([]);
+  expect(touched.filter((t) => !['paper-shadow:attributes:style', 'scrollrail:attributes:style', 'scrollrail:attributes:class'].includes(t))).toEqual([]);
   expect(await page.evaluate(() => (window as unknown as Hooks).__pagCount())).toBe(passes);
 
-  // Wider (1.77×) and at 1:1: the same 12 px on the screen, the same rule.
-  for (const size of [{ width: 1500, height: 900 }, { width: 868, height: 720 }]) {
+  // Wider (1.76×) and at 880 (1:1 with the scroll rail's gutter): the
+  // same 12 px on the screen, the same rule.
+  for (const size of [{ width: 1500, height: 900 }, { width: 880, height: 720 }]) {
     await page.setViewportSize(size);
-    await expect.poll(() => page.evaluate(() => document.getElementById('scroll')!.clientWidth)).toBe(size.width - RAIL - EDGE);
+    await expect.poll(() => page.evaluate(() => document.getElementById('scroll')!.clientWidth)).toBe(size.width - RAIL - GUTTER);
     await scrollPanel(page, 0);
     c = await settled();
     expect(c.sheetRadius, `at ${size.width}`).toBeCloseTo(12, 3);
@@ -783,7 +803,8 @@ test('clicks, selections, the caret and the toolbars land where the page is draw
   await expect.poll(async () => (await line()).head).not.toBe(from.head);
   const to = await line();
   const pitch = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.ProseMirror p')!).lineHeight));
-  const scale = (1500 - RAIL - EDGE) / PAGE_W;
+  // The demo runs to four sheets: the rail's gutter is there.
+  const scale = (1500 - RAIL - GUTTER) / PAGE_W;
   expect(to.top - from.top).toBeGreaterThan(pitch * scale * 0.8);
   expect(to.top - from.top).toBeLessThan(pitch * scale * 1.6);
 
@@ -800,7 +821,7 @@ test('clicks, selections, the caret and the toolbars land where the page is draw
   const tableBar = page.getByRole('toolbar', { name: 'Table controls', exact: true });
   await expect(tableBar).toBeVisible();
   const tb = (await tableBar.boundingBox())!;
-  expect(Math.abs(tb.x + tb.width / 2 - (RAIL + 1500 - EDGE) / 2)).toBeLessThan(1);
+  expect(Math.abs(tb.x + tb.width / 2 - (RAIL + 1500 - GUTTER) / 2)).toBeLessThan(1);
 
   // A click on the figure selects it and brings its toolbar up.
   const figure = await page.evaluate(() => {

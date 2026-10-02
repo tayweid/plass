@@ -56,6 +56,14 @@
   --topbar: env(titlebar-area-height, 44px);
   /* The frame's edge round the panel, at the window's right and bottom. */
   --edge: 8px;
+  /* The frame at the panel's right: the edge, or, while the paper runs
+     past the panel, the gutter the scroll rail lives in (scroll-rail.ts
+     puts .has-rail on this element, so --axis below follows it). One
+     variable, so the panel, its shadow, the HUD and everything on the
+     paper's axis read the same right margin; the window's bottom edge
+     stays --edge and the rail's side 6 px beside its tiles. */
+  --gutter: 20px;
+  --edge-right: var(--edge);
   /* A corner of the paper, on the screen at any scale: Knuth's room's
      (the paper's corners, below). */
   --paper-radius: 12px;
@@ -74,9 +82,9 @@
   --rail-gap: 6px;
   --rail: calc(var(--rail-tile) + 2 * var(--rail-gap));
   /* The paper's axis: the middle of the panel, right of the rail, left
-     of the panel's right edge (it draws no scrollbar). The toast and the
-     table and image toolbars sit on it. */
-  --axis: calc((var(--rail) + 100vw - var(--edge)) / 2);
+     of the panel's right edge (the scroll rail is outside it, in the
+     gutter). The toast and the table and image toolbars sit on it. */
+  --axis: calc((var(--rail) + 100vw - var(--edge-right)) / 2);
   --chrome: #fcfcfb;
   --chrome-border: #e3e1dc;
   --ink: #1a1a1a;
@@ -92,6 +100,10 @@
   --serif: 'STIX Two Text', 'Charter', 'Iowan Old Style', 'Palatino', 'Georgia', serif;
   --mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+}
+
+:root.has-rail {
+  --edge-right: var(--gutter);
 }
 
 * {
@@ -537,7 +549,7 @@ body {
   position: fixed;
   /* Inside the panel's bottom-right corner, over the paper: a quiet
      frosted chip, legible over a line of text or a page gap alike. */
-  right: calc(var(--edge) + 10px);
+  right: calc(var(--edge-right) + 10px);
   bottom: calc(var(--edge) + 10px);
   z-index: 50;
   padding: 2px 8px;
@@ -603,6 +615,317 @@ body {
 
 #toast .toast-action {
   flex: none;
+}
+
+/* The scroll rail (scroll-rail.ts): the whole paper, top to bottom, in a
+   20 px gutter between the panel's right edge and the window's, on the
+   frame and outside the paper, as the history view's strip lives beside
+   its river (docs/mockups/scroll-rail.md, the gutter mockup, which Taylor
+   chose). Its track is exactly the panel's height (the bar's bottom to
+   the frame's edge above the window's bottom), so at the top of the paper
+   the band's top is level with the panel's top and at the end its bottom
+   with the panel's bottom. Everything on it is placed by a fraction of
+   the paper's height: --f on a mark (written when a layout pass settles);
+   the band, the visible span, is moved by a transform on its own layer
+   (written in a frame after a scroll, on the band alone: a variable on
+   the rail would be inherited by every mark and restyle them all on every
+   frame of a scroll). There only while the paper runs past the panel. */
+#scrollrail {
+  position: fixed;
+  top: var(--topbar);
+  bottom: var(--edge);
+  right: 0;
+  width: var(--gutter);
+  z-index: 12;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+:root:not(.has-rail) #scrollrail,
+:root:not(.has-rail) #sr-label {
+  display: none;
+}
+
+.sr-track {
+  position: absolute;
+  inset: 0;
+}
+
+/* The visible span: the history strip's band (white 5 % over a 16 %
+   edge, rounded), as wide as the gutter less 3 px a side, never under
+   10 px tall and never past the track (its height and offset written by
+   scroll-rail.ts). Faint at rest: the rail's first job is where you are,
+   and the panel draws no other scrollbar. */
+.sr-band {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 0;
+  height: 100%;
+  will-change: transform;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  transition: background 0.3s, box-shadow 0.3s;
+  pointer-events: none;
+}
+
+/* Lit while the paper moves (a wheel, a jump: 0.9 s) and while the
+   pointer is in the gutter; lighter still while it is being dragged. */
+#scrollrail.moving .sr-band,
+#scrollrail.awake .sr-band {
+  background: rgba(255, 255, 255, 0.075);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.17);
+}
+
+#scrollrail.dragging .sr-band {
+  background: rgba(255, 255, 255, 0.11);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+  transition: none;
+}
+
+/* Placed by their fraction of the paper. A mark or a page gap inside the
+   band carries .in (scroll-rail.ts sets it on those that cross the band's
+   edges, usually none in a frame). */
+.sr-break,
+.sr-mark {
+  top: calc(var(--f) * 100%);
+}
+
+/* Page breaks: a hairline across the rail at the middle of each gap
+   between sheets, and the page's number faint just under it. A gap that
+   is on screen (inside the band) draws a longer, stronger tick, after the
+   edge mockup's: the gap you are looking at. A long paper thins its
+   numbers and, under 4 px a page, its unnumbered hairlines; a number
+   with a mark in its place moves off it, and an unnumbered hairline
+   over the moved number, or between it and its own, gives way under it
+   (scroll-rail.ts) until hovered. */
+.sr-break {
+  --inset: 4px;
+  position: absolute;
+  left: var(--inset);
+  right: var(--inset);
+  height: 1px;
+  margin-top: -0.5px;
+  background: rgba(255, 255, 255, 0.17);
+  pointer-events: none;
+}
+
+.sr-break.thin {
+  --inset: 7px;
+}
+
+.sr-break.in {
+  left: calc(var(--inset) - 2px);
+  right: calc(var(--inset) - 2px);
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.sr-break.first,
+.sr-break.under:not(.hot) {
+  background: none;
+}
+
+.sr-break.hot {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.sr-num {
+  position: absolute;
+  top: 3px;
+  left: -4px;
+  right: -4px;
+  text-align: center;
+  font: 500 8px/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: rgba(240, 238, 233, 0.4);
+}
+
+.sr-break.hot .sr-num {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.sr-num[hidden] {
+  display: none;
+}
+
+/* The marks: real buttons (one tab stop, arrows between them, Return
+   jumps), shown at rest, a step quieter outside the band so it reads as a
+   window onto them. The rail does its own hit-testing by the nearest mark,
+   so a 3 px dot has the gutter's full width and 7 px either side. */
+.sr-mark {
+  position: absolute;
+  left: 50%;
+  padding: 0;
+  border: 0;
+  transform: translate(-50%, -50%);
+  opacity: 0.6;
+  pointer-events: none;
+  /* The hover's grow and whiten. The band passing a mark or a gap changes
+     it at once: an opacity or a colour eased there, on the few that cross
+     in a frame, cost frames of the scroll (the main thread's paint). */
+  transition: transform 0.12s, background 0.12s, box-shadow 0.12s;
+}
+
+.sr-mark.in {
+  opacity: 1;
+}
+
+.sr-mark:focus {
+  outline: none;
+}
+
+/* Headings: dots sized by level, the title, a section, a subsection. */
+.sr-title {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(240, 238, 233, 0.86);
+}
+
+.sr-section {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(240, 238, 233, 0.72);
+}
+
+.sr-subsection {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(240, 238, 233, 0.56);
+}
+
+/* Figures and tables: tiny squares, a figure filled, a table open (the
+   history strip's square for your own commits). */
+.sr-figure {
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+  background: rgba(216, 214, 209, 0.6);
+}
+
+.sr-table {
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+  background: none;
+  box-shadow: inset 0 0 0 1.2px rgba(216, 214, 209, 0.7);
+}
+
+/* The caret: a short bar in the frame's focus blue, the one coloured
+   mark: where you were writing. */
+.sr-caret {
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: #9db8d6;
+}
+
+.sr-mark.hot {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.45);
+  background: #fff;
+}
+
+.sr-table.hot {
+  background: none;
+  box-shadow: inset 0 0 0 1.2px #fff;
+}
+
+.sr-caret.hot {
+  background: #c4d7ec;
+}
+
+.sr-mark:focus-visible {
+  box-shadow: 0 0 0 1.5px var(--frame), 0 0 0 3px #9db8d6;
+}
+
+/* Where a click on empty track would land: a faint line across it. */
+.sr-ghost {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  height: 1px;
+  margin-top: -0.5px;
+  background: rgba(255, 255, 255, 0.4);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sr-ghost.show {
+  opacity: 1;
+}
+
+/* The label: the menus' dark glass (toolbar.css), a size up for a
+   heading's own words, which are set in the bar's serif. It hangs to the
+   rail's left over the paper's right margin, level with the mark, fixed to
+   the window (scroll-rail.ts keeps it inside the window's top and bottom;
+   at 50vw wide at most it never reaches the left). */
+#sr-label {
+  position: fixed;
+  right: calc(var(--gutter) + 7px);
+  top: 0;
+  z-index: 60;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  max-width: min(360px, 50vw);
+  padding: 3px 9px 4px;
+  border-radius: 6px;
+  background: rgba(27, 26, 30, 0.94);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  color: rgba(240, 238, 233, 0.92);
+  font: 13px/1.35 var(--serif);
+  white-space: nowrap;
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity 0.12s;
+  pointer-events: none;
+}
+
+#sr-label.show {
+  opacity: 1;
+}
+
+#sr-label .k {
+  flex: none;
+  font: 11px/1 var(--sans);
+  color: rgba(240, 238, 233, 0.5);
+  font-variant-numeric: tabular-nums;
+}
+
+#sr-label .t {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#sr-label .p {
+  flex: none;
+  font: 10.5px/1 var(--sans);
+  color: rgba(240, 238, 233, 0.42);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A page, or a place on empty track: the caption's own size. */
+#sr-label.quiet {
+  font: 11px/1.35 var(--sans);
+  padding: 2px 8px;
+  border-radius: 5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-band,
+  .sr-mark,
+  #sr-label {
+    transition: none;
+  }
 }
 
 /* ---------- file menu ---------- */
@@ -707,10 +1030,12 @@ body {
    under the bar and right of the rail, the frame showing round it as a
    thin edge (the bar's band below its name pill, 7 px; the rail's beside
    its tiles, 6 px; --edge, 8 px, at the window's right and bottom:
-   Knuth's room's box), its shadow falling on the frame and its corners
-   rounded only where they are the paper's (below, the paper's corners:
-   the panel itself is a square clip, with no white or shadow of its
-   own). The pages fill its width edge to edge by scaling, never
+   Knuth's room's box, widened at the right to a 20 px gutter for the
+   scroll rail while the paper runs past the panel), its shadow falling
+   on the frame and its corners rounded only where they are the paper's
+   (below, the paper's corners: the panel itself is a square clip, with
+   no white or shadow of its own). The pages fill its width edge to edge
+   by scaling, never
    by re-flowing: the layout is the page's own width in CSS px (816 for
    Letter), and paper-scale.ts draws it at the panel's width with a
    transform on #stack, so a wider window is a larger page, a narrower
@@ -718,8 +1043,8 @@ body {
    zoom (a View menu zoom, which the shell answers by scaling the window,
    app/plass.json followZoom, is the same thing again). The pages run
    down the panel with a thin gap of the frame between them (#pages);
-   the panel clips them and scrolls, with no scrollbar drawn (the HUD
-   counts the pages). The page once centred in a grey room as a
+   the panel clips them and scrolls, with no scrollbar drawn (the scroll
+   rail beside it maps the paper, and the HUD counts the pages). The page once centred in a grey room as a
    fixed-width column; before that it sized the window to the paper with
    resizeTo 180 ms after every resize, which snapped a dragged window
    back and, under a zoom, walked it there in four steps over a
@@ -727,7 +1052,7 @@ body {
 #scroll {
   flex: 1;
   min-height: 0;
-  margin: var(--topbar) var(--edge) var(--edge) var(--rail);
+  margin: var(--topbar) var(--edge-right) var(--edge) var(--rail);
   overflow: hidden auto;
   scrollbar-width: none;
   /* The panel's clip is square, so the paper is cut straight where it
@@ -796,12 +1121,14 @@ body {
    the frame after a scroll and only when they change; the box sits under
    everything (z-index -1) on the frame, and an outer shadow draws
    nothing inside its own box, so the gaps between the sheets stay the
-   frame's colour. */
+   frame's colour. Its right side is the panel's (--edge-right): with the
+   scroll rail's gutter there its shadow falls on the gutter, under the
+   rail, which is drawn over it. */
 #paper-shadow {
   position: fixed;
   z-index: -1;
   left: var(--rail);
-  right: var(--edge);
+  right: var(--edge-right);
   top: calc(var(--topbar) + var(--paper-top, 0px));
   bottom: calc(var(--edge) + var(--paper-bottom, 0px));
   border-top-left-radius: var(--paper-left-corner, var(--paper-top-corner, var(--paper-radius)));
@@ -2934,6 +3261,8 @@ body {
   #rail,
   #hud,
   #toast,
+  #scrollrail,
+  #sr-label,
   .native-table-toolbar,
   .native-table-notice,
   #paper-shadow,

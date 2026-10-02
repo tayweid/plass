@@ -16,13 +16,16 @@ export default defineConfig({
       use: {
         browserName: 'chromium',
         // The window at which the drawn page is the laid-out page: the
-        // panel (src/style.css) is the window less the 44 px rail and the
-        // 8 px edge, and a Letter page is 816 CSS px, so 868 px draws it
-        // at 1:1 (src/paper-scale.ts). The layout tests read the page's
-        // geometry in the layout's own px, as they always have; the
-        // layout is the same at any width, which tests/frame.spec.ts
-        // checks at other widths with the page drawn larger and smaller.
-        viewport: { width: 868, height: 720 },
+        // panel (src/style.css) is the window less the 44 px rail and, a
+        // paper running past the panel as every Letter page does here, the
+        // scroll rail's 20 px gutter (src/scroll-rail.ts), and a Letter
+        // page is 816 CSS px, so 880 px draws it at 1:1 (src/paper-scale.ts;
+        // a paper that fits the panel keeps the 8 px edge and is drawn at
+        // 828 / 816). The layout tests read the page's geometry in the
+        // layout's own px, as they always have; the layout is the same at
+        // any width, which tests/frame.spec.ts checks at other widths with
+        // the page drawn larger and smaller.
+        viewport: { width: 880, height: 720 },
         // Linux Chromium hints the bundled fonts by default, which rounds
         // every glyph advance to a whole pixel: a 26-letter run measured
         // 225px against 212.6px on macOS, lines overflowed the port's exact

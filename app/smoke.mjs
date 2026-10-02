@@ -3,8 +3,9 @@
 // document open and typeset, edit it, save with ⌘S, and check the disk;
 // see the page fill the panel at its width, then drag the window wider
 // and zoom (the window stays, the page is drawn larger and nothing is
-// laid out again), see the rail under the bar, the paper's corners
-// rounded only where they are the page's, and the menus' blur, and,
+// laid out again), see the rail under the bar, the scroll rail in its
+// gutter at the window's right, the paper's corners rounded only where
+// they are the page's, and the menus' blur, and,
 // on a shell that hides the title bar, see Knuth's bar beside the
 // traffic lights, with the folder the shell knows the file by; and, on a
 // shell that keeps the autosave record and its history view, open File ›
@@ -28,7 +29,11 @@ const bundle = process.argv[2];
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'plass-smoke-'));
 const doc = path.join(work, 'docs', 'smoke.typ');
 fs.mkdirSync(path.dirname(doc));
-fs.writeFileSync(doc, '= Smoke\n\nA paragraph typeset inside the shell.\n');
+// Two sheets, so the scroll rail in its gutter (src/scroll-rail.ts: there
+// while the paper runs past the panel, as any Letter page does here) has a
+// page break to show.
+const filler = 'The Knuth Plass algorithm evaluates a complete paragraph and preserves globally optimal line endings while editing without visible jitter. ';
+fs.writeFileSync(doc, `= Smoke\n\nA paragraph typeset inside the shell.\n\n${Array.from({ length: 12 }, () => filler.repeat(3).trimEnd()).join('\n\n')}\n`);
 
 const app = await electron.launch({
   ...(bundle
@@ -185,17 +190,32 @@ if (passes) await fail(`a drag and a zoom step ran ${passes} pagination pass(es)
 
 // Zen's shape (src/style.css): the bar across the top, the rail down the
 // left under it, the panel of paper in the rest, edged by the frame's 8 px
-// at the window's right and bottom, under any shell.
+// at the window's bottom and, the paper running past the panel, by the
+// scroll rail's 20 px gutter at its right, the rail in it from the bar to
+// the bottom edge, under any shell.
 const frame = await page.evaluate(() => {
   const rect = (id) => document.getElementById(id).getBoundingClientRect();
   const bar = rect('toolbar');
   const rail = rect('rail');
   const panel = rect('scroll');
-  return { bar: { bottom: bar.bottom }, rail: { left: rail.left, top: rail.top, right: rail.right, bottom: rail.bottom }, panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom }, paper: getComputedStyle(document.querySelector('#pages .page-box')).backgroundColor, width: innerWidth, height: innerHeight };
+  const scrollRail = document.getElementById('scrollrail');
+  const map = scrollRail.getBoundingClientRect();
+  return {
+    bar: { bottom: bar.bottom },
+    rail: { left: rail.left, top: rail.top, right: rail.right, bottom: rail.bottom },
+    panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom },
+    paper: getComputedStyle(document.querySelector('#pages .page-box')).backgroundColor,
+    map: { shown: getComputedStyle(scrollRail).display !== 'none', left: map.left, top: map.top, right: map.right, bottom: map.bottom, breaks: scrollRail.querySelectorAll('.sr-break:not(.first)').length },
+    width: innerWidth,
+    height: innerHeight,
+  };
 });
 if (frame.rail.left !== 0 || frame.rail.top !== frame.bar.bottom || frame.rail.bottom !== frame.height || frame.panel.left !== frame.rail.right || frame.panel.top !== frame.bar.bottom
-  || frame.panel.right !== frame.width - 8 || frame.panel.bottom !== frame.height - 8 || frame.paper !== 'rgb(255, 255, 255)') {
-  await fail(`the rail is not under the bar down the left edge of the panel of paper: ${JSON.stringify(frame)}`);
+  || frame.panel.right !== frame.width - 20 || frame.panel.bottom !== frame.height - 8 || frame.paper !== 'rgb(255, 255, 255)') {
+  await fail(`the rail is not under the bar down the left edge of the panel of paper, with the gutter at its right: ${JSON.stringify(frame)}`);
+}
+if (!frame.map.shown || frame.map.left !== frame.panel.right || frame.map.right !== frame.width || frame.map.top !== frame.panel.top || frame.map.bottom !== frame.panel.bottom || frame.map.breaks < 1) {
+  await fail(`the scroll rail is not in the gutter beside the panel with its page breaks: ${JSON.stringify(frame)}`);
 }
 
 // The paper's corners (src/style.css): rounded only where they are a

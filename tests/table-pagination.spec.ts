@@ -108,7 +108,12 @@ function readBreak(page: Page) {
     const hdr = widget.querySelector<HTMLElement>('.ts-table-hdr');
     const nextRect = next?.getBoundingClientRect();
     const hdrRect = hdr?.getBoundingClientRect();
-    const marginTop = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--page-margin-top'));
+    // The margin is the layout's px; the rects are drawn at the paper's
+    // scale (1 at the tests' 880 px, with the scroll rail's gutter there,
+    // as it is for any Letter paper; read, so the test holds at any width).
+    const stack = document.getElementById('stack')!;
+    const scale = stack.getBoundingClientRect().width / stack.offsetWidth;
+    const marginTop = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--page-margin-top')) * scale;
     return {
       tables,
       widget: {
@@ -164,14 +169,17 @@ test('a 40-row table crossing a page boundary paginates exactly, breaking betwee
     const width = (el: Element, pseudo: string, side: 'borderTopWidth' | 'borderBottomWidth') =>
       parseFloat(getComputedStyle(el, pseudo)[side]);
     const requested = Number(/^pgr:\d+:(\d+):(\d+)(?::.*)?$/.exec(widget.dataset.tsGapKey ?? '')?.[1] ?? NaN);
+    // The spacer is the layout's px; the rects are drawn at the paper's scale.
+    const stack = document.getElementById('stack')!;
+    const scale = stack.getBoundingClientRect().width / stack.offsetWidth;
     return {
       classes: [...widget.classList],
       closingRule: width(td, '::before', 'borderTopWidth'),
       openingRule: width(gap, '::after', 'borderBottomWidth'),
       headerRule: width(td, '::after', 'borderBottomWidth'),
       requested,
-      painted: widget.getBoundingClientRect().height,
-      gapPlusHeader: gap.getBoundingClientRect().height + hdr.getBoundingClientRect().height,
+      painted: widget.getBoundingClientRect().height / scale,
+      gapPlusHeader: (gap.getBoundingClientRect().height + hdr.getBoundingClientRect().height) / scale,
       cellPaddingBlock: [getComputedStyle(td).paddingTop, getComputedStyle(td).paddingBottom],
     };
   });
