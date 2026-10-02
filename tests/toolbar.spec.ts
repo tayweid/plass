@@ -52,7 +52,7 @@ test('the bar, the rail and the open menus fit a narrow window with a long filen
     const fm = window.__fm as unknown as { rename(name: string): Promise<void> };
     await fm.rename('A very long manuscript title with tables and side-by-side grids');
   });
-  await expect(page.locator('.tb-file')).toHaveText('A very long manuscript title with tables and side-by-side grids');
+  await expect(page.locator('#file-name')).toHaveText('A very long manuscript title with tables and side-by-side grids');
 
   // The bar holds the paper's way in and out; the rail, every tool.
   const barButtons = page.locator('#toolbar button:visible');

@@ -79,13 +79,24 @@ export function focusThisWindow(): Promise<boolean> {
  *  from a handle is not, and the shell matches the rest to the file the
  *  handle touched instead — reading the File here is what makes it
  *  touch it first). Nothing in a browser tab, and nothing under a shell
- *  without `pathOf` (older than the record). Never rejects. */
-export function reportDocument(handle: FileSystemFileHandle | null): Promise<void> {
+ *  without `pathOf` (older than the record). Never rejects.
+ *
+ *  Resolves to the file's path as the shell knows it — the path it took,
+ *  or the file it matched the report to — or null: a browser tab, an
+ *  older shell, no file, or a report that matched nothing. The page keeps
+ *  it to show where the document lives (the bar's folder, toolbar.ts). */
+export function reportDocument(handle: FileSystemFileHandle | null): Promise<string | null> {
   const shell = bridge();
-  if (!shell || typeof shell.pathOf !== 'function') return Promise.resolve();
+  if (!shell || typeof shell.pathOf !== 'function') return Promise.resolve(null);
   const pathOf = shell.pathOf.bind(shell);
   const send = (message: { path: string | null; name?: string; size?: number; modified?: number }) =>
-    shell.request({ type: 'document', ...message }).then(() => undefined, () => undefined);
+    shell.request({ type: 'document', ...message }).then(
+      (reply) => {
+        const path = (reply as { path?: unknown } | null)?.path;
+        return typeof path === 'string' && path.startsWith('/') ? path : null;
+      },
+      () => null,
+    );
   if (!handle) return send({ path: null });
   return handle.getFile().then(
     (file) => {
@@ -93,11 +104,11 @@ export function reportDocument(handle: FileSystemFileHandle | null): Promise<voi
       try {
         path = pathOf(file);
       } catch {
-        return undefined; // the bridge is broken: nothing to tell
+        return null; // the bridge is broken: nothing to tell
       }
       return send({ path: path || null, name: handle.name, size: file.size, modified: file.lastModified });
     },
-    () => undefined,
+    () => null,
   );
 }
 

@@ -1,7 +1,7 @@
 // A flyout from the rail — toolbar.ts's menus, settings.ts's panel: beside
 // the rail, level with its tile, inside the window, and never over the
 // bar: it stops a frame's edge below the bar and scrolls inside itself
-// when the room is shorter than it. Read when it opens, never on the
+// when the panel is shorter than it. Read when it opens, never on the
 // typing path.
 export function placeFlyout(element: HTMLElement, anchor: HTMLElement) {
   const tile = anchor.getBoundingClientRect();

@@ -42,40 +42,37 @@
 :root {
   /* Zen's shape (knuth/docs/mockups/rail-layout.html, Zen itself): a
      dark frame — the bar across the top, the rail down the left, and an
-     edge of it all round — holds the room, a rounded panel a shade
-     lighter, and the paper hovers in the room, the only light. The frame
-     is Zen's (#131313–#141414 measured in Zen's own window) a step up, so
-     it reads as a dark grey edge rather than black; the room is the grey
-     a soft black shadow shows on. */
+     edge of it all round — holds one elevated panel, rounded, and the
+     panel is the paper: the pages fill it edge to edge, the only light.
+     The frame is Zen's (#131313–#141414 measured in Zen's own window) a
+     step up, so it reads as a dark grey edge rather than black; it also
+     shows as the thin gap between pages. */
   --frame: #18181a;
-  --bg: #2b2a2d;
   --pill: #232326;
   --tile: #2e2e32;
   /* The bar's height is the traffic lights' band, which the shell
      publishes as the Window Controls Overlay (in CSS px, so a zoom step
-     keeps the bar's row on the lights); 60 px in a tab and the PWA. */
-  --topbar: env(titlebar-area-height, 60px);
-  /* The frame's one width: the window's edge round the room, the gap
-     between a rail tile and either side of the rail. */
+     keeps the bar's row on the lights); 44 px in a tab and the PWA. */
+  --topbar: env(titlebar-area-height, 44px);
+  /* The frame's edge round the panel, at the window's right and bottom. */
   --edge: 8px;
+  /* The rail: a tile with 6 px either side, 44 px, the bar's height too
+     (Taylor, 2026-10-02: the bar as tall as the rail is wide; Knuth's
+     numbers, knuth c6875a4). */
   --rail-tile: 32px;
-  --rail: calc(var(--rail-tile) + 2 * var(--edge));
-  /* The paper's least gap to the room's edge; the bottom keeps a row
-     for the HUD. */
-  --margin: 24px;
-  --margin-bottom: 48px;
-  /* The paper's axis: the middle of the room's content box, right of the
-     rail, left of the room's right edge and scrollbar (main.ts sets
-     --room-scrollbar). The HUD, the toast and the table and image
-     toolbars sit on it. */
-  --axis: calc((var(--rail) + 100vw - var(--edge) - var(--room-scrollbar, 0px)) / 2);
+  --rail-gap: 6px;
+  --rail: calc(var(--rail-tile) + 2 * var(--rail-gap));
+  /* The paper's axis: the middle of the panel, right of the rail, left
+     of the panel's right edge (it draws no scrollbar). The toast and the
+     table and image toolbars sit on it. */
+  --axis: calc((var(--rail) + 100vw - var(--edge)) / 2);
   --chrome: #fcfcfb;
   --chrome-border: #e3e1dc;
   --ink: #1a1a1a;
   --ink-soft: #6b6b6b;
   --accent: #305c8a;
   --sheet: #ffffff;
-  /* Chrome floating over the room: light frosted glass, dark ink. */
+  /* Chrome floating over the paper: light frosted glass, dark ink. */
   --bar-ink: #2c2b29;
   --bar-ink-soft: #85837e;
   --bar-glass: rgba(251, 250, 248, 0.92);
@@ -105,7 +102,7 @@ body {
 }
 
 /* One plain bar on the frame, a straight line across the top of the
-   window, the rail and the room below it. The paper's way in and out
+   window, the rail and the panel below it. The paper's way in and out
    sits on the left beside the traffic lights — File, the name with its
    save dot, Export — and the tools are on the rail (toolbar.css). In
    Plass.app the bar is the window's title bar (the shell hides its own
@@ -126,9 +123,9 @@ body {
   left: 0;
   right: 0;
   height: var(--topbar);
-  padding: 0 14px;
   z-index: 10;
   -webkit-app-region: drag;
+  container: bar / inline-size;
 }
 
 #toolbar > *,
@@ -142,22 +139,28 @@ body {
   display: none;
 }
 
-/* ---------- the document slug ---------- */
+/* ---------- the name pill ---------- */
 
-/* The name pill: Zen's address pill, a shade up from the frame, holding
-   the document's name — small serif, letterspaced, quiet, the galley
-   slug for the manuscript below — and its save dot, between the File
-   and Export tiles. */
-.doc-title {
+/* Knuth's (knuth/src/styles.css): the two apps' bars are one bar. Zen's
+   address pill, a shade up from the frame, between the File and Export
+   tiles, holding the document's name (click to rename), its save dot and
+   the folder it lives in. When the pill is short only the folder gives
+   way, from its start, so the nearest folder stays; the name and the dot
+   never do — the name takes an ellipsis only if it alone overfills the
+   pill. */
+.doc-pod {
+  --pod-gap: 9px;
   display: flex;
   align-items: center;
-  gap: 9px;
-  height: 42px;
-  padding: 0 12px;
-  flex: none;
+  gap: var(--pod-gap);
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(560px, 50vw);
+  height: 30px;
+  padding: 0 10px;
   background: var(--pill);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
+  border-radius: 9px;
 }
 
 /* Keep the active toolbar group above its neighbors. */
@@ -170,35 +173,73 @@ body {
   z-index: 20;
 }
 
-.doc-title .tb-file {
-  font: 15px/1.5 'New Computer Modern', var(--serif);
+/* The document slug: small serif, letterspaced, quiet. (Its max-width
+   leaves the dot and its gap their room: the pill sizes itself to the
+   name, the gap and the 6 px dot, so a cap on any other gap than the
+   pill's own cut every name short by the difference.) */
+#toolbar .name {
+  flex: none;
+  max-width: min(40ch, calc(100% - var(--pod-gap) - 6px));
+  font: 15px/1.5 var(--serif);
   letter-spacing: 0.09em;
   color: rgba(252, 252, 251, 0.8);
-  max-width: 56ch;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
   cursor: text;
   padding: 1px 4px;
   border-radius: 5px;
 }
 
-.doc-title .tb-file:hover {
+#toolbar .name:hover {
   color: #fff;
 }
 
-/* The save state: a small honest dot beside the name. */
-.doc-title-dot {
+/* The save state: a small honest dot beside the name — green when the
+   file on disk holds the document, red when it does not (unsaved
+   changes, or no file yet). */
+.doc-mark {
+  flex: none;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: rgba(205, 100, 82, 0.95);
-  flex: none;
   transition: background 0.3s ease;
 }
 
-.doc-saved .doc-title-dot {
+.doc-saved .doc-mark {
   background: rgba(110, 165, 118, 0.9);
+}
+
+/* The folder: the file's, home as ~ (the whole path in its title). It
+   alone shrinks, and it ellipsizes from its start: right-to-left in the
+   pill, the path itself left-to-right inside (its span's dir), so the
+   cut and the ellipsis fall at the path's head. */
+#doc-folder {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font: 12px/1.5 var(--sans);
+  color: rgba(240, 238, 233, 0.55);
+}
+
+#doc-folder[hidden] {
+  display: none;
+}
+
+/* A narrow bar drops the folder (Knuth's rule, at the same 760 px). A
+   container query on the bar rather than a media query on the window: a
+   media query that flips re-reads the stylesheet holding the @font-face
+   rules, the faces load again, and the layout runs a pass for them —
+   on a resize, which must lay nothing out. */
+@container bar (max-width: 759px) {
+  #doc-folder {
+    display: none;
+  }
 }
 
 .tb-btn .ico,
@@ -211,7 +252,9 @@ body {
   transform: scale(1.12);
 }
 
-.tb-file-editing {
+/* Renaming, in place in the slug (toolbar.ts): the name itself turns
+   editable. */
+#toolbar .name.tb-file-editing {
   background: rgba(255, 255, 255, 0.09);
   color: rgba(252, 252, 251, 0.95);
   outline: none;
@@ -222,7 +265,7 @@ body {
   max-width: none;
 }
 
-.tb-file-editing::selection {
+#toolbar .name.tb-file-editing::selection {
   background: rgba(157, 184, 214, 0.35);
 }
 
@@ -310,7 +353,7 @@ body {
    compact chrome only dispatches structural commands against that document. */
 .native-table-toolbar {
   -webkit-app-region: no-drag; /* inside the bar's drag band: a click must reach it, not move the window */
-  /* Docked under the bar on the paper's axis (--axis), over the room's
+  /* Docked under the bar on the paper's axis (--axis), over the panel's
      top edge: a second row of chrome while the caret is in a table. It
      never covers the document and never moves with the table, so a
      keystroke reads no geometry for it. */
@@ -481,18 +524,25 @@ body {
 /* corner HUD + transient toast */
 #hud {
   position: fixed;
-  /* Sit just inside the PAGE's right edge (the paper is centered on
-     --axis), in the row the room keeps under the last page
-     (--margin-bottom), so it never sits on the paper's edge; fall back to
-     a viewport inset when the window is narrower than the paper. */
-  right: max(22px, calc(100vw - var(--axis) - var(--page-w, 816px) / 2 + 18px));
-  bottom: calc(var(--edge) + 12px);
+  /* Inside the panel's bottom-right corner, over the paper: a quiet
+     frosted chip, legible over a line of text or a page gap alike. */
+  right: calc(var(--edge) + 10px);
+  bottom: calc(var(--edge) + 10px);
   z-index: 50;
+  padding: 2px 8px;
   font: 11px var(--sans);
-  color: #97958f;
-  opacity: 0.55;
+  color: #6f6d68;
+  background: rgba(252, 252, 251, 0.82);
+  backdrop-filter: blur(8px);
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+  opacity: 0.7;
   transition: opacity 0.35s;
   user-select: none;
+}
+
+#hud:empty {
+  display: none;
 }
 
 #hud:hover {
@@ -642,69 +692,75 @@ body {
   white-space: nowrap;
 }
 
-/* The room: Zen's inset panel, under the bar and right of the rail,
-   rounded at all four corners, a shade lighter than the frame, which
-   shows as one thin edge of it all round (the bar's band below its name
-   pill, the rail's beside its tiles, --edge at the window's right and
-   bottom). The paper is a fixed-width column centered in it (#stack)
-   and never re-lays when the window does: a wider window is more room
-   around the paper, a narrower one scrolls sideways. A zoom scales the
-   paper in place (CSS px stay CSS px, so the layout never runs), and
-   nothing sizes the window back to the paper: the page once did, with
+/* The panel: Zen's inset panel, and the paper itself. One elevated panel
+   under the bar and right of the rail, rounded 12 px at all four corners,
+   the frame showing round it as a thin edge (the bar's band below its
+   name pill, 7 px; the rail's beside its tiles, 6 px; --edge, 8 px, at
+   the window's right and bottom: Knuth's room's box), its shadow falling
+   on the frame. The pages fill its width edge to edge by scaling, never
+   by re-flowing: the layout is the page's own width in CSS px (816 for
+   Letter), and paper-scale.ts draws it at the panel's width with a
+   transform on #stack, so a wider window is a larger page, a narrower
+   one a smaller page, and nothing is laid out again — the window is the
+   zoom (a View menu zoom, which the shell answers by scaling the window,
+   app/plass.json followZoom, is the same thing again). The pages run
+   down the panel with a thin gap of the frame between them (#pages);
+   the panel clips them and scrolls, with no scrollbar drawn (the HUD
+   counts the pages). The page once centred in a grey room as a
+   fixed-width column; before that it sized the window to the paper with
    resizeTo 180 ms after every resize, which snapped a dragged window
-   back and, under a zoom (innerWidth in zoomed px, resizeTo in screen
-   px), walked the window to the zoomed paper's width in four steps over
-   a second. */
+   back and, under a zoom, walked it there in four steps over a
+   second. */
 #scroll {
   flex: 1;
   min-height: 0;
   margin: var(--topbar) var(--edge) var(--edge) var(--rail);
   border-radius: 12px;
-  background: var(--bg);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
-  overflow: auto;
-  /* The gutter is always there, so the page's axis holds when a document
-     grows past the room. */
-  scrollbar-gutter: stable;
-  padding: var(--margin) var(--margin) var(--margin-bottom);
+  background: var(--sheet);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 2px 6px rgba(0, 0, 0, 0.35),
+    0 12px 32px rgba(0, 0, 0, 0.45);
+  overflow: hidden auto;
+  scrollbar-width: none;
+  /* No scroll anchoring: a layout pass takes the paper's transform off
+     and puts it back (paper-scale.ts), and at any scale but 1 Chromium's
+     anchoring answered by scrolling the panel a few hundred px by itself
+     a beat after typing. The pages hold their own content still, and a
+     pass holds a followed caret (paperPass). */
+  overflow-anchor: none;
 }
 
-#scroll::-webkit-scrollbar {
-  width: 11px;
-}
-
-#scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-#scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
-  border-radius: 6px;
-  border: 3px solid transparent;
-  background-clip: content-box;
-}
-
-#scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.28);
-  border: 3px solid transparent;
-  background-clip: content-box;
+/* The clip box round the stack: the drawn pages' size, or the editor's
+   while a burst of typing runs it past the last page (paper-scale.ts
+   writes its height), so the panel scrolls exactly them; the stack's own
+   laid-out box, which is larger or smaller than its drawing, is clipped
+   to it. It clips rather than lets the drawing overflow: a pass takes
+   the transform off, and an overflowing drawing would shrink the
+   panel's scroll range under it and clamp the scroll. */
+#paper {
+  overflow: clip;
 }
 
 /* ---------- the page stack ---------- */
 
-/* One continuous editable flow (#editor) over painted page boxes (#pages).
+/* One continuous editable flow (#editor) over painted page boxes (#pages),
+   at the page's own size and scaled to the panel's width from its top
+   left corner (paper-scale.ts; the transform is inline).
    Exact-height .ts-pagegap spacers push content past each page boundary. */
 #stack {
   position: relative;
   width: var(--page-w, 8.5in);
-  margin: 0 auto;
+  transform-origin: 0 0;
 }
 
+/* The page gaps: the frame's colour between the sheets. */
 #pages {
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  background: var(--frame);
 }
 
 .page-box {
@@ -713,13 +769,6 @@ body {
   width: var(--page-w, 8.5in);
   height: var(--page-h, 11in);
   background: var(--sheet);
-  /* The hovering, on the room's grey: a faint dark rim, a contact
-     shadow and a soft halo below. */
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.22),
-    0 1px 3px rgba(0, 0, 0, 0.32),
-    0 14px 36px rgba(0, 0, 0, 0.38);
-  border-radius: 4px;
 }
 
 .page-num {
@@ -755,15 +804,10 @@ body {
   --source-tint: color-mix(in srgb, var(--accent) 7%, transparent);
   position: relative;
   z-index: 1;
-  /* The room's height less its padding: the sheet fills the room. */
-  min-height: calc(100vh - var(--topbar) - var(--edge) - var(--margin) - var(--margin-bottom));
+  /* The panel is the paper's white too, so the sheet needs no height of
+     its own to fill it. */
   background: var(--sheet);
   color: var(--ink);
-  border-radius: 4px;
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.22),
-    0 1px 3px rgba(0, 0, 0, 0.32),
-    0 14px 36px rgba(0, 0, 0, 0.38);
 }
 
 #source .cm-editor {
@@ -2833,9 +2877,16 @@ body {
     box-shadow: none;
   }
 
+  /* The paper at its own size: no clip, no scale. */
+  #paper {
+    height: auto !important;
+    overflow: visible;
+  }
+
   #stack {
     width: auto;
     height: auto !important;
+    transform: none !important;
     background: none;
     box-shadow: none;
   }

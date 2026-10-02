@@ -1,45 +1,35 @@
 /* Zen's shape. The bar beside the traffic lights holds the paper's way in
-   and out: the File tile, the name pill with its save dot, the Export
-   tile. Its row is padded on the left by the lights' room (the Window
+   and out: the File tile, the name pill with its save dot and its folder
+   (Knuth's bar, style.css), the Export tile. Its row is padded on the
+   left by the lights' room (the Window
    Controls Overlay the shell publishes when it hides the title bar) and
    by nothing else: nothing in the bar centres on the paper any more.
    With no lights' room — a browser, the PWA, a native title bar — the
    File tile stands over the rail's column of tiles instead, 6 px in
-   ((48 − 36) / 2: the env() fallback undoes 6 px of the 12). The rail
+   ((44 − 32) / 2: the env() fallback undoes 6 px of the 12). The rail
    down the left holds the tools in the bar's old groups under
    hairlines, with the occasional ones behind Extras; its menus fly out
    to the right. The app's window is no narrower than the row needs
    beside the lights (app/plass.json, minWidth 740). */
 #toolbar {
   gap: 6px;
-  padding-inline: calc(12px + env(titlebar-area-x, -6px)) 12px;
+  padding-inline: calc(12px + env(titlebar-area-x, -6px)) var(--edge);
 }
 
-#toolbar .doc-title {
-  min-width: 0;
-  max-width: min(420px, 45vw);
-  flex: 0 1 auto;
-}
-
-#toolbar .tb-file {
-  min-width: 0;
-  max-width: 100%;
-}
-
-/* The bar's two tiles: bare, a little smaller than the rail's. */
+/* The bar's two tiles: bare, the rail's size (Knuth's, c6875a4). */
 #toolbar .tb-tile {
   flex: none;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
   padding: 0;
-  border-radius: 10px;
+  border-radius: 9px;
   color: rgba(240, 238, 233, 0.62);
 }
 
 #toolbar .tb-tile .ico {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 #toolbar .tb-tile:hover,
@@ -54,7 +44,7 @@
 }
 
 #toolbar button:focus-visible,
-#toolbar .tb-file:focus-visible,
+#toolbar .name:focus-visible,
 #rail button:focus-visible {
   outline: 2px solid #9db8d6;
   outline-offset: 2px;
@@ -63,12 +53,13 @@
 /* ---------- the rail ---------- */
 
 /* Under the bar, down the left edge, as narrow as Zen's: 32 px tiles with
-   the frame's edge either side (style.css, --rail). The tool groups
-   scroll as one when the window is short (no scrollbar drawn; the wheel
-   still scrolls, and a fade at the cut edge says there is more), and,
-   as Zen pins its bottom icons, Document settings and the view switch
-   stay pinned at the bottom, the switch level with the room's bottom
-   edge: only tools ever go under the fade. */
+   6 px either side, 44 px, as wide as the bar is tall (style.css,
+   --rail). The tool groups scroll as one when the window is short (no
+   scrollbar drawn; the wheel still scrolls, and a fade at the cut edge
+   says there is more), and, as Zen pins its bottom icons, Document
+   settings and the view switch stay pinned at the bottom, the switch
+   level with the panel's bottom edge: only tools ever go under the
+   fade. */
 #rail {
   position: fixed;
   top: var(--topbar);
@@ -404,16 +395,13 @@
   white-space: nowrap;
 }
 
-@media (max-width: 540px) {
-  /* Still 6 px in with no lights' room, over the rail's column. */
-  #toolbar {
-    padding-inline: calc(8px + env(titlebar-area-x, -2px)) 8px;
-    gap: 4px;
-  }
-
-  #toolbar .doc-title {
+/* A phone-narrow bar: a closer pill. A container query on the bar, not a
+   media query (style.css, #doc-folder: a media query that flips makes the
+   fonts load again and the layout run). */
+@container bar (max-width: 540px) {
+  #toolbar .doc-pod {
     padding-inline: 8px;
-    gap: 6px;
+    --pod-gap: 6px;
   }
 }
 

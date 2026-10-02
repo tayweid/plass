@@ -12,6 +12,7 @@
 import type { EditorView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { tableRowModel } from './table-rows';
+import { atPaperSize } from '../paper-scale';
 
 export interface TableBreakSpec {
   /** Position before the row that starts the next page. */
@@ -105,7 +106,7 @@ export function tableBreakWidget(view: EditorView, spec: TableBreakSpec): HTMLEl
         // copy; vertical-align itself has no effect on a div.
         const first = headerCell.firstElementChild;
         if (first instanceof HTMLElement) {
-          const offset = first.getBoundingClientRect().top - headerCell.getBoundingClientRect().top;
+          const offset = atPaperSize(() => first.getBoundingClientRect().top - headerCell.getBoundingClientRect().top);
           const margin = parseFloat(getComputedStyle(first).marginTop) || 0;
           hdr.style.paddingTop = `${Math.max(0, offset - margin)}px`;
         }

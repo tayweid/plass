@@ -17,6 +17,7 @@ import { schema } from './schema';
 import { getSettings } from './settings';
 import { blockFrameSlackEm } from './typ-serializer';
 import { pickAndInsertFigure } from './figures';
+import { atPaperSize } from './paper-scale';
 
 export const DEFAULT_GRID_GUTTER_EM = 1;
 
@@ -271,7 +272,8 @@ export class GridCellView implements NodeView {
     this.pending = true;
     queueMicrotask(() => {
       this.pending = false;
-      this.fit();
+      // Measured on the paper at its own size (paper-scale.ts).
+      atPaperSize(() => this.fit());
     });
   }
 

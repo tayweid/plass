@@ -1,71 +1,201 @@
 import { expect, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
-// The frame (src/style.css, "The room"): the paper is a fixed-width column
-// in the room under the bar and right of the rail, and the window's size
-// is room around it. Resizing the window must not touch the layout — the
-// editor's width stays, pagination does not run again — and the chrome
-// must keep the page's axis. The zoom step itself (CSS px stay CSS px) is
+// The frame (src/style.css, "The panel"): one elevated panel under the bar
+// and right of the rail, and the panel is the paper. The pages fill its
+// width by scaling (src/paper-scale.ts), never by re-flowing: a resize
+// draws the same layout larger or smaller — the editor's width in CSS px
+// stays, no pagination pass runs — and a page laid out in a window of any
+// width is the same page. The zoom step (the shell scales the window) is
 // driven in the shell by app/smoke.mjs; a browser tab cannot zoom from
-// Playwright.
+// Playwright. The bar is Knuth's (knuth/src/main.ts and styles.css).
 
-declare global {
-  interface Window {
-    __fm: { loadHandle: (h: FileSystemFileHandle) => Promise<unknown> };
-    __pagCount: () => number;
-  }
-}
+type Hooks = {
+  __fm: {
+    loadHandle: (h: FileSystemFileHandle, dir?: FileSystemDirectoryHandle) => Promise<unknown>;
+    rename: (name: string) => Promise<void>;
+  };
+  __pagCount: () => number;
+  __pagLog: () => string[];
+  __breakSig: () => string;
+  __loadDemo: () => void;
+  __mathInk: () => Record<string, number>;
+  __environment: () => { certified: boolean } | null;
+  view: import('prosemirror-view').EditorView;
+};
 
 const FILLER =
   'The Knuth Plass algorithm evaluates a complete paragraph and preserves globally optimal line endings while editing without visible jitter. ';
+/** A Letter page's width in CSS px: the layout's own width. */
+const PAGE_W = 816;
+/** The rail and the frame's edge: the panel is the window less these. */
+const RAIL = 44;
+const EDGE = 8;
 
-async function openTyp(page: Page, text: string) {
+async function openTyp(page: Page, text: string, name = 'frame.typ') {
   await page.goto('/?new=1');
-  await page.waitForFunction(() => Boolean(window.__fm && window.view));
-  await page.evaluate(async ({ text }) => {
+  await page.waitForFunction(() => Boolean((window as unknown as Hooks).__fm && (window as unknown as Hooks).view));
+  await page.evaluate(async ({ text, name }) => {
     const root = await navigator.storage.getDirectory();
-    const h = await root.getFileHandle('frame.typ', { create: true });
+    const h = await root.getFileHandle(name, { create: true });
     const w = await h.createWritable();
     await w.write(text);
     await w.close();
-    await window.__fm.loadHandle(h);
-  }, { text });
+    await (window as unknown as Hooks).__fm.loadHandle(h);
+  }, { text, name });
   await settleLocal(page);
 }
 
-interface Geometry {
-  passes: number;
-  pages: number;
-  editorWidth: number;
-  stack: { left: number; width: number; right: number };
-  room: { left: number; clientWidth: number; scrollWidth: number };
-  bar: { left: number; fileLeft: number; fileCentre: number };
-  railCentre: number;
-  hud: { right: number; top: number };
-  lastPage: { bottom: number };
-}
-
-const geometry = (page: Page) =>
-  page.evaluate((): Geometry => {
-    const stack = document.getElementById('stack')!.getBoundingClientRect();
-    const room = document.getElementById('scroll')!;
-    const bar = document.getElementById('toolbar')!.getBoundingClientRect();
-    const file = document.querySelector('#toolbar .tb-tile')!.getBoundingClientRect();
-    const tile = document.querySelector('#rail .tb-btn')!.getBoundingClientRect();
-    const hud = document.getElementById('hud')!.getBoundingClientRect();
-    const pages = document.querySelectorAll('.page-box');
+/** The panel, the drawn stack and the layout's own numbers. */
+const drawing = (page: Page) =>
+  page.evaluate(() => {
+    const app = window as unknown as Hooks;
+    const panel = document.getElementById('scroll')!;
+    const clip = document.getElementById('paper')!;
+    const stack = document.getElementById('stack')!;
+    const box = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+    };
     return {
-      passes: window.__pagCount(),
-      pages: document.querySelectorAll('.page-box').length,
+      window: { width: innerWidth, height: innerHeight },
+      panel: { ...box(panel), clientWidth: panel.clientWidth, scrollWidth: panel.scrollWidth, scrollHeight: panel.scrollHeight, scrollTop: panel.scrollTop },
+      clip: box(clip),
+      stack: { ...box(stack), laidWidth: stack.offsetWidth, laidHeight: stack.offsetHeight, transform: stack.style.transform },
+      passes: app.__pagCount(),
+      breaks: app.__breakSig(),
+      pagination: app.__pagLog().at(-1) ?? '',
       editorWidth: document.querySelector<HTMLElement>('.ProseMirror')!.clientWidth,
-      stack: { left: stack.left, width: stack.width, right: stack.right },
-      room: { left: room.getBoundingClientRect().left, clientWidth: room.clientWidth, scrollWidth: room.scrollWidth },
-      bar: { left: bar.left, fileLeft: file.left, fileCentre: file.left + file.width / 2 },
-      railCentre: tile.left + tile.width / 2,
-      hud: { right: hud.right, top: hud.top },
-      lastPage: { bottom: pages[pages.length - 1].getBoundingClientRect().bottom },
+      pages: document.querySelectorAll('.page-box').length,
     };
   });
+
+type Drawing = Awaited<ReturnType<typeof drawing>>;
+
+/** The page meets the panel edge to edge, drawn at panel width / 816. */
+function expectFilled(d: Drawing) {
+  const scale = (d.window.width - RAIL - EDGE) / PAGE_W;
+  expect(d.panel.width).toBe(d.window.width - RAIL - EDGE);
+  expect(d.stack.laidWidth).toBe(PAGE_W);
+  expect(d.stack.width / d.stack.laidWidth).toBeCloseTo(scale, 6);
+  expect(parseFloat(d.stack.transform.replace(/^scale\(/, ''))).toBeCloseTo(scale, 5);
+  expect(Math.abs(d.stack.left - d.panel.left)).toBeLessThan(0.01);
+  expect(Math.abs(d.stack.right - d.panel.right)).toBeLessThan(0.01);
+  // The clip box is the drawing (to a layout unit, 1/64 px), so the panel
+  // scrolls exactly the pages, and never sideways.
+  expect(Math.abs(d.clip.height - d.stack.height)).toBeLessThan(1 / 64 + 0.001);
+  expect(Math.abs(d.panel.scrollHeight - d.clip.height)).toBeLessThan(1);
+  expect(d.panel.scrollWidth).toBe(d.panel.clientWidth);
+}
+
+test('the paper is the panel: the pages fill its width by scaling, and a resize lays nothing out', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await openTyp(page, Array.from({ length: 18 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
+  // Scrolled two fifths down, to see that a resize keeps the place.
+  await page.evaluate(() => {
+    const panel = document.getElementById('scroll')!;
+    panel.scrollTop = (panel.scrollHeight - panel.clientHeight) * 0.4;
+  });
+  const before = await drawing(page);
+  expect(before.pages).toBeGreaterThan(2);
+  expectFilled(before);
+  const place = (d: Drawing) => d.panel.scrollTop / d.clip.height;
+
+  // Wider, then narrower than the laid-out page, then back: the same
+  // layout drawn at each panel's width, and not one pass.
+  for (const size of [{ width: 1500, height: 900 }, { width: 740, height: 600 }, { width: 1100, height: 800 }]) {
+    await page.setViewportSize(size);
+    await expect.poll(() => page.evaluate(() => document.getElementById('scroll')!.clientWidth)).toBe(size.width - RAIL - EDGE);
+    await page.waitForTimeout(500);
+    const after = await drawing(page);
+    expectFilled(after);
+    expect(after.passes).toBe(before.passes);
+    expect(after.breaks).toBe(before.breaks);
+    expect(after.pagination).toBe(before.pagination);
+    expect(after.editorWidth).toBe(before.editorWidth);
+    expect(after.stack.laidHeight).toBe(before.stack.laidHeight);
+    expect(Math.abs(place(after) - place(before))).toBeLessThan(0.002);
+  }
+});
+
+/** Everything the layout places, read at the page's own size. */
+const layoutSignature = (page: Page) =>
+  page.evaluate(() => {
+    const app = window as unknown as Hooks;
+    const styles = (selector: string, props: Array<'top' | 'left' | 'height' | 'width' | 'marginTop' | 'marginBottom'>) =>
+      [...document.querySelectorAll<HTMLElement>(selector)].map((el) => props.map((p) => el.style[p]).join(' '));
+    return {
+      environment: app.__environment()?.certified ?? null,
+      breaks: app.__breakSig(),
+      pagination: (app.__pagLog().at(-1) ?? '').replace(/^[^:]*:/, ''),
+      gaps: [...document.querySelectorAll<HTMLElement>('.ts-pagegap')].map((g) =>
+        `${g.dataset.tsGapKey}=${g.style.height || g.querySelector<HTMLElement>('.ts-table-gap')?.style.height}`),
+      pages: styles('.page-box', ['top', 'height']),
+      folios: styles('#pages .page-num', ['top']),
+      footnotes: styles('.fn-body', ['top', 'left']),
+      solutionRules: styles('.ts-solution-rules > div', ['top', 'left', 'height']),
+      tableColumns: styles('.ts-table-sized col', ['width']),
+      gridCells: styles('.ts-grid-cell', ['marginTop', 'marginBottom']),
+      hud: document.getElementById('hud')!.textContent,
+    };
+  });
+
+/** The demo document (math, a footnote, a figure, a table, citations and
+ *  the bibliography) with a solution block across a page, a grid and a
+ *  table of auto columns after it: every kind of block whose geometry the
+ *  layout reads off the page. */
+async function richDocument(page: Page) {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as Hooks).__loadDemo && (window as unknown as Hooks).view));
+  await page.evaluate((filler) => {
+    const app = window as unknown as Hooks;
+    app.__loadDemo();
+    const { state } = app.view;
+    const { schema } = state;
+    const p = (t: string) => schema.nodes.paragraph.create(null, schema.text(t));
+    const cell = (t: string) => schema.nodes.table_cell.create(null, [p(t)]);
+    const extra = [
+      p('Problem. ' + filler.repeat(4)),
+      schema.nodes.blockquote.create({ kind: 'solution' }, [p('Solution. ' + filler.repeat(14)), p('Hence the bound. ' + filler.repeat(3))]),
+      schema.nodes.grid.create({ columns: [2, 1], gutter: 1 }, [
+        schema.nodes.grid_row.create(null, [
+          schema.nodes.grid_cell.create(null, [p('Left cell. ' + filler.repeat(2))]),
+          schema.nodes.grid_cell.create(null, [p('Right cell.')]),
+        ]),
+      ]),
+      schema.nodes.table.create({ style: 'grid', columnWidths: ['auto', '1fr', 'auto'] }, [
+        schema.nodes.table_row.create(null, [cell('Term'), cell('Meaning across a wide middle column'), cell('Page')]),
+        schema.nodes.table_row.create(null, [cell('Badness'), cell('How far a line is stretched or shrunk from its natural width'), cell('12')]),
+      ]),
+      p('Closing. ' + filler.repeat(5)),
+    ];
+    app.view.dispatch(state.tr.insert(state.doc.content.size, extra));
+  }, FILLER);
+  await expect.poll(() => page.evaluate(() => (window as unknown as Hooks).__mathInk().pending ?? 0), { timeout: 30_000 }).toBe(0);
+  await settleLocal(page);
+}
+
+test('the layout is the same at any width: a page drawn larger or smaller is laid out at its own size', async ({ page }) => {
+  test.setTimeout(180_000);
+  // 868 px draws the page at 1:1 (the panel is 816 px wide); 1500 at 1.77
+  // and 740 (the app's least width) at 0.84. Each loads afresh, so every
+  // read the layout makes is made at that scale.
+  const signatures: Array<{ width: number; signature: Awaited<ReturnType<typeof layoutSignature>> }> = [];
+  for (const width of [868, 1500, 740]) {
+    await page.setViewportSize({ width, height: 800 });
+    await richDocument(page);
+    signatures.push({ width, signature: await layoutSignature(page) });
+  }
+  const [reference, ...others] = signatures;
+  expect(reference.signature.environment).toBe(true);
+  expect(reference.signature.pages.length).toBeGreaterThan(4);
+  expect(reference.signature.solutionRules.length).toBeGreaterThan(1);
+  expect(reference.signature.tableColumns.length).toBe(3);
+  expect(reference.signature.gridCells.length).toBe(2);
+  expect(reference.signature.footnotes.length).toBeGreaterThan(0);
+  for (const other of others) expect(other.signature, `at ${other.width} px`).toEqual(reference.signature);
+});
 
 const appRegion = (page: Page, selector: string) =>
   page.evaluate((selector) => {
@@ -73,75 +203,28 @@ const appRegion = (page: Page, selector: string) =>
     return style.getPropertyValue('-webkit-app-region') || style.appRegion || '';
   }, selector);
 
-test('the window is room around a fixed-width paper: a resize re-lays nothing and the chrome keeps the axis', async ({ page }) => {
-  test.setTimeout(90_000);
+test('the frame is Zen\'s: a dark edge all round one rounded panel of paper, the rail narrow, the bar a drag region with its controls the page\'s', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
-  await openTyp(page, Array.from({ length: 18 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
-  const before = await geometry(page);
-  expect(before.pages).toBeGreaterThan(2);
-  // Centered in the room (the room's content box: the window right of the
-  // rail, less the scrollbar's gutter), the HUD just inside the paper's
-  // right edge, and the bar's File tile at the bar's left, where the
-  // traffic lights' room ends (none in a tab: there it stands over the
-  // rail's column of tiles, 6 px in).
-  const axis = (g: Geometry) => g.room.left + g.room.clientWidth / 2;
-  const onAxis = (g: Geometry) => {
-    expect(Math.abs(g.stack.left + g.stack.width / 2 - axis(g))).toBeLessThan(1);
-    expect(Math.abs(g.hud.right - (g.stack.right - 18))).toBeLessThan(1);
-  };
-  onAxis(before);
-  expect(before.bar.fileLeft).toBe(before.bar.left + 6);
-  expect(before.bar.fileCentre).toBe(before.railCentre);
-
-  // At the end of the document the last page ends above the HUD's row
-  // (the room keeps it, --margin-bottom): the count never sits on the
-  // paper's edge.
-  await page.evaluate(() => {
-    const room = document.getElementById('scroll')!;
-    room.scrollTop = room.scrollHeight;
-  });
-  await page.waitForTimeout(200);
-  const end = await geometry(page);
-  expect(end.hud.top).toBeGreaterThan(end.lastPage.bottom + 8);
-  await page.evaluate(() => { document.getElementById('scroll')!.scrollTop = 0; });
-
-  // Wider: more room, the same paper and the same pagination.
-  await page.setViewportSize({ width: 1400, height: 900 });
-  await page.waitForTimeout(700);
-  const wide = await geometry(page);
-  expect(wide.passes).toBe(before.passes);
-  expect(wide.pages).toBe(before.pages);
-  expect(wide.editorWidth).toBe(before.editorWidth);
-  expect(wide.stack.width).toBe(before.stack.width);
-  onAxis(wide);
-
-  // Narrower than the paper: the room scrolls sideways; still no layout.
-  await page.setViewportSize({ width: 700, height: 600 });
-  await page.waitForTimeout(700);
-  const narrow = await geometry(page);
-  expect(narrow.passes).toBe(before.passes);
-  expect(narrow.pages).toBe(before.pages);
-  expect(narrow.editorWidth).toBe(before.editorWidth);
-  expect(narrow.stack.width).toBe(before.stack.width);
-  expect(narrow.room.scrollWidth).toBeGreaterThan(narrow.room.clientWidth);
-});
-
-test('the frame is Zen\'s: a dark edge all round a rounded room, the rail narrow, the bar a drag region with its controls the page\'s', async ({ page }) => {
-  await page.setViewportSize({ width: 1100, height: 800 });
-  await page.goto('/?new=1');
-  await page.waitForFunction(() => Boolean(window.view));
+  await openTyp(page, Array.from({ length: 12 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
   const look = await page.evaluate(() => {
-    const room = document.getElementById('scroll')!;
+    const panel = document.getElementById('scroll')!;
     const bar = document.getElementById('toolbar')!.getBoundingClientRect();
     const rail = document.getElementById('rail')!.getBoundingClientRect();
     const tile = document.querySelector('#rail .tb-btn')!.getBoundingClientRect();
-    const roomRect = room.getBoundingClientRect();
+    const hud = document.getElementById('hud')!.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const sheets = [...document.querySelectorAll<HTMLElement>('.page-box')];
+    const sheet = getComputedStyle(sheets[0]);
     return {
       frame: getComputedStyle(document.body).backgroundColor,
-      roomBackground: getComputedStyle(room).backgroundColor,
-      radius: getComputedStyle(room).borderRadius,
-      paperShadow: getComputedStyle(document.querySelector('.page-box')!).boxShadow,
-      room: { left: roomRect.left, top: roomRect.top, right: roomRect.right, bottom: roomRect.bottom },
+      panelBackground: getComputedStyle(panel).backgroundColor,
+      radius: getComputedStyle(panel).borderRadius,
+      panelShadow: getComputedStyle(panel).boxShadow,
+      sheet: { background: sheet.backgroundColor, shadow: sheet.boxShadow, radius: sheet.borderRadius },
+      gapColour: getComputedStyle(document.getElementById('pages')!).backgroundColor,
+      gap: sheets[1].getBoundingClientRect().top - sheets[0].getBoundingClientRect().bottom,
+      panel: { left: panelRect.left, top: panelRect.top, right: panelRect.right, bottom: panelRect.bottom },
+      hud: { right: hud.right, bottom: hud.bottom, background: getComputedStyle(document.getElementById('hud')!).backgroundColor },
       barBottom: bar.bottom,
       barLeft: bar.left,
       barRight: bar.right,
@@ -151,40 +234,384 @@ test('the frame is Zen\'s: a dark edge all round a rounded room, the rail narrow
       height: window.innerHeight,
     };
   });
-  // A dark grey frame, not black, and the room a shade lighter, where the
-  // paper's soft shadow shows.
+  // A dark grey frame, not black; the panel is the paper's white, its
+  // shadow on the frame; the sheets inside it are bare paper, edge to
+  // edge, and between them a thin line of the frame (6 CSS px drawn at
+  // the panel's scale: 7.7 px here).
   expect(look.frame).toBe('rgb(24, 24, 26)');
-  expect(look.roomBackground).toBe('rgb(43, 42, 45)');
+  expect(look.panelBackground).toBe('rgb(255, 255, 255)');
   expect(look.radius).toBe('12px');
-  expect(look.paperShadow).not.toBe('none');
+  expect(look.panelShadow).not.toBe('none');
+  expect(look.sheet).toEqual({ background: 'rgb(255, 255, 255)', shadow: 'none', radius: '0px' });
+  expect(look.gapColour).toBe('rgb(24, 24, 26)');
+  expect(look.gap).toBeCloseTo((6 * (1100 - RAIL - EDGE)) / PAGE_W, 3);
   // The bar spans the whole window (it is the window's title bar in
   // Plass.app); the rail runs under it down the left edge, as narrow as
-  // Zen's: 32 px tiles with the frame's 8 px either side. The room starts
-  // where they end and keeps the same 8 px to the window's right and
-  // bottom edges.
+  // Zen's: 32 px tiles with 6 px either side, 44 px, the bar's height
+  // (knuth c6875a4). The panel starts where they end and keeps the
+  // frame's 8 px to the window's right and bottom edges: Knuth's room, to
+  // the pixel.
   expect(look.barLeft).toBe(0);
   expect(look.barRight).toBe(look.width);
-  expect(look.rail).toEqual({ left: 0, top: look.barBottom, right: look.room.left, bottom: look.height });
-  expect(look.tile).toEqual({ left: 8, width: 32, height: 32 });
-  expect(look.rail.right).toBe(48);
-  expect(look.room).toEqual({ left: 48, top: look.barBottom, right: look.width - 8, bottom: look.height - 8 });
+  expect(look.rail).toEqual({ left: 0, top: look.barBottom, right: look.panel.left, bottom: look.height });
+  expect(look.tile).toEqual({ left: 6, width: 32, height: 32 });
+  expect(look.rail.right).toBe(44);
+  expect(look.barBottom).toBe(44);
+  expect(look.panel).toEqual({ left: 44, top: look.barBottom, right: look.width - 8, bottom: look.height - 8 });
+  // The page count and words: a quiet chip inside the panel's corner.
+  expect(look.hud.right).toBe(look.panel.right - 10);
+  expect(look.hud.bottom).toBe(look.panel.bottom - 10);
+  expect(look.hud.background).not.toBe('rgba(0, 0, 0, 0)');
   // Chromium exposes the property (inert in a tab; the shell's window
   // moves by the bar's empty part, and the tiles, the name, the menus
   // and the view switch keep their clicks). The rail scrolls, so it is
   // no drag region.
   expect(await appRegion(page, '#toolbar')).toBe('drag');
   expect(await appRegion(page, '#rail')).not.toBe('drag');
-  for (const selector of ['.doc-title', '#toolbar .tb-tile', '.view-switch']) expect(await appRegion(page, selector)).toBe('no-drag');
+  for (const selector of ['#doc-pod', '#toolbar .tb-tile', '.view-switch']) expect(await appRegion(page, selector)).toBe('no-drag');
   await page.getByRole('button', { name: 'File', exact: true }).click();
   expect(await appRegion(page, '.tb-menu:not([hidden])')).toBe('no-drag');
+});
+
+/** Knuth's bar, as knuth main has it since c6875a4 ("The bar as tall as
+ *  the rail is wide", 2026-10-02), measured in the same shell at 1100 px:
+ *  44 px tall (the traffic lights' band, the rail's width), the File tile
+ *  32 px with an 18 px glyph, 6 px down, the name pill 30 px tall 7 px
+ *  down, 9 px rounded, #232326 with a white 8 % hairline, 10 px padding
+ *  and 9 px gaps; the name 15 px STIX Two Text letterspaced 1.35 px, the
+ *  folder 12 px sans; 6 px between the bar's items, 8 px at its right
+ *  end. In a tab the File tile is 6 px in, over the rail's tiles. */
+const bar = (page: Page) =>
+  page.evaluate(() => {
+    const toolbar = document.getElementById('toolbar')!;
+    const file = toolbar.querySelector('.tb-tile')!;
+    const pod = document.getElementById('doc-pod')!;
+    const name = document.getElementById('file-name')!;
+    const folder = document.getElementById('doc-folder')!;
+    const rect = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    };
+    const css = (el: Element, ...props: string[]) => Object.fromEntries(props.map((p) => [p, getComputedStyle(el).getPropertyValue(p)]));
+    return {
+      bar: { ...rect(toolbar), ...css(toolbar, 'gap', 'padding-right') },
+      file: rect(file),
+      glyph: rect(file.querySelector('.ico')!),
+      pod: { ...rect(pod), ...css(pod, 'border-radius', 'background-color', 'border-top-width', 'border-top-color', 'padding-left', 'gap', 'max-width') },
+      name: css(name, 'font-size', 'line-height', 'letter-spacing', 'color', 'font-family'),
+      mark: rect(document.getElementById('doc-mark')!),
+      folder: { shown: getComputedStyle(folder).display !== 'none', text: folder.textContent, title: folder.title, ...css(folder, 'font-size', 'color', 'direction') },
+    };
+  });
+
+test('the bar is Knuth\'s: the File tile, the name pill with its save dot and its folder, Export beside it', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await openTyp(page, '= Notes\n\nA short paper.\n', 'notes.typ');
+  const b = await bar(page);
+  expect(b.bar).toMatchObject({ y: 0, height: 44, gap: '6px', 'padding-right': '8px' });
+  expect(b.file).toEqual({ x: 6, y: 6, width: 32, height: 32 });
+  expect(b.glyph).toMatchObject({ width: 18, height: 18 });
+  expect(b.pod).toMatchObject({
+    x: 44, y: 7, height: 30,
+    'border-radius': '9px', 'background-color': 'rgb(35, 35, 38)', 'border-top-width': '1px', 'border-top-color': 'rgba(255, 255, 255, 0.08)',
+    'padding-left': '10px', gap: '9px', 'max-width': '550px',
+  });
+  expect(b.name).toMatchObject({ 'font-size': '15px', 'line-height': '22.5px', 'letter-spacing': '1.35px', color: 'rgba(252, 252, 251, 0.8)' });
+  expect(b.name['font-family']).toMatch(/^"STIX Two Text"/);
+  expect(b.mark).toMatchObject({ width: 6, height: 6 });
+  // A file in a tab has no path: the name alone.
+  expect(b.folder.shown).toBe(false);
+  // Export sits beside the pill.
+  const exportTile = await page.getByRole('button', { name: 'Export', exact: true }).boundingBox();
+  expect(exportTile!.x).toBe(b.pod.x + b.pod.width + 6);
+  expect(exportTile).toMatchObject({ y: 6, width: 32, height: 32 });
+
+  // A phone-width tab closes the pill up (a 6 px gap under a 540 px bar),
+  // and a short name still shows whole: the name's cap follows the pill's
+  // gap (it once kept 9 px for it and cut every name's last 3 px).
+  await page.setViewportSize({ width: 480, height: 700 });
+  for (const name of ['Demo', 'notes', 'Block_Outline']) {
+    await page.evaluate((name) => (window as unknown as Hooks).__fm.rename(name), name);
+    await expect(page.locator('#file-name')).toHaveText(name);
+    expect(await page.evaluate(() => getComputedStyle(document.getElementById('doc-pod')!).gap)).toBe('6px');
+    expect(await page.locator('#file-name').evaluate((el) => el.scrollWidth - el.clientWidth), name).toBe(0);
+  }
+  await page.setViewportSize({ width: 1100, height: 800 });
+
+  // A paper in a project folder (a tab working in a folder): the folder's
+  // name, as Knuth shows an attached folder's. (Kept on purpose, against
+  // the third pass's brief of the name alone in any tab: the two bars are
+  // one bar, docs/ZEN-DRAFT.md. A bare file has the name alone, above.)
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(`frame-${Math.random().toString(36).slice(2)}`, { create: true });
+    const h = await dir.getFileHandle('paper.typ', { create: true });
+    const w = await h.createWritable();
+    await w.write('= Paper\n\nIn a folder.\n');
+    await w.close();
+    await (window as unknown as Hooks).__fm.loadHandle(h, dir);
+  });
+  await expect.poll(async () => (await bar(page)).folder.text).toMatch(/^frame-/);
+  expect((await bar(page)).folder).toMatchObject({ shown: true, 'font-size': '12px', color: 'rgba(240, 238, 233, 0.55)', direction: 'rtl' });
+});
+
+test('in Plass.app the pill shows the folder the shell knows the file by, home as ~', async ({ page }) => {
+  // The shell's bridge, as preload.js gives it (shell 0.2.1): the page
+  // reports its file's name, size and date, and the shell answers with the
+  // path it matched (src/claerbout.ts reportDocument).
+  await page.addInitScript(() => {
+    (window as unknown as { claerbout: unknown }).claerbout = {
+      request: async (message: { type: string; name?: string }) =>
+        message.type === 'document' ? { path: message.name ? `/Users/someone/Papers/drafts/${message.name}` : null } : null,
+      on: () => () => {},
+      pathOf: () => '',
+    };
+  });
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await openTyp(page, '= Notes\n\nA short paper.\n', 'notes.typ');
+  await expect.poll(async () => (await bar(page)).folder.text).toBe('~/Papers/drafts');
+  expect((await bar(page)).folder).toMatchObject({ shown: true, title: '/Users/someone/Papers/drafts' });
+  // The folder gives way before the name: a narrow bar drops it (Knuth's
+  // 760 px), and a short pill cuts it from its start.
+  await page.setViewportSize({ width: 740, height: 800 });
+  await expect.poll(async () => (await bar(page)).folder.shown).toBe(false);
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await page.evaluate(() => (window as unknown as Hooks).__fm.rename('A rather long name for a paper with tables and side-by-side grids'));
+  await expect(page.locator('#file-name')).toHaveText('A rather long name for a paper with tables and side-by-side grids');
+  const long = await bar(page);
+  expect(long.folder.shown).toBe(true);
+  expect(long.pod.width).toBeLessThanOrEqual(550);
+  const name = (await page.locator('#file-name').boundingBox())!;
+  const folder = (await page.locator('#doc-folder').boundingBox())!;
+  expect(folder.x).toBeGreaterThan(name.x + name.width);
+  expect(folder.x + folder.width).toBeLessThanOrEqual(long.pod.x + long.pod.width - 11);
+});
+
+test('clicks, selections, the caret and the toolbars land where the page is drawn', async ({ page }) => {
+  test.setTimeout(90_000);
+  // 1.77×: every client coordinate on the page is a scaled one.
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as Hooks).__loadDemo));
+  await page.evaluate(() => (window as unknown as Hooks).__loadDemo());
+  await settleLocal(page);
+  /** A phrase's drawn box, scrolled to the middle of the panel. */
+  const phrase = (text: string) =>
+    page.evaluate((text) => {
+      const walker = document.createTreeWalker(document.querySelector('.ProseMirror')!, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+        const at = node.data.indexOf(text);
+        if (at < 0) continue;
+        node.parentElement!.scrollIntoView({ block: 'center' });
+        const range = document.createRange();
+        range.setStart(node, at);
+        range.setEnd(node, at + text.length);
+        const r = range.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
+      }
+      throw new Error(`no "${text}"`);
+    }, text);
+  /** Whether the caret is inside `word` in its paragraph. */
+  const caretIn = (word: string) =>
+    page.evaluate((word) => {
+      const { $head } = (window as unknown as Hooks).view.state.selection;
+      const at = $head.parent.textContent.indexOf(word);
+      return at >= 0 && $head.parentOffset >= at && $head.parentOffset <= at + word.length;
+    }, word);
+
+  // A click puts the caret where it lands.
+  let r = await phrase('millisecond');
+  await page.mouse.click(r.x + r.width / 2, r.y + r.height / 2);
+  await expect.poll(() => caretIn('millisecond')).toBe(true);
+  // A drag selects what it covers.
+  r = await phrase('Click anywhere');
+  const end = await phrase('start typing');
+  await page.mouse.move(r.x + 1, r.y + r.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width - 1, end.y + end.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => {
+    const { state } = (window as unknown as Hooks).view;
+    return state.doc.textBetween(state.selection.from, state.selection.to);
+  })).toBe('Click anywhere and start typing');
+  // ArrowDown goes to the next line, not past it (the caret's probes step
+  // by the drawn line pitch, src/editing.ts).
+  // (A beat after the drag, so the click is not read as its second.)
+  await page.waitForTimeout(400);
+  r = await phrase('Click');
+  await page.mouse.click(r.x + 2, r.y + r.height / 2);
+  await expect.poll(() => caretIn('Click')).toBe(true);
+  const line = () => page.evaluate(() => {
+    const { view } = window as unknown as Hooks;
+    return { head: view.state.selection.head, top: view.coordsAtPos(view.state.selection.head).top };
+  });
+  const from = await line();
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(async () => (await line()).head).not.toBe(from.head);
+  const to = await line();
+  const pitch = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.ProseMirror p')!).lineHeight));
+  const scale = (1500 - RAIL - EDGE) / PAGE_W;
+  expect(to.top - from.top).toBeGreaterThan(pitch * scale * 0.8);
+  expect(to.top - from.top).toBeLessThan(pitch * scale * 1.6);
+
+  // A click in a table cell opens the table's toolbar, docked under the
+  // bar on the panel's axis.
+  const cell = await page.evaluate(() => {
+    const p = document.querySelector('.ProseMirror table td p')!;
+    p.scrollIntoView({ block: 'center' });
+    const b = p.getBoundingClientRect();
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  });
+  await page.mouse.click(cell.x, cell.y);
+  await expect.poll(() => page.evaluate(() => (window as unknown as Hooks).view.state.selection.$head.node(-1).type.name)).toBe('table_cell');
+  const tableBar = page.getByRole('toolbar', { name: 'Table controls', exact: true });
+  await expect(tableBar).toBeVisible();
+  const tb = (await tableBar.boundingBox())!;
+  expect(Math.abs(tb.x + tb.width / 2 - (RAIL + 1500 - EDGE) / 2)).toBeLessThan(1);
+
+  // A click on the figure selects it and brings its toolbar up.
+  const figure = await page.evaluate(() => {
+    const img = document.querySelector('.ProseMirror figure img')!;
+    img.scrollIntoView({ block: 'center' });
+    const b = img.getBoundingClientRect();
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  });
+  await page.mouse.click(figure.x, figure.y);
+  await expect.poll(() => page.evaluate(() => {
+    const selection = (window as unknown as Hooks).view.state.selection as unknown as { node?: { type: { name: string } } };
+    return selection.node?.type.name ?? null;
+  })).toBe('figure');
+  await expect(page.locator('.image-toolbar')).toBeVisible();
+
+  // An image dropped on the page lands where it was dropped: the drop's
+  // client point resolves to the drawn word under it.
+  r = await phrase('Supply and demand');
+  const dropped = await page.evaluate(({ x, y }) => {
+    const data = new DataTransfer();
+    data.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'dropped.png', { type: 'image/png' }));
+    document.querySelector('.ProseMirror')!.dispatchEvent(new DragEvent('drop', { clientX: x, clientY: y, dataTransfer: data, bubbles: true, cancelable: true }));
+    const { $head } = (window as unknown as Hooks).view.state.selection;
+    return $head.parent.textContent.slice($head.parentOffset, $head.parentOffset + 6);
+  }, { x: r.x + 1, y: r.y + r.height / 2 });
+  expect(dropped).toBe('Supply');
+
+  // The bibliography editor covers the window, whatever the page's scale.
+  await page.evaluate(async () => {
+    const { editBibliography } = await import('/src/citations.ts');
+    editBibliography((window as unknown as Hooks).view, () => {});
+  });
+  const overlay = (await page.locator('.bib-editor-overlay').boundingBox())!;
+  expect(overlay).toEqual({ x: 0, y: 0, width: 1500, height: 900 });
+});
+
+test('a pass holds the caret where it is on the screen: Enters mid-page, across a page break, and a burst past the last page', async ({ page }) => {
+  test.setTimeout(120_000);
+  // 1.77×, where Chromium's own scroll anchoring, now off on the panel,
+  // once scrolled it a few hundred px by itself a beat after the Enters
+  // (the pass takes the paper's transform off and puts it back), and where
+  // a line carried over a page break left the caret 365 px below the
+  // panel. A pass holds a followed caret still (src/paper-scale.ts).
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await openTyp(page, Array.from({ length: 30 }, (_, i) => `P${i} ` + FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
+  const caret = () =>
+    page.evaluate(() => {
+      const { view } = window as unknown as Hooks;
+      const panel = document.getElementById('scroll')!.getBoundingClientRect();
+      const clip = document.getElementById('paper')!.getBoundingClientRect();
+      const c = view.coordsAtPos(view.state.selection.head);
+      const sheets = [...document.querySelectorAll('.page-box')].map((el) => el.getBoundingClientRect());
+      return {
+        top: c.top,
+        inView: c.top >= panel.top && c.bottom <= panel.bottom && c.bottom <= clip.bottom,
+        sheet: sheets.findIndex((r) => c.top >= r.top && c.top < r.bottom),
+        sheets: sheets.length,
+      };
+    });
+  const passes = () => page.evaluate(() => (window as unknown as Hooks).__pagCount());
+
+  // Mid-document: scrolled 45 % down, a click near the panel's top, then
+  // Enter ×14. ProseMirror keeps the caret in view, near the panel's
+  // bottom, and the settled pass leaves it there to the pixel.
+  await page.evaluate(() => {
+    const panel = document.getElementById('scroll')!;
+    panel.scrollTop = (panel.scrollHeight - panel.clientHeight) * 0.45;
+  });
+  const start = await page.evaluate(() => {
+    const top = document.getElementById('scroll')!.getBoundingClientRect().top;
+    const p = [...document.querySelectorAll('.ProseMirror p')].find((el) => el.getBoundingClientRect().top > top + 40)!;
+    const r = p.getBoundingClientRect();
+    return { x: r.left + 3, y: r.top + 8 };
+  });
+  const head = () => page.evaluate(() => (window as unknown as Hooks).view.state.selection.head);
+  const from = await head();
+  await page.mouse.click(start.x, start.y);
+  await expect.poll(head).not.toBe(from);
+  let before = await passes();
+  for (let i = 0; i < 14; i++) await page.keyboard.press('Enter');
+  let typed = await caret();
+  await settleLocal(page, before);
+  let settled = await caret();
+  expect(typed.inView).toBe(true);
+  expect(Math.abs(settled.top - typed.top)).toBeLessThan(1);
+
+  // Across a page break: the caret on a page's last line near the panel's
+  // bottom, and Enters that carry its line over to the next page.
+  await page.evaluate(() => {
+    const { view } = window as unknown as Hooks;
+    const panel = document.getElementById('scroll')!;
+    const box = panel.getBoundingClientRect();
+    let gap = document.querySelectorAll('.ts-pagegap')[1].getBoundingClientRect();
+    panel.scrollTop += gap.top - (box.bottom - 80);
+    gap = document.querySelectorAll('.ts-pagegap')[1].getBoundingClientRect();
+    const line = parseFloat(getComputedStyle(document.querySelector('.ProseMirror p')!).lineHeight) * (box.width / 816);
+    const hit = view.posAtCoords({ left: box.left + box.width * 0.25, top: gap.top - line / 2 })!;
+    const Selection = view.state.selection.constructor as typeof import('prosemirror-state').Selection;
+    view.focus();
+    view.dispatch(view.state.tr.setSelection(Selection.near(view.state.doc.resolve(hit.pos), -1)).scrollIntoView());
+  });
+  const onPage = (await caret()).sheet;
+  before = await passes();
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Enter');
+  typed = await caret();
+  await settleLocal(page, before);
+  settled = await caret();
+  expect(settled.sheet).toBe(onPage + 1);
+  expect(typed.inView).toBe(true);
+  expect(settled.inView).toBe(true);
+  expect(Math.abs(settled.top - typed.top)).toBeLessThan(1);
+
+  // At the end of the paper, a burst of Enters running past the last page
+  // before the pass that adds one: the caret stays in view through it
+  // (the clip box takes the editor's height before ProseMirror scrolls),
+  // and the pass that adds the page leaves it where it was.
+  await page.keyboard.press('Meta+ArrowDown');
+  await settleLocal(page);
+  const sheets = (await caret()).sheets;
+  before = await passes();
+  for (let i = 0; i < 80; i++) {
+    await page.keyboard.press('Enter');
+    const now = await page.evaluate(() => {
+      const { view } = window as unknown as Hooks;
+      const stack = document.getElementById('stack')!;
+      return view.coordsAtPos(view.state.selection.head).top > stack.getBoundingClientRect().bottom + 60;
+    });
+    expect((await caret()).inView, `Enter ${i + 1}`).toBe(true);
+    if (now) break;
+  }
+  typed = await caret();
+  await settleLocal(page, before);
+  settled = await caret();
+  expect(settled.sheets).toBeGreaterThan(sheets);
+  expect(settled.inView).toBe(true);
+  expect(Math.abs(settled.top - typed.top)).toBeLessThan(1);
 });
 
 test('the rail and the panels it opens keep off the bar; a short window says the tools go on and keeps settings and the switch', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
   await page.goto('/?new=1');
-  await page.waitForFunction(() => Boolean(window.view));
+  await page.waitForFunction(() => Boolean((window as unknown as Hooks).view));
   const barBottom = await page.evaluate(() => document.getElementById('toolbar')!.getBoundingClientRect().bottom);
-  // Document settings is taller than the room under its tile: it opens
+  // Document settings is taller than the panel under its tile: it opens
   // beside the rail, stops below the bar and scrolls inside itself.
   await page.getByRole('button', { name: 'Document settings', exact: true }).click();
   const panel = page.getByRole('dialog', { name: 'Document settings', exact: true });
@@ -252,11 +679,16 @@ test('the rail and the panels it opens keep off the bar; a short window says the
   await expect.poll(cue).toEqual({ above: true, below: false });
 });
 
-test('print shows the paper alone: the bar, the rail and the HUD are gone', async ({ page }) => {
+test('print shows the paper alone, at its own size: the bar, the rail and the HUD are gone', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 800 });
   await page.goto('/?new=1');
-  await page.waitForFunction(() => Boolean(window.view));
+  await page.waitForFunction(() => Boolean((window as unknown as Hooks).view));
   await page.emulateMedia({ media: 'print' });
-  const shown = await page.evaluate(() => ['#toolbar', '#rail', '#hud', '.view-switch'].map((selector) => getComputedStyle(document.querySelector(selector)!).display));
-  expect(shown).toEqual(['none', 'none', 'none', 'none']);
+  const printed = await page.evaluate(() => ({
+    hidden: ['#toolbar', '#rail', '#hud', '.view-switch'].map((selector) => getComputedStyle(document.querySelector(selector)!).display),
+    transform: getComputedStyle(document.getElementById('stack')!).transform,
+    clip: getComputedStyle(document.getElementById('paper')!).overflow,
+  }));
+  expect(printed).toEqual({ hidden: ['none', 'none', 'none', 'none'], transform: 'none', clip: 'visible' });
   await page.emulateMedia({ media: 'screen' });
 });
