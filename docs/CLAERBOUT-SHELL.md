@@ -356,4 +356,9 @@ prompted.
   and installs a newer one, relaunching; the shell also checks quietly
   after launch and the item then reads Install update. `src/claerbout.ts`
   has the three calls (`checkForUpdate`, `installUpdate`, `onUpdate`).
-- Fullscreen as a menu role is enough, or the page needs to ask for it.
+- ~~Fullscreen as a menu role is enough, or the page needs to ask for it.~~
+  Both work, checked 2026-10-01 in the shell from the checkout:
+  `document.fullscreenEnabled` is true in the window and
+  `requestFullscreen()` on the page fills the screen (the shell grants
+  the page its own fullscreen, `grantPermissions`), beside View → Toggle
+  Full Screen. Nothing to add.
