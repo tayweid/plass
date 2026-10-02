@@ -119,7 +119,7 @@ jobs:
       # day: a sibling clone needs the exact Electron). Its own checkout
       # carries Electron and the packager; Plass's node_modules are not
       # needed here.
-      CLAERBOUT_TAG: v0.2.0
+      CLAERBOUT_TAG: v0.2.1
       CLAERBOUT_SHELL: ${{ github.workspace }}/../claerbout
       # The packager fetches Electron for each architecture itself.
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
@@ -142,7 +142,9 @@ jobs:
         run: node app/build.mjs --web dist --arch arm64,x64 --zip published/app
       # The way a user gets it: the install line against these zips, which
       # fetches Electron's release and checks it. Then the app itself on a
-      # document: it opens, typesets, saves.
+      # document: it opens, typesets, saves, and a second open of the
+      # document fronts the window that has it (shell 0.2.1's focus
+      # request; an older shell is said and skipped).
       - name: Install it with the install line
         run: PLASS_SITE="$PWD/published" PLASS_APP="$RUNNER_TEMP/Plass.app" PLASS_SIBLINGS="" bash public/install
       - name: Smoke-test the installed app
