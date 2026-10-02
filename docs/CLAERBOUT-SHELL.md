@@ -368,7 +368,8 @@ prompted.
   shell's config gains `window.titleBarStyle` (`default`, or
   `hiddenInset`/`hidden`: no native title bar, the page reaches the top
   of the window, the lights over it) and `window.trafficLightPosition`
-  (`{x, y}`); `app/plass.json` sets `hiddenInset` and `{x: 20, y: 23}`.
+  (`{x, y}`); `app/plass.json` sets `hiddenInset` and `{x: 14, y: 15}`
+  (`{x: 20, y: 23}` until the bar went to 44 px, 2026-10-02).
   Whenever the title bar is not native the shell also sets Electron's
   `titleBarOverlay: true`, which on macOS draws nothing and publishes
   the lights' room to the page: `navigator.windowControlsOverlay.visible`
@@ -382,7 +383,9 @@ prompted.
   drops to 0). Measured on the shell's Electron 44.5.0: `hiddenInset` +
   overlay gives area `{x: 84, y: 0, h: 36}` with the lights at their
   default place, `{x: 100, h: 60}` with `{x: 20, y: 23}` (the area is
-  2·y + 14 px tall, so y = 23 centres the lights on Plass's 60 px bar);
+  2·y + 14 px tall, so y = 23 centred the lights on the 60 px bar), and
+  `{x: 88, h: 44}` with `{x: 14, y: 15}`, the 44 px bar Plass and Knuth
+  have now;
   `hidden` + overlay `{x: 78, h: 32}`. The bar is `-webkit-app-region:
   drag`, with `no-drag` on its tiles and the name pill, the menus, the
   settings panel and the view switch; Electron handles the mouse over a

@@ -11,14 +11,17 @@ curved edges around the page at all four corners") and the two
 reviewers' findings (below, *The second pass*); both are on main. The
 third pass (branch `ux/zen3`, the same afternoon) gives Plass Knuth's
 bar and makes the panel the paper, the window the zoom (below, *The
-third pass*). Run it from the worktree with `npm run app` (after `npx
-vite build`); the record is `docs/zen-draft-1100.png` and
-`docs/zen-draft-1500.png`, the shell from the checkout at 1100 and 1500
-px wide, and `docs/zen-knuth-1100.png`, Knuth in the same shell at 1100,
-for the bars (page captures: the traffic lights are the window's own and
-are not in them — `screencapture` of the window needs a screen-recording
-grant this session does not have; their room is the empty 100 px at the
-bar's left, which the File tile sits beside).
+third pass*), and then takes Knuth's new 44 px bar and holds the view
+still while typing (below, *The bar as tall as the rail is wide*). Run
+it from the worktree with `npm run app` (after `npx vite build`); the
+record is `docs/zen-draft-1100.png` and `docs/zen-draft-1500.png`, the
+shell from the checkout at 1100 and 1500 px wide, and
+`docs/zen-knuth-1100.png`, Knuth in the same shell at 1100, for the
+bars, each on a document in `~/Projects/week-3` (page captures: the
+traffic lights are the window's own and are not in them —
+`screencapture` of the window needs a screen-recording grant this
+session does not have; their room is the empty 88 px at the bar's left,
+which the File tile sits 12 px past).
 
 ## The third pass
 
@@ -61,7 +64,8 @@ on the bar rather than a media query (below, *The resize cost*).
 
 Knuth's bar, measured in the shell checkout (claerbout main 6ef9af3,
 knuth main a1703f5, a 1100 × 800 window, `CLAERBOUT_APP=app/knuth.json`,
-a throwaway `KNUTH_CONFIG_DIR`), against Plass's before and after:
+a throwaway `KNUTH_CONFIG_DIR`), against Plass's before and after (the
+heights and sizes since replaced by Knuth's 44 px bar, below):
 
 | | Knuth | Plass before | Plass now |
 |---|---|---|---|
@@ -83,34 +87,35 @@ it, where the bar is the window's title bar with the lights in it. So
 the bars Taylor compared were in two shells (open, below).
 
 **The panel is the paper.** One elevated panel: from the rail's tiles
-plus the frame's 8 px (x 48) to 8 px short of the window's right edge,
-from the bar's band (9 px under the pill) to 8 px above the window's
-bottom, rounded 12 px at all four corners, the paper's white, its shadow
-on the frame — Knuth's room's box, to the pixel. ("From the rail's right
-edge plus 8 px … under the bar plus 8 px" is read with the rail's own
-8 px padding and the band's 9 px under the pill as that edge: taken past
-the rail element and the bar element, the frame would show 16 px beside
-the tiles and 17 under the pill, against "the frame shows only as that
-8 px edge all round", and the panel would sit off Knuth's.) The pages
-fill its width edge to edge and stack down it with a thin line of the
-frame between them; the panel clips them and scrolls, drawing no
-scrollbar (the rail's groups draw none either); the page count and
-words sit in its bottom-right corner, 10 px in, a quiet frosted chip.
+plus the frame's 8 px (x 48; x 44 since the rail's 6 px, below) to 8 px
+short of the window's right edge, from the bar's band (9 px under the
+pill) to 8 px above the window's bottom, rounded 12 px at all four
+corners, the paper's white, its shadow on the frame — Knuth's room's
+box, to the pixel. ("From the rail's right edge plus 8 px … under the
+bar plus 8 px" is read with the rail's own 8 px padding and the band's 9
+px under the pill as that edge: taken past the rail element and the bar
+element, the frame would show 16 px beside the tiles and 17 under the
+pill, against "the frame shows only as that 8 px edge all round", and
+the panel would sit off Knuth's.) The pages fill its width edge to edge
+and stack down it with a thin line of the frame between them; the panel
+clips them and scrolls, drawing no scrollbar (the rail's groups draw
+none either); the page count and words sit in its bottom-right corner,
+10 px in, a quiet frosted chip.
 
 The page fills the panel **by scaling, never by re-flowing**. The layout
 is still the page's own width, 816 CSS px for Letter, and
 `src/paper-scale.ts` draws it at the panel's width with a transform on
-`#stack`: `scale(panel width / 816)` from its top-left corner (1.279 at
-1100, 1.770 at 1500, 0.838 at 740). Around the stack, `#paper` is a
-clip box whose height is the stack's times the scale, so the panel
-scrolls exactly the drawn pages and never sideways. One ResizeObserver
-on the panel and the stack writes the scale and that height, and keeps
-the line at the panel's top where it was; a transform resizes no box,
-so the writes cannot loop. No CSS zoom, no layout, no pagination pass:
-the editor's width in CSS px never changes, and the layout scheduler,
-which watches that width, never wakes. The page gap is 6 CSS px (was 28,
-when the sheets floated in a room): 7.7 screen px at 1100, 10.6 at 1500,
-5 at 740, about the frame's edge.
+`#stack`: `scale(panel width / 816)` from its top-left corner (1.284 at
+1100, 1.775 at 1500, 0.843 at 740, with the 44 px rail). Around the
+stack, `#paper` is a clip box whose height is the stack's times the
+scale, so the panel scrolls exactly the drawn pages and never sideways.
+One ResizeObserver on the panel and the stack writes the scale and that
+height, and keeps the line at the panel's top where it was; a transform
+resizes no box, so the writes cannot loop. No CSS zoom, no layout, no
+pagination pass: the editor's width in CSS px never changes, and the
+layout scheduler, which watches that width, never wakes. The page gap is
+6 CSS px (was 28, when the sheets floated in a room): 7.7 screen px at
+1100, 10.6 at 1500, 5 at 740, about the frame's edge.
 
 What the transform asks of the code: every client rect under it is the
 drawn one, scaled. ProseMirror reads `getBoundingClientRect`, which
@@ -174,21 +179,99 @@ against the window and Knuth's room's; the page meeting the panel edge
 to edge with its scale equal to panel width / 816 at 1100, 1500 and 740,
 and not one pass, the same breaks and the place kept across them; the
 same layout, every spacer, folio, footnote, solution rule, table column
-and grid cell, laid out afresh at 872 (1:1), 1500 and 740 (with the
+and grid cell, laid out afresh at 868 (1:1), 1500 and 740 (with the
 brackets turned off this fails at 1500); the frame's colours, the bare
 sheets, the gap in the frame's colour and its drawn width, the HUD in
 the corner; the bar's measurements equal to Knuth's; the folder from a
 project folder in a tab, and from the shell's answer in Plass.app, with
 ~, giving way first; at 1.77× a click, a drag-selection, ArrowDown, the
 table toolbar, the figure's toolbar, an image drop and the bibliography
-editor; print at the page's own size. The suite's default window is
-872 × 720 (`playwright.config.ts`): the width at which the drawn page
-is the laid-out page, so the layout tests read the page in the layout's
-px as they always have, and `frame.spec` covers the other widths. The
-smoke (`app/smoke.mjs`) checks the page filling the panel at rest,
-wider and zoomed, no pass across the drag and the zoom (the HUD's
-title), the panel's box and white, the bar's measurements against
-Knuth's, and the folder from the shell.
+editor; print at the page's own size. The suite's default window is 868
+× 720 (`playwright.config.ts`; 872 with the 48 px rail): the width at
+which the drawn page is the laid-out page, so the layout tests read the
+page in the layout's px as they always have, and `frame.spec` covers the
+other widths. The smoke (`app/smoke.mjs`) checks the page filling the
+panel at rest, wider and zoomed, no pass across the drag and the zoom
+(the HUD's title), the panel's box and white, the bar's measurements
+against Knuth's, and the folder from the shell.
+
+### The bar as tall as the rail is wide (the same afternoon)
+
+Taylor, running the merged apps: the bars "seem taller than they were
+originally", and the height they liked is the panes mockup's, "equal in
+height to the width of the sidebar". Knuth took it first (knuth
+c6875a4, "The bar as tall as the rail is wide"), and Plass takes the
+same numbers: the bar 44 px (`--topbar: env(titlebar-area-height,
+44px)`), the rail 44 px (a 32 px tile with 6 px either side,
+`--rail-gap`; the panel's edge at the window's right and bottom stays
+8 px, and the panel still starts at the bar's bottom), the name pill
+30 px tall with 9 px corners and 10 px padding, the bar's tiles (File,
+Export) 32 px with 9 px corners and 18 px glyphs, and the traffic lights
+at {x: 14, y: 15} in `app/plass.json`, so their band is the bar
+(2·15 + 14 = 44). The 60 px bar was the old toolbar's height, which as
+a solid band with no title bar above it read heavier than the glass had.
+
+Both apps in the same shell (claerbout main b19873e, knuth main
+2d5fc68, which has c6875a4's numbers, Plass from this branch), 1100 ×
+800, each on a document in `~/Projects/week-3`:
+
+| | Knuth | Plass |
+|---|---|---|
+| lights' room | x 88, 44 tall | x 88, 44 tall |
+| bar | 44 px, padded 100 px (the room + 12) and 8 px, 6 px gaps | same |
+| File tile | 32 × 32 at (100, 6), 9 px corners, 18 px glyph | same |
+| name pill | 30 tall at (138, 7), 9 px corners, 10 px padding, 9 px gaps, #232326, widest 550 | same |
+| name | 15 px STIX Two Text, 1.35 px tracking, at x 149 | same |
+| folder | `~/Projects/week-3`, 12 px, y 13, 103.09 px wide | same |
+| the right of the pill | the status pill, 30 tall at y 7, 9 px corners, ending at the room's right (1092) | Export, 32 × 32 at y 6, 9 px corners, 18 px glyph, 6 px past the pill |
+| rail | 44 wide from y 44, its tiles 32 px at x 6 | same |
+| room / panel | (44, 44), 1048 × 748 | same |
+
+The same at 1500. The pills differ in width by their names alone
+(notes.py, draft).
+
+**The view holds still.** A pass takes the paper's transform off and
+puts it back (`atPaperSize`), and at any scale but 1 Chromium's scroll
+anchoring answered that by scrolling the panel by itself a beat after
+typing (the reviewers: Enter ×14 mid-document at 1500 px, then 272 px of
+scroll and the caret 272 px higher). And where Enters carry the caret's
+line over a page break, the pass moved it down past the panel's bottom
+(414 px at 1500; main does that too, 252 px at 1:1). The panel has
+`overflow-anchor: none` now, and the view is held by `paperPass`
+(`src/paper-scale.ts`), round both of the scheduler's passes: when the
+caret is being followed (ProseMirror scrolled it into view since it last
+moved: a keystroke, an arrow, a command, not a click or a load) and is
+in the panel's view, the panel scrolls by however far the pass moved it,
+once, so it is at the same place on the screen after the pass, to under
+a pixel, at 1500, 1100 and 868. Nothing else is anchored: the pages hold
+their content still on their own (a page's spacer takes up what its
+lines gain or lose), so a pass moves nothing in view but the lines that
+cross a break, and a first-visible-line anchor would hold a stale place
+against a pass that puts it right. An edit that is not at the caret
+(none in Plass's own use; a test inserting three paragraphs above the
+view) moves the text down by what it inserted (231 px at 1100); on main
+the anchoring held it through the insertion and the pass then moved it
+237–259 px the other way, so neither held, and this is accepted.
+
+Typing at the end of a long paper had a second fault behind the first:
+the clip box round the drawn pages had the pages' height, so a burst of
+Enters past the last page, before the pass that adds one, ran the caret
+under the clip, out of reach, and the pass then left it there (2276 px
+down in an 892 px panel). The clip now takes the editor's height while
+it runs past the stack (`fitPaper`), and before ProseMirror scrolls the
+caret into view (the typeset plugin's `handleScrollToSelection`), so
+the caret stays on screen through the burst and the pass that adds the
+page holds it. `frame.spec` types each case at 1500: Enter ×14
+mid-page, Enters over a page break, a burst past the last page; on the
+code before this change it fails at the first (the caret 414 px off).
+
+**The browser tab.** Under a 540 px bar (a phone-width tab) every name
+lost its last 3 px to an ellipsis: the name's cap kept the pill's 9 px
+gap while the narrow bar closes it to 6, so the cap follows the pill's
+gap now (`--pod-gap`). A tab working in a project folder **keeps the
+folder line** (decided: it mirrors Knuth, whose bar shows an attached
+folder's name; the brief's "a tab shows the name alone" is now a tab
+with a bare file), and `frame.spec` expects it so.
 
 ## The second pass
 
@@ -426,14 +509,8 @@ are the same.
 
 ## What is still open
 
-1. **The bar's height.** In the same shell Knuth's bar and Plass's were
-   already the same height (60 px, 55 at a zoom step); the third pass
-   copies the rest. Knuth's `npm run app` runs on the shell tag v0.2.0
-   (a native title bar above a 60 px bar), Plass's on the checkout (the
-   bar is the title bar, the lights in it). If "the vertical height of
-   the bar in knuth is better" meant the separate title bar, that is the
-   shell's `titleBarStyle`, one line in `app/plass.json`; once Knuth
-   pins a shell past 0.2.0 its bar will look like Plass's does now.
+1. ~~**The bar's height.**~~ DECIDED: 44 px, as tall as the rail is
+   wide, in both apps (above, *The bar as tall as the rail is wide*).
 2. **No scrollbar in the panel.** The paper runs to the panel's right
    edge, so there is nowhere for a gutter; the wheel and the keys scroll
    and the HUD counts pages. A thin thumb laid over the paper's right
@@ -444,31 +521,30 @@ are the same.
 4. **The page gap scales.** 6 CSS px, 5–11 screen px from the narrowest
    window to the widest. A gap fixed in screen px would change the
    layout's page stride with the window, which is a re-layout.
-5. **The folder in a tab.** A tab working in a project folder shows the
-   folder's name, as Knuth's does; the brief said a tab shows the name
-   alone. One line in `toolbar.ts` (`repaintFolder`) if not.
+5. ~~**The folder in a tab.**~~ DECIDED: kept. A tab working in a
+   project folder shows the folder's name, as Knuth's does; a tab with a
+   bare file shows the name alone.
 6. **The plain-text view scales too**, being in the same stack: at 1500
    its text is drawn 1.77×. Consistent with "the window is the zoom";
    it could keep a fixed size instead.
-7. **Scroll anchoring.** A pass sets the transform to identity and back,
-   and Chromium suspends scroll anchoring for a frame whose transform
-   changed, so a pass that moves a page break above the panel's top no
-   longer has the browser hold the view still. Nothing in the suite or
-   the measurements shows it; ProseMirror keeps the caret in view.
+7. ~~**Scroll anchoring.**~~ FIXED: it did show (the reviewers measured
+   the panel scrolling by itself after typing at 1.28× and 1.77×);
+   Chromium's anchoring is off on the panel and a pass holds a followed
+   caret (above).
 8. **The File menu's focus.** Knuth's menu hands the focus back to where
    it was when it opened (the cell being typed in); Plass's hands it to
    the tile, as `toolbar.spec` pins. Not copied.
 9. **Knuth's room.** Knuth keeps its grey room round a centred column;
    if the two apps are one system, its cells may want the same panel.
-10. **The frame's shade, the rail at 48 vs 44, Alignment on the rail,
+10. **The frame's shade (the rail is 44 now), Alignment on the rail,
     the rail as a drag region, 'File' or 'Open', the Insert ▸ glyph**:
     as the second pass left them.
 11. **The glass over the paper.** Every menu now opens over the white
     paper, so the step at the paper's edge is gone; the glass reads
     #28272b there (94 % opaque), a shade lighter than over the frame.
 12. **The record's screenshots** are page captures without the traffic
-    lights, and the documents were in the session's scratch folder, so
-    the folder line shows a long path cut from its start.
+    lights. (Retaken on documents in `~/Projects/week-3`: the folder
+    line reads as it would for a real project.)
 
 ## Checks (second pass)
 
@@ -514,3 +590,18 @@ are the same.
   "passes": the edit's own settled pass, 250 ms after the last key,
   landing after the counter was set; it now waits for a quiet second
   before counting.
+
+## Checks (third pass, the 44 px bar and the held view)
+
+- `npm test`: green. `npm run build`: green; the built stylesheet keeps
+  its two container queries and no width media query.
+- `CI=1 npx playwright test --project=chromium`: 179 passed. New and
+  changed: `frame.spec`'s bar at Knuth's 44 px numbers, the 44 px rail
+  and the panel from x 44, the 1:1 width 868, names whole at 480 px, and
+  the caret held through Enter ×14 mid-page, Enters over a page break
+  and a burst past the last page, at 1500.
+- `node app/smoke.mjs`: ok, four runs, with the bar checked at 44 px,
+  the File tile 32 px 6 px down and the pill 30 px 7 px down, against
+  the lights' band.
+- Both apps measured in the same shell at 1100 and 1500 (above): the
+  bars agree to the pixel.

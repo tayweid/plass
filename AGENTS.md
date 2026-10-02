@@ -49,7 +49,9 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   (`src/paper-scale.ts`), so a wider window draws a larger page and the
   layout never runs for a resize or a zoom; a layout read of page
   geometry goes through `atPaperSize`, which takes the transform off for
-  the read. On shell 0.2.1 (`followZoom` in `app/plass.json`) a zoom
+  the read, and a pass runs through `paperPass`, which holds a followed
+  caret still on the screen (the panel has no browser scroll anchoring).
+  On shell 0.2.1 (`followZoom` in `app/plass.json`) a zoom
   step scales the window with it, which is just a wider window. With a shell
   past v0.2.0, `app/plass.json`'s `titleBarStyle: "hiddenInset"` makes
   the bar the window's title bar beside the traffic lights; the page

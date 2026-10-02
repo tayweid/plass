@@ -6,7 +6,7 @@
    by nothing else: nothing in the bar centres on the paper any more.
    With no lights' room — a browser, the PWA, a native title bar — the
    File tile stands over the rail's column of tiles instead, 6 px in
-   ((48 − 36) / 2: the env() fallback undoes 6 px of the 12). The rail
+   ((44 − 32) / 2: the env() fallback undoes 6 px of the 12). The rail
    down the left holds the tools in the bar's old groups under
    hairlines, with the occasional ones behind Extras; its menus fly out
    to the right. The app's window is no narrower than the row needs
@@ -16,20 +16,20 @@
   padding-inline: calc(12px + env(titlebar-area-x, -6px)) var(--edge);
 }
 
-/* The bar's two tiles: bare, a little smaller than the rail's. */
+/* The bar's two tiles: bare, the rail's size (Knuth's, c6875a4). */
 #toolbar .tb-tile {
   flex: none;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
   padding: 0;
-  border-radius: 10px;
+  border-radius: 9px;
   color: rgba(240, 238, 233, 0.62);
 }
 
 #toolbar .tb-tile .ico {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 #toolbar .tb-tile:hover,
@@ -53,12 +53,13 @@
 /* ---------- the rail ---------- */
 
 /* Under the bar, down the left edge, as narrow as Zen's: 32 px tiles with
-   the frame's edge either side (style.css, --rail). The tool groups
-   scroll as one when the window is short (no scrollbar drawn; the wheel
-   still scrolls, and a fade at the cut edge says there is more), and,
-   as Zen pins its bottom icons, Document settings and the view switch
-   stay pinned at the bottom, the switch level with the panel's bottom
-   edge: only tools ever go under the fade. */
+   6 px either side, 44 px, as wide as the bar is tall (style.css,
+   --rail). The tool groups scroll as one when the window is short (no
+   scrollbar drawn; the wheel still scrolls, and a fade at the cut edge
+   says there is more), and, as Zen pins its bottom icons, Document
+   settings and the view switch stay pinned at the bottom, the switch
+   level with the panel's bottom edge: only tools ever go under the
+   fade. */
 #rail {
   position: fixed;
   top: var(--topbar);
@@ -400,7 +401,7 @@
 @container bar (max-width: 540px) {
   #toolbar .doc-pod {
     padding-inline: 8px;
-    gap: 6px;
+    --pod-gap: 6px;
   }
 }
 

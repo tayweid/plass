@@ -213,10 +213,12 @@ if (!glass || glass === 'none') await fail(`the File menu draws no blur (backdro
 // its File tile then sits. Plass.app is built on a tag of the shell,
 // which carries the key only from its next tag: the check is for a shell
 // that has it.
-// Knuth's bar, measured in the same shell on knuth main (a1703f5,
-// 2026-10-02): the bar the lights' band (60 px at rest), the File tile
-// 36 px square 12 px past the lights' room, the name pill 42 px tall and
-// centred on the band, Export beside it.
+// Knuth's bar, as knuth main has it since c6875a4 ("The bar as tall as
+// the rail is wide", 2026-10-02), measured in the same shell: the bar the
+// lights' band (44 px at rest, the rail's width; app/plass.json puts the
+// lights at {14, 15}, so the band is 2·15 + 14), the File tile 32 px
+// square 12 px past the lights' room and 6 px down, the name pill 30 px
+// tall 7 px down, centred on the band, Export beside it.
 const hidesTitleBar = process.platform === 'darwin' && fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('titleBarStyle');
 if (hidesTitleBar) {
   const bar = await page.evaluate(() => {
@@ -238,10 +240,10 @@ if (hidesTitleBar) {
     };
   });
   if (!bar.visible || bar.x <= 0) await fail(`the shell hides the title bar but the page sees no overlay (${JSON.stringify(bar)})`);
-  if (bar.height !== bar.barHeight || bar.barHeight !== 60) await fail(`the lights' room is ${bar.height}px tall, the bar ${bar.barHeight}px (Knuth's is 60)`);
+  if (bar.height !== bar.barHeight || bar.barHeight !== 44) await fail(`the lights' room is ${bar.height}px tall, the bar ${bar.barHeight}px (Knuth's is 44)`);
   if (bar.padding !== bar.x + 12 || bar.file.x !== bar.x + 12) await fail(`the File tile is at ${bar.file.x}px, the bar padded ${bar.padding}px, the lights' room ${bar.x}px (Knuth's tile is 12 px past it)`);
-  if (bar.file.width !== 36 || bar.file.height !== 36 || bar.file.y !== 12) await fail(`the File tile is ${JSON.stringify(bar.file)} (Knuth's is 36 px square, 12 px down)`);
-  if (bar.pod.height !== 42 || bar.pod.y !== 9) await fail(`the name pill is ${JSON.stringify(bar.pod)} (Knuth's is 42 px tall, 9 px down)`);
+  if (bar.file.width !== 32 || bar.file.height !== 32 || bar.file.y !== 6) await fail(`the File tile is ${JSON.stringify(bar.file)} (Knuth's is 32 px square, 6 px down)`);
+  if (bar.pod.height !== 30 || bar.pod.y !== 7) await fail(`the name pill is ${JSON.stringify(bar.pod)} (Knuth's is 30 px tall, 7 px down)`);
 }
 
 // The folder beside the name: the shell answers the page's report of its

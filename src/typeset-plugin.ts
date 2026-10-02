@@ -41,7 +41,7 @@ import { buildSpec, type AtomResolver, type SpecKind } from './layout/typst-orac
 import { portBreaks, shapedWidthPt } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
 import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdict } from './environment-check';
-import { atPaperSize } from './paper-scale';
+import { atPaperSize, fitPaper, paperPass } from './paper-scale';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { escapeTyp, expandMacrosWith, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
 import {
@@ -500,12 +500,26 @@ export function typesetPlugin(
       decorations(state) {
         return typesetKey.getState(state)?.decos ?? null;
       },
+      // ProseMirror is about to scroll the selection into view: the caret
+      // is followed from here until it moves without being scrolled to,
+      // and the clip box round the drawn pages takes the editor's height
+      // first, in case this keystroke's line ran past the last page
+      // (paper-scale.ts fitPaper).
+      handleScrollToSelection(view) {
+        viewRegistry.get(view)?.followCaret();
+        fitPaper();
+        return false;
+      },
     },
     view: (view) => new TypesetView(view, opts),
   });
 }
 
 class TypesetView {
+  /** Whether the caret is being followed: ProseMirror scrolled it into
+   *  view since it last moved (a keystroke, an arrow, a command), not a
+   *  click or a load. A pass then holds it still on the screen. */
+  private caretFollowed = false;
   private cache = new BlockLayoutCache();
   private measurer: Measurer;
   private scheduler!: LayoutScheduler;
@@ -808,10 +822,12 @@ class TypesetView {
     }
     // Every pass reads the paper at its own size (paper-scale.ts): the
     // client rects it measures are the laid-out ones, whatever the panel's
-    // width draws them at.
+    // width draws them at. And a pass holds a followed caret where it was
+    // on the screen: Enters that carry its line over a page break once
+    // left it below the panel.
     this.scheduler = new LayoutScheduler(view.dom, {
-      runLive: () => atPaperSize(() => this.liveRun()),
-      runSettled: () => atPaperSize(() => this.run()),
+      runLive: () => paperPass(() => this.liveRun(), this.followedCaret),
+      runSettled: () => paperPass(() => this.run(), this.followedCaret),
       // Web fonts arriving change every browser metric.
       invalidateMetrics: () => {
         this.paginationGeometryEpoch++;
@@ -842,7 +858,26 @@ class TypesetView {
     return fast ?? layoutBlock(block, measure, this.measurer, atomWidth, opts);
   }
 
+  /** The caret is about to be scrolled into view (the plugin's
+   *  handleScrollToSelection, which ProseMirror calls after update). */
+  followCaret(): void {
+    this.caretFollowed = true;
+  }
+
+  /** The followed caret's drawn box, for paperPass to hold. */
+  private followedCaret = (): { top: number; bottom: number } | null => {
+    if (!this.caretFollowed) return null;
+    try {
+      return this.view.coordsAtPos(this.view.state.selection.head);
+    } catch {
+      return null;
+    }
+  };
+
   update(view: EditorView, prevState: EditorState) {
+    // A caret that moved is followed only if this transaction scrolls it
+    // into view (followCaret, right after this).
+    if (!view.state.selection.eq(prevState.selection)) this.caretFollowed = false;
     // Document settings (font, size, hyphenation, …) invalidate every metric.
     if (view.state.doc.attrs !== prevState.doc.attrs) {
       this.paginationGeometryEpoch++;

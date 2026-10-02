@@ -29,7 +29,7 @@ const FILLER =
 /** A Letter page's width in CSS px: the layout's own width. */
 const PAGE_W = 816;
 /** The rail and the frame's edge: the panel is the window less these. */
-const RAIL = 48;
+const RAIL = 44;
 const EDGE = 8;
 
 async function openTyp(page: Page, text: string, name = 'frame.typ') {
@@ -178,11 +178,11 @@ async function richDocument(page: Page) {
 
 test('the layout is the same at any width: a page drawn larger or smaller is laid out at its own size', async ({ page }) => {
   test.setTimeout(180_000);
-  // 872 px draws the page at 1:1 (the panel is 816 px wide); 1500 at 1.77
+  // 868 px draws the page at 1:1 (the panel is 816 px wide); 1500 at 1.77
   // and 740 (the app's least width) at 0.84. Each loads afresh, so every
   // read the layout makes is made at that scale.
   const signatures: Array<{ width: number; signature: Awaited<ReturnType<typeof layoutSignature>> }> = [];
-  for (const width of [872, 1500, 740]) {
+  for (const width of [868, 1500, 740]) {
     await page.setViewportSize({ width, height: 800 });
     await richDocument(page);
     signatures.push({ width, signature: await layoutSignature(page) });
@@ -247,15 +247,17 @@ test('the frame is Zen\'s: a dark edge all round one rounded panel of paper, the
   expect(look.gap).toBeCloseTo((6 * (1100 - RAIL - EDGE)) / PAGE_W, 3);
   // The bar spans the whole window (it is the window's title bar in
   // Plass.app); the rail runs under it down the left edge, as narrow as
-  // Zen's: 32 px tiles with the frame's 8 px either side. The panel starts
-  // where they end and keeps the same 8 px to the window's right and
-  // bottom edges: Knuth's room, to the pixel.
+  // Zen's: 32 px tiles with 6 px either side, 44 px, the bar's height
+  // (knuth c6875a4). The panel starts where they end and keeps the
+  // frame's 8 px to the window's right and bottom edges: Knuth's room, to
+  // the pixel.
   expect(look.barLeft).toBe(0);
   expect(look.barRight).toBe(look.width);
   expect(look.rail).toEqual({ left: 0, top: look.barBottom, right: look.panel.left, bottom: look.height });
-  expect(look.tile).toEqual({ left: 8, width: 32, height: 32 });
-  expect(look.rail.right).toBe(48);
-  expect(look.panel).toEqual({ left: 48, top: look.barBottom, right: look.width - 8, bottom: look.height - 8 });
+  expect(look.tile).toEqual({ left: 6, width: 32, height: 32 });
+  expect(look.rail.right).toBe(44);
+  expect(look.barBottom).toBe(44);
+  expect(look.panel).toEqual({ left: 44, top: look.barBottom, right: look.width - 8, bottom: look.height - 8 });
   // The page count and words: a quiet chip inside the panel's corner.
   expect(look.hud.right).toBe(look.panel.right - 10);
   expect(look.hud.bottom).toBe(look.panel.bottom - 10);
@@ -271,13 +273,14 @@ test('the frame is Zen\'s: a dark edge all round one rounded panel of paper, the
   expect(await appRegion(page, '.tb-menu:not([hidden])')).toBe('no-drag');
 });
 
-/** Knuth's bar, measured in the shell checkout on knuth main (a1703f5,
- *  2026-10-02, a 1100 px window): 60 px tall (the traffic lights' band,
- *  55 at one zoom step), the File tile 36 px with a 20 px glyph, the name
- *  pill 42 px tall 9 px down, 12 px rounded, #232326 with a white 8 %
- *  hairline, 12 px padding and 9 px gaps; the name 15 px STIX Two Text
- *  letterspaced 1.35 px, the folder 12 px sans; 6 px between the bar's
- *  items, 8 px at its right end. In a tab the File tile is 6 px in. */
+/** Knuth's bar, as knuth main has it since c6875a4 ("The bar as tall as
+ *  the rail is wide", 2026-10-02), measured in the same shell at 1100 px:
+ *  44 px tall (the traffic lights' band, the rail's width), the File tile
+ *  32 px with an 18 px glyph, 6 px down, the name pill 30 px tall 7 px
+ *  down, 9 px rounded, #232326 with a white 8 % hairline, 10 px padding
+ *  and 9 px gaps; the name 15 px STIX Two Text letterspaced 1.35 px, the
+ *  folder 12 px sans; 6 px between the bar's items, 8 px at its right
+ *  end. In a tab the File tile is 6 px in, over the rail's tiles. */
 const bar = (page: Page) =>
   page.evaluate(() => {
     const toolbar = document.getElementById('toolbar')!;
@@ -305,13 +308,13 @@ test('the bar is Knuth\'s: the File tile, the name pill with its save dot and it
   await page.setViewportSize({ width: 1100, height: 800 });
   await openTyp(page, '= Notes\n\nA short paper.\n', 'notes.typ');
   const b = await bar(page);
-  expect(b.bar).toMatchObject({ y: 0, height: 60, gap: '6px', 'padding-right': '8px' });
-  expect(b.file).toEqual({ x: 6, y: 12, width: 36, height: 36 });
-  expect(b.glyph).toMatchObject({ width: 20, height: 20 });
+  expect(b.bar).toMatchObject({ y: 0, height: 44, gap: '6px', 'padding-right': '8px' });
+  expect(b.file).toEqual({ x: 6, y: 6, width: 32, height: 32 });
+  expect(b.glyph).toMatchObject({ width: 18, height: 18 });
   expect(b.pod).toMatchObject({
-    x: 48, y: 9, height: 42,
-    'border-radius': '12px', 'background-color': 'rgb(35, 35, 38)', 'border-top-width': '1px', 'border-top-color': 'rgba(255, 255, 255, 0.08)',
-    'padding-left': '12px', gap: '9px', 'max-width': '550px',
+    x: 44, y: 7, height: 30,
+    'border-radius': '9px', 'background-color': 'rgb(35, 35, 38)', 'border-top-width': '1px', 'border-top-color': 'rgba(255, 255, 255, 0.08)',
+    'padding-left': '10px', gap: '9px', 'max-width': '550px',
   });
   expect(b.name).toMatchObject({ 'font-size': '15px', 'line-height': '22.5px', 'letter-spacing': '1.35px', color: 'rgba(252, 252, 251, 0.8)' });
   expect(b.name['font-family']).toMatch(/^"STIX Two Text"/);
@@ -321,9 +324,24 @@ test('the bar is Knuth\'s: the File tile, the name pill with its save dot and it
   // Export sits beside the pill.
   const exportTile = await page.getByRole('button', { name: 'Export', exact: true }).boundingBox();
   expect(exportTile!.x).toBe(b.pod.x + b.pod.width + 6);
+  expect(exportTile).toMatchObject({ y: 6, width: 32, height: 32 });
+
+  // A phone-width tab closes the pill up (a 6 px gap under a 540 px bar),
+  // and a short name still shows whole: the name's cap follows the pill's
+  // gap (it once kept 9 px for it and cut every name's last 3 px).
+  await page.setViewportSize({ width: 480, height: 700 });
+  for (const name of ['Demo', 'notes', 'Block_Outline']) {
+    await page.evaluate((name) => (window as unknown as Hooks).__fm.rename(name), name);
+    await expect(page.locator('#file-name')).toHaveText(name);
+    expect(await page.evaluate(() => getComputedStyle(document.getElementById('doc-pod')!).gap)).toBe('6px');
+    expect(await page.locator('#file-name').evaluate((el) => el.scrollWidth - el.clientWidth), name).toBe(0);
+  }
+  await page.setViewportSize({ width: 1100, height: 800 });
 
   // A paper in a project folder (a tab working in a folder): the folder's
-  // name, as Knuth shows an attached folder's.
+  // name, as Knuth shows an attached folder's. (Kept on purpose, against
+  // the third pass's brief of the name alone in any tab: the two bars are
+  // one bar, docs/ZEN-DRAFT.md. A bare file has the name alone, above.)
   await page.evaluate(async () => {
     const root = await navigator.storage.getDirectory();
     const dir = await root.getDirectoryHandle(`frame-${Math.random().toString(36).slice(2)}`, { create: true });
@@ -484,6 +502,108 @@ test('clicks, selections, the caret and the toolbars land where the page is draw
   });
   const overlay = (await page.locator('.bib-editor-overlay').boundingBox())!;
   expect(overlay).toEqual({ x: 0, y: 0, width: 1500, height: 900 });
+});
+
+test('a pass holds the caret where it is on the screen: Enters mid-page, across a page break, and a burst past the last page', async ({ page }) => {
+  test.setTimeout(120_000);
+  // 1.77×, where Chromium's own scroll anchoring, now off on the panel,
+  // once scrolled it a few hundred px by itself a beat after the Enters
+  // (the pass takes the paper's transform off and puts it back), and where
+  // a line carried over a page break left the caret 365 px below the
+  // panel. A pass holds a followed caret still (src/paper-scale.ts).
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await openTyp(page, Array.from({ length: 30 }, (_, i) => `P${i} ` + FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
+  const caret = () =>
+    page.evaluate(() => {
+      const { view } = window as unknown as Hooks;
+      const panel = document.getElementById('scroll')!.getBoundingClientRect();
+      const clip = document.getElementById('paper')!.getBoundingClientRect();
+      const c = view.coordsAtPos(view.state.selection.head);
+      const sheets = [...document.querySelectorAll('.page-box')].map((el) => el.getBoundingClientRect());
+      return {
+        top: c.top,
+        inView: c.top >= panel.top && c.bottom <= panel.bottom && c.bottom <= clip.bottom,
+        sheet: sheets.findIndex((r) => c.top >= r.top && c.top < r.bottom),
+        sheets: sheets.length,
+      };
+    });
+  const passes = () => page.evaluate(() => (window as unknown as Hooks).__pagCount());
+
+  // Mid-document: scrolled 45 % down, a click near the panel's top, then
+  // Enter ×14. ProseMirror keeps the caret in view, near the panel's
+  // bottom, and the settled pass leaves it there to the pixel.
+  await page.evaluate(() => {
+    const panel = document.getElementById('scroll')!;
+    panel.scrollTop = (panel.scrollHeight - panel.clientHeight) * 0.45;
+  });
+  const start = await page.evaluate(() => {
+    const top = document.getElementById('scroll')!.getBoundingClientRect().top;
+    const p = [...document.querySelectorAll('.ProseMirror p')].find((el) => el.getBoundingClientRect().top > top + 40)!;
+    const r = p.getBoundingClientRect();
+    return { x: r.left + 3, y: r.top + 8 };
+  });
+  const head = () => page.evaluate(() => (window as unknown as Hooks).view.state.selection.head);
+  const from = await head();
+  await page.mouse.click(start.x, start.y);
+  await expect.poll(head).not.toBe(from);
+  let before = await passes();
+  for (let i = 0; i < 14; i++) await page.keyboard.press('Enter');
+  let typed = await caret();
+  await settleLocal(page, before);
+  let settled = await caret();
+  expect(typed.inView).toBe(true);
+  expect(Math.abs(settled.top - typed.top)).toBeLessThan(1);
+
+  // Across a page break: the caret on a page's last line near the panel's
+  // bottom, and Enters that carry its line over to the next page.
+  await page.evaluate(() => {
+    const { view } = window as unknown as Hooks;
+    const panel = document.getElementById('scroll')!;
+    const box = panel.getBoundingClientRect();
+    let gap = document.querySelectorAll('.ts-pagegap')[1].getBoundingClientRect();
+    panel.scrollTop += gap.top - (box.bottom - 80);
+    gap = document.querySelectorAll('.ts-pagegap')[1].getBoundingClientRect();
+    const line = parseFloat(getComputedStyle(document.querySelector('.ProseMirror p')!).lineHeight) * (box.width / 816);
+    const hit = view.posAtCoords({ left: box.left + box.width * 0.25, top: gap.top - line / 2 })!;
+    const Selection = view.state.selection.constructor as typeof import('prosemirror-state').Selection;
+    view.focus();
+    view.dispatch(view.state.tr.setSelection(Selection.near(view.state.doc.resolve(hit.pos), -1)).scrollIntoView());
+  });
+  const onPage = (await caret()).sheet;
+  before = await passes();
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Enter');
+  typed = await caret();
+  await settleLocal(page, before);
+  settled = await caret();
+  expect(settled.sheet).toBe(onPage + 1);
+  expect(typed.inView).toBe(true);
+  expect(settled.inView).toBe(true);
+  expect(Math.abs(settled.top - typed.top)).toBeLessThan(1);
+
+  // At the end of the paper, a burst of Enters running past the last page
+  // before the pass that adds one: the caret stays in view through it
+  // (the clip box takes the editor's height before ProseMirror scrolls),
+  // and the pass that adds the page leaves it where it was.
+  await page.keyboard.press('Meta+ArrowDown');
+  await settleLocal(page);
+  const sheets = (await caret()).sheets;
+  before = await passes();
+  for (let i = 0; i < 80; i++) {
+    await page.keyboard.press('Enter');
+    const now = await page.evaluate(() => {
+      const { view } = window as unknown as Hooks;
+      const stack = document.getElementById('stack')!;
+      return view.coordsAtPos(view.state.selection.head).top > stack.getBoundingClientRect().bottom + 60;
+    });
+    expect((await caret()).inView, `Enter ${i + 1}`).toBe(true);
+    if (now) break;
+  }
+  typed = await caret();
+  await settleLocal(page, before);
+  settled = await caret();
+  expect(settled.sheets).toBeGreaterThan(sheets);
+  expect(settled.inView).toBe(true);
+  expect(Math.abs(settled.top - typed.top)).toBeLessThan(1);
 });
 
 test('the rail and the panels it opens keep off the bar; a short window says the tools go on and keeps settings and the switch', async ({ page }) => {
