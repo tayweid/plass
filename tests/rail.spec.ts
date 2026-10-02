@@ -26,6 +26,9 @@ const PAGE_W = 816;
 const RAIL = 44;
 const EDGE = 8;
 const GUTTER = 20;
+/** The digits' ink in a page number's 8 px box (style.css, .sr-num), as
+ *  scroll-rail.ts takes it, and the frame it keeps from a mark. */
+const INK = { top: 1.1, bottom: 7.15, clear: 0.5 };
 
 /** A numbered paper of six sheets: a title, sections and subsections, a
  *  figure (its image missing, which still draws its box) and a captioned
@@ -41,6 +44,15 @@ const PAPER = [
   '#figure(\n  table(columns: 2, [City], [Index], [Atlanta], [0.30]),\n  caption: [The index by city.],\n)',
   para(6), '== Estimation', para(8), para(6), '= Results', para(7), para(7), para(5),
 ].join('\n\n') + '\n';
+
+/** Twenty sections, each with a subsection, about 1.8 sheets apiece, under
+ *  a title: 36 sheets and 41 marks, a heading at or near the top of most
+ *  sheets. */
+const LONG = (() => {
+  const parts = ['#set heading(numbering: "1.")', '#align(center, text(size: 1.55em, weight: 700)[A Long Paper])'];
+  for (let k = 1; k <= 20; k++) parts.push(`= Section number ${k}`, para(4), para(5), para(3), `== Part ${k}.1 of the section`, para(5), para(4), para(4));
+  return parts.join('\n\n') + '\n';
+})();
 
 /** One Letter sheet: it runs past the panel at any usual window size. */
 const NOTE = '= Notes\n\nA short note, one page.\n';
@@ -704,14 +716,10 @@ test('a scroll writes the band\'s span on the band, and marks only the marks and
   expect(quiet.filter((w) => w !== 'scrollrail:class')).toEqual(['sr-band:style']);
 });
 
-test('on a long paper whose pages open with headings, the page numbers stay: pushed past a mark in their place, page 1 among them, 16 px apart', async ({ page }) => {
+test('on a long paper whose pages open with headings, the page numbers stay: moved off a mark in their place, page 1 among them, 16 px apart', async ({ page }) => {
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 1100, height: 800 });
-  // Twenty sections, each with a subsection, about 1.8 sheets apiece:
-  // a heading falls at or near the top of most sheets.
-  const parts = ['#set heading(numbering: "1.")', '#align(center, text(size: 1.55em, weight: 700)[A Long Paper])'];
-  for (let k = 1; k <= 20; k++) parts.push(`= Section number ${k}`, para(4), para(5), para(3), `== Part ${k}.1 of the section`, para(5), para(4), para(4));
-  await openTyp(page, parts.join('\n\n') + '\n', 'long.typ');
+  await openTyp(page, LONG, 'long.typ');
   await expect.poll(async () => (await frame(page)).gutter).toBe(true);
   const read = () =>
     page.evaluate(() => {
@@ -743,9 +751,81 @@ test('on a long paper whose pages open with headings, the page numbers stay: pus
     // Under its own hairline and above the next one.
     expect(s.top).toBeGreaterThan(n.hairlines[s.page - 1]);
     expect(s.bottom).toBeLessThanOrEqual(s.page < n.pages ? n.hairlines[s.page] : 748);
-    // Clear of every heading's, figure's and table's mark.
-    for (const m of n.marks) expect(Math.min(s.bottom, m.bottom) - Math.max(s.top, m.top), `page ${s.page}`).toBeLessThanOrEqual(0.15);
+    // Its digits clear of every heading's, figure's and table's mark (the
+    // box's empty top and bottom may lie over a mark's edge).
+    for (const m of n.marks) expect(Math.min(s.top + INK.bottom, m.bottom) - Math.max(s.top + INK.top, m.top), `page ${s.page}`).toBeLessThanOrEqual(0.1 - INK.clear);
     // 16 px from the one before.
     if (i > 0) expect(s.top - n.shown[i - 1].top).toBeGreaterThanOrEqual(15.9);
+  }
+});
+
+test('the page numbers keep an even run at any window height: page 1, then every 1st, 2nd or 5th… page, 16 px apart, clear of the marks', async ({ page }) => {
+  test.setTimeout(180_000);
+  // The long paper at 1100 wide, from 748 px of track (20.8 px a sheet)
+  // down to 348 (9.7). The rule before this showed 35, 17, 9, none and
+  // none of its 36 page numbers at 800, 700, 600, 500 and 400 tall, in
+  // runs like 1, 2, 3, 6, 8, 10, 13…: a number moved past a mark was
+  // bounded by the next hairline and hid where it had no room, and the
+  // next one hid where it came within 16 px of a moved one.
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await openTyp(page, LONG, 'long.typ');
+  await expect.poll(async () => (await frame(page)).gutter).toBe(true);
+  const read = () =>
+    page.evaluate(() => {
+      const track = document.querySelector('#scrollrail .sr-track')!.getBoundingClientRect();
+      const box = (el: Element) => {
+        const r = el.getBoundingClientRect();
+        return { top: r.top - track.top, bottom: r.bottom - track.top };
+      };
+      const breaks = [...document.querySelectorAll<HTMLElement>('#scrollrail .sr-break')];
+      return {
+        trackH: track.height,
+        pages: document.querySelectorAll('.page-box').length,
+        hairlines: breaks.map((b) => box(b).top),
+        drawn: breaks.map((b) => getComputedStyle(b).backgroundColor !== 'rgba(0, 0, 0, 0)'),
+        shown: breaks
+          .map((b, i) => ({ page: i + 1, num: b.querySelector<HTMLElement>('.sr-num')! }))
+          .filter((n) => !n.num.hidden)
+          .map((n) => ({ page: n.page, ...box(n.num) })),
+        marks: [...document.querySelectorAll('#scrollrail .sr-mark:not(.sr-caret)')].map(box),
+      };
+    });
+  const STRIDES = [1, 2, 5, 10, 20, 50, 100];
+  for (const height of [800, 700, 600, 500, 400]) {
+    await page.setViewportSize({ width: 1100, height });
+    await expect.poll(async () => (await read()).trackH).toBe(height - 44 - EDGE);
+    // The rail lays its numbers out again in the frame after the resize.
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const n = await read();
+    expect(n.pages).toBe(36);
+    const pages = n.shown.map((s) => s.page);
+    const at = `${height} tall: ${pages.join(', ') || 'none'}`;
+    // Page 1, and then every stride-th page to the end, the stride one of
+    // the rail's steps and wide enough for 16 px between hairlines.
+    expect(pages[0], at).toBe(1);
+    const stride = pages[1] - pages[0];
+    expect(STRIDES, at).toContain(stride);
+    expect((n.trackH / n.pages) * stride, at).toBeGreaterThanOrEqual(16);
+    expect(pages, at).toEqual(Array.from({ length: Math.ceil(n.pages / stride) }, (_, k) => 1 + k * stride));
+    for (const [i, s] of n.shown.entries()) {
+      const which = `${at}: page ${s.page}`;
+      // Under its own hairline, never nearer than the lift (0.75 px), and
+      // above the next shown number's.
+      expect(s.top, which).toBeGreaterThanOrEqual(n.hairlines[s.page - 1] + 0.73);
+      expect(s.bottom, which).toBeLessThanOrEqual(s.page + stride <= n.pages ? n.hairlines[s.page + stride - 1] + 0.05 : n.trackH);
+      // 16 px from the one before (to layout's 1/64 px).
+      if (i > 0) expect(s.top - n.shown[i - 1].top, `${at}: pages ${n.shown[i - 1].page} and ${s.page}`).toBeGreaterThanOrEqual(15.95);
+      // No line drawn across its box, or between it and its own line: an
+      // unnumbered hairline there gives way.
+      for (let q = s.page + 1; q < s.page + stride && q <= n.pages; q++) {
+        if (n.drawn[q - 1]) expect(n.hairlines[q - 1], `${which}, page ${q}'s line`).toBeGreaterThanOrEqual(s.bottom - 0.05);
+      }
+      // Its digits clear of every heading's, figure's and table's mark by
+      // half a pixel. At 400 the marks are closer together than the digits
+      // are tall (under 5 px between two, all down the rail): no place is
+      // clear, and a number covers as little of a mark as its room allows.
+      const gap = Math.min(...n.marks.map((m) => Math.max(m.top - (s.top + INK.bottom), s.top + INK.top - m.bottom)));
+      expect(gap, which).toBeGreaterThanOrEqual(height > 400 ? INK.clear - 0.1 : -2);
+    }
   }
 });

@@ -58,14 +58,22 @@ with the panel's top and at the end its bottom is level with the
 panel's bottom. On it, in light marks on the dark:
 
 - a hairline across the rail at the middle of each page gap, the
-  page's number faint under it, thinned on a long paper (every 2nd,
-  5th, 10th … page) so the shown numbers stay 16 px apart; where a
-  heading's, figure's or table's mark is in the number's place (a
-  heading opening a page lands just under its hairline on a long
-  paper), the number moves up over the mark if there is room under the
-  hairline, else down past it, never past the next hairline, and gives
-  way only where neither fits; the gap that is on screen draws a
-  longer, stronger tick (from the edge mockup);
+  page's number faint under it, thinned on a long paper to an even run
+  (page 1, then every 2nd, 5th, 10th … page) so the shown numbers stay
+  16 px apart; where a heading's, figure's or table's mark is in the
+  number's place (a heading opening a page lands just under its
+  hairline on a long paper), the number moves to the nearest place
+  where its digits clear the marks by half a pixel, up over the mark or
+  down past it, never within 16 px of the number above, never past the
+  next shown number's hairline nor more than one unnumbered one (on a
+  paper numbered every 2nd page it may pass the unnumbered hairline
+  between, which then gives way under it until hovered). Where a
+  number of the run has no clear place, the next stride is taken
+  (every 2nd page and not every one), so no number drops out of the
+  run; only where no stride clears them all (marks closer together
+  than the digits are tall, all down the rail) does the first run
+  stand, each number where it covers least of a mark. The gap that is
+  on screen draws a longer, stronger tick (from the edge mockup);
 - headings as dots sized by level (the title 7 px, a section 5, a
   subsection 3), figures as tiny filled squares and tables as open
   ones;
@@ -225,8 +233,9 @@ it can drop subsections on a long paper, as both judges said. The rail
 counts sheets, as the HUD does: "Page 3 of 5" is the third sheet even
 where the folio is roman front matter or restarts. (Judge 1's 30-page
 note, that the crowding rule hid most numbers, is answered: a 36-sheet
-paper with 40 headings showed 6 numbers, page 1 never, and now shows 35,
-page 1 among them; the last gives way to the 16 px rule.)
+paper with 40 headings showed 6 numbers, page 1 never, and now shows all
+36 at 1100 × 800 and an even run from page 1 at any window height;
+below, *Checks (the scroll rail, the re-verifier's finding)*.)
 
 ## The paper's corners
 
@@ -1149,3 +1158,83 @@ problems, all closed in one commit on `ux/rail`:
 - `node app/smoke.mjs` (the shell checkout beside the main one): ok.
 - The record's screenshots stand: on that five-sheet paper no mark is
   in a number's place, and the band and the marks draw as they did.
+
+## Checks (the scroll rail, the re-verifier's finding)
+
+A re-verifier found problem 3 above closed only at the default window
+height. On the 36-sheet paper with 40 headings at 1100 wide, the numbers
+shown depended on the window's height: 35 of 36 at 800 tall (page 36 came
+within 16 px of a 35 moved down past a mark, and hid), 17 at 700 in an
+uneven run (1, 2, 3, 6, 8, 10, 13 …), 15 at 650, 9 at 600, 3 at 550, and
+none, page 1 included, at 500 and below. A moved number was bounded by
+the next hairline and hid where it had no room there, and the next one
+hid where it came within 16 px of a moved one. Its fix, taken: a moved
+number is bounded by the next shown number's hairline, not the next
+hairline, and the run stays even with page 1 always first. What that
+needed besides, all in `layoutRail`:
+
+- The marks are cleared by the digits, not the number's whole box: the
+  ink runs from 1.1 to 7.15 px of the 8 px box (read off the drawn
+  numbers at 8×), and a mark keeps half a pixel from it. At 500 tall
+  this paper's marks are at most 7.5 px apart, so the 8 px box had no
+  clear place anywhere on the rail.
+- A number goes to the nearest clear place in its room, which runs from
+  0.75 px under its hairline and 16 px under the number above down to
+  the next shown number's hairline, or the second hairline down where
+  the run is every 5th page or sparser, so a number stays by its own
+  line. A number that would come within 16 px of the one above moves
+  down instead of hiding.
+- Where a number of the run has no clear place, the next stride is
+  taken, and the run never loses a number. At 700 that is every 2nd
+  page: page 4's number had room above a section's mark 8.4 px under its
+  line only 0.75 px under the line, and 16 px under page 3's number is
+  1 px under it.
+- A number that passed the unnumbered hairline between sat on it (at
+  500 tall 3, 5 and 7 were struck through), and one that passed it
+  wholly read as the page below. Such a hairline now gives way under the
+  number (the class `under`, no line drawn) and is drawn again when
+  hovered; its gap is still a target. Kept as obstacles instead, the
+  in-between hairlines left no clear place for a run of every 2nd page
+  from 650 to 500 tall: the run went to every 20th page, and at 500 no
+  stride cleared them all.
+- At 450 tall and below, this paper's marks are under 5 px apart all
+  down the rail, less than the digits are tall, so no stride clears
+  every number. There the run of every 2nd page stands, each number
+  where it covers least of a mark: up to 0.7 px of a dot's edge at 450,
+  1.9 px at 400. The other way out was a run of page 1 alone; the brief
+  was an even run with page 1 in it.
+
+| tall | a sheet | before (7f0b47e) | now |
+|---|---|---|---|
+| 800 | 20.8 px | 35: 1 to 35 | 36, every page; closest pair 16.3 px |
+| 750 | 19.4 | 35: 1 to 35 | 36, every page; 16.0 |
+| 700 | 18.0 | 17: 1, 2, 3, 6, 8, 10, 13, 15, 17, 20, 22, 24, 27, 29, 31, 34, 36 | 18, every 2nd page, 1 to 35 |
+| 650 | 16.6 | 15: 1, 3, 7, 8, 10, 14, 15, 17, 21, 22, 24, 28, 29, 31, 35 | 18, every 2nd; 7 hairlines give way |
+| 600 | 15.2 | 9: 1, 3, 7, 15, 17, 21, 29, 31, 35 | 18, every 2nd; 9 give way |
+| 550 | 13.8 | 3: 1, 15, 29 | 18, every 2nd; 12 give way |
+| 500 | 12.4 | none | 18, every 2nd; all 18 unnumbered give way |
+| 450 | 11.1 | none | 18, every 2nd, over 0.7 px of a mark at most |
+| 400 | 9.7 | none | 18, every 2nd, over 1.9 px at most |
+
+From 800 to 500 tall the digits are 0.47 to 0.49 px from the nearest
+mark as drawn (0.5 as placed). A number with no mark in its place stays
+where it was, so the record's screenshots stand (no mark is in a
+number's place on that five-sheet paper). On the tests' six-sheet paper
+only page 1's number, lifted over the first heading's mark, moves: 0.4 px
+lower at 1100 × 800, now that only its digits must clear the mark, and
+0.7 px higher at 868 × 600.
+
+- `npm test`: green. `npm run build` (the sidecar, unused-code, exports
+  and cycle checks, tsc, vite): green.
+- `CI=1 npx playwright test --project=chromium` (a scratch config on a
+  spare port, deleted after): 201 passed. New in `rail.spec` (fourteen
+  tests now): the long paper at 1100 wide and 800, 700, 600, 500 and 400
+  tall shows page 1 and then every stride-th page to the end, the
+  stride one of the rail's steps, 16 px between numbers, each under its
+  own line and above the next shown number's, no line drawn across a
+  number or between it and its own, and its digits half a pixel clear
+  of every mark (at 400, over 2 px of one at most). On 7f0b47e it fails
+  at every height: 35 numbers at 800 (no 36), 17 at 700, 9 at 600, none
+  at 500 and 400. Changed: the long-paper test at 800 reads a number's
+  clearance from its digits' ink, not its box.
+- `node app/smoke.mjs` (the shell checkout beside the main one): ok.

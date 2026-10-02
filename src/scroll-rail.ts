@@ -61,14 +61,19 @@ const DRAG = 3;
 /** Shown page numbers stay this far apart: every 1st, 2nd, 5th… page. */
 const NUMBER_ROOM = 16;
 const STRIDES = [1, 2, 5, 10, 20, 50, 100];
-/** A page number's box (style.css, .sr-num: 8 px type, line-height 1, the
- *  digits' ink from 1.25 px into it to 1.15 px short of its bottom), this
- *  far under its hairline's top unless a mark is there; lifted over a mark,
- *  never nearer than NUMBER_LIFT, which leaves 1 px of frame between the
- *  hairline and the digits. */
+/** A page number's box (style.css, .sr-num: 8 px type, line-height 1),
+ *  this far under its hairline's top unless a mark is there; lifted over a
+ *  mark, never nearer than NUMBER_LIFT, which leaves about 1 px of frame
+ *  between the hairline and the digits. The digits' ink runs from INK_TOP
+ *  into the box to INK_BOTTOM (the round digits' overshoot included, read
+ *  off the drawn numbers at 8×), and a mark keeps NUMBER_CLEAR from the ink:
+ *  the box's empty top and bottom may lie over a mark's edge. */
 const NUMBER_DROP = 3;
 const NUMBER_LIFT = 0.75;
 const NUMBER_H = 8;
+const INK_TOP = 1.1;
+const INK_BOTTOM = 7.15;
+const NUMBER_CLEAR = 0.5;
 /** How long the band stays lit after the paper moves, and after the
  *  pointer leaves the gutter. */
 const MOVING_MS = 900;
@@ -359,51 +364,110 @@ export function attachScrollRail(view: EditorView, panel: HTMLElement, stack: HT
   function layoutRail(): void {
     // Fractional: under a zoom step the track is not a whole number of px.
     trackH = track.getBoundingClientRect().height || 1;
-    const count = breaks.length || 1;
-    const perPage = trackH / count;
-    // A long paper thins its numbers so the shown ones stay 16 px apart,
-    // and under 4 px a page its hairlines too, so the rail never turns to
-    // fur. A number sits 3 px under its hairline. A heading, figure or
-    // table whose mark is in the number's own box there (a heading opening
-    // a page lands just under the hairline on a long paper, where the
-    // number is) moves the number: up over the mark if there is room under
-    // the hairline, else down past it, never past the next hairline; only
-    // a number with no room either way gives way. The caret, which moves,
-    // takes no number's place.
-    const stride = STRIDES.find((s) => perPage * s >= NUMBER_ROOM) ?? STRIDES[STRIDES.length - 1];
+    const count = breaks.length;
+    const perPage = trackH / (count || 1);
+    // A long paper thins its numbers to every 2nd, 5th, 10th… page so the
+    // shown ones stay 16 px apart, and under 4 px a page its hairlines
+    // too, so the rail never turns to fur. A number sits 3 px under its
+    // hairline. A heading, figure or table whose mark is in the number's
+    // place (a heading opening a page lands just under the hairline on a
+    // long paper, where the number is) moves the number to the nearest
+    // place where its digits clear the marks, up over the mark or down
+    // past it: never within 16 px of the number above, never past the next
+    // shown number's hairline (so on a paper thinned to every 2nd page it
+    // may pass the unnumbered one between, which then gives way under it),
+    // and past one unnumbered hairline at most, so it stays by its own. The
+    // run stays even, page 1 first: where a number of the run has no clear
+    // place, the next stride is tried, every 2nd page and not every one,
+    // every 5th and not every 2nd. Only where no stride clears them all
+    // (the marks closer together than the digits are tall, all down the
+    // rail) does the first run stand, each number where it covers least of
+    // a mark. The caret, which moves, takes no number's place.
     const held = marks
       .filter((m) => m.kind !== 'caret')
-      .map((m) => ({ a: inTrack(m.y) - HALF[m.kind], z: inTrack(m.y) + HALF[m.kind] }))
-      .sort((p, q) => p.a - q.a);
-    let last = -Infinity;
-    breaks.forEach((b, i) => {
-      const shown = (b.page - 1) % stride === 0;
-      b.el.classList.toggle('thin', perPage < 4 && !shown);
-      // The hairline's box (1 px, its middle on the gap): the number's top
-      // is measured from its top edge.
-      const py = inTrack(b.y) - 0.5;
-      let top = py + NUMBER_DROP;
-      const hit = shown ? held.find((m) => m.a < top + NUMBER_H && m.z > top) : undefined;
-      if (hit) {
-        const lift = hit.a - NUMBER_H;
-        if (lift >= py + NUMBER_LIFT && !held.some((m) => m !== hit && m.a < hit.a && m.z > lift)) top = lift;
-        else {
-          for (const m of held) {
-            if (m.a >= top + NUMBER_H) break;
-            if (m.z > top) top = m.z;
+      .map((m) => ({ a: inTrack(m.y) - HALF[m.kind], z: inTrack(m.y) + HALF[m.kind] }));
+    // The hairline's box (1 px, its middle on the gap): a number's top is
+    // measured from its top edge. Past the last page, the track's end.
+    const line = (i: number) => (i < count ? inTrack(breaks[i].y) - 0.5 : trackH);
+
+    /** The run of every `stride`th page: each number's top under its
+     *  hairline, or null at the first that no place clears (unless `settle`,
+     *  which takes the place that covers least). */
+    function run(stride: number, settle: boolean): number[] | null {
+      const tops: number[] = [];
+      let last = -Infinity;
+      for (let i = 0; i < count; i += stride) {
+        const py = line(i);
+        const home = py + NUMBER_DROP;
+        // Its room: from NUMBER_LIFT under its hairline and 16 px under the
+        // number above, down to the next shown number's hairline or the
+        // second one down, whichever comes first. The usual place is kept
+        // where it already crosses that line (a paper thinned to every 5th
+        // page or more, as the mockup had it).
+        const lo = Math.max(py + NUMBER_LIFT, last + NUMBER_ROOM);
+        const hi = Math.max(lo, home, line(i + Math.min(stride, 2)) - NUMBER_H);
+        const near = held.filter((m) => m.z > lo + INK_TOP - NUMBER_CLEAR && m.a < hi + INK_BOTTOM + NUMBER_CLEAR);
+        const cover = (t: number) => {
+          let c = 0;
+          for (const m of near) c += Math.max(0, Math.min(t + INK_BOTTOM + NUMBER_CLEAR, m.z) - Math.max(t + INK_TOP - NUMBER_CLEAR, m.a));
+          return c;
+        };
+        // Its own place if it is free; else, of the ends of its room and
+        // the places where an edge of its digits meets an edge of a mark
+        // (the cover bends only there), the least covered and then the
+        // nearest, the higher of two as near.
+        let top = Math.min(Math.max(home, lo), hi);
+        let least = cover(top);
+        const weigh = (t: number) => {
+          if (t < lo || t > hi) return;
+          const c = cover(t);
+          const d = Math.abs(t - home) - Math.abs(top - home);
+          if (c < least - 1e-6 || (c < least + 1e-6 && (d < -1e-6 || (d < 1e-6 && t < top)))) {
+            top = t;
+            least = c;
           }
+        };
+        if (least > 1e-6) {
+          weigh(lo);
+          weigh(hi);
+          for (const m of near) {
+            weigh(m.a - INK_BOTTOM - NUMBER_CLEAR);
+            weigh(m.z - INK_BOTTOM - NUMBER_CLEAR);
+            weigh(m.a - INK_TOP + NUMBER_CLEAR);
+            weigh(m.z - INK_TOP + NUMBER_CLEAR);
+          }
+          if (least > 1e-6 && !settle) return null;
         }
+        tops.push(top);
+        last = top;
       }
-      // A moved number stays in its page's span, above the next hairline
-      // (the usual place is kept where it already crosses the next one, on
-      // a paper thinned to every 2nd page or more, as the mockup had it).
-      const next = i + 1 < breaks.length ? inTrack(breaks[i + 1].y) - 0.5 : trackH;
-      const room = Math.max(py + NUMBER_DROP + NUMBER_H, next);
-      const fits = shown && top + NUMBER_H <= room && top - last >= NUMBER_ROOM;
-      b.num.hidden = !fits;
-      if (!fits) return;
-      last = top;
-      const at = hit ? `${(top > py + NUMBER_DROP ? Math.ceil : Math.floor)((top - py) * 10) / 10}px` : '';
+      return tops;
+    }
+
+    const first = STRIDES.findIndex((s) => perPage * s >= NUMBER_ROOM);
+    const base = first < 0 ? STRIDES.length - 1 : first;
+    let stride = STRIDES[base];
+    let tops: number[] | null = null;
+    // Up the strides while the run keeps two numbers or more.
+    for (let k = base; !tops && k < STRIDES.length && (k === base || STRIDES[k] < count); k++) {
+      tops = run(STRIDES[k], false);
+      if (tops) stride = STRIDES[k];
+    }
+    tops ??= run(stride, true) ?? [];
+    breaks.forEach((b, i) => {
+      const k = i % stride;
+      const shown = k === 0;
+      const top = tops[(i - k) / stride];
+      b.el.classList.toggle('thin', perPage < 4 && !shown);
+      // An unnumbered hairline that a number's box reaches, or that lies
+      // above the number and under its own line, gives way: it would
+      // strike the digits through, sit on them, or read as theirs. Its gap
+      // is still a target and lights when hovered.
+      b.el.classList.toggle('under', !shown && line(i) < top + NUMBER_H);
+      b.num.hidden = !shown;
+      if (!shown) return;
+      const py = line(i);
+      const at = top === py + NUMBER_DROP ? '' : `${Math.round((top - py) * 100) / 100}px`;
       if (b.num.style.top !== at) b.num.style.top = at;
     });
     drawBand();

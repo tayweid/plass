@@ -698,7 +698,9 @@ body {
    is on screen (inside the band) draws a longer, stronger tick, after the
    edge mockup's: the gap you are looking at. A long paper thins its
    numbers and, under 4 px a page, its unnumbered hairlines; a number
-   with a mark in its place is pushed down past it (scroll-rail.ts). */
+   with a mark in its place moves off it, and an unnumbered hairline
+   over the moved number, or between it and its own, gives way under it
+   (scroll-rail.ts) until hovered. */
 .sr-break {
   --inset: 4px;
   position: absolute;
@@ -720,7 +722,8 @@ body {
   background: rgba(255, 255, 255, 0.36);
 }
 
-.sr-break.first {
+.sr-break.first,
+.sr-break.under:not(.hot) {
   background: none;
 }
 
