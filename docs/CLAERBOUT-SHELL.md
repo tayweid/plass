@@ -180,7 +180,11 @@ framework was placed and the install line still said success (its EXIT
 trap ended in a successful `rm`). Found from the Knuth side; the install
 line now braces its variables and keeps its exit status. Plass builds on
 `v0.1.5`, verified here by installing under `env -i` with no sibling
-(Electron downloaded) and running the smoke test on the result. Its README has the config keys. Plass finds it beside the main
+(Electron downloaded) and running the smoke test on the result. Then
+`v0.1.7` on 2026-10-01, with Knuth, when the shell's engine environment
+moved beside uv's Pythons (`v0.1.6`/`v0.1.7`, engine-only changes; Plass
+has no engine, and its smoke test from the checkout passed on the tag
+unchanged). Its README has the config keys. Plass finds it beside the main
 checkout for development (`app/shell-path.mjs`, `CLAERBOUT_SHELL`
 overrides) and the deploy clones it at `CLAERBOUT_TAG`: the tag is the
 dependency. Not an npm dependency on purpose: that would put Electron in
