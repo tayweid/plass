@@ -203,7 +203,7 @@ const appRegion = (page: Page, selector: string) =>
     return style.getPropertyValue('-webkit-app-region') || style.appRegion || '';
   }, selector);
 
-test('the frame is Zen\'s: a dark edge all round one rounded panel of paper, the rail narrow, the bar a drag region with its controls the page\'s', async ({ page }) => {
+test('the frame is Zen\'s: a dark edge all round one panel of paper, its sheets rounded, the rail narrow, the bar a drag region with its controls the page\'s', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
   await openTyp(page, Array.from({ length: 12 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
   const look = await page.evaluate(() => {
@@ -283,7 +283,9 @@ test('the frame is Zen\'s: a dark edge all round one rounded panel of paper, the
  *  the panel's corners (the paper where the corner is square; where the
  *  clip has cut a rounded corner away, the panel behind it), the sheets'
  *  radius on the screen, and the shadow's box and corner radii against
- *  the paper in view (the sheets' drawn boxes cut to the panel). */
+ *  the paper in view (the sheets' drawn boxes cut to the panel, the last
+ *  run on to the clip box's bottom while a burst of typing has the editor
+ *  past it). */
 const corners = (page: Page) =>
   page.evaluate(() => {
     const panel = document.getElementById('scroll')!;
@@ -291,9 +293,17 @@ const corners = (page: Page) =>
     const shadow = document.getElementById('paper-shadow')!;
     const p = panel.getBoundingClientRect();
     const onPaper = (x: number, y: number) => paper.contains(document.elementFromPoint(x, y));
-    const sheets = [...document.querySelectorAll('#pages .page-box')]
-      .map((el) => el.getBoundingClientRect())
-      .filter((r) => r.bottom > p.top && r.top < p.bottom);
+    const clip = paper.getBoundingClientRect();
+    const drawn = [...document.querySelectorAll('#pages .page-box')].map((el) => {
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom };
+    });
+    // A burst of typing run past the last page is paper too: the clip
+    // box's white below the last sheet, until the pass adds the page.
+    const end = drawn.at(-1);
+    const lastSheet = end?.bottom ?? NaN;
+    if (end && clip.bottom > end.bottom + 1) end.bottom = clip.bottom;
+    const sheets = drawn.filter((r) => r.bottom > p.top && r.top < p.bottom);
     const s = shadow.getBoundingClientRect();
     const style = getComputedStyle(shadow);
     const radius = (value: string) => Math.round(parseFloat(value) * 100) / 100;
@@ -316,10 +326,22 @@ const corners = (page: Page) =>
       },
       sheetRadius: parseFloat(getComputedStyle(document.querySelector('#pages .page-box')!).borderTopLeftRadius) * (p.width / 816),
       scrollTop: panel.scrollTop,
+      /** The last sheet's drawn bottom and the clip box's. */
+      ends: { lastSheet, clip: clip.bottom },
     };
   });
 
 type Corners = Awaited<ReturnType<typeof corners>>;
+
+/** The corners in the frame after a change: the shadow follows a scroll,
+ *  a new height or new sheets in the next frame. */
+const cornersNextFrame = async (page: Page) => {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  return corners(page);
+};
+
+/** Eighteen paragraphs: four Letter pages. */
+const FOUR_PAGES = Array.from({ length: 18 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') + '\n';
 
 /** The shadow is drawn round the paper in view, to a layout unit. */
 function expectShadowRoundPaper(c: Corners) {
@@ -347,12 +369,8 @@ const scrollPanel = (page: Page, to: number | 'end' | 'gap across the middle' | 
 test('the paper\'s corners are rounded only where they are a sheet\'s, and the shadow is drawn round the paper in view', async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1100, height: 800 });
-  await openTyp(page, Array.from({ length: 18 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
-  const settled = async () => {
-    // The shadow follows in the frame after a scroll.
-    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    return corners(page);
-  };
+  await openTyp(page, FOUR_PAGES);
+  const settled = () => cornersNextFrame(page);
 
   // At the top: the first page's top edge is in view, so its top corners
   // are rounded and the clip cuts them away; the paper runs on past the
@@ -470,6 +488,117 @@ test('the paper\'s corners are rounded only where they are a sheet\'s, and the s
   expect(c.shadow.top).toEqual([12, 12]);
   expect(c.shadow.bottom).toEqual([12, 12]);
   await page.locator('.tb-source').click();
+});
+
+test('a page gap crossing the panel\'s edge hands the shadow\'s end across it over a corner\'s length, never by a jump', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await openTyp(page, FOUR_PAGES);
+  // The second gap, in the panel's scroll offsets: where the sheet above
+  // it ends and the one below begins.
+  const gap = await page.evaluate(() => {
+    const panel = document.getElementById('scroll')!;
+    const view = panel.getBoundingClientRect();
+    const sheets = [...document.querySelectorAll('#pages .page-box')].map((el) => el.getBoundingClientRect());
+    const offset = (y: number) => panel.scrollTop + y - view.top;
+    return { end: offset(sheets[1].bottom), start: offset(sheets[2].top), height: view.height };
+  });
+  /** The shadow and the two sheets at the gap, drawn, at a scroll offset. */
+  const at = async (scrollTop: number) => {
+    await page.evaluate((y) => {
+      document.getElementById('scroll')!.scrollTop = y;
+    }, scrollTop);
+    const c = await cornersNextFrame(page);
+    const sheets = await page.evaluate(() =>
+      [...document.querySelectorAll('#pages .page-box')].slice(1, 3).map((el) => el.getBoundingClientRect()),
+    );
+    return { c, above: sheets[0].bottom, below: sheets[1].top };
+  };
+  /** One px of scroll moves the shadow's end by little more than a px and
+   *  its corner by at most one: no step the size of the gap (7.7 px here)
+   *  or of the corner (12). */
+  const expectSmooth = (ends: Array<{ edge: number; corner: number }>, where: string) => {
+    for (let i = 1; i < ends.length; i++) {
+      expect(Math.abs(ends[i].edge - ends[i - 1].edge), `${where}, step ${i}`).toBeLessThan(2.5);
+      expect(Math.abs(ends[i].corner - ends[i - 1].corner), `${where}, step ${i}`).toBeLessThan(1.5);
+    }
+  };
+
+  // At the panel's bottom: the sheet below the gap comes in a px a step.
+  // While a fraction of a px of it is in view, the shadow still ends
+  // with the sheet above, rounded; once a corner's length of it is in,
+  // the shadow runs to the panel's bottom, square (the paper runs on).
+  const bottom: Array<{ edge: number; corner: number }> = [];
+  let sliver = false;
+  for (let y = Math.floor(gap.start - gap.height) - 3; y <= Math.floor(gap.start - gap.height) + 15; y++) {
+    const { c, above, below } = await at(y);
+    bottom.push({ edge: c.shadow.box.bottom, corner: c.shadow.bottom[0] });
+    const inView = c.panel.bottom - below;
+    if (inView > 0 && inView <= 1) {
+      sliver = true;
+      expect(Math.abs(c.shadow.box.bottom - above), `${inView} px of the next sheet in`).toBeLessThan(1);
+      for (const r of c.shadow.bottom) expect(r).toBeGreaterThan(10.5);
+    }
+  }
+  expect(sliver).toBe(true);
+  expectSmooth(bottom, 'at the bottom');
+  expect(bottom.at(-1)).toEqual({ edge: (await corners(page)).panel.bottom, corner: 0 });
+
+  // At the panel's top, the same: the sheet above the gap goes out a px a
+  // step, and while a fraction of a px of it is left the shadow begins
+  // with the sheet below, rounded.
+  const top: Array<{ edge: number; corner: number }> = [];
+  sliver = false;
+  for (let y = Math.floor(gap.end) - 15; y <= Math.floor(gap.end) + 3; y++) {
+    const { c, above, below } = await at(y);
+    top.push({ edge: c.shadow.box.top, corner: c.shadow.top[0] });
+    const inView = above - c.panel.top;
+    if (inView > 0 && inView <= 1) {
+      sliver = true;
+      expect(Math.abs(c.shadow.box.top - below), `${inView} px of the sheet above left`).toBeLessThan(1);
+      for (const r of c.shadow.top) expect(r).toBeGreaterThan(10.5);
+    }
+  }
+  expect(sliver).toBe(true);
+  expectSmooth(top, 'at the top');
+  expect(top[0]).toEqual({ edge: (await corners(page)).panel.top, corner: 0 });
+});
+
+test('a burst of typing past the last page is paper: the shadow is drawn round the white run on from the sheet, rounded at its end as the clip is', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await openTyp(page, FOUR_PAGES);
+  await page.evaluate(() => (window as unknown as Hooks).view.focus());
+  await page.keyboard.press('Meta+ArrowDown');
+  await settleLocal(page);
+  const sheets = await page.evaluate(() => document.querySelectorAll('#pages .page-box').length);
+  const before = await page.evaluate(() => (window as unknown as Hooks).__pagCount());
+  // Enters at the end, each well inside the quarter second the pass that
+  // adds a page waits for: the editor runs past the last page, the clip
+  // box's white below it comes into view under the sheet, then fills the
+  // panel. In each frame the shadow is drawn round the paper in view, the
+  // white included, and its bottom corners are what is left in view of
+  // the clip's own, which the clip path rounds.
+  let underSheet = 0;
+  let filling = 0;
+  for (let i = 0; i < 80 && !filling; i++) {
+    await page.keyboard.press('Enter');
+    const c = await cornersNextFrame(page);
+    if (!(c.ends.clip > c.ends.lastSheet + 1)) continue;
+    expectShadowRoundPaper(c);
+    const left = 12 - Math.min(12, Math.max(0, c.ends.clip - c.panel.bottom));
+    for (const r of c.shadow.bottom) expect(Math.abs(r - left), `Enter ${i + 1}`).toBeLessThan(0.02);
+    if (c.ends.lastSheet > c.panel.top) underSheet++;
+    else filling++;
+  }
+  expect(underSheet).toBeGreaterThan(0);
+  expect(filling).toBeGreaterThan(0);
+  // The pass adds the page, and the shadow is round it.
+  await settleLocal(page, before);
+  const c = await cornersNextFrame(page);
+  expect(await page.evaluate(() => document.querySelectorAll('#pages .page-box').length)).toBeGreaterThan(sheets);
+  expect(c.ends.clip - c.ends.lastSheet).toBeLessThan(1);
+  expectShadowRoundPaper(c);
 });
 
 /** Knuth's bar, as knuth main has it since c6875a4 ("The bar as tall as

@@ -84,6 +84,18 @@ Why it is built that way:
   shrinks with the visible part of the paper's (6 px when scrolled 6 px)
   and does not snap. A page gap at the panel's edge starts the shadow at
   the next sheet's top, a few px in, rounded.
+- **A gap crossing the panel's edge hands the shadow over across a
+  corner's length.** The sheet beyond the gap is all corner for its
+  first 12 px in view, so while less than that of it is in, the
+  shadow's end is mixed from the sheet on this side's (its edge, 12 px
+  corners) and its own (the panel's edge, square), a part for each px in
+  view. At first a sheet counted as in view from its first fraction of a
+  px, so as a gap crossed the panel's bottom the shadow's end jumped the
+  gap's height (7.7 px at 1100) and its corners went from 12 px to
+  square in one frame (the review found it at a scroll offset where 0.06
+  px of the next sheet was in view; the same at the top). Now a px of
+  scroll moves the end by under 2 px (1.4 px at most at 1100) and the
+  corner by 1 px.
 - **No layout on scroll.** A scroll asks for one frame, and that frame
   reads the panel's scroll offset (the panel's height and the clip's are
   kept from the resize path), walks the kept sheets, and writes up to
@@ -102,9 +114,15 @@ Why it is built that way:
 - **The clip box is white** where nothing covers it: under a burst of
   typing run past the last page before the pass that adds the page (the
   text was on the panel's white before; the panel has none now), and as
-  the plain-text sheet. In the page view `#pages` covers it in the
-  frame's colour, which is what the gaps and the sheets' corner notches
-  show.
+  the plain-text sheet. Under a burst it is paper run on from the last
+  sheet: the clip path rounds its end like a page's, and the shadow is
+  drawn round it (`paper-scale.ts` counts it as the last sheet's while
+  `fitPaper` sees the editor past the stack). At first the shadow ended
+  at the last sheet, and once the burst had the panel all white it went
+  away altogether until the page came (the review's probe: hidden for a
+  quarter second round the whole panel). In the page view `#pages`
+  covers it in the frame's colour, which is what the gaps and the
+  sheets' corner notches show.
 - **Print and the PDF are untouched.** Typst knows nothing of the
   screen; `@media print` hides the shadow and the sheets and takes the
   clip path off the clip box, and `frame.spec` checks it.
@@ -120,6 +138,10 @@ corner:
 | 6 px down | half the corner left, cut | square | 6 px, 0 |
 | a gap across the middle | square | square | the panel's box; 0, 0 |
 | a gap at the panel's top edge | (the gap) | square | from the next sheet's top, 3.9 px in; 12 px, 0 |
+| a gap crossing the bottom edge, 0.12 px of the next sheet in | square | square | ends 7.75 px up (the sheet above ends 7.82 px up); 12 px, 11.88 px |
+| the same, 6.12 px in | square | square | ends 6.77 px up; 12 px, 5.88 px |
+| the same, 12.12 px in | square | square | the panel's box; 12 px, 0 |
+| a burst of Enters at the end, the white past the last sheet in view | square | rounded, cut away (the clip path) | the panel's box to the white's end, 0.4 px up or less; 0, 11.6–12 px |
 | at the end | square | rounded, cut away | 0, 11.94 px (the range ends 0.06 px short of the page) |
 | 740 × 1000, one page | rounded, cut away | rounded; the page ends 57.6 px above the panel's bottom | ends at the page; 12 px all round |
 | the plain-text view, a short text | rounded | rounded | the panel's box; 12 px all round |
@@ -161,13 +183,26 @@ at 1500 and 868, on a one-page paper at 740 × 1000 (the page's own
 bottom corners cut, the panel below it not the paper), and in the
 plain-text view; and a scroll from the end that touches nothing on the
 page but the shadow's style attribute and runs no pass. Without the
-scroll listener it fails at the 6 px step. The Zen frame test now
-expects a square, transparent, shadowless panel and sheets rounded 12
-px on the screen; the print test expects the shadow and the sheets gone
-and no clip path. The smoke checks, in the shell, that the page's top
-corners are cut at the top of the paper, that its bottom corners follow
-whether the page runs past the panel, and that the shadow's corners
-agree.
+scroll listener it fails at the 6 px step. Two more beside it: *a page
+gap crossing the panel's edge hands the shadow's end across it over a
+corner's length*, which scrolls a px at a time across the second gap
+at the panel's bottom and at its top, and checks that no px of scroll
+moves the shadow's end by 2.5 px or its corner by 1.5, and that with a
+fraction of a px of the sheet beyond the gap in view the shadow still
+ends within a px of the sheet on this side, rounded; and *a burst of
+typing past the last page is paper*, which presses Enter at the end of
+the paper until the white past the last sheet fills the panel, and
+checks in each frame that the shadow is drawn round the paper in view,
+the white included, its bottom corners what is left in view of the
+clip's. Both fail on the first version of this branch (the shadow 7.8
+px off the sheet with 0.12 px of the next one in; 20.5 px short of the
+white under a burst). The Zen frame test (renamed *a dark edge all
+round one panel of paper, its sheets rounded*) now expects a square,
+transparent, shadowless panel and sheets rounded 12 px on the screen;
+the print test expects the shadow and the sheets gone and no clip path.
+The smoke checks, in the shell, that the page's top corners are cut at
+the top of the paper, that its bottom corners follow whether the page
+runs past the panel, and that the shadow's corners agree.
 
 **What is still open.**
 
@@ -185,9 +220,12 @@ agree.
    would make a cut edge read as no edge at all.
 4. **A short paper's HUD** sits on the frame below the last page, not on
    the paper.
-5. **A burst of typing past the last page** shows square-cornered white
-   below the last sheet, with no shadow, until the pass adds the page
-   (a quarter second after the burst).
+5. **A burst of typing past the last page** shows the clip box's white
+   below the last sheet, rounded at its bottom by the clip path and
+   shadowed like a sheet, until the pass adds the page (a quarter second
+   after the burst). Where the sheet meets the white, its own rounded
+   bottom corners show two notches of the frame and a hairline seam runs
+   between them; both go when the page comes.
 6. **The zoom.** The corners are 12 CSS px, so a View-menu zoom scales
    them with everything else (14.4 screen px at two steps), as it scales
    the bar's pills and Knuth's room.
@@ -788,6 +826,7 @@ are the same.
   clip path, the `:has()` rule and the sheets' `calc()` radius as
   written, and still has no width media query.
 - `CI=1 npx playwright test --project=chromium` (on a spare port): 185
-  passed.
+  passed; 187 after the review's fixes (the gap hand-over and the
+  burst's shadow, two new tests in `frame.spec`).
 - `node app/smoke.mjs` (the shell checkout beside the main one): ok, with
   the paper's corners checked.

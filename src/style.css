@@ -743,9 +743,11 @@ body {
    paint but not in hit testing, so a click in a cut corner would still
    reach the editor. Its white shows only where nothing covers it: under
    a burst of typing run past the last page, before the pass that adds
-   the page (the pages' #pages covers the rest in the frame's colour),
-   and in the plain-text view, where it is the sheet, never shorter than
-   the panel. */
+   the page, where it is paper run on from the last sheet, rounded at its
+   bottom by the clip path, and the shadow is drawn round it as round a
+   sheet (the pages' #pages covers the rest in the frame's colour); and
+   in the plain-text view, where it is the sheet, never shorter than the
+   panel. */
 #paper {
   overflow: clip;
   clip-path: inset(0 round var(--paper-radius));
@@ -772,7 +774,9 @@ body {
    edge it does not have. Zen's shadow (it was the panel's) is a box
    behind the panel round the paper in view: from the first sheet in view
    to the last, inside the panel, its corners the visible part of those
-   sheets' corners, so it ends with a short document's last page, keeps
+   sheets' corners (its end handed across a page gap over a corner's
+   length as the gap crosses the panel's edge, so it never jumps by the
+   gap), so it ends with a short document's last page, keeps
    the frame's 8 px edge shaded under paper that runs on, and is square
    where the paper is cut. paper-scale.ts writes its four variables, in
    the frame after a scroll and only when they change; the box sits under
