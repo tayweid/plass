@@ -362,3 +362,23 @@ prompted.
   `requestFullscreen()` on the page fills the screen (the shell grants
   the page its own fullscreen, `grantPermissions`), beside View → Toggle
   Full Screen. Nothing to add.
+- ~~A Finder open of a file Plass.app already shows: a blank new window
+  with a toast, or the window that has it.~~ The window that has it, since
+  2026-10-02, on shell 0.2.1's `focus` request. The shell lands every
+  Finder open in a new window, since for Plass it cannot know which window
+  holds which file (handles come from Chromium's pickers and the drop, and
+  its window → path map goes stale as soon as a window opens another
+  file). So the pages decide, by handle: the new window asks the others as
+  Open… always has (`open-files.ts`), with `front: true`; the holder asks
+  the shell to focus it (`focusThisWindow` in `claerbout.ts` — a window may
+  only ask for itself, no window id crosses) and says in its claim whether
+  it was; the launch window then closes itself (`openLaunched` in
+  `main.ts`; `window.close()` closes a shell window). Open…, Recents and a
+  restore keep the toast and front nobody: those windows may hold their
+  own document. Under a shell without the request (v0.2.0 logs "unknown
+  shell message: focus" and answers null) the toast stays, as in a browser
+  tab, where no JS can focus another window. Known: the new window is
+  visible for the moment between its first paint and the claim; keeping a
+  `drop` window hidden until its page has decided would be a change in
+  the shell. `app/smoke.mjs` opens the document a second time and checks
+  the window closes and the first is the focused one.

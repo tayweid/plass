@@ -20,12 +20,18 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   because the shell's permission handler grants what the page holds. A
   Finder open arrives as `?open=<path>`; once the page sends `ready`, the
   shell drops the file on it and the page holds a real handle
-  (`src/claerbout.ts`). `npm run app` runs the shell from the checkout
-  (needs `dist/` and the `claerbout` checkout beside this one, or
-  `CLAERBOUT_SHELL`); `npm run app:build` packages and installs it
-  (`--zip`, `--arch`, `--web` pass through to the shell's packager);
-  `npm run app:smoke` drives the built app with Playwright `_electron`
-  (open, typeset, ⌘S); `npm run app:install-script` renders
+  (`src/claerbout.ts`). Every Finder open lands in a new window (the
+  shell cannot know which window holds which file); one for a file
+  another Plass.app window already shows fronts that window and closes
+  itself (`openLaunched` in `main.ts`: the holder asks the shell's
+  `focus` request for itself over `open-files.ts`; under a shell older
+  than 0.2.1, which answers null, the toast stays). `npm run app` runs
+  the shell from the checkout (needs `dist/` and the `claerbout` checkout
+  beside this one, or `CLAERBOUT_SHELL`); `npm run app:build` packages
+  and installs it (`--zip`, `--arch`, `--web` pass through to the shell's
+  packager); `npm run app:smoke` drives the built app with Playwright
+  `_electron` (open, typeset, ⌘S, a second open of the file fronts the
+  window that has it); `npm run app:install-script` renders
   `public/install` from the shell's template. Log:
   `~/Library/Logs/Plass.log`. The deploy's `app` job (macos-15) packages
   both processors from the verified `dist`, installs through the install
@@ -42,7 +48,9 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   JS can focus another independent window (tested 2026-09-11: neither
   `window.focus()` on a message nor `window.open('', name)` with a click
   reaches a window this one did not open), so with several windows the
-  launch lands in the last-focused one and says where the file is.
+  launch lands in the last-focused one and says where the file is. (In
+  Plass.app the shell fronts a window on that window's own request, so
+  there the window that has the file comes forward instead; above.)
   Manifest edits need an app uninstall/reinstall in Chrome to propagate to
   the OS.
 

@@ -8,6 +8,7 @@ import { tableEditing } from 'prosemirror-tables';
 import { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
 import { isNativeShell, takeLaunchFile } from './claerbout';
+import { openInAnotherWindow } from './open-files';
 import { migrateLegacyTableGeometry } from './typ-parser';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
 import { collapseSpaces } from './collapse-spaces';
@@ -431,6 +432,23 @@ async function openLaunched(files: ReadonlyArray<FileSystemFileHandle>): Promise
   if (current && (await current.isSameEntry?.(file).catch(() => false))) {
     showMessage(`${file.name} is open here`);
     return;
+  }
+  // Plass.app lands every Finder open in a new window (the shell cannot
+  // know which window holds which file), so this may be a window opened
+  // for a file another window already shows. That window brings itself
+  // forward — the holder asks the shell to focus it (open-files.ts);
+  // nothing else can, the shell knows windows and the pages know handles —
+  // and this one, holding nothing, goes away. Under a shell without the
+  // focus request (older than 0.2.1) the holder is not fronted, and
+  // loadHandle says where the file is, as before; a browser tab never
+  // gets here (no JS can focus a window it did not open; the 2026-09-11
+  // test in AGENTS.md), so its toast stays too.
+  if (isNativeShell() && !fileManager.handle && !fileManager.dirty) {
+    const holder = await openInAnotherWindow(file, true);
+    if (holder?.focused) {
+      window.close();
+      return;
+    }
   }
   await fileManager.loadHandle(file).then((opened) => {
     if (!opened) return;
