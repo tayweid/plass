@@ -35,7 +35,7 @@ import { FileManager } from './file-manager';
 import { resetCompilerCircuit } from './compiler-circuit';
 import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
 import { describeVerdict } from './environment-check';
-import { attachPaper } from './paper-scale';
+import { attachPaper, paperSheets } from './paper-scale';
 import { FROM_DISK, reloadTransaction } from './reload-in-place';
 
 const STORAGE_KEY = 'typeset-doc-v1';
@@ -173,8 +173,16 @@ const pagesEl = document.getElementById('pages')!;
 
 // The paper is the panel (style.css): the pages fill its width by scaling,
 // never by re-flowing, so the window is the zoom (paper-scale.ts). Nothing
-// here sizes the window, and a resize lays nothing out.
-attachPaper(scrollEl, document.getElementById('paper')!, stackEl);
+// here sizes the window, and a resize lays nothing out. The shadow on the
+// frame is drawn round the paper in view, its corners rounded only where
+// they are a sheet's (style.css, the paper's corners).
+attachPaper({
+  panel: scrollEl,
+  clip: document.getElementById('paper')!,
+  stack: stackEl,
+  pages: pagesEl,
+  shadow: document.getElementById('paper-shadow')!,
+});
 
 let pageCount = 0;
 let pageSignature = '';
@@ -280,6 +288,7 @@ function renderPages(info: PageInfo) {
       }
     }
     pagesEl.replaceChildren(frag);
+    paperSheets(info.pages);
   }
   updateStatus();
 }

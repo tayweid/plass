@@ -220,7 +220,8 @@ test('the frame is Zen\'s: a dark edge all round one rounded panel of paper, the
       panelBackground: getComputedStyle(panel).backgroundColor,
       radius: getComputedStyle(panel).borderRadius,
       panelShadow: getComputedStyle(panel).boxShadow,
-      sheet: { background: sheet.backgroundColor, shadow: sheet.boxShadow, radius: sheet.borderRadius },
+      paperShadow: getComputedStyle(document.getElementById('paper-shadow')!).boxShadow,
+      sheet: { background: sheet.backgroundColor, shadow: sheet.boxShadow, radius: parseFloat(sheet.borderRadius) * (panelRect.width / 816) },
       gapColour: getComputedStyle(document.getElementById('pages')!).backgroundColor,
       gap: sheets[1].getBoundingClientRect().top - sheets[0].getBoundingClientRect().bottom,
       panel: { left: panelRect.left, top: panelRect.top, right: panelRect.right, bottom: panelRect.bottom },
@@ -234,15 +235,19 @@ test('the frame is Zen\'s: a dark edge all round one rounded panel of paper, the
       height: window.innerHeight,
     };
   });
-  // A dark grey frame, not black; the panel is the paper's white, its
-  // shadow on the frame; the sheets inside it are bare paper, edge to
-  // edge, and between them a thin line of the frame (6 CSS px drawn at
-  // the panel's scale: 7.7 px here).
+  // A dark grey frame, not black; the panel is the paper, a square clip
+  // with no white or shadow of its own: the sheets are the white, edge to
+  // edge, each rounded 12 px on the screen at its corners, the shadow on
+  // the frame is the paper's (the next test), and between the sheets a
+  // thin line of the frame (6 CSS px drawn at the panel's scale: 7.7 px
+  // here).
   expect(look.frame).toBe('rgb(24, 24, 26)');
-  expect(look.panelBackground).toBe('rgb(255, 255, 255)');
-  expect(look.radius).toBe('12px');
-  expect(look.panelShadow).not.toBe('none');
-  expect(look.sheet).toEqual({ background: 'rgb(255, 255, 255)', shadow: 'none', radius: '0px' });
+  expect(look.panelBackground).toBe('rgba(0, 0, 0, 0)');
+  expect(look.radius).toBe('0px');
+  expect(look.panelShadow).toBe('none');
+  expect(look.paperShadow).not.toBe('none');
+  expect(look.sheet).toMatchObject({ background: 'rgb(255, 255, 255)', shadow: 'none' });
+  expect(look.sheet.radius).toBeCloseTo(12, 3);
   expect(look.gapColour).toBe('rgb(24, 24, 26)');
   expect(look.gap).toBeCloseTo((6 * (1100 - RAIL - EDGE)) / PAGE_W, 3);
   // The bar spans the whole window (it is the window's title bar in
@@ -271,6 +276,200 @@ test('the frame is Zen\'s: a dark edge all round one rounded panel of paper, the
   for (const selector of ['#doc-pod', '#toolbar .tb-tile', '.view-switch']) expect(await appRegion(page, selector)).toBe('no-drag');
   await page.getByRole('button', { name: 'File', exact: true }).click();
   expect(await appRegion(page, '.tb-menu:not([hidden])')).toBe('no-drag');
+});
+
+/** The paper's corners (src/style.css, the paper's corners), read from
+ *  geometry, no pixels: what answers a point one CSS px inside each of
+ *  the panel's corners (the paper where the corner is square; where the
+ *  clip has cut a rounded corner away, the panel behind it), the sheets'
+ *  radius on the screen, and the shadow's box and corner radii against
+ *  the paper in view (the sheets' drawn boxes cut to the panel). */
+const corners = (page: Page) =>
+  page.evaluate(() => {
+    const panel = document.getElementById('scroll')!;
+    const paper = document.getElementById('paper')!;
+    const shadow = document.getElementById('paper-shadow')!;
+    const p = panel.getBoundingClientRect();
+    const onPaper = (x: number, y: number) => paper.contains(document.elementFromPoint(x, y));
+    const sheets = [...document.querySelectorAll('#pages .page-box')]
+      .map((el) => el.getBoundingClientRect())
+      .filter((r) => r.bottom > p.top && r.top < p.bottom);
+    const s = shadow.getBoundingClientRect();
+    const style = getComputedStyle(shadow);
+    const radius = (value: string) => Math.round(parseFloat(value) * 100) / 100;
+    return {
+      onPaper: {
+        topLeft: onPaper(p.left + 1, p.top + 1),
+        topRight: onPaper(p.right - 1, p.top + 1),
+        bottomLeft: onPaper(p.left + 1, p.bottom - 1),
+        bottomRight: onPaper(p.right - 1, p.bottom - 1),
+      },
+      panel: { top: p.top, bottom: p.bottom, left: p.left, right: p.right },
+      paper: sheets.length
+        ? { top: Math.max(p.top, sheets[0].top), bottom: Math.min(p.bottom, sheets.at(-1)!.bottom), left: p.left, right: p.right }
+        : null,
+      shadow: {
+        box: { top: s.top, bottom: s.bottom, left: s.left, right: s.right },
+        top: [radius(style.borderTopLeftRadius), radius(style.borderTopRightRadius)],
+        bottom: [radius(style.borderBottomLeftRadius), radius(style.borderBottomRightRadius)],
+        hidden: shadow.hidden,
+      },
+      sheetRadius: parseFloat(getComputedStyle(document.querySelector('#pages .page-box')!).borderTopLeftRadius) * (p.width / 816),
+      scrollTop: panel.scrollTop,
+    };
+  });
+
+type Corners = Awaited<ReturnType<typeof corners>>;
+
+/** The shadow is drawn round the paper in view, to a layout unit. */
+function expectShadowRoundPaper(c: Corners) {
+  expect(c.shadow.hidden).toBe(false);
+  for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+    expect(Math.abs(c.shadow.box[side] - c.paper![side]), side).toBeLessThan(0.05);
+  }
+}
+
+/** Scroll the panel to a px offset, the end, or a page gap (the second
+ *  one) across its middle or at its top edge. */
+const scrollPanel = (page: Page, to: number | 'end' | 'gap across the middle' | 'gap at the top') =>
+  page.evaluate((to) => {
+    const panel = document.getElementById('scroll')!;
+    const view = panel.getBoundingClientRect();
+    const sheets = [...document.querySelectorAll('#pages .page-box')].map((el) => el.getBoundingClientRect());
+    const gap = sheets.length > 2 ? (sheets[1].bottom + sheets[2].top) / 2 : 0;
+    panel.scrollTop =
+      typeof to === 'number' ? to
+      : to === 'end' ? panel.scrollHeight
+      : to === 'gap across the middle' ? panel.scrollTop + gap - (view.top + view.height / 2)
+      : panel.scrollTop + gap - view.top;
+  }, to);
+
+test('the paper\'s corners are rounded only where they are a sheet\'s, and the shadow is drawn round the paper in view', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await openTyp(page, Array.from({ length: 18 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
+  const settled = async () => {
+    // The shadow follows in the frame after a scroll.
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    return corners(page);
+  };
+
+  // At the top: the first page's top edge is in view, so its top corners
+  // are rounded and the clip cuts them away; the paper runs on past the
+  // panel's bottom, so that edge is square and the paper reaches its
+  // corners. Every sheet is rounded 12 px on the screen.
+  let c = await settled();
+  expect(c.scrollTop).toBe(0);
+  expect(c.onPaper).toEqual({ topLeft: false, topRight: false, bottomLeft: true, bottomRight: true });
+  expect(c.sheetRadius).toBeCloseTo(12, 3);
+  expectShadowRoundPaper(c);
+  expect(c.shadow.top).toEqual([12, 12]);
+  expect(c.shadow.bottom).toEqual([0, 0]);
+
+  // Six px down, half the top corner is past the panel's edge: the clip
+  // still cuts what is left of it, and the shadow's corner is as large as
+  // that.
+  await scrollPanel(page, 6);
+  c = await settled();
+  expect(c.onPaper).toEqual({ topLeft: false, topRight: false, bottomLeft: true, bottomRight: true });
+  expect(c.shadow.top).toEqual([6, 6]);
+
+  // Mid-document, a page gap across the middle of the panel: no corner of
+  // the panel is a sheet's, so all four are square and the paper reaches
+  // them; the sheets' own corners are rounded at the gap.
+  await scrollPanel(page, 'gap across the middle');
+  c = await settled();
+  expect(c.onPaper).toEqual({ topLeft: true, topRight: true, bottomLeft: true, bottomRight: true });
+  expectShadowRoundPaper(c);
+  expect(c.shadow.top).toEqual([0, 0]);
+  expect(c.shadow.bottom).toEqual([0, 0]);
+
+  // A page gap at the panel's top edge: the paper in view begins with the
+  // next sheet's top, a few px down, and so does the shadow, rounded.
+  await scrollPanel(page, 'gap at the top');
+  c = await settled();
+  expect(c.paper!.top - c.panel.top).toBeGreaterThan(2);
+  expectShadowRoundPaper(c);
+  expect(c.shadow.top).toEqual([12, 12]);
+  expect(c.shadow.bottom).toEqual([0, 0]);
+
+  // At the end: the last page's bottom corners are rounded and cut, the
+  // top is square.
+  await scrollPanel(page, 'end');
+  c = await settled();
+  expect(c.onPaper).toEqual({ topLeft: true, topRight: true, bottomLeft: false, bottomRight: false });
+  expectShadowRoundPaper(c);
+  expect(c.shadow.top).toEqual([0, 0]);
+  for (const r of c.shadow.bottom) expect(r).toBeGreaterThan(11.5);
+
+  // Scrolling writes nothing but the shadow's variables, and lays nothing
+  // out: no pass, no attribute or node of the page touched but the
+  // shadow's style.
+  const passes = await page.evaluate(() => (window as unknown as Hooks).__pagCount());
+  await page.evaluate(() => {
+    const w = window as unknown as { __touched: string[] };
+    w.__touched = [];
+    new MutationObserver((records) => {
+      for (const r of records) w.__touched.push(`${(r.target as Element).id || (r.target as Element).nodeName}:${r.type}:${r.attributeName ?? ''}`);
+    }).observe(document.body, { subtree: true, attributes: true, childList: true, characterData: true });
+  });
+  await page.mouse.move(600, 400);
+  for (let i = 0; i < 30; i++) await page.mouse.wheel(0, -180);
+  await settled();
+  const touched = await page.evaluate(() => [...new Set((window as unknown as { __touched: string[] }).__touched)]);
+  expect(touched.filter((t) => t !== 'paper-shadow:attributes:style')).toEqual([]);
+  expect(await page.evaluate(() => (window as unknown as Hooks).__pagCount())).toBe(passes);
+
+  // Wider (1.77×) and at 1:1: the same 12 px on the screen, the same rule.
+  for (const size of [{ width: 1500, height: 900 }, { width: 868, height: 720 }]) {
+    await page.setViewportSize(size);
+    await expect.poll(() => page.evaluate(() => document.getElementById('scroll')!.clientWidth)).toBe(size.width - RAIL - EDGE);
+    await scrollPanel(page, 0);
+    c = await settled();
+    expect(c.sheetRadius, `at ${size.width}`).toBeCloseTo(12, 3);
+    expect(c.onPaper).toEqual({ topLeft: false, topRight: false, bottomLeft: true, bottomRight: true });
+    expectShadowRoundPaper(c);
+    expect(c.shadow.top).toEqual([12, 12]);
+    expect(c.shadow.bottom).toEqual([0, 0]);
+  }
+
+  // A short paper, one page in a tall narrow window (0.84×): the shadow
+  // ends where the page ends, rounded, and below it the panel is the
+  // frame, nothing of the paper.
+  await page.setViewportSize({ width: 740, height: 1000 });
+  await openTyp(page, '= Short\n\nOne page, shorter than the panel.\n', 'short.typ');
+  c = await settled();
+  expect(c.sheetRadius).toBeCloseTo(12, 3);
+  expect(c.paper!.bottom).toBeLessThan(c.panel.bottom - 20);
+  expectShadowRoundPaper(c);
+  expect(c.shadow.top).toEqual([12, 12]);
+  expect(c.shadow.bottom).toEqual([12, 12]);
+  expect(c.onPaper).toEqual({ topLeft: false, topRight: false, bottomLeft: false, bottomRight: false });
+  const page0 = await page.evaluate(() => {
+    const paper = document.getElementById('paper')!;
+    const r = document.querySelector('#pages .page-box')!.getBoundingClientRect();
+    const onPaper = (x: number, y: number) => paper.contains(document.elementFromPoint(x, y));
+    return { cornerCut: !onPaper(r.left + 1, r.bottom - 1) && !onPaper(r.right - 1, r.bottom - 1), inside: onPaper(r.left + 20, r.bottom - 20) };
+  });
+  expect(page0).toEqual({ cornerCut: true, inside: true });
+
+  // The plain-text view: its one sheet is the clip box, never shorter
+  // than the panel, so a short text's sheet has all four corners, and the
+  // shadow is the panel's box.
+  await page.locator('.tb-source').click();
+  await expect(page.locator('#source .cm-content')).toBeVisible();
+  c = await settled();
+  const sheet = await page.evaluate(() => {
+    const paper = document.getElementById('paper')!.getBoundingClientRect();
+    const panel = document.getElementById('scroll')!.getBoundingClientRect();
+    return { top: paper.top - panel.top, height: paper.height - panel.height };
+  });
+  expect(sheet).toEqual({ top: 0, height: 0 });
+  expect(c.onPaper).toEqual({ topLeft: false, topRight: false, bottomLeft: false, bottomRight: false });
+  for (const side of ['top', 'bottom', 'left', 'right'] as const) expect(Math.abs(c.shadow.box[side] - c.panel[side]), side).toBeLessThan(0.05);
+  expect(c.shadow.top).toEqual([12, 12]);
+  expect(c.shadow.bottom).toEqual([12, 12]);
+  await page.locator('.tb-source').click();
 });
 
 /** Knuth's bar, as knuth main has it since c6875a4 ("The bar as tall as
@@ -679,16 +878,18 @@ test('the rail and the panels it opens keep off the bar; a short window says the
   await expect.poll(cue).toEqual({ above: true, below: false });
 });
 
-test('print shows the paper alone, at its own size: the bar, the rail and the HUD are gone', async ({ page }) => {
+test('print shows the paper alone, at its own size: the bar, the rail, the HUD and the paper\'s shadow and corners are gone', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
   await page.goto('/?new=1');
   await page.waitForFunction(() => Boolean((window as unknown as Hooks).view));
   await page.emulateMedia({ media: 'print' });
   const printed = await page.evaluate(() => ({
-    hidden: ['#toolbar', '#rail', '#hud', '.view-switch'].map((selector) => getComputedStyle(document.querySelector(selector)!).display),
+    hidden: ['#toolbar', '#rail', '#hud', '.view-switch', '#paper-shadow', '#pages'].map((selector) => getComputedStyle(document.querySelector(selector)!).display),
     transform: getComputedStyle(document.getElementById('stack')!).transform,
     clip: getComputedStyle(document.getElementById('paper')!).overflow,
+    // No rounded corners on a printed page.
+    corners: getComputedStyle(document.getElementById('paper')!).clipPath,
   }));
-  expect(printed).toEqual({ hidden: ['none', 'none', 'none', 'none'], transform: 'none', clip: 'visible' });
+  expect(printed).toEqual({ hidden: ['none', 'none', 'none', 'none', 'none', 'none'], transform: 'none', clip: 'visible', corners: 'none' });
   await page.emulateMedia({ media: 'screen' });
 });
