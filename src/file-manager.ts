@@ -403,11 +403,14 @@ export class FileManager {
     // One window per file: a second window would autosave against its own
     // baseline and quietly overwrite the first. Say where the file already
     // is, and leave a way through in case that window is gone or wedged.
+    // (A Finder launch in Plass.app asks first, with the holder fronted and
+    // the launch window closed: main.ts openLaunched. Open…, Recents and a
+    // restore never front anyone — this window may hold its own document.)
     if (!stealConfirmed) {
       const elsewhere = await openInAnotherWindow(handle);
       if (elsewhere) {
         this.hooks.messageAction?.(
-          `${elsewhere} is already open in another Plass window`,
+          `${elsewhere.name} is already open in another Plass window`,
           { label: 'Open here anyway', run: () => void this.loadHandle(handle, dir, discardConfirmed, true) },
         );
         return false;

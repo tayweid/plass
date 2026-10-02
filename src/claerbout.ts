@@ -5,12 +5,18 @@
 // the pickers are native sheets, handles read and write, and a handle
 // stored in IndexedDB reopens after a relaunch because the shell's
 // permission handler grants what the page holds (a stored handle is the
-// grant). Two things cross the bridge (`window.claerbout`, preload.js):
+// grant). Three things cross the bridge (`window.claerbout`, preload.js):
 //
 // - A Finder open. The shell opens a window at `?open=<path>` and, once
 //   the page says it is ready, drops the file on it through the window's
 //   own debugger: the page receives a real FileSystemFileHandle, like one
 //   from a picker. There is no other way from a path to a handle.
+// - A window asking to come forward (`focus`, shell 0.2.1). Every Finder
+//   open lands in a new window, since the shell cannot know which window
+//   holds which file; when that file is already open in another window,
+//   that window fronts itself and the new one closes (open-files.ts,
+//   main.ts openLaunched). No page can focus another window; the shell
+//   can, on that window's own request.
 // - The app updating itself (the shell's update.js): `update` requests
 //   check the site for a newer build (and, with action 'install', install
 //   it), and `update` events report the shell's own check after launch and
@@ -32,6 +38,20 @@ function bridge(): ClaerboutBridge | null {
 /** Running inside Plass.app (the shell's bridge is present). */
 export function isNativeShell(): boolean {
   return bridge() !== null;
+}
+
+/** Ask the shell to bring THIS window forward: shown, unminimized, focused,
+ *  the app made active. True when it did. False in a browser tab, and under
+ *  a shell without the `focus` request (older than 0.2.1: it logs "unknown
+ *  shell message" and answers null), which is how a launch window knows it
+ *  cannot leave the file to the window that has it. Never rejects. */
+export function focusThisWindow(): Promise<boolean> {
+  const shell = bridge();
+  if (!shell) return Promise.resolve(false);
+  return shell.request({ type: 'focus' }).then(
+    (reply) => (reply as { focused?: unknown } | null)?.focused === true,
+    () => false,
+  );
 }
 
 /** How long the shell gets to drop the launched file once told the page

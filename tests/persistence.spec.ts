@@ -484,6 +484,104 @@ test('a second window refuses a file the first already has open', async ({ conte
   await expect.poll(() => b.evaluate(() => (window as any).__fm.handle?.name ?? null)).toBe('Shared.typ');
 });
 
+/** The page inside Plass.app, as far as these tests need it: the shell's
+ *  bridge is present (every request is kept on `__shell`; `focus` is
+ *  answered as given, null being an older shell's answer to anything it
+ *  does not know), and window.close() is recorded instead of done. */
+const inPlassApp = (page: import('playwright/test').Page, focusAnswer: { focused: boolean } | null) =>
+  page.addInitScript((answer) => {
+    const w = window as any;
+    w.__shell = [];
+    w.claerbout = {
+      request: async (message: { type: string }) => {
+        w.__shell.push(message);
+        return message.type === 'focus' ? answer : null;
+      },
+      on: () => () => {},
+    };
+    w.__closed = false;
+    w.close = () => {
+      w.__closed = true;
+    };
+  }, focusAnswer);
+
+/** Window A holds Shared.typ in a folder; a fresh window B, with no file. */
+const twoAppWindows = async (context: import('playwright/test').BrowserContext, focusAnswer: { focused: boolean } | null) => {
+  const dirName = `launch-${Math.random().toString(36).slice(2)}`;
+  const a = await context.newPage();
+  await inPlassApp(a, focusAnswer);
+  await a.goto('/?new=1');
+  await a.waitForFunction(() => !!(window as any).__fm);
+  const openedA = await a.evaluate(async (dirName) => {
+    const fm = (window as any).__fm;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(dirName, { create: true });
+    const h = await dir.getFileHandle('Shared.typ', { create: true });
+    const w = await h.createWritable();
+    await w.write('= Shared\n');
+    await w.close();
+    return await fm.loadHandle(h, dir);
+  }, dirName);
+  expect(openedA).toBe(true);
+  const b = await context.newPage();
+  await inPlassApp(b, focusAnswer);
+  await b.goto('/?new=1');
+  await b.waitForFunction(() => !!(window as any).__openLaunched);
+  return { a, b, dirName };
+};
+
+/** Finder opens Shared.typ: the shell has dropped it on window B. */
+const launchIn = (b: import('playwright/test').Page, dirName: string) =>
+  b.evaluate(async (dirName) => {
+    const w = window as any;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(dirName);
+    const h = await dir.getFileHandle('Shared.typ');
+    await w.__openLaunched([h]);
+    return { closed: w.__closed as boolean, holdsNothing: w.__fm.handle === null, toast: document.getElementById('toast')?.textContent ?? '' };
+  }, dirName);
+
+const focusRequests = (page: import('playwright/test').Page) =>
+  page.evaluate(() => (window as any).__shell.filter((m: { type: string }) => m.type === 'focus').length);
+
+test('in Plass.app a launch of a file another window holds fronts that window and closes this one', async ({ context }) => {
+  // Finder opens a file Plass.app already shows: the shell lands a new
+  // window on it, the window that has it asks the shell to front it, and
+  // the new window goes away instead of showing a toast on a blank sheet.
+  const { a, b, dirName } = await twoAppWindows(context, { focused: true });
+  const launched = await launchIn(b, dirName);
+  expect(launched.closed).toBe(true);
+  expect(launched.holdsNothing).toBe(true);
+  expect(launched.toast).not.toContain('already open');
+  expect(await focusRequests(a)).toBe(1);
+
+  // Open… in a window asks nobody to come forward: this window may hold a
+  // document of its own, so the toast stays the answer there.
+  const opened = await b.evaluate(async (dirName) => {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(dirName);
+    return await (window as any).__fm.loadHandle(await dir.getFileHandle('Shared.typ'), dir);
+  }, dirName);
+  expect(opened).toBe(false);
+  await expect(b.locator('#toast')).toContainText('already open in another Plass window');
+  expect(await focusRequests(a)).toBe(1);
+});
+
+test('under a shell without the focus request the launch window keeps the toast', async ({ context }) => {
+  // Plass.app on a shell older than 0.2.1: the holder asks and is answered
+  // null, so it is not fronted and the launch window cannot leave the file
+  // to it. It says where the file is and leaves the way through, as Open…
+  // does.
+  const { a, b, dirName } = await twoAppWindows(context, null);
+  const launched = await launchIn(b, dirName);
+  expect(launched.closed).toBe(false);
+  expect(launched.holdsNothing).toBe(true);
+  expect(launched.toast).toContain('already open in another Plass window');
+  expect(await focusRequests(a)).toBe(1);
+  await b.locator('#toast .toast-action').click();
+  await expect.poll(() => b.evaluate(() => (window as any).__fm.handle?.name ?? null)).toBe('Shared.typ');
+});
+
 test('a file renamed outside Plass stops autosave and says so', async ({ page }) => {
   await page.goto('/?new=1');
   await page.waitForFunction(() => !!(window as any).__fm);

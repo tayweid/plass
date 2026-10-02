@@ -146,6 +146,27 @@ if (hidesTitleBar) {
   if (bar.padding <= bar.x) await fail(`the bar is padded ${bar.padding}px, inside the lights' ${bar.x}px`);
 }
 
+// Finder opens the same file again: the shell lands a new window on it,
+// which finds the file open here, has this window brought forward and
+// closes itself (src/main.ts openLaunched). A shell without the focus
+// request leaves the toast in that window: said and skipped, since the
+// checkout beside this one may predate it.
+const knows = await page.evaluate(() => window.claerbout.request({ type: 'focus' }));
+if (knows?.focused === true) {
+  const opened = app.waitForEvent('window', { timeout: 30_000 });
+  await app.evaluate(({ app: electronApp }, file) => electronApp.emit('open-file', { preventDefault() {} }, file), doc);
+  const second = await opened;
+  for (let i = 0; i < 80 && !second.isClosed(); i++) await page.waitForTimeout(250);
+  if (!second.isClosed()) {
+    const toast = await second.evaluate(() => document.getElementById('toast')?.textContent ?? '').catch(() => '?');
+    await fail(`the second window on ${path.basename(doc)} stayed open (toast: "${toast}")`);
+  }
+  if (page.isClosed() || app.windows().length !== 1) await fail(`windows after the second open: ${app.windows().map((window) => window.url()).join(', ') || 'none'}`);
+  const front = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.getTitle() ?? null);
+  if (front === null) console.log('smoke: no window is focused here (the app is not active); the fronting is not checked');
+  else if (!front.startsWith('smoke')) await fail(`after the second open the focused window is "${front}", not the first`);
+} else console.log('smoke: the shell has no focus request; the second open is not checked');
+
 await app.close();
 fs.rmSync(work, { recursive: true, force: true });
 console.log(`smoke (${bundle ? path.basename(bundle) : 'checkout'}): ok`);
