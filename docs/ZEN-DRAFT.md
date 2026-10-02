@@ -12,16 +12,238 @@ reviewers' findings (below, *The second pass*); both are on main. The
 third pass (branch `ux/zen3`, the same afternoon) gives Plass Knuth's
 bar and makes the panel the paper, the window the zoom (below, *The
 third pass*), and then takes Knuth's new 44 px bar and holds the view
-still while typing (below, *The bar as tall as the rail is wide*). Run
+still while typing (below, *The bar as tall as the rail is wide*). The
+paper's corners (branch `ux/corners`, the same evening) round a corner
+only where it is a sheet's (below, *The paper's corners*). Run
 it from the worktree with `npm run app` (after `npx vite build`); the
 record is `docs/zen-draft-1100.png` and `docs/zen-draft-1500.png`, the
-shell from the checkout at 1100 and 1500 px wide, and
-`docs/zen-knuth-1100.png`, Knuth in the same shell at 1100, for the
-bars, each on a document in `~/Projects/week-3` (page captures: the
+shell from the checkout at 1100 and 1500 px wide at the top of a paper,
+`docs/zen-draft-scrolled-1100.png`, the same at 1100 with a page gap in
+view, and `docs/zen-knuth-1100.png`, Knuth in the same shell at 1100,
+for the bars, each on a document in `~/Projects/week-3` (page captures: the
 traffic lights are the window's own and are not in them —
 `screencapture` of the window needs a screen-recording grant this
 session does not have; their room is the empty 88 px at the bar's left,
 which the File tile sits 12 px past).
+
+## The paper's corners
+
+Taylor, after the merged layout (Plass main eb4ea89): "looks soo good.
+in plass i think it's a little hard to tell what's the top and bottom
+of the page. so i wonder if we can round the edges of the page when
+they're visible but if the edge of the paper isn't visible then the
+corners of the elevated platform on that side are squared off. not sure
+i'm explaining this very well. but i basically want to show the PAPER
+and it's rounded corners and not have the elevated platform round the
+corners if they aren't truely the corner of the paper."
+
+The panel's four corners were rounded 12 px whatever was under them, so
+in the middle of a paper a rounded corner at the top and the bottom of
+the window said "here the page ends" where it did not, and nothing told
+the first page's top from the middle of the third.
+
+**What was built.** A corner is rounded only where it is a sheet's own:
+the first page's top corners while its top edge is in view, both
+sheets' corners at every page gap (each sheet is a piece of paper, and
+the gap shows the frame), the last page's bottom corners at the end.
+Where the paper runs on past the panel's edge, that edge is square: the
+clip is straight and nothing there suggests an edge. The radius is 12
+px on the screen at any scale, Knuth's room's, so the corner is the
+same size at 868, 1100 and 1500 wide although the page is drawn at 1,
+1.28 and 1.77. Zen's shadow is now the paper's: it is drawn round the
+paper in view, so a short paper's shadow ends where its last page ends
+(below it the panel is the frame, nothing of the paper), the frame's
+8 px edge keeps its shade under paper that runs on, and its corners are
+the paper's, square where the paper is cut. The plain-text view is one
+long sheet, never shorter than the panel, rounded at its top and its
+end like a page.
+
+**The mechanism**, in two sentences: every sheet is rounded at its four
+corners (`.page-box`, the radius divided by the scale `paper-scale.ts`
+writes on `#pages`; the clip box `#paper` cuts the stack's outer four)
+and the panel's own clip is square, so a corner shows wherever a sheet's
+corner is in view and an edge is straight wherever the paper runs on, by
+geometry alone. The shadow is a fixed box behind the panel
+(`#paper-shadow`) whose top, bottom and corner radii are CSS variables
+`paper-scale.ts` writes in the frame after a scroll, a new set of
+sheets or a new height, and only when they change, from the sheets the
+painter laid (`paperSheets`, called by `renderPages`) and the panel's
+scroll offset.
+
+Why it is built that way:
+
+- **The rounding is geometry, not a rule per scroll position.** The
+  panel carries no white or shadow of its own any more: it is a square
+  window. Nothing decides "round the top now"; the first sheet's corner
+  is either in the window or not. The one thing that must be told is the
+  shadow, which sits outside the panel's clip (a shadow drawn inside a
+  scroller cannot fall on the frame round it).
+- **The shadow's corner is what is left of the sheet's corner.** Its
+  radius is 12 px less however far the sheet's edge is past the panel's
+  edge, so as the first page's top scrolls out the shadow's corner
+  shrinks with the visible part of the paper's (6 px when scrolled 6 px)
+  and does not snap. A page gap at the panel's edge starts the shadow at
+  the next sheet's top, a few px in, rounded.
+- **A gap crossing the panel's edge hands the shadow over across a
+  corner's length.** The sheet beyond the gap is all corner for its
+  first 12 px in view, so while less than that of it is in, the
+  shadow's end is mixed from the sheet on this side's (its edge, 12 px
+  corners) and its own (the panel's edge, square), a part for each px in
+  view. At first a sheet counted as in view from its first fraction of a
+  px, so as a gap crossed the panel's bottom the shadow's end jumped the
+  gap's height (7.7 px at 1100) and its corners went from 12 px to
+  square in one frame (the review found it at a scroll offset where 0.06
+  px of the next sheet was in view; the same at the top). Now a px of
+  scroll moves the end by under 2 px (1.4 px at most at 1100) and the
+  corner by 1 px.
+- **No layout on scroll.** A scroll asks for one frame, and that frame
+  reads the panel's scroll offset (the panel's height and the clip's are
+  kept from the resize path), walks the kept sheets, and writes up to
+  four variables on the shadow's own element, which only change near a
+  sheet's edge; in the middle of a page nothing is written. The scale
+  variable lives on `#pages`, not the stack: on the stack it would have
+  every node of the editor restyled (24 ms a write on a 32-page paper,
+  7269 nodes, against 0.2 ms on the page boxes). The scroll range, the
+  `paperPass` caret hold and the no-anchoring rule are untouched.
+- **A clip path, not a border radius, on the clip box.** Chromium clips
+  a rounded `overflow`'s descendants in paint but not in hit testing
+  (measured: a point in a cut corner still answered the editor), so a
+  click in the cut-away corner would have put the caret in the paper.
+  `clip-path: inset(0 round 12px)` clips both; `overflow: clip` stays
+  for the scroll range, as before.
+- **The clip box is white** where nothing covers it: under a burst of
+  typing run past the last page before the pass that adds the page (the
+  text was on the panel's white before; the panel has none now), and as
+  the plain-text sheet. Under a burst it is paper run on from the last
+  sheet: the clip path rounds its end like a page's, and the shadow is
+  drawn round it (`paper-scale.ts` counts it as the last sheet's while
+  `fitPaper` sees the editor past the stack). At first the shadow ended
+  at the last sheet, and once the burst had the panel all white it went
+  away altogether until the page came (the review's probe: hidden for a
+  quarter second round the whole panel). In the page view `#pages`
+  covers it in the frame's colour, which is what the gaps and the
+  sheets' corner notches show.
+- **Print and the PDF are untouched.** Typst knows nothing of the
+  screen; `@media print` hides the shadow and the sheets and takes the
+  clip path off the clip box, and `frame.spec` checks it.
+
+Measured in a browser tab (the dev server, `--font-render-hinting=none`),
+1100 × 800, eighteen paragraphs over four pages; the shadow's radius at
+its top and bottom, and what answers one CSS px inside the panel's
+corner:
+
+| where the panel is | top corners | bottom corners | the shadow |
+|---|---|---|---|
+| at the top | rounded, cut away (the panel answers) | square (the paper answers) | the panel's box; 12 px, 0 |
+| 6 px down | half the corner left, cut | square | 6 px, 0 |
+| a gap across the middle | square | square | the panel's box; 0, 0 |
+| a gap at the panel's top edge | (the gap) | square | from the next sheet's top, 3.9 px in; 12 px, 0 |
+| a gap crossing the bottom edge, 0.12 px of the next sheet in | square | square | ends 7.75 px up (the sheet above ends 7.82 px up); 12 px, 11.88 px |
+| the same, 6.12 px in | square | square | ends 6.77 px up; 12 px, 5.88 px |
+| the same, 12.12 px in | square | square | the panel's box; 12 px, 0 |
+| a burst of Enters at the end, the white past the last sheet in view | square | rounded, cut away (the clip path) | the panel's box to the white's end, 0.4 px up or less; 0, 11.6–12 px |
+| at the end | square | rounded, cut away | 0, 11.94 px (the range ends 0.06 px short of the page) |
+| 740 × 1000, one page | rounded, cut away | rounded; the page ends 57.6 px above the panel's bottom | ends at the page; 12 px all round |
+| the plain-text view, a short text | rounded | rounded | the panel's box; 12 px all round |
+
+The sheets' radius is 9.34 CSS px at 1100, 6.76 at 1500, 14.23 at 740
+and 12 at 868: 12 px drawn at each. In the shell from the checkout
+(claerbout main, this branch's `dist/`), two View-menu zoom steps take
+the window from 1100 to 1320 px wide at a device pixel ratio of 2.4, the
+page still 1100 CSS px: the corners stay 12 CSS px, scaled with the bar's
+pills, and the clip still cuts them (claerbout main b19873e).
+
+**The cost**, this branch against a copy of main, in the same tab:
+
+| | main | this branch |
+|---|---|---|
+| 120 wheel steps through a 32-page paper (two runs): layouts | 2, 4 | 4, 4 |
+| the same: layout time | 0.4, 0.7 ms | 0.5, 0.5 ms |
+| the same: script time | 0.7, 0.6 ms | 4.4, 4.8 ms (the edge, about 0.04 ms a scroll event) |
+| the same: passes | 0 | 0 |
+| a keystroke on that paper at 868 (median of 80, four runs) | 4.8, 4.9, 8.4, 9.5 ms | 5.3, 6.2, 6.3, 7.9 ms |
+| the same at 1500 | 5.1, 5.4, 5.9, 7.7 ms | 5.4, 6.4, 6.5, 6.6 ms |
+
+(A keystroke here is keydown to the end of the task that handled its
+input, the live pass included, on a 32-page paper, so larger than the
+2–3 ms live pass quoted above.) The two are the same within the spread
+between runs; without the clip path the keystroke measured 5.2–8.1 ms,
+so the clip path costs nothing measurable either. Typing writes nothing
+new: `fitPaper` runs before each scroll to the caret as before and only
+compares two numbers more, and the sheets are handed over only when the
+painter repaints them.
+
+**Checks.** `frame.spec` has a new test, *the paper's corners are
+rounded only where they are a sheet's*: with `document.elementFromPoint`
+one CSS px inside each of the panel's corners (not the paper where the
+corner is rounded and cut, the paper where it is square), the shadow's
+box against the sheets in view and its computed corner radii, at the top,
+6 px down, with a gap across the middle and at the top edge, at the end,
+at 1500 and 868, on a one-page paper at 740 × 1000 (the page's own
+bottom corners cut, the panel below it not the paper), and in the
+plain-text view; and a scroll from the end that touches nothing on the
+page but the shadow's style attribute and runs no pass. Without the
+scroll listener it fails at the 6 px step. Two more beside it: *a page
+gap crossing the panel's edge hands the shadow's end across it over a
+corner's length*, which scrolls a px at a time across the second gap
+at the panel's bottom and at its top, and checks that no px of scroll
+moves the shadow's end by 2.5 px or its corner by 1.5, and that with a
+fraction of a px of the sheet beyond the gap in view the shadow still
+ends within a px of the sheet on this side, rounded; and *a burst of
+typing past the last page is paper*, which presses Enter at the end of
+the paper until the white past the last sheet fills the panel, and
+checks in each frame that the shadow is drawn round the paper in view,
+the white included, its bottom corners what is left in view of the
+clip's. Both fail on the first version of this branch (the shadow 7.8
+px off the sheet with 0.12 px of the next one in; 20.5 px short of the
+white under a burst). The Zen frame test (renamed *a dark edge all
+round one panel of paper, its sheets rounded*) now expects a square,
+transparent, shadowless panel and sheets rounded 12 px on the screen;
+the print test expects the shadow and the sheets gone and no clip path.
+The smoke checks, in the shell, that the page's top corners are cut at
+the top of the paper, that its bottom corners follow whether the page
+runs past the panel, and that the shadow's corners agree.
+
+**What is still open.**
+
+1. **The sheets' corners at the gaps** are rounded (taken as yes: each
+   sheet is a piece of paper). Square there, with only the outer corners
+   rounded, would be one line (`.page-box` loses its radius).
+2. **The shadow and the gaps.** The shadow is one box round the paper in
+   view, so it runs down the panel's sides past a gap, and the gap is
+   the frame's plain colour. A shadow per sheet, falling into the gaps
+   too, would make each sheet float on its own; it would darken the gaps
+   to near black and needs a box per sheet in view.
+3. **The rim on a cut edge.** Zen's shadow has a white 5 % hairline round
+   the box, kept on every side, so a cut edge (the panel's top, mid-paper)
+   has a faint rim against the bar's band. Dropping it on cut edges
+   would make a cut edge read as no edge at all.
+4. **A short paper's HUD** sits on the frame below the last page, not on
+   the paper.
+5. **A burst of typing past the last page** shows the clip box's white
+   below the last sheet, rounded at its bottom by the clip path and
+   shadowed like a sheet, until the pass adds the page (a quarter second
+   after the burst). Where the sheet meets the white, its own rounded
+   bottom corners show two notches of the frame and a hairline seam runs
+   between them; both go when the page comes.
+6. **The zoom.** The corners are 12 CSS px, so a View-menu zoom scales
+   them with everything else (14.4 screen px at two steps), as it scales
+   the bar's pills and Knuth's room.
+
+**The left corners, later the same afternoon.** Taylor, seeing the rule
+in the app: "i think i only want it applied to all corners except the
+upper left. that should stay rounded. but leave it easy to undo if it
+looks strange", then "actually lets fix the left upper and lower to
+rounded." So the panel's two left corners are rounded whatever the paper
+does under them, and only the right corners follow the paper. One line is
+the switch, `--paper-left-corner: var(--paper-radius)` at the top of
+`src/style.css`: `#scroll` takes it as the left radii of its clip path (a
+clip path, as on `#paper`, so the cut holds in hit testing too), and
+`#paper-shadow` as its left radii, each falling back to the paper's own
+corner when the line is removed. Remove the line and all four corners
+follow the paper as first built. `frame.spec.ts` expects the left points
+never to answer the paper and the shadow's left radii to read 12
+throughout; its smoothness test reads the right corner.
 
 ## The third pass
 
@@ -152,7 +374,9 @@ and the page is drawn at a smaller CSS scale, still filling the panel
 **The room or the paper** (the second pass's first open question):
 the paper. The panel is the paper's white, the sheets are bare (no
 shadow, no rounded corners: the panel rounds the outer ones), and the
-grey room is gone. `--bg` went with it.
+grey room is gone. `--bg` went with it. (Since replaced: the panel is a
+square window and each sheet has its corners, above, *The paper's
+corners*.)
 
 **The resize cost**, 1100 → 1500 → 1100:
 
@@ -462,9 +686,10 @@ bar's old groups under hairlines:
 The groups scroll as one (no scrollbar drawn, a fade at the cut) when
 the window is shorter than they are; settings and the switch stay put.
 
-**The panel** (the third pass): one rounded panel edged by the frame
-(above), and it is the paper — the pages, laid out at 816 px, drawn at
-its width, edge to edge, a thin line of the frame between them. The
+**The panel** (the third pass): one panel edged by the frame (above),
+and it is the paper — the pages, laid out at 816 px, drawn at its width,
+edge to edge, a thin line of the frame between them, its corners
+rounded only where they are a sheet's (*The paper's corners*). The
 plain-text sheet is drawn the same way. The toast, the table toolbar
 and the image toolbar sit on the panel's axis (`--axis`, from `--rail`
 and `--edge`; the panel draws no scrollbar, so `--room-scrollbar` is
@@ -545,6 +770,9 @@ are the same.
 12. **The record's screenshots** are page captures without the traffic
     lights. (Retaken on documents in `~/Projects/week-3`: the folder
     line reads as it would for a real project.)
+13. **The paper's corners**: the gaps' corners, a shadow per sheet, the
+    rim on a cut edge, a short paper's HUD and the zoom are open in that
+    section (above).
 
 ## Checks (second pass)
 
@@ -605,3 +833,15 @@ are the same.
   the lights' band.
 - Both apps measured in the same shell at 1100 and 1500 (above): the
   bars agree to the pixel.
+
+## Checks (the paper's corners)
+
+- `npm test`: green. `npm run build` (the sidecar, unused-code, exports
+  and cycle checks, tsc, vite): green; the built stylesheet keeps the
+  clip path, the `:has()` rule and the sheets' `calc()` radius as
+  written, and still has no width media query.
+- `CI=1 npx playwright test --project=chromium` (on a spare port): 185
+  passed; 187 after the review's fixes (the gap hand-over and the
+  burst's shadow, two new tests in `frame.spec`).
+- `node app/smoke.mjs` (the shell checkout beside the main one): ok, with
+  the paper's corners checked.

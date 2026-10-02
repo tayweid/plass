@@ -38,9 +38,12 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   window that has it); `npm run app:install-script` renders
   `public/install` from the shell's template. Log:
   `~/Library/Logs/Plass.log`. The window is any size, and it is the
-  zoom: one rounded panel under the bar and right of the rail is the
-  paper, the bar and the rail being a dark frame that shows as one thin
-  edge round it (Zen's shape, the frame in `src/style.css`; the bar is
+  zoom: one panel under the bar and right of the rail is the paper, the
+  bar and the rail being a dark frame that shows as one thin edge round
+  it, its corners rounded only where they are a sheet's (the first
+  page's top, the gaps, the last page's bottom; square where the paper
+  runs on), with the shadow drawn round the paper in view (Zen's shape,
+  the frame in `src/style.css`; the bar is
   Knuth's — File, the name pill with its save dot and folder, then
   Export — beside the traffic lights, the rail the tools,
   `docs/ZEN-DRAFT.md`). The pages fill the panel's width by scaling,
@@ -50,7 +53,11 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   layout never runs for a resize or a zoom; a layout read of page
   geometry goes through `atPaperSize`, which takes the transform off for
   the read, and a pass runs through `paperPass`, which holds a followed
-  caret still on the screen (the panel has no browser scroll anchoring).
+  caret still on the screen (the panel has no browser scroll anchoring);
+  the shadow's box and corners are CSS variables the same file writes in
+  the frame after a scroll, from the sheets the painter laid
+  (`paperSheets`) and the panel's scroll offset, reading no page
+  geometry.
   On shell 0.2.1 (`followZoom` in `app/plass.json`) a zoom
   step scales the window with it, which is just a wider window. With a shell
   past v0.2.0, `app/plass.json`'s `titleBarStyle: "hiddenInset"` makes

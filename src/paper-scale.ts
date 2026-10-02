@@ -29,12 +29,49 @@
 // the caret: when it is being followed (scrolled into view since it last
 // moved) and is in the panel's view, it is at the same place on the
 // screen after the pass as before, whatever the pass moved.
+//
+// The paper's corners (style.css, the paper's corners) are rounded only
+// where they are a sheet's own, and that is geometry: every sheet is
+// rounded at its four corners, 12 px on the screen at any scale (this file
+// writes the scale on #pages for the radius to be divided by), and the
+// panel's clip is square, so a corner shows wherever a sheet's corner is
+// in view and an edge where the paper runs on past the panel is cut
+// straight. The one thing that has to be told is the shadow on the frame,
+// a box behind the panel drawn round the paper in view: where the first
+// sheet in view begins and the last one ends inside the panel, and how
+// much of each one's corner is in view, the end handed across a page gap
+// gradually as the gap crosses the panel's edge, and the white of a burst
+// of typing past the last page counted as that page's. That is arithmetic
+// on numbers kept here (the sheets the painter laid, the scale, the
+// panel's and the clip box's heights, whether the editor runs past the
+// last page) and the panel's scroll offset, written as CSS variables
+// on the shadow and only when they change: in the frame after a scroll, a
+// new set of sheets or a new height, and at once for a new scale. A scroll
+// reads nothing of the page but the scroll offset, and lays nothing out
+// but that box.
+
+/** A sheet in the stack, in the layout's px (layout/page-geometry.ts). */
+type Sheet = { readonly top: number; readonly height: number };
 
 let panelEl: HTMLElement | null = null;
 let clipEl: HTMLElement | null = null;
 let stack: HTMLElement | null = null;
+let pagesEl: HTMLElement | null = null;
+let shadowEl: HTMLElement | null = null;
 let scale = 1;
 let depth = 0;
+let sheets: readonly Sheet[] = [];
+/** The panel's height and the clip box's, drawn px, as fitPaper last
+ *  measured them. */
+let viewHeight = 0;
+let clipHeight = 0;
+/** Whether the editor runs past the last page (a burst of typing at the
+ *  end, before the pass that adds the page), as fitPaper last saw it: the
+ *  clip box's white below the last sheet is paper then. */
+let runsOn = false;
+/** A corner of the paper on the screen (style.css, --paper-radius). */
+let radius = 12;
+let edgeFrame = 0;
 
 /** The drawn page's width over its laid-out width (1 before attachPaper). */
 export function paperScale(): number {
@@ -71,25 +108,137 @@ export function fitPaper(): void {
   // The panel's content width (it has no border or padding and draws no
   // scrollbar) and the stack's own box, fractional: the drawn page meets
   // the panel's right edge to the subpixel.
-  const panelWidth = panel.getBoundingClientRect().width;
+  const view = panel.getBoundingClientRect();
+  const panelWidth = view.width;
   const box = getComputedStyle(sheet);
   const sheetWidth = parseFloat(box.width);
   const sheetHeight = parseFloat(box.height);
   if (!(panelWidth > 0) || !(sheetWidth > 0)) return;
   // scrollHeight is in whole px: it counts only past the stack's bottom.
   const overflow = sheet.scrollHeight;
-  const height = overflow > sheetHeight + 1 ? overflow : sheetHeight;
+  runsOn = overflow > sheetHeight + 1;
+  const height = runsOn ? overflow : sheetHeight;
   const before = scale;
   scale = panelWidth / sheetWidth;
   // Written only when they change: this runs before every scroll to the
   // caret, almost always with nothing new to say.
   const transform = `scale(${scale})`;
   if (depth === 0 && sheet.style.transform !== transform) sheet.style.transform = transform;
-  const clipHeight = `${height * scale}px`;
-  if (clip.style.height !== clipHeight) clip.style.height = clipHeight;
+  // The sheets' corners are 12 px on the screen: their radius is divided
+  // by this. On #pages, not the stack: a variable on the stack would have
+  // the whole editor's style recomputed (24 ms on a 32-page paper, against
+  // 0.2 on the page boxes alone).
+  if (before !== scale) pagesEl?.style.setProperty('--paper-scale', String(scale));
+  const drawnHeight = height * scale;
+  const clipPx = `${drawnHeight}px`;
+  if (clip.style.height !== clipPx) clip.style.height = clipPx;
   // The same line at the panel's top: the drawn pages grew or shrank
   // about the stack's top edge.
   if (before !== scale && panel.scrollTop > 0) panel.scrollTop = (panel.scrollTop * scale) / before;
+  // The shadow round the paper in view: at once for a new scale, in this
+  // frame (a resize's), else in the next if a height moved.
+  const moved = drawnHeight !== clipHeight || view.height !== viewHeight;
+  clipHeight = drawnHeight;
+  viewHeight = view.height;
+  if (before !== scale) edgePaper();
+  else if (moved) scheduleEdge();
+}
+
+/** The sheets the page painter laid (main.ts renderPages), in the layout's
+ *  px: the shadow is drawn round the ones in view. */
+export function paperSheets(next: readonly Sheet[]): void {
+  sheets = next;
+  scheduleEdge();
+}
+
+function scheduleEdge(): void {
+  if (!edgeFrame) edgeFrame = requestAnimationFrame(() => edgePaper());
+}
+
+/** What is left in view of a sheet's corner, given how far the sheet's
+ *  edge is past the panel's (`cut`): the sheet's own radius while that
+ *  edge is inside the panel, nothing once the whole corner has gone past,
+ *  and between the two as much of the corner as is left in view. */
+function cornerLeft(cut: number): number {
+  return radius - Math.min(radius, Math.max(0, cut));
+}
+
+/** One end of the shadow: how far it is in from the panel's edge, and its
+ *  corner's radius, drawn px. */
+type End = { readonly inset: number; readonly corner: number };
+
+/** `w` of one end and the rest of the other. */
+function mix(a: End, b: End, w: number): End {
+  return { inset: a.inset * w + b.inset * (1 - w), corner: a.corner * w + b.corner * (1 - w) };
+}
+
+function writeEdge(el: HTMLElement, name: string, value: string): void {
+  if (el.style.getPropertyValue(name) !== value) el.style.setProperty(name, value);
+}
+
+/** Draw the shadow round the paper in view, from the sheets kept here and
+ *  the panel's scroll offset (see the top of this file). */
+function edgePaper(): void {
+  if (edgeFrame) cancelAnimationFrame(edgeFrame);
+  edgeFrame = 0;
+  const panel = panelEl;
+  const shadow = shadowEl;
+  const sheet = stack;
+  if (!panel || !shadow || !sheet) return;
+  const top = panel.scrollTop;
+  const bottom = top + viewHeight;
+  // The paper's sheets, drawn, top to bottom: the ones the painter laid,
+  // the last of them running on while a burst of typing has the editor
+  // past it (the clip box's white below it, which the clip path rounds at
+  // its bottom, is paper until the pass adds the page); the plain-text
+  // view's one sheet, the clip box, never shorter than the panel
+  // (style.css); and the clip box before a pass has laid a page.
+  const source = sheet.classList.contains('source-mode');
+  const laid = !source && sheets.length > 0;
+  const count = laid ? sheets.length : 1;
+  const sheetTop = (k: number) => (laid ? sheets[k].top * scale : 0);
+  const sheetBottom = (k: number) =>
+    source ? Math.max(clipHeight, viewHeight)
+    : !laid || (k === count - 1 && runsOn) ? clipHeight
+    : (sheets[k].top + sheets[k].height) * scale;
+  // The first and the last sheet in view.
+  let first = -1;
+  let last = -1;
+  for (let k = 0; k < count && sheetTop(k) < bottom; k++) {
+    if (sheetBottom(k) <= top) continue;
+    if (first < 0) first = k;
+    last = k;
+  }
+  // None in view (an empty clip box, before the first pass): no paper, no
+  // shadow.
+  const bare = first < 0;
+  if (shadow.hidden !== bare) shadow.hidden = bare;
+  if (bare) return;
+  // The shadow's top were sheet k the first in view, and its bottom were
+  // it the last: the sheet's edge, inside the panel, and what is left in
+  // view of its corners.
+  const startAt = (k: number): End => ({ inset: Math.max(0, sheetTop(k) - top), corner: cornerLeft(top - sheetTop(k)) });
+  const endAt = (k: number): End => ({ inset: Math.max(0, bottom - sheetBottom(k)), corner: cornerLeft(sheetBottom(k) - bottom) });
+  let start = startAt(first);
+  let end = endAt(last);
+  // A page gap crossing the panel's edge: while less than a corner's
+  // length of the sheet beyond it is in view (its end at the top, its top
+  // at the bottom), that sliver is all corner, and the shadow's end is
+  // handed across the gap over that length, a part for each px in view,
+  // from the sheet on this side's to its own. Counted whole from its
+  // first fraction of a px, the sliver moved the shadow's end by the
+  // gap's height and squared its corners at once.
+  if (last > first) {
+    const inTop = sheetBottom(first) - top;
+    if (inTop < radius) start = mix(start, startAt(first + 1), inTop / radius);
+    const inBottom = bottom - sheetTop(last);
+    if (inBottom < radius) end = mix(end, endAt(last - 1), inBottom / radius);
+  }
+  const px = (v: number) => `${Math.round(v * 100) / 100}px`;
+  writeEdge(shadow, '--paper-top', px(start.inset));
+  writeEdge(shadow, '--paper-bottom', px(end.inset));
+  writeEdge(shadow, '--paper-top-corner', px(start.corner));
+  writeEdge(shadow, '--paper-bottom-corner', px(end.corner));
 }
 
 /** Run a layout pass on the paper at its own size, holding the caret still
@@ -119,14 +268,26 @@ export function paperPass<T>(pass: () => T, caret: () => { top: number; bottom: 
 /** Fit the stack to the panel's width now and on every resize of the
  *  panel (the window), of the stack's own box (a page added, the page size
  *  changed, the plain-text sheet growing) and of what it holds (the editor
- *  running past the last page). */
-export function attachPaper(panel: HTMLElement, clip: HTMLElement, sheet: HTMLElement): void {
-  panelEl = panel;
-  clipEl = clip;
-  stack = sheet;
+ *  running past the last page); and draw the shadow round the paper in
+ *  view after each, and in the frame after a scroll. */
+export function attachPaper(paper: {
+  panel: HTMLElement;
+  clip: HTMLElement;
+  stack: HTMLElement;
+  pages: HTMLElement;
+  shadow: HTMLElement;
+}): void {
+  panelEl = paper.panel;
+  clipEl = paper.clip;
+  stack = paper.stack;
+  pagesEl = paper.pages;
+  shadowEl = paper.shadow;
+  radius = parseFloat(getComputedStyle(paper.shadow).getPropertyValue('--paper-radius')) || radius;
   const observer = new ResizeObserver(() => fitPaper());
-  observer.observe(panel);
-  observer.observe(sheet);
-  for (const child of sheet.children) observer.observe(child);
+  observer.observe(paper.panel);
+  observer.observe(paper.stack);
+  for (const child of paper.stack.children) observer.observe(child);
+  paper.panel.addEventListener('scroll', scheduleEdge, { passive: true });
   fitPaper();
+  edgePaper();
 }
