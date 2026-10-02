@@ -117,6 +117,13 @@ test('the Insert flyout keeps glyph controls with hover captions', async ({ page
   await expect.poll(() => caption.evaluate((el) => getComputedStyle(el).opacity)).toBe('0');
   await grid.hover();
   await expect.poll(() => caption.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+  // Beside the panel, level with the glyph, as a rail tile's caption sits
+  // beside the rail: it covers nothing in the panel.
+  const panel = (await menu.boundingBox())!;
+  const glyph = (await grid.boundingBox())!;
+  const label = (await caption.boundingBox())!;
+  expect(label.x).toBeGreaterThanOrEqual(panel.x + panel.width);
+  expect(Math.abs(label.y + label.height / 2 - (glyph.y + glyph.height / 2))).toBeLessThan(1.5);
   await page.mouse.move(8, 400);
   await expect.poll(() => caption.evaluate((el) => getComputedStyle(el).opacity)).toBe('0');
   await grid.focus();

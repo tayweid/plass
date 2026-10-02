@@ -60,9 +60,12 @@
 
 /* ---------- the rail ---------- */
 
-/* Under the bar, down the left edge: the tool groups scroll as one when
-   the window is short (no scrollbar drawn; the wheel still scrolls), and
-   the view switch stays pinned at the bottom. */
+/* Under the bar, down the left edge, as narrow as Zen's: 32 px tiles with
+   the frame's edge either side (style.css, --rail). The tool groups
+   scroll as one when the window is short (no scrollbar drawn; the wheel
+   still scrolls, and a fade at the cut edge says there is more), and the
+   view switch stays pinned at the bottom, level with the room's bottom
+   edge. */
 #rail {
   position: fixed;
   top: var(--topbar);
@@ -74,7 +77,7 @@
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  padding: 4px 0 10px;
+  padding: 0 0 var(--edge);
 }
 
 .tb-rail-groups {
@@ -94,6 +97,32 @@
   display: none;
 }
 
+/* The cue that the groups go on past the cut: the frame's colour laid
+   over the last (or first) tiles in view, held at the edge while the
+   groups scroll (toolbar.ts sets the classes on scroll and resize). */
+.tb-rail-groups.tb-more-below::after,
+.tb-rail-groups.tb-more-above::before {
+  content: '';
+  position: sticky;
+  z-index: 1;
+  flex: none;
+  width: 100%;
+  height: 28px;
+  pointer-events: none;
+}
+
+.tb-rail-groups.tb-more-below::after {
+  bottom: 0;
+  margin-top: -31px;
+  background: linear-gradient(transparent, var(--frame) 85%);
+}
+
+.tb-rail-groups.tb-more-above::before {
+  top: 0;
+  margin-bottom: -31px;
+  background: linear-gradient(var(--frame) 15%, transparent);
+}
+
 .tb-rail-group {
   flex: none;
   display: flex;
@@ -104,7 +133,7 @@
 
 .tb-rule {
   flex: none;
-  width: 24px;
+  width: 18px;
   height: 1px;
   margin: 3px 0;
   background: rgba(255, 255, 255, 0.1);
@@ -114,14 +143,25 @@
    pressed one on a lighter tile. */
 #rail .tb-btn {
   flex: none;
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
+  width: var(--rail-tile);
+  min-width: var(--rail-tile);
+  height: var(--rail-tile);
   padding: 0;
   border: 0;
-  border-radius: 11px;
+  border-radius: 9px;
   background: transparent;
-  color: rgba(240, 238, 233, 0.62);
+  color: rgba(240, 238, 233, 0.64);
+}
+
+#rail .tb-btn .ico {
+  width: 18px;
+  height: 18px;
+}
+
+#rail .tb-btn .tico {
+  font-size: 14px;
+  line-height: 18px;
+  min-width: 18px;
 }
 
 #rail .tb-btn:hover:not(:disabled),
@@ -152,6 +192,15 @@
   visibility: hidden;
 }
 
+/* Every caption in the frame — a bar tile's, a rail tile's, a flyout
+   glyph's — is the menus' dark glass, Zen's tooltip on the dark frame. */
+#toolbar .tb-btn .lbl,
+#rail .tb-btn .lbl {
+  --bar-glass: rgba(27, 26, 30, 0.94);
+  --bar-ink: rgba(240, 238, 233, 0.9);
+  --bar-hairline: rgba(255, 255, 255, 0.1);
+}
+
 /* The caption to the tile's right, where nothing crowds it; fixed to
    the window, since the groups scroll and would clip it (toolbar.ts
    places it when the tile is hovered or focused). */
@@ -162,10 +211,6 @@
   transform: translateY(-50%);
 }
 
-.view-switch .ico {
-  width: 18px;
-  height: 18px;
-}
 
 .tb-menu {
   position: fixed;
@@ -251,6 +296,18 @@
   opacity: 0.25;
 }
 
+/* A glyph's caption, as on the rail: beside the panel, level with the
+   glyph, so it never covers a row of the panel (toolbar.ts places it,
+   above the glyph when the window has no room beside the panel). The
+   panel is the caption's containing block and lets it hang out. */
+.tb-menu-extras {
+  overflow: visible;
+}
+
+.tb-menu-extras .tb-btn {
+  position: static;
+}
+
 .tb-menu-extras .lbl {
   width: max-content;
   max-width: calc(100vw - 24px);
@@ -263,11 +320,6 @@
 
 .tb-menu-extras .tb-btn.tb-caption-active .lbl {
   opacity: 1;
-}
-
-.tb-extra-section:last-child .lbl {
-  top: auto;
-  bottom: calc(100% + 6px);
 }
 
 .tb-menu-heading {
@@ -356,9 +408,12 @@
   }
 }
 
+/* Here, after the rail's own display: style.css's print block comes
+   before this file and would lose to it. */
 @media print {
   .tb-menu,
-  .view-switch {
+  .view-switch,
+  #rail {
     display: none;
   }
 }

@@ -2,10 +2,9 @@
 .image-toolbar {
   position: fixed;
   z-index: 185;
-  /* On the paper's axis: the room's, right of the rail and left of the
-     room's scrollbar (main.ts sets --room-scrollbar). */
-  left: calc(var(--rail, 0px) + (100vw - var(--rail, 0px) - var(--room-scrollbar, 0px)) / 2);
-  bottom: 24px;
+  /* On the paper's axis (style.css, --axis), in the HUD's row. */
+  left: var(--axis, 50vw);
+  bottom: calc(var(--edge, 8px) + 16px);
   transform: translateX(-50%);
   max-width: calc(100vw - 24px);
   width: max-content;

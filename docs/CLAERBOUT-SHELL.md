@@ -391,9 +391,11 @@ prompted.
   draft, `docs/ZEN-DRAFT.md`) the bar holds only the paper's way in and
   out — File, the name with its save dot, Export — padded by
   `env(titlebar-area-x)` on the left, so the File tile sits beside the
-  lights; the tools are on a rail down the left under the bar, which is
-  no drag region (it scrolls); and the bar, the rail and the room are
-  one colour. The app's `minWidth` stays 740. Plass.app from the deploy
+  lights; the tools are on a narrow rail down the left under the bar,
+  which is no drag region (it scrolls); the bar and the rail are the
+  frame, which edges the room, a rounded panel, by 8 px all round. The
+  bar's height is the overlay's (`env(titlebar-area-height)`), so a zoom
+  step keeps its row on the lights. The app's `minWidth` stays 740. Plass.app from the deploy
   is built on tag v0.2.0: the frame and the end of the window-fitting
   ship with the next Plass deploy, the bar beside the lights with the
   next shell tag.

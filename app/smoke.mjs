@@ -129,6 +129,13 @@ await page.waitForTimeout(800);
 const zoomed = await bounds();
 const resizes = await page.evaluate(() => window.__resizes);
 const widthAfter = await editorWidth();
+// The bar is the lights' band at every zoom (src/style.css, --topbar is
+// the overlay's height in CSS px), so its row stays on the traffic lights.
+const band = await page.evaluate(() => {
+  const overlay = navigator.windowControlsOverlay;
+  return { lights: overlay?.visible ? overlay.getTitlebarAreaRect().height : null, bar: document.getElementById('toolbar').getBoundingClientRect().height };
+});
+if (band.lights !== null && Math.abs(band.lights - band.bar) > 0.5) await fail(`under a zoom step the lights' band is ${band.lights}px and the bar ${band.bar}px`);
 if (follows) await viewItem('Actual Size');
 else await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomLevel(0));
 const grew = zoomed.width / dragged.width;
@@ -139,15 +146,17 @@ if (resizes < 1 || resizes > 4) await fail(`a zoom step fired ${resizes} resize 
 if (widthAfter !== widthBefore) await fail(`a zoom step changed the editor's width from ${widthBefore} to ${widthAfter}`);
 
 // Zen's shape (src/style.css): the bar across the top, the rail down the
-// left under it, the room — the paper's — in the rest, under any shell.
+// left under it, the room — the paper's — in the rest, edged by the
+// frame's 8 px at the window's right and bottom, under any shell.
 const frame = await page.evaluate(() => {
   const rect = (id) => document.getElementById(id).getBoundingClientRect();
   const bar = rect('toolbar');
   const rail = rect('rail');
   const room = rect('scroll');
-  return { bar: { bottom: bar.bottom }, rail: { left: rail.left, top: rail.top, right: rail.right, bottom: rail.bottom }, room: { left: room.left, top: room.top }, height: innerHeight };
+  return { bar: { bottom: bar.bottom }, rail: { left: rail.left, top: rail.top, right: rail.right, bottom: rail.bottom }, room: { left: room.left, top: room.top, right: room.right, bottom: room.bottom }, width: innerWidth, height: innerHeight };
 });
-if (frame.rail.left !== 0 || frame.rail.top !== frame.bar.bottom || frame.rail.bottom !== frame.height || frame.room.left !== frame.rail.right || frame.room.top !== frame.bar.bottom) {
+if (frame.rail.left !== 0 || frame.rail.top !== frame.bar.bottom || frame.rail.bottom !== frame.height || frame.room.left !== frame.rail.right || frame.room.top !== frame.bar.bottom
+  || frame.room.right !== frame.width - 8 || frame.room.bottom !== frame.height - 8) {
   await fail(`the rail is not under the bar down the left edge of the room: ${JSON.stringify(frame)}`);
 }
 

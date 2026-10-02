@@ -40,7 +40,8 @@ interface Geometry {
   stack: { left: number; width: number; right: number };
   room: { left: number; clientWidth: number; scrollWidth: number };
   bar: { left: number; fileLeft: number };
-  hud: { right: number };
+  hud: { right: number; top: number };
+  lastPage: { bottom: number };
 }
 
 const geometry = (page: Page) =>
@@ -50,6 +51,7 @@ const geometry = (page: Page) =>
     const bar = document.getElementById('toolbar')!.getBoundingClientRect();
     const file = document.querySelector('#toolbar .tb-tile')!.getBoundingClientRect();
     const hud = document.getElementById('hud')!.getBoundingClientRect();
+    const pages = document.querySelectorAll('.page-box');
     return {
       passes: window.__pagCount(),
       pages: document.querySelectorAll('.page-box').length,
@@ -57,7 +59,8 @@ const geometry = (page: Page) =>
       stack: { left: stack.left, width: stack.width, right: stack.right },
       room: { left: room.getBoundingClientRect().left, clientWidth: room.clientWidth, scrollWidth: room.scrollWidth },
       bar: { left: bar.left, fileLeft: file.left },
-      hud: { right: hud.right },
+      hud: { right: hud.right, top: hud.top },
+      lastPage: { bottom: pages[pages.length - 1].getBoundingClientRect().bottom },
     };
   });
 
@@ -85,6 +88,18 @@ test('the window is room around a fixed-width paper: a resize re-lays nothing an
   onAxis(before);
   expect(before.bar.fileLeft).toBe(before.bar.left + 12);
 
+  // At the end of the document the last page ends above the HUD's row
+  // (the room keeps it, --margin-bottom): the count never sits on the
+  // paper's edge.
+  await page.evaluate(() => {
+    const room = document.getElementById('scroll')!;
+    room.scrollTop = room.scrollHeight;
+  });
+  await page.waitForTimeout(200);
+  const end = await geometry(page);
+  expect(end.hud.top).toBeGreaterThan(end.lastPage.bottom + 8);
+  await page.evaluate(() => { document.getElementById('scroll')!.scrollTop = 0; });
+
   // Wider: more room, the same paper and the same pagination.
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.waitForTimeout(700);
@@ -106,38 +121,48 @@ test('the window is room around a fixed-width paper: a resize re-lays nothing an
   expect(narrow.room.scrollWidth).toBeGreaterThan(narrow.room.clientWidth);
 });
 
-test('the frame is Zen\'s: one near-black surround — the bar, the rail, the room — the bar a drag region with its controls the page\'s', async ({ page }) => {
+test('the frame is Zen\'s: a dark edge all round a rounded room, the rail narrow, the bar a drag region with its controls the page\'s', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 800 });
   await page.goto('/?new=1');
   await page.waitForFunction(() => Boolean(window.view));
   const look = await page.evaluate(() => {
     const room = document.getElementById('scroll')!;
     const bar = document.getElementById('toolbar')!.getBoundingClientRect();
     const rail = document.getElementById('rail')!.getBoundingClientRect();
+    const tile = document.querySelector('#rail .tb-btn')!.getBoundingClientRect();
+    const roomRect = room.getBoundingClientRect();
     return {
       frame: getComputedStyle(document.body).backgroundColor,
       roomBackground: getComputedStyle(room).backgroundColor,
       radius: getComputedStyle(room).borderRadius,
-      roomTop: room.getBoundingClientRect().top,
-      roomLeft: room.getBoundingClientRect().left,
+      paperShadow: getComputedStyle(document.querySelector('.page-box')!).boxShadow,
+      room: { left: roomRect.left, top: roomRect.top, right: roomRect.right, bottom: roomRect.bottom },
       barBottom: bar.bottom,
       barLeft: bar.left,
       barRight: bar.right,
       rail: { left: rail.left, top: rail.top, right: rail.right, bottom: rail.bottom },
+      tile: { left: tile.left, width: tile.width, height: tile.height },
       width: window.innerWidth,
       height: window.innerHeight,
     };
   });
-  expect(look.frame).toBe('rgb(17, 17, 18)');
-  // One colour all round: the room paints the frame's, no panel.
-  expect(look.roomBackground).toBe('rgb(17, 17, 18)');
-  expect(look.radius).toBe('0px');
+  // A dark grey frame, not black, and the room a shade lighter, where the
+  // paper's soft shadow shows.
+  expect(look.frame).toBe('rgb(24, 24, 26)');
+  expect(look.roomBackground).toBe('rgb(43, 42, 45)');
+  expect(look.radius).toBe('12px');
+  expect(look.paperShadow).not.toBe('none');
   // The bar spans the whole window (it is the window's title bar in
-  // Plass.app); the rail runs under it down the left edge; the room
-  // starts where they end.
+  // Plass.app); the rail runs under it down the left edge, as narrow as
+  // Zen's: 32 px tiles with the frame's 8 px either side. The room starts
+  // where they end and keeps the same 8 px to the window's right and
+  // bottom edges.
   expect(look.barLeft).toBe(0);
   expect(look.barRight).toBe(look.width);
-  expect(look.rail).toEqual({ left: 0, top: look.barBottom, right: look.roomLeft, bottom: look.height });
-  expect(look.roomTop).toBe(look.barBottom);
+  expect(look.rail).toEqual({ left: 0, top: look.barBottom, right: look.room.left, bottom: look.height });
+  expect(look.tile).toEqual({ left: 8, width: 32, height: 32 });
+  expect(look.rail.right).toBe(48);
+  expect(look.room).toEqual({ left: 48, top: look.barBottom, right: look.width - 8, bottom: look.height - 8 });
   // Chromium exposes the property (inert in a tab; the shell's window
   // moves by the bar's empty part, and the tiles, the name, the menus
   // and the view switch keep their clicks). The rail scrolls, so it is
@@ -147,4 +172,50 @@ test('the frame is Zen\'s: one near-black surround — the bar, the rail, the ro
   for (const selector of ['.doc-title', '#toolbar .tb-tile', '.view-switch']) expect(await appRegion(page, selector)).toBe('no-drag');
   await page.getByRole('button', { name: 'File', exact: true }).click();
   expect(await appRegion(page, '.tb-menu:not([hidden])')).toBe('no-drag');
+});
+
+test('the rail and the panels it opens keep off the bar; a short window says the rail goes on', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean(window.view));
+  const barBottom = await page.evaluate(() => document.getElementById('toolbar')!.getBoundingClientRect().bottom);
+  // Document settings is taller than the room under its tile: it opens
+  // beside the rail, stops below the bar and scrolls inside itself.
+  await page.getByRole('button', { name: 'Document settings', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: 'Document settings', exact: true });
+  const bounds = (await panel.boundingBox())!;
+  expect(bounds.y).toBeGreaterThan(barBottom);
+  expect(bounds.x).toBeGreaterThanOrEqual(48);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(800 - 8);
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
+  // So do the flyouts.
+  await page.getByRole('button', { name: 'Extras', exact: true }).click();
+  const extras = (await page.getByRole('menu', { name: 'Extras', exact: true }).boundingBox())!;
+  expect(extras.y).toBeGreaterThan(barBottom);
+  await page.keyboard.press('Escape');
+
+  // A tall window shows every tool; a short one cuts the groups, and a
+  // fade at the cut says which way the rest is.
+  const cue = () => page.evaluate(() => {
+    const groups = document.querySelector('.tb-rail-groups')!;
+    return { above: groups.classList.contains('tb-more-above'), below: groups.classList.contains('tb-more-below') };
+  });
+  await expect.poll(cue).toEqual({ above: false, below: false });
+  await page.setViewportSize({ width: 1100, height: 480 });
+  await expect.poll(cue).toEqual({ above: false, below: true });
+  await page.evaluate(() => {
+    const groups = document.querySelector('.tb-rail-groups')!;
+    groups.scrollTop = groups.scrollHeight;
+  });
+  await expect.poll(cue).toEqual({ above: true, below: false });
+});
+
+test('print shows the paper alone: the bar, the rail and the HUD are gone', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean(window.view));
+  await page.emulateMedia({ media: 'print' });
+  const shown = await page.evaluate(() => ['#toolbar', '#rail', '#hud', '.view-switch'].map((selector) => getComputedStyle(document.querySelector(selector)!).display));
+  expect(shown).toEqual(['none', 'none', 'none', 'none']);
+  await page.emulateMedia({ media: 'screen' });
 });

@@ -40,19 +40,35 @@
 /* ---------- app chrome ---------- */
 
 :root {
-  /* Zen's shape (knuth/docs/mockups/rail-layout.html): a near-black frame
-     holds the bar across the top, the rail down the left and the room in
-     the rest, one colour all round, and the paper hovers on it, the only
-     light. (The room was an inset panel a shade lighter, #2b2a2d; --bg
-     brings it back in one line.) */
-  --frame: #111112;
-  --bg: var(--frame);
-  --pill: #1e1e21;
-  --tile: #29292c;
-  --topbar: 60px;
-  --rail: 60px;
-  /* The paper's least gap to the bar, the rail and the window's edge. */
+  /* Zen's shape (knuth/docs/mockups/rail-layout.html, Zen itself): a
+     dark frame — the bar across the top, the rail down the left, and an
+     edge of it all round — holds the room, a rounded panel a shade
+     lighter, and the paper hovers in the room, the only light. The frame
+     is Zen's (#131313–#141414 measured in Zen's own window) a step up, so
+     it reads as a dark grey edge rather than black; the room is the grey
+     a soft black shadow shows on. */
+  --frame: #18181a;
+  --bg: #2b2a2d;
+  --pill: #232326;
+  --tile: #2e2e32;
+  /* The bar's height is the traffic lights' band, which the shell
+     publishes as the Window Controls Overlay (in CSS px, so a zoom step
+     keeps the bar's row on the lights); 60 px in a tab and the PWA. */
+  --topbar: env(titlebar-area-height, 60px);
+  /* The frame's one width: the window's edge round the room, the gap
+     between a rail tile and either side of the rail. */
+  --edge: 8px;
+  --rail-tile: 32px;
+  --rail: calc(var(--rail-tile) + 2 * var(--edge));
+  /* The paper's least gap to the room's edge; the bottom keeps a row
+     for the HUD. */
   --margin: 24px;
+  --margin-bottom: 48px;
+  /* The paper's axis: the middle of the room's content box, right of the
+     rail, left of the room's right edge and scrollbar (main.ts sets
+     --room-scrollbar). The HUD, the toast and the table and image
+     toolbars sit on it. */
+  --axis: calc((var(--rail) + 100vw - var(--edge) - var(--room-scrollbar, 0px)) / 2);
   --chrome: #fcfcfb;
   --chrome-border: #e3e1dc;
   --ink: #1a1a1a;
@@ -295,14 +311,13 @@ body {
    compact chrome only dispatches structural commands against that document. */
 .native-table-toolbar {
   -webkit-app-region: no-drag; /* inside the bar's drag band: a click must reach it, not move the window */
-  /* Docked under the bar on the paper's axis — the room's, right of the
-     rail and left of the room's scrollbar (main.ts sets
-     --room-scrollbar): a second row of chrome while the caret is in a
-     table. It never covers the document and never moves with the table,
-     so a keystroke reads no geometry for it. */
+  /* Docked under the bar on the paper's axis (--axis), over the room's
+     top edge: a second row of chrome while the caret is in a table. It
+     never covers the document and never moves with the table, so a
+     keystroke reads no geometry for it. */
   position: fixed;
-  top: 58px;
-  left: calc(var(--rail) + (100vw - var(--rail) - var(--room-scrollbar, 0px)) / 2);
+  top: calc(var(--topbar) - 2px);
+  left: var(--axis);
   transform: translateX(-50%);
   z-index: 180;
   width: max-content;
@@ -468,12 +483,12 @@ body {
 /* corner HUD + transient toast */
 #hud {
   position: fixed;
-  /* Sit just inside the PAGE's right edge: the paper is centered on the
-     room's axis (right of the rail, left of the room's scrollbar; main.ts
-     sets --room-scrollbar); fall back to a viewport inset when the window
-     is narrower than the paper. */
-  right: max(14px, calc((100vw - var(--rail) + var(--room-scrollbar, 0px)) / 2 - var(--page-w, 816px) / 2 + 18px));
-  bottom: 16px;
+  /* Sit just inside the PAGE's right edge (the paper is centered on
+     --axis), in the row the room keeps under the last page
+     (--margin-bottom), so it never sits on the paper's edge; fall back to
+     a viewport inset when the window is narrower than the paper. */
+  right: max(22px, calc(100vw - var(--axis) - var(--page-w, 816px) / 2 + 18px));
+  bottom: calc(var(--edge) + 12px);
   z-index: 50;
   font: 11px var(--sans);
   color: #97958f;
@@ -488,9 +503,9 @@ body {
 
 #toast {
   position: fixed;
-  /* On the paper's axis (the room's; see #hud). */
-  left: calc(var(--rail) + (100vw - var(--rail) - var(--room-scrollbar, 0px)) / 2);
-  bottom: 22px;
+  /* On the paper's axis, in the HUD's row. */
+  left: var(--axis);
+  bottom: calc(var(--edge) + 10px);
   transform: translateX(-50%) translateY(6px);
   z-index: 120;
   font: 12.5px var(--sans);
@@ -630,28 +645,31 @@ body {
   white-space: nowrap;
 }
 
-/* The room: the rest of the window under the bar and right of the rail,
-   the frame's own colour, so the surround is one surface and the paper
-   hovers on its shadow with the same least margin to the bar, the rail
-   and the window's edge. The paper is a fixed-width column centered in
-   it (#stack) and never re-lays when the window does: a wider window is
-   more room around the paper, a narrower one scrolls sideways. A zoom
-   scales the paper in place (CSS px stay CSS px, so the layout never
-   runs), and nothing sizes the window back to the paper: the page once
-   did, with resizeTo 180 ms after every resize, which snapped a dragged
-   window back and, under a zoom (innerWidth in zoomed px, resizeTo in
-   screen px), walked the window to the zoomed paper's width in four
-   steps over a second. */
+/* The room: Zen's inset panel, under the bar and right of the rail,
+   rounded at all four corners, a shade lighter than the frame, which
+   shows as one thin edge of it all round (the bar's band below its name
+   pill, the rail's beside its tiles, --edge at the window's right and
+   bottom). The paper is a fixed-width column centered in it (#stack)
+   and never re-lays when the window does: a wider window is more room
+   around the paper, a narrower one scrolls sideways. A zoom scales the
+   paper in place (CSS px stay CSS px, so the layout never runs), and
+   nothing sizes the window back to the paper: the page once did, with
+   resizeTo 180 ms after every resize, which snapped a dragged window
+   back and, under a zoom (innerWidth in zoomed px, resizeTo in screen
+   px), walked the window to the zoomed paper's width in four steps over
+   a second. */
 #scroll {
   flex: 1;
   min-height: 0;
-  margin: var(--topbar) 0 0 var(--rail);
+  margin: var(--topbar) var(--edge) var(--edge) var(--rail);
+  border-radius: 12px;
   background: var(--bg);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
   overflow: auto;
   /* The gutter is always there, so the page's axis holds when a document
      grows past the room. */
   scrollbar-gutter: stable;
-  padding: var(--margin);
+  padding: var(--margin) var(--margin) var(--margin-bottom);
 }
 
 #scroll::-webkit-scrollbar {
@@ -698,12 +716,12 @@ body {
   width: var(--page-w, 8.5in);
   height: var(--page-h, 11in);
   background: var(--sheet);
-  /* The hovering, on a near-black surround: a hairline rim, a contact
-     shadow and a wide dark halo. */
+  /* The hovering, on the room's grey: a faint dark rim, a contact
+     shadow and a soft halo below. */
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.06),
-    0 1px 2px rgba(0, 0, 0, 0.5),
-    0 24px 64px rgba(0, 0, 0, 0.6);
+    0 0 0 1px rgba(0, 0, 0, 0.22),
+    0 1px 3px rgba(0, 0, 0, 0.32),
+    0 14px 36px rgba(0, 0, 0, 0.38);
   border-radius: 4px;
 }
 
@@ -740,15 +758,15 @@ body {
   --source-tint: color-mix(in srgb, var(--accent) 7%, transparent);
   position: relative;
   z-index: 1;
-  /* The room's height less its margins: the sheet fills the room. */
-  min-height: calc(100vh - var(--topbar) - 2 * var(--margin));
+  /* The room's height less its padding: the sheet fills the room. */
+  min-height: calc(100vh - var(--topbar) - var(--edge) - var(--margin) - var(--margin-bottom));
   background: var(--sheet);
   color: var(--ink);
   border-radius: 4px;
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.06),
-    0 1px 2px rgba(0, 0, 0, 0.5),
-    0 24px 64px rgba(0, 0, 0, 0.6);
+    0 0 0 1px rgba(0, 0, 0, 0.22),
+    0 1px 3px rgba(0, 0, 0, 0.32),
+    0 14px 36px rgba(0, 0, 0, 0.38);
 }
 
 #source .cm-editor {

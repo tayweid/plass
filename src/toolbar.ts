@@ -20,6 +20,7 @@ import { insertGrid } from './grid-editor';
 import { insertEditorComment } from './editor-comments';
 import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
+import { placeFlyout } from './flyout';
 import { isPwaInstalled, onPwaInstallState, requestPwaInstall } from './pwa-install';
 import { checkForUpdate, installUpdate, isNativeShell, onUpdate } from './claerbout';
 import type { TypesetStats } from './typeset-plugin';
@@ -60,8 +61,10 @@ const ICONS: Record<string, string> = {
   aligncenter: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="6.5" y1="12" x2="17.5" y2="12"/><line x1="5" y1="18" x2="19" y2="18"/>',
   alignright: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="6" y1="18" x2="21" y2="18"/>',
   paragraph: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="15" y2="18"/>',
-  quote: '<line x1="3" y1="4" x2="3" y2="20" stroke-dasharray="2 2"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="16" y2="18"/>',
-  solution: '<line x1="3" y1="4" x2="3" y2="20" stroke-width="3"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="16" y2="18"/>',
+  // Quotation marks, so the Blocks group reads apart from Lists above it.
+  quote: '<circle cx="7.5" cy="14.5" r="2.6" fill="currentColor" stroke="none"/><path d="M4.9 14.4C4.9 10.6 6.7 8.1 10.2 6.8"/><circle cx="16.5" cy="14.5" r="2.6" fill="currentColor" stroke="none"/><path d="M13.9 14.4C13.9 10.6 15.7 8.1 19.2 6.8"/>',
+  // The solution block's own mark: its red rule beside the text.
+  solution: '<line x1="5" y1="4" x2="5" y2="20" stroke="#d9433a" stroke-width="2.8"/><line x1="10" y1="8" x2="20" y2="8"/><line x1="10" y1="12" x2="20" y2="12"/><line x1="10" y1="16" x2="16" y2="16"/>',
   open: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
@@ -178,6 +181,15 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   const insertGroup = railGroup('Insert');
   const blocksGroup = railGroup('Blocks');
   const moreGroup = railGroup('More');
+  // A short window cuts the groups: a fade at the cut edge says the rest
+  // is a scroll away (toolbar.css). Read on scroll and resize only.
+  const railCue = () => {
+    const { scrollTop, scrollHeight, clientHeight } = railGroups;
+    railGroups.classList.toggle('tb-more-above', scrollTop > 1);
+    railGroups.classList.toggle('tb-more-below', scrollTop + clientHeight < scrollHeight - 1);
+  };
+  railGroups.addEventListener('scroll', railCue, { passive: true });
+  new ResizeObserver(railCue).observe(railGroups);
 
   let captionButton: HTMLButtonElement | null = null;
   const attachCaption = (button: HTMLButtonElement) => {
@@ -187,21 +199,42 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
       button.classList.add('tb-caption-active');
       const label = button.querySelector<HTMLElement>('.lbl');
       if (!label) return;
+      // (Reads on hover or focus, never on the typing path.)
       if (button.closest('#rail')) {
         // A rail tile's caption sits to its right, fixed to the window:
         // the rail's groups scroll, and a scrolling box clips what hangs
-        // out of it. (A read on hover or focus, never on the typing path.)
+        // out of it.
         const rect = button.getBoundingClientRect();
         label.style.top = `${rect.top + rect.height / 2}px`;
-        label.style.left = `${rect.right + 10}px`;
+        label.style.left = `${rect.right + 12}px`;
+        return;
+      }
+      const panelElement = button.closest<HTMLElement>('.tb-menu-extras');
+      if (panelElement) {
+        // A glyph in a flyout: the same rule as the rail — the caption
+        // beside the panel, level with the glyph, covering no row of it;
+        // above the glyph when the window has no room beside the panel.
+        // The panel is the caption's containing block (toolbar.css).
+        const panel = panelElement.getBoundingClientRect();
+        const glyph = button.getBoundingClientRect();
+        const originX = panel.left + panelElement.clientLeft;
+        const originY = panel.top + panelElement.clientTop;
+        const width = label.offsetWidth;
+        if (panel.right + 8 + width <= window.innerWidth - 8) {
+          label.style.left = `${panel.right + 8 - originX}px`;
+          label.style.top = `${glyph.top + glyph.height / 2 - originY}px`;
+          label.style.transform = 'translateY(-50%)';
+        } else {
+          const middle = Math.max(8 + width / 2, Math.min(glyph.left + glyph.width / 2, window.innerWidth - 8 - width / 2));
+          label.style.left = `${middle - originX}px`;
+          label.style.top = `${glyph.top - 6 - originY}px`;
+          label.style.transform = 'translate(-50%, -100%)';
+        }
         return;
       }
       label.style.marginLeft = '0px';
       const rect = label.getBoundingClientRect();
-      const panel = button.closest('.tb-menu-extras')?.getBoundingClientRect();
-      const left = panel ? panel.left + 6 : 8;
-      const right = panel ? panel.right - 6 : window.innerWidth - 8;
-      const shift = Math.max(0, left - rect.left) - Math.max(0, rect.right - right);
+      const shift = Math.max(0, 8 - rect.left) - Math.max(0, rect.right - (window.innerWidth - 8));
       if (shift) label.style.marginLeft = `${shift}px`;
     };
     const hide = () => {
@@ -295,15 +328,11 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     menu.anchor.setAttribute('aria-expanded', 'true');
     menu.anchor.setAttribute('aria-controls', menu.element.id);
     // Read geometry only when a menu opens, never on the typing path.
-    const rect = menu.anchor.getBoundingClientRect();
-    const { style } = menu.element;
-    if (menu.anchor.closest('#rail')) {
-      // A flyout: beside the rail, level with its tile, inside the window.
-      style.maxHeight = `${Math.max(80, window.innerHeight - 16)}px`;
-      style.top = `${Math.max(8, Math.min(rect.top, window.innerHeight - menu.element.offsetHeight - 8))}px`;
-      style.left = `${Math.max(8, Math.min(rect.right + 10, window.innerWidth - menu.element.offsetWidth - 8))}px`;
-    } else {
+    if (menu.anchor.closest('#rail')) placeFlyout(menu.element, menu.anchor);
+    else {
       // A dropdown: under its tile in the bar.
+      const rect = menu.anchor.getBoundingClientRect();
+      const { style } = menu.element;
       const top = rect.bottom + 10;
       style.top = `${top}px`;
       style.maxHeight = `${Math.max(80, window.innerHeight - top - 8)}px`;
