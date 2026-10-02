@@ -131,7 +131,7 @@ tier is always visible to the writer.
   an audit fixture, one at a time.
 
 One thing the page shows that the printer never does, on purpose:
-**editorial comments** (Extras → Comment). A comment is a plain-text note
+**editorial comments** (Comment, on the rail). A comment is a plain-text note
 between blocks, drawn as a full-width strip labeled "Comment · Not
 printed" so it can never be mistaken for the page. It lives in the working
 file (a `// plass:comment` frame in `.typ`, a `<!-- plass:comment -->`

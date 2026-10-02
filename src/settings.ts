@@ -638,10 +638,18 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
 
   document.body.appendChild(panel);
   const rect = anchor.getBoundingClientRect();
-  const top = rect.bottom + 10;
-  panel.style.top = `${top}px`;
-  panel.style.maxHeight = `${Math.max(80, window.innerHeight - top - 8)}px`;
-  panel.style.left = `${Math.max(8, Math.min(rect.right - panel.offsetWidth, window.innerWidth - panel.offsetWidth - 8))}px`;
+  if (anchor.closest('#rail')) {
+    // A flyout from the rail: beside it, level with its tile, inside the
+    // window (toolbar.ts places the menus the same way).
+    panel.style.maxHeight = `${Math.max(80, window.innerHeight - 16)}px`;
+    panel.style.top = `${Math.max(8, Math.min(rect.top, window.innerHeight - panel.offsetHeight - 8))}px`;
+    panel.style.left = `${Math.max(8, Math.min(rect.right + 10, window.innerWidth - panel.offsetWidth - 8))}px`;
+  } else {
+    const top = rect.bottom + 10;
+    panel.style.top = `${top}px`;
+    panel.style.maxHeight = `${Math.max(80, window.innerHeight - top - 8)}px`;
+    panel.style.left = `${Math.max(8, Math.min(rect.right - panel.offsetWidth, window.innerWidth - panel.offsetWidth - 8))}px`;
+  }
 
   const onDown = (e: MouseEvent) => {
     if (!panel.contains(e.target as Node) && e.target !== anchor && !anchor.contains(e.target as Node)) closePanel();

@@ -214,8 +214,13 @@ test('the visible view switch and the shortcut toggle from either view', async (
   await expect(btn).toBeVisible();
   await expect(btn).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#source .cm-content')).toBeFocused();
-  // Formatting tools rest while the text is the truth.
-  await expect(page.locator('.tb-tools > button:disabled')).toHaveCount(6);
+  // Formatting tools rest while the text is the truth: the six direct
+  // tiles, the Blocks tiles, Settings; the Insert and Extras flyouts stay
+  // open for what still applies.
+  await expect(page.locator('#rail .tb-rests:disabled')).toHaveCount(6);
+  await expect(page.getByRole('button', { name: 'Block quote', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Comment', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Insert', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Document settings', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Document settings', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Extras', exact: true }).click();
@@ -230,7 +235,8 @@ test('the visible view switch and the shortcut toggle from either view', async (
   await page.keyboard.press('ControlOrMeta+/');
   await expect(btn).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('.ProseMirror[contenteditable="true"]')).toBeFocused();
-  expect(await page.locator('.tb-tools button:disabled').count()).toBe(0);
+  expect(await page.locator('#rail .tb-rests:disabled').count()).toBe(0);
+  await expect(page.getByRole('button', { name: 'Block quote', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Document settings', exact: true })).toBeEnabled();
   // And from the page view.
   await page.keyboard.press('ControlOrMeta+/');

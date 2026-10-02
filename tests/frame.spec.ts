@@ -2,11 +2,12 @@ import { expect, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // The frame (src/style.css, "The room"): the paper is a fixed-width column
-// in a rounded room under the bar, and the window's size is room around
-// it. Resizing the window must not touch the layout — the editor's width
-// stays, pagination does not run again — and the chrome must keep the
-// page's axis. The zoom step itself (CSS px stay CSS px) is driven in the
-// shell by app/smoke.mjs; a browser tab cannot zoom from Playwright.
+// in the room under the bar and right of the rail, and the window's size
+// is room around it. Resizing the window must not touch the layout — the
+// editor's width stays, pagination does not run again — and the chrome
+// must keep the page's axis. The zoom step itself (CSS px stay CSS px) is
+// driven in the shell by app/smoke.mjs; a browser tab cannot zoom from
+// Playwright.
 
 declare global {
   interface Window {
@@ -36,24 +37,27 @@ interface Geometry {
   passes: number;
   pages: number;
   editorWidth: number;
-  stack: { left: number; width: number };
+  stack: { left: number; width: number; right: number };
   room: { left: number; clientWidth: number; scrollWidth: number };
-  pills: { left: number; right: number };
+  bar: { left: number; fileLeft: number };
+  hud: { right: number };
 }
 
 const geometry = (page: Page) =>
   page.evaluate((): Geometry => {
     const stack = document.getElementById('stack')!.getBoundingClientRect();
     const room = document.getElementById('scroll')!;
-    const title = document.querySelector('.doc-title')!.getBoundingClientRect();
-    const last = document.querySelector('#toolbar > .tb-pod:last-child')!.getBoundingClientRect();
+    const bar = document.getElementById('toolbar')!.getBoundingClientRect();
+    const file = document.querySelector('#toolbar .tb-tile')!.getBoundingClientRect();
+    const hud = document.getElementById('hud')!.getBoundingClientRect();
     return {
       passes: window.__pagCount(),
       pages: document.querySelectorAll('.page-box').length,
       editorWidth: document.querySelector<HTMLElement>('.ProseMirror')!.clientWidth,
-      stack: { left: stack.left, width: stack.width },
+      stack: { left: stack.left, width: stack.width, right: stack.right },
       room: { left: room.getBoundingClientRect().left, clientWidth: room.clientWidth, scrollWidth: room.scrollWidth },
-      pills: { left: title.left, right: last.right },
+      bar: { left: bar.left, fileLeft: file.left },
+      hud: { right: hud.right },
     };
   });
 
@@ -69,12 +73,17 @@ test('the window is room around a fixed-width paper: a resize re-lays nothing an
   await openTyp(page, Array.from({ length: 18 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
   const before = await geometry(page);
   expect(before.pages).toBeGreaterThan(2);
-  // Centered in the room (the room's content box, which is the window
-  // less the frame's insets and the scrollbar's gutter), the pills over
-  // the paper's axis.
+  // Centered in the room (the room's content box: the window right of the
+  // rail, less the scrollbar's gutter), the HUD just inside the paper's
+  // right edge, and the bar's File tile at the bar's left, where the
+  // traffic lights' room ends (none in a tab: 12px in).
   const axis = (g: Geometry) => g.room.left + g.room.clientWidth / 2;
-  expect(Math.abs(before.stack.left + before.stack.width / 2 - axis(before))).toBeLessThan(1);
-  expect(Math.abs((before.pills.left + before.pills.right) / 2 - axis(before))).toBeLessThan(1.5);
+  const onAxis = (g: Geometry) => {
+    expect(Math.abs(g.stack.left + g.stack.width / 2 - axis(g))).toBeLessThan(1);
+    expect(Math.abs(g.hud.right - (g.stack.right - 18))).toBeLessThan(1);
+  };
+  onAxis(before);
+  expect(before.bar.fileLeft).toBe(before.bar.left + 12);
 
   // Wider: more room, the same paper and the same pagination.
   await page.setViewportSize({ width: 1400, height: 900 });
@@ -84,8 +93,7 @@ test('the window is room around a fixed-width paper: a resize re-lays nothing an
   expect(wide.pages).toBe(before.pages);
   expect(wide.editorWidth).toBe(before.editorWidth);
   expect(wide.stack.width).toBe(before.stack.width);
-  expect(Math.abs(wide.stack.left + wide.stack.width / 2 - axis(wide))).toBeLessThan(1);
-  expect(Math.abs((wide.pills.left + wide.pills.right) / 2 - axis(wide))).toBeLessThan(1.5);
+  onAxis(wide);
 
   // Narrower than the paper: the room scrolls sideways; still no layout.
   await page.setViewportSize({ width: 700, height: 600 });
@@ -98,36 +106,45 @@ test('the window is room around a fixed-width paper: a resize re-lays nothing an
   expect(narrow.room.scrollWidth).toBeGreaterThan(narrow.room.clientWidth);
 });
 
-test('the frame is Zen\'s: a near-black frame, a rounded room, the bar a drag region with its controls the page\'s', async ({ page }) => {
+test('the frame is Zen\'s: one near-black surround — the bar, the rail, the room — the bar a drag region with its controls the page\'s', async ({ page }) => {
   await page.goto('/?new=1');
   await page.waitForFunction(() => Boolean(window.view));
   const look = await page.evaluate(() => {
-    const room = getComputedStyle(document.getElementById('scroll')!);
+    const room = document.getElementById('scroll')!;
     const bar = document.getElementById('toolbar')!.getBoundingClientRect();
+    const rail = document.getElementById('rail')!.getBoundingClientRect();
     return {
       frame: getComputedStyle(document.body).backgroundColor,
-      roomBackground: room.backgroundColor,
-      radius: room.borderRadius,
-      roomTop: document.getElementById('scroll')!.getBoundingClientRect().top,
+      roomBackground: getComputedStyle(room).backgroundColor,
+      radius: getComputedStyle(room).borderRadius,
+      roomTop: room.getBoundingClientRect().top,
+      roomLeft: room.getBoundingClientRect().left,
       barBottom: bar.bottom,
       barLeft: bar.left,
       barRight: bar.right,
+      rail: { left: rail.left, top: rail.top, right: rail.right, bottom: rail.bottom },
       width: window.innerWidth,
+      height: window.innerHeight,
     };
   });
   expect(look.frame).toBe('rgb(17, 17, 18)');
-  expect(look.roomBackground).toBe('rgb(43, 42, 45)');
-  expect(look.radius).toBe('12px');
-  // The room starts where the bar ends; the bar spans the whole window
-  // (it is the window's title bar in Plass.app).
-  expect(look.roomTop).toBe(look.barBottom);
+  // One colour all round: the room paints the frame's, no panel.
+  expect(look.roomBackground).toBe('rgb(17, 17, 18)');
+  expect(look.radius).toBe('0px');
+  // The bar spans the whole window (it is the window's title bar in
+  // Plass.app); the rail runs under it down the left edge; the room
+  // starts where they end.
   expect(look.barLeft).toBe(0);
   expect(look.barRight).toBe(look.width);
+  expect(look.rail).toEqual({ left: 0, top: look.barBottom, right: look.roomLeft, bottom: look.height });
+  expect(look.roomTop).toBe(look.barBottom);
   // Chromium exposes the property (inert in a tab; the shell's window
-  // moves by the bar's empty part, and the pills, menus and the view
-  // switch keep their clicks).
+  // moves by the bar's empty part, and the tiles, the name, the menus
+  // and the view switch keep their clicks). The rail scrolls, so it is
+  // no drag region.
   expect(await appRegion(page, '#toolbar')).toBe('drag');
-  for (const selector of ['.doc-title', '.tb-pod', '.view-switch']) expect(await appRegion(page, selector)).toBe('no-drag');
+  expect(await appRegion(page, '#rail')).not.toBe('drag');
+  for (const selector of ['.doc-title', '#toolbar .tb-tile', '.view-switch']) expect(await appRegion(page, selector)).toBe('no-drag');
   await page.getByRole('button', { name: 'File', exact: true }).click();
   expect(await appRegion(page, '.tb-menu:not([hidden])')).toBe('no-drag');
 });

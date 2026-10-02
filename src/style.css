@@ -41,13 +41,18 @@
 
 :root {
   /* Zen's shape (knuth/docs/mockups/rail-layout.html): a near-black frame
-     holds the top bar, the room is an inset rounded panel a shade lighter,
-     and the paper hovers in it, the only light. */
+     holds the bar across the top, the rail down the left and the room in
+     the rest, one colour all round, and the paper hovers on it, the only
+     light. (The room was an inset panel a shade lighter, #2b2a2d; --bg
+     brings it back in one line.) */
   --frame: #111112;
-  --bg: #2b2a2d;
+  --bg: var(--frame);
   --pill: #1e1e21;
+  --tile: #29292c;
   --topbar: 60px;
-  --inset: 8px;
+  --rail: 60px;
+  /* The paper's least gap to the bar, the rail and the window's edge. */
+  --margin: 24px;
   --chrome: #fcfcfb;
   --chrome-border: #e3e1dc;
   --ink: #1a1a1a;
@@ -83,23 +88,23 @@ body {
   flex-direction: column;
 }
 
-/* Floating capsule clusters over the paper (iOS toolbar language): each
-   group is its own stadium-shaped glass pod. Pods stay solid; their
-   CONTENTS sleep at rest and wake when the mouse approaches the cluster. */
 /* One plain bar on the frame, a straight line across the top of the
-   window, the room below it. The document's name sits on the left, the
-   tools to its right. In Plass.app it is the window's title bar (the
-   shell hides its own and leaves the traffic lights over the page,
-   docs/CLAERBOUT-SHELL.md): its empty part drags the window, which is
-   the shell's to handle, so the pills, the menus that open from them and
-   the view switch are marked the page's. A browser ignores the
-   property; toolbar.css reserves the lights' room. */
+   window, the rail and the room below it. The paper's way in and out
+   sits on the left beside the traffic lights — File, the name with its
+   save dot, Export — and the tools are on the rail (toolbar.css). In
+   Plass.app the bar is the window's title bar (the shell hides its own
+   and leaves the traffic lights over the page, docs/CLAERBOUT-SHELL.md):
+   its empty part drags the window, which is the shell's to handle, so
+   the tiles, the name, the menus and the panel that may open into the
+   bar's band and the view switch are marked the page's. A browser
+   ignores the property; toolbar.css reserves the lights' room. The rail
+   is no drag region: it scrolls, and a drag region takes the wheel. */
 #toolbar {
   display: flex;
   flex-direction: row;
   align-items: center;
-  justify-content: center;
-  gap: 5px;
+  justify-content: flex-start;
+  gap: 6px;
   position: fixed;
   top: 0;
   left: 0;
@@ -112,88 +117,31 @@ body {
 
 #toolbar > *,
 .tb-menu,
+.settings-panel,
 .view-switch {
   -webkit-app-region: no-drag;
-}
-
-/* The tools pill: Zen's address pill, a shade up from the frame. Nothing
-   scrolls under the bar any more, so the pills are solid. */
-.tb-pod {
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 2px;
-  height: 42px;
-  padding: 0 6px;
-  background: var(--pill);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  /* Pressed seam: facing sides keep a flat contact patch and turn away
-     through small CIRCULAR corners. Interior pills are flat-faced on
-     both sides; the run's last pill rounds back out to a stadium end.
-     (Explicit 21px, not 999px — an overflowing radius makes CSS scale
-     every corner down by one global factor.) */
-  border-radius: 12px;
-}
-
-#toolbar > .tb-pod:last-child {
-  border-radius: 12px 21px 21px 12px;
-}
-
-/* Sleep/wake tiers: soft at rest, everything wakes near the bar, the
-   hovered group at full ink. */
-.tb-btn {
-  opacity: 0.4;
-  transition: opacity 0.25s ease;
 }
 
 .tb-btn[hidden] {
   display: none;
 }
 
-#toolbar:hover .tb-btn {
-  opacity: 1;
-}
-
-.tb-group:hover .tb-btn,
-.tb-group:focus-within .tb-btn {
-  color: rgba(240, 238, 233, 0.95);
-}
-
-.tb-group {
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 2px;
-}
-
 /* ---------- the document slug ---------- */
 
-/* The name floats fixed over the room, centered above the page: small
-   serif, letterspaced, quiet — the galley slug for the manuscript below.
-   A faint dark glass keeps it legible when pages scroll beneath it. */
-/* The title pill: the same. */
+/* The name pill: Zen's address pill, a shade up from the frame, holding
+   the document's name — small serif, letterspaced, quiet, the galley
+   slug for the manuscript below — and its save dot, between the File
+   and Export tiles. */
 .doc-title {
   display: flex;
   align-items: center;
   gap: 9px;
   height: 42px;
-  padding: 0 8px 0 16px;
+  padding: 0 12px;
   flex: none;
   background: var(--pill);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 21px 12px 12px 21px;
-}
-
-/* The lifecycle triggers ride quietly at the pill's end. */
-.doc-title .tb-btn {
-  height: 30px;
-  min-width: 30px;
-  padding: 0 5px;
-}
-
-.doc-title .tb-btn .ico {
-  width: 17px;
-  height: 17px;
+  border-radius: 12px;
 }
 
 /* Keep the active toolbar group above its neighbors. */
@@ -262,27 +210,9 @@ body {
   background: rgba(157, 184, 214, 0.35);
 }
 
-
-
-.tb-menu-btn {
-  font: 18px/1 var(--sans);
-  color: var(--ink-soft);
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  width: 30px;
-  height: 26px;
-  cursor: pointer;
-  letter-spacing: 1px;
-}
-
-.tb-menu-btn:hover {
-  background: color-mix(in srgb, var(--chrome-border) 60%, transparent);
-  color: var(--ink);
-}
-
-/* Bar buttons: quiet icons; the name fades in as a caption below the icon —
-   absolutely positioned, so nothing in the bar ever moves. */
+/* Bar and rail buttons: quiet icons; the name fades in as a caption —
+   below a bar tile, beside a rail tile (toolbar.css) — absolutely
+   positioned, so nothing ever moves. */
 .tb-btn {
   position: relative;
   display: inline-flex;
@@ -356,24 +286,23 @@ body {
   opacity: 1;
 }
 
-.tb-div {
-  width: 1px;
-  height: 16px;
-  background: rgba(255, 255, 255, 0.13);
-  margin: 0 6px;
-  flex: none;
+/* An open menu takes the caption's place. */
+.tb-btn[aria-expanded='true'] .lbl {
+  visibility: hidden;
 }
 
 /* Native table controls. Cells remain the actual ProseMirror content; this
    compact chrome only dispatches structural commands against that document. */
 .native-table-toolbar {
   -webkit-app-region: no-drag; /* inside the bar's drag band: a click must reach it, not move the window */
-  /* Docked under the tools pill, centered: a second row of chrome while
-     the caret is in a table. It never covers the document and never
-     moves with the table, so a keystroke reads no geometry for it. */
+  /* Docked under the bar on the paper's axis — the room's, right of the
+     rail and left of the room's scrollbar (main.ts sets
+     --room-scrollbar): a second row of chrome while the caret is in a
+     table. It never covers the document and never moves with the table,
+     so a keystroke reads no geometry for it. */
   position: fixed;
   top: 58px;
-  left: 50%;
+  left: calc(var(--rail) + (100vw - var(--rail) - var(--room-scrollbar, 0px)) / 2);
   transform: translateX(-50%);
   z-index: 180;
   width: max-content;
@@ -539,10 +468,11 @@ body {
 /* corner HUD + transient toast */
 #hud {
   position: fixed;
-  /* Sit just inside the PAGE's right edge (pages are centered at
-     var(--page-w)); fall back to a viewport inset when the window is
-     narrower than the paper. */
-  right: max(14px, calc(50vw - var(--page-w, 816px) / 2 + 18px));
+  /* Sit just inside the PAGE's right edge: the paper is centered on the
+     room's axis (right of the rail, left of the room's scrollbar; main.ts
+     sets --room-scrollbar); fall back to a viewport inset when the window
+     is narrower than the paper. */
+  right: max(14px, calc((100vw - var(--rail) + var(--room-scrollbar, 0px)) / 2 - var(--page-w, 816px) / 2 + 18px));
   bottom: 16px;
   z-index: 50;
   font: 11px var(--sans);
@@ -558,7 +488,8 @@ body {
 
 #toast {
   position: fixed;
-  left: 50%;
+  /* On the paper's axis (the room's; see #hud). */
+  left: calc(var(--rail) + (100vw - var(--rail) - var(--room-scrollbar, 0px)) / 2);
   bottom: 22px;
   transform: translateX(-50%) translateY(6px);
   z-index: 120;
@@ -699,28 +630,28 @@ body {
   white-space: nowrap;
 }
 
-/* The room: Zen's inset panel under the bar, rounded, a shade lighter
-   than the frame. The paper is a fixed-width column centered in it
-   (#stack) and never re-lays when the window does: a wider window is more
-   room around the paper, a narrower one scrolls sideways. A zoom scales
-   the paper in place (CSS px stay CSS px, so the layout never runs), and
-   nothing sizes the window back to the paper: the page once did, with
-   resizeTo 180 ms after every resize, which snapped a dragged window
-   back and, under a zoom (innerWidth in zoomed px, resizeTo in screen
-   px), walked the window to the zoomed paper's width in four steps over
-   a second. */
+/* The room: the rest of the window under the bar and right of the rail,
+   the frame's own colour, so the surround is one surface and the paper
+   hovers on its shadow with the same least margin to the bar, the rail
+   and the window's edge. The paper is a fixed-width column centered in
+   it (#stack) and never re-lays when the window does: a wider window is
+   more room around the paper, a narrower one scrolls sideways. A zoom
+   scales the paper in place (CSS px stay CSS px, so the layout never
+   runs), and nothing sizes the window back to the paper: the page once
+   did, with resizeTo 180 ms after every resize, which snapped a dragged
+   window back and, under a zoom (innerWidth in zoomed px, resizeTo in
+   screen px), walked the window to the zoomed paper's width in four
+   steps over a second. */
 #scroll {
   flex: 1;
   min-height: 0;
-  margin: var(--topbar) var(--inset) var(--inset);
-  border-radius: 12px;
+  margin: var(--topbar) 0 0 var(--rail);
   background: var(--bg);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
   overflow: auto;
   /* The gutter is always there, so the page's axis holds when a document
      grows past the room. */
   scrollbar-gutter: stable;
-  padding: 36px 24px 56px;
+  padding: var(--margin);
 }
 
 #scroll::-webkit-scrollbar {
@@ -767,9 +698,12 @@ body {
   width: var(--page-w, 8.5in);
   height: var(--page-h, 11in);
   background: var(--sheet);
+  /* The hovering, on a near-black surround: a hairline rim, a contact
+     shadow and a wide dark halo. */
   box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.45),
-    0 18px 50px rgba(0, 0, 0, 0.4);
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 24px 64px rgba(0, 0, 0, 0.6);
   border-radius: 4px;
 }
 
@@ -806,14 +740,15 @@ body {
   --source-tint: color-mix(in srgb, var(--accent) 7%, transparent);
   position: relative;
   z-index: 1;
-  /* The room's height less its padding: the sheet fills the room. */
-  min-height: calc(100vh - var(--topbar) - var(--inset) - 92px);
+  /* The room's height less its margins: the sheet fills the room. */
+  min-height: calc(100vh - var(--topbar) - 2 * var(--margin));
   background: var(--sheet);
   color: var(--ink);
   border-radius: 4px;
   box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.45),
-    0 18px 50px rgba(0, 0, 0, 0.4);
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 24px 64px rgba(0, 0, 0, 0.6);
 }
 
 #source .cm-editor {
@@ -959,43 +894,9 @@ body {
   font: 12px var(--sans);
 }
 
-/* The tools pill rests while the text is the truth: its buttons act on the
+/* The formatting tiles rest while the text is the truth (toolbar.ts
+   disables them; toolbar.css draws a disabled tile): they act on the
    ProseMirror document, which is not being edited. */
-.tb-tools.tb-resting .tb-btn {
-  opacity: 0.22;
-  cursor: default;
-}
-
-#toolbar:hover .tb-tools.tb-resting .tb-btn {
-  opacity: 0.22;
-}
-
-.tb-tools.tb-resting .tb-btn:hover {
-  background: transparent;
-  color: rgba(235, 233, 228, 0.6);
-}
-
-.tb-tools.tb-resting .tb-btn:hover .ico,
-.tb-tools.tb-resting .tb-btn:hover svg {
-  transform: none;
-}
-
-.tb-tools.tb-resting .tb-btn:hover .lbl {
-  opacity: 0;
-  visibility: hidden;
-}
-
-.tb-btn.tb-resting-btn {
-  opacity: 0.22;
-  pointer-events: none;
-}
-
-/* The pressed toggle: lit, on the dark title pill. */
-.doc-title .tb-source[aria-pressed='true'] {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.16);
-  opacity: 1;
-}
 
 /* ---------- document typography (driven by document settings) ---------- */
 
@@ -2896,6 +2797,7 @@ body {
 
 @media print {
   #toolbar,
+  #rail,
   #hud,
   #toast,
   .native-table-toolbar,

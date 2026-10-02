@@ -60,7 +60,7 @@ test('insert a grid from the toolbar, tab between cells, set the split from the 
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, [p]));
   });
   await page.click('.ProseMirror p');
-  await page.getByRole('button', { name: 'Extras', exact: true }).click();
+  await page.getByRole('button', { name: 'Insert', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Grid', exact: true }).click();
   await expect(page.locator('.ProseMirror .ts-grid')).toHaveCount(1);
   await expect(page.locator('.grid-toolbar')).toBeVisible();

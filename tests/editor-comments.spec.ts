@@ -293,15 +293,14 @@ test('editing a note: newlines, exit, live sheet growth, insert, delete, undo', 
   });
   expect(breaks).toBe(1);
 
-  // Insert from Extras with the caret at a paragraph's start: the note goes
-  // BEFORE it, and the paragraph is untouched.
+  // Insert from the rail's Comment tile with the caret at a paragraph's
+  // start: the note goes BEFORE it, and the paragraph is untouched.
   const kidsBefore = await page.evaluate(() => {
     const k: string[] = [];
     window.view.state.doc.forEach((n) => k.push(n.type.name));
     return k;
   });
-  await page.getByRole('button', { name: 'Extras' }).click();
-  await page.getByRole('menuitem', { name: 'Comment' }).click();
+  await page.getByRole('button', { name: 'Comment', exact: true }).click();
   const inserted = await caretParent(page);
   expect(inserted.parent).toBe('editor_comment');
   expect(inserted.index).toBe(after.index);
@@ -312,10 +311,9 @@ test('editing a note: newlines, exit, live sheet growth, insert, delete, undo', 
   });
   expect(kidsAfter).toEqual([...kidsBefore.slice(0, after.index), 'editor_comment', ...kidsBefore.slice(after.index)]);
   await page.keyboard.type('Fresh note from the toolbar.');
-  // Nested insertion is refused: the command declines inside a note.
-  await page.getByRole('button', { name: 'Extras' }).click();
-  await expect(page.getByRole('menuitem', { name: 'Comment' })).toBeDisabled();
-  await page.keyboard.press('Escape');
+  // Nested insertion is refused: the command declines inside a note, and
+  // the tile shows it.
+  await expect(page.getByRole('button', { name: 'Comment', exact: true })).toBeDisabled();
 
   // The header's delete is one undoable step (a beat after typing, so the
   // history does not group the two).

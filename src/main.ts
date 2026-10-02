@@ -161,20 +161,21 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
 
 const editorEl = document.getElementById('editor')!;
 const toolbarEl = document.getElementById('toolbar')!;
+const railEl = document.getElementById('rail')!;
 const scrollEl = document.getElementById('scroll')!;
 
-// The page centers inside the room, which is inset from the window the
-// same on both sides but for the room's scrollbar; the fixed bar spans the
-// full window (it is the window's title bar in Plass.app, so it must). The
-// bar hands the scrollbar's width to its stylesheet, which pads the pills'
-// row by it on the right so they center on the page's axis, not the
-// window's. Nothing here sizes the window: the paper is a fixed-width
-// column, and a window of any width is room around it.
-function syncToolbarInset() {
-  toolbarEl.style.setProperty('--room-scrollbar', `${scrollEl.offsetWidth - scrollEl.clientWidth}px`);
+// The page centers inside the room, which runs from the rail to the
+// window's edge less the room's scrollbar; the chrome that keeps the
+// page's axis (the HUD, the toast, the table and image toolbars) is fixed
+// to the window, so the page hands the scrollbar's width to the
+// stylesheet, which works the axis out from the rail's width and it.
+// Nothing here sizes the window: the paper is a fixed-width column, and a
+// window of any width is room around it.
+function syncRoomScrollbar() {
+  document.documentElement.style.setProperty('--room-scrollbar', `${scrollEl.offsetWidth - scrollEl.clientWidth}px`);
 }
-window.addEventListener('resize', syncToolbarInset);
-requestAnimationFrame(syncToolbarInset);
+window.addEventListener('resize', syncRoomScrollbar);
+requestAnimationFrame(syncRoomScrollbar);
 const hudEl = document.getElementById('hud')!;
 const toastEl = document.getElementById('toast')!;
 const stackEl = document.getElementById('stack')!;
@@ -405,7 +406,7 @@ const fileManager = new FileManager({
   hasSessionDoc: () => restoredSessionDoc,
 });
 
-toolbar = buildToolbar(toolbarEl, view, fileManager, { toggleSource: () => void sourceView.toggle() });
+toolbar = buildToolbar(toolbarEl, railEl, view, fileManager, { toggleSource: () => void sourceView.toggle() });
 setFigureFileManager(fileManager);
 const stopAssetWatch = startAssetWatch(view);
 import.meta.hot?.dispose(() => {
