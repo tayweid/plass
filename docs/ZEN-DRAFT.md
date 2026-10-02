@@ -230,6 +230,21 @@ runs past the panel, and that the shadow's corners agree.
    them with everything else (14.4 screen px at two steps), as it scales
    the bar's pills and Knuth's room.
 
+**The left corners, later the same afternoon.** Taylor, seeing the rule
+in the app: "i think i only want it applied to all corners except the
+upper left. that should stay rounded. but leave it easy to undo if it
+looks strange", then "actually lets fix the left upper and lower to
+rounded." So the panel's two left corners are rounded whatever the paper
+does under them, and only the right corners follow the paper. One line is
+the switch, `--paper-left-corner: var(--paper-radius)` at the top of
+`src/style.css`: `#scroll` takes it as the left radii of its clip path (a
+clip path, as on `#paper`, so the cut holds in hit testing too), and
+`#paper-shadow` as its left radii, each falling back to the paper's own
+corner when the line is removed. Remove the line and all four corners
+follow the paper as first built. `frame.spec.ts` expects the left points
+never to answer the paper and the shadow's left radii to read 12
+throughout; its smoothness test reads the right corner.
+
 ## The third pass
 
 Taylor, running the merged Plass beside the merged Knuth: "plass looks
