@@ -15,7 +15,8 @@
     "minWidth": 740,
     "minHeight": 360,
     "titleBarStyle": "hiddenInset",
-    "trafficLightPosition": { "x": 20, "y": 23 }
+    "trafficLightPosition": { "x": 20, "y": 23 },
+    "followZoom": true
   },
   "icon": "../public/icons/plass-512.png",
   "copyright": "© 2026 Taylor J Weidman. MIT License.",

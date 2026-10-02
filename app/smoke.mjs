@@ -94,8 +94,12 @@ if (!saved.includes('Edited.')) await fail(`⌘S did not reach the disk:\n${save
 // every resize, which snapped a drag back and, under a zoom (innerWidth
 // in zoomed px, resizeTo in screen px), walked the window to the zoomed
 // paper's width in four steps over a second. A zoom step now scales the
-// paper in place: one resize event, the window's bounds untouched, the
-// editor's width (in CSS px) the same, so the layout never runs.
+// paper in place and the shell scales the window with it in one step
+// (app/plass.json followZoom, shell 0.2.1; an older shell leaves the
+// window alone): at most two resize events, the editor's width (in CSS
+// px) the same, so the layout never runs.
+// The shell this runs on: the checkout's main.js, or the bundle's, read for what it can do.
+const shellMain = bundle ? path.join(bundle, 'Contents', 'Resources', 'app', 'main.js') : path.join(shell, 'main.js');
 const bounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
 const window0 = await bounds();
 await app.evaluate(({ BrowserWindow }, width) => {
@@ -117,8 +121,12 @@ const zoomed = await bounds();
 const resizes = await page.evaluate(() => window.__resizes);
 const widthAfter = await editorWidth();
 await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomLevel(0));
-if (zoomed.width !== dragged.width || zoomed.height !== dragged.height) await fail(`a zoom step moved the window from ${dragged.width}×${dragged.height} to ${zoomed.width}×${zoomed.height}`);
-if (resizes !== 1) await fail(`a zoom step fired ${resizes} resize events, not one`);
+const follows = fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('followZoom');
+const grew = zoomed.width / dragged.width;
+if (follows ? grew < 1.15 || grew > 1.25 : zoomed.width !== dragged.width || zoomed.height !== dragged.height) {
+  await fail(`a zoom step took the window from ${dragged.width}×${dragged.height} to ${zoomed.width}×${zoomed.height}${follows ? ' (the shell should have scaled it by 1.2)' : ''}`);
+}
+if (resizes < 1 || resizes > 2) await fail(`a zoom step fired ${resizes} resize events`);
 if (widthAfter !== widthBefore) await fail(`a zoom step changed the editor's width from ${widthBefore} to ${widthAfter}`);
 
 // A shell that hides the title bar (app/plass.json, titleBarStyle; the
@@ -126,7 +134,6 @@ if (widthAfter !== widthBefore) await fail(`a zoom step changed the editor's wid
 // Controls Overlay, and the bar pads its row by it. Plass.app is built
 // on a tag of the shell, which carries the key only from its next tag:
 // the check is for a shell that has it.
-const shellMain = bundle ? path.join(bundle, 'Contents', 'Resources', 'app', 'main.js') : path.join(shell, 'main.js');
 const hidesTitleBar = process.platform === 'darwin' && fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('titleBarStyle');
 if (hidesTitleBar) {
   const bar = await page.evaluate(() => {

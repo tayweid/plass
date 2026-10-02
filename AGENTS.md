@@ -35,8 +35,7 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   `public/install` from the shell's template. Log:
   `~/Library/Logs/Plass.log`. The window is any size: the paper is a
   fixed-width column in a rounded room under the bar (Zen's shape, the
-  frame in `src/style.css`), a wider window is room, a zoom scales the
-  paper in place, and nothing sizes the window to the paper. With a shell
+  frame in `src/style.css`), a wider window is room, a zoom scales the paper in place and, on shell 0.2.1 (`followZoom` in `app/plass.json`), the shell scales the window with it in one step, so the paper keeps its room; the editor's width in CSS px never changes and the layout never runs for a zoom. With a shell
   past v0.2.0, `app/plass.json`'s `titleBarStyle: "hiddenInset"` makes
   the bar the window's title bar beside the traffic lights; the page
   learns the lights' room from the Window Controls Overlay

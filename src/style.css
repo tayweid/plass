@@ -367,6 +367,7 @@ body {
 /* Native table controls. Cells remain the actual ProseMirror content; this
    compact chrome only dispatches structural commands against that document. */
 .native-table-toolbar {
+  -webkit-app-region: no-drag; /* inside the bar's drag band: a click must reach it, not move the window */
   /* Docked under the tools pill, centered: a second row of chrome while
      the caret is in a table. It never covers the document and never
      moves with the table, so a keystroke reads no geometry for it. */
@@ -2244,6 +2245,7 @@ body {
 /* ---------- bibliography editor modal ---------- */
 
 .bib-editor-overlay {
+  -webkit-app-region: no-drag; /* inside the bar's drag band: a click must reach it, not move the window */
   position: fixed;
   inset: 0;
   z-index: 200;
