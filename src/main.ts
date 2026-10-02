@@ -3,11 +3,11 @@ import './style.css';
 
 import { EditorState } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
-import { history } from 'prosemirror-history';
+import { closeHistory, history } from 'prosemirror-history';
 import { tableEditing } from 'prosemirror-tables';
 import { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
-import { isNativeShell, reportDocument, takeLaunchFile } from './claerbout';
+import { isNativeShell, onShellReload, onShellSave, reportDocument, rewoundText, takeLaunchFile } from './claerbout';
 import { openInAnotherWindow } from './open-files';
 import { migrateLegacyTableGeometry } from './typ-parser';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
@@ -36,6 +36,7 @@ import { resetCompilerCircuit } from './compiler-circuit';
 import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
 import { describeVerdict } from './environment-check';
 import { attachPaper } from './paper-scale';
+import { FROM_DISK, reloadTransaction } from './reload-in-place';
 
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
@@ -337,7 +338,8 @@ const view = new EditorView(editorEl, {
     }
     if (tr.docChanged) {
       scheduleSave(view);
-      fileManager.noteChange();
+      // A reload from disk is not an edit: the document matches the file.
+      if (!tr.getMeta(FROM_DISK)) fileManager.noteChange();
       updateStatus();
     }
   },
@@ -376,6 +378,9 @@ const sourceView = createSourceView({
 });
 
 let reportedFile: FileSystemFileHandle | null = null;
+/** This window's file as the shell knows it (its answer to `document`),
+ *  which a rewind's `reload` names; null in a browser tab. */
+let documentPath: string | null = null;
 const fileManager = new FileManager({
   getDoc: () => sourceView.currentDoc(),
   getText: (format) => sourceView.textFor(format),
@@ -389,6 +394,16 @@ const fileManager = new FileManager({
     updateStatus();
     scheduleSave(view);
     sourceView.focus();
+  },
+  // In place (reload-in-place.ts): the caret and the scroll stay where the
+  // text still allows. The source view, when open, shows the new text.
+  reloadDoc(doc) {
+    const tr = reloadTransaction(view.state, doc);
+    if (tr) {
+      view.dispatch(tr);
+      view.dispatch(closeHistory(view.state.tr));
+    }
+    if (sourceView.isActive()) sourceView.afterSetDoc();
   },
   onState() {
     toolbar?.setFile(fileManager.name, fileManager.dirty);
@@ -405,13 +420,24 @@ const fileManager = new FileManager({
   // tell, and no path. The old file's folder goes at once, and an answer
   // for a file this window has since left is dropped.
   onFile: (handle) => {
-    if (handle !== reportedFile) toolbar?.setPath(null);
+    if (handle !== reportedFile) {
+      toolbar?.setPath(null);
+      documentPath = null;
+    }
     reportedFile = handle;
     void reportDocument(handle).then((path) => {
-      if (fileManager.handle === handle) toolbar?.setPath(path);
+      if (fileManager.handle !== handle) return;
+      documentPath = path;
+      toolbar?.setPath(path);
     });
   },
 });
+
+// Plass.app: a rewind from the shell's History window saves every window
+// on the project first, through ⌘S's write, and then the window whose
+// file it wrote or removed reads it again (claerbout.ts).
+onShellSave(() => fileManager.saveForShell());
+onShellReload(() => documentPath, (rewound) => void fileManager.reloadFromDisk(rewoundText(rewound)));
 
 toolbar = buildToolbar(toolbarEl, railEl, view, fileManager, { toggleSource: () => void sourceView.toggle() });
 setFigureFileManager(fileManager);

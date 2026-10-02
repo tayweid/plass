@@ -35,6 +35,14 @@
 //   seen handles touch — Chromium asks it, with the path but no window,
 //   on every read and write. The shell also makes it the window's
 //   represented file. Knuth opens by path and never needs this.
+// - A rewind (the shell's history view, its History window over the
+//   record). Before it writes anything the shell asks every window on
+//   the project to `save` (answered `saved`, within 3 s, or the window is
+//   passed over and its card says to reopen it), and after it every
+//   window hears `reload` with the paths it wrote or removed: the window
+//   whose file is among them reads it again (`onShellSave`,
+//   `onShellReload`). File › History… asks for the History window
+//   (`openHistory`), as the shell's View › History… does.
 // - Nothing else. `command` events (menu items acting in the page) are
 //   the shell's when a menu item needs one; the shell this replaced had no
 //   menu item that acted in the page.
@@ -194,4 +202,91 @@ export function onUpdate(listener: (step: UpdateStep) => void): () => void {
   const shell = bridge();
   if (!shell) return () => {};
   return shell.on('update', (detail) => listener((detail ?? {}) as UpdateStep));
+}
+
+/** The shell's `save {id, reason: 'rewind'}`: a rewind is about to write
+ *  the project's files, and every window on it writes its open document
+ *  first. `save` writes it and resolves to null once it is on disk (at
+ *  once when nothing changed), or to why it could not, in words that
+ *  follow "could not be saved:" on the History window's card; the answer
+ *  is `{type: 'saved', id, ok: true}` or `{type: 'saved', id, ok: false,
+ *  error}`, which refuses the rewind. The shell waits 3 s for it. Returns
+ *  the unsubscribe; nothing outside the app. */
+export function onShellSave(save: () => Promise<string | null>): () => void {
+  const shell = bridge();
+  if (!shell) return () => {};
+  return shell.on('save', (detail) => {
+    const id = (detail as { id?: unknown } | null)?.id;
+    if (typeof id !== 'string') return;
+    void save()
+      .then(
+        (error) => error,
+        (e: unknown) => (e instanceof Error ? e.message : String(e)) || 'Plass could not write it',
+      )
+      .then((error) =>
+        shell.request(error === null ? { type: 'saved', id, ok: true } : { type: 'saved', id, ok: false, error }),
+      )
+      .catch(() => undefined);
+  });
+}
+
+/** What a `reload` says of the rewind that wrote the file: the commit it
+ *  went to (`to`, a full sha) and, for another app's rewind, which app
+ *  (`app`, as the record names it: 'knuth'). */
+export interface Rewound {
+  to: string | null;
+  app: string | null;
+}
+
+/** What the window says when a rewind reloads its paper: "Rewound to
+ *  1a2b3c4" (the commit, as the History window shows it, seven
+ *  characters), or "Rewound by Knuth" when another app made it. */
+export function rewoundText({ to, app }: Rewound): string {
+  if (app) return `Rewound by ${app.charAt(0).toUpperCase()}${app.slice(1)}`;
+  return to ? `Rewound to ${to.slice(0, 7)}` : 'Rewound';
+}
+
+/** One file, however the two sides spell it: the shell sends the paths it
+ *  wrote as git's top level (symbolic links resolved) joined with each
+ *  file's path in the record, while this window's path is the one it was
+ *  given, and on a Mac /tmp, /var and /etc are links into /private: the
+ *  smoke's document under os.tmpdir() is /var/folders/… to the window
+ *  and /private/var/folders/… in a rewind's paths. */
+export function samePath(a: string, b: string): boolean {
+  const bare = (p: string) => (/^\/private\/(tmp|var|etc)(\/|$)/.test(p) ? p.slice('/private'.length) : p);
+  return a === b || bare(a) === bare(b);
+}
+
+/** The shell's `reload {id, paths, reason: 'rewind', to, app?}`: a rewind
+ *  wrote or removed `paths` (absolute). When this window's file, as the
+ *  shell knows it (`path()`, the answer to `document`), is among them,
+ *  `reload` reads it again; otherwise nothing happens. The shell sends
+ *  it after its own rewinds and when it sees another app's on the
+ *  record; nothing is answered. Returns the unsubscribe; nothing outside
+ *  the app. */
+export function onShellReload(path: () => string | null, reload: (rewound: Rewound) => void): () => void {
+  const shell = bridge();
+  if (!shell) return () => {};
+  return shell.on('reload', (detail) => {
+    const { paths, to, app } = (detail ?? {}) as { paths?: unknown; to?: unknown; app?: unknown };
+    const mine = path();
+    if (!mine || !Array.isArray(paths) || !paths.some((p) => typeof p === 'string' && samePath(p, mine))) return;
+    reload({ to: typeof to === 'string' && to ? to : null, app: typeof app === 'string' && app ? app : null });
+  });
+}
+
+/** Ask the shell for the History window of this window's project, made or
+ *  brought forward, as View › History… (⇧⌘H) does: true when it answers
+ *  `{opened: true}`. A window with no record gets one too, which says why
+ *  (not saved yet, a folder the record refuses, the record off, no git):
+ *  the shell answers a document page nothing more. False in a browser tab
+ *  and under a shell without the history view (older than 0.2.1 answers
+ *  null). Never rejects. */
+export function openHistory(): Promise<boolean> {
+  const shell = bridge();
+  if (!shell) return Promise.resolve(false);
+  return shell.request({ type: 'history', action: 'open' }).then(
+    (reply) => (reply as { opened?: unknown } | null)?.opened === true,
+    () => false,
+  );
 }

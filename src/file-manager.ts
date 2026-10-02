@@ -21,6 +21,11 @@ export interface FileHooks {
   getDoc: () => PMNode;
   /** Replace the editor document (fresh state: history resets). */
   setDoc: (doc: PMNode) => void;
+  /** The open file's new contents put in place of the document it already
+   *  shows (a change on disk, a rewind): only what differs is replaced, so
+   *  the caret and the scroll stay where the text still allows. Not an
+   *  edit of the writer's: the document then matches the disk. */
+  reloadDoc: (doc: PMNode) => void;
   emptyDoc: () => PMNode;
   /** Name/dirty changed — update chrome. */
   onState: () => void;
@@ -170,16 +175,72 @@ export class FileManager {
     // now would eat keystrokes — the conflict flow owns that case.
     if (handle !== this.handle || this.dirty) return;
     if (text === this.diskBaseline) return; // our own write, or a bare touch
+    const warnings = await this.putInPlace(handle, file, text);
+    if (typeof warnings !== 'number') return;
+    this.hooks.message(`${file.name} changed on disk — reloaded${warnings ? ` (${warnings} raw block(s))` : ''}`);
+  }
+
+  /** The shell's `reload`: a rewind (`lead`, "Rewound to 1a2b3c4" or
+   *  "Rewound by Knuth") wrote or removed the open file. It is read again
+   *  and put in place as the disk watcher puts an outside edit, but
+   *  whatever its mtime says, and every outcome is said: the document
+   *  reloaded (or already showing it: the watcher may get there first, or
+   *  the rewind left these bytes alone); the file gone, since the commit
+   *  rewound to lacks it, with the editor's copy kept; or edits typed
+   *  since the rewind saved the document, kept, with autosave paused as
+   *  for any change outside Plass. */
+  async reloadFromDisk(lead: string): Promise<void> {
+    const handle = this.handle;
+    if (!handle) return;
+    let file: File;
+    try {
+      file = await handle.getFile();
+    } catch (e) {
+      if (!this.noteMissingFile(e, `${lead}: ${handle.name} is not in that version — your editor copy is safe`)) {
+        this.hooks.message(`${lead} — ${handle.name} could not be read again`);
+      }
+      return;
+    }
+    const sizeError = this.documentSizeError(file);
+    if (sizeError) {
+      this.hooks.message(`${lead} — ${sizeError}`);
+      return;
+    }
+    const text = await this.readDocumentText(file);
+    if (handle !== this.handle) return;
+    if (text === this.diskBaseline) {
+      this.hooks.message(lead);
+      return;
+    }
+    if (this.dirty) {
+      this.conflict = true;
+      this.hooks.onState();
+      this.reportConflict(handle.name, `${lead} under unsaved edits to ${handle.name} — autosave is paused and your editor copy is safe`);
+      return;
+    }
+    const warnings = await this.putInPlace(handle, file, text);
+    // Typing began while it was parsed: the write path's conflict flow has it.
+    if (warnings === null) return;
+    this.hooks.message(`${lead}${typeof warnings === 'number' && warnings ? ` — ${warnings} block(s) preserved as raw Typst` : ''}`);
+  }
+
+  /** The file's text put in place of the clean document it already shows
+   *  (hooks.reloadDoc), the disk baseline moved to it. The count of blocks
+   *  kept as raw Typst; 'shown' when the other reader (the watcher, or a
+   *  rewind's reload) put this text in place while it was parsed, so only
+   *  one of them speaks of it; null when the document began changing, or
+   *  the window took another file, meanwhile. */
+  private async putInPlace(handle: FileSystemFileHandle, file: File, text: string): Promise<number | 'shown' | null> {
     const { doc, warnings } = isMd(file.name)
       ? (await import('./md-parser')).mdToDoc(text)
       : typToDoc(text);
-    if (handle !== this.handle || this.dirty) return;
+    if (handle !== this.handle || this.dirty) return null;
+    if (text === this.diskBaseline) return 'shown';
     this.diskBaseline = text;
-    this.hooks.setDoc(doc);
+    this.diskMtime = file.lastModified;
+    this.hooks.reloadDoc(doc);
     this.hooks.onState();
-    this.hooks.message(
-      `${file.name} changed on disk — reloaded${warnings.length ? ` (${warnings.length} raw block(s))` : ''}`,
-    );
+    return warnings.length;
   }
 
   /** Call on every document change: marks dirty, schedules a disk autosave. */
@@ -209,14 +270,14 @@ export class FileManager {
    *  written again, so autosave has to stop AND say so: silence here means
    *  every later keystroke fails to reach the disk while the document still
    *  looks like it is saving. */
-  private noteMissingFile(error: unknown): boolean {
+  private noteMissingFile(error: unknown, said?: string): boolean {
     if ((error as DOMException | null)?.name !== 'NotFoundError') return false;
     if (this.missing) return true;
     this.missing = true;
     this.dirty = true;
     this.hooks.onState();
     const name = this.handle?.name ?? `${this.name}${this.format}`;
-    const text = `${name} has moved or been renamed — Plass can no longer save to it, and your editor copy is safe`;
+    const text = said ?? `${name} has moved or been renamed — Plass can no longer save to it, and your editor copy is safe`;
     const action = { label: 'Save to a folder…', run: () => void this.saveElsewhere() };
     if (this.hooks.messageAction) this.hooks.messageAction(text, action);
     else this.hooks.message(text);
@@ -657,15 +718,10 @@ export class FileManager {
     }
     if (this.handle) {
       const handle = this.handle;
-      try {
-        const result = await this.enqueueWrite(false);
-        if (this.handle === handle && result !== 'conflict' && result !== 'stale') {
-          this.hooks.message(`Saved ${handle.name}`);
-        }
-      } catch (e) {
-        if (this.noteMissingFile(e)) return;
-        console.warn(e);
-        this.hooks.message('Save failed');
+      const result = await this.writeOpenFile();
+      if (result === 'failed') this.hooks.message('Save failed');
+      else if (this.handle === handle && result !== 'conflict' && result !== 'stale' && result !== 'missing') {
+        this.hooks.message(`Saved ${handle.name}`);
       }
       return;
     }
@@ -676,6 +732,43 @@ export class FileManager {
       return;
     }
     await this.openFolder('save');
+  }
+
+  /** ⌘S's write of a document that has a file: through the queue
+   *  autosave writes by, which checks the disk against what Plass last
+   *  saw first. A conflict and a file gone are said where they are found;
+   *  'failed' is anything else. */
+  private async writeOpenFile(): Promise<WriteResult | 'missing' | 'failed'> {
+    try {
+      return await this.enqueueWrite(false);
+    } catch (e) {
+      if (this.noteMissingFile(e)) return 'missing';
+      console.warn(e);
+      return 'failed';
+    }
+  }
+
+  /** The shell's `save` (claerbout.ts onShellSave): a rewind saves every
+   *  window on its project before it writes. ⌘S's write, without its
+   *  toast: null once the document is on disk, at once when nothing
+   *  changed; else why not, which refuses the rewind, in words the
+   *  History window's card puts after "could not be saved:". */
+  async saveForShell(): Promise<string | null> {
+    const handle = this.handle;
+    if (!handle) return 'it has no file yet';
+    if (!this.dirty) return null;
+    switch (await this.writeOpenFile()) {
+      case 'conflict':
+        return 'it changed on disk outside Plass, and Plass is keeping its own copy until you choose';
+      case 'missing':
+        return 'it has moved or been renamed';
+      case 'failed':
+        return 'Plass could not write it';
+      case 'stale':
+        return 'the window opened another document meanwhile';
+      default:
+        return null;
+    }
   }
 
   /** Surface a transient status message. */

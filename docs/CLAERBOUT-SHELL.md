@@ -477,3 +477,66 @@ prompted.
   repository of its own) and the represented file. The record is not
   pushed anywhere; the spec's outside witness is open in knuth's
   AUTOSAVE.md ("Built").
+- ~~How a rewind from the shell's history view reaches a Plass window.~~
+  DECIDED 2026-10-02, with the view (the shell's `history.js`, its README
+  under "The history view"; knuth's `docs/mockups/history.md`): Plass
+  answers the two events the shell sends every window on the project, and
+  File › History… asks for the History window.
+  - **`save {id, reason: 'rewind'}`**, before the rewind writes anything
+    (`onShellSave` in `src/claerbout.ts`): the file manager's
+    `saveForShell` writes through ⌘S's write (the queue autosave writes
+    by, which checks the disk against what Plass last saw first), without
+    ⌘S's toast, and the page answers `{type: 'saved', id, ok: true}` once
+    the text is on disk, at once when nothing changed. A window with no
+    file, a file changed outside Plass since it was last saved (the
+    conflict flow), a file gone and a failed write answer `ok: false` with
+    why, in words the History window's card puts after "could not be
+    saved:" ("it has no file yet"), which refuses the rewind. The shell
+    waits 3 s; the write takes milliseconds.
+  - **`reload {id, paths, reason: 'rewind', to, app?}`**, after it
+    (`onShellReload`): when the window's file, as the shell answered the
+    `document` report (`documentPath` in `src/main.ts`), is among `paths`,
+    the file manager's `reloadFromDisk` reads it again through its handle
+    and puts it in place of the document, and the toast says "Rewound to
+    1a2b3c4" (the seven characters the History window shows) or, for
+    another app's rewind the shell saw on the record, "Rewound by Knuth".
+    Otherwise nothing happens, and nothing is answered (the shell expects
+    no answer). The paths are git's top level, links resolved, joined with
+    the record's paths, while the window's path is the one it was given,
+    so `/private/var/…` and `/var/…` (likewise `/tmp`, `/etc`) are taken
+    as one file: the smoke's document under `os.tmpdir()` is both. A
+    document reached through any other link is not matched, and the disk
+    watcher reloads it instead, within 1.5 s, without the "Rewound" words.
+  - **In place** (`src/reload-in-place.ts`): one transaction replaces only
+    the range between the first and the last difference and sets only the
+    document attributes that changed, so the caret maps through it, the
+    nodes outside it keep their DOM (the scroll stays) and the layout
+    redoes only the changed pages. It is its own undo step, so ⌘Z takes
+    the reload back, and it is not the writer's edit (`FROM_DISK`): the
+    document matches the disk, and nothing is written back. The disk
+    watcher's reload of an outside edit goes the same way now, since the
+    two race after a rewind: whichever reads first puts the text in place,
+    and only the rewind's reload says so. With the source view open its
+    text is replaced the same way (`setText`, only the differing span).
+    Edits typed between the save and the reload are kept: autosave pauses
+    as for any change outside Plass, with "Rewound to … under unsaved
+    edits" and Overwrite disk; a rewind to a commit that lacks the file
+    keeps the editor's copy, unsaved, with Save to a folder….
+  - **File › History…** (⇧⌘H beside it; the shell's View › History…
+    holds the keys), in Plass.app only: `{type: 'history', action:
+    'open'}` (`openHistory`). The shell answers a document page `{opened:
+    true}` and nothing more: a window with no record still gets a History
+    window, which says why (not saved yet, the folder rule in words, the
+    record off, no git), so the page has nothing of its own to say then.
+    A shell without the view (older than 0.2.1 answers null) has the item
+    say so and go.
+  - Tests: `src/claerbout.test.ts` (the answers, the path match, the
+    request), `src/reload-in-place.test.ts`, `tests/rewind.spec.ts` (a
+    stand-in shell on `window.claerbout`, the disk watcher held still),
+    and `app/smoke.mjs`, on a shell with the view: File › History… opens
+    the History window, and a rewind from it to the session's opening
+    commit, made with typing not yet autosaved, passes no window over as
+    silent, records that typing in "rewind from", reloads the paper and
+    leaves "plass: rewind from" and "plass: rewind to" on the record. All
+    of it ships with the shell tag that brings the view; under v0.2.0
+    nothing sends the events.

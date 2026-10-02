@@ -23,7 +23,7 @@ import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
 import { placeFlyout } from './flyout';
 import { isPwaInstalled, onPwaInstallState, requestPwaInstall } from './pwa-install';
-import { checkForUpdate, installUpdate, isNativeShell, onUpdate } from './claerbout';
+import { checkForUpdate, installUpdate, isNativeShell, onUpdate, openHistory } from './claerbout';
 import type { TypesetStats } from './typeset-plugin';
 import { DEFAULT_DOC_NAME, type FileManager } from './file-manager';
 
@@ -769,6 +769,18 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   item(fileMenu.element, 'Open…', () => void fm.open(), { title: 'Open… (⌘O)', shortcut: '⌘O' });
   item(fileMenu.element, 'Recent papers', () => {}, { title: 'Your papers', submenu: recent });
   item(fileMenu.element, 'Save', () => void fm.save(), { shortcut: '⌘S' });
+  // Plass.app: the shell's History window, the record of this document's
+  // folder with a rewind to any point of it, as View › History… (⇧⌘H, the
+  // shell's menu takes the keys) opens it. A document with no record gets
+  // one that says why; a shell without the view answers null, and the
+  // item goes.
+  if (isNativeShell()) {
+    const historyItem = item(fileMenu.element, 'History…', () => void openHistory().then((opened) => {
+      if (opened) return;
+      historyItem.hidden = true;
+      fm.notify('This Plass.app has no history view — File → Check for updates…');
+    }), { shortcut: '⇧⌘H', title: 'The record of this document\u2019s folder, and a rewind to any point of it (⇧⌘H)' });
+  }
   item(documentRow, 'Markdown & shortcuts', () => showHelp(fm), { title: 'Markdown & shortcuts', glyph: '<span class="ico tico">?</span>' });
   const installButton = item(documentRow, 'Install Plass', () => void requestPwaInstall((message) => fm.notify(message)), {
     title: 'Install Plass as an app', glyph: icon('install'),
