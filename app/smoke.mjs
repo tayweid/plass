@@ -4,7 +4,8 @@
 // see the page fill the panel at its width, then drag the window wider
 // and zoom (the window stays, the page is drawn larger and nothing is
 // laid out again), see the rail under the bar, the scroll rail in its
-// gutter at the window's right and the menus' blur, and,
+// gutter at the window's right, the paper's corners rounded only where
+// they are the page's, and the menus' blur, and,
 // on a shell that hides the title bar, see Knuth's bar beside the
 // traffic lights, with the folder the shell knows the file by; and, on a
 // shell that keeps the autosave record and its history view, open File ›
@@ -202,7 +203,7 @@ const frame = await page.evaluate(() => {
     bar: { bottom: bar.bottom },
     rail: { left: rail.left, top: rail.top, right: rail.right, bottom: rail.bottom },
     panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom },
-    paper: getComputedStyle(document.getElementById('scroll')).backgroundColor,
+    paper: getComputedStyle(document.querySelector('#pages .page-box')).backgroundColor,
     map: { shown: getComputedStyle(scrollRail).display !== 'none', left: map.left, top: map.top, right: map.right, bottom: map.bottom, breaks: scrollRail.querySelectorAll('.sr-break:not(.first)').length },
     width: innerWidth,
     height: innerHeight,
@@ -214,6 +215,31 @@ if (frame.rail.left !== 0 || frame.rail.top !== frame.bar.bottom || frame.rail.b
 }
 if (!frame.map.shown || frame.map.left !== frame.panel.right || frame.map.right !== frame.width || frame.map.top !== frame.panel.top || frame.map.bottom !== frame.panel.bottom || frame.map.breaks < 1) {
   await fail(`the scroll rail is not in the gutter beside the panel with its page breaks: ${JSON.stringify(frame)}`);
+}
+
+// The paper's corners (src/style.css): rounded only where they are a
+// sheet's. At the top of the document the page's top corners are rounded,
+// so the clip cuts them away and a point one px inside the panel's corner
+// is not the paper; the page's bottom edge, past the panel's or not,
+// decides the bottom corners the same way; and the shadow on the frame,
+// drawn round the paper in view, has the same corners.
+const corners = await page.evaluate(async () => {
+  const panel = document.getElementById('scroll');
+  panel.scrollTop = 0;
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const p = panel.getBoundingClientRect();
+  const paper = document.getElementById('paper');
+  const onPaper = (x, y) => paper.contains(document.elementFromPoint(x, y));
+  const last = [...document.querySelectorAll('#pages .page-box')].at(-1).getBoundingClientRect();
+  const shadow = getComputedStyle(document.getElementById('paper-shadow'));
+  // (A page ending less than a radius past the panel's bottom has part
+  // of its corner in view: its bottom is not checked.)
+  const cut = last.bottom - p.bottom;
+  return { top: onPaper(p.left + 1, p.top + 1), bottom: onPaper(p.left + 1, p.bottom - 1), runsOn: cut >= 12, ends: cut <= 0, shadow: [shadow.borderTopLeftRadius, shadow.borderBottomLeftRadius] };
+});
+const bottomWrong = (corners.runsOn && (!corners.bottom || corners.shadow[1] !== '0px')) || (corners.ends && (corners.bottom || corners.shadow[1] !== '12px'));
+if (corners.top || corners.shadow[0] !== '12px' || bottomWrong) {
+  await fail(`the paper's corners are not the sheets': ${JSON.stringify(corners)}`);
 }
 
 // The menus are frosted glass over the paper (src/toolbar.css): the

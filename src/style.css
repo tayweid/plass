@@ -59,11 +59,14 @@
   /* The frame at the panel's right: the edge, or, while the paper runs
      past the panel, the gutter the scroll rail lives in (scroll-rail.ts
      puts .has-rail on this element, so --axis below follows it). One
-     variable, so the panel, the HUD and everything on the paper's axis
-     read the same right margin; the window's bottom edge stays --edge
-     and the rail's side 6 px beside its tiles. */
+     variable, so the panel, its shadow, the HUD and everything on the
+     paper's axis read the same right margin; the window's bottom edge
+     stays --edge and the rail's side 6 px beside its tiles. */
   --gutter: 20px;
   --edge-right: var(--edge);
+  /* A corner of the paper, on the screen at any scale: Knuth's room's
+     (the paper's corners, below). */
+  --paper-radius: 12px;
   /* The rail: a tile with 6 px either side, 44 px, the bar's height too
      (Taylor, 2026-10-02: the bar as tall as the rail is wide; Knuth's
      numbers, knuth c6875a4). */
@@ -1001,12 +1004,15 @@ body {
 }
 
 /* The panel: Zen's inset panel, and the paper itself. One elevated panel
-   under the bar and right of the rail, rounded 12 px at all four corners,
-   the frame showing round it as a thin edge (the bar's band below its
-   name pill, 7 px; the rail's beside its tiles, 6 px; --edge, 8 px, at
-   the window's right and bottom: Knuth's room's box, widened at the right
-   to a 20 px gutter for the scroll rail while the paper runs past the
-   panel), its shadow falling on the frame. The pages fill its width edge to edge by scaling, never
+   under the bar and right of the rail, the frame showing round it as a
+   thin edge (the bar's band below its name pill, 7 px; the rail's beside
+   its tiles, 6 px; --edge, 8 px, at the window's right and bottom:
+   Knuth's room's box, widened at the right to a 20 px gutter for the
+   scroll rail while the paper runs past the panel), its shadow falling
+   on the frame and its corners rounded only where they are the paper's
+   (below, the paper's corners: the panel itself is a square clip, with
+   no white or shadow of its own). The pages fill its width edge to edge
+   by scaling, never
    by re-flowing: the layout is the page's own width in CSS px (816 for
    Letter), and paper-scale.ts draws it at the panel's width with a
    transform on #stack, so a wider window is a larger page, a narrower
@@ -1024,12 +1030,6 @@ body {
   flex: 1;
   min-height: 0;
   margin: var(--topbar) var(--edge-right) var(--edge) var(--rail);
-  border-radius: 12px;
-  background: var(--sheet);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.05),
-    0 2px 6px rgba(0, 0, 0, 0.35),
-    0 12px 32px rgba(0, 0, 0, 0.45);
   overflow: hidden auto;
   scrollbar-width: none;
   /* No scroll anchoring: a layout pass takes the paper's transform off
@@ -1046,9 +1046,71 @@ body {
    laid-out box, which is larger or smaller than its drawing, is clipped
    to it. It clips rather than lets the drawing overflow: a pass takes
    the transform off, and an overflowing drawing would shrink the
-   panel's scroll range under it and clamp the scroll. */
+   panel's scroll range under it and clamp the scroll. Its corners are
+   the stack's outer four, the first page's top and the last page's
+   bottom (the paper's corners, below), cut by a clip path rather than a
+   border radius: Chromium clips a rounded overflow's descendants in
+   paint but not in hit testing, so a click in a cut corner would still
+   reach the editor. Its white shows only where nothing covers it: under
+   a burst of typing run past the last page, before the pass that adds
+   the page, where it is paper run on from the last sheet, rounded at its
+   bottom by the clip path, and the shadow is drawn round it as round a
+   sheet (the pages' #pages covers the rest in the frame's colour); and
+   in the plain-text view, where it is the sheet, never shorter than the
+   panel. */
 #paper {
   overflow: clip;
+  clip-path: inset(0 round var(--paper-radius));
+  background: var(--sheet);
+}
+
+#paper:has(> #stack.source-mode) {
+  min-height: 100%;
+}
+
+/* The paper's corners. Taylor, 2026-10-02: "in plass i think it's a
+   little hard to tell what's the top and bottom of the page. so i wonder
+   if we can round the edges of the page when they're visible but if the
+   edge of the paper isn't visible then the corners of the elevated
+   platform on that side are squared off ... i basically want to show the
+   PAPER and it's rounded corners". A corner is rounded only where it is a
+   sheet's own, and that is geometry, not a rule per scroll position:
+   every sheet is rounded at its four corners (.page-box; the clip box
+   above rounds the stack's outer four), 12 px on the screen whatever the
+   scale, and the panel's clip is square. So the first page's top corners
+   show while its top edge is in view, each sheet's show at every page
+   gap, the last page's bottom ones at the end, and where the paper runs
+   on past the panel's edge it is cut straight: nothing there suggests an
+   edge it does not have. Zen's shadow (it was the panel's) is a box
+   behind the panel round the paper in view: from the first sheet in view
+   to the last, inside the panel, its corners the visible part of those
+   sheets' corners (its end handed across a page gap over a corner's
+   length as the gap crosses the panel's edge, so it never jumps by the
+   gap), so it ends with a short document's last page, keeps
+   the frame's 8 px edge shaded under paper that runs on, and is square
+   where the paper is cut. paper-scale.ts writes its four variables, in
+   the frame after a scroll and only when they change; the box sits under
+   everything (z-index -1) on the frame, and an outer shadow draws
+   nothing inside its own box, so the gaps between the sheets stay the
+   frame's colour. Its right side is the panel's (--edge-right): with the
+   scroll rail's gutter there its shadow falls on the gutter, under the
+   rail, which is drawn over it. */
+#paper-shadow {
+  position: fixed;
+  z-index: -1;
+  left: var(--rail);
+  right: var(--edge-right);
+  top: calc(var(--topbar) + var(--paper-top, 0px));
+  bottom: calc(var(--edge) + var(--paper-bottom, 0px));
+  border-top-left-radius: var(--paper-top-corner, var(--paper-radius));
+  border-top-right-radius: var(--paper-top-corner, var(--paper-radius));
+  border-bottom-left-radius: var(--paper-bottom-corner, var(--paper-radius));
+  border-bottom-right-radius: var(--paper-bottom-corner, var(--paper-radius));
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 2px 6px rgba(0, 0, 0, 0.35),
+    0 12px 32px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
 }
 
 /* ---------- the page stack ---------- */
@@ -1072,12 +1134,16 @@ body {
   background: var(--frame);
 }
 
+/* A sheet is a piece of paper, rounded at its four corners: 12 px on the
+   screen, the radius divided by the scale the stack is drawn at
+   (paper-scale.ts writes it on #pages). Paint only: no layout reads it. */
 .page-box {
   position: absolute;
   left: 0;
   width: var(--page-w, 8.5in);
   height: var(--page-h, 11in);
   background: var(--sheet);
+  border-radius: calc(var(--paper-radius) / var(--paper-scale, 1));
 }
 
 .page-num {
@@ -1113,9 +1179,9 @@ body {
   --source-tint: color-mix(in srgb, var(--accent) 7%, transparent);
   position: relative;
   z-index: 1;
-  /* The panel is the paper's white too, so the sheet needs no height of
-     its own to fill it. */
-  background: var(--sheet);
+  /* No white of its own: the sheet is the clip box round the stack
+     (#paper), which is white, rounded at its corners and never shorter
+     than the panel, so the text needs no height of its own to fill it. */
   color: var(--ink);
 }
 
@@ -3170,6 +3236,7 @@ body {
   #sr-label,
   .native-table-toolbar,
   .native-table-notice,
+  #paper-shadow,
   #pages {
     display: none;
   }
@@ -3188,10 +3255,13 @@ body {
     box-shadow: none;
   }
 
-  /* The paper at its own size: no clip, no scale. */
+  /* The paper at its own size: no clip, no scale, no corners. */
   #paper {
     height: auto !important;
+    min-height: 0;
     overflow: visible;
+    clip-path: none;
+    background: none;
   }
 
   #stack {

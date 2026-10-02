@@ -38,9 +38,12 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   window that has it); `npm run app:install-script` renders
   `public/install` from the shell's template. Log:
   `~/Library/Logs/Plass.log`. The window is any size, and it is the
-  zoom: one rounded panel under the bar and right of the rail is the
-  paper, the bar and the rail being a dark frame that shows as one thin
-  edge round it (Zen's shape, the frame in `src/style.css`; the bar is
+  zoom: one panel under the bar and right of the rail is the paper, the
+  bar and the rail being a dark frame that shows as one thin edge round
+  it, its corners rounded only where they are a sheet's (the first
+  page's top, the gaps, the last page's bottom; square where the paper
+  runs on), with the shadow drawn round the paper in view (Zen's shape,
+  the frame in `src/style.css`; the bar is
   Knuth's — File, the name pill with its save dot and folder, then
   Export — beside the traffic lights, the rail the tools,
   `docs/ZEN-DRAFT.md`). The pages fill the panel's width by scaling,
@@ -50,12 +53,16 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   layout never runs for a resize or a zoom; a layout read of page
   geometry goes through `atPaperSize`, which takes the transform off for
   the read, and a pass runs through `paperPass`, which holds a followed
-  caret still on the screen (the panel has no browser scroll anchoring).
+  caret still on the screen (the panel has no browser scroll anchoring);
+  the shadow's box and corners are CSS variables the same file writes in
+  the frame after a scroll, from the sheets the painter laid
+  (`paperSheets`) and the panel's scroll offset, reading no page
+  geometry.
   On shell 0.2.1 (`followZoom` in `app/plass.json`) a zoom
   step scales the window with it, which is just a wider window. While a
   paper of two sheets or more runs past the panel in the page view, the
   frame at the panel's right is a 20 px gutter (`--edge-right`, the one
-  right-margin variable the panel, the HUD and `--axis` read) holding the
+  right-margin variable the panel, its shadow, the HUD and `--axis` read) holding the
   scroll rail (`src/scroll-rail.ts`): the paper's page breaks, headings,
   figures, tables and caret as marks placed from the settled pass, the
   visible span as a band, a hover label, click, drag, wheel and keys; the
