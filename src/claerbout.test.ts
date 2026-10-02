@@ -4,7 +4,16 @@
 // "fronted" is pinned here: only a shell that answers {focused: true}. An
 // older shell (null to anything it does not know), a bridge that fails,
 // an answer without the field, and no shell at all are all "no".
-import { focusThisWindow, isNativeShell } from './claerbout';
+//
+// reportDocument: the page's side of the shell's `document` request, which
+// keeps the shell's window → file map right for a page that holds files by
+// handle (the window's represented file, the project its autosave record
+// follows). The handle's name always goes; the path only when the preload's
+// `pathOf` knows it (a File from a handle has none, and the shell matches
+// the name to the file the handle touched). A handle that cannot be read
+// reports nothing; a shell without `pathOf` and no shell at all are told
+// nothing.
+import { focusThisWindow, isNativeShell, reportDocument } from './claerbout';
 
 let failed = 0;
 function check(name: string, ok: boolean) {
@@ -52,8 +61,66 @@ check('a shell that could not: false', (await focusThisWindow()) === false);
 shell(() => Promise.reject(new Error('the bridge is down')));
 check('a failing bridge: false, never a rejection', (await focusThisWindow()) === false);
 
+console.log('reportDocument');
+
+/** A shell bridge whose preload knows a File's path (the autosave record's). */
+function shellWithPaths(pathOf: (file: File) => string): void {
+  shell(async () => ({ path: null }));
+  (global.window as { claerbout: Record<string, unknown> }).claerbout.pathOf = pathOf;
+}
+/** A handle whose File the shell maps to `path` (the File itself carries it
+ *  here), 7 bytes, modified at a fixed moment. */
+const handleAt = (path: string, readable = true) =>
+  ({
+    kind: 'file',
+    name: path.slice(path.lastIndexOf('/') + 1),
+    getFile: () =>
+      readable
+        ? Promise.resolve({ name: path.slice(path.lastIndexOf('/') + 1), size: 7, lastModified: 1_700_000_000_000, __path: path } as unknown as File)
+        : Promise.reject(new Error('gone')),
+  }) as unknown as FileSystemFileHandle;
+const pathOfFile = (file: File) => (file as unknown as { __path?: string }).__path ?? '';
+const stamped = ',"size":7,"modified":1700000000000}';
+
+delete global.window;
+asked.length = 0;
+await reportDocument(handleAt('/p/a.typ'));
+check('no shell: nothing to tell', asked.length === 0);
+
+shell(async () => null);
+await reportDocument(handleAt('/p/a.typ'));
+check('a shell without pathOf (older than the record): nothing asked', asked.length === 0);
+
+shellWithPaths(pathOfFile);
+await reportDocument(handleAt('/p/a.typ'));
+check('a handle with a path: {type: document, path, name, size, modified}', JSON.stringify(asked.at(-1)) === `{"type":"document","path":"/p/a.typ","name":"a.typ"${stamped}`);
+await reportDocument(null);
+check('no handle: {type: document, path: null}', JSON.stringify(asked.at(-1)) === '{"type":"document","path":null}');
+await reportDocument(handleAt('/p/b.typ'));
+check('another handle: its path and name', JSON.stringify(asked.at(-1)) === `{"type":"document","path":"/p/b.typ","name":"b.typ"${stamped}`);
+
+asked.length = 0;
+shellWithPaths(() => '');
+await reportDocument(handleAt('/p/c.typ'));
+check('a File the shell has no path for (one from a handle): name, size and modified, for the shell to match', JSON.stringify(asked.at(-1)) === `{"type":"document","path":null,"name":"c.typ"${stamped}`);
+
+asked.length = 0;
+shellWithPaths(pathOfFile);
+await reportDocument(handleAt('/p/d.typ', false));
+check('a handle that cannot be read: nothing asked, no rejection', asked.length === 0);
+
+asked.length = 0;
+shellWithPaths(() => {
+  throw new Error('no bridge');
+});
+let threw = false;
+await reportDocument(handleAt('/p/e.typ')).catch(() => {
+  threw = true;
+});
+check('a pathOf that throws: nothing asked, and the promise still settles', !threw && asked.length === 0);
+
 if (failed) {
-  console.error(`\n${failed} focusThisWindow test(s) failed`);
+  console.error(`\n${failed} claerbout test(s) failed`);
   process.exit(1);
 }
-console.log('\nall focusThisWindow tests passed');
+console.log('\nall claerbout tests passed');

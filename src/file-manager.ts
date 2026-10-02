@@ -33,6 +33,10 @@ export interface FileHooks {
   onProjectKept?: () => void;
   /** Whether boot restored this tab's own crash/reload session. */
   hasSessionDoc?: () => boolean;
+  /** The open file changed: the handle now held, or null for none. Every
+   *  assignment of `handle` reports it (Plass.app tells its shell, which
+   *  keeps the project's autosave record: claerbout.ts reportDocument). */
+  onFile?: (handle: FileSystemFileHandle | null) => void;
   /** The document's text as the writer typed it, when a source view is
    *  open in `format` — saved verbatim, never re-serialized, until the
    *  writer returns to the page view (SOURCE-VIEW.md, decision 3). Null
@@ -81,6 +85,7 @@ export class FileManager {
     this.openHandle = handle;
     this.missing = false;
     holdOpenFile(handle);
+    this.hooks.onFile?.(handle);
     // Every site assigns dir on the line after handle, so recording waits
     // one microtask and captures the pair.
     queueMicrotask(() => this.rememberTabFile());

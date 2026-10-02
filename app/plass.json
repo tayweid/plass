@@ -9,6 +9,7 @@
   "site": "https://plass.tayweid.io",
   "elsewhere": "Elsewhere, Plass runs in Chrome at https://plass.tayweid.io.",
   "defaultDocument": "Untitled.typ",
+  "autosave": true,
   "window": {
     "width": 1100,
     "height": 800,

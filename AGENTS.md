@@ -14,7 +14,11 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   Claerbout Electron shell, the shell Knuth ships on (`github.com/tayweid/
   claerbout`, one tag for every app; the deploy clones it at
   `CLAERBOUT_TAG`). `app/plass.json` configures it: no Python, the page
-  from `dist/` under `plass://app/`, `openBy: "drop"`. The window is
+  from `dist/` under `plass://app/`, `openBy: "drop"`, `autosave: true`
+  (the shell keeps a git record of every project a window is on, on a
+  `claerbout-autosave` branch; the page tells it the window's file,
+  `reportDocument` in `src/claerbout.ts`; `docs/CLAERBOUT-SHELL.md`,
+  OPEN, and knuth's `docs/AUTOSAVE.md`). The window is
   Chromium, so files go through the File System Access API exactly as in
   a browser tab, and a handle stored in IndexedDB reopens after a relaunch
   because the shell's permission handler grants what the page holds. A
