@@ -354,6 +354,17 @@ const cornersNextFrame = async (page: Page) => {
   return corners(page);
 };
 
+/** The corners once the shadow agrees with the paper in view: the shadow
+ *  is drawn in the frame after the clip box's resize reaches its observer,
+ *  which on a slow runner (the deploy's) can be a frame or two behind the
+ *  read, so a read that still shows the frame before is taken again, a
+ *  few frames at most. */
+const cornersSettled = async (page: Page, agrees: (c: Corners) => boolean) => {
+  let c = await cornersNextFrame(page);
+  for (let i = 0; i < 6 && !agrees(c); i++) c = await cornersNextFrame(page);
+  return c;
+};
+
 /** Eighteen paragraphs: four Letter pages. */
 const FOUR_PAGES = Array.from({ length: 18 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') + '\n';
 
@@ -608,11 +619,13 @@ test('a burst of typing past the last page is paper: the shadow is drawn round t
   let filling = 0;
   for (let i = 0; i < 80 && !filling; i++) {
     await page.keyboard.press('Enter');
-    const c = await cornersNextFrame(page);
+    // The right corner is what is left in view of the clip's own; the left
+    // is the switch's 12.
+    const expected = (c: Corners) => 12 - Math.min(12, Math.max(0, c.ends.clip - c.panel.bottom));
+    const c = await cornersSettled(page, (c) => Math.abs(c.shadow.bottom[1] - expected(c)) < 0.02);
     if (!(c.ends.clip > c.ends.lastSheet + 1)) continue;
     expectShadowRoundPaper(c);
-    const left = 12 - Math.min(12, Math.max(0, c.ends.clip - c.panel.bottom));
-    expect(Math.abs(c.shadow.bottom[1] - left), `Enter ${i + 1}`).toBeLessThan(0.02); // the right corner; the left is the switch's 12
+    expect(Math.abs(c.shadow.bottom[1] - expected(c)), `Enter ${i + 1}`).toBeLessThan(0.02);
     if (c.ends.lastSheet > c.panel.top) underSheet++;
     else filling++;
   }
