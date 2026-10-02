@@ -362,3 +362,34 @@ prompted.
   `requestFullscreen()` on the page fills the screen (the shell grants
   the page its own fullscreen, `grantPermissions`), beside View → Toggle
   Full Screen. Nothing to add.
+- ~~Whether the page's bar can be the window's title bar, beside the
+  traffic lights, as Zen's is.~~ DECIDED 2026-10-01: yes, and the page
+  learns it from the Window Controls Overlay, not from the shell. The
+  shell's config gains `window.titleBarStyle` (`default`, or
+  `hiddenInset`/`hidden`: no native title bar, the page reaches the top
+  of the window, the lights over it) and `window.trafficLightPosition`
+  (`{x, y}`); `app/plass.json` sets `hiddenInset` and `{x: 20, y: 23}`.
+  Whenever the title bar is not native the shell also sets Electron's
+  `titleBarOverlay: true`, which on macOS draws nothing and publishes
+  the lights' room to the page: `navigator.windowControlsOverlay.visible`
+  is true, `getTitlebarAreaRect()` is the rest of the bar, and CSS
+  `env(titlebar-area-x/y/width/height)` are set. Under a native title
+  bar (the tagged shell v0.2.0, which ignores the two keys; a browser
+  tab; the Chrome PWA) `visible` is false and the `env()` fallbacks
+  apply, so one stylesheet is right under either bar and nothing crosses
+  the bridge; `geometrychange` on the overlay is the event if the page
+  ever needs the fact in JS (fullscreen hides the lights and the room
+  drops to 0). Measured on the shell's Electron 44.5.0: `hiddenInset` +
+  overlay gives area `{x: 84, y: 0, h: 36}` with the lights at their
+  default place, `{x: 100, h: 60}` with `{x: 20, y: 23}` (the area is
+  2·y + 14 px tall, so y = 23 centres the lights on Plass's 60 px bar);
+  `hidden` + overlay `{x: 78, h: 32}`. The bar is `-webkit-app-region:
+  drag`, with `no-drag` on the pills, the menus and the view switch;
+  Electron handles the mouse over a drag region natively, so hovering
+  the bar's empty part no longer wakes every button (hovering a pill
+  does) and a click there does not reach the page's outside-click menu
+  closer. The bar pads its row by `env(titlebar-area-x)` on both sides,
+  so the pills keep the paper's axis; the app's `minWidth` is 740, the
+  row's width beside the lights. Plass.app from the deploy is built on
+  tag v0.2.0: the frame and the end of the window-fitting ship with the
+  next Plass deploy, the bar beside the lights with the next shell tag.

@@ -1,6 +1,9 @@
 // A smoke test of Plass.app on the Claerbout shell: launch the shell from
 // the checkout (or a built app) on a .typ in a throwaway folder, see the
-// document open and typeset, edit it, save with ⌘S, and check the disk.
+// document open and typeset, edit it, save with ⌘S, and check the disk;
+// then drag the window wider and zoom (the window stays, the paper does
+// not re-lay), and, on a shell that hides the title bar, see the bar
+// padded by the traffic lights' room.
 //
 //   node app/smoke.mjs                 # the checkout: the shell on dist/
 //   node app/smoke.mjs path/to/Plass.app
@@ -84,6 +87,64 @@ await page.keyboard.press('Meta+s');
 for (let i = 0; i < 40 && !fs.readFileSync(doc, 'utf8').includes('Edited.'); i++) await page.waitForTimeout(250);
 const saved = fs.readFileSync(doc, 'utf8');
 if (!saved.includes('Edited.')) await fail(`⌘S did not reach the disk:\n${saved}`);
+
+// The window is room around a fixed-width paper (src/style.css, the
+// room): nothing sizes the window back to the paper, so a drag wider
+// stays wider — the page once resized itself to the paper 180 ms after
+// every resize, which snapped a drag back and, under a zoom (innerWidth
+// in zoomed px, resizeTo in screen px), walked the window to the zoomed
+// paper's width in four steps over a second. A zoom step now scales the
+// paper in place: one resize event, the window's bounds untouched, the
+// editor's width (in CSS px) the same, so the layout never runs.
+const bounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
+const window0 = await bounds();
+await app.evaluate(({ BrowserWindow }, width) => {
+  const window = BrowserWindow.getAllWindows()[0];
+  window.setSize(width, window.getBounds().height);
+}, window0.width + 200);
+await page.waitForTimeout(600);
+const dragged = await bounds();
+if (dragged.width !== window0.width + 200) await fail(`a drag from ${window0.width} to ${window0.width + 200} wide was answered with ${dragged.width}`);
+const editorWidth = () => page.evaluate(() => document.querySelector('.ProseMirror').clientWidth);
+const widthBefore = await editorWidth();
+await page.evaluate(() => {
+  window.__resizes = 0;
+  window.addEventListener('resize', () => { window.__resizes += 1; });
+});
+await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomLevel(1));
+await page.waitForTimeout(800);
+const zoomed = await bounds();
+const resizes = await page.evaluate(() => window.__resizes);
+const widthAfter = await editorWidth();
+await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomLevel(0));
+if (zoomed.width !== dragged.width || zoomed.height !== dragged.height) await fail(`a zoom step moved the window from ${dragged.width}×${dragged.height} to ${zoomed.width}×${zoomed.height}`);
+if (resizes !== 1) await fail(`a zoom step fired ${resizes} resize events, not one`);
+if (widthAfter !== widthBefore) await fail(`a zoom step changed the editor's width from ${widthBefore} to ${widthAfter}`);
+
+// A shell that hides the title bar (app/plass.json, titleBarStyle; the
+// shell's README) publishes the lights' room to the page as the Window
+// Controls Overlay, and the bar pads its row by it. Plass.app is built
+// on a tag of the shell, which carries the key only from its next tag:
+// the check is for a shell that has it.
+const shellMain = bundle ? path.join(bundle, 'Contents', 'Resources', 'app', 'main.js') : path.join(shell, 'main.js');
+const hidesTitleBar = process.platform === 'darwin' && fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('titleBarStyle');
+if (hidesTitleBar) {
+  const bar = await page.evaluate(() => {
+    const overlay = navigator.windowControlsOverlay;
+    const rect = overlay?.getTitlebarAreaRect?.();
+    const toolbar = document.getElementById('toolbar');
+    return {
+      visible: overlay?.visible === true,
+      x: rect?.x ?? 0,
+      height: rect?.height ?? 0,
+      barHeight: toolbar.getBoundingClientRect().height,
+      padding: parseFloat(getComputedStyle(toolbar).paddingLeft),
+    };
+  });
+  if (!bar.visible || bar.x <= 0) await fail(`the shell hides the title bar but the page sees no overlay (${JSON.stringify(bar)})`);
+  if (bar.height !== bar.barHeight) await fail(`the lights' room is ${bar.height}px tall, the bar ${bar.barHeight}px`);
+  if (bar.padding <= bar.x) await fail(`the bar is padded ${bar.padding}px, inside the lights' ${bar.x}px`);
+}
 
 await app.close();
 fs.rmSync(work, { recursive: true, force: true });
