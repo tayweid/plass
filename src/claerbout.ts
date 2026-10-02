@@ -11,9 +11,13 @@
 //   the page says it is ready, drops the file on it through the window's
 //   own debugger: the page receives a real FileSystemFileHandle, like one
 //   from a picker. There is no other way from a path to a handle.
-// - Nothing else yet. `command` events (menu items acting in the page)
-//   are the shell's when a menu item needs one; the shell this replaced
-//   had no menu item that acted in the page.
+// - The app updating itself (the shell's update.js): `update` requests
+//   check the site for a newer build (and, with action 'install', install
+//   it), and `update` events report the shell's own check after launch and
+//   the install's steps, until the app relaunches into the new build.
+// - Nothing else. `command` events (menu items acting in the page) are
+//   the shell's when a menu item needs one; the shell this replaced had no
+//   menu item that acted in the page.
 
 interface ClaerboutBridge {
   request(message: Record<string, unknown>): Promise<unknown>;
@@ -80,4 +84,36 @@ export function takeLaunchFile(): Promise<FileSystemFileHandle> | null {
     window.addEventListener('drop', onDrop, true);
     void shell.request({ type: 'ready' }).catch(() => undefined);
   });
+}
+
+/** A step of Plass.app updating itself, as the shell reports it: `state`
+ *  is one of current, available, development, unsupported, failed (a
+ *  check's answers), then downloading, unpacking, completing, installing,
+ *  ready (an install's events). */
+export interface UpdateStep {
+  state: string;
+  text?: string;
+  percent?: number | null;
+  latest?: { version?: string | null; build?: string; built?: string | null };
+  current?: { version?: string | null; build?: string | null; built?: string | null };
+}
+
+/** Ask the shell to compare this build with the site's; null outside it. */
+export function checkForUpdate(): Promise<UpdateStep | null> {
+  const shell = bridge();
+  if (!shell) return Promise.resolve(null);
+  return shell.request({ type: 'update' }).then((reply) => (reply ?? null) as UpdateStep | null, () => null);
+}
+
+/** Have the shell download the site's build, swap it in and relaunch;
+ *  the steps arrive through `onUpdate`. */
+export function installUpdate(): void {
+  void bridge()?.request({ type: 'update', action: 'install' }).catch(() => undefined);
+}
+
+/** The shell's update events; returns the unsubscribe. */
+export function onUpdate(listener: (step: UpdateStep) => void): () => void {
+  const shell = bridge();
+  if (!shell) return () => {};
+  return shell.on('update', (detail) => listener((detail ?? {}) as UpdateStep));
 }

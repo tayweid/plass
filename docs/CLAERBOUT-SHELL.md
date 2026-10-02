@@ -348,6 +348,12 @@ prompted.
 - ~~Whether a page opened from Finder needs a handle (outcome a or b) or
   keeps a by-path route for that one file.~~ Answered under step 1: the
   shell drops the path on the page and the page holds a real handle.
-- Whether Plass wants the page's download button at all, or stays with
-  the install line only, as today.
+- ~~Whether Plass wants the page's download button at all, or stays with
+  the install line only, as today.~~ Answered 2026-09-30 (`2429264`): File
+  → Get Plass for your Mac offers both. And since 2026-10-01 the installed
+  app updates itself (shell 0.2.0, `update.js`): File → Check for updates…
+  inside Plass.app compares this build with the site's `app/latest.json`
+  and installs a newer one, relaunching; the shell also checks quietly
+  after launch and the item then reads Install update. `src/claerbout.ts`
+  has the three calls (`checkForUpdate`, `installUpdate`, `onUpdate`).
 - Fullscreen as a menu role is enough, or the page needs to ask for it.

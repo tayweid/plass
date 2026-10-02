@@ -19,7 +19,7 @@ import { insertEditorComment } from './editor-comments';
 import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
 import { isPwaInstalled, onPwaInstallState, requestPwaInstall } from './pwa-install';
-import { isNativeShell } from './claerbout';
+import { checkForUpdate, installUpdate, isNativeShell, onUpdate } from './claerbout';
 import type { TypesetStats } from './typeset-plugin';
 import { DEFAULT_DOC_NAME, type FileManager } from './file-manager';
 
@@ -627,6 +627,63 @@ export function buildToolbar(container: HTMLElement, view: EditorView, fm: FileM
   if (mac && !isNativeShell()) {
     divider(fileMenu.element);
     item(fileMenu.element, 'Get Plass for your Mac', () => {}, { title: 'Plass.app: the download, or the install line', submenu: get });
+  }
+  // Inside Plass.app: the app updating itself (the shell's update.js;
+  // also Plass menu → Check for Updates…). The shell looks at the site
+  // after launch and says when it has a newer build; the item then offers
+  // the install, whose steps show as notices until the app relaunches.
+  if (isNativeShell()) {
+    divider(fileMenu.element);
+    let offered: string | null = null;
+    const updateItem = item(fileMenu.element, 'Check for updates…', () => {
+      if (offered) {
+        setLabel('Updating…');
+        installUpdate();
+        return;
+      }
+      setLabel('Checking…');
+      void checkForUpdate().then((step) => {
+        const when = step?.latest?.built ? ` (built ${step.latest.built.slice(0, 10)})` : '';
+        if (step?.state === 'available') {
+          offered = step.latest?.build ?? 'new';
+          setLabel(`Install update${when}`);
+          fm.notify(`A new Plass is available${when} — File → Install update`);
+        } else {
+          setLabel('Check for updates…');
+          if (step?.state === 'current') fm.notify(`Plass is up to date${step.current?.build ? ` (build ${step.current.build})` : ''}`);
+          else if (step?.state === 'development') fm.notify('Running from a checkout: nothing to update');
+          else fm.notify(step?.text ? `Could not check for updates: ${step.text}` : 'Could not check for updates');
+        }
+      });
+    }, { title: 'Plass.app: compare this build with the site\u2019s and install a newer one' });
+    const label = updateItem.querySelector('.tb-menu-label');
+    const setLabel = (text: string) => { if (label) label.textContent = text; };
+    onUpdate((step) => {
+      const when = step.latest?.built ? ` (built ${step.latest.built.slice(0, 10)})` : '';
+      switch (step.state) {
+        case 'available':
+          offered = step.latest?.build ?? 'new';
+          setLabel(`Install update${when}`);
+          break;
+        case 'downloading':
+        case 'unpacking':
+        case 'completing':
+        case 'installing':
+          setLabel('Updating…');
+          if (step.text) fm.notify(step.text);
+          break;
+        case 'ready':
+          setLabel('Relaunching…');
+          fm.notify(step.text ?? 'Plass relaunches now');
+          break;
+        case 'failed':
+          setLabel(offered ? `Install update${when}` : 'Check for updates…');
+          fm.notify(`Could not update Plass: ${step.text ?? 'unknown error'}`);
+          break;
+        default:
+          break;
+      }
+    });
   }
 
   const back = (menu: Menu) => {
