@@ -218,11 +218,14 @@ if (!frame.map.shown || frame.map.left !== frame.panel.right || frame.map.right 
 }
 
 // The paper's corners (src/style.css): rounded only where they are a
-// sheet's. At the top of the document the page's top corners are rounded,
-// so the clip cuts them away and a point one px inside the panel's corner
-// is not the paper; the page's bottom edge, past the panel's or not,
-// decides the bottom corners the same way; and the shadow on the frame,
-// drawn round the paper in view, has the same corners.
+// sheet's, read at the panel's right corners. At the top of the document
+// the page's top corners are rounded, so the clip cuts them away and a
+// point one px inside the panel's corner is not the paper; the page's
+// bottom edge, past the panel's or not, decides the bottom corners the
+// same way; and the shadow on the frame, drawn round the paper in view,
+// has the same corners. The two left corners stay rounded whatever is
+// under them (--paper-left-corner, the switch): never the paper, and the
+// shadow's left radii 12.
 const corners = await page.evaluate(async () => {
   const panel = document.getElementById('scroll');
   panel.scrollTop = 0;
@@ -235,10 +238,15 @@ const corners = await page.evaluate(async () => {
   // (A page ending less than a radius past the panel's bottom has part
   // of its corner in view: its bottom is not checked.)
   const cut = last.bottom - p.bottom;
-  return { top: onPaper(p.left + 1, p.top + 1), bottom: onPaper(p.left + 1, p.bottom - 1), runsOn: cut >= 12, ends: cut <= 0, shadow: [shadow.borderTopLeftRadius, shadow.borderBottomLeftRadius] };
+  return {
+    top: onPaper(p.right - 1, p.top + 1), bottom: onPaper(p.right - 1, p.bottom - 1), runsOn: cut >= 12, ends: cut <= 0,
+    shadow: [shadow.borderTopRightRadius, shadow.borderBottomRightRadius],
+    left: { top: onPaper(p.left + 1, p.top + 1), bottom: onPaper(p.left + 1, p.bottom - 1), shadow: [shadow.borderTopLeftRadius, shadow.borderBottomLeftRadius] },
+  };
 });
 const bottomWrong = (corners.runsOn && (!corners.bottom || corners.shadow[1] !== '0px')) || (corners.ends && (corners.bottom || corners.shadow[1] !== '12px'));
-if (corners.top || corners.shadow[0] !== '12px' || bottomWrong) {
+const leftWrong = corners.left.top || corners.left.bottom || corners.left.shadow.some((r) => r !== '12px');
+if (corners.top || corners.shadow[0] !== '12px' || bottomWrong || leftWrong) {
   await fail(`the paper's corners are not the sheets': ${JSON.stringify(corners)}`);
 }
 

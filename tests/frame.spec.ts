@@ -384,35 +384,40 @@ test('the paper\'s corners are rounded only where they are a sheet\'s, and the s
   await openTyp(page, FOUR_PAGES);
   const settled = () => cornersNextFrame(page);
 
+  // The panel's two left corners are rounded whatever is under them
+  // (--paper-left-corner, the switch in style.css), so the left points
+  // never answer the paper and the shadow's left radii read 12 throughout;
+  // the right corners follow the paper, below.
   // At the top: the first page's top edge is in view, so its top corners
   // are rounded and the clip cuts them away; the paper runs on past the
   // panel's bottom, so that edge is square and the paper reaches its
-  // corners. Every sheet is rounded 12 px on the screen.
+  // right corner there. Every sheet is rounded 12 px on the screen.
   let c = await settled();
   expect(c.scrollTop).toBe(0);
-  expect(c.onPaper).toEqual({ topLeft: false, topRight: false, bottomLeft: true, bottomRight: true });
+  expect(c.onPaper).toEqual({ topLeft: false, topRight: false, bottomLeft: false, bottomRight: true });
   expect(c.sheetRadius).toBeCloseTo(12, 3);
   expectShadowRoundPaper(c);
   expect(c.shadow.top).toEqual([12, 12]);
-  expect(c.shadow.bottom).toEqual([0, 0]);
+  expect(c.shadow.bottom).toEqual([12, 0]);
 
   // Six px down, half the top corner is past the panel's edge: the clip
   // still cuts what is left of it, and the shadow's corner is as large as
   // that.
   await scrollPanel(page, 6);
   c = await settled();
-  expect(c.onPaper).toEqual({ topLeft: false, topRight: false, bottomLeft: true, bottomRight: true });
-  expect(c.shadow.top).toEqual([6, 6]);
+  expect(c.onPaper).toEqual({ topLeft: false, topRight: false, bottomLeft: false, bottomRight: true });
+  expect(c.shadow.top).toEqual([12, 6]);
 
   // Mid-document, a page gap across the middle of the panel: no corner of
-  // the panel is a sheet's, so all four are square and the paper reaches
-  // them; the sheets' own corners are rounded at the gap.
+  // the panel is a sheet's, so the right corners are square and the paper
+  // reaches them (the left two stay rounded by the switch); the sheets'
+  // own corners are rounded at the gap.
   await scrollPanel(page, 'gap across the middle');
   c = await settled();
-  expect(c.onPaper).toEqual({ topLeft: true, topRight: true, bottomLeft: true, bottomRight: true });
+  expect(c.onPaper).toEqual({ topLeft: false, topRight: true, bottomLeft: false, bottomRight: true });
   expectShadowRoundPaper(c);
-  expect(c.shadow.top).toEqual([0, 0]);
-  expect(c.shadow.bottom).toEqual([0, 0]);
+  expect(c.shadow.top).toEqual([12, 0]);
+  expect(c.shadow.bottom).toEqual([12, 0]);
 
   // A page gap at the panel's top edge: the paper in view begins with the
   // next sheet's top, a few px down, and so does the shadow, rounded.
@@ -421,16 +426,16 @@ test('the paper\'s corners are rounded only where they are a sheet\'s, and the s
   expect(c.paper!.top - c.panel.top).toBeGreaterThan(2);
   expectShadowRoundPaper(c);
   expect(c.shadow.top).toEqual([12, 12]);
-  expect(c.shadow.bottom).toEqual([0, 0]);
+  expect(c.shadow.bottom).toEqual([12, 0]);
 
   // At the end: the last page's bottom corners are rounded and cut, the
   // top is square.
   await scrollPanel(page, 'end');
   c = await settled();
-  expect(c.onPaper).toEqual({ topLeft: true, topRight: true, bottomLeft: false, bottomRight: false });
+  expect(c.onPaper).toEqual({ topLeft: false, topRight: true, bottomLeft: false, bottomRight: false });
   expectShadowRoundPaper(c);
-  expect(c.shadow.top).toEqual([0, 0]);
-  for (const r of c.shadow.bottom) expect(r).toBeGreaterThan(11.5);
+  expect(c.shadow.top).toEqual([12, 0]);
+  expect(c.shadow.bottom[1]).toBeGreaterThan(11.5);
 
   // Scrolling writes nothing but the shadow's variables and the scroll
   // rail's band (its two fractions, and the class that lights it while
@@ -459,10 +464,10 @@ test('the paper\'s corners are rounded only where they are a sheet\'s, and the s
     await scrollPanel(page, 0);
     c = await settled();
     expect(c.sheetRadius, `at ${size.width}`).toBeCloseTo(12, 3);
-    expect(c.onPaper).toEqual({ topLeft: false, topRight: false, bottomLeft: true, bottomRight: true });
+    expect(c.onPaper).toEqual({ topLeft: false, topRight: false, bottomLeft: false, bottomRight: true });
     expectShadowRoundPaper(c);
     expect(c.shadow.top).toEqual([12, 12]);
-    expect(c.shadow.bottom).toEqual([0, 0]);
+    expect(c.shadow.bottom).toEqual([12, 0]);
   }
 
   // A short paper, one page in a tall narrow window (0.84×): the shadow
@@ -546,12 +551,12 @@ test('a page gap crossing the panel\'s edge hands the shadow\'s end across it ov
   let sliver = false;
   for (let y = Math.floor(gap.start - gap.height) - 3; y <= Math.floor(gap.start - gap.height) + 15; y++) {
     const { c, above, below } = await at(y);
-    bottom.push({ edge: c.shadow.box.bottom, corner: c.shadow.bottom[0] });
+    bottom.push({ edge: c.shadow.box.bottom, corner: c.shadow.bottom[1] });
     const inView = c.panel.bottom - below;
     if (inView > 0 && inView <= 1) {
       sliver = true;
       expect(Math.abs(c.shadow.box.bottom - above), `${inView} px of the next sheet in`).toBeLessThan(1);
-      for (const r of c.shadow.bottom) expect(r).toBeGreaterThan(10.5);
+      expect(c.shadow.bottom[1]).toBeGreaterThan(10.5);
     }
   }
   expect(sliver).toBe(true);
@@ -565,12 +570,12 @@ test('a page gap crossing the panel\'s edge hands the shadow\'s end across it ov
   sliver = false;
   for (let y = Math.floor(gap.end) - 15; y <= Math.floor(gap.end) + 3; y++) {
     const { c, above, below } = await at(y);
-    top.push({ edge: c.shadow.box.top, corner: c.shadow.top[0] });
+    top.push({ edge: c.shadow.box.top, corner: c.shadow.top[1] });
     const inView = above - c.panel.top;
     if (inView > 0 && inView <= 1) {
       sliver = true;
       expect(Math.abs(c.shadow.box.top - below), `${inView} px of the sheet above left`).toBeLessThan(1);
-      for (const r of c.shadow.top) expect(r).toBeGreaterThan(10.5);
+      expect(c.shadow.top[1]).toBeGreaterThan(10.5);
     }
   }
   expect(sliver).toBe(true);
@@ -601,7 +606,7 @@ test('a burst of typing past the last page is paper: the shadow is drawn round t
     if (!(c.ends.clip > c.ends.lastSheet + 1)) continue;
     expectShadowRoundPaper(c);
     const left = 12 - Math.min(12, Math.max(0, c.ends.clip - c.panel.bottom));
-    for (const r of c.shadow.bottom) expect(Math.abs(r - left), `Enter ${i + 1}`).toBeLessThan(0.02);
+    expect(Math.abs(c.shadow.bottom[1] - left), `Enter ${i + 1}`).toBeLessThan(0.02); // the right corner; the left is the switch's 12
     if (c.ends.lastSheet > c.panel.top) underSheet++;
     else filling++;
   }

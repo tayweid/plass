@@ -67,6 +67,14 @@
   /* A corner of the paper, on the screen at any scale: Knuth's room's
      (the paper's corners, below). */
   --paper-radius: 12px;
+  /* The panel's two left corners stay rounded whatever the paper does
+     under them; the right corners follow the paper (Taylor, 2026-10-02,
+     seeing the rule in the app: "fix the left upper and lower to
+     rounded", and "leave it easy to undo if it looks strange"). This line
+     is the switch: remove it and all four corners follow the paper, as
+     the rule was first built (#scroll's clip path and #paper-shadow's
+     left radii fall back to the paper's). */
+  --paper-left-corner: var(--paper-radius);
   /* The rail: a tile with 6 px either side, 44 px, the bar's height too
      (Taylor, 2026-10-02: the bar as tall as the rail is wide; Knuth's
      numbers, knuth c6875a4). */
@@ -1032,6 +1040,12 @@ body {
   margin: var(--topbar) var(--edge-right) var(--edge) var(--rail);
   overflow: hidden auto;
   scrollbar-width: none;
+  /* The panel's clip is square, so the paper is cut straight where it
+     runs on past an edge — except at its two left corners, kept rounded
+     by --paper-left-corner (the switch, at the top of this file). A clip
+     path rather than a border radius, as on #paper: it cuts hit testing
+     too. */
+  clip-path: inset(0 round var(--paper-left-corner, 0px) 0 0 var(--paper-left-corner, 0px));
   /* No scroll anchoring: a layout pass takes the paper's transform off
      and puts it back (paper-scale.ts), and at any scale but 1 Chromium's
      anchoring answered by scrolling the panel a few hundred px by itself
@@ -1102,9 +1116,9 @@ body {
   right: var(--edge-right);
   top: calc(var(--topbar) + var(--paper-top, 0px));
   bottom: calc(var(--edge) + var(--paper-bottom, 0px));
-  border-top-left-radius: var(--paper-top-corner, var(--paper-radius));
+  border-top-left-radius: var(--paper-left-corner, var(--paper-top-corner, var(--paper-radius)));
   border-top-right-radius: var(--paper-top-corner, var(--paper-radius));
-  border-bottom-left-radius: var(--paper-bottom-corner, var(--paper-radius));
+  border-bottom-left-radius: var(--paper-left-corner, var(--paper-bottom-corner, var(--paper-radius)));
   border-bottom-right-radius: var(--paper-bottom-corner, var(--paper-radius));
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.05),
@@ -3251,6 +3265,7 @@ body {
     margin: 0;
     padding: 0;
     border-radius: 0;
+    clip-path: none;
     background: none;
     box-shadow: none;
   }

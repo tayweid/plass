@@ -394,6 +394,21 @@ runs past the panel, and that the shadow's corners agree.
    them with everything else (14.4 screen px at two steps), as it scales
    the bar's pills and Knuth's room.
 
+**The left corners, later the same afternoon.** Taylor, seeing the rule
+in the app: "i think i only want it applied to all corners except the
+upper left. that should stay rounded. but leave it easy to undo if it
+looks strange", then "actually lets fix the left upper and lower to
+rounded." So the panel's two left corners are rounded whatever the paper
+does under them, and only the right corners follow the paper. One line is
+the switch, `--paper-left-corner: var(--paper-radius)` at the top of
+`src/style.css`: `#scroll` takes it as the left radii of its clip path (a
+clip path, as on `#paper`, so the cut holds in hit testing too), and
+`#paper-shadow` as its left radii, each falling back to the paper's own
+corner when the line is removed. Remove the line and all four corners
+follow the paper as first built. `frame.spec.ts` expects the left points
+never to answer the paper and the shadow's left radii to read 12
+throughout; its smoothness test reads the right corner.
+
 ## The third pass
 
 Taylor, running the merged Plass beside the merged Knuth: "plass looks
@@ -1026,9 +1041,16 @@ are the same.
   check that a scroll writes only the shadow's variables now allows the
   rail's band too, and its resize step expects the gutter),
   `node app/smoke.mjs` ok with both its corners' and its gutter's checks.
+- After merging main (03655dd, which had taken `ux/corners` with two
+  more commits: 9eb8a75, the panel's left corners stay rounded and the
+  right ones follow the paper, and 03655dd, the smoke reading that rule
+  at the right corners; the rail is outside the panel's clip): merged
+  without conflicts; `npm test` and `npm run build` green, 196 passed,
+  `node app/smoke.mjs` ok.
 - The record: `docs/zen-rail-1100.png` (mid-paper, the pointer on the
   3.1 mark with its label) and `docs/zen-rail-1500.png` (at rest),
-  retaken on the merged build (so the sheets have their corners), the
+  retaken on the merged build (so the sheets have their corners and the
+  panel its rounded left ones), the
   shell checkout's Electron launched as `app/run.mjs` does, on a paper
   under `~/Projects/week-3` (a symlink for the captures, removed after),
   taken with the window's own capture: Playwright's page capture
