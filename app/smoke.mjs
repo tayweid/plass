@@ -12,6 +12,7 @@
 // Needs dist/ (npx vite build) and the shell (app/shell-path.mjs). The
 // open relies on the shell's drop-based launch (docs/CLAERBOUT-SHELL.md,
 // step 1): the page reports `ready` and the shell drops the file on it.
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -98,9 +99,20 @@ if (!saved.includes('Edited.')) await fail(`⌘S did not reach the disk:\n${save
 // paper in place and the shell scales the window with it in one step
 // (app/plass.json followZoom, shell 0.2.1; an older shell leaves the
 // window alone): at most two resize events, the editor's width (in CSS
-// px) the same, so the layout never runs.
+// px) the same, so the layout never runs. The step is View → Zoom In as
+// a user takes it, through the shell's menu: the shell follows the zoom
+// from its menu items, not from a zoom level set behind its back, which
+// is what this once did (and never saw the window follow). One item is
+// a half step, ×1.2^0.5.
 // The shell this runs on: the checkout's main.js, or the bundle's, read for what it can do.
 const shellMain = bundle ? path.join(bundle, 'Contents', 'Resources', 'app', 'main.js') : path.join(shell, 'main.js');
+const viewMenu = (label) => app.evaluate(({ Menu }, wanted) => {
+  const view = Menu.getApplicationMenu()?.items.find((item) => item.label === 'View');
+  const item = view?.submenu?.items.find((entry) => entry.label === wanted && entry.visible !== false);
+  if (!item) return false;
+  item.click();
+  return true;
+}, label);
 const bounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
 const window0 = await bounds();
 await app.evaluate(({ BrowserWindow }, width) => {
@@ -227,6 +239,46 @@ if (knows?.focused === true) {
   if (front === null) console.log('smoke: no window is focused here (the app is not active); the fronting is not checked');
   else if (!front.startsWith('smoke')) await fail(`after the second open the focused window is "${front}", not the first`);
 } else console.log('smoke: the shell has no focus request; the second open is not checked');
+
+// The autosave record (the shell's autosave.js; app/plass.json `autosave`,
+// knuth's docs/AUTOSAVE.md): the document's folder, in no repository of
+// anyone's, got one of its own, and its claerbout-autosave branch has the
+// session's opening commit, made by the shell once the window's file was
+// known. The page told it: the shell lands a Finder open with the path it
+// was given, and the page reports the handle's path back (`document`)
+// whenever its file changes. The user's side of that repository is
+// untouched: HEAD is still unborn. A shell without the record (the
+// checkout beside this one may predate it) is said and skipped.
+const keepsRecord = fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('autosave.js');
+if (keepsRecord) {
+  const folder = path.dirname(doc);
+  const recorded = () => {
+    try {
+      return execFileSync('git', ['-C', folder, 'log', '--format=%s', 'claerbout-autosave'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+        .split('\n')
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+  let subjects = [];
+  for (let i = 0; i < 60 && !subjects.includes('plass: session open'); i++) {
+    subjects = recorded();
+    if (!subjects.includes('plass: session open')) await page.waitForTimeout(500);
+  }
+  if (!subjects.includes('plass: session open')) await fail(`the autosave record has no "plass: session open" commit (it has: ${subjects.join(' | ') || 'no branch'})`);
+  // One session: a report the shell could not match would have closed it
+  // and the second open reopened it.
+  if (subjects.filter((subject) => subject === 'plass: session open').length !== 1) await fail(`the session opened more than once (${subjects.join(' | ')})`);
+  const head = spawnSync('git', ['-C', folder, 'rev-parse', '--verify', '-q', 'HEAD'], { encoding: 'utf8' });
+  if (head.status === 0) await fail(`the autosave record touched the user's HEAD (${head.stdout.trim()})`);
+  // The page's report: the shell knows the window's file from the name
+  // the page sent, matched to the file its handle touched, which is where
+  // the window's represented file comes from.
+  const represented = await (await app.browserWindow(page)).evaluate((window) => window.getRepresentedFilename());
+  if (path.basename(represented) !== path.basename(doc)) await fail(`the window's represented file is "${represented}", not ${path.basename(doc)}`);
+  console.log(`smoke: autosave record: ${subjects.join(' | ')}`);
+} else console.log('smoke: the shell keeps no autosave record; not checked');
 
 await app.close();
 fs.rmSync(work, { recursive: true, force: true });

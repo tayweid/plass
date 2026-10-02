@@ -422,3 +422,46 @@ prompted.
   be a change in the shell. `app/smoke.mjs` minimizes the first window,
   opens the document a second time and checks the new window closes and
   the first is back from the Dock and focused.
+- ~~How the shell can keep the autosave record (knuth's
+  `docs/AUTOSAVE.md`) for a page whose documents are handles, not
+  paths.~~ DECIDED 2026-10-02, with the record itself (the shell's
+  `autosave.js`; `"autosave": true` in `app/plass.json`): the shell is
+  the git runner for every app, since it has the filesystem and knows
+  each window's document, and Plass tells it which: the page sends
+  `{type: 'document', path, name}` whenever its open file changes
+  (`reportDocument` in `src/claerbout.ts`, from the file manager's
+  `handle` setter through the `onFile` hook; `path: null` when the window
+  holds no file). The preload gains `pathOf(file)` (Electron's
+  `webUtils.getPathForFile`: a File object crosses the bridge, the path
+  comes back) for the path, but it has one only for a path-backed File (a
+  drop); a File from a handle's `getFile()` is blob-backed and gives ''
+  (measured 2026-10-02: the first report emptied the shell's map and
+  closed the session). So the path comes from the other side: Chromium
+  asks the shell's permission check handler about every read and write
+  of a handle, with the file's path (`details.filePath`, `fileAccessType`
+  readable/writable) but no window (`webContents` is null for these
+  checks, also measured), so the shell keeps the files lately touched,
+  and the report's `name`, `size` and `modified` (the File's) are matched
+  against them, the newest first, by name and the file's stat — reading
+  the File in `reportDocument` is what makes the handle touch the file
+  first. A report that matches nothing (or carries no size and mtime) is
+  none, never a stale path or a same-named file, and a `path` is taken
+  only when it is an absolute path to an existing regular file. With it the shell sets the window's
+  represented file and follows the file's project: one branch per
+  working tree, `claerbout-autosave` (`claerbout-autosave-<name>` in a
+  linked worktree), written with a temporary index and plumbing (never
+  the user's HEAD, branch or index; in the working tree it writes
+  `untracked/`, a `.gitignore` line and `.claerbout/untracked.json`, never
+  through a symbolic link, and a repository is started only in a
+  project's folder, never straight in `~/Desktop` or `~/Documents`; a
+  document in a hidden folder of the home folder such as `~/.config`, or
+  in a repository rooted at the home folder, gets no record at all),
+  committed on a one-minute timer while a
+  window is open and at the session's open and close, `plass: timer`,
+  `plass: session open`. A shell without
+  `pathOf` (older than the record) is told nothing. `src/claerbout.test.ts`
+  pins the report; `app/smoke.mjs` checks the `plass: session open`
+  commit on the document's folder (a temporary one, which got a
+  repository of its own) and the represented file. The record is not
+  pushed anywhere; the spec's outside witness is open in knuth's
+  AUTOSAVE.md ("Built").

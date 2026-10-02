@@ -21,6 +21,20 @@
 //   check the site for a newer build (and, with action 'install', install
 //   it), and `update` events report the shell's own check after launch and
 //   the install's steps, until the app relaunches into the new build.
+// - Which file this window holds (`document`, with the shell's autosave
+//   record; knuth's docs/AUTOSAVE.md). The shell keeps a git record of
+//   every project a window is on, and for that it needs the window's file
+//   as a path, which a page that keeps files by handle cannot learn
+//   itself. The page sends the handle's name whenever its open file
+//   changes (`reportDocument`, from the file manager's handle setter),
+//   with the path when the preload's `pathOf(file)` knows it (Electron's
+//   webUtils.getPathForFile: a dropped File has a path; a File from a
+//   handle's getFile() is blob-backed and has none, measured
+//   2026-10-02), with the File's size and lastModified, and the shell
+//   matches them against the files its permission handler has lately
+//   seen handles touch — Chromium asks it, with the path but no window,
+//   on every read and write. The shell also makes it the window's
+//   represented file. Knuth opens by path and never needs this.
 // - Nothing else. `command` events (menu items acting in the page) are
 //   the shell's when a menu item needs one; the shell this replaced had no
 //   menu item that acted in the page.
@@ -28,6 +42,9 @@
 interface ClaerboutBridge {
   request(message: Record<string, unknown>): Promise<unknown>;
   on(event: string, listener: (detail: unknown) => void): () => void;
+  /** The path of a File the page holds; '' when Chromium has none for it.
+   *  Absent on a shell older than the autosave record. */
+  pathOf?(file: File): string;
 }
 
 function bridge(): ClaerboutBridge | null {
@@ -51,6 +68,36 @@ export function focusThisWindow(): Promise<boolean> {
   return shell.request({ type: 'focus' }).then(
     (reply) => (reply as { focused?: unknown } | null)?.focused === true,
     () => false,
+  );
+}
+
+/** Tell the shell which file this window holds now (null: none), so its
+ *  window → document map is right for a page that keeps files by handle:
+ *  the window's represented file, and the project its autosave record
+ *  follows. The handle's name, size and lastModified go, and its path
+ *  when the preload's `pathOf` knows it (only a path-backed File; one
+ *  from a handle is not, and the shell matches the rest to the file the
+ *  handle touched instead — reading the File here is what makes it
+ *  touch it first). Nothing in a browser tab, and nothing under a shell
+ *  without `pathOf` (older than the record). Never rejects. */
+export function reportDocument(handle: FileSystemFileHandle | null): Promise<void> {
+  const shell = bridge();
+  if (!shell || typeof shell.pathOf !== 'function') return Promise.resolve();
+  const pathOf = shell.pathOf.bind(shell);
+  const send = (message: { path: string | null; name?: string; size?: number; modified?: number }) =>
+    shell.request({ type: 'document', ...message }).then(() => undefined, () => undefined);
+  if (!handle) return send({ path: null });
+  return handle.getFile().then(
+    (file) => {
+      let path: string;
+      try {
+        path = pathOf(file);
+      } catch {
+        return undefined; // the bridge is broken: nothing to tell
+      }
+      return send({ path: path || null, name: handle.name, size: file.size, modified: file.lastModified });
+    },
+    () => undefined,
   );
 }
 

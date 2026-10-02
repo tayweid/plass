@@ -79,6 +79,7 @@ interface Window {
   claerbout?: {
     request(message: Record<string, unknown>): Promise<unknown>;
     on(event: string, listener: (detail: unknown) => void): () => void;
+    pathOf?(file: File): string;
   };
 }
 

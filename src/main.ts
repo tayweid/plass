@@ -7,7 +7,7 @@ import { history } from 'prosemirror-history';
 import { tableEditing } from 'prosemirror-tables';
 import { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
-import { isNativeShell, takeLaunchFile } from './claerbout';
+import { isNativeShell, reportDocument, takeLaunchFile } from './claerbout';
 import { openInAnotherWindow } from './open-files';
 import { migrateLegacyTableGeometry } from './typ-parser';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
@@ -404,6 +404,10 @@ const fileManager = new FileManager({
   message: showMessage,
   messageAction: showMessage,
   hasSessionDoc: () => restoredSessionDoc,
+  // Plass.app: the shell follows this window's file (its represented file,
+  // and the project whose autosave record it keeps); a browser tab has
+  // nobody to tell.
+  onFile: (handle) => void reportDocument(handle),
 });
 
 toolbar = buildToolbar(toolbarEl, railEl, view, fileManager, { toggleSource: () => void sourceView.toggle() });
