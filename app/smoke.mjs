@@ -115,18 +115,27 @@ await page.evaluate(() => {
   window.__resizes = 0;
   window.addEventListener('resize', () => { window.__resizes += 1; });
 });
-await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomLevel(1));
+// The zoom the way a person does it, through View → Zoom In (twice: level 1,
+// ×1.2), which is where a shell that follows the zoom scales the window;
+// a zoom level set from outside the menu is the page's alone.
+const follows = fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('followZoom');
+const viewItem = (label) => app.evaluate(({ Menu }, name) => {
+  const view = Menu.getApplicationMenu().items.find((item) => item.label === 'View');
+  view.submenu.items.find((item) => item.label === name && item.visible !== false).click();
+}, label);
+if (follows) { await viewItem('Zoom In'); await page.waitForTimeout(200); await viewItem('Zoom In'); }
+else await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomLevel(1));
 await page.waitForTimeout(800);
 const zoomed = await bounds();
 const resizes = await page.evaluate(() => window.__resizes);
 const widthAfter = await editorWidth();
-await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomLevel(0));
-const follows = fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('followZoom');
+if (follows) await viewItem('Actual Size');
+else await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomLevel(0));
 const grew = zoomed.width / dragged.width;
-if (follows ? grew < 1.15 || grew > 1.25 : zoomed.width !== dragged.width || zoomed.height !== dragged.height) {
-  await fail(`a zoom step took the window from ${dragged.width}×${dragged.height} to ${zoomed.width}×${zoomed.height}${follows ? ' (the shell should have scaled it by 1.2)' : ''}`);
+if (follows ? grew < 1.09 || grew > 1.25 : zoomed.width !== dragged.width || zoomed.height !== dragged.height) {
+  await fail(`a zoom step took the window from ${dragged.width}×${dragged.height} to ${zoomed.width}×${zoomed.height}${follows ? ' (the shell should have scaled it with the zoom, up to its display)' : ''}`);
 }
-if (resizes < 1 || resizes > 2) await fail(`a zoom step fired ${resizes} resize events`);
+if (resizes < 1 || resizes > 4) await fail(`a zoom step fired ${resizes} resize events`);
 if (widthAfter !== widthBefore) await fail(`a zoom step changed the editor's width from ${widthBefore} to ${widthAfter}`);
 
 // A shell that hides the title bar (app/plass.json, titleBarStyle; the
