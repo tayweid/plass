@@ -74,8 +74,8 @@ assert(firstDecorations.some((decoration) => decoration.spec.sig === 'word-spaci
 assert(firstDecorations.some((decoration) => decoration.spec.sig === 'nospell'));
 assert(firstDecorations.some((decoration) => decoration.spec.key === 'br:12'));
 assert(firstDecorations.some((decoration) => decoration.spec.key === 'hy:14'));
-assert(firstDecorations.some((decoration) => decoration.spec.key === 'pg:5:20:h'));
-assert.equal(blockGap.spec.key, `pgb:${secondPos}:27`);
+assert(firstDecorations.some((decoration) => decoration.spec.key === 'pg:5:19.60:h'));
+assert.equal(blockGap.spec.key, `pgb:${secondPos}:27.20`);
 console.log('  ok  every emitted decoration has an explicit semantic kind without changing key/sig identity');
 
 const originalOrder = allDecorations.slice();

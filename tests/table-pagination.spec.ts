@@ -168,7 +168,7 @@ test('a 40-row table crossing a page boundary paginates exactly, breaking betwee
     const hdr = widget.querySelector<HTMLElement>('.ts-table-hdr')!;
     const width = (el: Element, pseudo: string, side: 'borderTopWidth' | 'borderBottomWidth') =>
       parseFloat(getComputedStyle(el, pseudo)[side]);
-    const requested = Number(/^pgr:\d+:(\d+):(\d+)(?::.*)?$/.exec(widget.dataset.tsGapKey ?? '')?.[1] ?? NaN);
+    const requested = Number(/^pgr:\d+:([\d.]+):([\d.]+)(?::.*)?$/.exec(widget.dataset.tsGapKey ?? '')?.[1] ?? NaN);
     // The spacer is the layout's px; the rects are drawn at the paper's scale.
     const stack = document.getElementById('stack')!;
     const scale = stack.getBoundingClientRect().width / stack.offsetWidth;

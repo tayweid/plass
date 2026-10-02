@@ -205,13 +205,6 @@ if (typeof window !== 'undefined' && import.meta.env.DEV) {
   w.__forcedPathStats = () => ({ fast: forcedFastHits, fallback: forcedFallbacks });
 }
 
-/** A settled pagination whose spacer differs from the installed one by less
- * than this many px is measurement noise around a live-adjusted height, not a
- * new page decision: keep the installed height so the settle dispatch becomes
- * a signature no-op (zero spacer churn). Always compared against the freshly
- * computed absolute height, so the tolerance can never accumulate. */
-const SPACER_REINSTALL_TOLERANCE_PX = 0.75;
-
 type CurrentSpacers = {
   lineMap: Map<number, Spacer>;
   blocks: Spacer[];
@@ -1274,7 +1267,8 @@ class TypesetView {
    * its page must shrink or grow by exactly -ΔH for the pages below to hold
    * still. Doing that here — instead of keeping the stale height and letting
    * the settled repagination move everything back — makes the settled pass a
-   * confirmation (no-op) whenever the page-start set is unchanged.
+   * confirmation whenever the page-start set is unchanged: a no-op, or a
+   * move of the fraction of a px by which line-height × Δlines missed.
    *
    * ΔH costs no new reflows: line counts come from the layout entries the
    * live pass just computed (and its predecessor cached), line-height from
@@ -1980,23 +1974,28 @@ class TypesetView {
     this.pagLogTotal++;
     if (this.pagLog.length > 40) this.pagLog.shift();
     if (spacers.length || held.lineMap.size || held.blocks.length) {
-      // A computed spacer that matches an installed one (same position and
-      // kind, height within the sub-pixel tolerance) keeps the installed
-      // height: the live pass already maintained the page invariant, and
-      // reinstalling for noise would churn widget DOM without moving pixels.
-      // When everything matches, the dispatch below becomes a signature no-op.
-      const effective = spacers.map((sp) => {
-        const installed =
-          sp.kind === 'line'
-            ? held.lineMap.get(sp.pos)
-            : held.blocks.find((b) => b.pos === sp.pos && b.kind === sp.kind);
-        return installed && Math.abs(installed.height - sp.height) < SPACER_REINSTALL_TOLERANCE_PX
-          ? { ...sp, height: installed.height }
-          : sp;
-      });
+      // The settled pass installs the heights it computed, exactly. It used
+      // to keep an installed spacer within 0.75 px of the computed one (to
+      // spare the widget DOM a reinstall after a live adjustment), but then
+      // the page was whatever an earlier pass had left: on CI a pass run
+      // before the page had its last geometry (a formula's ink on its way,
+      // say) installed the first page's gap at 337.45 px, every later pass
+      // computed 337.90 and kept it, and which passes ran depended on the
+      // runner's timing, so one load differed from the next (tests/
+      // frame.spec.ts, the layout at any width and after a passing state). The
+      // computed height is the document's own (natural geometry, read
+      // through the painted spacers), so a pass that confirms the pages
+      // installs the same heights and the dispatch is a signature no-op;
+      // one that differs moves the page to where it belongs, to the
+      // hundredth of a px the gap's CSS is written in. That takes the
+      // widget key too: ProseMirror keeps the DOM of a widget whose key is
+      // unchanged, so each gap's key carries its height in hundredths
+      // (line-decorations.ts). Keyed on the whole pixel, a gap moving from
+      // 337.9 to 337.6 kept its old div and its 337.9, which the next pass
+      // read back as painted and so computed again: the stale gap stayed.
       const lineSpacers = new Map<number, Spacer>();
       const blockSpacers: Spacer[] = [];
-      for (const sp of effective) (sp.kind === 'line' ? lineSpacers.set(sp.pos, sp) : blockSpacers.push(sp));
+      for (const sp of spacers) (sp.kind === 'line' ? lineSpacers.set(sp.pos, sp) : blockSpacers.push(sp));
       const secondLineStart = performance.now();
       this.dispatchDecos(lineSpacers, blockSpacers);
       lineLayoutMs += performance.now() - secondLineStart;
@@ -2706,10 +2705,10 @@ class TypesetView {
       if (this.suffixControl.installsSuffix) {
         // PROMOTED PATH: the suffix result IS the fallback pagination. It is
         // returned through the identical install machinery the full pass
-        // uses (reinstall tolerance, dispatch, snapshot capture, footnotes),
-        // and no full pass runs. Soundness rests on the shadow soaks'
-        // 120/120 record plus the sampled verification below; the first
-        // verified mismatch kills the suffix paginator for the session.
+        // uses (dispatch, snapshot capture, footnotes), and no full pass
+        // runs. Soundness rests on the shadow soaks' 120/120 record plus
+        // the sampled verification below; the first verified mismatch
+        // kills the suffix paginator for the session.
         this.suffixPaginationStats.installs++;
         this.suffixPaginationStats.lastSuffixPass = { units: suffix.visitedUnits, ms: suffixMs };
         this.suffixPaginationStats.lastReason = `installed-${suffixPlan.source}`;

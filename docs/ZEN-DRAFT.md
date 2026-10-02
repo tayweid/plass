@@ -1238,3 +1238,71 @@ lower at 1100 × 800, now that only its digits must clear the mark, and
   at 500 and 400. Changed: the long-paper test at 800 reads a number's
   clearance from its digits' ink, not its box.
 - `node app/smoke.mjs` (the shell checkout beside the main one): ok.
+
+## Checks (the layout at any width, CI's half pixel)
+
+Plass's deploy (ubuntu-latest, Playwright Chromium) failed *the layout
+is the same at any width* at 1500 px: the first page's gap was
+`pg:1865:338:=337.9px` against `pg:1865:337:=337.45px` at 880 and 740,
+and everything after it 0.46 px lower. The scale was not the cause. A
+guard on every `getBoundingClientRect` and `getClientRects` (Element
+and Range) of a node in `#stack` while its transform was not
+`scale(1)`, run through the whole load at 1500, found four callers, all
+drawing on the screen and none feeding the layout: `paperPass` reading
+the panel to hold the caret, `fitPaper` reading the panel's width, and
+the scroll rail's `wanted` and `caretPlace` (the caret's mark, divided
+by the scale). Every pass read its geometry at `scale(1)`, and on this
+Mac each pass at each width computed the gap at 337.902.
+
+The cause is in CI's own numbers: the pagination log, the computed
+spacers, says `1865@338` at all three widths, while the gap at 880 and
+740 is keyed `337`, the installed height. The settled pass kept an
+installed spacer within 0.75 px of the one it computed
+(`SPACER_REINSTALL_TOLERANCE_PX`, from the live page-invariant work), so
+a pass run before the page had its last geometry (here, KaTeX before a
+formula's ink: the passes go 336.449 → 337.902, and with the CPU
+throttled other gaps take other intermediate heights) installed 337.45,
+and the passes after it computed 337.90 and kept it. Which passes ran
+was the runner's timing, so one load differed from the next. The
+settled pass now installs the heights it computed; a pass that confirms
+the pages installs the same heights and its dispatch is still a
+signature no-op.
+
+The review found that half done. Each gap widget's ProseMirror key held
+the rounded height (`pg:${pos}:${Math.round(height)}`, and the same in
+`pgb:` and `pgr:`), and ProseMirror keeps the DOM of a widget whose key
+is unchanged. A new height that rounded to the installed one's pixel
+dispatched (the signature carries the exact height) but left the old
+div and its `style.height`; `currentSpacers` read that painted height
+back, the next pass computed the same value, the signature matched, and
+the stale gap stayed for good. At 880 with a 0.3 px padding the settled
+pass computed 337.6 (`1865@338` in the log), the gap stayed
+`pg:1865:338:=337.9px`, and the solution's rules moved from
+`4449.69px` to `4449.98px`. The keys now carry the height in the
+hundredths the CSS writes (`pg:1865:337.60:`, `pgb:<pos>:27.20`,
+`pgr:<pos>:<height>:<header>`, each `toFixed(2)`), so any change in the
+painted height rebuilds the widget. The revival of a spacer lost in a
+deletion reads only a key's prefix and `currentSpacers` matches keys
+exactly, so neither changed; the unit test's two keys and
+`table-pagination.spec`'s `pgr:` pattern (`[\d.]+` for `\d+`) did. No
+other code builds or parses a gap key (the scroll rail and the HUD
+read neither).
+
+- New in `frame.spec`: *the layout is the document's, not the passes'
+  before it*. At 880 a 0.45 px padding on the first paragraph and a
+  settled pass, then the padding gone and another: the gap follows the
+  padded page (337.45) and comes back to a fresh load's signature; then
+  the same with 0.3 px, where both heights round to the same pixel: the
+  gap follows to 337.6 and comes back. On ce5f862 the padded pass kept
+  337.9, CI's pair exactly. With the keys still rounded (the key change
+  stashed) the 0.45 px state passes and the 0.3 px state fails, the gap
+  `pg:1865:338:=337.9px` against 337.6 expected. No flag or
+  device scale factor showed the half pixel on the Mac on ce5f862
+  (device scale factor 1 and 2, `--disable-font-subpixel-positioning`
+  beside the project's `--font-render-hinting=none`, the CPU throttled
+  4×, 8× and 20×): the history it needs is the runner's.
+- `npm test`: green. `npm run build`: green. `node app/smoke.mjs`: ok.
+  The same with the keys in hundredths.
+- `CI=1 npx playwright test --project=chromium` (a scratch config on a
+  spare port, deleted after): 202 passed, before the keys' change and
+  after it.

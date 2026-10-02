@@ -209,6 +209,47 @@ test('the layout is the same at any width: a page drawn larger or smaller is lai
   for (const other of others) expect(other.signature, `at ${other.width} px`).toEqual(reference.signature);
 });
 
+test('the layout is the document\'s, not the passes\' before it: a page gap left by a passing state is put back where the document has it', async ({ page }) => {
+  test.setTimeout(120_000);
+  // A settled pass used to keep an installed page gap within 0.75 px of
+  // the one it computed, so the page was whatever an earlier pass had
+  // left. On CI a pass run before the page had its last geometry left the
+  // first page's gap 0.45 px short at two widths of the three above and
+  // not at the third, by timing. Here the passing state is a padding on
+  // the first paragraph: the settled pass puts the gap where the padded
+  // page has it, and once the padding is gone, back where a fresh load
+  // does, to the hundredth of a px the gap is written in. At 0.45 px the
+  // two heights round to different whole pixels (337.45 and 337.9); at
+  // 0.3 px to the same one (337.6 and 337.9), which a widget keyed on the
+  // whole pixel took for the gap already there and kept.
+  await page.setViewportSize({ width: 880, height: 800 });
+  await richDocument(page);
+  const reference = await layoutSignature(page);
+  const settle = async () => {
+    const count = await page.evaluate(() => (window as unknown as Hooks).__pagCount());
+    await page.evaluate(() => {
+      const app = window as unknown as { __layoutSuspend: (suspended: boolean) => boolean };
+      app.__layoutSuspend(true);
+      app.__layoutSuspend(false);
+    });
+    await settleLocal(page, count);
+  };
+  const gap = (g: string) => parseFloat(g.replace(/^.*=/, ''));
+  for (const padding of [0.45, 0.3]) {
+    await page.addStyleTag({ content: `.ProseMirror > p:first-of-type { padding-bottom: ${padding}px }` });
+    await settle();
+    const passing = await layoutSignature(page);
+    // The same breaks and page starts; only the first gap's height moves.
+    expect(passing.breaks, `padding ${padding} px`).toBe(reference.breaks);
+    expect(passing.pagination.replace(/@\d+/g, ''), `padding ${padding} px`).toBe(reference.pagination.replace(/@\d+/g, ''));
+    expect(passing.gaps.slice(1), `padding ${padding} px`).toEqual(reference.gaps.slice(1));
+    expect(gap(passing.gaps[0]), `padding ${padding} px: ${passing.gaps[0]}`).toBeCloseTo(gap(reference.gaps[0]) - padding, 1);
+    await page.evaluate(() => document.querySelector('style:last-of-type')!.remove());
+    await settle();
+    expect(await layoutSignature(page), `after padding ${padding} px`).toEqual(reference);
+  }
+});
+
 const appRegion = (page: Page, selector: string) =>
   page.evaluate((selector) => {
     const style = getComputedStyle(document.querySelector(selector)!) as CSSStyleDeclaration & { appRegion?: string };
