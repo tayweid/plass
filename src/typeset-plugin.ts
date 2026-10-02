@@ -1986,8 +1986,13 @@ class TypesetView {
       // computed height is the document's own (natural geometry, read
       // through the painted spacers), so a pass that confirms the pages
       // installs the same heights and the dispatch is a signature no-op;
-      // one that differs by any fraction moves the page to where it
-      // belongs.
+      // one that differs moves the page to where it belongs, to the
+      // hundredth of a px the gap's CSS is written in. That takes the
+      // widget key too: ProseMirror keeps the DOM of a widget whose key is
+      // unchanged, so each gap's key carries its height in hundredths
+      // (line-decorations.ts). Keyed on the whole pixel, a gap moving from
+      // 337.9 to 337.6 kept its old div and its 337.9, which the next pass
+      // read back as painted and so computed again: the stale gap stayed.
       const lineSpacers = new Map<number, Spacer>();
       const blockSpacers: Spacer[] = [];
       for (const sp of spacers) (sp.kind === 'line' ? lineSpacers.set(sp.pos, sp) : blockSpacers.push(sp));

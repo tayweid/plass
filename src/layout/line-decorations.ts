@@ -153,12 +153,15 @@ export function pageGapWidget(height: number, hyphen: boolean, key?: string) {
 
 /** A line-position page spacer. `key` is accepted for mapped-decoration
  * revival, where the original identity must survive even if its position
- * was re-anchored by a transaction. */
+ * was re-anchored by a transaction. Every page-gap key carries the height
+ * in the hundredths its CSS writes: ProseMirror keeps the DOM of a widget
+ * whose key is unchanged, so any change in the painted height must change
+ * the key. */
 export function pageSpacerDecoration(
   pos: number,
   height: number,
   hyphen: boolean,
-  key = `pg:${pos}:${Math.round(height)}:${hyphen ? 'h' : ''}`,
+  key = `pg:${pos}:${height.toFixed(2)}:${hyphen ? 'h' : ''}`,
 ): Decoration {
   return Decoration.widget(pos, () => pageGapWidget(height, hyphen, key), {
     side: -1,
@@ -171,7 +174,7 @@ export function pageSpacerDecoration(
 
 /** A spacer between whole blocks rather than at a paragraph line break. */
 export function blockSpacerDecoration(spacer: Spacer): Decoration {
-  const key = `pgb:${spacer.pos}:${Math.round(spacer.height)}`;
+  const key = `pgb:${spacer.pos}:${spacer.height.toFixed(2)}`;
   return Decoration.widget(spacer.pos, () => pageGapWidget(spacer.height, false, key), {
     side: -1,
     key,
@@ -224,7 +227,7 @@ function repeatedHeaderSignature(doc: PMNode | undefined, pos: number): string {
 export function rowSpacerDecoration(spacer: Spacer, doc?: PMNode): Decoration {
   const hdr = spacer.hdr ?? 0;
   const headerSig = hdr > 0 ? repeatedHeaderSignature(doc, spacer.pos) : '';
-  const key = `pgr:${spacer.pos}:${Math.round(spacer.height)}:${Math.round(hdr)}${headerSig ? `:${headerSig}` : ''}`;
+  const key = `pgr:${spacer.pos}:${spacer.height.toFixed(2)}:${hdr.toFixed(2)}${headerSig ? `:${headerSig}` : ''}`;
   return Decoration.widget(
     spacer.pos,
     (view) => tableBreakWidget(view, { pos: spacer.pos, height: spacer.height, hdr, key }),

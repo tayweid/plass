@@ -1268,15 +1268,41 @@ settled pass now installs the heights it computed; a pass that confirms
 the pages installs the same heights and its dispatch is still a
 signature no-op.
 
+The review found that half done. Each gap widget's ProseMirror key held
+the rounded height (`pg:${pos}:${Math.round(height)}`, and the same in
+`pgb:` and `pgr:`), and ProseMirror keeps the DOM of a widget whose key
+is unchanged. A new height that rounded to the installed one's pixel
+dispatched (the signature carries the exact height) but left the old
+div and its `style.height`; `currentSpacers` read that painted height
+back, the next pass computed the same value, the signature matched, and
+the stale gap stayed for good. At 880 with a 0.3 px padding the settled
+pass computed 337.6 (`1865@338` in the log), the gap stayed
+`pg:1865:338:=337.9px`, and the solution's rules moved from
+`4449.69px` to `4449.98px`. The keys now carry the height in the
+hundredths the CSS writes (`pg:1865:337.60:`, `pgb:<pos>:27.20`,
+`pgr:<pos>:<height>:<header>`, each `toFixed(2)`), so any change in the
+painted height rebuilds the widget. The revival of a spacer lost in a
+deletion reads only a key's prefix and `currentSpacers` matches keys
+exactly, so neither changed; the unit test's two keys and
+`table-pagination.spec`'s `pgr:` pattern (`[\d.]+` for `\d+`) did. No
+other code builds or parses a gap key (the scroll rail and the HUD
+read neither).
+
 - New in `frame.spec`: *the layout is the document's, not the passes'
   before it*. At 880 a 0.45 px padding on the first paragraph and a
   settled pass, then the padding gone and another: the gap follows the
-  padded page (337.45) and comes back to a fresh load's signature. On
-  ce5f862 the padded pass kept 337.9, CI's pair exactly. No flag or
+  padded page (337.45) and comes back to a fresh load's signature; then
+  the same with 0.3 px, where both heights round to the same pixel: the
+  gap follows to 337.6 and comes back. On ce5f862 the padded pass kept
+  337.9, CI's pair exactly. With the keys still rounded (the key change
+  stashed) the 0.45 px state passes and the 0.3 px state fails, the gap
+  `pg:1865:338:=337.9px` against 337.6 expected. No flag or
   device scale factor showed the half pixel on the Mac on ce5f862
   (device scale factor 1 and 2, `--disable-font-subpixel-positioning`
   beside the project's `--font-render-hinting=none`, the CPU throttled
   4×, 8× and 20×): the history it needs is the runner's.
 - `npm test`: green. `npm run build`: green. `node app/smoke.mjs`: ok.
+  The same with the keys in hundredths.
 - `CI=1 npx playwright test --project=chromium` (a scratch config on a
-  spare port, deleted after): 202 passed.
+  spare port, deleted after): 202 passed, before the keys' change and
+  after it.
