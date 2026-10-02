@@ -14,9 +14,10 @@ import { Plugin, TextSelection } from 'prosemirror-state';
 import { baseKeymap, chainCommands, exitCode, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import { closeHistory, redo, undo } from 'prosemirror-history';
 import { ReplaceStep } from 'prosemirror-transform';
-import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
+import { liftListItem, sinkListItem, wrapInList } from 'prosemirror-schema-list';
 import { goToNextCell } from 'prosemirror-tables';
 import { enterInTable, exitTableVertically, tabInTable } from './table-editor';
+import { enterInList } from './list-enter';
 import { tabInGrid } from './grid-editor';
 import { Slice, type MarkType } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
@@ -256,7 +257,7 @@ export function buildKeymap(): Plugin {
     'Mod-Alt-5': setBlockType(schema.nodes.heading, { level: 5 }),
     'Mod-Alt-6': setBlockType(schema.nodes.heading, { level: 6 }),
     'Ctrl->': wrapIn(schema.nodes.blockquote),
-    'Enter': chainCommands(exitFootnote, exitFigure, exitFrontMatter, enterInTable, splitListItem(schema.nodes.list_item)),
+    'Enter': chainCommands(exitFootnote, exitFigure, exitFrontMatter, enterInTable, enterInList),
     'Mod-Alt-f': insertFootnote,
     'Mod-Enter': (state, dispatch) => {
       const { $from } = state.selection;
