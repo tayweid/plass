@@ -9,8 +9,9 @@
 // on a shell that hides the title bar, see Knuth's bar beside the
 // traffic lights, with the folder the shell knows the file by; and, on a
 // shell that keeps the autosave record and its history view, open the
-// History window from the History tile beside the name and rewind the
-// document to the session's opening commit.
+// History page from the History tile beside the name — in the window's
+// room on a shell that has it (0.2.3), its History window on one before —
+// and rewind the document to the session's opening commit from it.
 //
 //   node app/smoke.mjs                 # the checkout: the shell on dist/
 //   node app/smoke.mjs path/to/Plass.app
@@ -395,16 +396,21 @@ if (keepsRecord) {
 } else console.log('smoke: the shell keeps no autosave record; not checked');
 
 // A rewind (the shell's history view, its README; docs/CLAERBOUT-SHELL.md):
-// the History tile beside the name (one call with File › History…, which
-// tests/rewind.spec.ts clicks) opens the History window on the document's
-// project, and a rewind from it to the session's opening commit, made
-// while the window has typing not yet autosaved, has the window answer the
-// save step (so no window is passed over as silent) with that typing on
-// disk before "rewind from" records it, then reload its paper to the
-// opening text, in place, saying so. The record gains "plass: rewind from
-// <tip>" and "plass: rewind to <sha>". A shell without the view is said
-// and skipped.
+// the History tile beside the name (one toggle with File › History…, which
+// tests/rewind.spec.ts clicks) lays the shell's History page over the room
+// — the panel that is the paper, #scroll — at its box (CSS px × the zoom,
+// in DIP), pressed while it is up, and the page follows the room when the
+// window grows; on a shell from before the room (0.2.1, 0.2.2) it opens
+// the History window instead. A rewind from it to the session's opening
+// commit, made with typing the paper took just before the tile, has the
+// window under it answer the save step (so no window is passed over as
+// silent) with that typing on disk before "rewind from" records it, then
+// reload its paper to the opening text, in place, saying so. The record
+// gains "plass: rewind from <tip>" and "plass: rewind to <sha>". Escape in
+// the page puts it away (a note the rewind left first), and the tile
+// un-presses. A shell without the view is said and skipped.
 const hasHistory = keepsRecord && fs.readFileSync(shellMain, 'utf8').includes('history.js');
+const inRoom = hasHistory && fs.readFileSync(shellMain, 'utf8').includes('addChildView');
 if (hasHistory) {
   const folder = path.dirname(doc);
   const name = path.basename(doc);
@@ -413,21 +419,10 @@ if (hasHistory) {
   const opening = log().find((commit) => commit.subject === 'plass: session open');
   const openingText = git('show', `${opening.sha}:${name}`);
   if (openingText.includes('Unsaved.')) await fail(`the opening commit already holds the typing to come:\n${openingText}`);
-  const opened = app.waitForEvent('window', { timeout: 30_000 });
-  await page.click('#history-tile');
-  const history = await opened.catch(() => null);
-  if (!history) await fail('the History tile opened no window');
-  await history.waitForLoadState('domcontentloaded');
-  if (!history.url().endsWith('/_claerbout/history.html')) await fail(`the History tile opened ${history.url()}`);
-  const graph = await history.evaluate(() => {
-    window.__steps = [];
-    window.claerbout.on('rewind', (step) => window.__steps.push(step));
-    return window.claerbout.request({ type: 'history', action: 'graph' });
-  });
-  if (graph?.state !== 'on' || !graph.tip) await fail(`the History window's graph: ${JSON.stringify(graph && { state: graph.state, reason: graph.reason, tip: graph.tip })}`);
-  // Typed at the paragraph's end, put there by a click past its text (with
-  // the History window in front, End left the caret where a click had put
-  // it), and the rewind asked for at once, inside autosave's 1.2 s.
+  // Typed at the paragraph's end, put there by a click past its text, just
+  // before the tile: the History page covers the paper, which takes no
+  // typing while it is hidden under it. A rewind inside autosave's 1.2 s
+  // has the save step write it; a later one finds it written.
   const end = await page.evaluate(() => {
     const paragraph = document.querySelector('.ProseMirror p');
     paragraph.scrollIntoView({ block: 'center' });
@@ -438,12 +433,98 @@ if (hasHistory) {
   });
   await page.mouse.click(end.x, end.y);
   await page.keyboard.type(' Unsaved.');
-  const rewind = (tip) => history.evaluate(([sha, tip]) => window.claerbout.request({ type: 'rewind', sha, tip }), [opening.sha, tip]);
+  /** Runs `source` (an expression) in the History page and gives back its value. */
+  let inHistory;
+  let closeHistory;
+  if (inRoom) {
+    const host = await app.browserWindow(page);
+    const views = () =>
+      host.evaluate((win) =>
+        win.contentView.children
+          .filter((view) => view.webContents && view.webContents !== win.webContents && !view.webContents.isDestroyed())
+          .map((view) => ({ id: view.webContents.id, url: view.webContents.getURL(), bounds: view.getBounds(), loading: view.webContents.isLoading() })),
+      );
+    const historyView = async () => {
+      for (let i = 0; i < 120; i++) {
+        const found = (await views()).find((view) => view.url.includes('/_claerbout/history.html?inline=1') && !view.loading);
+        if (found) return found;
+        await page.waitForTimeout(100);
+      }
+      return null;
+    };
+    const room = async () => {
+      const zoom = await host.evaluate((win) => win.webContents.getZoomFactor());
+      const r = await page.evaluate(() => {
+        const box = document.getElementById('scroll').getBoundingClientRect();
+        return { x: box.left, y: box.top, width: box.width, height: box.height };
+      });
+      return { x: Math.round(r.x * zoom), y: Math.round(r.y * zoom), width: Math.round(r.width * zoom), height: Math.round(r.height * zoom) };
+    };
+    const same = (a, b) => ['x', 'y', 'width', 'height'].every((key) => Math.abs(a[key] - b[key]) <= 1);
+    const pressed = () => page.evaluate(() => document.getElementById('history-tile').getAttribute('aria-pressed'));
+    await page.click('#history-tile');
+    const view = await historyView();
+    if (!view) await fail(`the History tile laid no History page over the room (views: ${JSON.stringify(await views())})`);
+    inHistory = (source) => app.evaluate(({ webContents }, [id, code]) => webContents.fromId(id).executeJavaScript(code), [view.id, source]);
+    for (let i = 0; i < 40 && (await pressed()) !== 'true'; i++) await page.waitForTimeout(100);
+    if ((await pressed()) !== 'true') await fail('the History tile is not pressed with the History page up');
+    const at = await room();
+    if (!same(view.bounds, at)) await fail(`the History page is at ${JSON.stringify(view.bounds)}, not the room's ${JSON.stringify(at)}`);
+    // The window grows: the page measures its room again and the shell
+    // moves the History page to it.
+    await host.evaluate((win) => {
+      const [width, height] = win.getContentSize();
+      win.setContentSize(width + 80, height + 60);
+    });
+    let moved = null;
+    for (let i = 0; i < 40; i++) {
+      moved = (await views()).find((v) => v.id === view.id);
+      if (moved && same(moved.bounds, await room()) && !same(moved.bounds, view.bounds)) break;
+      await page.waitForTimeout(125);
+    }
+    if (!moved || !same(moved.bounds, await room()) || same(moved.bounds, view.bounds)) await fail(`after the window grew the History page is at ${JSON.stringify(moved?.bounds)}, not the room's ${JSON.stringify(await room())}`);
+    console.log(`smoke: history in the room at ${view.bounds.x},${view.bounds.y} ${view.bounds.width}×${view.bounds.height}, then ${moved.bounds.x},${moved.bounds.y} ${moved.bounds.width}×${moved.bounds.height} with the window grown`);
+    closeHistory = async () => {
+      for (let i = 0; i < 4 && (await views()).some((v) => v.id === view.id); i++) {
+        await app.evaluate(({ webContents }, id) => {
+          const contents = webContents.fromId(id);
+          if (!contents || contents.isDestroyed()) return;
+          contents.focus();
+          contents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+          contents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+        }, view.id);
+        await page.waitForTimeout(300);
+      }
+      if ((await views()).length) await fail(`Escape left the History page over the room (${JSON.stringify(await views())})`);
+      for (let i = 0; i < 20 && (await pressed()) !== 'false'; i++) await page.waitForTimeout(100);
+      if ((await pressed()) !== 'false') await fail('the History tile stayed pressed after Escape put the History page away');
+      const paper = await page.evaluate(() => getComputedStyle(document.getElementById('scroll')).visibility);
+      if (paper !== 'visible') await fail(`the paper is ${paper} after the History page went`);
+      const leaked = await app.evaluate(({ webContents }) => webContents.getAllWebContents().filter((contents) => contents.getURL().includes('history.html?inline=1')).length);
+      if (leaked) await fail('the inline History page outlived its view');
+    };
+  } else {
+    const opened = app.waitForEvent('window', { timeout: 30_000 });
+    await page.click('#history-tile');
+    const history = await opened.catch(() => null);
+    if (!history) await fail('the History tile opened no window');
+    await history.waitForLoadState('domcontentloaded');
+    if (!history.url().endsWith('/_claerbout/history.html')) await fail(`the History tile opened ${history.url()}`);
+    inHistory = (source) => history.evaluate(source);
+    closeHistory = () => history.close();
+  }
+  const graph = await inHistory(`(() => {
+    window.__steps = [];
+    window.claerbout.on('rewind', (step) => window.__steps.push(step));
+    return window.claerbout.request({ type: 'history', action: 'graph' });
+  })()`);
+  if (graph?.state !== 'on' || !graph.tip) await fail(`the History page's graph: ${JSON.stringify(graph && { state: graph.state, reason: graph.reason, tip: graph.tip })}`);
+  const rewind = (tip) => inHistory(`window.claerbout.request({ type: 'rewind', sha: ${JSON.stringify(opening.sha)}, tip: ${JSON.stringify(tip)} })`);
   let result = await rewind(graph.tip);
   // A timer commit between the graph and the click: asked again, as the page does.
   if (result?.refused === 'moved') result = await rewind(result.tip);
   if (!result?.ok) await fail(`the rewind was not made: ${JSON.stringify(result)}`);
-  const steps = await history.evaluate(() => window.__steps);
+  const steps = await inHistory('window.__steps');
   const silent = steps.filter((step) => step.state === 'done' && step.detail?.silent?.length);
   if (silent.length || (result.silent ?? []).length) await fail(`a window did not answer the rewind: ${JSON.stringify({ steps, silent: result.silent })}`);
   if (!steps.some((step) => step.step === 'save' && step.state === 'done')) await fail(`the rewind's steps had no save: ${JSON.stringify(steps)}`);
@@ -463,8 +544,9 @@ if (hasHistory) {
   // Not an edit: nothing written back over what the rewind wrote.
   await page.waitForTimeout(1600);
   if (fs.readFileSync(doc, 'utf8') !== openingText) await fail(`the window wrote over the rewound file:\n${fs.readFileSync(doc, 'utf8')}`);
-  console.log(`smoke: rewind: ${steps.map((step) => `${step.step} ${step.state}`).join(', ')}; ${to}`);
-  await history.close();
+  console.log(`smoke: rewind${inRoom ? ' from the room' : ''}: ${steps.map((step) => `${step.step} ${step.state}`).join(', ')}; ${to}`);
+  await closeHistory();
+  if (inRoom) console.log('smoke: history: Escape put it away, the tile un-pressed, the paper shown, nothing left behind');
 } else console.log('smoke: the shell has no history view; the rewind is not checked');
 
 await app.close();

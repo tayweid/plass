@@ -528,21 +528,60 @@ prompted.
     holds the keys) and **the History tile** in the bar right after the
     name pill (since the evening of 2026-10-02: "i think it belongs as a
     tile on the topbar beside the address", Taylor; Knuth's bar has the
-    same tile, the same glyph, `docs/ZEN-DRAFT.md`), in Plass.app only:
-    one call, `{type: 'history', action: 'open'}` (`openHistory`). The
-    shell answers a document page `{opened: true}` and nothing more: a
-    window with no record still gets a History window, which says why
-    (not saved yet, the folder rule in words, the record off, no git), so
-    the page has nothing of its own to say then. A shell without the view
-    (older than 0.2.1 answers null) has the toast say so at the first ask,
-    from either, and the item and the tile both go.
+    same tile, the same glyph, `docs/ZEN-DRAFT.md`), in Plass.app only,
+    toggle the shell's History page **in the room** of the same window,
+    not a window of its own (later the same evening: "instead of a new
+    window, i just want it to open in the same window in the main area").
+    The room is the panel that is the paper, `#scroll`: under the bar,
+    right of the rail, 8 px from the right and bottom, or 20 px from the
+    right while the scroll rail's gutter shows. The page's side of the
+    shell's protocol (its README, "The protocol"; `src/claerbout.ts`):
+    - a click sends `{type: 'history', action: 'open', inline: {x, y,
+      width, height}}`, the room's `getBoundingClientRect()` in CSS px
+      (`openHistory`), or, with the page up, `{action: 'close'}`
+      (`closeHistory`);
+    - the tile is pressed (`aria-pressed`, the look of the bar's tiles
+      when active) exactly while the shell says the page is up, `history
+      {kind: 'inline', state: 'open' | 'closed'}` (`onHistoryView`), never
+      from the click; the page can go by Escape or its own close tile, by
+      View › History…, or with a reload of this page, and the tile follows
+      the word each time;
+    - while it is up, a ResizeObserver on the room, coalesced to a frame,
+      sends `{action: 'bounds', inline}` (`moveHistory`) whenever the
+      room's size changes: a resize of the window, or the scroll rail's
+      gutter coming or going (the panel's right edge); its top and left
+      are the bar's and the rail's and never move. A zoom step (the
+      device pixel ratio's change, heard on a resolution media query)
+      sends it too, since under `followZoom` the box in CSS px may not
+      change while the shell's factor does;
+    - View › History… (⇧⌘H) sends the page `history {kind: 'toggle'}`, and
+      the page does what its tile does, so the box is the page's;
+    - while it is up the paper, its shadow, the HUD and the scroll rail
+      are `visibility: hidden` (`.history-inline` in `src/style.css`), not
+      removed: the page's rounded corners show the frame, not the paper,
+      no click in the gutter scrolls a paper no one can see, nothing
+      moves, and the document stays laid out underneath, answering a
+      rewind's `save` and `reload` as any window does. The editor loses
+      its focus while hidden, and gets it back (the caret where it was)
+      when the page goes;
+    - a shell from before the room (0.2.1, 0.2.2) answers `{opened: true}`
+      without `inline` and opens its History window, as before; a shell
+      without the view (older than 0.2.1 answers null) has the toast say so
+      at the first ask, from either, and the item and the tile both go.
+    A window with no record still gets the page, which says why (not saved
+    yet, the folder rule in words, the record off, no git), so the page
+    has nothing of its own to say then.
   - Tests: `src/claerbout.test.ts` (the answers, the path match, the
     request), `src/reload-in-place.test.ts`, `tests/rewind.spec.ts` (a
     stand-in shell on `window.claerbout`, the disk watcher held still),
-    and `app/smoke.mjs`, on a shell with the view: the History tile opens
-    the History window, and a rewind from it to the session's opening
+    `tests/frame.spec.ts` (the room's box is the panel's, and goes again
+    when the gutter goes), and `app/smoke.mjs`, on a shell with the view:
+    the History tile lays the History page over the room at its box in
+    DIP (on 0.2.3; the History window on an older shell), the page follows
+    the window when it grows, and a rewind from it to the session's opening
     commit, made with typing not yet autosaved, passes no window over as
     silent, records that typing in "rewind from", reloads the paper and
-    leaves "plass: rewind from" and "plass: rewind to" on the record. All
+    leaves "plass: rewind from" and "plass: rewind to" on the record;
+    Escape puts the page away, the tile un-presses and the paper shows. All
     of it ships with the shell tag that brings the view; under v0.2.0
     nothing sends the events.

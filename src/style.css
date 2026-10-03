@@ -1145,6 +1145,23 @@ body {
   pointer-events: none;
 }
 
+/* The History page in the room (Plass.app; toolbar.ts, the History
+   tile): the shell lays its page over #scroll's box, rounded 12 px on a
+   transparent ground, so what shows at its corners is what lies under
+   it. While it is up the paper and everything drawn for it — the shadow
+   round it, the HUD in its corner, the scroll rail's marks in the gutter
+   — are hidden, not removed: the corners show the frame, a click in the
+   gutter scrolls no paper one cannot see, and the document stays laid
+   out underneath at the same box, so a rewind's save and reload work on
+   it as ever and nothing moves (the gutter keeps its width). */
+:root.history-inline #scroll,
+:root.history-inline #paper-shadow,
+:root.history-inline #hud,
+:root.history-inline #scrollrail,
+:root.history-inline #sr-label {
+  visibility: hidden;
+}
+
 /* ---------- the page stack ---------- */
 
 /* One continuous editable flow (#editor) over painted page boxes (#pages),

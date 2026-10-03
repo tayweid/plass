@@ -45,8 +45,10 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   runs on), with the shadow drawn round the paper in view (Zen's shape,
   the frame in `src/style.css`; the bar is
   Knuth's — File, the name pill with its save dot and folder, in
-  Plass.app the History tile (the shell's History window, one call with
-  File › History…; the same tile and glyph as Knuth's), then Export —
+  Plass.app the History tile (the shell's History page laid over the
+  panel in the same window, one toggle with File › History… and the
+  shell's View › History…, pressed while it is up; the same tile and glyph
+  as Knuth's), then Export —
   beside the traffic lights, the rail the tools, `docs/ZEN-DRAFT.md`). The pages fill the panel's width by scaling,
   never by re-flowing: they are laid out at their own width (816 CSS px
   for Letter) and drawn at the panel's by a transform on `#stack`

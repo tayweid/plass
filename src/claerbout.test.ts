@@ -19,9 +19,15 @@
 // 'saved', id, ok: true}` once the document is on disk, or `ok: false`
 // with why, which refuses the rewind; `reload {paths, to, app?}` reads the
 // file again only when this window's path is among the paths, however
-// /private spells it; File › History… asks `{type: 'history', action:
-// 'open'}`, and only `{opened: true}` is an opened window.
-import { focusThisWindow, isNativeShell, onShellReload, onShellSave, openHistory, reportDocument, rewoundText, samePath } from './claerbout';
+// /private spells it.
+//
+// The History page in the room: the tile asks `{type: 'history', action:
+// 'open', inline: <the room's box>}`, and only `{opened: true, inline:
+// true}` is the page in the room; `{opened: true}` alone is an older shell
+// that opened its window instead; anything else, no history view. `bounds`
+// and `close` carry what they should, and the shell's `history` events
+// reach the page as inline open/closed and toggle, nothing else.
+import { closeHistory, focusThisWindow, isNativeShell, moveHistory, onHistoryView, onShellReload, onShellSave, openHistory, reportDocument, rewoundText, samePath, type HistoryViewEvent } from './claerbout';
 
 let failed = 0;
 function check(name: string, ok: boolean) {
@@ -244,23 +250,57 @@ check('what the window says: Rewound to the first seven', rewoundText({ to: sha,
 check('another app\u2019s: Rewound by Knuth', rewoundText({ to: sha, app: 'knuth' }) === 'Rewound by Knuth');
 check('neither known: Rewound', rewoundText({ to: null, app: null }) === 'Rewound');
 
-console.log('openHistory (File › History…)');
+console.log('openHistory, moveHistory, closeHistory (the History page in the room)');
 
+const room = { x: 44, y: 44, width: 828, height: 668 };
 delete global.window;
-check('no shell: false', (await openHistory()) === false);
+check('no shell: null', (await openHistory(room)) === null);
+moveHistory(room);
+closeHistory();
+
+shell(async () => ({ opened: true, inline: true }));
+check('the shell laid the page over the room: inline', (await openHistory(room)) === 'inline');
+check('what it was asked: open with the room\u2019s box', JSON.stringify(asked.at(-1)) === '{"type":"history","action":"open","inline":{"x":44,"y":44,"width":828,"height":668}}');
+moveHistory({ ...room, width: 900 });
+check('bounds carries the new box', JSON.stringify(asked.at(-1)) === '{"type":"history","action":"bounds","inline":{"x":44,"y":44,"width":900,"height":668}}');
+closeHistory();
+check('close carries nothing else', JSON.stringify(asked.at(-1)) === '{"type":"history","action":"close"}');
 
 shell(async () => ({ opened: true }));
-check('the shell opened the History window: true', (await openHistory()) === true);
-check('what it was asked', JSON.stringify(asked.at(-1)) === '{"type":"history","action":"open"}');
+check('a shell from before the room opened its window: window', (await openHistory(room)) === 'window');
 
 shell(async () => null);
-check('a shell without the history view answers null: false', (await openHistory()) === false);
+check('a shell without the history view answers null: null', (await openHistory(room)) === null);
+
+shell(async () => ({ opened: false, error: 'inline must be the room\u2019s box' }));
+check('a refused box: null', (await openHistory(room)) === null);
 
 shell(async () => ({}));
-check('an answer without opened: false', (await openHistory()) === false);
+check('an answer without opened: null', (await openHistory(room)) === null);
 
 shell(() => Promise.reject(new Error('the bridge is down')));
-check('a failing bridge: false, never a rejection', (await openHistory()) === false);
+check('a failing bridge: null, never a rejection', (await openHistory(room)) === null);
+moveHistory(room);
+closeHistory();
+await settle();
+check('bounds and close on a failing bridge reject nothing', true);
+
+console.log('onHistoryView (the shell\u2019s history events to a document page)');
+delete global.window;
+const heard: HistoryViewEvent[] = [];
+onHistoryView((event) => heard.push(event))();
+shell(async () => null);
+const stop = onHistoryView((event) => heard.push(event));
+fire('history', { kind: 'inline', state: 'open' });
+fire('history', { kind: 'toggle' });
+fire('history', { kind: 'inline', state: 'closed' });
+fire('history', { kind: 'inline', state: 'half' });
+fire('history', { kind: 'commit', sha: 'f00' });
+fire('history', null);
+check('inline open, toggle, inline closed, and nothing else', JSON.stringify(heard) === '[{"kind":"inline","open":true},{"kind":"toggle"},{"kind":"inline","open":false}]');
+stop();
+fire('history', { kind: 'toggle' });
+check('the unsubscribe stops it', heard.length === 3);
 delete global.window;
 
 if (failed) {
