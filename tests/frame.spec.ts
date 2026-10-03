@@ -914,6 +914,95 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
   }
 });
 
+test('in Plass.app the History page’s room is the panel: the box sent is the panel’s, and it goes again when the scroll rail’s gutter goes, nothing else moving', async ({ page }) => {
+  // The stand-in shell keeps every request and lets the test send events.
+  await page.addInitScript(() => {
+    const w = window as any;
+    w.__shell = [];
+    w.__listeners = {} as Record<string, Array<(detail: unknown) => void>>;
+    w.__fire = (event: string, detail: unknown) => (w.__listeners[event] ?? []).forEach((listener: (d: unknown) => void) => listener(detail));
+    w.claerbout = {
+      request: async (message: { type: string }) => {
+        w.__shell.push(message);
+        return message.type === 'history' ? { opened: true, inline: true } : message.type === 'document' ? { path: null } : null;
+      },
+      on: (event: string, listener: (detail: unknown) => void) => {
+        (w.__listeners[event] ??= []).push(listener);
+        return () => {};
+      },
+      pathOf: () => '',
+    };
+  });
+  // Tall enough that one page fits the panel and two do not.
+  // A Letter page at 1100 px is drawn 1356 px tall (1341 with the gutter);
+  // the panel is 1448.
+  const W = 1100;
+  const H = 1500;
+  await page.setViewportSize({ width: W, height: H });
+  await openTyp(page, Array.from({ length: 18 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') + '\n', 'room.typ');
+  const asks = () => page.evaluate(() => (window as any).__shell.filter((m: { type: string }) => m.type === 'history'));
+  const frame = () =>
+    page.evaluate(() => {
+      const box = (el: Element | null) => {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
+      };
+      return {
+        gutter: document.documentElement.classList.contains('has-rail'),
+        panel: box(document.getElementById('scroll')),
+        rail: box(document.getElementById('rail')),
+        bar: [...document.getElementById('toolbar')!.children].map((el) => box(el)),
+        scrollTop: document.getElementById('scroll')!.scrollTop,
+      };
+    });
+  const before = await frame();
+  expect(before.gutter).toBe(true);
+  // The panel: under the 44 px bar, right of the 44 px rail, to the
+  // gutter and the frame's bottom edge.
+  const room = { x: RAIL, y: 44, width: W - RAIL - GUTTER, height: H - 44 - EDGE };
+  expect(before.panel).toEqual(room);
+
+  await page.locator('#history-tile').click();
+  await expect.poll(asks).toEqual([{ type: 'history', action: 'open', inline: room }]);
+  await page.evaluate(() => (window as any).__fire('history', { kind: 'inline', state: 'open' }));
+  await expect(page.locator('#history-tile')).toHaveAttribute('aria-pressed', 'true');
+  // Up: the paper, its shadow and the scroll rail hidden, nothing moved —
+  // the panel, the rail of tools, the bar, the gutter, the scroll.
+  const up = await frame();
+  expect(up).toEqual(before);
+  for (const id of ['scroll', 'paper-shadow', 'scrollrail']) {
+    expect(await page.evaluate((id) => getComputedStyle(document.getElementById(id)!).visibility, id)).toBe('hidden');
+  }
+
+  // The paper shortened to one page under the page (a rewind, say): it
+  // fits the panel now, the gutter goes, the panel runs to the 8 px edge,
+  // and its new box goes to the shell, once.
+  await page.evaluate(() => {
+    const view = (window as any).view;
+    const { state } = view;
+    const last = state.doc.child(state.doc.childCount - 1);
+    const from = state.doc.child(0).nodeSize;
+    view.dispatch(state.tr.delete(from, state.doc.content.size - last.nodeSize));
+  });
+  await settleLocal(page);
+  await expect.poll(async () => (await frame()).gutter).toBe(false);
+  const wide = { ...room, width: W - RAIL - EDGE };
+  await expect.poll(async () => (await asks()).at(-1)).toEqual({ type: 'history', action: 'bounds', inline: wide });
+  expect((await frame()).panel).toEqual(wide);
+  await page.waitForTimeout(300);
+  expect((await asks()).filter((m: { action: string }) => m.action === 'bounds')).toHaveLength(1);
+  // The bar did not move.
+  expect((await frame()).bar).toEqual(before.bar);
+
+  // Put away: everything shown again.
+  await page.evaluate(() => (window as any).__fire('history', { kind: 'inline', state: 'closed' }));
+  await expect(page.locator('#history-tile')).toHaveAttribute('aria-pressed', 'false');
+  for (const id of ['scroll', 'paper-shadow']) {
+    expect(await page.evaluate((id) => getComputedStyle(document.getElementById(id)!).visibility, id)).toBe('visible');
+  }
+});
+
 test('clicks, selections, the caret and the toolbars land where the page is drawn', async ({ page }) => {
   test.setTimeout(90_000);
   // 1.77×: every client coordinate on the page is a scaled one.

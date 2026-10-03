@@ -35,15 +35,25 @@
 //   seen handles touch — Chromium asks it, with the path but no window,
 //   on every read and write. The shell also makes it the window's
 //   represented file. Knuth opens by path and never needs this.
-// - A rewind (the shell's history view, its History window over the
+// - A rewind (the shell's history view, its History page over the
 //   record). Before it writes anything the shell asks every window on
 //   the project to `save` (answered `saved`, within 3 s, or the window is
 //   passed over and its card says to reopen it), and after it every
 //   window hears `reload` with the paths it wrote or removed: the window
 //   whose file is among them reads it again (`onShellSave`,
-//   `onShellReload`). File › History… and the History tile beside the
-//   name ask for the History window (`openHistory`, one call for both,
-//   toolbar.ts), as the shell's View › History… does.
+//   `onShellReload`).
+// - The History page in the room (shell 0.2.3). The History tile beside
+//   the name, File › History… and the shell's View › History… toggle the
+//   shell's History page over this window's panel, the room (#scroll),
+//   not a window of its own (Taylor, 2026-10-02: "instead of a new
+//   window, i just want it to open in the same window in the main area"):
+//   `openHistory` sends the room's box, `moveHistory` the box again when
+//   it changes, `closeHistory` puts it away, and `onHistoryView` hears
+//   the shell say when it is up (`history {kind: 'inline', state}`, the
+//   only thing the tile's pressed look follows) and View › History…
+//   asking the page to do what its tile does (`toggle`). The document
+//   stays loaded under it, so a rewind's save and reload above reach it
+//   as they reach any window on the project. toolbar.ts drives it.
 // - Nothing else. `command` events (menu items acting in the page) are
 //   the shell's when a menu item needs one; the shell this replaced had no
 //   menu item that acted in the page.
@@ -209,7 +219,7 @@ export function onUpdate(listener: (step: UpdateStep) => void): () => void {
  *  the project's files, and every window on it writes its open document
  *  first. `save` writes it and resolves to null once it is on disk (at
  *  once when nothing changed), or to why it could not, in words that
- *  follow "could not be saved:" on the History window's card; the answer
+ *  follow "could not be saved:" on the History page's card; the answer
  *  is `{type: 'saved', id, ok: true}` or `{type: 'saved', id, ok: false,
  *  error}`, which refuses the rewind. The shell waits 3 s for it. Returns
  *  the unsubscribe; nothing outside the app. */
@@ -240,7 +250,7 @@ export interface Rewound {
 }
 
 /** What the window says when a rewind reloads its paper: "Rewound to
- *  1a2b3c4" (the commit, as the History window shows it, seven
+ *  1a2b3c4" (the commit, as the History page shows it, seven
  *  characters), or "Rewound by Knuth" when another app made it. */
 export function rewoundText({ to, app }: Rewound): string {
   if (app) return `Rewound by ${app.charAt(0).toUpperCase()}${app.slice(1)}`;
@@ -276,18 +286,73 @@ export function onShellReload(path: () => string | null, reload: (rewound: Rewou
   });
 }
 
-/** Ask the shell for the History window of this window's project, made or
- *  brought forward, as View › History… (⇧⌘H) does: true when it answers
- *  `{opened: true}`. A window with no record gets one too, which says why
- *  (not saved yet, a folder the record refuses, the record off, no git):
- *  the shell answers a document page nothing more. False in a browser tab
- *  and under a shell without the history view (older than 0.2.1 answers
- *  null). Never rejects. */
-export function openHistory(): Promise<boolean> {
+/** The room's box in the page's CSS px (its getBoundingClientRect). */
+export interface RoomBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Ask the shell for the History page of this window's project, laid over
+ *  `room` in this window (`{type: 'history', action: 'open', inline}`).
+ *  Resolves to what it did:
+ *  - 'inline': the page is in the room (`{opened: true, inline: true}`,
+ *    shell 0.2.3). A window with no record gets it too, saying why (not
+ *    saved yet, the folder rule in words, the record off, no git), so the
+ *    page has nothing of its own to say then. A second ask while it is up
+ *    answers the same and changes nothing.
+ *  - 'window': a shell from before the room (0.2.1, 0.2.2) answers
+ *    `{opened: true}` without `inline` and opens its History window, as
+ *    it always did; nothing is up in the room, and no event says so.
+ *  - null: a browser tab, a shell without the history view (older than
+ *    0.2.1 answers null), a box the shell refused (`{opened: false}`), or
+ *    a failed bridge. Never rejects. */
+export function openHistory(room: RoomBox): Promise<'inline' | 'window' | null> {
   const shell = bridge();
-  if (!shell) return Promise.resolve(false);
-  return shell.request({ type: 'history', action: 'open' }).then(
-    (reply) => (reply as { opened?: unknown } | null)?.opened === true,
-    () => false,
+  if (!shell) return Promise.resolve(null);
+  return shell.request({ type: 'history', action: 'open', inline: room }).then(
+    (reply) => {
+      const { opened, inline } = (reply ?? {}) as { opened?: unknown; inline?: unknown };
+      if (opened !== true) return null;
+      return inline === true ? 'inline' : 'window';
+    },
+    () => null,
   );
+}
+
+/** The room's box changed while the History page is in it: the shell moves
+ *  the page to it (`bounds`). Answered `{ok: true}`, or `{ok: false}` when
+ *  nothing is up; either way there is nothing to do with it. */
+export function moveHistory(room: RoomBox): void {
+  void bridge()?.request({ type: 'history', action: 'bounds', inline: room }).catch(() => undefined);
+}
+
+/** Put the History page in the room away (`close`; answered `{closed:
+ *  true}` whether or not one was up). The tile un-presses when the shell
+ *  says it went, not here. */
+export function closeHistory(): void {
+  void bridge()?.request({ type: 'history', action: 'close' }).catch(() => undefined);
+}
+
+/** What the shell says of the History page in the room: it came or went
+ *  (`{kind: 'inline', state: 'open' | 'closed'}`, whichever side moved it:
+ *  the tile, Escape or the close tile in the page, View › History…, a
+ *  reload of this page), or View › History… asks this page to do what its
+ *  tile does (`{kind: 'toggle'}`, sent only while nothing is up: the
+ *  room's box is the page's to send). */
+export type HistoryViewEvent = { kind: 'inline'; open: boolean } | { kind: 'toggle' };
+
+/** The shell's `history` events to a document page; returns the
+ *  unsubscribe; nothing outside the app. Other kinds (the History page's
+ *  own: commit, refs, state, focus) never reach a document page and are
+ *  passed over. */
+export function onHistoryView(listener: (event: HistoryViewEvent) => void): () => void {
+  const shell = bridge();
+  if (!shell) return () => {};
+  return shell.on('history', (detail) => {
+    const { kind, state } = (detail ?? {}) as { kind?: unknown; state?: unknown };
+    if (kind === 'inline' && (state === 'open' || state === 'closed')) listener({ kind, open: state === 'open' });
+    else if (kind === 'toggle') listener({ kind });
+  });
 }

@@ -23,7 +23,7 @@ import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
 import { placeFlyout } from './flyout';
 import { isPwaInstalled, onPwaInstallState, requestPwaInstall } from './pwa-install';
-import { checkForUpdate, installUpdate, isNativeShell, onUpdate, openHistory } from './claerbout';
+import { checkForUpdate, closeHistory, installUpdate, isNativeShell, moveHistory, onHistoryView, onUpdate, openHistory } from './claerbout';
 import type { TypesetStats } from './typeset-plugin';
 import { DEFAULT_DOC_NAME, type FileManager } from './file-manager';
 
@@ -83,7 +83,7 @@ function icon(name: string): string {
   return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 }
 
-// The History tile's glyph, the record's river as the History window draws
+// The History tile's glyph, the record's river as the History page draws
 // it: three nodes on a vertical line, time running down, the lowest — now —
 // filled. One SVG in both apps, byte for byte: Knuth's copy is
 // HISTORY_GLYPH in knuth/src/main.ts, and a change is made to both. Not a
@@ -779,27 +779,110 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   item(fileMenu.element, 'Open…', () => void fm.open(), { title: 'Open… (⌘O)', shortcut: '⌘O' });
   item(fileMenu.element, 'Recent papers', () => {}, { title: 'Your papers', submenu: recent });
   item(fileMenu.element, 'Save', () => void fm.save(), { shortcut: '⌘S' });
-  // Plass.app: the shell's History window, the record of this document's
-  // folder with a rewind to any point of it, as View › History… (⇧⌘H, the
-  // shell's menu takes the keys) opens it. Two ways in, one call: this
-  // item, and the History tile in the bar right after the name pill
-  // (Taylor, 2026-10-02: "i think it belongs as a tile on the topbar
-  // beside the address"), a bar tile like File, with the same river glyph
-  // as Knuth's. A document with no record gets a window that says why; a
-  // shell without the view answers null, and the item and the tile go.
+  // Plass.app: the shell's History page, the record of this document's
+  // folder with a rewind to any point of it, in this window's room — the
+  // panel that is the paper (#scroll), under the bar and right of the
+  // rail — not a window of its own (Taylor, 2026-10-02: "instead of a new
+  // window, i just want it to open in the same window in the main
+  // area"). Three ways in, one toggle: the History tile in the bar right
+  // after the name pill ("i think it belongs as a tile on the topbar
+  // beside the address", a bar tile like File, with the same river glyph
+  // as Knuth's), this item, and the shell's View › History… (⇧⌘H, the
+  // shell's menu takes the keys), which asks the page to do what the tile
+  // does (`toggle`), since the room's box is the page's to send. The shell
+  // lays its page over the box and says when it comes and goes (Escape and
+  // the page's own close tile put it away too, and a reload of this page);
+  // the tile is pressed exactly while it is up, from that word alone,
+  // never from the click. While it is up the room is measured again
+  // whenever its box changes — a resize of the window, the scroll rail's
+  // gutter coming or going (the panel's right edge, 8 px or 20 px), a zoom
+  // step — and the shell moves the page to it. The document stays loaded
+  // underneath, hidden (style.css, .history-inline: the page's rounded
+  // corners show the frame, not the paper), so a rewind's save and reload
+  // reach it as ever. A document with no record gets the page saying why;
+  // a shell from before the room (0.2.1, 0.2.2) opens its History window
+  // instead, as it did; a shell without the view answers null, and the
+  // item and the tile go.
   if (isNativeShell()) {
     const historyTile = glyphButton(container, 'History', HISTORY_GLYPH);
     historyTile.id = 'history-tile';
     historyTile.classList.add('tb-tile');
     historyTile.title = 'History (⇧⌘H)';
     historyTile.setAttribute('aria-keyshortcuts', 'Shift+Meta+H');
+    historyTile.setAttribute('aria-pressed', 'false');
     titleBar.after(historyTile);
     const ways: HTMLElement[] = [historyTile];
-    const showHistory = () => void openHistory().then((opened) => {
-      if (opened) return;
-      for (const way of ways) way.hidden = true;
-      fm.notify('This Plass.app has no history view — File → Check for updates…');
+    const room = document.getElementById('scroll')!;
+    const roomBox = () => {
+      const r = room.getBoundingClientRect();
+      return { x: r.left, y: r.top, width: r.width, height: r.height };
+    };
+    let shown = false;
+    const showHistory = () => {
+      if (shown) {
+        closeHistory();
+        return;
+      }
+      void openHistory(roomBox()).then((how) => {
+        if (how) return;
+        for (const way of ways) way.hidden = true;
+        fm.notify('This Plass.app has no history view — File → Check for updates…');
+      });
+    };
+    onHistoryView((event) => {
+      if (event.kind === 'toggle') {
+        closeMenu();
+        showHistory();
+        return;
+      }
+      if (event.open === shown) return;
+      shown = event.open;
+      historyTile.setAttribute('aria-pressed', String(shown));
+      document.documentElement.classList.toggle('history-inline', shown);
+      // Back from the record: the caret where it was, for typing on. The
+      // shell gives the window's page its focus back; the editor lost it
+      // when the paper was hidden.
+      if (!shown && (document.activeElement === document.body || view.dom.contains(document.activeElement))) view.focus();
     });
+    // The room's box, again whenever it changes while the page is in it,
+    // once a frame. A size change is what moves it: the room's top and
+    // left are the bar's and the rail's, fixed.
+    let frame = 0;
+    const follow = () => {
+      if (!shown || frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (shown) moveHistory(roomBox());
+      });
+    };
+    new ResizeObserver(follow).observe(room);
+    // A zoom step changes the CSS px → DIP the shell multiplies the box
+    // by; under followZoom (app/plass.json) the window scales with it, so
+    // the box in CSS px may not change at all. A change of the device
+    // pixel ratio is the step.
+    const zoomStep = () => {
+      matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => {
+        follow();
+        zoomStep();
+      }, { once: true });
+    };
+    zoomStep();
+    // The page is the shell's, above everything this one draws in the
+    // room, so whatever opens or acts there puts it away first, as Knuth's
+    // bar does: the File and Export tiles (their menus drop over the room)
+    // and the rail (its tiles edit the paper under the page; its flyouts
+    // and Document settings open over the room). On the press, before the
+    // click opens anything, and on the keys that press a tile or open its
+    // menu, for a bar the focus came back to. The History tile is the
+    // toggle itself; the HUD and the scroll rail are hidden while the page
+    // is up (style.css), so they open nothing.
+    const putAway = () => { if (shown) closeHistory(); };
+    const presses = (e: KeyboardEvent) => e.key === 'Enter' || e.key === ' '
+      || (['ArrowDown', 'ArrowUp', 'ArrowRight'].includes(e.key) && (e.target as Element).classList.contains('tb-menu-trigger'));
+    for (const way of [fileBtn, exportBtn, rail]) {
+      way.addEventListener('pointerdown', putAway, true);
+      way.addEventListener('keydown', (e) => { if (presses(e)) putAway(); }, true);
+    }
     historyTile.addEventListener('click', () => { closeMenu(); showHistory(); });
     ways.push(item(fileMenu.element, 'History…', showHistory, { shortcut: '⇧⌘H', title: 'The record of this document\u2019s folder, and a rewind to any point of it (⇧⌘H)' }));
   }
