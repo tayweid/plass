@@ -69,6 +69,9 @@ const fail = async (message) => {
   } catch (error) {
     report(`smoke: (no diagnostics: ${error.message})`);
   }
+  // The reason once more, last: a deploy's log is read from its tail, and
+  // the page text and the shell's log above push the first line out of it.
+  report(`smoke: FAILED: ${message}`);
   await app.close().catch(() => {});
   process.exit(1);
 };
