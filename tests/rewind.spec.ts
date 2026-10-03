@@ -4,7 +4,8 @@
 // answers `saved`, at once when nothing changed and `ok: false` with why
 // when it cannot; `reload {paths, to, app?}` reads the file again, in
 // place, only when the window's own path is among the paths; and File ›
-// History… asks for the History window, inside Plass.app only.
+// History… and the History tile beside the name ask for the History
+// window, one call, inside Plass.app only.
 //
 // The shell is a stand-in on `window.claerbout` (as in persistence.spec.ts):
 // every request kept on `__shell`, the page's listeners kept so a test can
@@ -241,4 +242,57 @@ test('File › History… asks Plass.app for the History window, and is not in a
   await old.getByRole('button', { name: 'File', exact: true }).click();
   await expect(old.getByRole('menuitem', { name: 'Open…' })).toBeVisible();
   await expect(old.getByRole('menuitem', { name: 'History…' })).toBeHidden();
+  // The tile goes with it: one call behind both.
+  await expect(old.locator('#history-tile')).toBeHidden();
+});
+
+const historyAsks = (page: Page) => page.evaluate(() => (window as any).__shell.filter((m: { type: string }) => m.type === 'history'));
+
+test('the History tile beside the name asks Plass.app for the History window as File › History… does, and is not in a browser tab', async ({ page, context }) => {
+  // A browser tab: no shell, no tile.
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!(window as any).__fm);
+  await expect(page.locator('#doc-pod')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'History', exact: true })).toHaveCount(0);
+
+  // Plass.app: the tile, its caption on hover, and a click sends the
+  // request the menu item sends, the same one: the item after it adds a
+  // second, identical.
+  const app = await context.newPage();
+  await inPlassApp(app);
+  await app.goto('/?new=1');
+  const tile = app.getByRole('button', { name: 'History', exact: true });
+  await expect(tile).toBeVisible();
+  await expect(tile).toHaveAttribute('title', 'History (⇧⌘H)');
+  await tile.hover();
+  await expect(tile.locator('.lbl')).toHaveText('History');
+  await expect(tile.locator('.lbl')).toHaveCSS('opacity', '1');
+  // The click leaves the editor its focus, as every bar tile does.
+  const editor = app.locator('.ProseMirror[contenteditable="true"]');
+  await editor.click();
+  await tile.click();
+  await expect.poll(() => historyAsks(app)).toEqual([{ type: 'history', action: 'open' }]);
+  await expect(editor).toBeFocused();
+  await app.getByRole('button', { name: 'File', exact: true }).click();
+  await app.getByRole('menuitem', { name: 'History…' }).click();
+  await expect.poll(() => historyAsks(app)).toEqual([{ type: 'history', action: 'open' }, { type: 'history', action: 'open' }]);
+  await expect(app.locator('#toast')).not.toContainText('history view');
+  await expect(tile).toBeVisible();
+
+  // A shell without the history view answers null: the first click says
+  // so and the tile hides itself, Export closing up to the pill; the
+  // menu item goes too.
+  const old = await context.newPage();
+  await inPlassApp(old, null);
+  await old.goto('/?new=1');
+  await old.getByRole('button', { name: 'History', exact: true }).click();
+  await expect(old.locator('#toast')).toContainText('This Plass.app has no history view');
+  await expect(old.locator('#history-tile')).toBeHidden();
+  const pod = (await old.locator('#doc-pod').boundingBox())!;
+  const exportTile = (await old.getByRole('button', { name: 'Export', exact: true }).boundingBox())!;
+  expect(exportTile.x).toBe(pod.x + pod.width + 6);
+  await old.getByRole('button', { name: 'File', exact: true }).click();
+  await expect(old.getByRole('menuitem', { name: 'Open…' })).toBeVisible();
+  await expect(old.getByRole('menuitem', { name: 'History…' })).toBeHidden();
+  expect(await historyAsks(old)).toEqual([{ type: 'history', action: 'open' }]);
 });

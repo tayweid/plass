@@ -127,14 +127,15 @@ body {
 /* One plain bar on the frame, a straight line across the top of the
    window, the rail and the panel below it. The paper's way in and out
    sits on the left beside the traffic lights — File, the name with its
-   save dot, Export — and the tools are on the rail (toolbar.css). In
-   Plass.app the bar is the window's title bar (the shell hides its own
-   and leaves the traffic lights over the page, docs/CLAERBOUT-SHELL.md):
-   its empty part drags the window, which is the shell's to handle, so
-   the tiles, the name, the menus and the panel that may open into the
-   bar's band and the view switch are marked the page's. A browser
-   ignores the property; toolbar.css reserves the lights' room. The rail
-   is no drag region: it scrolls, and a drag region takes the wheel. */
+   save dot, History (Plass.app), Export — and the tools are on the rail
+   (toolbar.css). In Plass.app the bar is the window's title bar (the
+   shell hides its own and leaves the traffic lights over the page,
+   docs/CLAERBOUT-SHELL.md): its empty part drags the window, which is
+   the shell's to handle, so the tiles, the name, the menus and the panel
+   that may open into the bar's band and the view switch are marked the
+   page's. A browser ignores the property; toolbar.css reserves the
+   lights' room. The rail is no drag region: it scrolls, and a drag
+   region takes the wheel. */
 #toolbar {
   display: flex;
   flex-direction: row;
@@ -165,12 +166,14 @@ body {
 /* ---------- the name pill ---------- */
 
 /* Knuth's (knuth/src/styles.css): the two apps' bars are one bar. Zen's
-   address pill, a shade up from the frame, between the File and Export
-   tiles, holding the document's name (click to rename), its save dot and
-   the folder it lives in. When the pill is short only the folder gives
-   way, from its start, so the nearest folder stays; the name and the dot
-   never do — the name takes an ellipsis only if it alone overfills the
-   pill. */
+   address pill, a shade up from the frame, after the File tile and before
+   the History tile (Plass.app) and Export, holding the document's name
+   (click to rename), its save dot and the folder it lives in. It is the
+   one thing in the bar that gives way (at most half the window, and it
+   alone shrinks), so the tiles keep their 32 px however short the bar.
+   When the pill is short only the folder gives way, from its start, so
+   the nearest folder stays; the name and the dot never do — the name
+   takes an ellipsis only if it alone overfills the pill. */
 .doc-pod {
   --pod-gap: 9px;
   display: flex;

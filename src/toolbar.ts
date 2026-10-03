@@ -1,8 +1,8 @@
 // Zen's shape: the paper's way in and out in the bar beside the traffic
 // lights (File, the name with its save dot and folder — Knuth's bar —
-// and Export), the tools on a rail down the left in the bar's old groups,
-// the occasional ones behind Extras. Menus preserve the editor selection
-// and keep geometry reads off typing.
+// then, in Plass.app, History, and Export), the tools on a rail down the
+// left in the bar's old groups, the occasional ones behind Extras. Menus
+// preserve the editor selection and keep geometry reads off typing.
 
 import './toolbar.css';
 import { TextSelection } from 'prosemirror-state';
@@ -82,6 +82,16 @@ const ICONS: Record<string, string> = {
 function icon(name: string): string {
   return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 }
+
+// The History tile's glyph, the record's river as the History window draws
+// it: three nodes on a vertical line, time running down, the lowest — now —
+// filled. One SVG in both apps, byte for byte: Knuth's copy is
+// HISTORY_GLYPH in knuth/src/main.ts, and a change is made to both. Not a
+// clock with an arrow, which reads as history too: that is Knuth's Restart
+// session glyph (Feather's rotate-ccw) with hands, and the two would share
+// a window. The nodes are r 2.25 at the icons' 1.7 stroke, so at 18 px each
+// ring keeps a hole 2.1 px wide.
+const HISTORY_GLYPH = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="3.5" r="2.25"/><line x1="12" y1="6.25" x2="12" y2="9.25"/><circle cx="12" cy="12" r="2.25"/><line x1="12" y1="14.75" x2="12" y2="17.75"/><circle cx="12" cy="20.5" r="2.25" fill="currentColor"/></svg>';
 
 /** A folder as a person reads it: their home as ~ (Knuth's, src/main.ts).
  *  The page has no way to ask for the home folder, so a home is what macOS
@@ -306,8 +316,8 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     button.setAttribute('aria-expanded', 'false');
     return button;
   };
-  // The bar, left to right: File, the name, Export — the paper's way in
-  // and out, beside the traffic lights.
+  // The bar, left to right: File, the name, History (Plass.app, below),
+  // Export — the paper's way in and out, beside the traffic lights.
   const fileBtn = trigger(container, 'File', icon('open'));
   fileBtn.classList.add('tb-tile');
   container.append(titleBar);
@@ -771,15 +781,27 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   item(fileMenu.element, 'Save', () => void fm.save(), { shortcut: '⌘S' });
   // Plass.app: the shell's History window, the record of this document's
   // folder with a rewind to any point of it, as View › History… (⇧⌘H, the
-  // shell's menu takes the keys) opens it. A document with no record gets
-  // one that says why; a shell without the view answers null, and the
-  // item goes.
+  // shell's menu takes the keys) opens it. Two ways in, one call: this
+  // item, and the History tile in the bar right after the name pill
+  // (Taylor, 2026-10-02: "i think it belongs as a tile on the topbar
+  // beside the address"), a bar tile like File, with the same river glyph
+  // as Knuth's. A document with no record gets a window that says why; a
+  // shell without the view answers null, and the item and the tile go.
   if (isNativeShell()) {
-    const historyItem = item(fileMenu.element, 'History…', () => void openHistory().then((opened) => {
+    const historyTile = glyphButton(container, 'History', HISTORY_GLYPH);
+    historyTile.id = 'history-tile';
+    historyTile.classList.add('tb-tile');
+    historyTile.title = 'History (⇧⌘H)';
+    historyTile.setAttribute('aria-keyshortcuts', 'Shift+Meta+H');
+    titleBar.after(historyTile);
+    const ways: HTMLElement[] = [historyTile];
+    const showHistory = () => void openHistory().then((opened) => {
       if (opened) return;
-      historyItem.hidden = true;
+      for (const way of ways) way.hidden = true;
       fm.notify('This Plass.app has no history view — File → Check for updates…');
-    }), { shortcut: '⇧⌘H', title: 'The record of this document\u2019s folder, and a rewind to any point of it (⇧⌘H)' });
+    });
+    historyTile.addEventListener('click', () => { closeMenu(); showHistory(); });
+    ways.push(item(fileMenu.element, 'History…', showHistory, { shortcut: '⇧⌘H', title: 'The record of this document\u2019s folder, and a rewind to any point of it (⇧⌘H)' }));
   }
   item(documentRow, 'Markdown & shortcuts', () => showHelp(fm), { title: 'Markdown & shortcuts', glyph: '<span class="ico tico">?</span>' });
   const installButton = item(documentRow, 'Install Plass', () => void requestPwaInstall((message) => fm.notify(message)), {

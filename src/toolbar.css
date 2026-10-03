@@ -1,6 +1,8 @@
 /* Zen's shape. The bar beside the traffic lights holds the paper's way in
    and out: the File tile, the name pill with its save dot and its folder
-   (Knuth's bar, style.css), the Export tile. Its row is padded on the
+   (Knuth's bar, style.css), in Plass.app the History tile right after it
+   (the shell's History window; Knuth's bar has the same tile in the same
+   place, with the same glyph), the Export tile. Its row is padded on the
    left by the lights' room (the Window
    Controls Overlay the shell publishes when it hides the title bar) and
    by nothing else: nothing in the bar centres on the paper any more.
@@ -16,7 +18,9 @@
   padding-inline: calc(12px + env(titlebar-area-x, -6px)) var(--edge);
 }
 
-/* The bar's two tiles: bare, the rail's size (Knuth's, c6875a4). */
+/* The bar's tiles — File, History (Plass.app) and Export: bare, the
+   rail's size (Knuth's, c6875a4). History is the bar's gap past the pill,
+   and Export the gap past it; nothing else in the bar moves for it. */
 #toolbar .tb-tile {
   flex: none;
   width: 32px;
