@@ -273,10 +273,11 @@ if (!glass || glass === 'none') await fail(`the File menu draws no blur (backdro
 // that has it.
 // Knuth's bar, as knuth main has it since c6875a4 ("The bar as tall as
 // the rail is wide", 2026-10-02), measured in the same shell: the bar the
-// lights' band (44 px at rest, the rail's width; app/plass.json puts the
-// lights at {14, 15}, so the band is 2·15 + 14), the File tile 32 px
-// square 12 px past the lights' room and 6 px down, the name pill 30 px
-// tall 7 px down, centred on the band, then the History tile (Plass.app's
+// lights' band (44 px at rest on macOS 26, the rail's width; app/plass.json
+// puts the lights at {14, 15}, so the band is 2·15 plus the OS's lights,
+// 46 on a macOS 15 runner), the File tile 32 px square 12 px past the
+// lights' room and centred on the band (6 px down on 44), the name pill
+// 30 px tall centred on the band (7 px down on 44), then the History tile (Plass.app's
 // and Knuth.app's, the shell's History window) the bar's 6 px gap past
 // it, 32 px square 6 px down like File, and Export the same gap past
 // that.
@@ -303,13 +304,18 @@ if (hidesTitleBar) {
     };
   });
   if (!bar.visible || bar.x <= 0) await fail(`the shell hides the title bar but the page sees no overlay (${JSON.stringify(bar)})`);
-  if (bar.height !== bar.barHeight || bar.barHeight !== 44) await fail(`the lights' room is ${bar.height}px tall, the bar ${bar.barHeight}px (Knuth's is 44)`);
+  // The band is 2·y plus the OS's lights: 44 on macOS 26 (14 px lights),
+  // 46 on a macOS 15 runner (16); the bar is the band whatever it is, and
+  // its tiles and pill sit centred on it (6 and 7 px down on 44).
+  if (bar.height !== bar.barHeight || bar.barHeight < 44 || bar.barHeight > 48) await fail(`the lights' room is ${bar.height}px tall, the bar ${bar.barHeight}px (Knuth's is the band: 44 on macOS 26, 46 on 15)`);
+  const tileY = (bar.barHeight - 32) / 2;
+  const pillY = (bar.barHeight - 30) / 2;
   if (bar.padding !== bar.x + 12 || bar.file.x !== bar.x + 12) await fail(`the File tile is at ${bar.file.x}px, the bar padded ${bar.padding}px, the lights' room ${bar.x}px (Knuth's tile is 12 px past it)`);
-  if (bar.file.width !== 32 || bar.file.height !== 32 || bar.file.y !== 6) await fail(`the File tile is ${JSON.stringify(bar.file)} (Knuth's is 32 px square, 6 px down)`);
-  if (bar.pod.height !== 30 || bar.pod.y !== 7) await fail(`the name pill is ${JSON.stringify(bar.pod)} (Knuth's is 30 px tall, 7 px down)`);
+  if (bar.file.width !== 32 || bar.file.height !== 32 || bar.file.y !== tileY) await fail(`the File tile is ${JSON.stringify(bar.file)} (Knuth's is 32 px square, centred: ${tileY} px down)`);
+  if (bar.pod.height !== 30 || bar.pod.y !== pillY) await fail(`the name pill is ${JSON.stringify(bar.pod)} (Knuth's is 30 px tall, centred: ${pillY} px down)`);
   const besidePill = bar.pod.x + bar.pod.width + 6;
-  if (!bar.history || bar.history.x !== besidePill || bar.history.y !== 6 || bar.history.width !== 32 || bar.history.height !== 32) await fail(`the History tile is ${JSON.stringify(bar.history)}, not 32 px square at (${besidePill}, 6), the bar's gap past the pill ${JSON.stringify(bar.pod)}`);
-  else if (bar.exportTile.x !== bar.history.x + 38 || bar.exportTile.y !== 6) await fail(`Export is ${JSON.stringify(bar.exportTile)}, not the bar's gap past the History tile ${JSON.stringify(bar.history)}`);
+  if (!bar.history || bar.history.x !== besidePill || bar.history.y !== tileY || bar.history.width !== 32 || bar.history.height !== 32) await fail(`the History tile is ${JSON.stringify(bar.history)}, not 32 px square at (${besidePill}, ${tileY}), the bar's gap past the pill ${JSON.stringify(bar.pod)}`);
+  else if (bar.exportTile.x !== bar.history.x + 38 || bar.exportTile.y !== tileY) await fail(`Export is ${JSON.stringify(bar.exportTile)}, not the bar's gap past the History tile ${JSON.stringify(bar.history)}`);
   console.log(`smoke: the bar at ${await page.evaluate(() => innerWidth)} px: File ${JSON.stringify(bar.file)}, the pill ${JSON.stringify(bar.pod)}, History ${JSON.stringify(bar.history)}, Export ${JSON.stringify(bar.exportTile)}`);
 }
 
