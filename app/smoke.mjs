@@ -185,7 +185,14 @@ else await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].
 await page.waitForTimeout(600);
 const passes = await page.evaluate(() => window.__passes);
 const grew = zoomed.width / dragged.width;
-if (follows ? grew < 1.09 || grew > 1.25 : zoomed.width !== dragged.width || zoomed.height !== dragged.height) {
+// The shell scales the window with the zoom only as far as its display: on
+// the deploy's Mac the screen is small (1224 px dragged, no room for a
+// tenth more), and the step is fitted to the display instead, which the
+// check cannot read as a zoom. There the growth is not checked, and said.
+const display = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workAreaSize);
+const roomToGrow = display.width >= Math.ceil(dragged.width * 1.1) && display.height >= Math.ceil(dragged.height * 1.1);
+if (follows && !roomToGrow) console.log(`smoke: the display (${display.width}×${display.height}) has no room for a zoom step from ${dragged.width}×${dragged.height}: the window's growth is not checked here`);
+else if (follows ? grew < 1.09 || grew > 1.25 : zoomed.width !== dragged.width || zoomed.height !== dragged.height) {
   await fail(`a zoom step took the window from ${dragged.width}×${dragged.height} to ${zoomed.width}×${zoomed.height}${follows ? ' (the shell should have scaled it with the zoom, up to its display)' : ''}`);
 }
 if (resizes < 1 || resizes > 4) await fail(`a zoom step fired ${resizes} resize events`);
