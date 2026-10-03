@@ -57,11 +57,22 @@ or later.
 Every deploy packages the app on a GitHub Mac from that deploy's site and
 publishes it beside the site, so the app and plass.tayweid.io are always the
 same version. The app is the site's page inside the Claerbout shell, the
-Electron shell Knuth ships on (`docs/CLAERBOUT-SHELL.md`). To build it
-yourself from a checkout (needs Apple's Command Line Tools, Node 22 and the
-`claerbout` repository beside this one): `npx vite build`, then
-`npm run app:build`, which installs your build in Applications;
-`npm run app` runs it from the checkout without installing.
+Electron shell Knuth ships on (`docs/CLAERBOUT-SHELL.md`).
+
+From a checkout (needs Apple's Command Line Tools, Node 22 and the
+`claerbout` repository beside this one): to run the checkout,
+`npx vite build`, then `npm run app`, which starts the shell on `dist/` with
+a state folder of its own, beside an installed Plass. To install the checkout's
+build as the app, with nothing pushed: quit Plass, then
+`npm run install:local`. It does the deploy's steps on this Mac (builds the
+site, packages Plass.app for this Mac's processor into a scratch site folder
+and runs the install line against it) and installs `/Applications/Plass.app`,
+or the `.app` named after `--` (`npm run install:local -- ~/Desktop/Plass.app`).
+Its build is the checkout's commit (`-dirty` when the tree has changes),
+and the app's **Check for Updates…** replaces it with the site's build once
+the site has a newer one, the next deploy.
+`npm run app:build` is the packager alone (`--install <App.app>`, or the
+deploy's `--zip`).
 
 ## Run it
 

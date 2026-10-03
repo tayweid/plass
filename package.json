@@ -30,6 +30,7 @@
     "verify:production": "node --import tsx scripts/verify-production.ts",
     "preview": "vite preview",
     "app": "node app/run.mjs",
+    "install:local": "node app/install-local.mjs",
     "app:build": "node app/build.mjs",
     "app:install-script": "node app/build.mjs --install-script public/install",
     "app:smoke": "node app/smoke.mjs",
