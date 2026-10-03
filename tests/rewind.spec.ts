@@ -363,6 +363,14 @@ test('the History tile toggles the History page in the room: pressed by the shel
   expect(rest).toMatchObject({ pressed: 'false', inline: false, paper: 'visible' });
   const barAtRest = await bar();
   const roomAtRest = await roomBox(page);
+  // The look of the bar's tiles when active: Export's with its menu open,
+  // taken now, since with the page up its press puts the page away.
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  const exportLook = await page.evaluate(() => {
+    const style = getComputedStyle(document.querySelector('#toolbar [aria-label="Export"]')!);
+    return { color: style.color, background: style.backgroundColor };
+  });
+  await page.keyboard.press('Escape');
 
   // The click asks, with the room's box; the tile is not pressed until the
   // shell says the page is up.
@@ -378,12 +386,6 @@ test('the History tile toggles the History page in the room: pressed by the shel
   // they were. Nothing sent for it.
   await fire(page, 'history', { kind: 'inline', state: 'open' });
   await expect.poll(async () => (await look()).pressed).toBe('true');
-  await page.getByRole('button', { name: 'Export', exact: true }).click();
-  const exportLook = await page.evaluate(() => {
-    const style = getComputedStyle(document.querySelector('#toolbar [aria-label="Export"]')!);
-    return { color: style.color, background: style.backgroundColor };
-  });
-  await page.keyboard.press('Escape');
   await away();
   expect(await look()).toEqual({ pressed: 'true', ...exportLook, inline: true, paper: 'hidden' });
   expect(exportLook.background).not.toBe(rest.background);
@@ -444,18 +446,109 @@ test('the History tile toggles the History page in the room: pressed by the shel
   await fire(page, 'history', { kind: 'toggle' });
   await expect.poll(async () => (await historyAsks(page)).at(-1)).toEqual({ type: 'history', action: 'close' });
 
-  // File › History… with the page up puts it away too.
+  // Gone by the shell's word; File › History… is the tile's call and
+  // brings it back. (With the page up, File's press puts it away before
+  // the menu opens: the test below.)
+  await fire(page, 'history', { kind: 'inline', state: 'closed' });
+  await expect.poll(look).toEqual(rest);
   const before = (await historyAsks(page)).length;
   await page.getByRole('button', { name: 'File', exact: true }).click();
   await page.getByRole('menuitem', { name: 'History…' }).click();
   await expect.poll(() => historyAsks(page)).toHaveLength(before + 1);
-  expect((await historyAsks(page)).at(-1)).toEqual({ type: 'history', action: 'close' });
+  expect((await historyAsks(page)).at(-1)).toEqual({ type: 'history', action: 'open', inline: roomAtRest });
+  await fire(page, 'history', { kind: 'inline', state: 'open' });
+  await expect.poll(async () => (await look()).pressed).toBe('true');
 
   // Put away from the page's side (Escape, its close tile): the word alone
   // un-presses the tile.
   await fire(page, 'history', { kind: 'inline', state: 'closed' });
+  await away();
   await expect.poll(look).toEqual(rest);
   expect(await historyAsks(page)).toHaveLength(before + 1);
+});
+
+test('with the History page in the room, File, Export and the rail put it away on the press, before anything opens under it', async ({ page }) => {
+  await inPlassApp(page);
+  await openRewind(page, '= Rewind\n\nThe first version.\n');
+  const tile = page.locator('#history-tile');
+  // What is open over the room as each close goes: it must be nothing,
+  // since the shell's page sits above anything this page draws there.
+  await page.evaluate(() => {
+    const w = window as any;
+    const request = w.claerbout.request;
+    w.__openAtClose = [];
+    w.claerbout.request = (message: { type: string; action?: string }) => {
+      if (message.type === 'history' && message.action === 'close') {
+        w.__openAtClose.push([...document.querySelectorAll('.tb-menu:not([hidden]), #document-settings')].map((el) => el.id));
+      }
+      return request(message);
+    };
+  });
+  const closes = () => page.evaluate(() => (window as any).__openAtClose as string[][]);
+  const up = async () => {
+    await tile.click();
+    await fire(page, 'history', { kind: 'inline', state: 'open' });
+    await expect(tile).toHaveAttribute('aria-pressed', 'true');
+  };
+  const down = async () => {
+    await fire(page, 'history', { kind: 'inline', state: 'closed' });
+    await expect(tile).toHaveAttribute('aria-pressed', 'false');
+    await page.keyboard.press('Escape');
+  };
+
+  // File: the close on the press, then its menu.
+  await up();
+  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await expect(page.locator('#tb-menu-file')).toBeVisible();
+  expect(await closes()).toEqual([[]]);
+  await down();
+  await expect(page.locator('#tb-menu-file')).toBeHidden();
+
+  // Export, the same.
+  await up();
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  await expect(page.locator('#tb-menu-export')).toBeVisible();
+  expect(await closes()).toEqual([[], []]);
+  await down();
+
+  // The rail: a flyout (Headings) and Document settings.
+  await up();
+  await page.getByRole('button', { name: 'Headings', exact: true }).click();
+  await expect(page.locator('#tb-menu-headings')).toBeVisible();
+  expect(await closes()).toEqual([[], [], []]);
+  await down();
+  await up();
+  await page.getByRole('button', { name: 'Document settings', exact: true }).click();
+  await expect(page.locator('#document-settings')).toBeVisible();
+  expect(await closes()).toEqual([[], [], [], []]);
+  await down();
+  await expect(page.locator('#document-settings')).toHaveCount(0);
+
+  // From the keyboard: Enter on the File tile.
+  await up();
+  await page.getByRole('button', { name: 'File', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#tb-menu-file')).toBeVisible();
+  expect(await closes()).toHaveLength(5);
+  expect((await closes())[4]).toEqual([]);
+  await down();
+
+  // The History tile is the toggle alone: one close from its press.
+  await up();
+  await tile.click();
+  await expect.poll(closes).toHaveLength(6);
+  await page.waitForTimeout(200);
+  expect(await closes()).toHaveLength(6);
+  await fire(page, 'history', { kind: 'inline', state: 'closed' });
+
+  // Down, the presses send nothing.
+  const asked = (await historyAsks(page)).length;
+  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await expect(page.locator('#tb-menu-file')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Headings', exact: true }).click();
+  await page.keyboard.press('Escape');
+  expect(await historyAsks(page)).toHaveLength(asked);
 });
 
 test('with the History page in the room the document under it still answers a rewind’s save and reload', async ({ page }) => {

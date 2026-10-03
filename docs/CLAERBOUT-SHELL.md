@@ -564,6 +564,15 @@ prompted.
       rewind's `save` and `reload` as any window does. The editor loses
       its focus while hidden, and gets it back (the caret where it was)
       when the page goes;
+    - the page is the shell's view, above anything this page draws in the
+      room, so whatever opens or acts there puts it away first, as Knuth's
+      bar does: a press of the File or Export tile (their menus drop over
+      the room) or anywhere on the rail (its tiles edit the paper; its
+      flyouts and Document settings open over the room) sends `close` on
+      pointerdown, before the click opens anything, and so do the keys
+      that press a tile or open its menu (Enter, Space, a menu tile's
+      arrows). The History tile is the toggle itself; the HUD and the
+      scroll rail are hidden while the page is up and open nothing;
     - a shell from before the room (0.2.1, 0.2.2) answers `{opened: true}`
       without `inline` and opens its History window, as before; a shell
       without the view (older than 0.2.1 answers null) has the toast say so
@@ -582,6 +591,8 @@ prompted.
     commit, made with typing not yet autosaved, passes no window over as
     silent, records that typing in "rewind from", reloads the paper and
     leaves "plass: rewind from" and "plass: rewind to" on the record;
-    Escape puts the page away, the tile un-presses and the paper shows. All
+    Escape puts the page away, the tile un-presses and the paper shows;
+    up again, a press of the File tile puts it away before its menu
+    opens (`tests/rewind.spec.ts` presses Export, the rail and the keys). All
     of it ships with the shell tag that brings the view; under v0.2.0
     nothing sends the events.

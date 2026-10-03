@@ -85,7 +85,7 @@ page.on('console', (message) => { if (message.type() === 'error') report(`smoke:
 
 // The document opens (the shell's drop) and typesets.
 await page.waitForFunction(() => document.title.startsWith('smoke'), null, { timeout: 30_000 })
-  .catch(() => fail(`the document did not open (title: ${document.title})`));
+  .catch(async () => fail(`the document did not open (title: ${await page.title()})`));
 await page.waitForFunction(() => document.querySelector('.ProseMirror')?.textContent?.includes('typeset inside the shell'), null, { timeout: 30_000 })
   .catch(() => fail('the document did not render'));
 // Chromium unhinted: the exact path must be on (src/environment-check.ts).
@@ -408,7 +408,8 @@ if (keepsRecord) {
 // reload its paper to the opening text, in place, saying so. The record
 // gains "plass: rewind from <tip>" and "plass: rewind to <sha>". Escape in
 // the page puts it away (a note the rewind left first), and the tile
-// un-presses. A shell without the view is said and skipped.
+// un-presses; up again, a press of the File tile puts it away before its
+// menu opens. A shell without the view is said and skipped.
 const hasHistory = keepsRecord && fs.readFileSync(shellMain, 'utf8').includes('history.js');
 const inRoom = hasHistory && fs.readFileSync(shellMain, 'utf8').includes('addChildView');
 if (hasHistory) {
@@ -436,6 +437,7 @@ if (hasHistory) {
   /** Runs `source` (an expression) in the History page and gives back its value. */
   let inHistory;
   let closeHistory;
+  let putAwayByFile;
   if (inRoom) {
     const host = await app.browserWindow(page);
     const views = () =>
@@ -503,6 +505,22 @@ if (hasHistory) {
       const leaked = await app.evaluate(({ webContents }) => webContents.getAllWebContents().filter((contents) => contents.getURL().includes('history.html?inline=1')).length);
       if (leaked) await fail('the inline History page outlived its view');
     };
+    // The view is above anything the page draws in the room, so whatever
+    // opens there puts it away first: the File tile, pressed with the page
+    // up, closes it on the press, and its menu opens over the paper, not
+    // under the view (tests/rewind.spec.ts has Export and the rail too).
+    putAwayByFile = async () => {
+      await page.click('#history-tile');
+      if (!(await historyView())) await fail('the History tile laid no History page over the room the second time');
+      for (let i = 0; i < 40 && (await pressed()) !== 'true'; i++) await page.waitForTimeout(100);
+      await page.click('#toolbar [aria-label="File"]');
+      for (let i = 0; i < 40 && (await views()).length; i++) await page.waitForTimeout(100);
+      if ((await views()).length) await fail(`the File tile opened its menu under the History page (${JSON.stringify(await views())})`);
+      for (let i = 0; i < 20 && (await pressed()) !== 'false'; i++) await page.waitForTimeout(100);
+      if ((await pressed()) !== 'false') await fail('the History tile stayed pressed after the File tile put the History page away');
+      if (!(await page.evaluate(() => !document.getElementById('tb-menu-file').hidden))) await fail('the File tile opened no menu once the History page went');
+      await page.keyboard.press('Escape');
+    };
   } else {
     const opened = app.waitForEvent('window', { timeout: 30_000 });
     await page.click('#history-tile');
@@ -546,7 +564,11 @@ if (hasHistory) {
   if (fs.readFileSync(doc, 'utf8') !== openingText) await fail(`the window wrote over the rewound file:\n${fs.readFileSync(doc, 'utf8')}`);
   console.log(`smoke: rewind${inRoom ? ' from the room' : ''}: ${steps.map((step) => `${step.step} ${step.state}`).join(', ')}; ${to}`);
   await closeHistory();
-  if (inRoom) console.log('smoke: history: Escape put it away, the tile un-pressed, the paper shown, nothing left behind');
+  if (inRoom) {
+    console.log('smoke: history: Escape put it away, the tile un-pressed, the paper shown, nothing left behind');
+    await putAwayByFile();
+    console.log('smoke: history: the File tile put it away on the press and opened its menu over the paper');
+  }
 } else console.log('smoke: the shell has no history view; the rewind is not checked');
 
 await app.close();

@@ -867,6 +867,22 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
       }, { once: true });
     };
     zoomStep();
+    // The page is the shell's, above everything this one draws in the
+    // room, so whatever opens or acts there puts it away first, as Knuth's
+    // bar does: the File and Export tiles (their menus drop over the room)
+    // and the rail (its tiles edit the paper under the page; its flyouts
+    // and Document settings open over the room). On the press, before the
+    // click opens anything, and on the keys that press a tile or open its
+    // menu, for a bar the focus came back to. The History tile is the
+    // toggle itself; the HUD and the scroll rail are hidden while the page
+    // is up (style.css), so they open nothing.
+    const putAway = () => { if (shown) closeHistory(); };
+    const presses = (e: KeyboardEvent) => e.key === 'Enter' || e.key === ' '
+      || (['ArrowDown', 'ArrowUp', 'ArrowRight'].includes(e.key) && (e.target as Element).classList.contains('tb-menu-trigger'));
+    for (const way of [fileBtn, exportBtn, rail]) {
+      way.addEventListener('pointerdown', putAway, true);
+      way.addEventListener('keydown', (e) => { if (presses(e)) putAway(); }, true);
+    }
     historyTile.addEventListener('click', () => { closeMenu(); showHistory(); });
     ways.push(item(fileMenu.element, 'History…', showHistory, { shortcut: '⇧⌘H', title: 'The record of this document\u2019s folder, and a rewind to any point of it (⇧⌘H)' }));
   }
