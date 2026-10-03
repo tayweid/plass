@@ -802,6 +802,118 @@ test('in Plass.app the pill shows the folder the shell knows the file by, home a
   expect(folder.x + folder.width).toBeLessThanOrEqual(long.pod.x + long.pod.width - 11);
 });
 
+test('in Plass.app the History tile stands right after the name pill, a bar tile like File, and nothing else in the bar moves', async ({ page, context }) => {
+  // A browser tab first: no History tile (the shell's controls are the
+  // shell's), and the bar's boxes as the test above holds them.
+  const name = 'notes.typ';
+  const long = 'A rather long name for a paper with tables and side-by-side grids';
+  const boxes = (p: Page) =>
+    p.evaluate(() => {
+      const box = (el: Element | null) => {
+        if (!el || getComputedStyle(el).display === 'none') return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
+      };
+      const toolbar = document.getElementById('toolbar')!;
+      const tile = document.getElementById('history-tile');
+      const tiles = [...toolbar.querySelectorAll<HTMLElement>('.tb-tile')].filter((el) => getComputedStyle(el).display !== 'none');
+      return {
+        bar: { ...box(toolbar)!, right: toolbar.getBoundingClientRect().right, paddingRight: getComputedStyle(toolbar).paddingRight },
+        file: box(toolbar.querySelector('.tb-tile')),
+        pod: box(document.getElementById('doc-pod')),
+        history: box(tile),
+        exportTile: box([...toolbar.querySelectorAll('.tb-tile')].find((el) => el.getAttribute('aria-label') === 'Export') ?? null),
+        order: [...toolbar.children].filter((el) => getComputedStyle(el).display !== 'none').map((el) => el.id || el.getAttribute('aria-label')),
+        widths: tiles.map((el) => el.getBoundingClientRect().width),
+        tile: tile && {
+          radius: getComputedStyle(tile).borderRadius,
+          color: getComputedStyle(tile).color,
+          glyph: box(tile.querySelector('svg.ico')),
+          svg: tile.querySelector('svg.ico')!.outerHTML,
+          label: tile.getAttribute('aria-label'),
+          title: tile.title,
+          caption: tile.querySelector('.lbl')?.textContent,
+          keys: tile.getAttribute('aria-keyshortcuts'),
+          popup: tile.getAttribute('aria-haspopup'),
+          region: (getComputedStyle(tile) as CSSStyleDeclaration & { appRegion?: string }).getPropertyValue('-webkit-app-region'),
+        },
+        fileColor: getComputedStyle(toolbar.querySelector('.tb-tile')!).color,
+      };
+    });
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await openTyp(page, '= Notes\n\nA short paper.\n', name);
+  const tab = await boxes(page);
+  expect(tab.history).toBeNull();
+  expect(tab.order).toEqual(['File', 'doc-pod', 'Export']);
+
+  // Plass.app (the shell's bridge; the `document` report answered with no
+  // path, so the pill holds the same name alone and is the tab's width).
+  // Its notes.typ is another file of that name, in a folder of the origin's
+  // storage: one window per file (open-files.ts) would refuse the tab's.
+  const app = await context.newPage();
+  await app.addInitScript(() => {
+    (window as unknown as { claerbout: unknown }).claerbout = {
+      request: async (message: { type: string }) => (message.type === 'history' ? { opened: true } : message.type === 'document' ? { path: null } : null),
+      on: () => () => {},
+      pathOf: () => '',
+    };
+  });
+  await app.setViewportSize({ width: 1100, height: 800 });
+  await app.goto('/?new=1');
+  await app.waitForFunction(() => Boolean((window as unknown as Hooks).__fm && (window as unknown as Hooks).view));
+  expect(await app.evaluate(async (name) => {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(`tile-${Math.random().toString(36).slice(2)}`, { create: true });
+    const h = await dir.getFileHandle(name, { create: true });
+    const w = await h.createWritable();
+    await w.write('= Notes\n\nA short paper.\n');
+    await w.close();
+    return await (window as unknown as Hooks).__fm.loadHandle(h);
+  }, name)).toBe(true);
+  await settleLocal(app);
+  const b = await boxes(app);
+  expect(b.order).toEqual(['File', 'doc-pod', 'history-tile', 'Export']);
+  // The tile: the bar's gap past the pill, 32 px square 6 px down, 9 px
+  // corners, an 18 px glyph, the File tile's soft ink; one of the page's
+  // controls in the bar's drag band.
+  expect(b.history).toEqual({ x: b.pod!.x + b.pod!.width + 6, y: 6, width: 32, height: 32 });
+  expect(b.tile).toMatchObject({ radius: '9px', glyph: { width: 18, height: 18 }, label: 'History', title: 'History (⇧⌘H)', caption: 'History', keys: 'Shift+Meta+H', popup: null, region: 'no-drag' });
+  expect(b.tile!.color).toBe(b.fileColor);
+  // The river: three nodes on a vertical line, the lowest filled — the one
+  // string Knuth's bar draws too (HISTORY_GLYPH in both apps).
+  expect(b.tile!.svg).toBe(
+    '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="3.5" r="2.25"></circle><line x1="12" y1="6.25" x2="12" y2="9.25"></line><circle cx="12" cy="12" r="2.25"></circle><line x1="12" y1="14.75" x2="12" y2="17.75"></line><circle cx="12" cy="20.5" r="2.25" fill="currentColor"></circle></svg>',
+  );
+  // Nothing else moves: the bar, the File tile and the pill are the tab's
+  // to the pixel, the right end too; Export moves on by the tile and the
+  // gap, 38 px, and keeps its box.
+  expect(b.bar).toEqual(tab.bar);
+  expect(b.file).toEqual(tab.file);
+  expect(b.pod).toEqual(tab.pod);
+  expect(b.exportTile).toEqual({ ...tab.exportTile!, x: tab.exportTile!.x + 38 });
+  expect(b.exportTile!.x).toBe(b.history!.x + 32 + 6);
+
+  // A short bar: the pill gives way, never a tile. With a long name the
+  // pill is no wider than half the window (at 480, a phone-width tab, it is
+  // cut to that; at 740, the app's narrowest window, the name's own cap is
+  // the narrower), the same width as without the tile, and the three tiles
+  // keep 32 px inside the bar's 8 px right edge.
+  for (const width of [740, 480]) {
+    for (const p of [page, app]) {
+      await p.setViewportSize({ width, height: 700 });
+      await p.evaluate((n) => (window as unknown as Hooks).__fm.rename(n), long);
+      await expect(p.locator('#file-name')).toHaveText(long);
+    }
+    const [short, shortTab] = [await boxes(app), await boxes(page)];
+    if (width === 480) expect(short.pod!.width).toBe(240);
+    else expect(short.pod!.width).toBeLessThanOrEqual(width / 2);
+    expect(short.pod).toEqual(shortTab.pod);
+    expect(short.widths).toEqual([32, 32, 32]);
+    expect(short.history!.x).toBe(short.pod!.x + short.pod!.width + 6);
+    expect(short.exportTile!.x + 32).toBeLessThanOrEqual(width - 8);
+  }
+});
+
 test('clicks, selections, the caret and the toolbars land where the page is drawn', async ({ page }) => {
   test.setTimeout(90_000);
   // 1.77×: every client coordinate on the page is a scaled one.

@@ -18,7 +18,10 @@ only where it is a sheet's (below, *The paper's corners*), and the
 scroll rail (branch `ux/rail`, the same evening) maps the paper in a
 20 px gutter of the frame at the window's right (below, *The scroll
 rail*; its record is `docs/zen-rail-1100.png` and
-`docs/zen-rail-1500.png`). Run
+`docs/zen-rail-1500.png`). The History tile (branch `ux/history-tile`,
+later the same evening) puts the shell's History window in the bar,
+right after the name pill, in Plass.app and in Knuth.app alike (below,
+*The History tile*). Run
 it from the worktree with `npm run app` (after `npx vite build`); the
 record is `docs/zen-draft-1100.png` and `docs/zen-draft-1500.png`, the
 shell from the checkout at 1100 and 1500 px wide at the top of a paper,
@@ -29,6 +32,83 @@ traffic lights are the window's own and are not in them —
 `screencapture` of the window needs a screen-recording grant this
 session does not have; their room is the empty 88 px at the bar's left,
 which the File tile sits 12 px past).
+
+## The History tile
+
+Taylor asked where the autosave record's page is opened from, was told
+File › History… (⇧⌘H), and answered: "yeah i think it belongs as a tile
+on the topbar beside the address". So the bar has a History tile right
+after the name pill (the address: the document's name with its folder)
+and before Export, in Plass.app only, and Knuth's bar has the same tile
+in the same place before its session pill (knuth `ux/history-tile`,
+its `docs/ZEN-DRAFT.md`). The File menu keeps its History… item.
+
+**The tile** (`#history-tile`, `src/toolbar.ts`): a bar tile like File,
+`.tb-tile` — 32 × 32, 9 px corners, an 18 px glyph at the File tile's
+soft ink, white on the 8 % hover — with the caption "History" below it
+in the frame's dark glass, `title` "History (⇧⌘H)", `aria-label`
+"History" and `aria-keyshortcuts` "Shift+Meta+H" (the keys are the
+shell's View › History…, which the native menu takes first). A plain
+button, not a menu trigger; it swallows mousedown like every bar tile,
+so the editor keeps its focus and selection. A click asks the shell for
+the History window through the menu item's own function: one call,
+`openHistory()`, `{type: 'history', action: 'open'}`. In a browser tab
+there is no shell and no tile, as there is no History… item and no
+update item. Where the shell answers null (older than 0.2.1, no history
+view) the first ask, from the tile or the item, says so in the toast
+("This Plass.app has no history view — File → Check for updates…") and
+hides both; Export closes up to the pill again.
+
+**The glyph** is the record's river as the History window draws it:
+three nodes on a vertical line, time running down, the lowest — the
+mouth, now — filled. One SVG string in both apps, byte for byte
+(`HISTORY_GLYPH` in `src/toolbar.ts` here and in knuth's `src/main.ts`,
+each naming the other; `frame.spec` holds the string):
+
+    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+      aria-hidden="true"><circle cx="12" cy="3.5" r="2.25"/><line x1="12"
+      y1="6.25" x2="12" y2="9.25"/><circle cx="12" cy="12" r="2.25"/><line
+      x1="12" y1="14.75" x2="12" y2="17.75"/><circle cx="12" cy="20.5"
+      r="2.25" fill="currentColor"/></svg>
+
+(one line in the source). The nodes are r 2.25 at the icons' 1.7
+stroke, so at 18 px each ring keeps a hole 2.1 px across, and the
+segments end inside the rings' strokes. Rendered at 18 px on the
+frame (both device scales, against File, Export and Knuth's Restart
+session), it reads at 2× as three rings on a stream with the last one
+full; at 1× it is a dotted bar with a full foot. Not the clock with an
+arrow, which reads as history anywhere: that is Knuth's Restart session
+glyph (Feather's rotate-ccw) with hands, and the two would share a
+window meaning different things. The river is the window the tile
+opens, drawn small.
+
+**Nothing else moves.** The tile is the bar's 6 px gap past the pill,
+Export the same gap past the tile; the File tile, the pill's left edge
+and its rules (at most `min(560px, 50vw)`, the one thing in the bar that
+shrinks), every tile's size and the bar's 8 px right end are as they
+were. In the shell from the checkout (claerbout v0.2.2, 96f5a1e), on a
+document in a scratch folder whose long path fills the pill to its
+widest; the left column is the same window with the tile hidden, as an
+older shell's null leaves it, which is main's bar:
+
+| | without the tile (main) | with the tile |
+|---|---|---|
+| lights' room / bar | x 88; 44 px, padded 100 and 8 px, 6 px gaps | same |
+| File | 32 × 32 at (100, 6) | same |
+| name pill at 1100 | 550 × 30 at (138, 7) | same |
+| History at 1100 | — | 32 × 32 at (694, 6), 9 px corners, glyph 18 × 18 at (701, 13) |
+| Export at 1100 | 32 × 32 at (694, 6) | 32 × 32 at (732, 6) |
+| name pill / History / Export at 1500 | 560 at 138 / — / 704 | 560 at 138 / 704 / 742 |
+
+In a browser tab (no lights' room: the bar padded 6 px) the File tile is
+at (6, 6) and the pill at (44, 7); with the shell's bridge the tile is
+at the pill's right + 6 and Export 38 px further on than in the tab,
+every other box the tab's to the pixel. Under a short bar a long name
+leaves the pill no wider than half the window (240 px at 480, a
+phone-width tab; at 740, the app's narrowest window, the name's own cap
+is the narrower) and the same width with the tile as without it, the
+three tiles 32 px inside the 8 px edge.
 
 ## The scroll rail
 
@@ -1319,3 +1399,38 @@ comment above it, so the site deploys; the Mac keeps the check. To close
 it: read the failed run's published browser test results (error-context.md
 holds the DOM at the failure) and see whether `runsOn` or the clip's
 height is what lags.
+
+## Checks (the History tile)
+
+- New in `frame.spec`: *in Plass.app the History tile stands right after
+  the name pill, a bar tile like File, and nothing else in the bar
+  moves*. A tab first (no tile; the bar File, the pill, Export), then a
+  page with the shell's bridge at 1100: the bar's children in order File,
+  the pill, the tile, Export; the tile 32 × 32 at the pill's right + 6,
+  y 6, 9 px corners, an 18 px glyph, the File tile's ink, no drag, its
+  label, title, caption and keys, and the glyph's markup the one string;
+  the bar, the File tile and the pill equal to the tab's, Export 38 px on.
+  At 740 and 480 with a long name: the pill the tab's width (240 at 480),
+  the three tiles 32 px, Export inside the 8 px edge.
+- New in `rewind.spec`: *the History tile beside the name asks Plass.app
+  for the History window as File › History… does, and is not in a
+  browser tab*: no tile in a tab; in the app its caption on hover, a
+  click sends `{type: 'history', action: 'open'}` and the editor keeps
+  its focus, and the menu item after it sends the same request again;
+  under a shell answering null the first click toasts "This Plass.app has
+  no history view", the tile hides, Export closes up to the pill and the
+  menu item is gone too. The menu item's own test now checks that its
+  null hides the tile as well.
+- `app/smoke.mjs`: on a shell that hides the title bar the tile is the
+  bar's gap past the pill, 32 px square 6 px down, Export the gap past
+  it (logged: at 1470 px, the pill 560 wide at 138, History at 704,
+  Export at 742); the History window of the rewind is opened by the tile.
+- `npm test`: green (all 30 suites). `npm run build`: green.
+  `node app/smoke.mjs`: ok (the shell checkout at v0.2.2), the rewind
+  through the tile's window included.
+- `CI=1 npx playwright test --project=chromium` (a scratch config on a
+  spare port, deleted after): 204 passed (202 before, and the two new
+  tests). A first run had one failure in `math-ink-recovery.spec` (the
+  Typst compiler's download aborted under four workers: "could not be
+  loaded: BodyStreamBuffer was aborted"), which passed alone and in the
+  two full runs after it.

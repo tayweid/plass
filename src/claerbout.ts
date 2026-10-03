@@ -41,8 +41,9 @@
 //   passed over and its card says to reopen it), and after it every
 //   window hears `reload` with the paths it wrote or removed: the window
 //   whose file is among them reads it again (`onShellSave`,
-//   `onShellReload`). File › History… asks for the History window
-//   (`openHistory`), as the shell's View › History… does.
+//   `onShellReload`). File › History… and the History tile beside the
+//   name ask for the History window (`openHistory`, one call for both,
+//   toolbar.ts), as the shell's View › History… does.
 // - Nothing else. `command` events (menu items acting in the page) are
 //   the shell's when a menu item needs one; the shell this replaced had no
 //   menu item that acted in the page.

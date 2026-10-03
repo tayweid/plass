@@ -392,7 +392,8 @@ prompted.
   drag region natively, so a click on the bar's empty part does not
   reach the page's outside-click menu closer. Since 2026-10-02 (the Zen
   draft, `docs/ZEN-DRAFT.md`) the bar holds only the paper's way in and
-  out — File, the name with its save dot, Export — padded by
+  out — File, the name with its save dot, (in Plass.app, since the
+  evening of 2026-10-02) the History tile, Export — padded by
   `env(titlebar-area-x)` on the left, so the File tile sits beside the
   lights; the tools are on a narrow rail down the left under the bar,
   which is no drag region (it scrolls); the bar and the rail are the
@@ -481,7 +482,8 @@ prompted.
   DECIDED 2026-10-02, with the view (the shell's `history.js`, its README
   under "The history view"; knuth's `docs/mockups/history.md`): Plass
   answers the two events the shell sends every window on the project, and
-  File › History… asks for the History window.
+  File › History… and the History tile in the bar ask for the History
+  window.
   - **`save {id, reason: 'rewind'}`**, before the rewind writes anything
     (`onShellSave` in `src/claerbout.ts`): the file manager's
     `saveForShell` writes through ⌘S's write (the queue autosave writes
@@ -523,17 +525,21 @@ prompted.
     edits" and Overwrite disk; a rewind to a commit that lacks the file
     keeps the editor's copy, unsaved, with Save to a folder….
   - **File › History…** (⇧⌘H beside it; the shell's View › History…
-    holds the keys), in Plass.app only: `{type: 'history', action:
-    'open'}` (`openHistory`). The shell answers a document page `{opened:
-    true}` and nothing more: a window with no record still gets a History
-    window, which says why (not saved yet, the folder rule in words, the
-    record off, no git), so the page has nothing of its own to say then.
-    A shell without the view (older than 0.2.1 answers null) has the item
-    say so and go.
+    holds the keys) and **the History tile** in the bar right after the
+    name pill (since the evening of 2026-10-02: "i think it belongs as a
+    tile on the topbar beside the address", Taylor; Knuth's bar has the
+    same tile, the same glyph, `docs/ZEN-DRAFT.md`), in Plass.app only:
+    one call, `{type: 'history', action: 'open'}` (`openHistory`). The
+    shell answers a document page `{opened: true}` and nothing more: a
+    window with no record still gets a History window, which says why
+    (not saved yet, the folder rule in words, the record off, no git), so
+    the page has nothing of its own to say then. A shell without the view
+    (older than 0.2.1 answers null) has the toast say so at the first ask,
+    from either, and the item and the tile both go.
   - Tests: `src/claerbout.test.ts` (the answers, the path match, the
     request), `src/reload-in-place.test.ts`, `tests/rewind.spec.ts` (a
     stand-in shell on `window.claerbout`, the disk watcher held still),
-    and `app/smoke.mjs`, on a shell with the view: File › History… opens
+    and `app/smoke.mjs`, on a shell with the view: the History tile opens
     the History window, and a rewind from it to the session's opening
     commit, made with typing not yet autosaved, passes no window over as
     silent, records that typing in "rewind from", reloads the paper and

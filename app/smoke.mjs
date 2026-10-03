@@ -8,8 +8,9 @@
 // they are the page's, and the menus' blur, and,
 // on a shell that hides the title bar, see Knuth's bar beside the
 // traffic lights, with the folder the shell knows the file by; and, on a
-// shell that keeps the autosave record and its history view, open File ›
-// History… and rewind the document to the session's opening commit.
+// shell that keeps the autosave record and its history view, open the
+// History window from the History tile beside the name and rewind the
+// document to the session's opening commit.
 //
 //   node app/smoke.mjs                 # the checkout: the shell on dist/
 //   node app/smoke.mjs path/to/Plass.app
@@ -274,7 +275,10 @@ if (!glass || glass === 'none') await fail(`the File menu draws no blur (backdro
 // lights' band (44 px at rest, the rail's width; app/plass.json puts the
 // lights at {14, 15}, so the band is 2·15 + 14), the File tile 32 px
 // square 12 px past the lights' room and 6 px down, the name pill 30 px
-// tall 7 px down, centred on the band, Export beside it.
+// tall 7 px down, centred on the band, then the History tile (Plass.app's
+// and Knuth.app's, the shell's History window) the bar's 6 px gap past
+// it, 32 px square 6 px down like File, and Export the same gap past
+// that.
 const hidesTitleBar = process.platform === 'darwin' && fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('titleBarStyle');
 if (hidesTitleBar) {
   const bar = await page.evaluate(() => {
@@ -293,6 +297,8 @@ if (hidesTitleBar) {
       padding: parseFloat(getComputedStyle(toolbar).paddingLeft),
       file: box(toolbar.querySelector('.tb-tile')),
       pod: box(document.getElementById('doc-pod')),
+      history: document.getElementById('history-tile') && box(document.getElementById('history-tile')),
+      exportTile: box([...toolbar.querySelectorAll('.tb-tile')].find((el) => el.getAttribute('aria-label') === 'Export')),
     };
   });
   if (!bar.visible || bar.x <= 0) await fail(`the shell hides the title bar but the page sees no overlay (${JSON.stringify(bar)})`);
@@ -300,6 +306,10 @@ if (hidesTitleBar) {
   if (bar.padding !== bar.x + 12 || bar.file.x !== bar.x + 12) await fail(`the File tile is at ${bar.file.x}px, the bar padded ${bar.padding}px, the lights' room ${bar.x}px (Knuth's tile is 12 px past it)`);
   if (bar.file.width !== 32 || bar.file.height !== 32 || bar.file.y !== 6) await fail(`the File tile is ${JSON.stringify(bar.file)} (Knuth's is 32 px square, 6 px down)`);
   if (bar.pod.height !== 30 || bar.pod.y !== 7) await fail(`the name pill is ${JSON.stringify(bar.pod)} (Knuth's is 30 px tall, 7 px down)`);
+  const besidePill = bar.pod.x + bar.pod.width + 6;
+  if (!bar.history || bar.history.x !== besidePill || bar.history.y !== 6 || bar.history.width !== 32 || bar.history.height !== 32) await fail(`the History tile is ${JSON.stringify(bar.history)}, not 32 px square at (${besidePill}, 6), the bar's gap past the pill ${JSON.stringify(bar.pod)}`);
+  else if (bar.exportTile.x !== bar.history.x + 38 || bar.exportTile.y !== 6) await fail(`Export is ${JSON.stringify(bar.exportTile)}, not the bar's gap past the History tile ${JSON.stringify(bar.history)}`);
+  console.log(`smoke: the bar at ${await page.evaluate(() => innerWidth)} px: File ${JSON.stringify(bar.file)}, the pill ${JSON.stringify(bar.pod)}, History ${JSON.stringify(bar.history)}, Export ${JSON.stringify(bar.exportTile)}`);
 }
 
 // The folder beside the name: the shell answers the page's report of its
@@ -385,13 +395,15 @@ if (keepsRecord) {
 } else console.log('smoke: the shell keeps no autosave record; not checked');
 
 // A rewind (the shell's history view, its README; docs/CLAERBOUT-SHELL.md):
-// File › History… opens the History window on the document's project, and
-// a rewind from it to the session's opening commit, made while the window
-// has typing not yet autosaved, has the window answer the save step (so no
-// window is passed over as silent) with that typing on disk before "rewind
-// from" records it, then reload its paper to the opening text, in place,
-// saying so. The record gains "plass: rewind from <tip>" and "plass:
-// rewind to <sha>". A shell without the view is said and skipped.
+// the History tile beside the name (one call with File › History…, which
+// tests/rewind.spec.ts clicks) opens the History window on the document's
+// project, and a rewind from it to the session's opening commit, made
+// while the window has typing not yet autosaved, has the window answer the
+// save step (so no window is passed over as silent) with that typing on
+// disk before "rewind from" records it, then reload its paper to the
+// opening text, in place, saying so. The record gains "plass: rewind from
+// <tip>" and "plass: rewind to <sha>". A shell without the view is said
+// and skipped.
 const hasHistory = keepsRecord && fs.readFileSync(shellMain, 'utf8').includes('history.js');
 if (hasHistory) {
   const folder = path.dirname(doc);
@@ -402,12 +414,11 @@ if (hasHistory) {
   const openingText = git('show', `${opening.sha}:${name}`);
   if (openingText.includes('Unsaved.')) await fail(`the opening commit already holds the typing to come:\n${openingText}`);
   const opened = app.waitForEvent('window', { timeout: 30_000 });
-  await page.click('#toolbar .tb-tile');
-  await page.getByRole('menuitem', { name: 'History…' }).click();
+  await page.click('#history-tile');
   const history = await opened.catch(() => null);
-  if (!history) await fail('File › History… opened no window');
+  if (!history) await fail('the History tile opened no window');
   await history.waitForLoadState('domcontentloaded');
-  if (!history.url().endsWith('/_claerbout/history.html')) await fail(`File › History… opened ${history.url()}`);
+  if (!history.url().endsWith('/_claerbout/history.html')) await fail(`the History tile opened ${history.url()}`);
   const graph = await history.evaluate(() => {
     window.__steps = [];
     window.claerbout.on('rewind', (step) => window.__steps.push(step));
