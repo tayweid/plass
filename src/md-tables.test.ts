@@ -86,7 +86,9 @@ function readMd(md: string): PMNode {
         else if (c.type === 'em_open') marks = [...marks, schema.marks.em.create()];
         else if (c.type === 'strong_close' || c.type === 'em_close') marks = marks.slice(0, -1);
       }
-      cells.push(type.create({ align: delimiterAlign(t.attrGet('style')) }, paragraph.create(null, content)));
+      // markdown-it types attrGet as string | number | null; md-parser's
+      // own token interface reads it as the string it is.
+      cells.push(type.create({ align: delimiterAlign(t.attrGet('style') as string | null) }, paragraph.create(null, content)));
     }
   }
   return tableType.create({ style: 'booktabs' }, rows);
