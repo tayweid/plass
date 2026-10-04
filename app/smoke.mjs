@@ -460,11 +460,11 @@ if (hasHistory) {
       host.evaluate((win) =>
         win.contentView.children
           .filter((view) => view.webContents && view.webContents !== win.webContents && !view.webContents.isDestroyed())
-          .map((view) => ({ id: view.webContents.id, url: view.webContents.getURL(), bounds: view.getBounds(), loading: view.webContents.isLoading() })),
+          .map((view) => ({ id: view.webContents.id, url: view.webContents.getURL(), bounds: view.getBounds(), loading: view.webContents.isLoading(), visible: view.getVisible() })),
       );
     const historyView = async () => {
       for (let i = 0; i < 120; i++) {
-        const found = (await views()).find((view) => view.url.includes('/_claerbout/history.html?inline=1') && !view.loading);
+        const found = (await views()).find((view) => view.visible && view.url.includes('/_claerbout/history.html?inline=1') && !view.loading);
         if (found) return found;
         await page.waitForTimeout(100);
       }
@@ -503,7 +503,9 @@ if (hasHistory) {
     if (!moved || !same(moved.bounds, await room()) || same(moved.bounds, view.bounds)) await fail(`after the window grew the History page is at ${JSON.stringify(moved?.bounds)}, not the room's ${JSON.stringify(await room())}`);
     console.log(`smoke: history in the room at ${view.bounds.x},${view.bounds.y} ${view.bounds.width}×${view.bounds.height}, then ${moved.bounds.x},${moved.bounds.y} ${moved.bounds.width}×${moved.bounds.height} with the window grown`);
     closeHistory = async () => {
-      for (let i = 0; i < 4 && (await views()).some((v) => v.id === view.id); i++) {
+      // Since the shell's 0.2.6 a put-away view is kept and hidden, not
+      // destroyed (the next open is a frame): "away" is no visible view.
+      for (let i = 0; i < 4 && (await views()).some((v) => v.id === view.id && v.visible); i++) {
         await app.evaluate(({ webContents }, id) => {
           const contents = webContents.fromId(id);
           if (!contents || contents.isDestroyed()) return;
@@ -513,13 +515,14 @@ if (hasHistory) {
         }, view.id);
         await page.waitForTimeout(300);
       }
-      if ((await views()).length) await fail(`Escape left the History page over the room (${JSON.stringify(await views())})`);
+      if ((await views()).some((v) => v.visible)) await fail(`Escape left the History page over the room (${JSON.stringify(await views())})`);
       for (let i = 0; i < 20 && (await pressed()) !== 'false'; i++) await page.waitForTimeout(100);
       if ((await pressed()) !== 'false') await fail('the History tile stayed pressed after Escape put the History page away');
       const paper = await page.evaluate(() => getComputedStyle(document.getElementById('scroll')).visibility);
       if (paper !== 'visible') await fail(`the paper is ${paper} after the History page went`);
-      const leaked = await app.evaluate(({ webContents }) => webContents.getAllWebContents().filter((contents) => contents.getURL().includes('history.html?inline=1')).length);
-      if (leaked) await fail('the inline History page outlived its view');
+      // One kept page at most, hidden with its view; two would be a leak.
+      const kept = await app.evaluate(({ webContents }) => webContents.getAllWebContents().filter((contents) => contents.getURL().includes('history.html?inline=1')).length);
+      if (kept > 1) await fail(`${kept} inline History pages are alive after one was put away`);
     };
     // The view is above anything the page draws in the room, so whatever
     // opens there puts it away first: the File tile, pressed with the page
@@ -530,8 +533,9 @@ if (hasHistory) {
       if (!(await historyView())) await fail('the History tile laid no History page over the room the second time');
       for (let i = 0; i < 40 && (await pressed()) !== 'true'; i++) await page.waitForTimeout(100);
       await page.click('#toolbar [aria-label="File"]');
-      for (let i = 0; i < 40 && (await views()).length; i++) await page.waitForTimeout(100);
-      if ((await views()).length) await fail(`the File tile opened its menu under the History page (${JSON.stringify(await views())})`);
+      const up = async () => (await views()).some((v) => v.visible);
+      for (let i = 0; i < 40 && (await up()); i++) await page.waitForTimeout(100);
+      if (await up()) await fail(`the File tile opened its menu under the History page (${JSON.stringify(await views())})`);
       for (let i = 0; i < 20 && (await pressed()) !== 'false'; i++) await page.waitForTimeout(100);
       if ((await pressed()) !== 'false') await fail('the History tile stayed pressed after the File tile put the History page away');
       if (!(await page.evaluate(() => !document.getElementById('tb-menu-file').hidden))) await fail('the File tile opened no menu once the History page went');
@@ -581,7 +585,7 @@ if (hasHistory) {
   console.log(`smoke: rewind${inRoom ? ' from the room' : ''}: ${steps.map((step) => `${step.step} ${step.state}`).join(', ')}; ${to}`);
   await closeHistory();
   if (inRoom) {
-    console.log('smoke: history: Escape put it away, the tile un-pressed, the paper shown, nothing left behind');
+    console.log('smoke: history: Escape put it away, the tile un-pressed, the paper shown, the page kept hidden for the next open');
     await putAwayByFile();
     console.log('smoke: history: the File tile put it away on the press and opened its menu over the paper');
   }
