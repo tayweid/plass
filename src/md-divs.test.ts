@@ -252,6 +252,25 @@ expectStream(
     'div_close 12-13',
   ],
 );
+expectStream(
+  "the plan's grid form: one .columns div per row, later rows .continued",
+  ':::: {.columns gutter=1em}\n::: {.column width=60%}\na\n:::\n\n::: {.column width=40%}\nb\n:::\n::::\n\n:::: {.columns .continued gutter=1em}\n::: column\nc\n:::\n::::\n',
+  [
+    'div_open 0-9 {.columns gutter="1em"}',
+    '  div_open 1-4 {.column width="60%"}',
+    ...para(2, 2, 3, 'a'),
+    '  div_close 3-4',
+    '  div_open 5-8 {.column width="40%"}',
+    ...para(2, 6, 7, 'b'),
+    '  div_close 7-8',
+    'div_close 8-9',
+    'div_open 10-15 {.columns .continued gutter="1em"}',
+    '  div_open 11-14 {.column}',
+    ...para(2, 12, 13, 'c'),
+    '  div_close 13-14',
+    'div_close 14-15',
+  ],
+);
 expectStream('an unknown class is a div like any other (the reader decides)', '::: weird\ntext\n:::\n', [
   'div_open 0-3 {.weird}',
   ...para(1, 1, 2, 'text'),
