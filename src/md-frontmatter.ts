@@ -366,7 +366,7 @@ class FlowReader {
 
   node(inFlow = false): YNode {
     this.ws();
-    if (inFlow) {
+    if (inFlow && (this.s[this.i] === '&' || this.s[this.i] === '!')) {
       const rest = this.s.slice(this.i);
       this.i += rest.length - stripProperties(rest, this.notes).length;
       this.ws();
