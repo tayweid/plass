@@ -83,15 +83,17 @@ function icon(name: string): string {
   return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 }
 
-// The History tile's glyph, the record's river as the History page draws
-// it: three nodes on a vertical line, time running down, the lowest — now —
-// filled. One SVG in both apps, byte for byte: Knuth's copy is
-// HISTORY_GLYPH in knuth/src/main.ts, and a change is made to both. Not a
-// clock with an arrow, which reads as history too: that is Knuth's Restart
-// session glyph (Feather's rotate-ccw) with hands, and the two would share
-// a window. The nodes are r 2.25 at the icons' 1.7 stroke, so at 18 px each
-// ring keeps a hole 2.1 px wide.
-const HISTORY_GLYPH = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="3.5" r="2.25"/><line x1="12" y1="6.25" x2="12" y2="9.25"/><circle cx="12" cy="12" r="2.25"/><line x1="12" y1="14.75" x2="12" y2="17.75"/><circle cx="12" cy="20.5" r="2.25" fill="currentColor"/></svg>';
+// The History tile's glyph, the standard history icon: a clock face with a
+// counter-clockwise arrow around its left side (Material's "history" in the
+// icons' stroke), the arrowhead at nine o'clock pointing back down the arc,
+// the hands at twelve and four. Taylor asked for "the rewind clock one":
+// the glyph people already read as history, where the record's river it
+// replaced had to be learned. One SVG in both apps, byte for byte: Knuth's
+// copy is HISTORY_GLYPH in knuth/src/main.ts, and a change is made to both.
+// Knuth's bar also has a Restart session tile, an arrow round a circle
+// (Feather's rotate-ccw); the hands tell the two apart, so they stay long
+// enough to read at 18 px.
+const HISTORY_GLYPH = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12a8 8 0 1 1 2.34 5.66M2.2 9.8 5 12.6l2.8-2.8"/><polyline points="13 7.5 13 12 16.5 14"/></svg>';
 
 /** A folder as a person reads it: their home as ~ (Knuth's, src/main.ts).
  *  The page has no way to ask for the home folder, so a home is what macOS
