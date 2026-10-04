@@ -401,16 +401,21 @@ rails can always be finished in Typst itself, because the file is Typst.
   no install. The compiler (~28 MB) and bundled fonts in `public/fonts/` load
   lazily; those fonts retain the individual licenses documented in
   [`public/fonts/README.md`](./public/fonts/README.md). Math uses only the
-  pinned mitex 0.2.5 archive: it is fetched from
+  pinned mitex 0.2.7 archive: it is fetched from
   the Typst registry when first needed, size-bounded, and SHA-256 verified;
   imported documents cannot request arbitrary packages. Embedded images are
   decoded into the compiler's bounded virtual filesystem and the markup is
   rewritten to reference them, so figures compile properly. Equation refs
   export as `(#ref(<label>, supplement: none))` so the PDF shows "(1)"
   exactly like the editor.
-- **Export**: `.typ` (Typst markup; math wrapped with mitex so it compiles —
-  `typst compile document.typ` also works from the CLI), plus Print/PDF of
-  the typeset view itself.
+- **Export**: `.typ` (Typst markup; math wrapped with the same pinned mitex
+  0.2.7 so it compiles — `typst compile document.typ` also works from the
+  CLI, except for embedded `data:` images, which the CLI cannot read). The
+  export is exact on typst 0.14.2, the in-app compiler's release, and says
+  so on its first line; typst 0.15.x compiles it too, but Typst 0.15 changed
+  some math layout (calligraphic letters and `\binom` among others), so
+  those formulas can sit differently there. Plus Print/PDF of the typeset
+  view itself.
 
 ## Architecture (how the needle gets threaded)
 

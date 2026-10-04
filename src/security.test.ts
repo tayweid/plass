@@ -3,7 +3,7 @@ import { schema } from './schema';
 import { docToTyp, textSetLine } from './typ-serializer';
 import { isRemoteSource, remoteImageStatus } from './remote-images';
 import { contentSecurityPolicy } from './security-policy';
-import { isAllowedTypstPackage, sourceNeedsPinnedTypstPackage, TYPST_PACKAGE_POLICY } from './typst-config';
+import { isAllowedTypstPackage, MITEX_IMPORT, sourceNeedsPinnedTypstPackage, TYPST_PACKAGE_POLICY } from './typst-config';
 import { COMPILER_LIMITS, validateCompilerTask } from './typst-worker-protocol';
 import { INPUT_LIMITS, inputSizeError, textSizeError } from './input-limits';
 import { DEFAULT_SETTINGS, normalizeSettings } from './settings';
@@ -149,9 +149,15 @@ check(
 );
 check(
   'only source using the pinned package triggers its prefetch',
-  sourceNeedsPinnedTypstPackage('#import "@preview/mitex:0.2.5": mitex') &&
+  sourceNeedsPinnedTypstPackage('#import "@preview/mitex:0.2.7": mitex') &&
     !sourceNeedsPinnedTypstPackage('#import "@preview/other:1.0.0": other'),
 );
+check(
+  'the previous mitex pin is just another unlisted package',
+  !isAllowedTypstPackage({ namespace: 'preview', name: 'mitex', version: '0.2.5' }) &&
+    !sourceNeedsPinnedTypstPackage('#import "@preview/mitex:0.2.5": mitex'),
+);
+check('generated math imports exactly the pinned package', sourceNeedsPinnedTypstPackage(MITEX_IMPORT));
 
 if (failed) {
   console.error(`\n${failed} security test(s) failed`);

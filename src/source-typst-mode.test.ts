@@ -93,7 +93,7 @@ const tokens = tokenize(typ);
     assert.ok(refs.includes(key), `${key} should be a reference`);
   }
   assert.deepEqual(styles(tokenize('mail me@example.org'), 'link'), []);
-  assert.deepEqual(styles(tokenize('#import "@preview/mitex:0.2.5": mi, mitex'), 'link'), []);
+  assert.deepEqual(styles(tokenize('#import "@preview/mitex:0.2.7": mi, mitex'), 'link'), []);
   // Labels on the equation and the figure, and the equation reference's
   // `#ref(<eq:gauss>, …)` argument (the serializer's form for equations).
   const labels = styles(tokens, 'labelName');

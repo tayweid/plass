@@ -532,7 +532,7 @@ test('a .typ source opens with the generated preamble folded and the caret on th
   const caret = await page.evaluate(() => ({ at: window.__sourceView.caret(), body: window.__sourceView.text()!.indexOf('= Plass') }));
   expect(caret.at).toBe(caret.body);
   // The fold is presentation: the text still carries the preamble.
-  expect(await sourceText(page)).toMatch(/^\/\/ Exported from Plass\n#set page/);
+  expect(await sourceText(page)).toMatch(/^\/\/ Exported from Plass[^\n]*\n#set page/);
 
   // Click expands to the real, editable lines with a fold affordance above.
   await fold.click();
@@ -582,5 +582,5 @@ test('autosave writes the folded preamble too', async ({ page }) => {
   await expect.poll(() => onDisk(page), { timeout: 5_000 }).toContain('More  body.');
   const disk = await onDisk(page);
   expect(disk).toBe(await sourceText(page));
-  expect(disk).toMatch(/^\/\/ Exported from Plass\n#set page/);
+  expect(disk).toMatch(/^\/\/ Exported from Plass[^\n]*\n#set page/);
 });
