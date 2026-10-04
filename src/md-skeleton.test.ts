@@ -201,6 +201,28 @@ same(
   ]),
 );
 
+// A `[^ref]` marker is unresolved text when pandoc names the heading, so
+// its label is in the id; an inline `^[…]` note adds nothing (pandoc 3.4).
+same(
+  'headings: a footnote reference label in the auto identifier',
+  doc(
+    N.heading.create({ level: 1 }, [t('Footnote here'), fn(t('One.'))]),
+    N.heading.create({ level: 1 }, [t('Slope here'), fn(t('Slope.'))]),
+    N.heading.create({ level: 1 }, [t('Inline here'), fn(t('An inline note.'))]),
+    N.heading.create({ level: 1 }, [t('Two'), fn(t('One.')), t(' notes'), fn(t('Slope.')), t(' here')]),
+    N.heading.create({ level: 1 }, [t('Footnote here'), fn(t('One.'))]),
+    N.heading.create({ level: 2, label: 'sec:noted' }, [t('Labeled'), fn(t('One.'))]),
+  ),
+  ast([
+    Header(1, 'footnote-here1', [...w('Footnote here'), Note(Para(S('One.')))]),
+    Header(1, 'slope-hereslope', [...w('Slope here'), Note(Para(S('Slope.')))]),
+    Header(1, 'inline-here', [...w('Inline here'), Note(Para(w('An inline note.')))]),
+    Header(1, 'two1-notesslope-here', [S('Two'), Note(Para(S('One.'))), Sp, S('notes'), Note(Para(S('Slope.'))), Sp, S('here')]),
+    Header(1, 'footnote-here1-1', [...w('Footnote here'), Note(Para(S('One.')))]),
+    Header(2, 'sec:noted', [S('Labeled'), Note(Para(S('One.')))]),
+  ]),
+);
+
 // `$$ … $$ {#eq:x}`: pandoc leaves the attribute block as text after the
 // formula, on the closing line or the next.
 same(
@@ -291,7 +313,7 @@ same(
       Para(w('Answer text'), Sp, RawI('html', '<!-- inline -->'), Sp, S('more.')),
       RawB('html', '<!-- trailing -->'),
     ]),
-    Div(attr('', ['columns'], [['gutter', '1em'], ['cols', '2']]), [
+    Div(attr('', ['columns'], [['gutter', '1em']]), [
       Div(attr('', ['column']), [Para(w('Left.'))]),
       Div(attr('', ['column']), [RawB('html', '<!-- in column -->'), Para(w('Right.'))]),
     ]),
@@ -342,21 +364,27 @@ check(
   );
 }
 
+// Grids: one `.columns` div per row; later rows carry `.continued`.
+const gcell = (...blocks: PMNode[]) => N.grid_cell.create(null, blocks);
+const grow = (...xs: string[]) => N.grid_row.create(null, xs.map((x) => gcell(p(t(x)))));
+const colDiv = (...blocks: PandocNode[]) => Div(attr('', ['column']), blocks);
+const rowDiv = (classes: string[], ...xs: string[]) =>
+  Div(attr('', ['columns', ...classes], [['gutter', '1em']]), xs.map((x) => colDiv(Para(S(x)))));
+const cellRecs = (...xs: string[]) => xs.flatMap((x) => [rec('column', 1), rec('paragraph', 2, { text: x })]);
+
 same(
-  'columns: one div per grid, cells row-major',
+  'columns: a 3x2 grid is two divs, the second .continued',
   doc(
-    N.grid.create({ columns: [1.5, 1], gutter: 1 }, [N.grid_row.create(null, [N.grid_cell.create(null, [p(t('Left.'))]), N.grid_cell.create(null, [p(N.image.create({ src: SVG }))])])]),
-    N.grid.create({ columns: [1, 1, 1] }, [
-      N.grid_row.create(null, ['a', 'b', 'c'].map((x) => N.grid_cell.create(null, [p(t(x))]))),
-      N.grid_row.create(null, ['d', 'e', 'f'].map((x) => N.grid_cell.create(null, [p(t(x))]))),
-    ]),
+    N.grid.create({ columns: [1.5, 1], gutter: 1 }, [N.grid_row.create(null, [gcell(p(t('Left.'))), gcell(p(N.image.create({ src: SVG })))])]),
+    N.grid.create({ columns: [1, 1, 1], gutter: 1 }, [grow('a', 'b', 'c'), grow('d', 'e', 'f')]),
   ),
   ast([
-    Div(attr('', ['columns'], [['gutter', '1em'], ['cols', '2']]), [
+    Div(attr('', ['columns'], [['gutter', '1em']]), [
       Div(attr('', ['column'], [['width', '60%']]), [Para(w('Left.'))]),
       Div(attr('', ['column'], [['width', '40%']]), [Para(Image(SVG))]),
     ]),
-    Div(attr('', ['columns'], [['cols', '3']]), ['a', 'b', 'c', 'd', 'e', 'f'].map((x) => Div(attr('', ['column']), [Para(S(x))]))),
+    rowDiv([], 'a', 'b', 'c'),
+    rowDiv(['continued'], 'd', 'e', 'f'),
   ]),
   [
     rec('columns', 0, { cols: 2 }),
@@ -365,7 +393,57 @@ same(
     rec('column', 1),
     rec('image', 2, { src: SVG_KEY }),
     rec('columns', 0, { cols: 3 }),
-    ...['a', 'b', 'c', 'd', 'e', 'f'].flatMap((x) => [rec('column', 1), rec('paragraph', 2, { text: x })]),
+    ...cellRecs('a', 'b', 'c', 'd', 'e', 'f'),
+  ],
+);
+
+{
+  // Two adjacent unmarked rows with equal shares and gutter: two grids.
+  const pd = ast([rowDiv([], 'a', 'b'), rowDiv([], 'c', 'd')]);
+  same(
+    'columns: adjacent unmarked divs stay two grids',
+    doc(N.grid.create({ columns: [1, 1], gutter: 1 }, [grow('a', 'b')]), N.grid.create({ columns: [1, 1], gutter: 1 }, [grow('c', 'd')])),
+    pd,
+    [rec('columns', 0, { cols: 2 }), ...cellRecs('a', 'b'), rec('columns', 0, { cols: 2 }), ...cellRecs('c', 'd')],
+  );
+  const merged = docSkeleton(doc(N.grid.create({ columns: [1, 1], gutter: 1 }, [grow('a', 'b'), grow('c', 'd')])));
+  check('…and are not one two-row grid', firstDivergence(merged, pandocSkeleton(pd)) === 5, show(pandocSkeleton(pd)));
+}
+
+same(
+  'columns: a comment between rows is hoisted and the rows still merge',
+  doc(
+    N.grid.create({ columns: [1, 1], gutter: 1 }, [grow('a', 'b'), grow('c', 'd')]),
+    note('between rows'),
+    note('first in row two'),
+    N.blockquote.create({ kind: 'solution' }, [p(t('Lead.')), N.grid.create({ columns: [1, 1], gutter: 1 }, [grow('e', 'f'), grow('g', 'h')])]),
+    note('nested between rows'),
+    p(t('After.')),
+    N.grid.create({ columns: [1, 1], gutter: 1 }, [grow('i', 'j')]),
+  ),
+  ast([
+    rowDiv([], 'a', 'b'),
+    RawB('html', '<!-- between rows -->'),
+    Div(attr('', ['columns', 'continued'], [['gutter', '1em']]), [colDiv(RawB('html', '<!-- first in row two -->'), Para(S('c'))), colDiv(Para(S('d')))]),
+    // Nested in a solution, with a comment between the rows' divs too.
+    Div(attr('', ['solution']), [Para(S('Lead.')), rowDiv([], 'e', 'f'), RawB('html', '<!-- nested between rows -->'), rowDiv(['continued'], 'g', 'h')]),
+    Para(S('After.')),
+    // A `.continued` row with no grid before it starts one.
+    rowDiv(['continued'], 'i', 'j'),
+  ]),
+  [
+    rec('columns', 0, { cols: 2 }),
+    ...cellRecs('a', 'b', 'c', 'd'),
+    rec('comment', 0, { printed: false, text: 'between rows' }),
+    rec('comment', 0, { printed: false, text: 'first in row two' }),
+    rec('solution', 0),
+    rec('paragraph', 1, { text: 'Lead.' }),
+    rec('columns', 1, { cols: 2 }),
+    ...['e', 'f', 'g', 'h'].flatMap((x) => [rec('column', 2), rec('paragraph', 3, { text: x })]),
+    rec('comment', 0, { printed: false, text: 'nested between rows' }),
+    rec('paragraph', 0, { text: 'After.' }),
+    rec('columns', 0, { cols: 2 }),
+    ...cellRecs('i', 'j'),
   ],
 );
 
@@ -441,6 +519,35 @@ same(
     ast([Table({ aligns: ['AlignDefault'], head: [row(cell())], body: [row(cell(Plain(S('v'))))] })]),
   )[0];
   check('a header row of empty cells is dropped', emptyHead.rows === 1 && emptyHead.head === 0, JSON.stringify(emptyHead));
+}
+
+// A table's comments are placed by its cells: before the table when no
+// cell text precedes them, after it otherwise; a caption does not count.
+{
+  const th = (...c: PMNode[]) => N.table_header.create(null, [p(...c)]);
+  const td = (...c: PMNode[]) => N.table_cell.create(null, [p(...c)]);
+  same(
+    'a comment in a table: before it when it precedes every cell’s text',
+    doc(
+      note('first'),
+      N.table.create({ caption: 'Cap' }, [N.table_row.create(null, [th(t('Item')), th(t('Note'))]), N.table_row.create(null, [td(t('a')), td(t('b'))])]),
+      note('later'),
+      p(t('Text.')),
+      N.table.create(null, [N.table_row.create(null, [th(t('H'))]), N.table_row.create(null, [td(t('v'))])]),
+      note('after text'),
+    ),
+    ast([
+      Div(attr('', ['table'], [['caption', 'Cap']]), [
+        Table({
+          aligns: ['AlignLeft', 'AlignLeft'],
+          head: [row(cell(Plain(RawI('html', '<!-- first -->'), Sp, S('Item'))), cell(Plain(S('Note'))))],
+          body: [row(cell(Plain(S('a'))), cell(Plain(S('b'), Sp, RawI('html', '<!-- later -->'))))],
+        }),
+      ]),
+      Para(S('Text.')),
+      Table({ aligns: ['AlignDefault'], head: [row(cell(Plain(S('H'))))], body: [row(cell(Plain(RawI('html', '<!-- after text -->'), Sp, S('v'))))] }),
+    ]),
+  );
 }
 
 same(

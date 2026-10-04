@@ -57,6 +57,22 @@
 //   inside a div are still hoisted (a div is a container until its class
 //   decides), and whole-line comments inside an HTML element are lifted
 //   out after it (the element's first line is printed code);
+// - a grid is written one `.columns` div per row (the plan's grid rows):
+//   a `.columns` div holding only `.column` divs is a row, and every
+//   following sibling `.columns` row that carries `.continued` (comments
+//   between rows allowed) is a later row of the SAME grid — one `columns`
+//   record whose `cols` is the first row's cell count (the model's
+//   `columns.length`), then each row's `column` records in order. A row
+//   without `.continued` starts a new grid, so two adjacent unmarked rows
+//   are two grids; a `.continued` row with no grid before it starts one.
+//   A comment between rows is inside the grid and hoisted after it. Shares,
+//   gutters and `cols=` attributes are geometry, not content: not read;
+// - a table's comments are placed by its cells alone: one before the
+//   first non-empty cell's text goes before the table, any other after
+//   it; the caption does not count (a `.table` attribute, or a `: Caption`
+//   line pandoc takes from before or after the table — its AST does not
+//   say which). A comment in a figure's caption goes after the figure (the
+//   image precedes its caption);
 // - `Para [Image]` is `paragraph > image` (`image`), unless the image has
 //   an id: then it is a labeled figure with an empty caption; `Figure` is
 //   `figure`; a lone image in a `Plain` reads the same way;
@@ -65,13 +81,24 @@
 //   (`{#eq:x .unnumbered}`); `.numbered`/`.unnumbered` become `classes`;
 // - a heading id equal to pandoc's own auto-identifier is not a label
 //   (pandoc invents one for every heading; a hand-written `{#intro}` on
-//   "Intro" is therefore indistinguishable and reads as no label);
+//   "Intro" is therefore indistinguishable and reads as no label). A
+//   `[^ref]` footnote marker in a heading puts its reference label into
+//   pandoc's id (`# Slope[^s]` is `slopes`), which the AST does not keep,
+//   so any identifier characters at a note's place still match;
 // - a `.table` div lends the table its id, caption, `decimal` columns,
 //   `aligns` overrides and `spans` (covered cells are skipped); a header
 //   row whose cells are all empty is dropped (the headerless form); cells
 //   are one `paragraph` record each, row-major, their blocks joined by a
 //   space, and `aligns` lists every cell's alignment in the same order;
 // - a footnote's paragraphs are joined by a space (Plass flattens them).
+//
+// Known limitation: an HTML `<div class="solution">` (or any rail class)
+// is the same `Div` in pandoc's JSON as `::: solution` (`native_divs`), so
+// it reduces as the rail, while Plass (markdown-it) reads it as an
+// `md-raw` island. The referee reports that divergence and the format
+// cannot heal it from pandoc's side: an accepted-divergence candidate for
+// step 10 and a MARKDOWN-FORMAT.md pitfall ("write `:::`, not
+// `<div class>`"). The course corpus has no classed `<div>`.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
@@ -463,6 +490,14 @@ function hoist(ctx: Ctx, payloads: string[], seen: boolean): void {
 
 // pandoc's `stringify` and `auto_identifiers` (Text.Pandoc.Shared,
 // pandoc 3.4): a heading's generated id, so it is not taken for a label.
+// The Markdown reader names a heading before it resolves footnote
+// references, so a `[^ref]` marker is still the text `[^ref]` then and its
+// label lands in the id (`# Slope[^s]` is `slopes`); an inline `^[…]` note
+// is already a Note and adds nothing. The AST keeps neither the label nor
+// which form a note had, so NOTE_MARK stands in for it and `isAutoId`
+// matches it as any run of identifier characters.
+const NOTE_MARK = '\uE000';
+
 function stringify(inlines: PandocNode[]): string {
   let s = '';
   for (const n of inlines) {
@@ -497,6 +532,7 @@ function stringify(inlines: PandocNode[]): string {
         s += stringify((n.c as unknown[])[1] as PandocNode[]);
         break;
       case 'Note':
+        s += NOTE_MARK;
         break;
       default:
         if (Array.isArray(n.c) && n.c.every((x) => typeof x === 'object' && x !== null && 't' in x)) s += stringify(n.c as PandocNode[]);
@@ -508,12 +544,21 @@ function stringify(inlines: PandocNode[]): string {
 const SPACE = /[\t\n\v\f\r \u00a0\p{Zs}]+/u;
 function autoIdentifier(inlines: PandocNode[], used: Set<string>): string {
   const filtered = [...stringify(inlines).toLowerCase()]
-    .filter((c) => SPACE.test(c) || /[\p{L}\p{N}_.-]/u.test(c))
+    .filter((c) => c === NOTE_MARK || SPACE.test(c) || /[\p{L}\p{N}_.-]/u.test(c))
     .join('');
-  const base = filtered.split(SPACE).filter(Boolean).join('-').replace(/^[^\p{L}]+/u, '') || 'section';
-  if (!used.has(base)) return base;
+  const base = filtered.split(SPACE).filter(Boolean).join('-').replace(/^[^\p{L}\uE000]+/u, '') || 'section';
+  if (base.includes(NOTE_MARK) || !used.has(base)) return base;
   for (let n = 1; n <= 60000; n++) if (!used.has(`${base}-${n}`)) return `${base}-${n}`;
   return base;
+}
+
+/** Whether `id` is the identifier pandoc generated for the heading. With a
+ *  footnote in it, the note's reference label (unknown here) may stand
+ *  where NOTE_MARK is, and a duplicate's `-N` may follow. */
+function isAutoId(id: string, auto: string): boolean {
+  if (!auto.includes(NOTE_MARK)) return id === auto;
+  const escape = (part: string) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${auto.split(NOTE_MARK).map(escape).join('[\\p{L}\\p{N}_.-]*')}(?:-\\d+)?$`, 'u').test(id);
 }
 
 /** A pandoc attribute block left as text after display math
@@ -907,6 +952,11 @@ function reduceBlocks(blocks: PandocNode[], depth: number, ctx: Ctx | null, ids:
       local.keepInline = keep;
       recs.push(record('island', depth));
       i = end;
+    } else if (isGridRow(b)) {
+      // A grid: this row and every `.continued` row after it.
+      const end = gridEnd(blocks, i);
+      gridRecords(blocks.slice(i, end + 1), depth, local, recs);
+      i = end;
     } else reduceBlock(b, depth, local, recs);
     if (ctx) out.push(...recs);
     else out.push(...local.before, ...recs, ...local.after);
@@ -934,7 +984,7 @@ function reduceBlock(b: PandocNode, depth: number, ctx: Ctx, out: SkeletonRecord
       ctx.ids.add(id || auto);
       const flat = flattenInlines(inlines, ctx);
       ctx.seen = true;
-      out.push(...textRecords(`heading-${level}`, depth, flat, { label: id === auto ? '' : id }));
+      out.push(...textRecords(`heading-${level}`, depth, flat, { label: isAutoId(id, auto) ? '' : id }));
       return;
     }
     case 'CodeBlock': {
@@ -1017,12 +1067,62 @@ function reduceBlock(b: PandocNode, depth: number, ctx: Ctx, out: SkeletonRecord
   }
 }
 
+const divClasses = (b: PandocNode) => attrOf((b.c as [Attr])[0])[1];
+const railOf = (classes: string[]) => RAIL_CLASSES.find((c) => classes.includes(c));
+const isComment = (b: PandocNode) => b.t === 'RawBlock' && htmlComments(b) !== null;
+
+/** A `.columns` div in the grid-row form: nothing but `.column` divs
+ *  (and comments). Any other content makes it the unknown-div island. */
+function isGridRow(b: PandocNode): boolean {
+  if (b.t !== 'Div' || railOf(divClasses(b)) !== 'columns') return false;
+  const solid = (b.c as [unknown, PandocNode[]])[1].filter((n) => !isComment(n));
+  return solid.length > 0 && solid.every((n) => n.t === 'Div' && divClasses(n).includes('column'));
+}
+
+/** The index of a grid's last row: the row at `i` and every `.continued`
+ *  row after it, comments between rows allowed. A row without the class
+ *  starts a new grid (the plan's step 4: consecutive divs merge only
+ *  through `.continued`). */
+function gridEnd(blocks: PandocNode[], i: number): number {
+  let end = i;
+  for (let j = i + 1; j < blocks.length; j++) {
+    const b = blocks[j];
+    if (isComment(b)) continue;
+    if (!isGridRow(b) || !divClasses(b).includes('continued')) break;
+    end = j;
+  }
+  return end;
+}
+
+/** One grid from its row divs: one `columns` record, its `cols` the first
+ *  row's cell count (the model's `columns.length`), then every row's
+ *  `column` records in order. A comment between rows or between cells is
+ *  inside the grid, so it is hoisted like any nested comment. */
+function gridRecords(group: PandocNode[], depth: number, ctx: Ctx, out: SkeletonRecord[]): void {
+  const cells = (row: PandocNode) => (row.c as [unknown, PandocNode[]])[1];
+  out.push(record('columns', depth, { cols: cells(group[0]).filter((n) => n.t === 'Div').length }));
+  for (const row of group) {
+    if (row.t !== 'Div') {
+      reduceBlock(row, depth, ctx, out);
+      continue;
+    }
+    for (const child of cells(row)) {
+      if (child.t !== 'Div') {
+        reduceBlock(child, depth + 1, ctx, out);
+        continue;
+      }
+      out.push(record('column', depth + 1));
+      reduceBlocks(cells(child), depth + 2, ctx, ctx.ids, out);
+    }
+  }
+}
+
 function divRecords(b: PandocNode, depth: number, ctx: Ctx, out: SkeletonRecord[]): void {
   const [rawAttr, children] = b.c as [Attr, PandocNode[]];
   const attr = attrOf(rawAttr);
   const classes = attr[1];
-  const rail = RAIL_CLASSES.find((c) => classes.includes(c));
-  const solid = children.filter((n) => !(n.t === 'RawBlock' && htmlComments(n)));
+  const rail = railOf(classes);
+  const solid = children.filter((n) => !isComment(n));
   const island = () => {
     // A div is a container until its class decides: its comments are
     // hoisted by the same rule as a solution's.
@@ -1036,17 +1136,9 @@ function divRecords(b: PandocNode, depth: number, ctx: Ctx, out: SkeletonRecord[
     return;
   }
   if (rail === 'columns') {
-    if (!solid.length || !solid.every((n) => n.t === 'Div' && attrOf((n.c as [Attr])[0])[1].includes('column'))) return island();
-    const n = Number(kv(attr, 'cols'));
-    out.push(record('columns', depth, { cols: Number.isInteger(n) && n > 0 ? n : solid.length }));
-    for (const child of children) {
-      if (child.t !== 'Div') {
-        reduceBlock(child, depth + 1, ctx, out); // a comment between cells: hoisted
-        continue;
-      }
-      out.push(record('column', depth + 1));
-      reduceBlocks((child.c as [unknown, PandocNode[]])[1], depth + 2, ctx, ctx.ids, out);
-    }
+    // Reached outside a block list (reduceBlocks groups the rows): one row.
+    if (!isGridRow(b)) return island();
+    gridRecords([b], depth, ctx, out);
     return;
   }
   if (rail === 'table') {
@@ -1097,7 +1189,11 @@ function tableRecords(t: PandocNode, divAttr: Attr | null, depth: number, ctx: C
     Array<[unknown, unknown, PandocNode[], PandocNode[]]>,
     [unknown, PandocNode[]],
   ];
-  ctx.seen = true;
+  // For placing a comment, a table's printed content is its cells,
+  // row-major: a comment before the first non-empty cell's text goes
+  // before the table, any later one after it. The caption does not count
+  // (a `.table` attribute, or a `: Caption` line pandoc accepts before or
+  // after the table; its AST does not say which).
   const cols = colspecs.length;
   const colAlign = colspecs.map(([a]) => ALIGN_NAME[a.t] ?? 'left');
   const decimal = new Set((divAttr ? kv(divAttr, 'decimal') ?? '' : '').split(/[\s,]+/).filter(Boolean).map(Number));
@@ -1128,7 +1224,9 @@ function tableRecords(t: PandocNode, divAttr: Attr | null, depth: number, ctx: C
       if (!covered.has(`r${r}c${c}`)) {
         const base = colAlign[c] ?? 'left';
         aligns.push(alignOverride.get(`r${r}c${c}`) ?? (decimal.has(c) && base === 'right' ? 'decimal' : base));
-        cells.push(...textRecords('paragraph', depth + 1, blocksFlat(cell[4], ctx)));
+        const flat = blocksFlat(cell[4], ctx);
+        if (!isEmptyFlat(flat)) ctx.seen = true;
+        cells.push(...textRecords('paragraph', depth + 1, flat));
       }
       c += cell[3] || 1;
     }
@@ -1147,6 +1245,7 @@ function tableRecords(t: PandocNode, divAttr: Attr | null, depth: number, ctx: C
       caption = m[1];
     }
   }
+  ctx.seen = true; // a table is printed even when every cell is empty
   return [record('table', depth, { text: caption || undefined, label, rows: rows.length, head: head.length, cols, aligns }), ...cells];
 }
 
