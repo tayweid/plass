@@ -879,10 +879,11 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
   expect(b.history).toEqual({ x: b.pod!.x + b.pod!.width + 6, y: 6, width: 32, height: 32 });
   expect(b.tile).toMatchObject({ radius: '9px', glyph: { width: 18, height: 18 }, label: 'History', title: 'History (⇧⌘H)', caption: 'History', keys: 'Shift+Meta+H', popup: null, region: 'no-drag' });
   expect(b.tile!.color).toBe(b.fileColor);
-  // The river: three nodes on a vertical line, the lowest filled — the one
-  // string Knuth's bar draws too (HISTORY_GLYPH in both apps).
+  // The standard history icon, a clock face with a counter-clockwise arrow
+  // round its left side — the one string Knuth's bar draws too
+  // (HISTORY_GLYPH in both apps; Knuth's history.spec holds it as well).
   expect(b.tile!.svg).toBe(
-    '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="3.5" r="2.25"></circle><line x1="12" y1="6.25" x2="12" y2="9.25"></line><circle cx="12" cy="12" r="2.25"></circle><line x1="12" y1="14.75" x2="12" y2="17.75"></line><circle cx="12" cy="20.5" r="2.25" fill="currentColor"></circle></svg>',
+    '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12a8 8 0 1 1 2.34 5.66M2.2 9.8 5 12.6l2.8-2.8"></path><polyline points="13 7.5 13 12 16.5 14"></polyline></svg>',
   );
   // Nothing else moves: the bar, the File tile and the pill are the tab's
   // to the pixel, the right end too; Export moves on by the tile and the

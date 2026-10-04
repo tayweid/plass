@@ -59,29 +59,33 @@ view) the first ask, from the tile or the item, says so in the toast
 ("This Plass.app has no history view — File → Check for updates…") and
 hides both; Export closes up to the pill again.
 
-**The glyph** is the record's river as the History window draws it:
-three nodes on a vertical line, time running down, the lowest — the
-mouth, now — filled. One SVG string in both apps, byte for byte
-(`HISTORY_GLYPH` in `src/toolbar.ts` here and in knuth's `src/main.ts`,
-each naming the other; `frame.spec` holds the string):
+**The glyph** (since 2026-10-04) is the standard history icon: a clock
+face with a counter-clockwise arrow round its left side, Material's
+"history" in the icons' stroke — the arc from nine o'clock over the top
+to half past seven, a chevron at nine pointing back down it, the hands
+at twelve and four. Taylor: "lets make the icon look more like the
+standard history icon, that rewind clock one you use." It was first the
+record's river (three nodes on a vertical line, the lowest filled), kept
+off the clock because Knuth's Restart session glyph (Feather's
+rotate-ccw) is an arrow round a circle too; but the river had to be
+learned, and the clock is what people already read as history. The
+hands are what tell it from Restart, so they are long (4.5 and 4 units)
+and the face reads as a clock at 18 px; rendered side by side with
+Restart at 18 px, the two read differently at a glance. Hands at twelve
+and two ("ten past") made a narrow wedge that read as a tick at that
+size, so they open to twelve and four. One SVG string in both apps,
+byte for byte (`HISTORY_GLYPH` in `src/toolbar.ts` here and in knuth's
+`src/main.ts`, each naming the other; `frame.spec` holds the string):
 
     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
-      aria-hidden="true"><circle cx="12" cy="3.5" r="2.25"/><line x1="12"
-      y1="6.25" x2="12" y2="9.25"/><circle cx="12" cy="12" r="2.25"/><line
-      x1="12" y1="14.75" x2="12" y2="17.75"/><circle cx="12" cy="20.5"
-      r="2.25" fill="currentColor"/></svg>
+      aria-hidden="true"><path d="M5 12a8 8 0 1 1 2.34 5.66M2.2 9.8 5
+      12.6l2.8-2.8"/><polyline points="13 7.5 13 12 16.5 14"/></svg>
 
-(one line in the source). The nodes are r 2.25 at the icons' 1.7
-stroke, so at 18 px each ring keeps a hole 2.1 px across, and the
-segments end inside the rings' strokes. Rendered at 18 px on the
-frame (both device scales, against File, Export and Knuth's Restart
-session), it reads at 2× as three rings on a stream with the last one
-full; at 1× it is a dotted bar with a full foot. Not the clock with an
-arrow, which reads as history anywhere: that is Knuth's Restart session
-glyph (Feather's rotate-ccw) with hands, and the two would share a
-window meaning different things. The river is the window the tile
-opens, drawn small.
+(one line in the source). The face is centred at x 13, as Material's
+is, to leave the arrowhead room inside the 24-unit box. The arc and the
+chevron are one path, so where they meet at the tip the stroke is drawn
+once (as two elements their edges overlapped there in a brighter dot).
 
 **Nothing else moves.** The tile is the bar's 6 px gap past the pill,
 Export the same gap past the tile; the File tile, the pill's left edge
