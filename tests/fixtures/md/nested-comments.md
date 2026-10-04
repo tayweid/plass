@@ -12,7 +12,7 @@ The answer is four pasties.
 
 :::
 
-::: {.columns gutter=1em cols=2}
+::: {.columns gutter=1em}
 
 ::: {.column}
 

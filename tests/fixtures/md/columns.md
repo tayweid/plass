@@ -1,8 +1,8 @@
 # Columns
 
-One grid is one `.columns` div holding every cell row-major; `cols` says how many cells make a row.
+One grid row is one `.columns` div holding its cells as `.column` divs; a later row of the same grid is another `.columns` div marked `.continued`.
 
-::: {.columns gutter=1em cols=2}
+::: {.columns gutter=1em}
 
 ::: {.column width=60%}
 

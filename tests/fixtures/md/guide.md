@@ -19,7 +19,7 @@ Colin Creevey can bake $20$ cornish pasties ($P$) or $5$ cauldron cakes ($C$) in
 
 ::: solution
 
-::: {.columns gutter=1em cols=2}
+::: {.columns gutter=1em}
 
 ::: {.column}
 
