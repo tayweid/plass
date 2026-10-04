@@ -5,8 +5,8 @@
 // double-quoted scalars (double-quoted escapes decoded as YAML 1.2 — and
 // pandoc — decode them), block maps at any depth, flow maps and lists,
 // block lists, block scalars (`|`, `>`, chomping and indentation
-// indicators) and `#` comments. No anchors, aliases or tags: a value that
-// starts with `&`, `*` or `!` is read as text, with a warning.
+// indicators) and `#` comments. An anchor (`&a`) or tag (`!t`) is skipped
+// and the value after it read, as pandoc reads it; aliases are not resolved.
 //
 // Known keys are interpreted: pandoc's own names for the big knobs, Plass's
 // settings under one `plass:` key (which pandoc ignores). Everything else —
@@ -147,23 +147,39 @@ function parseEntry(lines: string[], indent: number, notes: string[]): { key: st
 /** The value after `key:` (or after `- `): `rest` is the rest of its line,
  *  `cont` the deeper lines after it, `indent` the key's indentation. */
 function parseValue(rest: string, cont: string[], indent: number, notes: string[]): YNode {
+  rest = stripProperties(rest.trimStart(), notes);
   const r = rest.trim();
   if (r === '' || r.startsWith('#')) return parseNested(cont, indent, notes);
   if (r[0] === '|' || r[0] === '>') return parseBlockScalar(r, cont, indent);
   if ('"\'{['.includes(r[0])) {
     // Untrimmed at the end: a quoted line's trailing `\ ` is text.
-    const reader = new FlowReader([rest.trimStart(), ...cont].join('\n'), notes);
+    const reader = new FlowReader([rest, ...cont].join('\n'), notes);
     const node = reader.node();
     reader.end();
     return node;
   }
-  if ('*&!'.includes(r[0])) {
-    notes.push(`an unquoted value starting with ${r[0]} is a YAML ${r[0] === '*' ? 'alias' : r[0] === '&' ? 'anchor' : 'tag'} to pandoc, which rejects the file; read as text`);
-  } else if ('%@`'.includes(r[0])) {
-    notes.push(`YAML does not allow an unquoted value to start with ${r[0]} (pandoc rejects the file); read as text`);
-  }
+  if ('*&%@`'.includes(r[0])) notes.push(rejected(r[0]));
   return parsePlain(r, cont, notes);
 }
+
+/** An anchor (`&a`) or tag (`!t`, `!!str`) before a value: pandoc reads the
+ *  value after it, and so does Plass (aliases are not resolved). */
+function stripProperties(r: string, notes: string[]): string {
+  for (;;) {
+    const m = /^(&[^\s,[\]{}]+|![^\s,[\]{}]*)(?=[\s,[\]{}]|$)[ \t]*/.exec(r);
+    if (!m) return r;
+    notes.push(`the YAML ${m[1][0] === '&' ? 'anchor' : 'tag'} ${m[1]} is ignored`);
+    r = r.slice(m[0].length);
+  }
+}
+
+/** The note for an unquoted value pandoc's YAML reader rejects. */
+const rejected = (c: string): string =>
+  c === '*'
+    ? 'a leading * is a YAML alias to pandoc, which rejects the file when it names no anchor; read as text'
+    : c === '&'
+      ? 'a bare & is an empty YAML anchor to pandoc, which rejects the file; read as text'
+      : `YAML does not allow an unquoted value to start with ${c} (pandoc rejects the file); read as text`;
 
 /** A value on the lines after its key: a block list, a block map, or a scalar. */
 function parseNested(cont: string[], indent: number, notes: string[]): YNode {
@@ -350,6 +366,13 @@ class FlowReader {
 
   node(inFlow = false): YNode {
     this.ws();
+    if (inFlow) {
+      const rest = this.s.slice(this.i);
+      this.i += rest.length - stripProperties(rest, this.notes).length;
+      this.ws();
+      // A property with no value after it (`{a: !t, …}`) is an empty value.
+      if (this.i >= this.s.length || ',]}'.includes(this.s[this.i])) return { t: 'null' };
+    }
     const c = this.s[this.i];
     if (c === '"') return this.double();
     if (c === "'") return this.single();
@@ -430,7 +453,7 @@ class FlowReader {
     const s = this.s;
     const c = s[this.i];
     if (',[]{}'.includes(c)) throw new YamlError(`unexpected "${c}" in a flow collection`);
-    if ('*&!%@`'.includes(c)) this.notes.push(`YAML does not allow an unquoted value to start with ${c} (pandoc rejects the file); read as text`);
+    if ('*&%@`'.includes(c)) this.notes.push(rejected(c));
     const start = this.i;
     while (this.i < s.length) {
       const ch = s[this.i];

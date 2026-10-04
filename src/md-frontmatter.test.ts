@@ -480,6 +480,20 @@ console.log('lenient reading:');
   check('… and is written quoted', writeFrontmatter(star) === "---\ntitle: '*Emphasis* matters'\n---");
   const comment = read('title: Notes #3');
   check('" #" starts a comment, as in YAML', comment.titleMd === 'Notes');
+  // Pandoc reads past an anchor or a tag (verified on 3.4): so does Plass.
+  for (const [yaml, want] of [
+    ['title: !important note', 'note'],
+    ['title: !!str 123', '123'],
+    ['title: &a\n  long text', 'long text'],
+    ['title: !x "quoted"', 'quoted'],
+  ] as const) {
+    const r = read(yaml);
+    check(`${json(yaml)} reads ${json(want)}, as pandoc does`, r.titleMd === want && r.warnings.length === 1, json(r));
+  }
+  const tagged = read('plass:\n  header: !!map {text: !t, align: !t left}');
+  check('properties inside a flow map are skipped too', tagged.settings.headerAlign === 'left' && tagged.warnings.length === 3, json(tagged));
+  const bare = read('title: & more');
+  check('a bare & (pandoc rejects it) reads as text, with a warning', bare.titleMd === '& more' && bare.warnings.length === 1, json(bare));
 }
 
 // --- 13. YAML the subset cannot read is kept as written ---
