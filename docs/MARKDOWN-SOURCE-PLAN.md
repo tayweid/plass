@@ -92,7 +92,7 @@ Pandoc 3.4, default `markdown` reader (extensions `fenced_divs`,
 `native_divs`, `subscript`, `superscript` are on):
 
 - `::: solution`, `::: {.solution}`, `::: center`, `::: {.keep}`,
-  `::: {.columns gutter=1em cols=2}` with nested `::: {.column width=60%}`
+  `::: {.columns gutter=1em}` / `::: {.columns .continued gutter=1em}` with nested `::: {.column width=60%}`
   (quoted or bare values), and `::: {#tbl:t .table caption="Cap"
   density=compact}` wrapping a pipe table all parse as `Div` with id,
   classes and key–values intact; the table inside is a `Table` with
@@ -462,7 +462,7 @@ Rules:
 | Node | Form | Notes |
 |---|---|---|
 | `blockquote{kind:'solution'}` | `::: solution` … `:::` | also read `::: {.solution}`; blank line before and after |
-| `grid` | `::: {.columns gutter=1em cols=2}` holding every cell row-major as `::: {.column width=60%}` | **departure**: one div per GRID, never per row, never merged (below); `cols=N` always written; equal shares write no `width` |
+| `grid` | one `::: {.columns gutter=1em}` div per ROW holding its cells as `::: {.column width=60%}`; rows after the first carry `.continued` (`::: {.columns .continued gutter=1em}`) | the standard form (pandoc's slide columns, Quarto); consecutive divs merge into one grid only through `.continued`; equal shares write no `width` |
 | `paragraph{align}` / `paragraph{keep}` | `::: center`, `::: right`, `::: {.keep}` (classes combine: `::: {.keep .center}`) around exactly one paragraph | the rail for the two features the brief's list omits; any other content inside → the unknown-div island |
 | `blockquote` | `> …` | quoted paragraphs are separated by a bare `>` line (today's `> >` bug fixed) |
 | `editor_comment` | `<!-- … -->` at top level | every HTML comment; written verbatim except `-->` → `--&gt;` (decoded on read); the tagged `<!-- plass:comment` frame is still read with its old decoding, never written |
@@ -499,24 +499,22 @@ accepts `N%`, a bare number or `Nfr` and canonicalizes, so `33.333%`/
 `66.667%` recovers `[1, 2]`. Gutter: `em` native; `pt`/`in`/`mm`/`cm`
 converted at the document font size.
 
-Grid rows (**departure**): the brief says "one `.columns` div per grid
-row". Two adjacent one-row grids with equal shares and gutter are
-indistinguishable in that form from one two-row grid, and the two are
-different Typst (one `#grid` applies its gutter between rows; two grids
-are separated by paragraph spacing — a 3 pt difference at 12 pt, on both
-compilers) and different pages (the editor's `.ts-grid-row + .ts-grid-row`
-margin). Merging on read would silently rewrite a shape the editor
-produces in one click and break the step-6 equality test; not merging
-would make every multi-row grid two grids. So a grid is exactly one
-`::: {.columns …}` div holding all its cells row-major, with `cols=N`
-always written (the row length is otherwise unrecoverable when equal
-shares write no `width`). Pandoc preserves the attribute; Quarto would
-render the cells in one row, which is irrelevant since pandoc is not a
-renderer. Taylor's call (open question 11); the alternative is the brief's per-row
-form with a continuation class on later rows (`::: {.columns .continued}`),
-which needs no attribute and lets Quarto render rows, at the cost of a
-referee merge rule; the course corpus has 12 two-row grids and 2 adjacent
-equal pairs, so both rules are exercised by real files.
+Grid rows (decided 2026-10-04 with Taylor: follow the standard): one
+`.columns` div per row, as pandoc's slide columns and Quarto define it.
+Two adjacent one-row grids with equal shares and gutter would otherwise
+be indistinguishable from one two-row grid, and the two are different
+Typst (one `#grid` applies its gutter between rows; two grids are
+separated by paragraph spacing — a 3 pt difference at 12 pt) and
+different pages. So rows after the first of a multi-row grid carry the
+class `.continued`: the reader merges a `.columns` div into the preceding
+grid only when it has that class (and warns if its share count or gutter
+differs); consecutive `.columns` divs without it are separate grids, which
+is also what Quarto renders. The writer emits `.continued` on every row
+after the first. A hand-written multi-row grid without the class reads as
+separate grids and loses only the row gutter. The referee merges a
+`.continued` sibling into the preceding `columns` record. The course
+corpus has 12 two-row grids and 2 adjacent equal pairs, so both rules are
+exercised by real files.
 
 Citations: a bracket group `[…]` containing `@` is read by pandoc's
 grammar — items split on `;`, each with optional prefix text, optional
@@ -659,8 +657,8 @@ New questions this review found (answers proposed; Taylor overrides):
    never lands on an export beside its source.
 10. **The `{=typst}` hatch in the export:** printed as a code block
     (`islands: 'print'`), the same as the page and the PDF.
-11. **Grid rows:** one div per grid with `cols=N` (the departure above),
-    or a continuation class per row. The plan assumes the former.
+11. **Grid rows:** the standard per-row form with `.continued` on later
+    rows (decided 2026-10-04).
 12. **Repo repair:** done 2026-10-04.
 
 ## Steps
@@ -800,8 +798,7 @@ closing tag) and a `<div>` `Div` reduce to one `island` record with no
 text and children not descended; `Para [Image]` ↔ `paragraph > image`,
 `Figure` ↔ `figure`; `abstract` (MetaBlocks) and title/author/date
 (MetaInlines) are reduced like body paragraphs; `AlignDefault` =
-`AlignLeft`; tables carry `rows` and `head` counts; the `columns` record
-carries `cols`. New `tests/fixtures/md/`: one file per row of the
+`AlignLeft`; tables carry `rows` and `head` counts; a `.continued` `columns` record merges into the preceding one. New `tests/fixtures/md/`: one file per row of the
 vocabulary table (including `paragraph > image` with a data-URL SVG, a
 captioned labeled figure, `::: center`/`::: {.keep}`, a headerless
 table, a cell with `` `a|b` ``, every citation form, a `--` comment, a
@@ -876,8 +873,8 @@ step share no files.
 
 **Step 6 — The body** (after 1 and 3). Integrate steps 1 and 3 (step 4
 is consumed by step 10). Reader: `div_open` with class `solution` →
-`blockquote{kind:'solution'}`; `columns` → one grid, cells row-major by
-`cols`, shares canonicalized; `table` → the inner pipe table with the
+`blockquote{kind:'solution'}`; `columns` → one grid row (a new grid, or a row appended to the
+preceding grid when the div carries `.continued`), shares canonicalized; `table` → the inner pipe table with the
 div's attrs; `center`/`right`/`keep` holding one paragraph → the
 paragraph's attrs; any other class, a `<div>`, or an HTML element → an
 `md-raw` island holding the ORIGINAL source lines for that token range
@@ -2246,13 +2243,10 @@ The proposed answers above stand unless overruled: 1 (`solution`),
 4 (no automatic extraction), 5 (flip now), 6 (0.14.2 exact, 0.15.x
 compiles), 7 (pin 0.2.7 with the two named departures, translate later),
 8 (`center`/`right`/`keep` divs), 9 (`.typ` opens as today until step 13,
-which is required), 10 (hatch printed as code in the export), 11 (one
-`.columns` div per grid with `cols=N`, a departure from the brief's
-"one div per row"), 12 (the two git commands first). Two sentences of
-the brief are only partly true and could be amended: "Plass's save
+which is required), 10 (hatch printed as code in the export), 11 (per-row divs with `.continued`), 12 (done). One sentence of the
+brief is only partly true and could be amended: "Plass's save
 normalizations … are the same choices pandoc `smart` makes" (true for
-quotes, dashes and the ellipsis only) and "One `.columns` div per grid
-row".
+quotes, dashes and the ellipsis only).
 
 ## Appendix A — native-Typst math export, when wanted
 
