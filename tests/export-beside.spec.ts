@@ -553,6 +553,35 @@ test('the .typ export names images by content and keeps what it cannot write as 
   expect(result.messages).toContain(`Exported typ-kept/${result.name}.typ — 1 embedded image could not be written to figures/`);
 });
 
+test('an image whose MIME type is in capitals is written as .svg', async ({ page }) => {
+  // MIME types are case-insensitive; a file's extension is what Finder and
+  // Plass's own figure loader go by, so `image/SVG+XML` must land as .svg.
+  await page.goto('/?new=1');
+  const result = await page.evaluate(async () => {
+    const app = window as ExportApp;
+    const { schema } = app.view.state;
+    const n = schema.nodes;
+    const src =
+      'data:image/SVG+XML;utf8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%2210%22%3E%3Crect width=%2210%22 height=%2210%22/%3E%3C/svg%3E';
+    app.__fm.newDoc(n.doc.create(null, [n.figure.create({ src, name: 'upper.svg' }, schema.text('Capitals.'))]), 'Upper');
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle('typ-upper', { create: true });
+    app.__fm.dir = dir;
+    await app.__fm.exportCopy();
+    const figures = await dir.getDirectoryHandle('figures');
+    const names: string[] = [];
+    for await (const k of (figures as unknown as { keys(): AsyncIterable<string> }).keys()) names.push(k);
+    const typ = await (await (await dir.getFileHandle('Upper.typ')).getFile()).text();
+    const svg = names.length ? await (await (await figures.getFileHandle(names[0])).getFile()).text() : '';
+    return { names, typ, svg };
+  });
+
+  expect(result.names).toHaveLength(1);
+  expect(result.names[0]).toMatch(/^upper-[0-9a-f]{12}\.svg$/);
+  expect(result.typ).toContain(`image("figures/${result.names[0]}"`);
+  expect(result.svg).toContain('<svg');
+});
+
 test('a .typ export the serializer refuses writes nothing and says why', async ({ page }) => {
   await page.goto('/?new=1');
   const result = await page.evaluate(
