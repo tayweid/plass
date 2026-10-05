@@ -129,6 +129,11 @@ const QUOTE_PREFIX = /^(?:[ \t]{0,3}>[ \t]?)+/;
 
 const LIST_MARKER = /^(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/;
 
+/** An autolink at the scan position: a URI or an email address in angle
+ *  brackets (CommonMark's grammar, which markdown-it follows). */
+const AUTOLINK =
+  /<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\x00-\x20]*|[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)>/y;
+
 /** Whether a formula cannot continue onto `line`. pandoc's math parsers
  *  take line breaks themselves (never a blank line), so a formula runs on
  *  through a heading or quote marker inside a paragraph; what ends it is
@@ -251,10 +256,27 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       !/^\|/.test(body(opener)) &&
       !breaksMath(text.slice(at + 1, text.indexOf('\n', at + 1) < 0 ? undefined : text.indexOf('\n', at + 1)), inList || LIST_MARKER.test(body(opener)));
 
+    /** Whether the `$` at `k` starts a line after the opener's, in its
+     *  container's coordinates: quote markers off, and in a list the item's
+     *  indentation when the line has all of it (pandoc reads an item's
+     *  text that way; a paragraph's own continuation lines keep theirs). */
+    const startsLine = (k: number, i: number, opener: string): boolean => {
+      const from = text.lastIndexOf('\n', k - 1) + 1;
+      if (from <= i) return false;
+      const { quoted, indent } = contentIndent(opener);
+      const itemIndent = inList || LIST_MARKER.test(body(opener)) ? indent : 0;
+      let lead = text.slice(from, k);
+      if (quoted) lead = lead.replace(QUOTE_PREFIX, '');
+      if (/^[ \t]*/.exec(lead)![0].length >= itemIndent) lead = lead.slice(itemIndent);
+      return lead === '';
+    };
+
     /** Inline math opening at `i` (pandoc's `mathInlineWith "$" "$"`): a
      *  non-space after the `$`; `\` escapes the next character and `\text`
-     *  takes a balanced brace group (which may hold a `$`); whitespace may
-     *  not precede the closing `$`, which no digit may follow. */
+     *  takes a balanced brace group (which may hold a `$`); a space or tab
+     *  may not come right before the closing `$`, which no digit may follow.
+     *  A line break may: pandoc's formula takes it like any other
+     *  character, so a `$` that starts the next line closes the formula. */
     const inlineMath = (i: number): number => {
       const first = text[i + 1];
       if (first === undefined || /\s/.test(first)) return -1;
@@ -286,7 +308,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
             if (text[k] === '\n' && !softBreak(k, opener)) return -1;
             k++;
           }
-          if (text[k] === '$') return -1;
+          if (text[k] === '$' && !startsLine(k, i, opener)) return -1;
           j = k;
           continue;
         }
@@ -379,6 +401,18 @@ function prepass(src: string, warn: (m: string) => void): Pre {
         i = end;
         continue;
       }
+      if (c === '<') {
+        // An autolink is verbatim (CommonMark's grammar, markdown-it's): a
+        // `$`, a backtick or underscores in it are the URL's.
+        AUTOLINK.lastIndex = i;
+        const auto = AUTOLINK.exec(text);
+        if (auto) {
+          flushProse();
+          cur += auto[0];
+          i += auto[0].length;
+          continue;
+        }
+      }
       if (c === '<' && text.startsWith('<!--', i)) {
         const end = text.indexOf('-->', i + 4);
         if (end >= 0) {
@@ -430,7 +464,9 @@ function prepass(src: string, warn: (m: string) => void): Pre {
         }
         const end = inlineMath(i);
         if (end > 0) {
-          sentinel({ k: 'math', src: dedentMath(text.slice(i + 1, end - 1), lineAt(i)), orig: text.slice(i, end) });
+          // A formula closed at the start of a line ends in that line
+          // break, which pandoc trims.
+          sentinel({ k: 'math', src: dedentMath(text.slice(i + 1, end - 1), lineAt(i)).replace(/\s+$/, ''), orig: text.slice(i, end) });
           i = end;
           continue;
         }

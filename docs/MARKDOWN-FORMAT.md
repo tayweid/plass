@@ -171,6 +171,9 @@ $$ {.unnumbered}
 - The math itself is LaTeX. A `$` must touch the formula: `$x$`, not `$ x $`.
   A closing `$` that has a digit right after it does not end the formula.
 - Inline math can continue onto the next line, but not past a blank line.
+  A `$` at the start of a line closes a formula opened on the line before
+  (pandoc reads it that way), so a dollar sign at the end of a line, before
+  a `$$` block for instance, must be written `\$`.
 - Put `$$` on lines of their own. Attributes go right after the *closing*
   `$$` (or on the next line): `{#eq:name}` is a label;
   `{.unnumbered}` leaves one equation unnumbered; `{.numbered}` numbers one
@@ -449,7 +452,9 @@ content.
 1. Put a blank line before and after every `:::` line and every comment.
    Pandoc reads a `:::` that comes straight after a line of text as more
    text. A comment there becomes part of that paragraph.
-2. Write `\$` for a literal dollar sign.
+2. Write `\$` for a literal dollar sign, above all at the end of a line: a
+   `$` that starts the next line (the first `$` of a `$$` block too)
+   closes a formula opened by it.
 3. Equation attributes go after the closing `$$`, not the opening one.
 4. Write ```` ```{=typst} ````, not ```` ```typst ````. Write
    ```` ```{=bibtex} ````, not ```` ```bibtex ````. Without the braces, the

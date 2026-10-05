@@ -585,6 +585,66 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   const text = mdToDoc('$\\text{a $ b}|c$ and $a\\$b$.\n').doc;
   check('pandoc\'s math rule: \\text{…$…} and \\$ inside math', JSON.stringify(all(text, (n) => n.type.name === 'math_inline').map((n) => n.attrs.src)) === JSON.stringify(['\\text{a $ b}|c', 'a\\$b']));
   check('a dollar before a digit is prose', !find(mdToDoc('Costs $5 and $6.\n').doc, (n) => n.type.name === 'math_inline'));
+  // pandoc's formula takes a line break like any other character, so a `$`
+  // that starts the next line (in its container's coordinates) closes it;
+  // a space or tab right before it does not. Followed as pandoc reads it,
+  // a stray `$` at a line's end before a `$$` block opens a formula.
+  const srcs = (md: string) => JSON.stringify(all(mdToDoc(md).doc, (n) => n.type.name === 'math_inline').map((n) => n.attrs.src));
+  for (const [md, want] of [
+    ['price $a\n$ b\n', '["a"]'],
+    ['price $a +\n$\n', '["a +"]'],
+    ['price $a\n $ b\n', '[]'],
+    ['> x $a\n> $ b\n', '["a"]'],
+    ['>  x $a\n>  $ b\n', '[]'],
+    ['- x $a\n  $ b\n', '["a"]'],
+    ['- x $a\n$ b\n', '["a"]'],
+    ['1. x $a\n  $ b\n', '[]'],
+    ['- a\n\n  x $a\n  $ b\n', '["a"]'],
+    ['x $a\n$5 b\n', '[]'],
+  ] as const) {
+    const t = trip(md);
+    check(`a closing $ that starts the next line, as pandoc reads it: ${JSON.stringify(md)}`, srcs(md) === want && t.converges, JSON.stringify([srcs(md), t.md1, t.md2]));
+  }
+  check(
+    'a closing $ at a line start: the referee agrees with pandoc 3.4',
+    referee('price $a\n$ b\n', pandocDoc('[{"t":"Para","c":[{"t":"Str","c":"price"},{"t":"Space"},{"t":"Math","c":[{"t":"InlineMath"},"a"]},{"t":"Space"},{"t":"Str","c":"b"}]}]')) < 0,
+  );
+  const stray = trip('price of $2 per gallon follows:\n$$\nD: x\n$$\n');
+  check(
+    'a stray $ before a $$ block opens a formula, as pandoc reads it (the referee agrees; the save escapes the rest)',
+    referee('price of $2 per gallon follows:\n$$\nD: x\n$$\n', pandocDoc('[{"t":"Para","c":[{"t":"Str","c":"price"},{"t":"Space"},{"t":"Str","c":"of"},{"t":"Space"},{"t":"Math","c":[{"t":"InlineMath"},"2 per gallon follows:"]},{"t":"Str","c":"$"},{"t":"SoftBreak"},{"t":"Str","c":"D:"},{"t":"Space"},{"t":"Str","c":"x"},{"t":"SoftBreak"},{"t":"Str","c":"$$"}]}]')) < 0 &&
+      stray.md1 === 'price of $2 per gallon follows:$\\$ D: x \\$\\$\n' &&
+      stray.converges,
+    JSON.stringify(stray.md1),
+  );
+}
+
+// An autolink is verbatim: a `$`, a backtick or underscores in its URL are
+// the URL's, never a formula, a code span or an escape.
+{
+  for (const [md, href] of [
+    ['See <https://example.com/$a$b> now.\n', 'https://example.com/$a$b'],
+    ['See <https://example.com/`a`b> now.\n', 'https://example.com/%60a%60b'],
+    ['See <https://example.com/a___b> now.\n', 'https://example.com/a___b'],
+    ['Mail <a$b$c@x.org> now.\n', 'mailto:a$b$c@x.org'],
+  ] as const) {
+    const t = trip(md);
+    const p = t.doc.firstChild!;
+    const linked: string[] = [];
+    p.forEach((c) => {
+      if (c.marks.some((m) => m.type.name === 'link')) linked.push(c.type.name + ':' + (c.text ?? ''));
+    });
+    const url = md.slice(md.indexOf('<') + 1, md.indexOf('>'));
+    check(
+      `an autolink holding ${url.includes('$') ? 'dollars' : url.includes('`') ? 'backticks' : 'underscores'} is one link: ${url}`,
+      JSON.stringify(linked) === JSON.stringify([`text:${url}`]) && find(p, (n) => n.marks.some((m) => m.attrs.href === href)) !== null && t.converges,
+      JSON.stringify([p.toJSON(), t.md1]),
+    );
+  }
+  check(
+    'an autolink with dollars: the referee agrees with pandoc 3.4',
+    referee('See <https://example.com/$a$b> now.\n', pandocDoc('[{"t":"Para","c":[{"t":"Str","c":"See"},{"t":"Space"},{"t":"Link","c":[["",["uri"],[]],[{"t":"Str","c":"https://example.com/$a$b"}],["https://example.com/$a$b",""]]},{"t":"Space"},{"t":"Str","c":"now."}]}]')) < 0,
+  );
 }
 
 // Pandoc's sub/superscript and citation marks typed by hand converge: the

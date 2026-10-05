@@ -104,7 +104,9 @@ Pandoc 3.4, default `markdown` reader (extensions `fenced_divs`,
   `Str "{#eq:x}"` in the same `Para`; `{.unnumbered}` and
   `{#eq:x .unnumbered}` likewise (two `Str`s); a label on the line after
   the closing `$$` lands in the same `Para` after a `SoftBreak`. Inline
-  math may span a soft line break (`$a +\nb$` is `Math "a +\nb"`).
+  math may span a soft line break (`$a +\nb$` is `Math "a +\nb"`), and a
+  closing `$` may start the next line (`$a\n$ b` is `Math "a"`; after a
+  space or tab it may not close).
 - `# H {#sec:x}` → `Header` id. Pandoc makes a `Figure` only for a lone
   image with NON-EMPTY alt: `![Cap](f.svg){#fig:f width=60%}` → `Figure`
   with id and an `Image` carrying `width`; `![](f.svg)`,
