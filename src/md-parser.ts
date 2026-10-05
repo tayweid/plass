@@ -14,7 +14,8 @@
 //     never a citation); `\ ` becomes a no-break space; a heading's
 //     trailing `{#sec:x}` is read off its line. Every sentinel remembers
 //     its source text, and every pre-pass line the source line it starts
-//     at, so code and islands come back as written.
+//     at, so code and islands come back as written. Indented code passes
+//     through verbatim, as a fence's lines do.
 //   - fenced divs: `::: solution` (the solution block), one `::: {.columns
 //     gutter=1em}` per grid row holding `::: {.column width=60%}` cells
 //     (later rows carry `.continued`), `::: {.table …}` around a pipe table
@@ -28,7 +29,8 @@
 //     after it otherwise (one warning per file with the count). As pandoc
 //     reads it, a comment is a block only where a block starts: on a line
 //     inside a paragraph it is inline (the paragraph stays whole), and text
-//     after a comment block on its closing line opens a paragraph.
+//     after a comment block on its closing line opens a paragraph. A
+//     `<!--` that no `-->` follows is text (pandoc's reading too).
 //   - citations by pandoc's grammar (`[see @a, p. 3; @b]`, bare `@a`); a
 //     key prefixed `eq:`, `fig:`, `sec:` or `tbl:` is a reference.
 //   - ```` ```{=typst} ```` is the raw-Typst island, ```` ```{=bibtex} ````
@@ -82,10 +84,19 @@ type Stored =
   // payload, and whether only whitespace and comments follow it there.
   | { k: 'comment'; text: string; trailing: boolean; orig: string };
 
-// Sentinels use a private-use character: markdown-it passes it through
-// verbatim (NUL would be rewritten to U+FFFD per CommonMark).
-const S = '\uE000';
-const SENTINEL = /\uE000(\d+)\uE000/g;
+// Sentinels are wrapped in a symbol character (U+241F, the control
+// picture for the unit separator): markdown-it passes it through verbatim
+// (NUL would be rewritten to U+FFFD per CommonMark), and, being a symbol,
+// it flanks an emphasis delimiter the way the punctuation it stands for
+// does (`$`, a backtick, `{`, `<`, `\`), so `` `make`*(once)* `` is still
+// emphasis. A private-use character would read as a letter there.
+const S = '\u241F';
+const SENTINEL = /\u241F(\d+)\u241F/g;
+/** A sentinel that opens a text. */
+const LEADING_SENTINEL = /^\u241F(\d+)\u241F/;
+/** What may follow a lone image: its attribute block, then spaces and
+ *  no-break spaces. */
+const IMAGE_TAIL = /^(?:\u241F(\d+)\u241F)?([ \t\n\u00a0]*)$/;
 
 interface Pre {
   /** The text markdown-it parses. */
@@ -144,25 +155,40 @@ function breaksMath(line: string, inList: boolean): boolean {
   return /^(?:`{3,}|~{3,}|:{3,})/.test(b) || (inList && LIST_MARKER.test(b));
 }
 
+/** How many quotes a line opens with (`> > ` is two). */
+const quoteDepth = (line: string) => (QUOTE_PREFIX.exec(line)?.[0].match(/>/g) ?? []).length;
+
+/** A line with its first `depth` quote markers removed: the markers of the
+ *  quotes a paragraph is in. A `>` past them is the line's own text
+ *  (pandoc reads no quote inside a paragraph). */
+function stripQuotes(line: string, depth: number): string {
+  let l = line;
+  for (let d = 0; d < depth; d++) {
+    const m = /^[ \t]{0,3}>[ \t]?/.exec(l);
+    if (!m) break;
+    l = l.slice(m[0].length);
+  }
+  return l;
+}
+
 /** Indentation of a line's content inside its container: quote markers
  *  first, then a list marker or plain indentation. */
-function contentIndent(line: string): { quoted: boolean; indent: number } {
+function contentIndent(line: string): number {
   const quote = QUOTE_PREFIX.exec(line)?.[0] ?? '';
   const rest = line.slice(quote.length);
-  const m = /^[ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?/.exec(rest)!;
-  return { quoted: quote.length > 0, indent: m[0].length };
+  return /^[ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?/.exec(rest)![0].length;
 }
 
 /** A formula's (or a comment's) source lines after the first, back in the
- *  container's own coordinates: quote markers and the container's
- *  indentation removed. */
-function dedentMath(src: string, opener: string): string {
-  const { quoted, indent } = contentIndent(opener);
+ *  container's own coordinates: the `depth` quote markers of the quotes
+ *  around the paragraph and the container's indentation removed. */
+function dedentMath(src: string, opener: string, depth: number): string {
+  const indent = contentIndent(opener);
   return src
     .split('\n')
     .map((line, i) => {
       if (i === 0) return line;
-      let l = quoted ? line.replace(QUOTE_PREFIX, '') : line;
+      let l = stripQuotes(line, depth);
       const lead = /^[ \t]*/.exec(l)![0].length;
       l = l.slice(Math.min(lead, indent));
       return l;
@@ -193,9 +219,19 @@ function prepass(src: string, warn: (m: string) => void): Pre {
   const lines = src.split('\n');
   const store: Stored[] = [];
   const keep = (s: Stored) => `${S}${store.push(s) - 1}${S}`;
+  /** A stored value with the sentinels a source line already held (a
+   *  literal sentinel character) back to their text: a formula's, a code
+   *  span's or a comment's text holds what the file says. */
+  const unlit = (text: string) => (text.includes(S) ? text.replace(SENTINEL, (all, n: string) => store[+n]?.orig ?? all) : text);
+  const literal = (s: Stored): Stored => {
+    if (!s.orig.includes(S)) return s;
+    const out = { ...s, orig: unlit(s.orig) } as Record<string, unknown>;
+    for (const key of ['src', 'code', 'text'] as const) if (typeof out[key] === 'string') out[key] = unlit(out[key] as string);
+    return out as Stored;
+  };
   // A sentinel character already in the file is literal text: it becomes
   // a sentinel of its own, so nothing the file holds can read as one.
-  const work = src.includes(S) ? src.replace(//g, () => keep({ k: 'lit', ch: S, orig: S })).split('\n') : lines;
+  const work = (src.includes(S) ? src.replace(new RegExp(S, 'g'), () => keep({ k: 'lit', ch: S, orig: S })) : src).split('\n');
   const out: string[] = [];
   const origLine: number[] = [];
   const headingAttrs = new Map<number, PandocAttrs>();
@@ -223,6 +259,9 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       return lo;
     };
     const lineAt = (offset: number) => text.slice(starts[lineIndexAt(offset)], text.indexOf('\n', offset) < 0 ? undefined : text.indexOf('\n', offset));
+    /** The quotes the text is in: its first line has all their markers (a
+     *  later line may lack them, lazily, or hold more, as text). */
+    const depth = quoteDepth(lineAt(0));
     const result: Array<{ text: string; line: number }> = [];
     let cur = '';
     let prose = '';
@@ -243,7 +282,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
     };
     const sentinel = (s: Stored) => {
       flushProse();
-      cur += keep(s);
+      cur += keep(literal(s));
     };
 
     // A list's lines (an item's, or a later paragraph's in a loose item): a
@@ -263,10 +302,8 @@ function prepass(src: string, warn: (m: string) => void): Pre {
     const startsLine = (k: number, i: number, opener: string): boolean => {
       const from = text.lastIndexOf('\n', k - 1) + 1;
       if (from <= i) return false;
-      const { quoted, indent } = contentIndent(opener);
-      const itemIndent = inList || LIST_MARKER.test(body(opener)) ? indent : 0;
-      let lead = text.slice(from, k);
-      if (quoted) lead = lead.replace(QUOTE_PREFIX, '');
+      const itemIndent = inList || LIST_MARKER.test(body(opener)) ? contentIndent(opener) : 0;
+      let lead = stripQuotes(text.slice(from, k), depth);
       if (/^[ \t]*/.exec(lead)![0].length >= itemIndent) lead = lead.slice(itemIndent);
       return lead === '';
     };
@@ -382,7 +419,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
         let code = text.slice(i + run, close);
         // A quote's markers on the span's later lines are the quote's, not
         // the code's (pandoc keeps a list's indentation there, though).
-        if (code.includes('\n') && QUOTE_PREFIX.test(opener)) code = code.replace(/\n(?:[ \t]{0,3}>[ \t]?)+/g, '\n');
+        if (code.includes('\n') && depth) code = code.replace(/\n([^\n]*)/g, (_, line: string) => '\n' + stripQuotes(line, depth));
         code = code.replace(/\n/g, ' ');
         if (/^ [\s\S]* $/.test(code) && code.trim()) code = code.slice(1, -1);
         let end = close + run;
@@ -422,7 +459,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
           const orig = text.slice(i, end + 3);
           sentinel({
             k: 'comment',
-            text: readMdComment(dedentMath(orig, lineAt(i))) ?? '',
+            text: readMdComment(dedentMath(orig, lineAt(i), depth)) ?? '',
             trailing: !text.slice(end + 3).replace(/<!--[\s\S]*?-->/g, '').trim(),
             orig,
           });
@@ -435,7 +472,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
           const end = displayMath(i);
           if (end > 0) {
             const opener = lineAt(i);
-            const src = dedentMath(text.slice(i + 2, end - 2), opener).trim();
+            const src = dedentMath(text.slice(i + 2, end - 2), opener, depth).trim();
             // The attribute block pandoc leaves as text after the formula:
             // after spaces, or on the next line.
             let j = end;
@@ -466,7 +503,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
         if (end > 0) {
           // A formula closed at the start of a line ends in that line
           // break, which pandoc trims.
-          sentinel({ k: 'math', src: dedentMath(text.slice(i + 1, end - 1), lineAt(i)).replace(/\s+$/, ''), orig: text.slice(i, end) });
+          sentinel({ k: 'math', src: dedentMath(text.slice(i + 1, end - 1), lineAt(i), depth).replace(/\s+$/, ''), orig: text.slice(i, end) });
           i = end;
           continue;
         }
@@ -492,13 +529,25 @@ function prepass(src: string, warn: (m: string) => void): Pre {
    *  line at the left margin follows a blank line. */
   let listed = false;
   let paraListed = false;
+  /** Lines that open with a `<!--` no `-->` follows: text (below). */
+  const literalComment = new Set<number>();
   const flush = () => {
     if (!para.length) return;
-    for (const l of scan(para.map((p) => p.text).join('\n'), para.map((p) => p.line), paraListed)) push(l.text, l.line);
+    for (const l of scan(para.map((p) => p.text).join('\n'), para.map((p) => p.line), paraListed)) {
+      // The `<` is set aside as a literal, so markdown-it reads no HTML
+      // block there (when no formula or code span took the line's start).
+      const at = literalComment.has(l.line) ? /^(?:[ \t]*>)*[ \t]*(?=<!--)/.exec(l.text)?.[0].length : undefined;
+      push(at === undefined ? l.text : l.text.slice(0, at) + keep({ k: 'lit', ch: '<', orig: '<' }) + l.text.slice(at + 1), l.line);
+    }
     para = [];
   };
 
   const splitComments = new Set<number>();
+  /** Whether a `-->` follows the `<!--` on line `i`. */
+  const lastClose = src.lastIndexOf('-->');
+  const lineStart: number[] = [];
+  for (let k = 0, at = 0; k < lines.length; at += lines[k].length + 1, k++) lineStart.push(at);
+  const closedLater = (i: number) => lastClose >= lineStart[i] + lines[i].indexOf('<!--') + 4;
   /** The comment run that opens line `i`'s body: the line its last comment
    *  closes on, the column after that, and whether text follows there.
    *  Null when a comment runs into a blank line or another comment opens
@@ -564,7 +613,16 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       afterBlank = true;
       continue;
     }
-    if (LIST_MARKER.test(b)) listed = true;
+    if (!inPara && !listed && /^(?: {4}|\t)/.test(line.replace(QUOTE_PREFIX, ''))) {
+      // Indented code (four spaces or a tab past the quote markers, where
+      // no paragraph or list item goes on) is verbatim: no formula, code
+      // span or escape is read in it, and a fence or `:::` there is code.
+      push(line, i);
+      afterBlank = false;
+      continue;
+    }
+    // A footnote's text, like a list item's, goes on in indented lines.
+    if (LIST_MARKER.test(b) || /^\[\^[^\]\s]+\]:/.test(b)) listed = true;
     else if (afterBlank && !/^[ \t]/.test(line.replace(QUOTE_PREFIX, ''))) listed = false;
     afterBlank = false;
     const open = /^(`{3,}|~{3,})/.exec(b);
@@ -573,6 +631,17 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       push(line, i);
       fence = { ch: open[1][0], len: open[1].length };
       inPara = false;
+      continue;
+    }
+    if (b.startsWith('<!--') && !closedLater(i)) {
+      // A `<!--` that no `-->` follows is text to pandoc, where markdown-it
+      // would open an HTML block running to the end of its container (and
+      // past a div's closer). Its `<` is set aside as a literal, so
+      // markdown-it reads the line as text too.
+      if (!para.length) paraListed = listed;
+      para.push({ text: line, line: i });
+      literalComment.add(i);
+      inPara = true;
       continue;
     }
     if (b.startsWith('<!--')) {
@@ -859,6 +928,11 @@ export function mdToDoc(src: string): MdImport {
     if (!quiet) islands.push({ node, range: mapLines(map) });
     return node;
   };
+  /** Islands whose source runs open to the end of its container (an
+   *  unclosed div, an HTML block whose end never came): a closer written
+   *  after one would be taken into it. */
+  const openEnded = new WeakSet<PMNode>();
+  const endsOpen = (nodes: PMNode[]) => nodes.length > 0 && openEnded.has(nodes[nodes.length - 1]);
   /** The cut a comment block leaves: its lines, or, when the pre-pass split
    *  text off its closing line, the comment itself on those lines. */
   const blockCut = (t: MdToken): Cut =>
@@ -1005,7 +1079,7 @@ export function mdToDoc(src: string): MdImport {
           H.seen = true;
           break;
         case 'raw':
-          if (s.fmt === 'typst' || s.fmt === 'html') out.push(schema.nodes.typst_inline.create({ src: s.src, lang: s.fmt === 'html' ? 'html' : null }));
+          if (s.fmt === 'typst' || s.fmt === 'html') out.push(schema.nodes.typst_inline.create({ src: s.src, lang: s.fmt === 'html' ? 'html' : 'typst' }));
           else {
             if (s.src) out.push(schema.text(s.src, [...marks, schema.marks.code.create()]));
             pushText(`{=${s.fmt}}`, marks, out);
@@ -1084,7 +1158,7 @@ export function mdToDoc(src: string): MdImport {
   const imageAttrs = (children: MdToken[], at: number): PandocAttrs | null => {
     const next = children[at];
     if (next?.type !== 'text') return null;
-    const m = /^\uE000(\d+)\uE000/.exec(next.content);
+    const m = LEADING_SENTINEL.exec(next.content);
     const s = m ? store[+m[1]] : null;
     if (s?.k !== 'attrs') return null;
     next.content = next.content.slice(m![0].length);
@@ -1253,25 +1327,35 @@ export function mdToDoc(src: string): MdImport {
     return !!read && !read.rest;
   };
 
-  /** Paragraphs whose source line is a caption line (`: Caption`). */
-  const captionLines = new WeakSet<PMNode>();
-
   /** The plain caption a paragraph states (`: Caption`), from its read
    *  nodes: math as `$…$`, citations and references in their Markdown
-   *  form, as step 3's `takeCaptionLine` stores a caption row. */
-  const captionOf = (p: PMNode): string | null => {
+   *  form, as step 3's `takeCaptionLine` stores a caption row. `flat` when
+   *  marks or line breaks were kept as their text only. Null when it holds
+   *  what a caption cannot (a footnote, an image, inline HTML or Typst). */
+  const captionOf = (p: PMNode): { text: string; flat: boolean } | null => {
     if (p.type !== paragraph) return null;
     let text = '';
     let ok = true;
+    let flat = false;
     p.forEach((n) => {
       if (n.isText) text += n.text;
       else if (n.type.name === 'math_inline') text += `$${n.attrs.src as string}$`;
       else if (n.type.name === 'citation') text += `[@${n.attrs.key as string}]`;
       else if (n.type.name === 'eq_ref') text += `@${n.attrs.label as string}`;
-      else if (n.type.name === 'hard_break') text += ' ';
-      else ok = false;
+      else if (n.type.name === 'hard_break') {
+        text += ' ';
+        flat = true;
+      } else ok = false;
+      if (n.marks.length) flat = true;
     });
-    return ok ? captionFromLine(text) : null;
+    const caption = ok ? captionFromLine(text) : null;
+    return caption === null ? null : { text: caption, flat };
+  };
+  const NOT_A_CAPTION = 'a footnote, an image, inline HTML or display math, which a Plass table caption cannot hold';
+  /** `table` with the caption a `: Caption` line gives it. */
+  const captioned = (table: PMNode, caption: { text: string; flat: boolean }): PMNode => {
+    if (caption.flat) warn('a table caption is plain text — its emphasis, code, links and line breaks are kept as their text');
+    return table.type.create({ ...table.attrs, caption: printedCaption(caption.text) }, table.content);
   };
 
   /** A table caption in printed form (dashes, ellipsis, Typst's quotes)
@@ -1351,7 +1435,7 @@ export function mdToDoc(src: string): MdImport {
     // What may follow a lone image: its attribute block, then spaces and
     // no-break spaces. A no-break space there is pandoc's way to keep the
     // image out of a figure.
-    const tail = solid.length === 2 && solid[1].type === 'text' ? /^(?:\uE000(\d+)\uE000)?([ \t\n\u00a0]*)$/.exec(uncommented(solid[1].content)) : null;
+    const tail = solid.length === 2 && solid[1].type === 'text' ? IMAGE_TAIL.exec(uncommented(solid[1].content)) : null;
     const tailAttrs = tail?.[1] !== undefined ? store[+tail[1]] : null;
     const tailOk = !!tail && (tailAttrs ? tailAttrs.k === 'attrs' : tail[2].includes('\u00a0'));
     const glue = tailOk && tail![2].includes('\u00a0');
@@ -1393,8 +1477,20 @@ export function mdToDoc(src: string): MdImport {
     // each piece read on its own (its own quote state).
     const out: PMNode[] = [];
     let piece: PMNode[] = [];
+    const isBreak = (n: PMNode) => n.type === schema.nodes.hard_break;
+    /** A line break that ends a piece (before a formula, or at the
+     *  paragraph's end) prints nothing, as Typst lays it out, and has no
+     *  Markdown form (`\` there is a literal backslash): it goes, with the
+     *  spaces around it. One that opens the piece after a formula prints
+     *  an empty line and stays. */
+    const dropEndBreaks = (nodes: PMNode[]) => {
+      let end = nodes.length;
+      while (end > 0 && (isBreak(nodes[end - 1]) || (nodes[end - 1].isText && /^[ \t\n]*$/.test(nodes[end - 1].text!)))) end--;
+      if (nodes.slice(end).some(isBreak)) nodes.length = end;
+    };
     const flushPiece = () => {
       const nodes = [...piece];
+      dropEndBreaks(nodes);
       while (nodes.length && nodes[0].isText && !nodes[0].text!.trim()) nodes.shift();
       while (nodes.length && nodes[nodes.length - 1].isText && !nodes[nodes.length - 1].text!.trim()) nodes.pop();
       if (nodes.length && nodes[0].isText) nodes[0] = schema.text(nodes[0].text!.replace(/^\s+/, ''), nodes[0].marks);
@@ -1410,7 +1506,10 @@ export function mdToDoc(src: string): MdImport {
       } else piece.push(item);
     }
     if (out.length) flushPiece();
-    else if (piece.length) out.push(paragraph.create(null, smartenInline(piece)));
+    else if (piece.length) {
+      dropEndBreaks(piece);
+      if (piece.length) out.push(paragraph.create(null, smartenInline(piece)));
+    }
     return out;
   }
 
@@ -1505,12 +1604,36 @@ export function mdToDoc(src: string): MdImport {
       parseSeq(i + 1, 'div_close', false);
       quiet--;
       H.seen = true;
-      return { nodes: [keepIsland(code_block.create({ params: 'md-raw' }, textNode(islandSource(t.map ?? [0, 0], cuts.slice(mark)))), t.map)], next };
+      const node = keepIsland(code_block.create({ params: 'md-raw' }, textNode(islandSource(t.map ?? [0, 0], cuts.slice(mark)))), t.map);
+      if (meta.unclosed) openEnded.add(node);
+      return { nodes: [node], next };
     };
+    /** Where the reading stands, so a div read as a rail can still turn
+     *  into an island. */
+    const readMark = () => ({ warnings: warnings.length, cuts: cuts.length, notes: printedNotes.length, islands: islands.length });
+    /** The div, already read, kept as source instead: what was read is
+     *  dropped for the island (its warnings, its notes and islands with
+     *  it); the comments it held stay moved out of it. */
+    const readAsIsland = (mark: ReturnType<typeof readMark>, why: string): { nodes: PMNode[]; next: number } => {
+      warnings.length = mark.warnings;
+      printedNotes.length = mark.notes;
+      islands.length = mark.islands;
+      H.seen = true;
+      warn(why);
+      const node = keepIsland(code_block.create({ params: 'md-raw' }, textNode(islandSource(t.map ?? [0, 0], cuts.slice(mark.cuts)))), t.map);
+      if (meta.unclosed) openEnded.add(node);
+      return { nodes: [node], next };
+    };
+    // An unclosed div whose content ends in source that runs open lost its
+    // closer to that source: it is kept as source as well, or the closer
+    // written after its content would be taken in again on every save.
+    const TAKEN = `"${opener}" (${where}) ends in content kept as source that takes in its closer — kept as source`;
 
     if (rail === 'solution') {
+      const mark = readMark();
       dropExtra(['solution'], []);
       const inner = parseSeq(i + 1, 'div_close', false);
+      if (meta.unclosed && endsOpen(inner.nodes)) return readAsIsland(mark, TAKEN);
       return { nodes: [blockquote.create({ kind: 'solution' }, inner.nodes.length ? inner.nodes : [paragraph.create()])], next };
     }
 
@@ -1526,6 +1649,8 @@ export function mdToDoc(src: string): MdImport {
         else return island();
       }
       if (!cellDivs.length) return island();
+      const mark = readMark();
+      let taken = false;
       dropExtra(['columns', 'continued'], ['gutter']);
       const continued = classes.includes('continued');
       let gi = seq.length - 1;
@@ -1554,9 +1679,11 @@ export function mdToDoc(src: string): MdImport {
         }
         shares.push(share);
         const inner = parseSeq(j + 1, 'div_close', false);
+        if (cellMeta.unclosed && endsOpen(inner.nodes)) taken = true;
         cells.push(schema.nodes.grid_cell.create(null, inner.nodes.length ? inner.nodes : [paragraph.create()]));
         j = inner.next;
       }
+      if (taken) return readAsIsland(mark, TAKEN);
       const given = shares.filter((s): s is number => s !== null);
       const filled = shares.map((s) => s ?? (given.length ? given.reduce((a, b) => a + b, 0) / given.length : 1));
       const columns = canonicalShares(filled);
@@ -1592,8 +1719,10 @@ export function mdToDoc(src: string): MdImport {
         else return island();
       }
       if (tableAt < 0 || captions.length > 1) return island();
+      const mark = readMark();
       let node: PMNode | null = null;
-      let caption: string | null = null;
+      let caption: { text: string; flat: boolean } | null = null;
+      let rejected = false;
       for (let j = i + 1; j < close; ) {
         const u = tokens[j];
         if (j === tableAt) {
@@ -1601,34 +1730,28 @@ export function mdToDoc(src: string): MdImport {
           node = read.node;
           j = read.next;
         } else if (captions.includes(j)) {
-          caption = captionOf(parseParagraph(j, false)[0] ?? paragraph.create());
+          const read = parseParagraph(j, false);
+          caption = read.length === 1 ? captionOf(read[0]) : null;
+          rejected = !caption;
           j += 3;
         } else {
           for (const c of readMdComments(u.content)?.comments ?? []) hoist(c, blockCut(u));
           j++;
         }
       }
+      if (rejected) return readAsIsland(mark, `"${opener}" (${where}): its caption line holds ${NOT_A_CAPTION} — kept as source`);
       if (caption !== null && node) {
         if (node.attrs.caption) warn('a table has both a caption attribute and a caption line — the attribute is kept');
-        else node = node.type.create({ ...node.attrs, caption: printedCaption(caption) }, node.content);
+        else node = captioned(node, caption);
       }
       return { nodes: node ? [node] : [], next };
     }
 
     if (rail && ALIGN_RAILS.includes(rail)) {
-      const mark = { warnings: warnings.length, cuts: cuts.length, notes: printedNotes.length, islands: islands.length };
+      const mark = readMark();
       const inner = parseSeq(i + 1, 'div_close', false);
       const only = inner.nodes.filter((n) => n.type !== schema.nodes.editor_comment);
-      if (only.length !== 1 || only[0].type !== paragraph) {
-        // What was read is dropped for the island: its warnings, its notes
-        // and islands with it.
-        warnings.length = mark.warnings;
-        printedNotes.length = mark.notes;
-        islands.length = mark.islands;
-        H.seen = true;
-        warn(`"${opener}" (${where}) holds something other than one paragraph — kept as source`);
-        return { nodes: [keepIsland(code_block.create({ params: 'md-raw' }, textNode(islandSource(t.map ?? [0, 0], cuts.slice(mark.cuts)))), t.map)], next };
-      }
+      if (only.length !== 1 || only[0].type !== paragraph) return readAsIsland(mark, `"${opener}" (${where}) holds something other than one paragraph — kept as source`);
       dropExtra(ALIGN_RAILS, []);
       const aligns = classes.filter((c) => c === 'center' || c === 'right');
       if (aligns.length > 1) warn(`"${opener}" names two alignments — the first is kept`);
@@ -1665,8 +1788,9 @@ export function mdToDoc(src: string): MdImport {
     return Math.round((pt / settings.sizePt) * 1000) / 1000;
   }
 
-  /** The blocks of one block-level token at `i`. */
-  function parseBlock(i: number, seq: PMNode[], top: boolean): { nodes: PMNode[]; next: number } {
+  /** The blocks of one block-level token at `i`; `captionLine` when it is
+   *  a paragraph whose source is a `: Caption` line. */
+  function parseBlock(i: number, seq: PMNode[], top: boolean): { nodes: PMNode[]; next: number; captionLine?: boolean } {
     const t = tokens[i];
     switch (t.type) {
       case 'heading_open': {
@@ -1695,10 +1819,9 @@ export function mdToDoc(src: string): MdImport {
       }
       case 'paragraph_open': {
         const nodes = parseParagraph(i, top);
-        // A `: Caption` paragraph right before a table is its caption: so
-        // its source says (an escaped `\:` is a paragraph).
-        if (nodes.length === 1 && captionFromLine(tokens[i + 1]?.content ?? '') !== null) captionLines.add(nodes[0]);
-        return { nodes, next: i + 3 };
+        // A `: Caption` line beside a table may be its caption: so its
+        // source says (an escaped `\:` is a paragraph).
+        return { nodes, next: i + 3, captionLine: captionFromLine(tokens[i + 1]?.content ?? '') !== null };
       }
       case 'code_block':
         // Indented (four-space) code: same node as a fence, no language.
@@ -1806,7 +1929,12 @@ export function mdToDoc(src: string): MdImport {
           const behind = !!t.map && !!after && after[0] === t.map[1];
           tight = before && behind ? 'both' : before ? 'before' : behind ? 'after' : '';
         }
-        return { nodes: [keepIsland(code_block.create({ params: 'md-raw', tight }, [schema.text(kept.join('\n'))]), t.map)], next: i + 1 };
+        const node = keepIsland(code_block.create({ params: 'md-raw', tight }, [schema.text(kept.join('\n'))]), t.map);
+        // An element whose end markdown-it never found (`<pre>` with no
+        // `</pre>`) ran to the end of its container.
+        const end = HTML_STARTS.find(([re]) => re.test((src[0] ?? '').trimStart()))?.[1];
+        if (end && !end.test(t.content)) openEnded.add(node);
+        return { nodes: [node], next: i + 1 };
       }
       case 'div_open':
         return parseDiv(i, seq);
@@ -1830,6 +1958,10 @@ export function mdToDoc(src: string): MdImport {
    *  hoisting boundary for the comments inside it. */
   function parseSeq(i: number, closeType: string | null, top: boolean): { nodes: PMNode[]; next: number } {
     const nodes: PMNode[] = [];
+    /** The block read last, while what follows may pair with it: a table
+     *  with no caption, or a `: Caption` line (its caption, when it is one
+     *  paragraph that can be one), by its place in `nodes`. */
+    let prev: { at: number; table: true } | { at: number; table: false; caption: { text: string; flat: boolean } | null } | null = null;
     while (i < tokens.length) {
       const t = tokens[i];
       if (closeType && t.type === closeType) return { nodes, next: i + 1 };
@@ -1844,6 +1976,7 @@ export function mdToDoc(src: string): MdImport {
             const p = paragraph.create(null, finishInline(inlineItems(inlineTokens(read.rest), false)));
             nodes.push(...H.before, p, ...H.after);
           }
+          prev = null;
           i++;
           continue;
         }
@@ -1851,25 +1984,37 @@ export function mdToDoc(src: string): MdImport {
       const saved = H;
       if (top) H = { seen: false, before: [], after: [] };
       const r = parseBlock(i, nodes, top);
-      // A `: Caption` paragraph beside a table is the table's caption.
-      if (r.nodes.length === 1 && r.nodes[0].type === schema.nodes.table && !r.nodes[0].attrs.caption) {
-        const prev = nodes[nodes.length - 1];
-        const before = prev && captionLines.has(prev) ? captionOf(prev) : null;
-        if (before !== null) {
-          nodes.pop();
-          r.nodes[0] = r.nodes[0].type.create({ ...r.nodes[0].attrs, caption: printedCaption(before) }, r.nodes[0].content);
-        } else if (tokens[r.next]?.type === 'paragraph_open' && captionFromLine(tokens[r.next + 1]?.content ?? '') !== null) {
-          const after = captionOf(parseParagraph(r.next, false)[0] ?? paragraph.create());
-          if (after !== null) {
-            r.nodes[0] = r.nodes[0].type.create({ ...r.nodes[0].attrs, caption: printedCaption(after) }, r.nodes[0].content);
-            r.next += 3;
-          }
-        }
+      // A `: Caption` paragraph beside a table is the table's caption (each
+      // read once, as what it is): the line before the table, or else the
+      // line after it. One that holds what a caption cannot stays a
+      // paragraph, with a warning.
+      let own = r.nodes;
+      const table = own.length === 1 && own[0].type === schema.nodes.table && !own[0].attrs.caption ? own[0] : null;
+      const caption = r.captionLine ? (own.length === 1 ? captionOf(own[0]) : null) : undefined;
+      let paired = false;
+      if (table && prev && !prev.table) {
+        if (prev.caption) {
+          own = [captioned(table, prev.caption)];
+          nodes.splice(prev.at, 1);
+          paired = true;
+        } else warn(`a ": Caption" line before a table holds ${NOT_A_CAPTION} — kept as a paragraph`);
+      } else if (caption !== undefined && prev?.table) {
+        if (caption) {
+          nodes[prev.at] = captioned(nodes[prev.at], caption);
+          own = [];
+          paired = true;
+        } else warn(`a ": Caption" line after a table holds ${NOT_A_CAPTION} — kept as a paragraph`);
       }
+      const at = nodes.length + (top ? H.before.length : 0);
       if (top) {
-        nodes.push(...H.before, ...r.nodes, ...H.after);
+        // Source left open runs to the end of the file, so what the save
+        // writes after it would be read as inside it: the comments that
+        // came out of it go before it.
+        if (endsOpen(own)) nodes.push(...H.before, ...H.after, ...own);
+        else nodes.push(...H.before, ...own, ...H.after);
         H = saved;
-      } else nodes.push(...r.nodes);
+      } else nodes.push(...own);
+      prev = paired ? null : table ? { at, table: true } : caption !== undefined ? { at, table: false, caption } : null;
       i = r.next;
     }
     return { nodes, next: i };

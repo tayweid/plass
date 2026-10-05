@@ -269,7 +269,7 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
     check(`code ${JSON.stringify(code)} reads back as written and converges`, JSON.stringify(back.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(back) === md, JSON.stringify([md, back.firstChild!.textContent]));
   }
   for (const src of [' #h(1em) ', '#h(1em)', ' #h(1em)', '`x`', '  ']) {
-    const d = para(schema.nodes.typst_inline.create({ src, lang: null }));
+    const d = para(schema.nodes.typst_inline.create({ src }));
     const md = docToMd(d);
     const back = mdToDoc(md).doc;
     check(`raw Typst ${JSON.stringify(src)} reads back as written and converges`, JSON.stringify(back.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(back) === md, JSON.stringify([md, back.toJSON()]));
@@ -303,11 +303,24 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   }
 }
 
-// A sentinel character already in the file is text, never a sentinel.
+// A sentinel character already in the file is text, never a sentinel: the
+// reader's own (U+241F) and the one it used before (U+E000), in prose, in a
+// formula, in a code span and in a fenced listing.
 {
-  const md = 'Odd 0 and  text with $x$.\n';
-  const t = trip(md);
-  check('a literal U+E000 is carried as text', t.doc.firstChild!.textContent === 'Odd 0 and  text with .' && !!find(t.doc, (n) => n.type.name === 'math_inline' && n.attrs.src === 'x') && t.md1 === md && t.converges, JSON.stringify([t.doc.firstChild!.textContent, t.md1]));
+  for (const ch of ['\uE000', '\u241F']) {
+    const md = `Odd ${ch}0${ch} and ${ch} text with $x${ch}$ and \`c${ch}\`.\n\n\`\`\`\n${ch}1${ch}\n\`\`\`\n`;
+    const t = trip(md);
+    const name = `U+${ch.charCodeAt(0).toString(16).toUpperCase()}`;
+    check(
+      `a literal ${name} is carried as text`,
+      t.doc.firstChild!.textContent === `Odd ${ch}0${ch} and ${ch} text with  and c${ch}.` &&
+        !!find(t.doc, (n) => n.type.name === 'math_inline' && n.attrs.src === `x${ch}`) &&
+        t.doc.child(1).textContent === `${ch}1${ch}` &&
+        t.md1 === md &&
+        t.converges,
+      JSON.stringify([t.doc.toJSON(), t.md1]),
+    );
+  }
 }
 
 // Nothing Markdown says is stripped on the way through the page view.
@@ -965,6 +978,233 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('the abstract reads back exactly', JSON.stringify(mdToDoc(md).doc.toJSON().content) === JSON.stringify(abs.toJSON().content), JSON.stringify(mdToDoc(md).doc.toJSON()));
   const quote = trip('> One.\n>\n> Two.\n');
   check('a two-paragraph quote round-trips byte for byte', quote.md1 === '> One.\n>\n> Two.\n' && quote.doc.firstChild!.childCount === 2, quote.md1);
+}
+
+// A display formula with no text is `$$` over `$$`: a blank line ends a
+// formula for pandoc (and the reader), so `$$`, blank, `$$` would be two
+// paragraphs of dollars. Lines of spaces in a formula go the same way.
+{
+  const P = (text: string) => schema.nodes.paragraph.create(null, schema.text(text));
+  for (const [src, label] of [['', ''], ['', 'eq:a'], ['  \n ', ''], ['a\n  \nb', 'eq:b']]) {
+    const d = schema.nodes.doc.create(null, [P('Before'), schema.nodes.math_display.create({ src, label }), P('After')]);
+    const md = docToMd(d);
+    const back = mdToDoc(md).doc;
+    const want = src.split('\n').filter((line) => line.trim()).join('\n');
+    check(
+      `the display formula ${JSON.stringify(src)}${label ? ' with a label' : ''} reads back as a formula`,
+      JSON.stringify(kinds(back)) === '["paragraph","math_display","paragraph"]' && back.child(1).attrs.src === want && back.child(1).attrs.label === label && docToMd(back) === md,
+      JSON.stringify([md, kinds(back)]),
+    );
+  }
+  const empty = docToMd(schema.nodes.doc.create(null, [P('Before'), schema.nodes.math_display.create({ src: '' }), P('After')]));
+  check(
+    'an empty formula is written $$ over $$, as pandoc reads one',
+    empty === 'Before\n\n$$\n$$\n\nAfter\n' &&
+      referee(empty, pandocDoc('[{"t":"Para","c":[{"t":"Str","c":"Before"}]},{"t":"Para","c":[{"t":"Math","c":[{"t":"DisplayMath"},"\\n"]}]},{"t":"Para","c":[{"t":"Str","c":"After"}]}]')) < 0,
+    JSON.stringify(empty),
+  );
+}
+
+// A line break that ends a piece of a paragraph split at display math, or
+// the paragraph itself, prints nothing (Typst drops it) and has no
+// Markdown form (`\` there is a literal backslash): the reader drops it and
+// so does the writer. One that opens the piece after a formula prints an
+// empty line, and stays.
+{
+  for (const md of ['The vertices are:  \n$$\nA = 1\n$$\n', 'Line one\\\n$$\nA = 1\n$$\n', 'Line one  \n<!-- c -->\n']) {
+    const t = trip(md);
+    check(
+      `a line break before ${md.includes('$$') ? 'a formula' : 'a comment'} is dropped and the save converges: ${JSON.stringify(md.slice(0, 14))}`,
+      !find(t.doc, (n) => n.type.name === 'hard_break') && !t.md1.includes('\\\n') && !/\\$/.test(t.doc2.firstChild!.textContent) && t.converges,
+      JSON.stringify([t.md1, t.md2]),
+    );
+  }
+  const after = trip('$$\nA = 1\n$$\\\nnext\n');
+  check('a line break that opens the piece after a formula stays', after.doc.child(1).firstChild!.type.name === 'hard_break' && after.converges, JSON.stringify(after.md1));
+  const br = schema.nodes.hard_break;
+  const one = docToMd(schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.text('One'), br.create(), schema.text(' ')])));
+  check('the writer leaves out a line break that ends a paragraph', one === 'One\n', JSON.stringify(one));
+  const warned: string[] = [];
+  const two = docToMd(schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.text('Two'), br.create(), br.create()])), (w) => warned.push(w));
+  check('two that end a paragraph (a blank line in print) are left out with a warning', two === 'Two\n' && warned.some((w) => /line breaks at the end of a paragraph/.test(w)), JSON.stringify([two, warned]));
+  const inner = docToMd(schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.text('A'), br.create(), schema.text('B')])));
+  check('a line break inside a paragraph is written', inner === 'A\\\nB\n', JSON.stringify(inner));
+}
+
+// A `: Caption` line is read once, as what it is: a caption when it is one
+// plain paragraph; otherwise (a footnote, an image, inline HTML, display
+// math) a paragraph beside a bare table, or the `.table` div kept as
+// source, with a warning. Never dropped, never read twice.
+{
+  const T = '| A |\n|---|\n| 1 |\n';
+  const inDiv = (line: string) => `::: {.table}\n\n${T}\n${line}\n\n:::\n`;
+  const notes = (d: PMNode) => all(d, (n) => n.type.name === 'editor_comment').map((n) => n.textContent);
+  const a = trip(inDiv(': Cap <!-- e --> with[^2]') + '\n[^2]: Note M.\n');
+  check(
+    'a .table div whose caption line holds a note is kept as source, note and all',
+    a.doc.firstChild!.attrs.params === 'md-raw' &&
+      a.doc.firstChild!.textContent.includes(': Cap with[^2]') &&
+      a.doc.firstChild!.textContent.includes('[^2]: Note M.') &&
+      JSON.stringify(notes(a.doc)) === '["e"]' &&
+      a.warnings.some((w) => /caption line holds a footnote/.test(w)) &&
+      a.converges,
+    JSON.stringify([a.doc.toJSON(), a.warnings]),
+  );
+  const b = trip(inDiv(': Caption with CO<sub>2</sub>'));
+  check('a .table div whose caption line holds inline HTML is kept as source', b.doc.firstChild!.attrs.params === 'md-raw' && b.doc.firstChild!.textContent.includes('CO<sub>2</sub>') && b.warnings.length === 1 && b.converges, JSON.stringify([b.md1, b.warnings]));
+  const c = trip(T + '\n: Caption $$x = 1$$ and more text\n');
+  check(
+    'a caption line with display math after a table stays whole, as paragraphs',
+    JSON.stringify(kinds(c.doc)) === '["table","paragraph","math_display","paragraph"]' && !c.doc.firstChild!.attrs.caption && c.doc.child(3).textContent === 'and more text' && c.warnings.length === 1 && c.converges,
+    JSON.stringify([kinds(c.doc), c.warnings]),
+  );
+  const d = trip(T + '\n: Caption with a note[^1] <!-- c -->\n\n[^1]: N.\n');
+  check(
+    'a caption line with a note after a table is one paragraph, its comment not doubled',
+    JSON.stringify(kinds(d.doc)) === '["table","paragraph","editor_comment"]' && !!find(d.doc, (n) => n.type.name === 'footnote') && JSON.stringify(notes(d.doc)) === '["c"]' && d.converges,
+    JSON.stringify([kinds(d.doc), d.md1]),
+  );
+  const e = trip(T + '\n: Caption with ![img](x.png){width=50%}\n');
+  check('a caption line with an image after a table keeps the image whole', find(e.doc, (n) => n.type.name === 'image')?.attrs.widthPct === 50 && e.converges, JSON.stringify(e.md1));
+  const f = trip(T + '\n: Caption with *em* and `code`\n');
+  check(
+    'a caption keeps emphasis and code as their text, with a warning',
+    f.doc.childCount === 1 && f.doc.firstChild!.attrs.caption === 'Caption with em and code' && f.warnings.some((w) => /caption is plain text/.test(w)) && f.converges,
+    JSON.stringify([f.doc.firstChild!.attrs.caption, f.warnings]),
+  );
+  const g = trip(': Cap with a note[^1]\n\n' + T + '\n[^1]: N.\n');
+  check('a caption line before a table that holds a note stays a paragraph', JSON.stringify(kinds(g.doc)) === '["paragraph","table"]' && g.warnings.length === 1 && g.converges, JSON.stringify([kinds(g.doc), g.warnings]));
+  const h = trip(T + '\n: First\n\n' + T + '\n: Second\n');
+  check('each table takes the caption line after it', h.doc.childCount === 2 && h.doc.child(0).attrs.caption === 'First' && h.doc.child(1).attrs.caption === 'Second' && h.converges, JSON.stringify(kinds(h.doc)));
+}
+
+// Emphasis beside a code span or a formula opens and closes as it does
+// beside the backtick or the dollar it stands for (both punctuation).
+{
+  const md = 'Run `make`*(once)* please.\n\nA **Note:**`code` here.\n\nSee $x$*(b)* now.\n';
+  const t = trip(md);
+  const marked = (name: string) => all(t.doc, (n) => n.isText && n.marks.some((m) => m.type.name === name)).map((n) => n.text);
+  check(
+    'emphasis next to code and math reads as pandoc reads it',
+    JSON.stringify(marked('em')) === '["(once)","(b)"]' &&
+      JSON.stringify(marked('strong')) === '["Note:"]' &&
+      t.md1 === md &&
+      referee(
+        md,
+        pandocDoc(
+          '[{"t":"Para","c":[{"t":"Str","c":"Run"},{"t":"Space"},{"t":"Code","c":[["",[],[]],"make"]},{"t":"Emph","c":[{"t":"Str","c":"(once)"}]},{"t":"Space"},{"t":"Str","c":"please."}]},{"t":"Para","c":[{"t":"Str","c":"A"},{"t":"Space"},{"t":"Strong","c":[{"t":"Str","c":"Note:"}]},{"t":"Code","c":[["",[],[]],"code"]},{"t":"Space"},{"t":"Str","c":"here."}]},{"t":"Para","c":[{"t":"Str","c":"See"},{"t":"Space"},{"t":"Math","c":[{"t":"InlineMath"},"x"]},{"t":"Emph","c":[{"t":"Str","c":"(b)"}]},{"t":"Space"},{"t":"Str","c":"now."}]}]',
+        ),
+      ) < 0,
+    JSON.stringify([marked('em'), marked('strong'), t.md1]),
+  );
+}
+
+// Malformed nesting settles on the first save. A `<!--` that no `-->`
+// follows is text (pandoc's reading), so it cannot take a div's closer; an
+// unclosed div whose closer content kept as source took is kept as source
+// too; notes and comments go before source left open at the file's end.
+{
+  const u = trip('::: solution\n\n<!--\nunterminated\n\n:::\n');
+  check(
+    'a <!-- that no --> follows is text, and the solution closes',
+    u.doc.firstChild!.attrs.kind === 'solution' && u.doc.firstChild!.textContent.startsWith('<!') && u.converges,
+    JSON.stringify([u.md1, u.md2]),
+  );
+  for (const src of [
+    '::: solution\n::: weird\ntext\n',
+    '::: solution\n\n::: weird\ntext\n\n::: solution\n::: {.column width=40%}\n',
+    '::: {.columns}\n::: {.column}\n::: weird\nopen\n',
+    '::: solution\n::: center\nx = 1\n```\n',
+    '::: solution\n\n<pre>\nopen\n',
+  ]) {
+    const t = trip(src);
+    check(`an unclosed div converges on the first save: ${JSON.stringify(src)}`, t.converges, JSON.stringify([t.md1, t.md2]));
+  }
+  const n = trip('Text[^1].\n\n::: weird\nopen\n\n<!-- c -->\n\nmore\n\n[^1]: Note.\n');
+  check(
+    'notes and comments are written before a div left open at the end of the file',
+    n.md1 === 'Text[^2].\n\n<!-- c -->\n\n[^2]: Note.\n\n::: weird\nopen\n\nmore\n\n[^1]: Note.\n' && n.converges,
+    JSON.stringify([n.md1, n.md2]),
+  );
+}
+
+// In a quote, a formula's or a code span's later line keeps a `>` past the
+// quote's own markers: pandoc reads no quote inside a paragraph.
+{
+  const d = schema.nodes.doc.create(null, schema.nodes.blockquote.create(null, schema.nodes.math_display.create({ src: 'f(x)\n> 0' })));
+  const md = docToMd(d);
+  const back = mdToDoc(md).doc;
+  check(
+    'a display formula line that starts with > survives a quote',
+    md === '> $$\n> f(x)\n> > 0\n> $$\n' &&
+      back.firstChild!.firstChild!.attrs.src === 'f(x)\n> 0' &&
+      referee(md, pandocDoc('[{"t":"BlockQuote","c":[{"t":"Para","c":[{"t":"Math","c":[{"t":"DisplayMath"},"\\nf(x)\\n> 0\\n"]}]}]}]')) < 0,
+    JSON.stringify([md, back.toJSON()]),
+  );
+  const inline = mdToDoc('> a $x\n> > y$ b\n').doc;
+  check('so does an inline formula line', find(inline, (n) => n.type.name === 'math_inline')?.attrs.src === 'x\n> y', JSON.stringify(inline.toJSON()));
+  const code = mdToDoc('> a `x\n> > y` b\n').doc;
+  check('and a code span line', find(code, (n) => n.isText && n.marks.some((m) => m.type.name === 'code'))?.text === 'x > y', JSON.stringify(code.toJSON()));
+}
+
+// Indented code is verbatim: an escaped space, a run of underscores and a
+// fence in it are code. A footnote's indented paragraph is still read.
+{
+  const md = 'Para.\n\n    code with \\ space and ___ blank\n\n    ```\n    not a fence\n';
+  const t = trip(md);
+  check(
+    'indented code keeps its text as written',
+    t.doc.child(1).type.name === 'code_block' &&
+      t.doc.child(1).textContent === 'code with \\ space and ___ blank\n\n```\nnot a fence' &&
+      referee(md, pandocDoc('[{"t":"Para","c":[{"t":"Str","c":"Para."}]},{"t":"CodeBlock","c":[["",[],[]],"code with \\\\ space and ___ blank\\n\\n```\\nnot a fence"]}]')) < 0 &&
+      t.converges,
+    JSON.stringify([t.doc.toJSON(), t.md1]),
+  );
+  const note = mdToDoc('Text[^1].\n\n[^1]: Note $x$.\n\n    More $y$ note.\n').doc;
+  check('a footnote\'s indented paragraph is text, its formula read', all(note, (n) => n.type.name === 'math_inline').length === 2, JSON.stringify(note.toJSON()));
+}
+
+// The no-break space that keeps a lone captioned image out of a figure is
+// written only where pandoc would read a figure: never after an image
+// inside emphasis.
+{
+  const em = schema.marks.em.create();
+  const d = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, schema.nodes.image.create({ src: 'a.png', alt: 'x' }, null, [em])));
+  const md = docToMd(d);
+  const back = mdToDoc(md).doc;
+  check('an emphasized lone image is written with no space after it and reads back alone', md === '*![x](a.png)*\n' && back.firstChild!.childCount === 1 && back.firstChild!.firstChild!.type.name === 'image', JSON.stringify([md, back.toJSON()]));
+}
+
+// Links: one `[…](…)` over every text it spans, marks they all share
+// outside it; brackets in its text and in a caption escaped (a backslash
+// before one included); a title's backslash escaped.
+{
+  const link = (href: string, title: string | null = null) => schema.marks.link.create({ href, title });
+  const code = schema.marks.code.create();
+  const strong = schema.marks.strong.create();
+  const para = (...kids: PMNode[]) => schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, kids));
+  const same = (d: PMNode, md: string) => {
+    const back = mdToDoc(md).doc;
+    return JSON.stringify(back.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(back) === md;
+  };
+  const one = para(schema.text('The '), schema.text('table', [code, link('$table')]), schema.text(' function', [link('$table')]), schema.text('.'));
+  check('a link over code and text is one link', docToMd(one) === 'The [`table` function]($table).\n' && same(one, docToMd(one)), docToMd(one));
+  const br = para(schema.text('see [a] b', [link('u')]), schema.text(' and '), schema.text('x]', [link('v')]));
+  check('brackets in a link\'s text are escaped', docToMd(br) === '[see \\[a\\] b](u) and [x\\]](v)\n' && same(br, docToMd(br)), docToMd(br));
+  const part = para(schema.text('A ', [strong]), schema.text('B', [strong, link('u')]), schema.text(' C', [link('u')]));
+  const partMd = docToMd(part);
+  const partBack = mdToDoc(partMd).doc;
+  check(
+    'a mark that covers part of a link is written inside it',
+    partMd === '**A** [**B** C](u)\n' && all(partBack, (n) => n.isText && n.marks.some((m) => m.type.name === 'link')).length === 2 && docToMd(partBack) === partMd,
+    JSON.stringify(partMd),
+  );
+  const titled = para(schema.text('t', [link('u', 'a\\b "c"')]));
+  check('a link title\'s backslash and quotes are escaped', same(titled, docToMd(titled)), docToMd(titled));
+  const fig = schema.nodes.doc.create(null, schema.nodes.figure.create({ src: 'f.png' }, schema.text('a\\[b] c')));
+  const figMd = docToMd(fig);
+  const figBack = mdToDoc(figMd).doc;
+  check('a caption with a backslash before a bracket stays a figure', figBack.firstChild!.type.name === 'figure' && figBack.firstChild!.textContent === 'a\\[b] c' && docToMd(figBack) === figMd, JSON.stringify([figMd, figBack.toJSON()]));
 }
 
 // Every fixture under tests/fixtures/md parses and converges.

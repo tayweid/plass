@@ -345,7 +345,11 @@ counted including the cells a merged cell covers. In a merged cell, the
 cells it covers are written empty. Where an attribute takes several
 entries (`decimal`, `rules`, `fills`, `valign`, `aligns`, `spans`),
 separate them with spaces. A `: Caption` line after a table is also read
-as its caption.
+as its caption. A caption is plain text: emphasis, code and links in it
+keep only their text, with a warning. A caption line that holds a
+footnote, an image, inline HTML or display math is no caption: next to a
+table it stays a paragraph, and in a `.table` div the whole div is kept as
+source (see Kept, not rendered), with a warning.
 
 ## Figures and images
 
@@ -416,7 +420,8 @@ shows it as a "Comment · Not printed" strip. It is left out of the PDF,
 the Typst export and the LaTeX export, and kept in a Markdown export. Put
 it on its own lines, with a blank line before and after. A comment cannot
 contain `-->`: write `--&gt;` instead, and Plass shows it as `-->`. The old
-`<!-- plass:comment` form is still read.
+`<!-- plass:comment` form is still read. A `<!--` that no `-->` follows
+anywhere after it is not a comment: it is text, as pandoc reads it.
 
 A comment can also sit inside a block: a solution, a column, a list item, a
 quote, a table cell or a footnote, or in the middle of a paragraph. It is
@@ -515,7 +520,9 @@ keep, it drops with a warning (see Pitfalls 10, 11 and 15).
   `--`, `---` and `...` become –, — and …. A hyphen after a space and before
   a digit becomes a minus sign (−3). `5'11"` gets primes (5′11″). The space
   before a footnote marker is removed.
-- **Layout of the text.** Each paragraph is written on one line. `_em_`
+- **Layout of the text.** Each paragraph is written on one line. A line
+  break (`\` or two spaces) that ends a paragraph, or comes just before a
+  `$$` formula, prints nothing and is dropped. `_em_`
   becomes `*em*`, and `__strong__` becomes `**strong**`. Bullets become `-`,
   numbered items are renumbered 1., 2., 3., … from the list's start
   number, and indents are made consistent. Footnotes become `[^1]`,
