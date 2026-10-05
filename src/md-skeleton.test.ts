@@ -712,6 +712,26 @@ same(
   ]),
 );
 
+// A no-break space after a lone image keeps it out of a figure (pandoc's
+// idiom, which Plass writes after an image with alt text): pandoc 3.4 reads
+// `Para [Image, Str "\160"]`, Plass an image in its paragraph — in a list
+// item (`Plain`) too, with a width, or with an id the reader drops.
+same(
+  'an image with a no-break space after it is an image in its paragraph',
+  doc(
+    p(N.image.create({ src: 'x.png', alt: 'alt' })),
+    p(N.image.create({ src: 'y.png', alt: 'wide', widthPct: 50 })),
+    p(N.image.create({ src: 'z.png', alt: 'z' })),
+    N.bullet_list.create(null, [N.list_item.create(null, [p(N.image.create({ src: 'w.png', alt: 'w' }))])]),
+  ),
+  ast([
+    Para(Image('x.png', [S('alt')]), S('\u00a0')),
+    Para(Image('y.png', [S('wide')], attr('', [], [['width', '50%']])), S('\u00a0')),
+    Para(Image('z.png', [S('z')], attr('fig:z')), S('\u00a0\u00a0')),
+    Bullets([Plain(Image('w.png', [S('w')]), S('\u00a0'))]),
+  ]),
+);
+
 // The image precedes its caption, so a comment in the caption follows the
 // figure (pandoc 3.4 repeats the caption as the image's alt).
 {
