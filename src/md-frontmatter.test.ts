@@ -922,6 +922,21 @@ console.log('flow re-emission:');
   check('a boolean, number or null stays plain (typed); text that spells one is quoted', types.extra === "plass:\n  future: {a: yes, b: 12, c: ~, d: off, e: 'yes', f: plain text}", json(types.extra));
 }
 
+// --- 24. a compact list after an anchor or a tag ---
+console.log('compact lists after a property:');
+{
+  const author = read('author: &a\n- Ada\n- Bob\ntitle: T');
+  check('author: &a with a compact list reads the list', author.authorsMd === 'Ada, Bob' && author.titleMd === 'T' && author.extra === '' && author.warnings.length === 1 && /anchor &a/.test(author.warnings[0]), json(author));
+  check('… and the save keeps the names with their key', writeFrontmatter(author) === '---\ntitle: T\nauthor: Ada, Bob\n---');
+  const tagged = read('sources: !!seq\n- a\n- b\nnote: n');
+  check('an unknown key tagged !!seq keeps its compact list, with no warning', tagged.extra === 'sources: !!seq\n- a\n- b\nnote: n' && tagged.warnings.length === 0, json(tagged));
+  check('… through a save', writeFrontmatter(tagged) === '---\nsources: !!seq\n- a\n- b\nnote: n\n---');
+  const both = read('sources: &s !!seq # the list\n- a\n- b\nother: *s');
+  check('an anchor, a tag and a comment before a compact list', both.extra === 'sources: &s !!seq # the list\n- a\n- b\nother: *s' && both.warnings.length === 0, json(both));
+  const child = read('plass:\n  future: &f\n  - x\n  landscape: true');
+  check('… under plass: too', child.extra === 'plass:\n  future: &f\n  - x' && child.settings.landscape === true && child.warnings.length === 1, json(child));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

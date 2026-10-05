@@ -239,7 +239,7 @@ interface Item {
 /** Partition lines into the items of a block map at `indent`. An entry runs
  *  from its key line through every line indented deeper (and through a
  *  compact list, `- item` lines at the key's own indentation directly under
- *  an empty `key:`). Comment and blank lines are not content: one at the
+ *  a `key:` with no value on its line, an anchor or tag aside). Comment and blank lines are not content: one at the
  *  margin stays inside the entry when more of the entry follows it, and
  *  trailing blank lines are left out. Comments and blank lines between
  *  entries are items of their own; a line that is none of these is `stray`. */
@@ -261,8 +261,9 @@ function splitItems(lines: string[], indent: number): Item[] {
       continue;
     }
     const first = next[i + 1];
+    const bare = afterProperties(m.rest);
     const compact =
-      (m.rest === '' || m.rest[0] === '#') && first < lines.length && indentOf(lines[first]) === indent && SEQ_ITEM.test(lines[first].slice(indent));
+      (bare === '' || bare[0] === '#') && first < lines.length && indentOf(lines[first]) === indent && SEQ_ITEM.test(lines[first].slice(indent));
     const continues = (k: number): boolean => {
       const ni = indentOf(lines[k]);
       return ni > indent || (compact && ni === indent && SEQ_ITEM.test(lines[k].slice(indent)));
@@ -358,6 +359,12 @@ function typed(node: YNode, props: Props): YNode {
   return node;
 }
 
+/** The rest of a line after its properties: what decides whether the value
+ *  is on the lines below (a compact list may follow `key: &a`). */
+const afterProperties = (r: string): string => {
+  for (let m = PROPERTY.exec(r); m; m = PROPERTY.exec(r)) r = r.slice(m[0].length);
+  return r;
+};
 
 function define(cx: Ctx, name: string, node: YNode): void {
   node.anchor = name;
