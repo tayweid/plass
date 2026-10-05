@@ -25,7 +25,10 @@
 //     top-level block — in a div, a list, a quote, a cell, a footnote,
 //     inline in a paragraph — is hoisted to the nearest top-level boundary:
 //     before its top-level block when nothing printed precedes it there,
-//     after it otherwise (one warning per file with the count).
+//     after it otherwise (one warning per file with the count). As pandoc
+//     reads it, a comment is a block only where a block starts: on a line
+//     inside a paragraph it is inline (the paragraph stays whole), and text
+//     after a comment block on its closing line opens a paragraph.
 //   - citations by pandoc's grammar (`[see @a, p. 3; @b]`, bare `@a`); a
 //     key prefixed `eq:`, `fig:`, `sec:` or `tbl:` is a reference.
 //   - ```` ```{=typst} ```` is the raw-Typst island, ```` ```{=bibtex} ````
@@ -74,7 +77,10 @@ type Stored =
   | { k: 'code'; code: string; orig: string }
   | { k: 'raw'; fmt: string; src: string; orig: string }
   | { k: 'attrs'; attrs: PandocAttrs; orig: string }
-  | { k: 'lit'; ch: string; orig: string };
+  | { k: 'lit'; ch: string; orig: string }
+  // An HTML comment inside paragraph text (pandoc's RawInline): its
+  // payload, and whether only whitespace and comments follow it there.
+  | { k: 'comment'; text: string; trailing: boolean; orig: string };
 
 // Sentinels use a private-use character: markdown-it passes it through
 // verbatim (NUL would be rewritten to U+FFFD per CommonMark).
@@ -92,6 +98,9 @@ interface Pre {
   store: Stored[];
   /** A heading's attribute block, by its pre-pass line. */
   headingAttrs: Map<number, PandocAttrs>;
+  /** Pre-pass lines that end a comment block whose source line went on
+   *  with text (the text opens the paragraph on the next pre-pass line). */
+  splitComments: Set<number>;
 }
 
 // markdown-it's HTML block start conditions (rules_block/html_block.mjs):
@@ -139,8 +148,9 @@ function contentIndent(line: string): { quoted: boolean; indent: number } {
   return { quoted: quote.length > 0, indent: m[0].length };
 }
 
-/** A formula's source lines after the first, back in the container's own
- *  coordinates: quote markers and the container's indentation removed. */
+/** A formula's (or a comment's) source lines after the first, back in the
+ *  container's own coordinates: quote markers and the container's
+ *  indentation removed. */
 function dedentMath(src: string, opener: string): string {
   const { quoted, indent } = contentIndent(opener);
   return src
@@ -225,13 +235,6 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       result.push({ text: cur, line: curLine });
       cur = '';
       curLine = lineNos[lineIndexAt(at + 1)];
-    };
-    const verbatim = (from: number, to: number) => {
-      flushProse();
-      for (let k = from; k < to; k++) {
-        if (text[k] === '\n') newline(k);
-        else cur += text[k];
-      }
     };
     const sentinel = (s: Stored) => {
       flushProse();
@@ -379,7 +382,16 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       if (c === '<' && text.startsWith('<!--', i)) {
         const end = text.indexOf('-->', i + 4);
         if (end >= 0) {
-          verbatim(i, end + 3);
+          // Inside paragraph text a comment is inline, as pandoc reads it
+          // (markdown-it would end the paragraph at one that starts a
+          // line): a sentinel, hoisted out of the paragraph by the reader.
+          const orig = text.slice(i, end + 3);
+          sentinel({
+            k: 'comment',
+            text: readMdComment(dedentMath(orig, lineAt(i))) ?? '',
+            trailing: !text.slice(end + 3).replace(/<!--[\s\S]*?-->/g, '').trim(),
+            orig,
+          });
           i = end + 3;
           continue;
         }
@@ -450,6 +462,44 @@ function prepass(src: string, warn: (m: string) => void): Pre {
     para = [];
   };
 
+  const splitComments = new Set<number>();
+  /** The comment run that opens line `i`'s body: the line its last comment
+   *  closes on, the column after that, and whether text follows there.
+   *  Null when a comment runs into a blank line or another comment opens
+   *  after it and does not close on that line (then markdown-it's HTML
+   *  block reads it, as before). */
+  const commentRun = (i: number): { line: number; restAt: number; rest: boolean } | null => {
+    let l = i;
+    let at = work[i].length - body(work[i]).length + 4;
+    for (;;) {
+      const close = work[l].indexOf('-->', at);
+      if (close >= 0) {
+        at = close + 3;
+        break;
+      }
+      l++;
+      if (l >= work.length || !body(work[l]).trim()) return null;
+      at = 0;
+    }
+    for (;;) {
+      const lead = /^[ \t]*/.exec(work[l].slice(at))![0].length;
+      if (!work[l].startsWith('<!--', at + lead)) break;
+      const close = work[l].indexOf('-->', at + lead + 4);
+      if (close < 0) return null;
+      at = close + 3;
+    }
+    return { line: l, restAt: at, rest: !!work[l].slice(at).trim() };
+  };
+  /** Whether the open paragraph lines are a pipe table (a delimiter row
+   *  among them) or indented code, which a comment line ends for pandoc
+   *  as for markdown-it. */
+  const tableOrCode = () =>
+    para.some((p) => {
+      const pb = body(p.text);
+      return pb.includes('|') && /^\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/.test(pb);
+    }) ||
+    (!paraListed && /^(?: {4}|\t)/.test(para[0].text.replace(QUOTE_PREFIX, '')));
+
   let fence: { ch: string; len: number } | null = null;
   let html: RegExp | 'blank' | null = null;
   let inPara = false;
@@ -488,6 +538,33 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       fence = { ch: open[1][0], len: open[1].length };
       inPara = false;
       continue;
+    }
+    if (b.startsWith('<!--')) {
+      const run = commentRun(i);
+      if (run && inPara && !tableOrCode()) {
+        // pandoc reads a comment inside a paragraph (a list item's, a
+        // quote's) as inline, where markdown-it would end the paragraph at
+        // it: its lines join the paragraph, and the scan sets it aside.
+        for (let l = i; l <= run.line; l++) para.push({ text: work[l], line: l });
+        i = run.line;
+        continue;
+      }
+      if (run && !inPara && run.rest) {
+        // A comment that opens a block and closes on a line that goes on
+        // with text: pandoc reads the comment as a block and the text as
+        // the start of a paragraph, which the next lines continue.
+        // markdown-it would keep the text in the HTML block, so the text
+        // moves to a line of its own.
+        flush();
+        for (let l = i; l < run.line; l++) push(work[l], l);
+        push(work[run.line].slice(0, run.restAt).replace(/[ \t]+$/, ''), run.line);
+        splitComments.add(out.length - 1);
+        paraListed = listed;
+        para.push({ text: line.slice(0, line.length - b.length) + work[run.line].slice(run.restAt).replace(/^[ \t]+/, ''), line: run.line });
+        inPara = true;
+        i = run.line;
+        continue;
+      }
     }
     const start = HTML_STARTS.find(([re, , interrupts]) => re.test(b) && (interrupts || !inPara));
     if (start) {
@@ -546,7 +623,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
   }
   flush();
   origLine.push(lines.length);
-  return { text: out.join('\n'), origLine, lines, store, headingAttrs };
+  return { text: out.join('\n'), origLine, lines, store, headingAttrs, splitComments };
 }
 
 // ------------------------------------------------------------- the reader
@@ -641,7 +718,7 @@ export function mdToDoc(src: string): MdImport {
         c.type === 'text' || c.type === 'code_inline'
           ? c.content.replace(SENTINEL, (all, n: string) => {
               const s = store[+n];
-              return !s ? all : s.k === 'lit' ? s.ch : s.k === 'code' ? s.code : s.orig;
+              return !s ? all : s.k === 'lit' ? s.ch : s.k === 'code' ? s.code : s.k === 'comment' ? '' : s.orig;
             })
           : c.type === 'softbreak' || c.type === 'hardbreak'
             ? ' '
@@ -685,11 +762,40 @@ export function mdToDoc(src: string): MdImport {
   /** The source lines of the inline run being read (for an inline cut). */
   let inlineLines: [number, number] = [0, 0];
   const comment = (text: string) => schema.nodes.editor_comment.create(null, text ? [schema.text(text)] : []);
-  const hoist = (text: string, cut: Cut) => {
+  /** `stays`: a comment on the last lines of a top-level paragraph. It
+   *  goes after the paragraph like any other, but that is where it already
+   *  stands, so it is not counted as moved. */
+  const hoist = (text: string, cut: Cut, stays = false) => {
     (H.seen || forceAfter ? H.after : H.before).push(comment(text));
-    hoisted++;
+    if (!stays) hoisted++;
     cuts.push(cut);
   };
+  /** Whether the paragraph being read is a top-level one (its trailing
+   *  comments stay where they are). */
+  let topParagraph = false;
+  /** The cut a comment block leaves: its lines, or, when the pre-pass split
+   *  text off its closing line, the comment itself on those lines. */
+  const blockCut = (t: MdToken): Cut =>
+    t.map && pre.splitComments.has(t.map[1] - 1)
+      ? { inline: restore(t.content).replace(/\n$/, ''), lines: [origLine[t.map[0]], origLine[t.map[1] - 1] + 1] }
+      : { lines: mapLines(t.map) };
+  /** The comments a token holds: an inline comment, or the comment
+   *  sentinels in a text token. */
+  const tokenComments = (k: MdToken): Array<{ text: string; orig: string; trailing: boolean }> => {
+    if (k.type === 'html_inline') {
+      const note = readMdComment(k.content);
+      return note === null ? [] : [{ text: note, orig: k.content, trailing: false }];
+    }
+    if (k.type !== 'text') return [];
+    const found: Array<{ text: string; orig: string; trailing: boolean }> = [];
+    for (const m of k.content.matchAll(SENTINEL)) {
+      const s = store[+m[1]];
+      if (s?.k === 'comment') found.push(s);
+    }
+    return found;
+  };
+  /** Text with its comment sentinels taken out. */
+  const uncommented = (text: string) => text.replace(SENTINEL, (all, n: string) => (store[+n]?.k === 'comment' ? '' : all));
   const mapLines = (map: [number, number] | null): [number, number] => (map ? [origLine[map[0]], origLine[map[1]] ?? lines.length] : [0, 0]);
 
   // ---------- footnotes (definitions arrive at the stream tail) ----------
@@ -713,6 +819,9 @@ export function mdToDoc(src: string): MdImport {
     if (known) return known;
     const parts: PMNode[][] = [];
     forceAfter++;
+    const top = topParagraph;
+    topParagraph = false;
+    const lineRange = inlineLines;
     for (const t of footnoteDefs.get(id) ?? []) {
       if (t.type === 'inline') {
         inlineLines = mapLines(t.map);
@@ -720,11 +829,13 @@ export function mdToDoc(src: string): MdImport {
       } else if (t.type === 'html_block') {
         const read = readMdComments(t.content);
         if (read) {
-          for (const c of read.comments) hoist(c, { lines: mapLines(t.map) });
+          for (const c of read.comments) hoist(c, blockCut(t));
           if (read.rest) parts.push(finishInline(inlineItems(inlineTokens(read.rest), false)));
         }
       }
     }
+    inlineLines = lineRange;
+    topParagraph = top;
     forceAfter--;
     if (parts.length > 1) warn('multi-paragraph footnote flattened');
     const nodes = parts.flatMap((b, k) => (k > 0 ? [schema.text(' '), ...b] : b));
@@ -820,6 +931,10 @@ export function mdToDoc(src: string): MdImport {
           break;
         case 'lit':
           pushText(s.ch, marks, out);
+          break;
+        case 'comment':
+          hoist(s.text, { inline: s.orig, lines: inlineLines }, s.trailing && topParagraph);
+          out.push(CUT);
           break;
       }
     }
@@ -1128,21 +1243,27 @@ export function mdToDoc(src: string): MdImport {
     const inline = tokens[i + 1];
     const kids = inline?.children ?? [];
     inlineLines = mapLines(inline?.map ?? tokens[i].map);
+    /** Hoist the comments in `ks` (the paragraph is not read as a run). */
+    const hoistIn = (ks: MdToken[]) => {
+      for (const k of ks) for (const c of tokenComments(k)) hoist(c.text, { inline: c.orig, lines: inlineLines }, c.trailing && top);
+    };
+    // Comments and white space do not count: what is left says what the
+    // paragraph is.
     const solid = kids.filter(
-      (k) => !(k.type === 'softbreak' || (k.type === 'text' && /^[ \t\n]*$/.test(k.content)) || (k.type === 'html_inline' && readMdComment(k.content) !== null)),
+      (k) => !(k.type === 'softbreak' || (k.type === 'text' && /^[ \t\n]*$/.test(uncommented(k.content))) || (k.type === 'html_inline' && readMdComment(k.content) !== null)),
     );
-    if (solid.length === 1 && solid[0].type === 'text' && /^\\(?:newpage|pagebreak)\s*$/.test(solid[0].content)) {
-      for (const k of kids) if (k.type === 'html_inline' && readMdComment(k.content) !== null) hoist(readMdComment(k.content)!, { inline: k.content, lines: inlineLines });
+    if (solid.length === 1 && solid[0].type === 'text' && /^\\(?:newpage|pagebreak)\s*$/.test(uncommented(solid[0].content))) {
+      hoistIn(kids);
       H.seen = true;
       if (top) return [schema.nodes.page_break.create()];
       warn('a page break inside a block cannot print — kept as source');
-      return [code_block.create({ params: 'md-raw' }, [schema.text(solid[0].content.trim())])];
+      return [code_block.create({ params: 'md-raw' }, [schema.text(uncommented(solid[0].content).trim())])];
     }
     const at = kids.indexOf(solid[0]);
     // What may follow a lone image: its attribute block, then spaces and
     // no-break spaces. A no-break space there is pandoc's way to keep the
     // image out of a figure.
-    const tail = solid.length === 2 && solid[1].type === 'text' ? /^(?:\uE000(\d+)\uE000)?([ \t\n\u00a0]*)$/.exec(solid[1].content) : null;
+    const tail = solid.length === 2 && solid[1].type === 'text' ? /^(?:\uE000(\d+)\uE000)?([ \t\n\u00a0]*)$/.exec(uncommented(solid[1].content)) : null;
     const tailAttrs = tail?.[1] !== undefined ? store[+tail[1]] : null;
     const tailOk = !!tail && (tailAttrs ? tailAttrs.k === 'attrs' : tail[2].includes('\u00a0'));
     const glue = tailOk && tail![2].includes('\u00a0');
@@ -1154,7 +1275,7 @@ export function mdToDoc(src: string): MdImport {
       // figure) or a label; otherwise an image in its paragraph. With the
       // no-break space after it, it is an image in its paragraph whatever
       // it has, and the space (the file's way of saying so) is dropped.
-      for (const k of kids.slice(0, at)) if (k.type === 'html_inline' && readMdComment(k.content) !== null) hoist(readMdComment(k.content)!, { inline: k.content, lines: inlineLines });
+      hoistIn(kids.slice(0, at));
       const attrs = imageAttrs(kids, kids.indexOf(img) + 1);
       const src = restoreLink(img.attrGet('src') ?? '');
       const title = restoreLink(img.attrGet('title') ?? '');
@@ -1174,10 +1295,12 @@ export function mdToDoc(src: string): MdImport {
       } else {
         node = paragraph.create(null, [schema.nodes.image.create({ src, alt: null, title: title || null, widthPct: widthOf(attrs, 'image') })]);
       }
-      for (const k of kids.slice(at + 1)) if (k.type === 'html_inline' && readMdComment(k.content) !== null) hoist(readMdComment(k.content)!, { inline: k.content, lines: inlineLines });
+      hoistIn(kids.slice(at + 1));
       return [node];
     }
+    topParagraph = top;
     const items = closeCuts(inlineItems(kids, true));
+    topParagraph = false;
     // Display math is a block: the paragraph splits around each formula,
     // each piece read on its own (its own quote state).
     const out: PMNode[] = [];
@@ -1239,9 +1362,11 @@ export function mdToDoc(src: string): MdImport {
         if (!m || joined.slice(0, m.index).includes('\n')) continue;
         const before = joined.slice(0, m.index);
         let after = joined.slice(m.index + m[0].length);
-        // The gap closes to one space, as it does in a paragraph.
-        if (/[ \t]$/.test(before)) after = after.replace(/^[ \t]+/, '');
-        const merged = (before + after).split('\n');
+        // The gap closes to one space, as it does in a paragraph; a comment
+        // that held a line of its own (in a paragraph, or a block's that
+        // its text followed) takes the line with it.
+        if (!before.trim() || /[ \t]$/.test(before)) after = after.replace(/^[ \t]+/, '');
+        const merged = /^[ \t>]*$/.test(before + after) ? [] : (before + after).split('\n');
         span.forEach((e, k) => text.set(e, k < merged.length ? merged[k] : null));
         break;
       }
@@ -1324,7 +1449,7 @@ export function mdToDoc(src: string): MdImport {
       for (let j = i + 1; j < close; ) {
         const u = tokens[j];
         if (u.type === 'html_block') {
-          for (const c of readMdComments(u.content)?.comments ?? []) hoist(c, { lines: mapLines(u.map) });
+          for (const c of readMdComments(u.content)?.comments ?? []) hoist(c, blockCut(u));
           j++;
           continue;
         }
@@ -1391,7 +1516,7 @@ export function mdToDoc(src: string): MdImport {
           caption = captionOf(parseParagraph(j, false)[0] ?? paragraph.create());
           j += 3;
         } else {
-          for (const c of readMdComments(u.content)?.comments ?? []) hoist(c, { lines: mapLines(u.map) });
+          for (const c of readMdComments(u.content)?.comments ?? []) hoist(c, blockCut(u));
           j++;
         }
       }
@@ -1544,7 +1669,7 @@ export function mdToDoc(src: string): MdImport {
         const read = readMdComments(t.content);
         if (read) {
           // A comment that is not a top-level block moves out of its block.
-          for (const c of read.comments) hoist(c, { lines: mapLines(t.map) });
+          for (const c of read.comments) hoist(c, blockCut(t));
           if (!read.rest) return { nodes: [], next: i + 1 };
           const kids = inlineTokens(read.rest);
           return { nodes: [paragraph.create(null, finishInline(inlineItems(kids, false)))], next: i + 1 };

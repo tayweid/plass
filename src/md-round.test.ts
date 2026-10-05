@@ -13,6 +13,7 @@ import { typToDoc } from './typ-parser';
 import { demoDoc } from './demo-doc';
 import { DEFAULT_SETTINGS } from './settings';
 import { schema } from './schema';
+import { docSkeleton, firstDivergence, pandocSkeleton, type PandocDoc } from './md-skeleton';
 import * as F from './typ-fixtures';
 
 let failures = 0;
@@ -39,6 +40,11 @@ function trip(md: string) {
   const md2 = docToMd(second.doc);
   return { doc: first.doc, warnings: first.warnings, written, md1, md2, doc2: second.doc, converges: md1 === md2 };
 }
+
+/** The referee on one file: Plass's reading against pandoc 3.4's JSON for
+ *  it (`pandoc -f markdown-smart -t json`, pasted), -1 when they agree. */
+const referee = (md: string, pandocJson: string) => firstDivergence(docSkeleton(mdToDoc(md).doc), pandocSkeleton(JSON.parse(pandocJson) as PandocDoc));
+const pandocDoc = (blocks: string) => `{"pandoc-api-version":[1,23,1],"meta":{},"blocks":${blocks}}`;
 
 const kinds = (doc: PMNode) => {
   const out: string[] = [];
@@ -340,6 +346,46 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('the print holds no comment', !typ.includes('ED: MOVED') && !typ.includes('inside a list item'), typ);
   check('the <div> island prints as a raw block, never runs', typ.includes('```\n<div style') && (typ.match(/^<div/gm) ?? []).length === (typ.match(/```\n<div/g) ?? []).length, typ);
   check('critic marks survive as text', out.includes('{++an insertion++}') && out.includes('~~a strike~~'), out);
+}
+
+// A comment line inside a paragraph (a list item's, a quote's) is inline
+// to pandoc: the paragraph stays whole and the comment moves after it. A
+// comment that opens a block and closes on a line that goes on with text
+// is a block, and the text opens a paragraph the next lines continue.
+{
+  const str = (t: string) => t.split(' ').map((x) => `{"t":"Str","c":"${x}"}`).join(',{"t":"Space"},');
+  const SB = '{"t":"SoftBreak"}';
+  const RAW = '{"t":"RawInline","c":["html","<!-- c -->"]}';
+  const RAWB = '{"t":"RawBlock","c":["html","<!-- c -->"]}';
+  const cases: Array<[string, string, string, string, number]> = [
+    // name, source, first save, pandoc 3.4's blocks, comments counted as moved
+    ['in a paragraph', 'Line one\n<!-- c -->\nLine two\n', 'Line one Line two\n\n<!-- c -->\n', `[{"t":"Para","c":[${str('Line one')},${SB},${RAW},${SB},${str('Line two')}]}]`, 1],
+    ['in a list item', '- item one\n  <!-- c -->\n  continues\n- b\n', '- item one continues\n- b\n\n<!-- c -->\n', `[{"t":"BulletList","c":[[{"t":"Plain","c":[${str('item one')},${SB},${RAW},${SB},${str('continues')}]}],[{"t":"Plain","c":[${str('b')}]}]]}]`, 1],
+    ['in a quote', '> Quoted line\n> <!-- c -->\n> more quote\n', '> Quoted line more quote\n\n<!-- c -->\n', `[{"t":"BlockQuote","c":[{"t":"Para","c":[${str('Quoted line')},${SB},${RAW},${SB},${str('more quote')}]}]}]`, 1],
+    ['before text that goes on', '<!-- c --> text\nmore text\n', '<!-- c -->\n\ntext more text\n', `[${RAWB},{"t":"Para","c":[${str('text')},${SB},${str('more text')}]}]`, 0],
+    ['before text in a solution', '::: solution\n\n<!-- c --> text\nmore\n\n:::\n', '<!-- c -->\n\n::: solution\n\ntext more\n\n:::\n', `[{"t":"Div","c":[["",["solution"],[]],[${RAWB},{"t":"Para","c":[${str('text')},${SB},${str('more')}]}]]}]`, 1],
+    ['before text in a list item', '- <!-- c --> text\n  more\n', '<!-- c -->\n\n- text more\n', `[{"t":"BulletList","c":[[${RAWB},{"t":"Plain","c":[${str('text')},${SB},${str('more')}]}]]}]`, 1],
+  ];
+  for (const [name, md, want, blocks, moved] of cases) {
+    const t = trip(md);
+    const counted = t.warnings.filter((w) => /comment\(s\) moved/.test(w));
+    check(`a comment ${name}: the block stays whole`, t.md1 === want && t.converges, JSON.stringify([t.md1, t.md2]));
+    check(`a comment ${name}: no other warning, ${moved} counted as moved`, t.warnings.length === counted.length && counted.length === moved && (!moved || /^1 /.test(counted[0])) && t.written.length === 0, JSON.stringify([t.warnings, t.written]));
+    check(`a comment ${name}: the referee agrees`, referee(md, pandocDoc(blocks)) < 0, JSON.stringify(docSkeleton(t.doc)));
+  }
+  const tail = trip('Para text\n<!-- c -->\n\nNext.\n');
+  check('a comment that ends its paragraph stays where it is, not counted as moved', tail.md1 === 'Para text\n\n<!-- c -->\n\nNext.\n' && tail.warnings.length === 0 && tail.converges, JSON.stringify([tail.md1, tail.warnings]));
+  const table = trip('| a | b |\n|---|---|\n| x | y |\n<!-- c -->\nmore\n');
+  check('a comment line after a table ends it (pandoc too); the next line is a paragraph', JSON.stringify(kinds(table.doc)) === '["table","editor_comment","paragraph"]' && table.warnings.length === 0 && table.converges, JSON.stringify([kinds(table.doc), table.warnings]));
+  const code = mdToDoc('    code\n<!-- c -->\nmore\n');
+  check('a comment line after indented code is a comment block', JSON.stringify(kinds(code.doc)) === '["code_block","editor_comment","paragraph"]' && code.warnings.length === 0, JSON.stringify(kinds(code.doc)));
+  const wrapped = trip('Line one\n<!-- a\nb -->\nLine two <!-- d --> end.\n');
+  check('a comment over two lines in a paragraph, and one inside a line', wrapped.doc.firstChild!.textContent === 'Line one Line two end.' && JSON.stringify(kinds(wrapped.doc)) === '["paragraph","editor_comment","editor_comment"]' && wrapped.doc.child(1).textContent === 'a\nb' && wrapped.converges, JSON.stringify([kinds(wrapped.doc), wrapped.md1]));
+  const figure = mdToDoc('<!-- c --> ![A plot](p.svg){#fig:p}\n');
+  check('a comment before a figure on its line is a block; the figure is read', JSON.stringify(kinds(figure.doc)) === '["editor_comment","figure"]' && figure.doc.child(1).attrs.label === 'fig:p' && figure.warnings.length === 0, JSON.stringify([kinds(figure.doc), figure.warnings]));
+  // In an island the comment leaves the source and its text stays.
+  const island = trip('::: weird\n\n<!-- c --> text\nmore\n\nPara\n<!-- d -->\nend\n\n:::\n');
+  check('in an island, a comment is left out and the text around it kept', island.md1 === '<!-- c -->\n\n::: weird\n\ntext\nmore\n\nPara\nend\n\n:::\n\n<!-- d -->\n' && island.converges, JSON.stringify(island.md1));
 }
 
 // Heading levels 4–6 are real levels: kept on import, written back.
