@@ -418,7 +418,10 @@ rails can always be finished in Typst itself, because the file is Typst.
   its content, so exporting again links the one already there. Exported
   without a folder, the images stay `data:` URLs, which the CLI cannot
   read, and the export says so. The `.typ` is for compiling and reading,
-  not editing: Export → Typst never overwrites the open document. The export is exact on
+  not editing: Export → Typst never overwrites the open document, asks
+  before replacing a `.typ` already in the folder unless it is still the
+  one the last export wrote there, and neither export touches a file open
+  in another Plass window. The export is exact on
   typst 0.14.2, the in-app compiler's release, compiled with Plass's own
   fonts (`--ignore-system-fonts --ignore-embedded-fonts --font-path
   public/fonts`), and says so on its first line; typst 0.15.x compiles it

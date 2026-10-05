@@ -333,6 +333,133 @@ test('Export → Markdown asks before replacing an .md already in the folder', a
   expect(result.files).toEqual(['Paper.md', 'Paper.typ']);
 });
 
+test('Export → Typst asks before replacing a .typ it did not write, and re-exports its own unasked', async ({ page }) => {
+  // The chain the open-.typ toast recommends: Paper.typ is the writer's
+  // source, Export → Markdown writes Paper.md, Paper.md is opened, and
+  // Export → Typst would write the print form over Paper.typ — its page
+  // setup and table styling, which the .md cannot hold, gone unasked.
+  await page.goto('/?new=1');
+  const answers = [false, true, false];
+  const asked: string[] = [];
+  page.on('dialog', (d) => {
+    asked.push(d.message());
+    if (/already exists/.test(d.message()) && !answers.shift()) void d.dismiss();
+    else void d.accept();
+  });
+  const result = await page.evaluate(async () => {
+    const list = async (d: FileSystemDirectoryHandle) => {
+      const names: string[] = [];
+      for await (const k of (d as unknown as { keys(): AsyncIterable<string> }).keys()) names.push(k);
+      return names.sort();
+    };
+    const app = window as ExportApp;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle('typ-chain', { create: true });
+    const source =
+      '#set page(paper: "a4", margin: 1.5in)\n#set text(size: 12pt)\n\n= Paper\n\n' +
+      '#table(columns: 2, gutter: 3pt, [a], [b])\n\nOne paragraph of the source.\n';
+    const typ = await dir.getFileHandle('Paper.typ', { create: true });
+    const write = async (text: string) => {
+      const w = await typ.createWritable();
+      await w.write(text);
+      await w.close();
+    };
+    const read = async () => (await typ.getFile()).text();
+    await write(source);
+    await app.__fm.loadHandle(typ, dir, true);
+
+    const toast = document.getElementById('toast')!;
+    const messages: string[] = [];
+    const observer = new MutationObserver(() => messages.push(toast.textContent ?? ''));
+    observer.observe(toast, { childList: true, characterData: true, subtree: true });
+    await app.__fm.exportCopy();
+    await app.__fm.exportMdCopy();
+    await app.__fm.loadHandle(await dir.getFileHandle('Paper.md'), dir, true);
+    const asked0 = messages.length;
+    // Declined: nothing is written, figures/ included.
+    await app.__fm.exportCopy();
+    const declined = await read();
+    const afterDecline = await list(dir);
+    const quietDecline = messages.slice(asked0).filter((m) => m.startsWith('Exported')).length === 0;
+    // Accepted: the export replaces it.
+    await app.__fm.exportCopy();
+    const accepted = await read();
+    // Unchanged since that export: re-exporting is one click, no question.
+    await app.__fm.exportCopy();
+    const again = await read();
+    // Edited by hand since: it is the writer's again, and asked about.
+    const edited = accepted.replace('One paragraph of the source.', 'An edit made by hand.');
+    await write(edited);
+    await app.__fm.exportCopy();
+    const keptEdit = await read();
+    await new Promise((r) => setTimeout(r, 0));
+    observer.disconnect();
+    return { source, declined, afterDecline, quietDecline, accepted, again, edited, keptEdit, messages };
+  });
+
+  expect(result.messages).toContain('Paper.typ is the open document — Export → Markdown, then export Typst from the .md');
+  expect(result.messages.some((m) => m.startsWith('Exported typ-chain/Paper.md'))).toBe(true);
+  const question =
+    "Paper.typ already exists in this folder — replace it with this document's Typst export? Anything only Paper.typ holds, such as its page setup, is lost.";
+  expect(asked.filter((m) => m === question)).toHaveLength(3);
+  expect(asked).toHaveLength(3);
+  expect(result.declined).toBe(result.source);
+  expect(result.afterDecline).toEqual(['Paper.md', 'Paper.typ']);
+  expect(result.quietDecline).toBe(true);
+  expect(result.accepted).toMatch(/^\/\/ Exported from Plass — exact on typst /);
+  expect(result.accepted).toContain('One paragraph of the source.');
+  expect(result.again).toBe(result.accepted);
+  expect(result.keptEdit).toBe(result.edited);
+  expect(result.messages.filter((m) => m.startsWith('Exported typ-chain/Paper.typ'))).toHaveLength(2);
+});
+
+test('an export never replaces a file another Plass window has open', async ({ page, context }) => {
+  // The other window would reload into the export, or meet it as a conflict
+  // over its unsaved edits: the export is refused there, with no question.
+  await page.goto('/?new=1');
+  const other = await context.newPage();
+  await other.goto('/?new=1');
+  const asked: string[] = [];
+  for (const p of [page, other]) p.on('dialog', (d) => (asked.push(d.message()), void d.accept()));
+  const original = '= Held\n\nOpen in the other window.\n';
+  await other.evaluate(async (text) => {
+    const app = window as ExportApp;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle('held', { create: true });
+    const write = async (name: string, body: string) => {
+      const h = await dir.getFileHandle(name, { create: true });
+      const w = await h.createWritable();
+      await w.write(body);
+      await w.close();
+      return h;
+    };
+    await write('Held.md', '# Held\n\nOpen in the other window.\n');
+    await app.__fm.loadHandle(await write('Held.typ', text), dir, true);
+  }, original);
+
+  const result = await page.evaluate(async () => {
+    const app = window as ExportApp;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle('held');
+    const { schema } = app.view.state;
+    app.__fm.newDoc(schema.nodes.doc.create(null, [schema.nodes.paragraph.create(null, schema.text('A different text.'))]), 'Held');
+    app.__fm.dir = dir;
+    const toast = document.getElementById('toast')!;
+    const messages: string[] = [];
+    const observer = new MutationObserver(() => messages.push(toast.textContent ?? ''));
+    observer.observe(toast, { childList: true, characterData: true, subtree: true });
+    await app.__fm.exportCopy();
+    const typ = await (await (await dir.getFileHandle('Held.typ')).getFile()).text();
+    await new Promise((r) => setTimeout(r, 0));
+    observer.disconnect();
+    return { typ, messages };
+  });
+
+  expect(result.typ).toBe(original);
+  expect(result.messages).toContain('Held.typ is open in another Plass window — close it there, then export again');
+  expect(asked).toEqual([]);
+});
+
 test('Export → Markdown from the open .md is a save, and a .typ export never writes over an open .TYP', async ({ page }) => {
   await page.goto('/?new=1');
   const result = await page.evaluate(async () => {

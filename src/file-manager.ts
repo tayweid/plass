@@ -889,9 +889,14 @@ export class FileManager {
    *  so the file compiles with the typst CLI; without a folder the data URLs
    *  stay (the CLI cannot read them) and the toast says so. The open
    *  document is never the target: a .typ that IS the open file is the
-   *  writer's source, not an export to overwrite. Nothing is written until
-   *  the text is built, so a document the serializer refuses leaves no
-   *  images behind, and the refusal is said on the toast. */
+   *  writer's source, not an export to overwrite — and neither is a .typ
+   *  already in the folder, unasked: it may be the writer's source too (the
+   *  guard below sends a writer from their X.typ to X.md and back here), so
+   *  it is replaced without a question only while its bytes are still the
+   *  last export this app wrote to it, which keeps re-exporting one click.
+   *  Nothing is written until the text is built and the target cleared, so
+   *  a document the serializer refuses, or a declined overwrite, leaves no
+   *  images behind; a refusal is said on the toast. */
   async exportCopy() {
     const fileName = `${this.name}.typ`;
     if (await this.isOpenFile(fileName)) {
@@ -910,6 +915,12 @@ export class FileManager {
         docToTyp(doc, { islands: 'print', resolveImage: (src) => paths.get(src) ?? src });
       const planned = new Map([...images.planned].map(([src, p]) => [src, p.path]));
       let text = build(planned);
+      const replace = await this.mayReplaceInFolder(
+        fileName,
+        `${fileName} already exists in this folder — replace it with this document's Typst export? Anything only ${fileName} holds, such as its page setup, is lost.`,
+        (there) => this.isLastTypExport(there),
+      );
+      if (!replace) return;
       const paths = new Map<string, string>();
       for (const [src, p] of images.planned) {
         if (!p.write || (await this.writeAsset(p.path, p.blob))) paths.set(src, p.path);
@@ -920,6 +931,9 @@ export class FileManager {
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
       const where = await this.saveBeside(fileName, blob);
       if (where === null) return;
+      // Only a write into the folder is vouched for; a save dialog the
+      // folder write fell back to put the text somewhere else.
+      if (this.dir && where === `${this.dir.name}/${fileName}`) await this.rememberTypExport(fileName, text);
       const kept = images.found - paths.size;
       const count = (n: number) => `${n} embedded image${n === 1 ? '' : 's'}`;
       let note = '';
@@ -945,7 +959,8 @@ export class FileManager {
    *  the autosave poller on the same path. An X.md already in the folder is
    *  a Markdown source — most likely the writer's own, the one the open
    *  .typ was exported from — so it is replaced only on a yes, as a first
-   *  save into a folder asks. (Outside a folder the save dialog asks.) */
+   *  save into a folder asks, and never while another Plass window has it
+   *  open. (Outside a folder the save dialog asks.) */
   async exportMdCopy() {
     const fileName = `${this.name}.md`;
     if (await this.isOpenFile(fileName)) {
@@ -964,7 +979,7 @@ export class FileManager {
         const { docToMd } = await import('./md-serializer');
         text = docToMd(this.hooks.getDoc(), (m) => warned.add(m));
       }
-      if ((await this.folderFile(fileName)) && !confirm(`${fileName} already exists in this folder — overwrite it?`)) return;
+      if (!(await this.mayReplaceInFolder(fileName, `${fileName} already exists in this folder — overwrite it?`))) return;
       const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
       const where = await this.saveBeside(fileName, blob);
       if (where !== null) this.hooks.message(`Exported ${where}${warned.size ? ` — ${[...warned].join('; ')}` : ''}`);
@@ -982,6 +997,63 @@ export class FileManager {
       return await this.dir.getFileHandle(fileName);
     } catch {
       return null;
+    }
+  }
+
+  /** Whether an export may write `fileName` into the project folder. Yes
+   *  when nothing is there (and with no folder, where the save dialog asks
+   *  for itself). No, said on a toast, while another Plass window has the
+   *  file open: that window would reload into the export, or meet it as a
+   *  conflict over its unsaved edits. Otherwise only on a yes to `question`,
+   *  unless `known` vouches for what is there. */
+  private async mayReplaceInFolder(
+    fileName: string,
+    question: string,
+    known?: (there: FileSystemFileHandle) => Promise<boolean>,
+  ): Promise<boolean> {
+    const there = await this.folderFile(fileName);
+    if (!there) return true;
+    const elsewhere = await openInAnotherWindow(there);
+    if (elsewhere) {
+      this.hooks.message(`${elsewhere.name} is open in another Plass window — close it there, then export again`);
+      return false;
+    }
+    if (known && (await known(there))) return true;
+    return confirm(question);
+  }
+
+  /** Whether the bytes in `there` are still the last Typst export this app
+   *  wrote to that file (`rememberTypExport`): an X.typ opened and edited
+   *  since, written by hand, or exported by another browser is not. */
+  private async isLastTypExport(there: FileSystemFileHandle): Promise<boolean> {
+    try {
+      const records = ((await idbGet(TYP_EXPORTS_KEY)) as TypExportRecord[] | null) ?? [];
+      for (const record of records) {
+        if (!(await record.file.isSameEntry(there).catch(() => false))) continue;
+        const bytes = new Uint8Array(await (await there.getFile()).arrayBuffer());
+        return record.hash === (await sha256Hex(bytes, TYP_EXPORT_HASH_BYTES));
+      }
+    } catch (e) {
+      console.warn('Could not read the Typst export records', e);
+    }
+    return false;
+  }
+
+  /** Note what Export → Typst just wrote to `fileName` in the folder, so the
+   *  next export may replace it unasked while it is unchanged. */
+  private async rememberTypExport(fileName: string, text: string): Promise<void> {
+    try {
+      const file = await this.folderFile(fileName);
+      if (!file) return;
+      const hash = await sha256Hex(new TextEncoder().encode(text), TYP_EXPORT_HASH_BYTES);
+      const records = ((await idbGet(TYP_EXPORTS_KEY)) as TypExportRecord[] | null) ?? [];
+      const kept: TypExportRecord[] = [];
+      for (const record of records) {
+        if (!(await record.file.isSameEntry(file).catch(() => false))) kept.push(record);
+      }
+      await idbSet(TYP_EXPORTS_KEY, [{ file, hash }, ...kept].slice(0, TYP_EXPORTS_KEPT));
+    } catch (e) {
+      console.warn('Could not record the Typst export', e);
     }
   }
 
@@ -1036,8 +1108,7 @@ export class FileManager {
       }
       if (!decoded) continue;
       const bytes = new Uint8Array(await decoded.blob.arrayBuffer());
-      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-      const hash = [...digest.slice(0, 6)].map((b) => b.toString(16).padStart(2, '0')).join('');
+      const hash = await sha256Hex(bytes, 6);
       // A name from the alt text or file name, in the letters a path keeps;
       // one with none of them (日本語, α, -) is "image", never a dotfile.
       const stem =
@@ -1275,6 +1346,29 @@ function sameBytes(a: Uint8Array | undefined, b: Uint8Array): boolean {
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
 }
+
+/** The first `keep` bytes of the SHA-256 of `bytes`, in hex. */
+async function sha256Hex(bytes: BufferSource, keep: number): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return [...digest.slice(0, keep)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ---------- Typst exports this app wrote (shared kv-store) ----------
+
+/** One record per exported file: its handle (folder and name in one, compared
+ *  with isSameEntry) and a short SHA-256 of the bytes written. */
+interface TypExportRecord {
+  file: FileSystemFileHandle;
+  hash: string;
+}
+
+const TYP_EXPORTS_KEY = 'typ-exports';
+/** 128 bits: a file edited since is told from the export by far more than
+ *  any accident, and the record stays small. */
+const TYP_EXPORT_HASH_BYTES = 16;
+/** Enough for every folder a writer exports from in a term; an older one
+ *  dropped off only means its next export asks once. */
+const TYP_EXPORTS_KEPT = 32;
 
 // ---------- recents (persisted in the shared kv-store) ----------
 
