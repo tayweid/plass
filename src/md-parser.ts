@@ -766,11 +766,32 @@ export function mdToDoc(src: string): MdImport {
 
   // ---------- tokenize ----------
   const md = new MarkdownIt({ html: true }).use(footnotePlugin).use(fencedDivs);
-  // markdown-it drops every `data:` URL but a few raster types; an SVG
-  // data URL is how a single-file document carries a figure.
+  // markdown-it drops every `data:` URL but a few raster types. An SVG
+  // data URL is how a single-file document carries a figure, so an image's
+  // destination may be one; a link's may not (an SVG opened from a link
+  // can run script), nor a reference definition's. markdown-it validates
+  // all of them through one hook, so the rule ahead of `link` notes
+  // whether the inline at hand opens an image, and a label scan (which
+  // runs the rules over the label, an image inside it included) leaves
+  // the answer as it found it for the link or image around it.
+  let imageDest = false;
+  md.inline.ruler.before('link', 'plass_image_dest', (state) => {
+    imageDest = state.src.charCodeAt(state.pos) === 0x21 && state.src.charCodeAt(state.pos + 1) === 0x5b;
+    return false;
+  });
+  const parseLinkLabel = md.helpers.parseLinkLabel;
+  md.helpers.parseLinkLabel = (state, start, disableNested) => {
+    const image = imageDest;
+    try {
+      return parseLinkLabel(state, start, disableNested);
+    } finally {
+      imageDest = image;
+    }
+  };
   md.validateLink = (url: string) => {
     const s = url.trim().toLowerCase();
-    return /^(vbscript|javascript|file|data):/.test(s) ? /^data:image\/(gif|png|jpeg|webp|svg\+xml);/.test(s) : true;
+    if (!/^(vbscript|javascript|file|data):/.test(s)) return true;
+    return /^data:image\/(gif|png|jpeg|webp);/.test(s) || (imageDest && /^data:image\/svg\+xml;/.test(s));
   };
   // A destination may hold sentinels (`$`, a backtick, `\@` in a URL):
   // they go back to their text before markdown-it percent-encodes it.

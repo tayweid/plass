@@ -785,6 +785,32 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('a hand-written image with a no-break space after it: an image; with no caption the space is text', hand.child(0).childCount === 1 && hand.child(0).firstChild!.attrs.alt === 'Alt' && hand.child(0).firstChild!.attrs.widthPct === 40 && hand.child(1).childCount === 2, JSON.stringify(hand.toJSON()));
   const width = mdToDoc('![](a.svg){width=3in}\n');
   check('a non-percent width warns and is dropped', width.warnings.some((w) => /width "3in"/.test(w)) && width.doc.firstChild!.firstChild!.attrs.widthPct === null);
+  // Only an image may carry an SVG data URL: a link to one (an SVG opened
+  // from a link can run script) is text, as markdown-it reads it by
+  // default, wherever it stands.
+  const hrefs = (md: string) => {
+    const out: string[] = [];
+    mdToDoc(md).doc.descendants((n) => {
+      for (const m of n.marks) if (m.type.name === 'link') out.push(m.attrs.href as string);
+      return true;
+    });
+    return out;
+  };
+  const links = [
+    `[link](${svg})\n`,
+    `Inline ![x](${svg}) and [l](${svg}).\n`,
+    `[![x](a.png)](${svg})\n`,
+    `[a ![x](${svg}) b](${svg})\n`,
+    `[link][r]\n\n[r]: ${svg}\n`,
+  ];
+  for (const md of links) {
+    const t = trip(md);
+    check(`no link to an SVG data URL: ${JSON.stringify(md.slice(0, 24))}…`, hrefs(md).length === 0 && t.converges && hrefs(t.md1).length === 0, JSON.stringify([hrefs(md), t.md1]));
+  }
+  check('an image beside the refused link keeps its SVG data URL', find(mdToDoc(links[1]).doc, (n) => n.type.name === 'image')?.attrs.src === svg);
+  check('a refused link\'s text is kept as written', mdToDoc(links[0]).doc.textContent === `[link](${svg})`, mdToDoc(links[0]).doc.textContent);
+  const png = 'data:image/png;base64,iVBORw0KGgo=';
+  check('a link to a raster data URL is still a link (markdown-it\'s own list)', JSON.stringify(hrefs(`[p](${png})\n`)) === JSON.stringify([png]), JSON.stringify(hrefs(`[p](${png})\n`)));
 }
 
 // Divs: solution, aligned and kept paragraphs, unknown classes, tables.
