@@ -754,3 +754,104 @@ test('an opened .md file shows .md in the window title', async ({ page }) => {
   });
   await expect(page).toHaveTitle('Notes.md');
 });
+
+// A Markdown file's `bibliography:` names a .bib beside it (plan step 7):
+// read once the folder is there, put in the document, and embedded by the
+// next save as a {=bibtex} block in place of the key. Without the folder
+// nothing is read and a save keeps the line, so nothing is lost.
+test('a bibliography: sidecar is read once the folder is attached, and the save embeds it', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = `plass-sidecar-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  type App = typeof window & {
+    view: import('prosemirror-view').EditorView;
+    __fm: {
+      loadHandle(h: FileSystemFileHandle, dir?: FileSystemDirectoryHandle | null): Promise<boolean>;
+      attachFolder(): Promise<boolean>;
+      save(): Promise<void>;
+      pendingBibliography: string | null;
+      handle: FileSystemFileHandle | null;
+      dirty: boolean;
+    };
+  };
+
+  const opened = await page.evaluate(async (name) => {
+    const app = window as App;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(name, { create: true });
+    const write = async (file: string, text: string) => {
+      const h = await dir.getFileHandle(file, { create: true });
+      const w = await h.createWritable();
+      await w.write(text);
+      await w.close();
+      return h;
+    };
+    await write('refs.bib', '@book{arrow1951, title={Social Choice and Individual Values}, author={Arrow, Kenneth J.}, year={1951}}\n');
+    const handle = await write('Paper.md', '---\ntitle: Paper\nbibliography: refs.bib\n---\n\nArrow [@arrow1951] started it.\n');
+    // A launched file: a handle and no folder.
+    await app.__fm.loadHandle(handle);
+    return { bib: app.view.state.doc.attrs.bib, pending: app.__fm.pendingBibliography };
+  }, dirName);
+  expect(opened.bib).toBeNull();
+  expect(opened.pending).toBe('refs.bib');
+  await expect(page.locator('#toast')).toContainText('its bibliography is refs.bib');
+
+  // With no folder, a save keeps the key (and writes no bibliography).
+  const unread = await page.evaluate(async () => {
+    const app = window as App;
+    const end = app.view.state.doc.content.size - 1;
+    app.view.dispatch(app.view.state.tr.insertText(' Then', end));
+    await app.__fm.save();
+    return (await app.__fm.handle!.getFile()).text();
+  });
+  expect(unread).toContain('bibliography: refs.bib');
+  expect(unread).not.toContain('{=bibtex}');
+
+  // The folder is granted: the sidecar is read, not as an edit.
+  const attached = await page.evaluate(async (name) => {
+    const app = window as App;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(name);
+    (window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker = async () => dir;
+    const ok = await app.__fm.attachFolder();
+    const { bib, frontmatter } = app.view.state.doc.attrs;
+    return { ok, bib, frontmatter, pending: app.__fm.pendingBibliography, dirty: app.__fm.dirty };
+  }, dirName);
+  expect(attached.ok).toBe(true);
+  expect(attached.bib?.content).toContain('@book{arrow1951');
+  expect(attached.frontmatter).toBe('');
+  expect(attached.pending).toBeNull();
+  expect(attached.dirty).toBe(false);
+  await expect(page.locator('#toast')).toContainText('bibliography read from refs.bib');
+
+  // The next save writes the entries as a {=bibtex} block, and the key goes.
+  const saved = await page.evaluate(async () => {
+    const app = window as App;
+    const end = app.view.state.doc.content.size - 1;
+    app.view.dispatch(app.view.state.tr.insertText(' it.', end));
+    await app.__fm.save();
+    return (await app.__fm.handle!.getFile()).text();
+  });
+  expect(saved).toContain('```{=bibtex}\n@book{arrow1951');
+  expect(saved).not.toContain('bibliography:');
+  expect(saved).toMatch(/^---\ntitle: Paper\n---\n/);
+});
+
+test('an opened .md file words its front-matter warnings as warnings', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const settings = await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const h = await root.getFileHandle('Settings.md', { create: true });
+    const w = await h.createWritable();
+    await w.write('---\nfontsize: 99pt\npapersize: a4\n---\n\nBody.\n');
+    await w.close();
+    const app = window as unknown as { view: import('prosemirror-view').EditorView; __fm: { loadHandle: (h: FileSystemFileHandle) => Promise<unknown> } };
+    await app.__fm.loadHandle(h);
+    return app.view.state.doc.attrs.settings;
+  });
+  expect(settings.page).toBe('a4');
+  expect(settings.sizePt).toBe(12.5);
+  await expect(page.locator('#toast')).toContainText('front matter: 1 warning — fontsize: 99pt is out of range');
+  await expect(page.locator('#toast')).not.toContainText('raw Typst');
+});

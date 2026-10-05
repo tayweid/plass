@@ -425,6 +425,13 @@ const fileManager = new FileManager({
     }
     if (sourceView.isActive()) sourceView.afterSetDoc();
   },
+  // A `bibliography:` sidecar read once the folder is here: the document
+  // takes its entries (the next save embeds them), and the carried front
+  // matter loses the line. Not an edit to save or undo — it is what the
+  // file says, read late.
+  setBib(bib, frontmatter) {
+    view.dispatch(view.state.tr.setDocAttribute('bib', bib).setDocAttribute('frontmatter', frontmatter).setMeta('addToHistory', false).setMeta(FROM_DISK, true));
+  },
   onState() {
     toolbar?.setFile(fileManager.name, fileManager.dirty);
     // Just the file name, as Knuth does: an installed PWA window already
@@ -509,13 +516,17 @@ async function openLaunched(files: ReadonlyArray<FileSystemFileHandle>): Promise
     if (files.length > 1) {
       showMessage(`Opened ${file.name} — Plass opens one document at a time`);
     }
-    let needsFolder = false;
+    let figures = false;
     view.state.doc.descendants((n) => {
-      if ((n.type.name === 'figure' || n.type.name === 'image') && isPathSrc(n.attrs.src as string)) needsFolder = true;
-      return !needsFolder;
+      if ((n.type.name === 'figure' || n.type.name === 'image') && isPathSrc(n.attrs.src as string)) figures = true;
+      return !figures;
     });
+    // A Markdown file's `bibliography:` sidecar is read from the folder too.
+    const bibliography = fileManager.pendingBibliography;
+    const needsFolder = figures || bibliography !== null;
     if (needsFolder && !fileManager.inFolder) {
-      fileManager.notifyAction(`Figures live next to ${file.name} — grant folder access to load them`, {
+      const what = figures && bibliography ? `Figures and the bibliography (${bibliography}) live` : figures ? 'Figures live' : `The bibliography (${bibliography}) lives`;
+      fileManager.notifyAction(`${what} next to ${file.name} — grant folder access to load ${figures ? 'them' : 'it'}`, {
         label: 'Grant folder',
         run: () => void fileManager.attachFolder().then((ok) => ok && refreshAssets()),
       });

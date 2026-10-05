@@ -554,6 +554,31 @@ test('a Markdown source has no preamble fold', async ({ page }) => {
   await expect(page.locator('#source .source-preamble-bar')).toHaveCount(0);
 });
 
+// A Markdown file's settings live in its front matter (plan step 7): the
+// source carries them, an untouched trip keeps the editor's own, and an
+// edit there applies on exit, as a .typ preamble's does.
+test('a Markdown front matter carries the settings through the source', async ({ page }) => {
+  await boot(page);
+  await openSeeded(page, 'Notes.md', '---\ntitle: Notes\nfontsize: 11pt\nplass:\n  landscape: true\n---\n\n# Notes\n\nBody.\n');
+  const before = await docJson(page);
+  expect(await page.evaluate(() => window.view.state.doc.attrs.settings.sizePt)).toBe(11);
+  await enter(page);
+  expect(await sourceText(page)).toMatch(/^---\ntitle: Notes\nfontsize: 11pt\nplass:\n {2}landscape: true\n---\n/);
+  await exit(page);
+  expect(await docJson(page)).toBe(before);
+  expect(await page.evaluate(() => window.__fm.dirty)).toBe(false);
+
+  await enter(page);
+  await page.evaluate(() => {
+    const sv = window.__sourceView;
+    sv.setText(sv.text()!.replace('fontsize: 11pt', 'fontsize: 10pt'));
+  });
+  await exit(page);
+  const settings = await page.evaluate(() => window.view.state.doc.attrs.settings);
+  expect(settings.sizePt).toBe(10);
+  expect(settings.landscape).toBe(true);
+});
+
 test('a settings edit in the unfolded preamble applies on exit', async ({ page }) => {
   await loadDemo(page);
   expect(await page.evaluate(() => window.view.state.doc.attrs.settings.marginTop)).toBe(1.25);
