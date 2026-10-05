@@ -207,7 +207,9 @@ test('Export → Typst never overwrites the open .typ; Export → Markdown write
     const app = window as ExportApp;
     const root = await navigator.storage.getDirectory();
     const dir = await root.getDirectoryHandle('open-typ', { create: true });
-    const original = '= Paper\n\nOne paragraph of the source.\n';
+    // The table's `gutter` has no Markdown form (it is kept as `params`), so
+    // the conversion has something to say it could not keep.
+    const original = '= Paper\n\n#table(columns: 2, gutter: 3pt, [a], [b])\n\nOne paragraph of the source.\n';
     const handle = await dir.getFileHandle('Paper.typ', { create: true });
     const w = await handle.createWritable();
     await w.write(original);
@@ -232,7 +234,11 @@ test('Export → Typst never overwrites the open .typ; Export → Markdown write
   expect(result.after).toBe(result.original);
   expect(result.md).toContain('# Paper');
   expect(result.md).toContain('One paragraph of the source.');
-  expect(result.messages).toContain('Exported open-typ/Paper.md');
+  // What the conversion could not keep is on the export's own toast, not on
+  // notices the "Exported" toast replaces at once.
+  const exported = result.messages.filter((m) => m.startsWith('Exported open-typ/Paper.md'));
+  expect(exported).toHaveLength(1);
+  expect(exported[0]).toMatch(/^Exported open-typ\/Paper\.md — \S/);
 });
 
 test('the .typ export from an open Typst source is the print form, not the typed text', async ({ page }) => {

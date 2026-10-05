@@ -924,10 +924,20 @@ export class FileManager {
       await this.save();
       return;
     }
-    const text = await this.serialize(fileName);
+    // Not through `serialize`, which toasts each notice on its own: the
+    // "Exported" toast would replace them at once, and a conversion must
+    // say what it could not keep. They ride on that toast instead.
+    const typed = this.hooks.getText?.('.md');
+    const warned = new Set<string>();
+    let text: string;
+    if (typeof typed === 'string') text = typed;
+    else {
+      const { docToMd } = await import('./md-serializer');
+      text = docToMd(this.hooks.getDoc(), (m) => warned.add(m));
+    }
     const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
     const where = await this.saveBeside(fileName, blob);
-    if (where !== null) this.hooks.message(`Exported ${where}`);
+    if (where !== null) this.hooks.message(`Exported ${where}${warned.size ? ` — ${[...warned].join('; ')}` : ''}`);
   }
 
   /** Data-URL images already written to figures/ by Export → Typst, per
