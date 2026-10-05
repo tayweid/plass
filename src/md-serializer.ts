@@ -40,6 +40,17 @@ function longestRun(text: string, ch: string): number {
   return best;
 }
 
+/** A code span (or a raw span's code) holding `text`: a fence one backtick
+ *  longer than any run inside, and a space inside each end where the
+ *  reader would otherwise take one away (CommonMark's rule, which the
+ *  reader follows: one space off each end when both ends have one and the
+ *  span is not all spaces) or a backtick would touch the fence. */
+function codeSpan(text: string): string {
+  const fence = '`'.repeat(longestRun(text, '`') + 1);
+  const pad = /^`|`$/.test(text) || (/^ [\s\S]* $/.test(text) && text.trim()) ? ' ' : '';
+  return fence + pad + text + pad + fence;
+}
+
 /** A number as Markdown writes it: at most three decimals, no trailing
  *  zeros. */
 const num = (n: number) => String(Math.round(n * 1000) / 1000);
@@ -264,11 +275,8 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         const rest = moveTo(want, lead, k);
         put(rest);
         let t: string;
-        if (has('code')) {
-          const fence = '`'.repeat(longestRun(inner, '`') + 1);
-          const pad = /^`|`$|^ .* $/.test(inner) ? ' ' : '';
-          t = fence + pad + inner + pad + fence;
-        } else {
+        if (has('code')) t = codeSpan(inner);
+        else {
           t = esc(inner);
           if (alt) t = t.replace(/(?<!\\)([[\]])/g, '\\$1');
           // A `{` right after code or an image would read as its
@@ -301,11 +309,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         case 'typst_inline': {
           const src = child.attrs.src as string;
           if (child.attrs.lang === 'html') put(src);
-          else {
-            const fence = '`'.repeat(longestRun(src, '`') + 1);
-            const pad = /^`|`$/.test(src) ? ' ' : '';
-            put(`${fence}${pad}${src}${pad}${fence}{=typst}`);
-          }
+          else put(`${codeSpan(src)}{=typst}`);
           break;
         }
         case 'citation':
@@ -524,7 +528,11 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       case 'figure': {
         const src = node.attrs.src as string;
         if (src.startsWith('data:')) warn('embedded figure written as a data: URL — consider a project folder');
-        const caption = inline(node, true);
+        // Spaces at a caption's edges never print, and a caption of spaces
+        // alone is no caption to the reader (or pandoc): it reads back as
+        // an image in a paragraph unless a label keeps it a figure.
+        const written = inline(node, true);
+        const caption = written.trim() ? written.replace(/^[ \t]+|[ \t]+$/g, '') : '';
         // An image with no caption and no label is not a figure to pandoc;
         // a label (made up when there is none) keeps it one.
         let label = node.attrs.label as string;

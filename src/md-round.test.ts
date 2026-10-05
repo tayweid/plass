@@ -256,6 +256,26 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   }
 }
 
+// A code span or a raw `{=typst}` span with spaces at its edges reads back
+// as written (the reader takes one space off each end only when both ends
+// have one and the span is not all spaces), so a save never grows or
+// shrinks it.
+{
+  const para = (kid: PMNode) => schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.text('a '), kid, schema.text(' b')]));
+  for (const code of [' ', '  ', ' x ', '  x  ', ' x', 'x ', '`', ' `', '`x` ', 'a``b']) {
+    const d = para(schema.text(code, [schema.marks.code.create()]));
+    const md = docToMd(d);
+    const back = mdToDoc(md).doc;
+    check(`code ${JSON.stringify(code)} reads back as written and converges`, JSON.stringify(back.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(back) === md, JSON.stringify([md, back.firstChild!.textContent]));
+  }
+  for (const src of [' #h(1em) ', '#h(1em)', ' #h(1em)', '`x`', '  ']) {
+    const d = para(schema.nodes.typst_inline.create({ src, lang: null }));
+    const md = docToMd(d);
+    const back = mdToDoc(md).doc;
+    check(`raw Typst ${JSON.stringify(src)} reads back as written and converges`, JSON.stringify(back.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(back) === md, JSON.stringify([md, back.toJSON()]));
+  }
+}
+
 // A code span ends where its block does: never in the next list item, and
 // a quote's markers on its later lines are not its text. The corpus shapes:
 // a backtick in one item and one in a later item (the course style guide
@@ -668,6 +688,16 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   const pw: string[] = [];
   const pm = docToMd(plain, (w) => pw.push(w));
   check('an uncaptioned, unlabeled figure keeps a made-up label (its only Markdown form), and says so', pm === '![](a.svg){#fig:figure-2}\n\n![](b.svg){#fig:figure-1}\n' && JSON.stringify(kinds(mdToDoc(pm).doc)) === '["figure","figure"]' && pw.length === 1 && /made-up label/.test(pw[0]), JSON.stringify([pm, pw]));
+  for (const blank of [' ', '  ', '\u00a0']) {
+    const fig = schema.nodes.doc.create(null, schema.nodes.figure.create({ src: 'a.png' }, schema.text(blank)));
+    const fw: string[] = [];
+    const fm = docToMd(fig, (w) => fw.push(w));
+    const back = mdToDoc(fm).doc;
+    check(`a figure whose caption is only ${JSON.stringify(blank)} takes the made-up label and stays a figure`, fm === '![](a.png){#fig:figure-1}\n' && JSON.stringify(kinds(back)) === '["figure"]' && docToMd(back) === fm && fw.length === 1, JSON.stringify([fm, kinds(back)]));
+  }
+  const edges = schema.nodes.doc.create(null, schema.nodes.figure.create({ src: 'a.png' }, schema.text(' The caption ')));
+  const em = docToMd(edges);
+  check('a caption\'s edge spaces are not written', em === '![The caption](a.png)\n' && mdToDoc(em).doc.firstChild!.textContent === 'The caption' && trip(em).converges, JSON.stringify(em));
   const lone = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, schema.nodes.image.create({ src: 'a.svg', alt: 'An icon' })));
   const lm = docToMd(lone);
   check('a lone image with alt text stays an image, not a figure', lm === '![An icon](a.svg)\u00a0\n' && mdToDoc(lm).doc.firstChild!.type.name === 'paragraph' && trip(lm).converges, JSON.stringify(lm));
