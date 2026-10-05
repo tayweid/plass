@@ -606,6 +606,22 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
     const out = docToMd(d);
     check(`a caret before ${name} is escaped (^[ would open an inline footnote)`, out.startsWith('x\\^[') && JSON.stringify(mdToDoc(out).doc.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(mdToDoc(out).doc) === out, out);
   }
+  // A pair across a mark or an atom is a pair to pandoc too (`x^**2**^` is
+  // a superscript): its first is escaped. A space between ends the pair.
+  const t = (text: string, ...marks: Array<ReturnType<typeof schema.marks.strong.create>>) => schema.text(text, marks);
+  const cross: Array<[string, PMNode[], string]> = [
+    ['a strong mark', [t('x^'), t('2', schema.marks.strong.create()), t('^')], 'x\\^**2**^\n'],
+    ['a formula', [t('a~'), schema.nodes.math_inline.create({ src: 'x' }), t('~b')], 'a\\~$x$~b\n'],
+    ['a link with a space in it', [t('x^'), t('a b', schema.marks.link.create({ href: 'u' })), t('^ end')], 'x\\^[a b](u)^ end\n'],
+    ['a citation', [t('x^'), schema.nodes.citation.create({ key: 'k' }), t('^')], 'x\\^[@k]^\n'],
+    ['both kinds at once', [t('a~b^'), t('c', schema.marks.em.create()), t('~d^e')], 'a\\~b\\^*c*~d^e\n'],
+    ['a space (no pair)', [t('x^ '), t('2', schema.marks.strong.create()), t('^')], 'x^ **2**^\n'],
+  ];
+  for (const [name, kids, want] of cross) {
+    const d = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, kids));
+    const out = docToMd(d);
+    check(`a ~ or ^ pair across ${name} is escaped where pandoc would pair it`, out === want && JSON.stringify(mdToDoc(out).doc.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(mdToDoc(out).doc) === out, JSON.stringify(out));
+  }
   const sub = trip('Water is H\\~2\\~O and x\\^2\\^ and note\\^[x].\n');
   check('the written escapes read back as the characters', sub.doc.firstChild!.textContent === 'Water is H~2~O and x^2^ and note^[x].' && sub.md1 === 'Water is H\\~2\\~O and x\\^2\\^ and note\\^[x].\n', sub.md1);
 }

@@ -214,6 +214,14 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       md += s;
       last = s[s.length - 1];
     };
+    /** Where what is written is one inline to pandoc (a formula, a code or
+     *  raw span, a link, an image, a citation, a footnote marker) or a
+     *  delimiter: a `~` or `^` there never pairs with one outside. */
+    const opaque: Array<[number, number]> = [];
+    const putWhole = (s: string) => {
+      put(s);
+      if (s) opaque.push([md.length - s.length, md.length]);
+    };
     const DELIM: Record<string, string> = { strike: '~~', strong: '**', em: '*' };
     let active: string[] = [];
     /** Whitespace that ended the last text, written once the marks around
@@ -235,7 +243,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     const moveTo = (want: string[], lead = '', at = -1): string => {
       let keep = 0;
       while (keep < active.length && want.includes(active[keep])) keep++;
-      for (let k = active.length - 1; k >= keep; k--) put(DELIM[active[k]]);
+      for (let k = active.length - 1; k >= keep; k--) putWhole(DELIM[active[k]]);
       active = active.slice(0, keep);
       put(pending);
       pending = '';
@@ -246,7 +254,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         lead = '';
       }
       for (const m of opening) {
-        put(DELIM[m]);
+        putWhole(DELIM[m]);
         active.push(m);
       }
       return lead;
@@ -293,7 +301,8 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           const title = link.attrs.title as string | null;
           t = `[${t}](${link.attrs.href as string}${title ? ` "${title.replace(/"/g, '\\"')}"` : ''})`;
         }
-        put(t);
+        if (has('code') || link) putWhole(t);
+        else put(t);
         pending = trail;
         continue;
       }
@@ -301,15 +310,14 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       switch (child.type.name) {
         case 'math_inline':
           // One line: a formula's soft break reads back as its space.
-          put(`$${(child.attrs.src as string).replace(/\s*\n\s*/g, ' ')}$`);
+          putWhole(`$${(child.attrs.src as string).replace(/\s*\n\s*/g, ' ')}$`);
           mathEnd = md.length;
           break;
         // Pandoc's raw-attribute syntax: standard markdown that other
         // tools understand as "Typst-only", and round-trips here.
         case 'typst_inline': {
           const src = child.attrs.src as string;
-          if (child.attrs.lang === 'html') put(src);
-          else put(`${codeSpan(src)}{=typst}`);
+          putWhole(child.attrs.lang === 'html' ? src : `${codeSpan(src)}{=typst}`);
           break;
         }
         case 'citation':
@@ -327,13 +335,13 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           const ref = (n: PMNode | undefined) => n?.type.name === 'citation' || n?.type.name === 'eq_ref';
           while (ref(children[k + 1]) && marksOf(children[k + 1]).join() === marksOf(child).join()) keys.push(keyOf(children[++k]));
           if (keys.length > 1 || child.type.name === 'citation') {
-            put(citeGroup(keys));
+            putWhole(citeGroup(keys));
             break;
           }
           // A lone reference is bare unless a letter or digit glues it to
           // the text around it.
           const glued = /[\p{L}\p{N}_]$/u.test(last) || KEY_CONTINUES.test(nextText(k)) || ref(children[k + 1]);
-          put(glued ? `[@${keys[0]}]` : `@${keys[0]}`);
+          putWhole(glued ? `[@${keys[0]}]` : `@${keys[0]}`);
           break;
         }
         case 'hard_break':
@@ -346,7 +354,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           if (src.startsWith('data:')) warn('embedded image written as a data: URL — consider a project folder');
           const destination = src.replace(/([\\()\s])/g, (c) => (c === ' ' ? '%20' : `\\${c}`));
           const width = child.attrs.widthPct != null ? `{width=${num(child.attrs.widthPct as number)}%}` : '';
-          put(`![${altText}](${destination}${title ? ` "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ''})${width}`);
+          putWhole(`![${altText}](${destination}${title ? ` "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ''})${width}`);
           break;
         }
         case 'footnote': {
@@ -355,7 +363,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           // would read there as a list, quote or heading is escaped, and
           // leading spaces (code, or dropped) go.
           footnotes.push([n, escLines(inline(child).replace(/^[ \t]+/, ''))]);
-          put(`[^${n}]`);
+          putWhole(`[^${n}]`);
           break;
         }
         default:
@@ -363,7 +371,45 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       }
     }
     moveTo([]);
-    return md;
+    return unpaired(md, opaque);
+  };
+
+  /** `~x~` and `^x^` are pandoc's sub- and superscript, and their content
+   *  may run across marks and atoms (`x^**2**^`, `a~$x$~b`) as long as no
+   *  space or line break comes between: of two such `~` (or `^`) in the
+   *  written text, the first is escaped. (A pair inside one run of text
+   *  was escaped already.) */
+  const unpaired = (md: string, opaque: Array<[number, number]>): string => {
+    let out = '';
+    const open: Record<string, number> = {};
+    let k = 0;
+    for (let i = 0; i < md.length; i++) {
+      while (k < opaque.length && opaque[k][1] <= i) k++;
+      if (k < opaque.length && opaque[k][0] <= i) {
+        out += md.slice(i, opaque[k][1]);
+        i = opaque[k][1] - 1;
+        continue;
+      }
+      const c = md[i];
+      if (c === '\\') {
+        out += md.slice(i, i + 2);
+        i++;
+      } else if (c === ' ' || c === '\t' || c === '\n') {
+        delete open['~'];
+        delete open['^'];
+        out += c;
+      } else if (c === '~' || c === '^') {
+        const at = open[c];
+        if (at !== undefined) {
+          out = out.slice(0, at) + '\\' + out.slice(at);
+          const other = c === '~' ? '^' : '~';
+          if (open[other] !== undefined && open[other] > at) open[other]++;
+        }
+        open[c] = out.length;
+        out += c;
+      } else out += c;
+    }
+    return out;
   };
 
   /** How many div levels a block's Markdown nests: an outer fence is one
