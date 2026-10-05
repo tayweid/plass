@@ -4,6 +4,7 @@ import { docToTyp } from './typ-serializer.ts';
 import { migrateLegacyTableGeometry, typToDoc } from './typ-parser.ts';
 import { schema } from './schema.ts';
 import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config.ts';
+import * as F from './typ-fixtures.ts';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = '') {
@@ -77,20 +78,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 4. hand-written Typst: pragmatic subset + raw preservation ---
 {
-  const src = [
-    '#let answer = 42',
-    '#show heading: set text(blue)',
-    '',
-    '= Intro',
-    '',
-    'Some *bold*, _italic_, and `code` here. Math like $x^2 + 1$ inline.',
-    'A second source line of the same paragraph.',
-    '',
-    '- first item',
-    '- second item',
-    '',
-    'Escaped \\* star and \\@ at-sign.',
-  ].join('\n');
+  const src = F.HAND_WRITTEN_TYP;
   const { doc, warnings } = typToDoc(src);
 
   check('unknown directives kept as raw islands', warnings.length === 1, warnings.join('; '));
@@ -127,7 +115,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 5. labels and references survive ---
 {
-  const src = ['#mitex(`', 'a^2 + b^2 = c^2', '`) <eq:pyth>', '', 'See @eq:pyth. Done.'].join('\n');
+  const src = F.LABELS_TYP;
   const { doc } = typToDoc(src);
   check('display math label imported', doc.child(0).attrs.label === 'eq:pyth');
   let refLabel = '';
@@ -140,7 +128,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 6. figures round-trip and import ---
 {
-  const src = '#figure(image("chart.png"), caption: [The *elasticity* of demand [inelastic case]]) <fig:el>';
+  const src = F.FIGURE_TYP;
   // note: hand-written captions may contain brackets; ours are escaped
   const { doc } = typToDoc(src + '\n');
   const fig = doc.child(0);
@@ -162,7 +150,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- strikethrough round-trips and imports ---
 {
-  const src = 'Keep this, #strike[drop *this* part], continue.\n';
+  const src = F.STRIKE_TYP;
   const { doc, warnings } = typToDoc(src);
   let struck = '';
   let nested = false;
@@ -220,7 +208,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 7. footnotes round-trip and import ---
 {
-  const src = 'A claim#footnote[See *Smith 2020*, ch. 3 — and $x^2$ holds.] with a note.\n';
+  const src = F.FOOTNOTE_TYP;
   const { doc } = typToDoc(src);
   const para = doc.child(0);
   let fnNode: typeof para | null = null;
@@ -247,8 +235,8 @@ function firstDiff(a: string, b: string): string {
 
 // --- 8. citations + embedded bibliography round-trip ---
 {
-  const bib = '@book{knuth86, title={The TeXbook}, author={Knuth, Donald E.}, year={1986}}';
-  const src = ['See @knuth86 and @eq:foo for details.', '', `#bibliography(bytes(${JSON.stringify(bib)}), style: "ieee")`].join('\n');
+  const bib = F.CITATION_BIB;
+  const src = F.CITATIONS_TYP;
   const { doc } = typToDoc(src);
   let citeKeyFound = '';
   let refLabel = '';
@@ -271,14 +259,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 9. tables round-trip (header, merges) ---
 {
-  const src = [
-    '#table(',
-    '  columns: 3,',
-    '  table.header([Model], [Coef.], [SE]),',
-    '  [OLS], [0.42], [0.05],',
-    '  table.cell(colspan: 2)[Fixed effects], [yes],',
-    ')',
-  ].join('\n');
+  const src = F.TABLE_MERGES_TYP;
   const { doc, warnings } = typToDoc(src + '\n');
   const tbl = doc.child(0);
   check('table parsed', tbl.type.name === 'table', warnings.join('; '));
@@ -295,19 +276,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 10. table styles + alignment round-trip ---
 {
-  const src = [
-    '#table(',
-    '  columns: 2,',
-    '  align: (left, right),',
-    '  stroke: none,',
-    '  table.hline(stroke: 0.08em),',
-    '  table.header([Variable], [Estimate]),',
-    '  table.hline(stroke: 0.05em),',
-    '  [Constant], [1.234],',
-    '  [Slope], table.cell(align: center)[0.567],',
-    '  table.hline(stroke: 0.08em),',
-    ')',
-  ].join('\n');
+  const src = F.TABLE_STYLES_TYP;
   const { doc } = typToDoc(src + '\n');
   const tbl = doc.child(0);
   check('booktabs style detected', tbl.attrs.style === 'booktabs');
@@ -322,15 +291,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 11. custom #table arguments round-trip verbatim (full-control hatch) ---
 {
-  const src = [
-    '#table(',
-    '  columns: (2fr, 1fr, 1fr),',
-    '  inset: 6pt,',
-    '  fill: (x, y) => if calc.odd(y) { luma(245) },',
-    '  table.header([A], [B], [C]),',
-    '  [1], [2], [3],',
-    ')',
-  ].join('\n');
+  const src = F.TABLE_PARAMS_TYP;
   const { doc, warnings } = typToDoc(src + '\n');
   const tbl = doc.child(0);
   check('custom-arg table still parses as a table', tbl.type.name === 'table', warnings.join('; '));
@@ -346,21 +307,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 12. polish bundle: page numbering, sections, macros, heading labels ---
 {
-  const src = [
-    '// Exported from Plass',
-    '#set page(paper: "us-letter", margin: 1.25in, numbering: "— 1 —", number-align: right)',
-    '#set par(justify: true)',
-    '#set text(size: 12.5pt, font: "New Computer Modern", hyphenate: true)',
-    '#set math.equation(numbering: "(1)")',
-    '#set heading(numbering: "1.1")',
-    '#counter(page).update(3)',
-    '// typeset:math-macros "\\\\E = \\\\mathbb{E}"',
-    '#import "@preview/mitex:0.2.7": mi, mitex',
-    '',
-    '= Introduction <sec:intro>',
-    '',
-    'See @sec:intro and the mean #mi(`\\E[X]`).',
-  ].join('\n');
+  const src = F.POLISH_TYP;
   const { doc } = typToDoc(src + '\n');
   const s = doc.attrs.settings;
   check('page number format imported', s.pageNumFormat === '— 1 —' && s.pageNumShow === true);
@@ -393,22 +340,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 13b. captioned table (figure) round-trips with number/label/midrule ---
 {
-  const src = [
-    '#set page(paper: "us-letter", margin: 1.25in)',
-    '',
-    '#figure(',
-    '  table(',
-    '    columns: 2,',
-    '    stroke: none,',
-    '    table.hline(stroke: 0.08em),',
-    '    table.header([A], [B]),',
-    '    table.hline(stroke: 0.05em),',
-    '    [1], [2],',
-    '    table.hline(stroke: 0.08em),',
-    '  ),',
-    '  caption: [Results of the thing],',
-    ') <tab:results>',
-  ].join('\n');
+  const src = F.CAPTIONED_TABLE_TYP;
   const { doc } = typToDoc(src + '\n');
   let table: import('prosemirror-model').Node | null = null;
   doc.descendants((n) => {
@@ -427,16 +359,9 @@ function firstDiff(a: string, b: string): string {
 
 // --- 13c. decimal-aligned column splits on export and fuses on import ---
 {
-  const { table, table_row, table_cell, table_header, paragraph, doc: docType } = schema.nodes;
-  const mk = (text: string, header = false, align: string | null = null) =>
-    (header ? table_header : table_cell).create({ align }, [paragraph.create(null, text ? [schema.text(text)] : [])]);
-  const t = table.create({ style: 'booktabs' }, [
-    table_row.create(null, [mk('Item', true), mk('Price', true, 'decimal')]),
-    table_row.create(null, [mk('Apples'), mk('12.5', false, 'decimal')]),
-    table_row.create(null, [mk('Pears'), mk('3.75', false, 'decimal')]),
-    table_row.create(null, [mk('Total'), mk('16', false, 'decimal')]),
-  ]);
-  const d = docType.create(null, [t]);
+  const { doc: docType } = schema.nodes;
+  const d = F.decimalTableDoc();
+  const t = d.firstChild!;
   const out = docToTyp(d);
   check('decimal directive emitted', out.includes('// typeset:decimal-columns 1'));
   check('decimal split emitted', out.includes('inset: (right: 0pt))[12]') && out.includes('inset: (left: 0pt))[.5]'));
@@ -462,17 +387,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 13d. table font size + vlines round-trip ---
 {
-  const { table, table_row, table_cell, table_header, paragraph, doc: docType } = schema.nodes;
-  const mk2 = (text: string, header = false) =>
-    (header ? table_header : table_cell).create(null, [paragraph.create(null, text ? [schema.text(text)] : [])]);
-  const t = table.create(
-    { style: 'booktabs', fontSize: '0.85em', params: 'table.vline(x: 1, stroke: 0.05em)', caption: 'Sized', label: 'tab:sized' },
-    [
-      table_row.create(null, [mk2('A', true), mk2('B', true)]),
-      table_row.create(null, [mk2('1'), mk2('2')]),
-    ],
-  );
-  const d2 = docType.create(null, [t]);
+  const d2 = F.sizedTableDoc();
   const out = docToTyp(d2);
   check('size wrapper emitted', out.includes('text(size: 0.85em, table('));
   check('kind marker emitted', out.includes('kind: table'));
@@ -492,14 +407,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 13e. front matter (title/authors/date/abstract) round-trips ---
 {
-  const { doc_title, doc_authors, doc_date, abstract, paragraph, doc: docType } = schema.nodes;
-  const d3 = docType.create(null, [
-    doc_title.create(null, [schema.text('On Widgets')]),
-    doc_authors.create(null, [schema.text('T. Weidman and A. Nother')]),
-    doc_date.create(null, [schema.text('July 8, 2026')]),
-    abstract.create(null, [paragraph.create(null, [schema.text('We study widgets carefully.')])]),
-    paragraph.create(null, [schema.text('Body starts here.')]),
-  ]);
+  const d3 = F.frontMatterDoc();
   const out = docToTyp(d3);
   check('title emitted', out.includes('#align(center, text(size: 1.55em, weight: 700)[On Widgets])'));
   check('abstract emitted', out.includes('#align(center, text(weight: 600)[Abstract])') && out.includes('#pad(x: 1.8em)['));
@@ -574,15 +482,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 18. solution block: the #block(stroke: (left: …)) preset round-trips as kind 'solution' ---
 {
-  const p = schema.nodes.paragraph;
-  const doc = schema.nodes.doc.create(null, [
-    p.create(null, schema.text('Problem 1. Show that the sum is finite.')),
-    schema.nodes.blockquote.create({ kind: 'solution' }, [
-      p.create(null, schema.text('Bound each term by a geometric series.')),
-      p.create(null, schema.text('The partial sums are therefore Cauchy.')),
-    ]),
-    schema.nodes.blockquote.create(null, [p.create(null, schema.text('A plain quote stays a quote.'))]),
-  ]);
+  const doc = F.solutionDoc();
   const t1 = docToTyp(doc);
   check('solution exports as a left-stroke block', /#block\(width: 100%, stroke: \(left: 2pt \+ rgb\("#c00000"\)\), inset: \(left: 1em\)\)\[\n  #set text\(fill: rgb\("#c00000"\)\)\n/.test(t1), t1);
   const { doc: back, warnings } = typToDoc(t1);
@@ -627,13 +527,13 @@ function firstDiff(a: string, b: string): string {
 
 // --- 19c. table density presets: a uniform inset round-trips as the preset ---
 {
-  const src = '#align(center, table(\n  columns: 2,\n  inset: 3pt,\n  stroke: none,\n  table.hline(stroke: 0.08em),\n  table.header([A], [B]),\n  table.hline(stroke: 0.05em),\n  [1], [2],\n  table.hline(stroke: 0.08em),\n))\n';
+  const src = F.DENSITY_TYP;
   const { doc } = typToDoc(src);
   check('inset: 3pt imports as the compact preset', doc.child(0).type.name === 'table' && doc.child(0).attrs.density === 'compact' && !doc.child(0).attrs.params, JSON.stringify(doc.child(0).attrs));
   const out = docToTyp(doc);
   check('the compact preset exports inset: 3pt', out.includes('  inset: 3pt,'), out);
   check('a density table round-trips byte-identically', docToTyp(typToDoc(out).doc) === out, firstDiff(docToTyp(typToDoc(out).doc), out));
-  const other = typToDoc(src.replace('inset: 3pt', 'inset: (x: 2pt, y: 1pt)')).doc;
+  const other = typToDoc(F.DENSITY_CUSTOM_TYP).doc;
   check('a non-uniform inset stays a custom parameter', other.child(0).attrs.density === '' && /inset/.test(other.child(0).attrs.params as string), JSON.stringify(other.child(0).attrs));
   const five = typToDoc(src.replace('inset: 3pt', 'inset: 5pt')).doc;
   check('inset: 5pt is the default and exports without an inset', five.child(0).attrs.density === '' && !docToTyp(five).includes('inset:'), docToTyp(five));
@@ -641,7 +541,7 @@ function firstDiff(a: string, b: string): string {
 
 // --- 19d. row rule presets: table.hline(y:, stroke:) at a row boundary ---
 {
-  const src = '#align(center, table(\n  columns: 2,\n  stroke: none,\n  table.hline(y: 2, stroke: 0.05em),\n  table.hline(stroke: 0.08em),\n  table.header([A], [B]),\n  table.hline(stroke: 0.05em),\n  [1], [2],\n  [3], [4],\n  table.hline(stroke: 0.08em),\n))\n';
+  const src = F.ROW_RULES_TYP;
   const { doc } = typToDoc(src);
   const t = doc.child(0);
   check('a light rule under row 2 is the row preset', t.type.name === 'table' && t.child(1).attrs.rule === 'light' && !t.attrs.params, JSON.stringify([t.type.name, t.child(1).attrs, t.attrs.params]));
@@ -649,19 +549,19 @@ function firstDiff(a: string, b: string): string {
   check('the row rule exports at its boundary', out.includes('  table.hline(y: 2, stroke: 0.05em),'), out);
   check('a row-rule table round-trips byte-identically', docToTyp(typToDoc(out).doc) === out, firstDiff(docToTyp(typToDoc(out).doc), out));
   // The header row's rule set to none replaces the booktabs midrule.
-  const none = '#align(center, table(\n  columns: 2,\n  stroke: none,\n  table.hline(y: 1, stroke: none),\n  table.hline(stroke: 0.08em),\n  table.header([A], [B]),\n  [1], [2],\n  table.hline(stroke: 0.08em),\n))\n';
+  const none = F.ROW_RULE_NONE_TYP;
   const nd = typToDoc(none).doc;
   check('a header rule of none imports as the row preset', nd.child(0).type.name === 'table' && nd.child(0).child(0).attrs.rule === 'none', JSON.stringify(nd.child(0).attrs));
   const nout = docToTyp(nd);
   check('the preset midrule yields to the none rule', nout.includes('table.hline(y: 1, stroke: none)') && !nout.includes('table.hline(stroke: 0.05em)'), nout);
   // A partial or oddly-weighted rule stays a custom parameter.
-  const custom = typToDoc(src.replace('table.hline(y: 2, stroke: 0.05em)', 'table.hline(y: 2, stroke: 1pt)')).doc;
+  const custom = typToDoc(F.ROW_RULES_CUSTOM_TYP).doc;
   check('an unrecognized weight stays custom', custom.child(0).child(1).attrs.rule === '' && /hline\(y: 2, stroke: 1pt\)/.test(custom.child(0).attrs.params as string), JSON.stringify(custom.child(0).attrs));
 }
 
 // --- 19e. cell fill presets ---
 {
-  const src = '#align(center, table(\n  columns: 2,\n  stroke: none,\n  table.hline(stroke: 0.08em),\n  table.header([A], [B]),\n  table.hline(stroke: 0.05em),\n  table.cell(fill: luma(240))[1], [2],\n  [3], table.cell(align: right, fill: rgb("#fff3b0"))[4],\n  table.hline(stroke: 0.08em),\n))\n';
+  const src = F.FILLS_TYP;
   const { doc } = typToDoc(src);
   const t = doc.child(0);
   check('preset fills import onto the cells', t.type.name === 'table' && t.child(1).child(0).attrs.fill === 'gray' && t.child(2).child(1).attrs.fill === 'yellow' && t.child(2).child(1).attrs.align === 'right', JSON.stringify([t.type.name, t.child(1).child(0).attrs, t.child(2).child(1).attrs]));
@@ -689,7 +589,7 @@ function firstDiff(a: string, b: string): string {
 // --- 19b. a paragraph that starts with inline math is prose, not an island ---
 {
   // Export writes `$P^*$: …` as `#mi(`P^*`): …`; import must read it back.
-  const src = 'Intro.\n\n$P^*$: \\_\\_\\_\n\nPrice is\n$Delta$ now.\n\n#grid(\n  columns: (1fr, 1fr),\n  gutter: 1em,\n  [\n    $Q^*$: \\_\\_\\_\n  ],\n  [\n    b\n  ],\n)\n';
+  const src = F.LEADING_MATH_TYP;
   const once = docToTyp(typToDoc(src).doc);
   check('leading math exports as #mi', once.includes('#mi(`P^*`): \\_\\_\\_'), once);
   const { doc, warnings } = typToDoc(once);
@@ -712,7 +612,7 @@ function firstDiff(a: string, b: string): string {
   // A grid in the rail's form is native (grid-editor.ts): fraction or
   // counted columns, one gutter, content cells — a blank line inside a
   // cell is a second paragraph there. Anything else stays an island.
-  const src = 'Intro.\n\n#grid(\n  columns: 2,\n  [first para\n\n  second para],\n  [b],\n)\n\nAfter.\n';
+  const src = F.GRID_TYP;
   const { doc, warnings } = typToDoc(src);
   const kinds: string[] = [];
   doc.forEach((n) => kinds.push(n.type.name + (n.attrs.params === 'typst-raw' ? ':raw' : '')));
@@ -740,33 +640,7 @@ function firstDiff(a: string, b: string): string {
   {
     // The rail's richer content: three fraction columns, two rows, a list
     // and a table in cells, a heading in a cell.
-    const rich = [
-      '#grid(',
-      '  columns: (2fr, 1fr, 1fr),',
-      '  gutter: 1.5em,',
-      '  [',
-      '    == Left',
-      '',
-      '    Text on the left.',
-      '',
-      '    - one',
-      '    - two',
-      '  ],',
-      '  [',
-      '    #table(',
-      '      columns: 2,',
-      '      [a], [b],',
-      '    )',
-      '  ],',
-      '  [],',
-      '  [',
-      '    Second row.',
-      '  ],',
-      '  [],',
-      '  [],',
-      ')',
-      '',
-    ].join('\n');
+    const rich = F.RICH_GRID_TYP;
     const r = typToDoc(rich);
     const grid = r.doc.child(0);
     const cellKinds = (row: number) => {
@@ -796,7 +670,7 @@ function firstDiff(a: string, b: string): string {
   // A loose list in Typst markup (blank lines between items) imports with
   // its pitch, exports as the set/restore pair around blank-lined items,
   // and the pair is consumed on the way back in. A tight one is untouched.
-  const src = 'Intro.\n\n- one\n\n- two\n\n+ a\n+ b\n\nAfter.\n';
+  const src = F.LISTS_TYP;
   const { doc } = typToDoc(src);
   const kinds: string[] = [];
   doc.forEach((n) => kinds.push(n.type.name + (n.attrs.tight === false ? ':loose' : n.attrs.tight === true ? ':tight' : '')));
@@ -817,11 +691,7 @@ function firstDiff(a: string, b: string): string {
   // Page chrome: a running header and footer with {page}/{section}, the
   // number at the top of the page, and the first-page flags round-trip
   // through the page line.
-  const SECTION = '#context { let hs = query(selector(heading.where(level: 1)).before(here())); if hs.len() > 0 { hs.last().body } }';
-  const PAGE = '#context counter(page).display()';
-  const src =
-    `#set page(paper: "us-letter", margin: 1in, numbering: "— 1 —", number-align: top + right, header: context if(counter(page).get().first() > 1) { align(left)[Notes · ${SECTION} · ${PAGE}] }, footer: align(center)[Econ 0100 · ${PAGE}])\n` +
-    '#set text(font: "New Computer Modern", size: 12.5pt)\n\n= Title\n\nBody.\n';
+  const src = F.CHROME_TYP;
   const { doc } = typToDoc(src);
   const s = doc.attrs.settings as Record<string, unknown>;
   check(
@@ -839,7 +709,7 @@ function firstDiff(a: string, b: string): string {
 // The Skillsheet's measured table controls are editable attributes, with no
 // hidden source override that could win against later toolbar edits.
 {
-  const source = '#table(columns: (auto, 1fr, auto), inset: 9pt, align: (center + horizon, left + horizon, center + horizon), fill: (x, y) => if y == 0 { luma(220) }, table.header([Code], [Skill], [Practice]), [B1.1], [Demand], [Exercise B1])';
+  const source = F.SKILLSHEET_TYP;
   const { doc } = typToDoc(source);
   const table = doc.firstChild!;
   check('Skillsheet widths and padding are editable attributes', table.type.name === 'table' && JSON.stringify(table.attrs.columnWidths) === '["auto","1fr","auto"]' && table.attrs.insetPt === 9 && table.attrs.params === '', JSON.stringify(table.attrs));
@@ -850,8 +720,8 @@ function firstDiff(a: string, b: string): string {
   check('Skillsheet controls round-trip stably', docToTyp(typToDoc(output).doc) === output);
   const fixed = typToDoc(source.replace('(auto, 1fr, auto)', '(24pt, 2fr, 0pt)')).doc.firstChild!;
   check('fixed point widths import without approximation', JSON.stringify(fixed.attrs.columnWidths) === '["24pt","2fr","0pt"]');
-  for (const unsupported of ['columns: (auto, calc.max(1fr, 2fr), auto)', 'inset: (x: 9pt, y: 5pt)', 'align: (x, y) => center', 'fill: (x, y) => if calc.odd(y) { luma(220) }']) {
-    const custom = typToDoc(`#table(columns: 3, ${unsupported}, [A], [B], [C])`).doc.firstChild!;
+  for (const unsupported of F.UNSUPPORTED_TABLE_EXPRESSIONS) {
+    const custom = typToDoc(F.unsupportedTableTyp(unsupported)).doc.firstChild!;
     check(`unknown table expression is preserved: ${unsupported}`, String(custom.attrs.params).includes(unsupported));
   }
   const hex = typToDoc('#table(columns: 1, table.cell(fill: rgb("#dcdcdc"))[A])').doc.firstChild!;
@@ -953,7 +823,7 @@ function firstDiff(a: string, b: string): string {
 
 // Image resizing survives save/reopen, including inside grid cells.
 {
-  const source = '#grid(columns: (1fr, 1fr), gutter: 1em, [\n#image("axes.svg", width: 75%)\n], [\n#figure(image("curve.svg", width: 100%), caption: [A curve]) <fig:curve>\n])';
+  const source = F.IMAGE_GRID_TYP;
   const { doc } = typToDoc(source);
   const row = doc.firstChild!.firstChild!;
   check('inline image width imports inside a grid', row.child(0).firstChild!.firstChild!.attrs.widthPct === 75);
