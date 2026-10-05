@@ -62,6 +62,7 @@ interface MdToken {
   tag: string;
   content: string;
   info: string;
+  markup: string;
   children: MdToken[] | null;
   meta: unknown;
   map: [number, number] | null;
@@ -91,6 +92,9 @@ type Stored =
 // does (`$`, a backtick, `{`, `<`, `\`), so `` `make`*(once)* `` is still
 // emphasis. A private-use character would read as a letter there.
 const S = '\u241F';
+/** The sentinel character, for the tests that check none leaks into a
+ *  document. */
+export const SENTINEL_CHAR = S;
 const SENTINEL = /\u241F(\d+)\u241F/g;
 /** A sentinel that opens a text. */
 const LEADING_SENTINEL = /^\u241F(\d+)\u241F/;
@@ -139,6 +143,10 @@ const body = (line: string) => line.replace(/^(?:[ \t]*>)*[ \t]*/, '');
 const QUOTE_PREFIX = /^(?:[ \t]{0,3}>[ \t]?)+/;
 
 const LIST_MARKER = /^(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/;
+
+/** The container markers a line opens with: quote markers, list markers
+ *  and indentation, in any order (`> - `, `1. 1. `). */
+const CONTAINER_MARKERS = /^(?:[ \t]*>[ \t]?|[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+|[ \t]+)*/;
 
 /** An autolink at the scan position: a URI or an email address in angle
  *  brackets (CommonMark's grammar, which markdown-it follows). */
@@ -551,11 +559,25 @@ function prepass(src: string, warn: (m: string) => void): Pre {
   const literalComment = new Set<number>();
   const flush = () => {
     if (!para.length) return;
+    const given = new Map(para.map((p) => [p.line, p.text]));
     for (const l of scan(para.map((p) => p.text).join('\n'), para.map((p) => p.line), paraListed)) {
       // The `<` is set aside as a literal, so markdown-it reads no HTML
       // block there (when no formula or code span took the line's start).
       const at = literalComment.has(l.line) ? /^(?:[ \t]*>)*[ \t]*(?=<!--)/.exec(l.text)?.[0].length : undefined;
-      push(at === undefined ? l.text : l.text.slice(0, at) + keep({ k: 'lit', ch: '<', orig: '<' }) + l.text.slice(at + 1), l.line);
+      let text = at === undefined ? l.text : l.text.slice(0, at) + keep({ k: 'lit', ch: '<', orig: '<' }) + l.text.slice(at + 1);
+      // A line whose content (past its quote and list markers) opens with
+      // three or more backticks and holds another backtick later is text,
+      // not a fence (CommonMark's rule and pandoc's). The scan may have
+      // made that later backtick a code span's sentinel, and markdown-it
+      // would then read a fence there that runs to the end of the file: the
+      // run is set aside as a literal, so the line stays text.
+      const lead = CONTAINER_MARKERS.exec(text)![0].length;
+      const run = /^`{3,}/.exec(text.slice(lead))?.[0];
+      const source = given.get(l.line) ?? '';
+      if (run && source.startsWith(run, lead) && source.slice(lead + run.length).includes('`')) {
+        text = text.slice(0, lead) + keep({ k: 'lit', ch: run, orig: run }) + text.slice(lead + run.length);
+      }
+      push(text, l.line);
     }
     para = [];
   };
@@ -1079,17 +1101,14 @@ export function mdToDoc(src: string): MdImport {
         pushText(m[0], marks, out);
         continue;
       }
-      // Strong emboldens (and widens) Typst math, so a formula keeps the
-      // span's marks; a link or code mark does not apply to it.
-      const mathMarks = marks.filter((mk) => ['strong', 'em', 'strike'].includes(mk.type.name));
       switch (s.k) {
         case 'math':
-          out.push(schema.nodes.math_inline.create({ src: s.src }, null, mathMarks));
+          out.push(schema.nodes.math_inline.create({ src: s.src }, null, atomMarks(marks)));
           H.seen = true;
           break;
         case 'display':
           if (displays) out.push(new DisplayItem(s));
-          else out.push(schema.nodes.math_inline.create({ src: s.src }, null, mathMarks));
+          else out.push(schema.nodes.math_inline.create({ src: s.src }, null, atomMarks(marks)));
           H.seen = true;
           break;
         case 'code':
@@ -1097,7 +1116,7 @@ export function mdToDoc(src: string): MdImport {
           H.seen = true;
           break;
         case 'raw':
-          if (s.fmt === 'typst' || s.fmt === 'html') out.push(schema.nodes.typst_inline.create({ src: s.src, lang: s.fmt === 'html' ? 'html' : 'typst' }));
+          if (s.fmt === 'typst' || s.fmt === 'html') out.push(schema.nodes.typst_inline.create({ src: s.src, lang: s.fmt === 'html' ? 'html' : 'typst' }, null, atomMarks(marks)));
           else {
             if (s.src) out.push(schema.text(s.src, [...marks, schema.marks.code.create()]));
             pushText(`{=${s.fmt}}`, marks, out);
@@ -1125,8 +1144,18 @@ export function mdToDoc(src: string): MdImport {
     if (text.trim()) H.seen = true;
   }
 
-  function refNode(key: string): PMNode {
-    return NAMESPACE.test(key) ? schema.nodes.eq_ref.create({ label: key }) : schema.nodes.citation.create({ key });
+  /** The marks an inline atom (a formula, a citation or reference, a
+   *  footnote marker, an image, an inline island) takes from the span it
+   *  sits in: strong, emphasis and strike, as the editor gives them to an
+   *  atom inside a bolded run and the writer writes it inside the run's
+   *  delimiters. Strong emboldens (and widens) Typst math. A link or code
+   *  mark does not apply to an atom. */
+  function atomMarks(marks: readonly Mark[]): Mark[] {
+    return marks.filter((mk) => mk.type.name === 'strong' || mk.type.name === 'em' || mk.type.name === 'strike');
+  }
+
+  function refNode(key: string, marks: readonly Mark[]): PMNode {
+    return NAMESPACE.test(key) ? schema.nodes.eq_ref.create({ label: key }, null, atomMarks(marks)) : schema.nodes.citation.create({ key }, null, atomMarks(marks));
   }
 
   /** A markdown-it text token: printed form (the dash and ellipsis
@@ -1147,7 +1176,7 @@ export function mdToDoc(src: string): MdImport {
         // locator: kept as the text they are.
         if (m[1] || /^ ?\[[^\]@]*\]/.test(seg.slice(m.index! + m[0].length))) warn(CITE_EXTRAS);
         if (m[1]) pushText('-', marks, out);
-        out.push(refNode(m[2]));
+        out.push(refNode(m[2], marks));
         H.seen = true;
         at = m.index! + m[0].length;
       }
@@ -1163,7 +1192,7 @@ export function mdToDoc(src: string): MdImport {
         if (k > 0 && (group.items[k - 1].suffix || it.prefix)) expand('; ', marks, displays, out);
         if (it.prefix) expand(it.prefix + ' ', marks, displays, out);
         if (it.suppress) pushText('-', marks, out);
-        out.push(refNode(it.key));
+        out.push(refNode(it.key, marks));
         if (it.suffix) expand(it.suffix, marks, displays, out);
       });
       H.seen = true;
@@ -1248,7 +1277,7 @@ export function mdToDoc(src: string): MdImport {
           const alt = altText(t.children ?? []);
           const title = restoreLink(t.attrGet('title') ?? '');
           out.push(
-            schema.nodes.image.create({ src: restoreLink(t.attrGet('src') ?? ''), alt: alt || null, title: title || null, widthPct: widthOf(attrs, 'image') }),
+            schema.nodes.image.create({ src: restoreLink(t.attrGet('src') ?? ''), alt: alt || null, title: title || null, widthPct: widthOf(attrs, 'image') }, null, atomMarks(marks)),
           );
           H.seen = true;
           break;
@@ -1265,7 +1294,7 @@ export function mdToDoc(src: string): MdImport {
             if (one.length) out[out.length - 1] = one[0];
             else out.pop();
           }
-          out.push(schema.nodes.footnote.create(null, body));
+          out.push(schema.nodes.footnote.create(null, body, atomMarks(marks)));
           H.seen = true;
           break;
         }
@@ -1278,7 +1307,7 @@ export function mdToDoc(src: string): MdImport {
           }
           // An inline island: verbatim in the file, inline code in the
           // page and the print.
-          if (t.content) out.push(schema.nodes.typst_inline.create({ src: restore(t.content), lang: 'html' }));
+          if (t.content) out.push(schema.nodes.typst_inline.create({ src: restore(t.content), lang: 'html' }, null, atomMarks(marks)));
           H.seen = true;
           break;
         }
@@ -1531,13 +1560,30 @@ export function mdToDoc(src: string): MdImport {
     return out;
   }
 
+  /** Where the opener of div `t` starts on its source line: the last run
+   *  of its colons that its attributes follow (a list marker, quote
+   *  markers or a comment may come before it on the line). -1 if none. */
+  function openerColumn(line: string, t: MdToken): number {
+    const info = restore(t.info).split('\n')[0];
+    for (let p = line.lastIndexOf(t.markup); p >= 0; p = p > 0 ? line.lastIndexOf(t.markup, p - 1) : -1) {
+      let q = p + t.markup.length;
+      if (line[p - 1] === ':' || line[q] === ':') continue;
+      while (line[q] === ' ' || line[q] === '\t') q++;
+      if (line.startsWith(info, q)) return p;
+    }
+    return -1;
+  }
+
   /** The original source of a div, opener to closer, in its container's
    *  coordinates and with the comments the reader hoisted out of it left
-   *  out: an island's text. */
-  function islandSource(map: [number, number], within: Cut[]): string {
+   *  out: an island's text. Its first line starts at the opener; what is
+   *  before the opener there (a list item's marker, quote markers, a
+   *  comment that closes on that line) is the container's or the file's,
+   *  and the same container markers come off the lines after it. */
+  function islandSource(t: MdToken, within: Cut[]): string {
+    const map = t.map ?? [0, 0];
     const from = origLine[map[0]];
     const to = origLine[map[1]] ?? lines.length;
-    const prefix = /^(?:[ \t]*>[ \t]?)*[ \t]*/.exec(lines[from])![0];
     const kept: string[] = [];
     const dropped = new Set<number>();
     const commentLines = new Set<number>();
@@ -1576,6 +1622,23 @@ export function mdToDoc(src: string): MdImport {
         break;
       }
     }
+    const opener = text.get(from) ?? lines[from];
+    let at = openerColumn(opener, t);
+    if (at < 0) at = /^(?:[ \t]*>[ \t]?)*[ \t]*/.exec(opener)![0].length;
+    // The container markers before the opener, a comment closing there
+    // left out: each quote marker comes off a later line (when it has
+    // one), and a list marker's or indentation's width of spaces.
+    let head = opener.slice(0, at);
+    if (head.includes('-->')) head = head.slice(head.lastIndexOf('-->') + 3);
+    const peel: Array<number | '>'> = [];
+    for (let m: RegExpExecArray | null; head && (m = /^[ \t]{0,3}>[ \t]?|^[ \t]*(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$)|^[ \t]+/.exec(head)); head = head.slice(m[0].length)) {
+      peel.push(m[0].includes('>') ? '>' : m[0].length);
+    }
+    const dedent = (line: string) => {
+      let l = line;
+      for (const p of peel) l = p === '>' ? l.replace(/^[ \t]{0,3}>[ \t]?/, '') : l.slice(Math.min(p, /^[ \t]*/.exec(l)![0].length));
+      return l;
+    };
     for (let l = from; l < to; l++) {
       if (text.get(l) === null) continue;
       if (commentLines.has(l)) {
@@ -1584,10 +1647,7 @@ export function mdToDoc(src: string): MdImport {
         continue;
       }
       if (dropped.has(l)) continue;
-      let line = text.get(l)!;
-      if (line.startsWith(prefix)) line = line.slice(prefix.length);
-      else line = line.replace(/^(?:[ \t]*>)+[ \t]?/, '');
-      kept.push(line);
+      kept.push(l === from ? opener.slice(at) : dedent(text.get(l)!));
     }
     while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
     return kept.join('\n');
@@ -1622,7 +1682,7 @@ export function mdToDoc(src: string): MdImport {
       parseSeq(i + 1, 'div_close', false);
       quiet--;
       H.seen = true;
-      const node = keepIsland(code_block.create({ params: 'md-raw' }, textNode(islandSource(t.map ?? [0, 0], cuts.slice(mark)))), t.map);
+      const node = keepIsland(code_block.create({ params: 'md-raw' }, textNode(islandSource(t, cuts.slice(mark)))), t.map);
       if (meta.unclosed) openEnded.add(node);
       return { nodes: [node], next };
     };
@@ -1638,7 +1698,7 @@ export function mdToDoc(src: string): MdImport {
       islands.length = mark.islands;
       H.seen = true;
       warn(why);
-      const node = keepIsland(code_block.create({ params: 'md-raw' }, textNode(islandSource(t.map ?? [0, 0], cuts.slice(mark.cuts)))), t.map);
+      const node = keepIsland(code_block.create({ params: 'md-raw' }, textNode(islandSource(t, cuts.slice(mark.cuts)))), t.map);
       if (meta.unclosed) openEnded.add(node);
       return { nodes: [node], next };
     };
@@ -1846,7 +1906,9 @@ export function mdToDoc(src: string): MdImport {
         H.seen = true;
         return { nodes: [code_block.create({ params: '' }, [schema.text(restore(t.content).replace(/\n$/, ''))])], next: i + 1 };
       case 'fence': {
-        const info = t.info.trim();
+        // A fence the pre-pass did not see (one opening in a list item's
+        // marker line) was scanned: its info string goes back to its text.
+        const info = restore(t.info).trim();
         const content = restore(t.content).replace(/\n$/, '');
         const text = content ? [schema.text(content)] : [];
         H.seen = true;

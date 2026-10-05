@@ -293,7 +293,10 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     /** Text the next node starts with (for the guards below). */
     const nextText = (k: number) => {
       const next = children[k + 1];
-      return next?.isText && !next.marks.some((m) => m.type.name === 'code' || m.type.name === 'link') ? next.text ?? '' : '';
+      // A delimiter written between them (the two differ in strong,
+      // emphasis or strike) ends a citation key there.
+      const delimited = !!next && marksOf(next).join() !== marksOf(children[k]).join();
+      return next?.isText && !delimited && !next.marks.some((m) => m.type.name === 'code' || m.type.name === 'link') ? next.text ?? '' : '';
     };
     /** Where the printed text ends: a line break after it (spaces around
      *  it aside) prints nothing in Typst and has no Markdown form (`\`

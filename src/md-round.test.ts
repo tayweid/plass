@@ -6,7 +6,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import MarkdownIt from 'markdown-it';
 import type { Node as PMNode } from 'prosemirror-model';
-import { mdToDoc } from './md-parser';
+import { mdToDoc, SENTINEL_CHAR } from './md-parser';
 import { docToMd } from './md-serializer';
 import { docToTyp } from './typ-serializer';
 import { typToDoc } from './typ-parser';
@@ -29,6 +29,13 @@ function firstDiff(a: string, b: string): string {
     if (al[i] !== bl[i]) return `line ${i + 1}:\n  a: ${JSON.stringify(al[i])}\n  b: ${JSON.stringify(bl[i])}`;
   }
   return '';
+}
+
+/** Whether the reader's sentinel (or its percent-encoding, in a link)
+ *  leaked into `doc` read from `src`, a source holding none of its own. */
+function leaks(src: string, doc: PMNode): boolean {
+  const json = JSON.stringify(doc.toJSON());
+  return !src.includes(SENTINEL_CHAR) && (json.includes(SENTINEL_CHAR) || json.toUpperCase().includes(encodeURIComponent(SENTINEL_CHAR)));
 }
 
 /** Read, write, read, write: the doc, its warnings, both writes. */
@@ -582,7 +589,7 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('a formula never runs into the next list item', !find(items, (n) => n.type.name === 'math_inline'), JSON.stringify(items.toJSON()));
   const split = mdToDoc('The supply relationship is\n$$\nP = 10 - Q\n$$\nand the rest follows.\n');
   check('display math after text splits the paragraph', JSON.stringify(kinds(split.doc)) === '["paragraph","math_display","paragraph"]' && split.doc.child(1).attrs.src === 'P = 10 - Q' && split.doc.child(2).textContent === 'and the rest follows.', JSON.stringify(split.doc.toJSON()));
-  check('no sentinel leaks out of a split paragraph', !/\uE000/.test(JSON.stringify(split.doc.toJSON())));
+  check('no sentinel leaks out of a split paragraph', !leaks('', split.doc));
   const attrs = mdToDoc('$$\nx\n$$ {#eq:a .unnumbered}\n\n$$\ny\n$$\n{#eq:b}\n\n$$ z $$ {.numbered}\n\nA $$w$$ mid-line.\n').doc;
   const eq = all(attrs, (n) => n.type.name === 'math_display').map((n) => [n.attrs.src, n.attrs.label, n.attrs.numbered]);
   check('display attributes: closing line, next line, numbering, mid-line', JSON.stringify(eq) === JSON.stringify([['x', 'eq:a', false], ['y', 'eq:b', null], ['z', '', true], ['w', '', null]]), JSON.stringify(eq));
@@ -733,7 +740,7 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   ] as const) {
     const t = trip(md);
     const got = find(t.doc, (n) => n.isText && n.marks.some((m) => m.type.name === 'link'))?.marks.find((m) => m.type.name === 'link')?.attrs.href;
-    check(`a link destination keeps its text: ${JSON.stringify(md)}`, got === href && t.converges && !/%EE%80%80|\uE000/i.test(JSON.stringify(t.doc.toJSON())), JSON.stringify([got, t.md1]));
+    check(`a link destination keeps its text: ${JSON.stringify(md)}`, got === href && t.converges && !leaks(md, t.doc), JSON.stringify([got, t.md1]));
   }
   const img = mdToDoc('See ![a](img$1$.png "t $x$ \\@k") here.\n').doc;
   check('an image source and title keep their text', JSON.stringify(find(img, (n) => n.type.name === 'image')?.attrs) === JSON.stringify({ src: 'img$1$.png', alt: 'a', title: 't $x$ @k', widthPct: null }), JSON.stringify(img.toJSON()));
@@ -1207,6 +1214,100 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('a caption with a backslash before a bracket stays a figure', figBack.firstChild!.type.name === 'figure' && figBack.firstChild!.textContent === 'a\\[b] c' && docToMd(figBack) === figMd, JSON.stringify([figMd, figBack.toJSON()]));
 }
 
+// Each of these once changed the file again on every reopen-and-save (step
+// 6 review, fix round 1): the second save must equal the first.
+{
+  /** Save, reopen, save. */
+  const saves = (doc: PMNode) => {
+    const warned: string[] = [];
+    const md1 = docToMd(doc, (w) => warned.push(w));
+    const back = mdToDoc(md1).doc;
+    return { md1, md2: docToMd(back), back, warned };
+  };
+  const strong = schema.marks.strong.create();
+  const doc = (...blocks: PMNode[]) => schema.nodes.doc.create(null, blocks);
+
+  // A paragraph bolded whole in the editor (select all, bold): its
+  // citation, reference, footnote marker and image carry the mark too,
+  // and read back with it.
+  const bolded = saves(
+    doc(
+      schema.nodes.paragraph.create(null, [
+        schema.text('As shown in ', [strong]),
+        schema.nodes.citation.create({ key: 'smith' }, null, [strong]),
+        schema.text(' and ', [strong]),
+        schema.nodes.eq_ref.create({ label: 'eq:x' }, null, [strong]),
+        schema.text(', see!', [strong]),
+        schema.nodes.footnote.create(null, schema.text('Note.'), [strong]),
+        schema.text(' here ', [strong]),
+        schema.nodes.image.create({ src: 'a.svg', alt: 'icon' }, null, [strong]),
+        schema.text(' ok.', [strong]),
+      ]),
+    ),
+  );
+  const atoms = all(bolded.back, (n) => ['citation', 'eq_ref', 'footnote', 'image'].includes(n.type.name));
+  check(
+    'a bolded paragraph with a citation, a reference, a note and an image: the second save equals the first',
+    bolded.md1.startsWith('**As shown in [@smith] and @eq:x, see![^1] here ![icon](a.svg) ok.**\n') &&
+      bolded.md2 === bolded.md1 &&
+      atoms.length === 4 &&
+      atoms.every((n) => n.marks.some((m) => m.type.name === 'strong')),
+    JSON.stringify([bolded.md1, bolded.md2]),
+  );
+  for (const md of ['*a[^1] b*\n\n[^1]: n\n', '*a `x`{=typst} b*\n', '*a <sub>2</sub> b*\n', '~~a [@x] b~~\n', '**a $x$ [@k] ![i](p.png) `c`{=typst}**\n']) {
+    const t = trip(md);
+    check(`an atom stays inside the span around it: ${JSON.stringify(md)}`, t.md1 === md && t.converges, JSON.stringify([t.md1, t.md2]));
+  }
+  const krilla = trip('_(Thanks to @LaurenzV for creating krilla!)_\n');
+  check('a citation inside emphasis keeps the emphasis whole', krilla.md1 === '*(Thanks to [@LaurenzV] for creating krilla!)*\n' && krilla.converges, krilla.md1);
+
+  // A line opening with three backticks that holds another backtick is
+  // text, not a fence (CommonMark, pandoc): a code span later on it never
+  // makes it one, wherever the line is.
+  for (const md of [
+    '```x `y`\n',
+    '```{r} chunks run R; `r x` is inline.\n\nNext paragraph.\n',
+    'Para\n```x `y`\nmore\n',
+    '> ```x `y`\n> z\n',
+    '- ```x `y`\n- b\n',
+    '1. 1. ```<!-- c -->`~`---\n',
+  ]) {
+    const t = trip(md);
+    check(
+      `a backtick line holding a code span is text: ${JSON.stringify(md)}`,
+      !find(t.doc, (n) => n.type.name === 'code_block') && /```/.test(t.doc.textContent) && !leaks(md, t.doc) && t.converges,
+      JSON.stringify([t.md1, t.md2]),
+    );
+  }
+  const rChunk = trip('```{r} chunks run R; `r x` is inline.\n\nNext paragraph.\n');
+  check('the paragraph after such a line stays a paragraph', JSON.stringify(kinds(rChunk.doc)) === '["paragraph","paragraph"]' && rChunk.doc.child(1).textContent === 'Next paragraph.', JSON.stringify(rChunk.doc.toJSON()));
+  const listFence = mdToDoc('- ```js $x$\n  a\n  ```\n').doc;
+  check('a fence on a list marker line keeps its info string as written', find(listFence, (n) => n.type.name === 'code_block')?.attrs.params === 'js $x$', JSON.stringify(listFence.toJSON()));
+
+  // A div kept as source that opens on a list item's marker line (or after
+  // quote markers, or a comment closing on its line): the island starts at
+  // the opener, so the save writes the marker once.
+  for (const md of [
+    '- ::: {.callout-tip}\n  Tip text\n  :::\n- next\n',
+    '1. ::: {.aside}\n   Tip\n   :::\n',
+    '- ::: center\n  one\n\n  two\n  :::\n',
+    '> - ::: {.x}\n>   T\n>   :::\n',
+    '- a\n  - ::: x\n    T\n    :::\n',
+    '- > ::: x\n  > T\n  > :::\n',
+  ]) {
+    const t = trip(md);
+    const island = find(t.doc, (n) => n.type.name === 'code_block' && n.attrs.params === 'md-raw');
+    check(`a div on a marker line is kept from its opener: ${JSON.stringify(md)}`, !!island && /^:::/.test(island.textContent) && t.md1 === md && t.converges, JSON.stringify([island?.textContent, t.md1, t.md2]));
+  }
+  const glued = trip('<!-- c -->> ::: {.columns}\n> a\n> :::\n');
+  check(
+    'a div after a comment on its line is kept from its opener',
+    glued.md1 === '<!-- c -->\n\n> ::: {.columns}\n> a\n> :::\n' && find(glued.doc, (n) => n.attrs.params === 'md-raw')?.textContent === '::: {.columns}\na\n:::' && glued.converges,
+    JSON.stringify([glued.md1, glued.md2]),
+  );
+
+}
+
 // Every fixture under tests/fixtures/md parses and converges.
 {
   const dir = new URL('../tests/fixtures/md/', import.meta.url);
@@ -1214,9 +1315,10 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   const bad: string[] = [];
   for (const name of names) {
     try {
-      const t = trip(readFileSync(new URL(name, dir), 'utf8'));
+      const src = readFileSync(new URL(name, dir), 'utf8');
+      const t = trip(src);
       if (!t.converges) bad.push(`${name}: ${firstDiff(t.md1, t.md2)}`);
-      if (/\uE000|%EE%80%80/i.test(JSON.stringify(t.doc.toJSON()))) bad.push(`${name}: a sentinel leaked`);
+      if (leaks(src, t.doc) || leaks(t.md1, t.doc2)) bad.push(`${name}: a sentinel leaked`);
     } catch (e) {
       bad.push(`${name}: ${(e as Error).message}`);
     }
