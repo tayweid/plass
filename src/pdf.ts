@@ -33,7 +33,10 @@ export function setAssetReader(fn: (path: string, maxBytes: number) => Promise<U
 function dataUrlToBytes(src: string): { data: Uint8Array; ext: string } | null {
   const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[^;,]*)*),(.*)$/is.exec(src);
   if (!m) return null;
-  const ext = m[1] === 'svg+xml' ? 'svg' : m[1] === 'jpeg' ? 'jpg' : m[1];
+  // MIME types are case-insensitive: `image/SVG+XML` is an SVG, and must
+  // not skip the sanitizer below for want of a lowercase name.
+  const type = m[1].toLowerCase();
+  const ext = type === 'svg+xml' ? 'svg' : type === 'jpeg' ? 'jpg' : type;
   const payload = m[3];
   if (/(?:^|;)base64(?:;|$)/i.test(m[2])) {
     // Reject before atob allocates a second, decoded copy. A few trailing

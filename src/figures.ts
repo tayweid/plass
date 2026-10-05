@@ -141,11 +141,17 @@ async function assetUrl(path: string): Promise<string | null> {
 
 const ASSET_EVENT = 'typeset-assets-changed';
 
-function dataUrlBytes(src: string): { blob: Blob; ext: string } | null {
+/** The bytes of a data-URL image exactly as embedded (an SVG is NOT
+ *  sanitized: what is written to disk must be the writer's own art), or null
+ *  when it is not a PNG, JPEG, GIF or SVG. Throws past the 20 MiB limit. */
+export function dataUrlBytes(src: string): { blob: Blob; ext: string } | null {
   const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[^;,]*)*),(.*)$/is.exec(src);
   if (!m) return null;
-  const ext = m[1] === 'svg+xml' ? 'svg' : m[1] === 'jpeg' ? 'jpg' : m[1];
-  const mime = `image/${m[1]}`;
+  // A MIME type is case-insensitive; the extension a file is named with,
+  // and that Finder and assetUrl go by, is not (`image/SVG+XML` is .svg).
+  const type = m[1].toLowerCase();
+  const ext = type === 'svg+xml' ? 'svg' : type === 'jpeg' ? 'jpg' : type;
+  const mime = `image/${type}`;
   const payload = m[3];
   if (/(?:^|;)base64(?:;|$)/i.test(m[2])) {
     if (payload.length > Math.ceil(COMPILER_LIMITS.assetBytes / 3) * 4 + 4) {
@@ -900,7 +906,7 @@ function insertFigureNode(view: EditorView, src: string, name: string) {
 }
 
 /** A collision-safe figures/ path for a new project image. */
-function projectImagePath(name: string) {
+export function projectImagePath(name: string) {
   const clean = name.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^-+/, '') || 'image.png';
   const stamp = `${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}-${crypto.randomUUID().slice(0, 8)}`;
   const dot = clean.lastIndexOf('.');

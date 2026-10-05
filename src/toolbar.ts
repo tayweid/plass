@@ -325,7 +325,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   container.append(titleBar);
   const exportBtn = trigger(container, 'Export', icon('download'));
   exportBtn.classList.add('tb-tile');
-  exportBtn.title = 'Export — PDF, .typ, .tex';
+  exportBtn.title = 'Export — PDF, .md, .typ, .tex';
   // The rail, top to bottom, in the bar's old groups; the Blocks, once a
   // row inside Extras, are tiles of their own.
   const formatBtn = trigger(textGroup, 'Headings', '<span class="ico tico">H1</span>');
@@ -979,6 +979,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     );
   };
   item(exports.element, 'PDF', exportPdfNow, { title: 'Export PDF via Typst' });
+  item(exports.element, 'Markdown (.md)', () => void fm.exportMdCopy(), { title: 'Export a .md copy' });
   item(exports.element, 'Typst (.typ)', () => void fm.exportCopy(), { title: 'Export a .typ copy' });
   item(exports.element, 'LaTeX (.tex)', () => fm.exportTexCopy(), { title: 'Export a .tex copy (vanilla LaTeX for journals)' });
   back(get);
