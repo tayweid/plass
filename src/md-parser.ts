@@ -195,9 +195,16 @@ function prepass(src: string, warn: (m: string) => void): Pre {
   const scan = (text: string, lineNos: number[]): Array<{ text: string; line: number }> => {
     const starts = [0];
     for (let k = 0; k < text.length; k++) if (text[k] === '\n') starts.push(k + 1);
+    /** The buffer line holding `offset` (binary search: a long table is
+     *  one buffer of many lines). */
     const lineIndexAt = (offset: number) => {
       let lo = 0;
-      while (lo + 1 < starts.length && starts[lo + 1] <= offset) lo++;
+      let hi = starts.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (starts[mid] <= offset) lo = mid;
+        else hi = mid - 1;
+      }
       return lo;
     };
     const lineAt = (offset: number) => text.slice(starts[lineIndexAt(offset)], text.indexOf('\n', offset) < 0 ? undefined : text.indexOf('\n', offset));

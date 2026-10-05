@@ -148,6 +148,14 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
    *  other atoms carry their own marks (usually none). */
   const inline = (node: PMNode, alt = false): string => {
     let md = '';
+    /** The last character written (reading `md` itself would flatten the
+     *  growing string on every call). */
+    let last = '';
+    const put = (s: string) => {
+      if (!s) return;
+      md += s;
+      last = s[s.length - 1];
+    };
     const DELIM: Record<string, string> = { strike: '~~', strong: '**', em: '*' };
     let active: string[] = [];
     /** Whitespace that ended the last text, written once the marks around
@@ -169,18 +177,18 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     const moveTo = (want: string[], lead = '', at = -1): string => {
       let keep = 0;
       while (keep < active.length && want.includes(active[keep])) keep++;
-      for (let k = active.length - 1; k >= keep; k--) md += DELIM[active[k]];
+      for (let k = active.length - 1; k >= keep; k--) put(DELIM[active[k]]);
       active = active.slice(0, keep);
-      md += pending;
+      put(pending);
       pending = '';
       const opening = want.filter((m) => !active.includes(m));
       if (at >= 0) opening.sort((a, b) => spanOf(at, b) - spanOf(at, a));
       if (opening.length) {
-        md += lead;
+        put(lead);
         lead = '';
       }
       for (const m of opening) {
-        md += DELIM[m];
+        put(DELIM[m]);
         active.push(m);
       }
       return lead;
@@ -207,7 +215,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           continue;
         }
         const rest = moveTo(want, lead, k);
-        md += rest;
+        put(rest);
         let t: string;
         if (has('code')) {
           const fence = '`'.repeat(longestRun(inner, '`') + 1);
@@ -218,7 +226,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           if (alt) t = t.replace(/(?<!\\)([[\]])/g, '\\$1');
           // A `{` right after code or an image would read as its
           // attributes; `(`/`[` right after a citation's `]` as a link.
-          const tail = md.slice(-1);
+          const tail = last;
           if ((/^[{]/.test(t) && /[`)]$/.test(tail)) || (/^[([]/.test(t) && tail === ']')) t = '\\' + t;
         }
         const link = marks.find((m: Mark) => m.type.name === 'link');
@@ -226,7 +234,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           const title = link.attrs.title as string | null;
           t = `[${t}](${link.attrs.href as string}${title ? ` "${title.replace(/"/g, '\\"')}"` : ''})`;
         }
-        md += t;
+        put(t);
         pending = trail;
         continue;
       }
@@ -234,36 +242,36 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       switch (child.type.name) {
         case 'math_inline':
           // One line: a formula's soft break reads back as its space.
-          md += `$${(child.attrs.src as string).replace(/\s*\n\s*/g, ' ')}$`;
+          put(`$${(child.attrs.src as string).replace(/\s*\n\s*/g, ' ')}$`);
           break;
         // Pandoc's raw-attribute syntax: standard markdown that other
         // tools understand as "Typst-only", and round-trips here.
         case 'typst_inline': {
           const src = child.attrs.src as string;
-          if (child.attrs.lang === 'html') md += src;
+          if (child.attrs.lang === 'html') put(src);
           else {
             const fence = '`'.repeat(longestRun(src, '`') + 1);
             const pad = /^`|`$/.test(src) ? ' ' : '';
-            md += `${fence}${pad}${src}${pad}${fence}{=typst}`;
+            put(`${fence}${pad}${src}${pad}${fence}{=typst}`);
           }
           break;
         }
         case 'citation': {
           const keys = [child.attrs.key as string];
           while (children[k + 1]?.type.name === 'citation' && marksOf(children[k + 1]).join() === marksOf(child).join()) keys.push(children[++k].attrs.key as string);
-          md += citeGroup(keys);
+          put(citeGroup(keys));
           break;
         }
         case 'eq_ref': {
           const label = child.attrs.label as string;
           if (!NAMESPACE.test(label)) warn(`the reference @${label} reads back as a citation — Markdown references are @eq:, @fig:, @sec: and @tbl: labels`);
           // Bare unless a letter or digit glues it to the text around it.
-          const glued = /[\p{L}\p{N}_]$/u.test(md.slice(-1)) || KEY_CONTINUES.test(nextText(k)) || children[k + 1]?.type.name === 'citation';
-          md += glued ? `[@${label}]` : `@${label}`;
+          const glued = /[\p{L}\p{N}_]$/u.test(last) || KEY_CONTINUES.test(nextText(k)) || children[k + 1]?.type.name === 'citation';
+          put(glued ? `[@${label}]` : `@${label}`);
           break;
         }
         case 'hard_break':
-          md += '\\\n';
+          put('\\\n');
           break;
         case 'image': {
           const src = String(child.attrs.src ?? '');
@@ -272,17 +280,17 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           if (src.startsWith('data:')) warn('embedded image written as a data: URL — consider a project folder');
           const destination = src.replace(/([\\()\s])/g, (c) => (c === ' ' ? '%20' : `\\${c}`));
           const width = child.attrs.widthPct != null ? `{width=${num(child.attrs.widthPct as number)}%}` : '';
-          md += `![${altText}](${destination}${title ? ` "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ''})${width}`;
+          put(`![${altText}](${destination}${title ? ` "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ''})${width}`);
           break;
         }
         case 'footnote': {
           const n = footnotes.length + 1;
           footnotes.push(inline(child));
-          md += `[^${n}]`;
+          put(`[^${n}]`);
           break;
         }
         default:
-          md += esc(child.textContent);
+          put(esc(child.textContent));
       }
     }
     moveTo([]);
