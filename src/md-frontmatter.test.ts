@@ -445,6 +445,18 @@ console.log('the plan’s example:');
   check('bibliography: is never written', !/bibliography/.test(w), w);
   check('defaults among the given values are not written', !/fontsize|linestretch|mainfont|bibliographystyle|footnotes/.test(w), w);
   check('the example is a fixed point after one write', fixedPoint(r));
+  // Comments beside known keys are carried, in order, as whole lines.
+  const carried = [
+    '# a YAML list is read too',
+    '# written as the dict',
+    '# present = numberSections',
+    '# read once from a sidecar',
+    'plass:',
+    '  # only non-default values are written',
+    '  # or {width: 5.5in, height: 8.5in}',
+  ].join('\n');
+  check('comments beside known keys are carried in order', r.extra === carried, json(r.extra));
+  check('… and written after the known keys', w.endsWith('  # or {width: 5.5in, height: 8.5in}\n# a YAML list is read too\n# written as the dict\n# present = numberSections\n# read once from a sidecar\n---'), w);
   const list = read('bibliography:\n  - a.bib\n  - b.bib');
   check('a bibliography list reads its first file, with a warning', list.bibliography === 'a.bib' && list.warnings.length === 1);
   const bibWarnings: string[] = [];
@@ -512,6 +524,178 @@ console.log('unreadable entries:');
   check('a key given twice: the last is read, with a warning (as pandoc)', twice.titleMd === 'Second' && twice.warnings.length === 1 && twice.extra === '', json(twice));
   const stray = read('  indented: x\ntitle: T');
   check('a stray line is kept with a warning', stray.titleMd === 'T' && stray.extra === '  indented: x' && stray.warnings.length === 1, json(stray));
+  check('… written before the known keys, where it was read', writeFrontmatter(stray) === '---\n  indented: x\ntitle: T\n---' && fixedPoint(stray), writeFrontmatter(stray));
+  const deep = read('title: ' + '['.repeat(5000) + ']'.repeat(5000));
+  check('nesting deeper than the cap is kept as written, not a crash', deep.titleMd === null && deep.warnings.length === 1 && /nested/.test(deep.warnings[0]), json(deep.warnings));
+}
+
+// --- 14. comments are not content: inside and beside known keys ---
+console.log('comments in known keys:');
+{
+  // A comment at the margin between items of a known key's value does not end it (pandoc reads past it).
+  const author = read('author:\n  - Ada\n# - Removed\n  - Charles\ndate: 2026-10-04');
+  check('a margin comment inside an author list', author.authorsMd === 'Ada, Charles' && author.dateMd === '2026-10-04' && author.warnings.length === 0, json(author));
+  check('… is carried, and written where it cannot join a key', writeFrontmatter(author) === '---\nauthor: Ada, Charles\ndate: 2026-10-04\n# - Removed\n---', writeFrontmatter(author));
+  const margin = read('title: T\nmargin:\n  top: 2in\n# c\n  bottom: 1in');
+  check('a margin comment inside a margin map', margin.settings.marginTop === 2 && margin.settings.marginBottom === 1 && margin.warnings.length === 0, json(margin));
+  check('… written as the dict, the comment after it', writeFrontmatter(margin) === '---\ntitle: T\nmargin: {top: 2in, right: 1.25in, bottom: 1in, left: 1.25in}\n# c\n---', writeFrontmatter(margin));
+  const plassFirst = read('title: Notes\nplass:\n# page setup\n  landscape: true');
+  check('a margin comment as the first line under plass:', plassFirst.settings.landscape === true && plassFirst.warnings.length === 0, json(plassFirst));
+  check('… stays in the plass block', writeFrontmatter(plassFirst) === '---\ntitle: Notes\nplass:\n  landscape: true\n  # page setup\n---', writeFrontmatter(plassFirst));
+  const compact = read('author:\n- Ada\n# - Removed\n- Charles');
+  check('a margin comment inside a compact list', compact.authorsMd === 'Ada, Charles' && compact.extra === '# - Removed', json(compact));
+
+  // Indented comments inside a known key's value move out of it, in order.
+  const inMargin = read('margin:\n  # top is wider for binding\n  top: 2in\n  bottom: 1in');
+  check('a comment inside a margin block is carried', inMargin.settings.marginTop === 2 && inMargin.extra === '# top is wider for binding', json(inMargin));
+  const inAuthor = read('author:\n  # lead author\n  - Ada\n  # - Removed Person\n  - Charles');
+  check('comments inside an author list are carried in order', inAuthor.authorsMd === 'Ada, Charles' && inAuthor.extra === '# lead author\n# - Removed Person', json(inAuthor));
+  const inPageNumbers = read('plass:\n  page-numbers:\n    # roman front matter\n    front-matter: roman\n    start: 2');
+  check('a comment inside a plass sub-map stays in the plass block', inPageNumbers.frontMatterRestart && inPageNumbers.settings.pageNumStart === 2 && inPageNumbers.extra === 'plass:\n  # roman front matter', json(inPageNumbers));
+  const trailing = read('title: Hello # note\nfontsize: 11pt   # smaller\nabstract: | # the summary\n  Text.');
+  check('comments beside known values are carried', trailing.titleMd === 'Hello' && trailing.extra === '# note\n# smaller\n# the summary' && trailing.warnings.length === 0, json(trailing));
+  check('a # line inside block text is text, not a comment', read('abstract: |\n  # Not a comment\n  text').abstractMd === '# Not a comment\ntext');
+  const after = read('abstract: |\n    text\n  # comment\ntitle: T');
+  check('a comment after block text, less indented, is a comment', after.abstractMd === 'text' && after.titleMd === 'T' && after.extra === '# comment', json(after));
+
+  // A kept comment goes to the margin, where it cannot join the entry written before it.
+  const indented = read('  # note on sources\nsources: T\nauthor: Ada');
+  const w1 = writeFrontmatter(indented);
+  check('an indented comment is written at the margin', w1 === '---\nauthor: Ada\n# note on sources\nsources: T\n---', w1);
+  check('… and the second save is the first', writeFrontmatter(readFrontmatter(w1 + '\n')) === w1);
+
+  // write(read(write(read(x)))) === write(read(x)) on comment-bearing inputs.
+  const inputs = [
+    'author:\n  - Ada\n# - Removed\n  - Charles\ndate: 2026-10-04',
+    'title: T\nmargin:\n  top: 2in\n# c\n  bottom: 1in',
+    'title: Notes\nplass:\n# page setup\n  landscape: true',
+    '  # note\nsources: T\nauthor: Ada',
+    '# head\ntitle: T  # t\nplass:   # p\n  # a\n  landscape: true # l\n# b\n  hyphenate: false\n# tail',
+    'stem: x\nplass:\n  landscape: true\n# between\n  future: 1\nlang: en',
+    'sources:\n  - a\n# inside\n  - b\ntitle: T\n  # deeper after a known key\nnote: |\n  # text\n\n  more',
+    'author:\n  - name: Ada\n# c\n    affiliation: X\n  - Bob',
+    'plass:\n  page-numbers:\n# c1\n    start: 3\n  # c2\n    show: false\n  header: {text: "{section}"}  # c3',
+    'margin: {top: 1in, # inside the flow map\n  left: 2in}\ndate: x',
+  ];
+  for (const yaml of inputs) {
+    const once = writeFrontmatter(read(yaml));
+    const twice = writeFrontmatter(readFrontmatter(once + '\n'));
+    check(`a fixed point after one save: ${json(yaml.slice(0, 40))}`, once === twice, `\n${once}\n--\n${twice}`);
+  }
+  // A seeded sweep: comments at every indentation among known and unknown keys.
+  let seed = 3;
+  const rand = (n: number) => ((seed = (seed * 1103515245 + 12345) % 2147483648) % n);
+  const comment = () => [' # c', '# c', '  # c', '    # c'][rand(4)].trimEnd();
+  let bad = 0;
+  for (let k = 0; k < 300; k++) {
+    const lines: string[] = [];
+    if (rand(3) === 0) lines.push(comment());
+    lines.push('author:');
+    for (const a of ['Ada', 'Bob'].slice(0, 1 + rand(2))) {
+      if (rand(3) === 0) lines.push(comment());
+      lines.push(`  - ${a}`);
+    }
+    if (rand(2)) lines.push('stem: x' + (rand(3) ? '' : '  # t'));
+    lines.push('plass:' + (rand(3) ? '' : '  # p'));
+    if (rand(3) === 0) lines.push(comment());
+    lines.push('  landscape: true');
+    if (rand(3) === 0) lines.push(comment());
+    lines.push('  future: [1, 2]');
+    if (rand(2)) lines.push('margin:', '  top: 2in', ...(rand(2) ? [comment()] : []), '  left: 1in');
+    const r = read(lines.join('\n'));
+    const once = writeFrontmatter(r);
+    const again = readFrontmatter(once + '\n');
+    const ok =
+      writeFrontmatter(again) === once &&
+      r.authorsMd !== null && r.authorsMd === again.authorsMd &&
+      r.settings.landscape === true && again.settings.landscape === true &&
+      json(normalizeSettings(r.settings)) === json(normalizeSettings(again.settings)) &&
+      r.warnings.every((m) => m.includes('plass.future'));
+    if (!ok && bad++ < 2) console.log(`    ${json(lines.join('\n'))}\n    ${json(once)} ${json(r.warnings)}`);
+  }
+  check('300 seeded comment placements read alike and save to a fixed point', bad === 0, `${bad} failed`);
+}
+
+// --- 15. time linear in the input ---
+console.log('linear time:');
+{
+  const long = 200_000;
+  const t0 = performance.now();
+  const stray = read('title: T\na' + ' '.repeat(long) + 'b\nfontsize: ' + '1'.repeat(long) + 'x');
+  writeFrontmatter(stray);
+  read('linestretch: ' + '1'.repeat(long) + 'x\nmargin: ' + '2'.repeat(long) + ' x');
+  read('plass:\n  header: {text: "a' + ' '.repeat(long) + 'b"}\n  math-macros: |\n    a\n' + '\n'.repeat(long) + '    b');
+  read('author:\n  - A\n' + '# c\n'.repeat(long) + '  - B');
+  const elapsed = performance.now() - t0;
+  check('a 200k-character stray line, 200k-digit numbers and 200k blank or comment lines read in well under a second', elapsed < 1500 && stray.titleMd === 'T', `${elapsed.toFixed(0)} ms`);
+  check('… with the warnings that say why', stray.warnings.length === 2 && stray.warnings.every((m) => m.length < 200), json(stray.warnings));
+  const many = read('plass:\n  page-numbers: {' + Array.from({ length: 1000 }, (_, i) => `k${i}: 1`).join(', ') + '}');
+  check('a crafted block lists 50 warnings and counts the rest', many.warnings.length === 51 && /950 more/.test(many.warnings[50]), many.warnings[50]);
+}
+
+// --- 16. characters YAML does not allow as written ---
+console.log('control characters:');
+{
+  const C1 = String.fromCharCode(0x92);
+  const w = writeFrontmatter({ titleMd: `Taylor${C1}s notes` });
+  check('a C1 control is written escaped (pandoc rejects it raw)', w === `---\ntitle: "Taylor${BS}u0092s notes"\n---` && readFrontmatter(w + '\n').titleMd === `Taylor${C1}s notes`, w);
+  for (const [name, v] of [['U+0080', '\u0080'], ['U+FFFE', '\ufffe'], ['U+0085', '\u0085'], ['a tab', '\t']] as const) {
+    const wv = writeFrontmatter({ settings: { headerText: `a${v}b` } });
+    check(`${name} in a value is written as a \\u escape`, wv.includes(`${BS}u${v.charCodeAt(0).toString(16).padStart(4, '0')}`) && readFrontmatter(wv + '\n').settings.headerText === `a${v}b`, wv);
+  }
+  const abs = writeFrontmatter({ abstractMd: `para ${C1} one` });
+  check('an abstract holding one is double-quoted, ending in a line break (pandoc reads it as blocks)', abs === `---\nabstract: "para ${BS}u0092 one${BS}u000a"\n---` && readFrontmatter(abs + '\n').abstractMd === `para ${C1} one`, abs);
+  const raw = read(`title: Taylor${C1}s notes`);
+  check('a raw C1 control in the file is read, with a warning', raw.titleMd === `Taylor${C1}s notes` && raw.warnings.length === 1 && raw.warnings[0].includes('U+0092'), json(raw.warnings));
+  check('a lone surrogate is written as U+FFFD', writeFrontmatter({ titleMd: 'x\ud800y' }) === '---\ntitle: x\ufffdy\n---');
+  check('a surrogate escape is not a YAML escape (pandoc rejects it)', read(`title: "x${BS}ud800y"`).warnings.length === 1);
+  const beta = read(`title: "Effect of $${BS}beta$"`);
+  check('the \\beta warning says the save keeps the control character', /a save keeps U\+0008, not \\beta/.test(beta.warnings[0] ?? ''), json(beta.warnings));
+}
+
+// --- 17. finding the block, as pandoc finds it ---
+console.log('finding the block:');
+{
+  check('a block that is not a map is body text', readFrontmatter('---\nfoo\n---\n\nBody\n').body === '---\nfoo\n---\n\nBody\n' && readFrontmatter('---\nfoo\n---\n').titleMd === null);
+  check('… a list too', readFrontmatter('---\n- a\n- b\n---\n').body === '---\n- a\n- b\n---\n');
+  check('a block of comments alone is metadata', readFrontmatter('---\n# just a note\n---\nBody').body === 'Body');
+  const flowRoot = read('{title: X, author: A,\n  plass: {landscape: true}}');
+  check('a block written as one flow map is read', flowRoot.titleMd === 'X' && flowRoot.authorsMd === 'A' && flowRoot.settings.landscape === true && flowRoot.warnings.length === 0, json(flowRoot));
+  check('… and written one key per line', writeFrontmatter(flowRoot) === '---\ntitle: X\nauthor: A\nplass:\n  landscape: true\n---', writeFrontmatter(flowRoot));
+  const complex = read('? complex\n: v\ntitle: T');
+  check('a block opening with a complex key is metadata, the key kept as written', complex.titleMd === 'T' && complex.extra === '? complex\n: v' && complex.warnings.length === 2, json(complex));
+  const uniform = read('  title: X\n  author: A\n  stem: s\n  plass:\n    landscape: true');
+  check('a uniformly indented block is a map', uniform.titleMd === 'X' && uniform.authorsMd === 'A' && uniform.settings.landscape === true && uniform.extra === 'stem: s' && uniform.warnings.length === 0, json(uniform));
+  check('… written at the margin', writeFrontmatter(uniform) === '---\ntitle: X\nauthor: A\nplass:\n  landscape: true\nstem: s\n---', writeFrontmatter(uniform));
+  const lead = readFrontmatter('\n  \n---\ntitle: X\n---\nBody');
+  check('blank lines may come before the block', lead.titleMd === 'X' && lead.body === 'Body', json(lead));
+  // pandoc expands tabs to four-column stops before it reads the YAML.
+  const tabs = read('plass:\n\tlandscape: true\n\tfuture:\n\t\ta: 1');
+  check('a tab-indented plass child is nested', tabs.settings.landscape === true && tabs.extra === 'plass:\n  future:\n      a: 1', json(tabs));
+  check('… and written with spaces', writeFrontmatter(tabs) === '---\nplass:\n  landscape: true\n  future:\n      a: 1\n---', writeFrontmatter(tabs));
+  check('a tab after two spaces is four columns', read('  author:\n  \t- Ada\n  \t- Bob\n  date: x').authorsMd === 'Ada, Bob');
+  check('a kept entry keeps its tabs', read('sources:\n\t- a\ntitle: T').extra === 'sources:\n\t- a');
+  // An alias of an earlier anchor is that anchor's value.
+  const alias = read('x: &a T\ntitle: *a');
+  check('an alias reads its anchor’s value', alias.titleMd === 'T' && alias.warnings.length === 0 && alias.extra === 'x: &a T', json(alias));
+  check('… and the anchor stays on the kept entry', writeFrontmatter(alias) === '---\ntitle: T\nx: &a T\n---');
+  const plassAlias = read('base: &b {landscape: true, hyphenate: false}\nplass: *b');
+  check('plass: may be an alias of a map', plassAlias.settings.landscape === true && plassAlias.settings.hyphenate === false, json(plassAlias));
+  const flowAlias = read('h: &h left\nplass:\n  header: {align: *h}');
+  check('an alias inside a flow map', flowAlias.settings.headerAlign === 'left', json(flowAlias));
+  const dangling = read('title: &t Notes\nsubtitle: *t');
+  check('an anchor on a known key that a kept entry aliases is warned about', dangling.titleMd === 'Notes' && dangling.warnings.some((m) => /\*t in a kept entry names its anchor/.test(m)), json(dangling.warnings));
+  check('… not when only known keys use it', !read('date: &d 2026\ntitle: *d').warnings.some((m) => /kept entry/.test(m)));
+}
+
+// --- 18. unknown plass children are kept as written ---
+console.log('kept plass children:');
+{
+  const r = read('plass:\n  note: |\n    a\n\n\n    b\n      \n    c\n  landscape: true');
+  check('blank-line runs and whitespace-only lines inside block text are kept', r.extra === 'plass:\n  note: |\n    a\n\n\n    b\n      \n    c', json(r.extra));
+  check('… through a save', writeFrontmatter(r) === '---\nplass:\n  landscape: true\n  note: |\n    a\n\n\n    b\n      \n    c\n---', writeFrontmatter(r));
+  const deep = read('plass:\n    note: |\n      a\n\n\n      b\n        \n      c');
+  check('… and when re-indented to two spaces', deep.extra === 'plass:\n  note: |\n    a\n\n\n    b\n      \n    c', json(deep.extra));
 }
 
 declare const process: { exitCode?: number };

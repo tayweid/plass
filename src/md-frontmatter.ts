@@ -6,14 +6,18 @@
 // pandoc — decode them), block maps at any depth, flow maps and lists,
 // block lists, block scalars (`|`, `>`, chomping and indentation
 // indicators) and `#` comments. An anchor (`&a`) or tag (`!t`) is skipped
-// and the value after it read, as pandoc reads it; aliases are not resolved.
+// and the value after it read, and an alias (`*a`) of an anchor read
+// earlier is that anchor's value, as pandoc reads them. Tabs are expanded
+// to four-column stops first, as pandoc expands them.
 //
 // Known keys are interpreted: pandoc's own names for the big knobs, Plass's
 // settings under one `plass:` key (which pandoc ignores). Everything else —
-// unknown keys, whole-line `#` comments, an entry that cannot be read — is
-// carried verbatim, in order, in `extra` (doc.attrs.frontmatter) and
-// written back after the known keys. title, author, date and abstract come
-// back as RAW Markdown for the body reader to parse; this module never
+// unknown keys, `#` comments, an entry that cannot be read — is carried, in
+// order, in `extra` (doc.attrs.frontmatter) and written back after the known
+// keys: an entry as written, a comment as a whole line at the margin of the
+// block it sat in. A comment inside or beside a known key moves out of it,
+// since Plass rewrites that key. title, author, date and abstract come back
+// as RAW Markdown for the body reader to parse; this module never
 // interprets Markdown. The writer emits only non-default settings, in the
 // plan's fixed order, `margin` as a dict, and every scalar in a form that
 // needs no backslash escaping (plain when YAML reads it back as the same
@@ -22,6 +26,9 @@
 // Where pandoc rejects a file whose intent is plain (an unquoted `: ` or a
 // leading `*` in a title, an unknown `\` escape), the reader takes the
 // intent, warns, and the next save writes the value in a form pandoc reads.
+//
+// The file is untrusted: every pattern here runs in time linear in its
+// input, and nesting is capped so a crafted file cannot overflow the stack.
 
 import { DEFAULT_SETTINGS, FOOTNOTE_NUMBERINGS, FOOTNOTE_SEPARATORS, normalizeSettings, type DocSettings, type PaperName } from './settings';
 import { CITATION_STYLES } from './citation-styles';
@@ -67,23 +74,144 @@ type YNode = YScalar | YMap | YSeq | { t: 'null' };
 /** YAML this subset cannot read: the entry is kept as written. */
 class YamlError extends Error {}
 
+/** What reading a value gathers besides the value. */
+interface Ctx {
+  /** Warnings: how pandoc reads a form, or that it rejects one. */
+  notes: string[];
+  /** The `# …` comments passed inside the value, in order. */
+  comments: string[];
+  /** The anchors (`&a`) read so far in the block, for an alias (`*a`) after them. */
+  anchors: Map<string, YNode>;
+  /** The anchors this value defines (a save drops them from a known key). */
+  defined: string[];
+  depth: number;
+}
+
+const context = (anchors: Map<string, YNode> = new Map()): Ctx => ({ notes: [], comments: [], anchors, defined: [], depth: 0 });
+
+/** Values nested deeper than this are not read (kept as written). Plass
+ *  reads three levels (`plass.page-numbers.start`); each level rescans the
+ *  lines below it, so the cap also bounds the work on a crafted file. */
+const MAX_DEPTH = 16;
+
+function nest<T>(cx: Ctx, read: () => T): T {
+  if (cx.depth >= MAX_DEPTH) throw new YamlError(`nested more than ${MAX_DEPTH} levels deep`);
+  cx.depth++;
+  try {
+    return read();
+  } finally {
+    cx.depth--;
+  }
+}
+
 const isBlank = (line: string): boolean => /^[ \t]*$/.test(line);
 const isComment = (line: string): boolean => /^[ \t]*#/.test(line);
-const indentOf = (line: string): number => /^ */.exec(line)![0].length;
-// `key:` then whitespace or the end of the line. A plain key may hold a
-// colon that no space follows (`a:b: c` is the key `a:b`).
-const KEY_RE = /^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s#'"{}[\],&*!|>%@`?:-][^\n]*?|[?:-][^\s][^\n]*?)[ \t]*:(?:[ \t]+(.*))?$/;
+/** A line that is neither blank nor a comment. */
+const isContent = (line: string): boolean => !isBlank(line) && !isComment(line);
+const indentOf = (line: string): number => {
+  const k = line.search(/[^ ]/);
+  return k < 0 ? line.length : k;
+};
+/** Tabs expanded to the next multiple of four columns, as pandoc expands
+ *  every tab in its input before it reads anything (so a tab-indented
+ *  child of `plass:` is nested, four columns in). */
+function detab(line: string): string {
+  if (!line.includes('\t')) return line;
+  let out = '';
+  let col = 0;
+  for (const ch of line) {
+    const n = ch === '\t' ? 4 - (col % 4) : 1;
+    out += ch === '\t' ? ' '.repeat(n) : ch;
+    col += n;
+  }
+  return out;
+}
 const SEQ_ITEM = /^-(?:[ \t]|$)/;
 
+/** The least indentation of the lines that hold content (0 when none does). */
+function baseIndent(lines: string[]): number {
+  let least = Infinity;
+  for (const line of lines) if (isContent(line)) least = Math.min(least, indentOf(line));
+  return least === Infinity ? 0 : least;
+}
+
+/** next[k]: the first line at or after k that holds content (lines.length when none does). */
+function nextContent(lines: string[]): number[] {
+  const next = new Array<number>(lines.length + 1);
+  next[lines.length] = lines.length;
+  for (let k = lines.length - 1; k >= 0; k--) next[k] = isContent(lines[k]) ? k : next[k + 1];
+  return next;
+}
+
+/** `s` without its trailing line breaks (a loop: `/\n+$/` is quadratic on a long run of them). */
+function trimNewlines(s: string): string {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === '\n') end--;
+  return s.slice(0, end);
+}
+
+/** `into.push(...lines)` without spreading: a kept block can hold more lines than a call takes arguments. */
+function append(into: string[], lines: string[]): void {
+  for (const line of lines) into.push(line);
+}
+
+/** File text quoted in a warning, cut short. */
+const clip = (s: string): string => (s.length > 60 ? s.slice(0, 57) + '…' : s);
+
+interface KeyLine {
+  /** The key as written: quoted, or plain with any spaces before the colon. */
+  raw: string;
+  /** The rest of the line after the colon and its whitespace. */
+  rest: string;
+}
+
+/** A `key:` line, from the key on: the colon is followed by whitespace or
+ *  ends the line. A plain key may hold a colon no space follows (`a:b: c`
+ *  is the key `a:b`); a ` #` before the colon makes the line a value and a
+ *  comment, not a key. A scan, not one regex: the obvious pattern
+ *  backtracks quadratically on a long run of spaces with no colon. */
+function matchKey(s: string): KeyLine | null {
+  const c = s[0];
+  if (c === undefined) return null;
+  let colon: number;
+  let raw: string;
+  if (c === '"' || c === "'") {
+    let i = 1;
+    for (;;) {
+      if (i >= s.length) return null;
+      const ch = s[i];
+      if (c === '"' && ch === '\\') i += 2;
+      else if (ch !== c) i++;
+      else if (c === "'" && s[i + 1] === "'") i += 2;
+      else break;
+    }
+    raw = s.slice(0, i + 1);
+    colon = i + 1;
+    while (s[colon] === ' ' || s[colon] === '\t') colon++;
+    if (s[colon] !== ':') return null;
+  } else {
+    if (/[\s#'"{}[\],&*!|>%@`]/.test(c)) return null;
+    // `-`, `?` and `:` start a plain key only when text follows at once.
+    if ((c === '-' || c === '?' || c === ':') && !/\S/.test(s[1] ?? ' ')) return null;
+    const m = /:(?=[ \t]|$)|[ \t]#/.exec(s);
+    if (!m || m[0] !== ':') return null;
+    colon = m.index;
+    raw = s.slice(0, colon);
+  }
+  const after = s.slice(colon + 1);
+  if (after !== '' && after[0] !== ' ' && after[0] !== '\t') return null;
+  return { raw, rest: after.replace(/^[ \t]+/, '') };
+}
+
 function decodeKey(raw: string): string {
-  if (raw.startsWith('"')) return (new FlowReader(raw, []).node() as YScalar).value;
+  if (raw.startsWith('"')) return (new FlowReader(raw, context()).node() as YScalar).value;
   if (raw.startsWith("'")) return raw.slice(1, -1).replace(/''/g, "'");
   return raw.trim();
 }
 
 function keyOf(line: string, indent: number): string | null {
-  const m = KEY_RE.exec(line.slice(indent));
-  return m ? decodeKey(m[1]) : null;
+  const m = matchKey(line.slice(indent));
+  return m ? decodeKey(m.raw) : null;
 }
 
 interface Item {
@@ -92,44 +220,47 @@ interface Item {
   end: number;
 }
 
-/** Partition lines into the items of a block map at `indent`: each entry
- *  runs from its key line through every deeper line (and a compact list at
- *  the same indent under an empty `key:`), trailing blank lines excluded;
- *  comments and blank lines between entries are items of their own; a line
- *  that is none of these is `stray`. */
+/** Partition lines into the items of a block map at `indent`. An entry runs
+ *  from its key line through every line indented deeper (and through a
+ *  compact list, `- item` lines at the key's own indentation directly under
+ *  an empty `key:`). Comment and blank lines are not content: one at the
+ *  margin stays inside the entry when more of the entry follows it, and
+ *  trailing blank lines are left out. Comments and blank lines between
+ *  entries are items of their own; a line that is none of these is `stray`. */
 function splitItems(lines: string[], indent: number): Item[] {
+  const next = nextContent(lines);
   const items: Item[] = [];
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    if (isBlank(line)) {
-      items.push({ kind: 'blank', start: i, end: i + 1 });
+    if (!isContent(line)) {
+      items.push({ kind: isBlank(line) ? 'blank' : 'comment', start: i, end: i + 1 });
       i++;
       continue;
     }
-    if (isComment(line)) {
-      items.push({ kind: 'comment', start: i, end: i + 1 });
-      i++;
-      continue;
-    }
-    const m = indentOf(line) === indent ? KEY_RE.exec(line.slice(indent)) : null;
+    const m = indentOf(line) === indent ? matchKey(line.slice(indent)) : null;
     if (!m) {
       items.push({ kind: 'stray', start: i, end: i + 1 });
       i++;
       continue;
     }
-    const empty = !m[2] || isBlank(m[2]) || isComment(m[2]);
+    const first = next[i + 1];
+    const compact =
+      (m.rest === '' || m.rest[0] === '#') && first < lines.length && indentOf(lines[first]) === indent && SEQ_ITEM.test(lines[first].slice(indent));
+    const continues = (k: number): boolean => {
+      const ni = indentOf(lines[k]);
+      return ni > indent || (compact && ni === indent && SEQ_ITEM.test(lines[k].slice(indent)));
+    };
     let end = i + 1;
     for (let j = i + 1; j < lines.length; j++) {
-      const next = lines[j];
-      const ni = indentOf(next);
-      if (isBlank(next)) {
-        // Spaces past the indent (and a tab after them) can be block text.
-        if (ni > indent) end = j + 1;
-        continue;
-      }
-      if (ni > indent || (empty && ni === indent && SEQ_ITEM.test(next.slice(indent)))) end = j + 1;
-      else break;
+      const l = lines[j];
+      if (isContent(l)) {
+        if (!continues(j)) break;
+        end = j + 1;
+      } else if (indentOf(l) > indent) {
+        // Spaces past the indent may be block text, a comment there the entry's own.
+        end = j + 1;
+      } else if (isComment(l) && !(next[j] < lines.length && continues(next[j]))) break;
     }
     items.push({ kind: 'entry', start: i, end });
     i = end;
@@ -138,39 +269,80 @@ function splitItems(lines: string[], indent: number): Item[] {
 }
 
 /** One `key: value` entry: `lines[0]` is the key line at `indent`, the rest its continuation. */
-function parseEntry(lines: string[], indent: number, notes: string[]): { key: string; value: YNode } {
-  const m = KEY_RE.exec(lines[0].slice(indent));
+function parseEntry(lines: string[], indent: number, cx: Ctx): { key: string; value: YNode } {
+  const m = matchKey(lines[0].slice(indent));
   if (!m) throw new YamlError('not a "key: value" line');
-  return { key: decodeKey(m[1]), value: parseValue(m[2] ?? '', lines.slice(1), indent, notes) };
+  return { key: decodeKey(m.raw), value: parseValue(m.rest, lines.slice(1), indent, cx) };
 }
 
 /** The value after `key:` (or after `- `): `rest` is the rest of its line,
- *  `cont` the deeper lines after it, `indent` the key's indentation. */
-function parseValue(rest: string, cont: string[], indent: number, notes: string[]): YNode {
-  rest = stripProperties(rest.trimStart(), notes);
+ *  `cont` the lines after it, `indent` the key's indentation. */
+function parseValue(rest: string, cont: string[], indent: number, cx: Ctx): YNode {
+  const anchors: string[] = [];
+  const node = valueOf(stripProperties(rest.trimStart(), cx, anchors), cont, indent, cx);
+  for (const name of anchors) define(cx, name, node);
+  return node;
+}
+
+function valueOf(rest: string, cont: string[], indent: number, cx: Ctx): YNode {
   const r = rest.trim();
-  if (r === '' || r.startsWith('#')) return parseNested(cont, indent, notes);
-  if (r[0] === '|' || r[0] === '>') return parseBlockScalar(r, cont, indent);
+  if (r === '' || r[0] === '#') {
+    if (r) cx.comments.push(r);
+    return parseNested(cont, indent, cx);
+  }
+  if (r[0] === '|' || r[0] === '>') return parseBlockScalar(r, cont, indent, cx);
   if ('"\'{['.includes(r[0])) {
     // Untrimmed at the end: a quoted line's trailing `\ ` is text.
-    const reader = new FlowReader([rest, ...cont].join('\n'), notes);
+    const reader = new FlowReader([rest, ...cont].join('\n'), cx);
     const node = reader.node();
     reader.end();
     return node;
   }
-  if ('*&%@`'.includes(r[0])) notes.push(rejected(r[0]));
-  return parsePlain(r, cont, notes);
+  if (r[0] === '*') {
+    const node = alias(r, cont, cx);
+    if (node) return node;
+  }
+  if ('*&%@`'.includes(r[0])) cx.notes.push(rejected(r[0]));
+  return parsePlain(r, cont, cx);
 }
 
 /** An anchor (`&a`) or tag (`!t`, `!!str`) before a value: pandoc reads the
- *  value after it, and so does Plass (aliases are not resolved). */
-function stripProperties(r: string, notes: string[]): string {
+ *  value after it, and so does Plass. Anchor names go to `anchors`. */
+function stripProperties(r: string, cx: Ctx, anchors: string[]): string {
   for (;;) {
     const m = /^(&[^\s,[\]{}]+|![^\s,[\]{}]*)(?=[\s,[\]{}]|$)[ \t]*/.exec(r);
     if (!m) return r;
-    notes.push(`the YAML ${m[1][0] === '&' ? 'anchor' : 'tag'} ${m[1]} is ignored`);
+    if (m[1][0] === '&') {
+      anchors.push(m[1].slice(1));
+      cx.notes.push(`the YAML anchor ${m[1]} is not written back`);
+    } else cx.notes.push(`the YAML tag ${m[1]} is ignored`);
     r = r.slice(m[0].length);
   }
+}
+
+function define(cx: Ctx, name: string, node: YNode): void {
+  cx.anchors.set(name, node);
+  cx.defined.push(name);
+}
+
+/** The names after every `*` that can start an alias, in one pass. */
+function aliasNames(text: string): Set<string> {
+  const names = new Set<string>();
+  for (const m of text.matchAll(/(?:^|[\s[{,])\*([^\s,[\]{}]+)/g)) names.add(m[1]);
+  return names;
+}
+
+/** `*a` alone (a comment may follow): the value of the anchor `&a` read
+ *  earlier in the block, as pandoc reads it; null when none was. */
+function alias(r: string, cont: string[], cx: Ctx): YNode | null {
+  const m = /^\*([^\s,[\]{}]+)/.exec(r);
+  const node = m ? cx.anchors.get(m[1]) : undefined;
+  if (!m || !node || cont.some(isContent)) return null;
+  const after = r.slice(m[0].length).trimStart();
+  if (after && after[0] !== '#') return null;
+  if (after) cx.comments.push(after);
+  for (const line of cont) if (isComment(line)) cx.comments.push(line.trim());
+  return node;
 }
 
 /** The note for an unquoted value pandoc's YAML reader rejects. */
@@ -182,60 +354,73 @@ const rejected = (c: string): string =>
       : `YAML does not allow an unquoted value to start with ${c} (pandoc rejects the file); read as text`;
 
 /** A value on the lines after its key: a block list, a block map, or a scalar. */
-function parseNested(cont: string[], indent: number, notes: string[]): YNode {
-  const first = cont.findIndex((line) => !isBlank(line) && !isComment(line));
-  if (first < 0) return { t: 'null' };
-  const line = cont[first];
-  const ci = indentOf(line);
-  const body = line.slice(ci);
-  if (SEQ_ITEM.test(body)) return parseSeq(cont.slice(first), ci, notes);
-  if (ci <= indent) throw new YamlError('expected an indented value');
-  if (KEY_RE.test(body)) return parseMap(cont.slice(first), ci, notes);
-  return parseValue(body, cont.slice(first + 1), indent, notes);
+function parseNested(cont: string[], indent: number, cx: Ctx): YNode {
+  return nest(cx, () => {
+    let first = 0;
+    for (; first < cont.length && !isContent(cont[first]); first++) {
+      if (isComment(cont[first])) cx.comments.push(cont[first].trim());
+    }
+    if (first === cont.length) return { t: 'null' };
+    const line = cont[first];
+    const ci = indentOf(line);
+    const body = line.slice(ci);
+    if (SEQ_ITEM.test(body)) return parseSeq(cont.slice(first), ci, cx);
+    if (ci <= indent) throw new YamlError('expected an indented value');
+    if (matchKey(body)) return parseMap(cont.slice(first), ci, cx);
+    return parseValue(body, cont.slice(first + 1), indent, cx);
+  });
 }
 
-function parseMap(lines: string[], indent: number, notes: string[]): YMap {
-  const entries: Array<[string, YNode]> = [];
+function parseMap(lines: string[], indent: number, cx: Ctx): YMap {
+  const entries = new Map<string, YNode>();
   for (const item of splitItems(lines, indent)) {
-    if (item.kind === 'blank' || item.kind === 'comment') continue;
-    if (item.kind === 'stray') throw new YamlError(`unexpected line "${lines[item.start].trim()}"`);
-    const { key, value } = parseEntry(lines.slice(item.start, item.end), indent, notes);
-    const at = entries.findIndex(([k]) => k === key);
-    if (at >= 0) entries.splice(at, 1); // the last one wins, as in pandoc
-    entries.push([key, value]);
+    if (item.kind === 'blank') continue;
+    if (item.kind === 'comment') {
+      cx.comments.push(lines[item.start].trim());
+      continue;
+    }
+    if (item.kind === 'stray') throw new YamlError(`unexpected line "${clip(lines[item.start].trim())}"`);
+    const { key, value } = parseEntry(lines.slice(item.start, item.end), indent, cx);
+    entries.delete(key); // the last one wins, as in pandoc
+    entries.set(key, value);
   }
-  return { t: 'map', entries };
+  return { t: 'map', entries: [...entries] };
 }
 
-function parseSeq(lines: string[], indent: number, notes: string[]): YSeq {
+function parseSeq(lines: string[], indent: number, cx: Ctx): YSeq {
+  const next = nextContent(lines);
   const items: YNode[] = [];
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    if (isBlank(line) || isComment(line)) {
+    if (!isContent(line)) {
+      if (isComment(line)) cx.comments.push(line.trim());
       i++;
       continue;
     }
     if (indentOf(line) !== indent || !SEQ_ITEM.test(line.slice(indent))) {
-      throw new YamlError(`unexpected line "${line.trim()}" in a list`);
+      throw new YamlError(`unexpected line "${clip(line.trim())}" in a list`);
     }
     let end = i + 1;
     for (let j = i + 1; j < lines.length; j++) {
-      if (indentOf(lines[j]) > indent) end = j + 1;
-      else if (!isBlank(lines[j])) break;
+      const l = lines[j];
+      if (indentOf(l) > indent) end = j + 1;
+      else if (isContent(l)) break;
+      else if (isComment(l) && !(next[j] < lines.length && indentOf(lines[next[j]]) > indent)) break;
     }
     // The dash becomes a space, so a compact map (`- name: x`) or a nested
     // list reads at its own column.
     const head = ' '.repeat(indent + 1) + line.slice(indent + 1);
-    items.push(parseNested([head, ...lines.slice(i + 1, end)], indent, notes));
+    items.push(parseNested([head, ...lines.slice(i + 1, end)], indent, cx));
     i = end;
   }
   return { t: 'seq', items };
 }
 
-function parseBlockScalar(header: string, cont: string[], indent: number): YScalar {
-  const m = /^([|>])([1-9])?([+-])?([1-9])?[ \t]*(?:#.*)?$/.exec(header);
-  if (!m || (m[2] && m[4])) throw new YamlError(`"${header}" is not a block-text header`);
+function parseBlockScalar(header: string, cont: string[], indent: number, cx: Ctx): YScalar {
+  const m = /^([|>])([1-9])?([+-])?([1-9])?[ \t]*(#[\s\S]*)?$/.exec(header);
+  if (!m || (m[2] && m[4])) throw new YamlError(`"${clip(header)}" is not a block-text header`);
+  if (m[5]) cx.comments.push(m[5]);
   const folded = m[1] === '>';
   const chomp = m[3] ?? '';
   const explicit = m[2] ?? m[4];
@@ -264,7 +449,11 @@ function parseBlockScalar(header: string, cont: string[], indent: number): YScal
     }
     if (indentOf(line) < contentIndent) {
       // Only comments may follow the text, less indented than it.
-      if (isComment(line) && cont.slice(k).every((l) => isBlank(l) || isComment(l))) break;
+      const tail = cont.slice(k);
+      if (isComment(line) && !tail.some(isContent)) {
+        for (const c of tail) if (isComment(c)) cx.comments.push(c.trim());
+        break;
+      }
       throw new YamlError('a line of block text is less indented than the first');
     }
     lines.push(line.slice(contentIndent));
@@ -300,7 +489,7 @@ function parseBlockScalar(header: string, cont: string[], indent: number): YScal
 }
 
 /** A multi-line plain scalar: continuation lines fold to one space, each blank line to a newline. */
-function parsePlain(first: string, cont: string[], notes: string[]): YScalar {
+function parsePlain(first: string, cont: string[], cx: Ctx): YScalar {
   let out = '';
   let blanks = 0;
   let ended = false;
@@ -308,6 +497,7 @@ function parsePlain(first: string, cont: string[], notes: string[]): YScalar {
   const take = (text: string, isFirst: boolean): void => {
     const hash = text.search(/(?:^|[ \t])#/);
     if (hash >= 0) {
+      cx.comments.push(text.slice(hash).trim());
       text = text.slice(0, hash);
       ended = true;
     }
@@ -325,12 +515,13 @@ function parsePlain(first: string, cont: string[], notes: string[]): YScalar {
       continue;
     }
     if (ended) {
-      if (isComment(line)) continue;
-      throw new YamlError('text after a comment');
+      if (!isComment(line)) throw new YamlError('text after a comment');
+      cx.comments.push(line.trim());
+      continue;
     }
     take(line, false);
   }
-  if (colon) notes.push('an unquoted ": " is not allowed in a YAML value (pandoc rejects the file); read as text');
+  if (colon) cx.notes.push('an unquoted ": " is not allowed in a YAML value (pandoc rejects the file); read as text');
   return { t: 'scalar', plain: true, value: out };
 }
 
@@ -339,12 +530,14 @@ const ESCAPES: Record<string, string> = {
   ' ': ' ', '"': '"', '/': '/', '\\': '\\', N: '\u0085', _: '\u00a0', L: '\u2028', P: '\u2029',
 };
 
+const codePoint = (c: string): string => `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`;
+
 /** Quoted scalars and flow collections, read from one string that may span lines. */
 class FlowReader {
   private i = 0;
   constructor(
     private readonly s: string,
-    private readonly notes: string[],
+    private readonly cx: Ctx,
   ) {}
 
   /** Skip whitespace, line breaks and comments (a `#` after whitespace). */
@@ -354,31 +547,48 @@ class FlowReader {
       const c = s[this.i];
       if (c === ' ' || c === '\t' || c === '\n') this.i++;
       else if (c === '#' && (this.i === 0 || /\s/.test(s[this.i - 1]))) {
+        const start = this.i;
         while (this.i < s.length && s[this.i] !== '\n') this.i++;
+        this.cx.comments.push(s.slice(start, this.i).trim());
       } else return;
     }
   }
 
   end(): void {
     this.ws();
-    if (this.i < this.s.length) throw new YamlError(`unexpected "${this.s.slice(this.i).split('\n')[0]}" after the value`);
+    if (this.i < this.s.length) throw new YamlError(`unexpected "${clip(this.s.slice(this.i).split('\n', 1)[0])}" after the value`);
   }
 
   node(inFlow = false): YNode {
     this.ws();
+    const anchors: string[] = [];
     if (inFlow && (this.s[this.i] === '&' || this.s[this.i] === '!')) {
       const rest = this.s.slice(this.i);
-      this.i += rest.length - stripProperties(rest, this.notes).length;
+      this.i += rest.length - stripProperties(rest, this.cx, anchors).length;
       this.ws();
       // A property with no value after it (`{a: !t, …}`) is an empty value.
       if (this.i >= this.s.length || ',]}'.includes(this.s[this.i])) return { t: 'null' };
     }
+    const node = this.bare(inFlow);
+    for (const name of anchors) define(this.cx, name, node);
+    return node;
+  }
+
+  private bare(inFlow: boolean): YNode {
     const c = this.s[this.i];
     if (c === '"') return this.double();
     if (c === "'") return this.single();
-    if (c === '{') return this.map();
-    if (c === '[') return this.seq();
+    if (c === '{') return nest(this.cx, () => this.map());
+    if (c === '[') return nest(this.cx, () => this.seq());
     if (!inFlow) throw new YamlError('expected a quoted value or a flow collection');
+    if (c === '*') {
+      const m = /^\*([^\s,[\]{}]+)/.exec(this.s.slice(this.i));
+      const node = m ? this.cx.anchors.get(m[1]) : undefined;
+      if (m && node) {
+        this.i += m[0].length;
+        return node;
+      }
+    }
     return this.plain();
   }
 
@@ -391,12 +601,12 @@ class FlowReader {
 
   private map(): YMap {
     this.i++;
-    const entries: Array<[string, YNode]> = [];
+    const entries = new Map<string, YNode>();
     for (;;) {
       this.ws();
       if (this.s[this.i] === '}') {
         this.i++;
-        return { t: 'map', entries };
+        return { t: 'map', entries: [...entries] };
       }
       const key = this.key();
       this.ws();
@@ -405,9 +615,8 @@ class FlowReader {
         this.i++;
         value = this.value('}');
       }
-      const at = entries.findIndex(([k]) => k === key);
-      if (at >= 0) entries.splice(at, 1);
-      entries.push([key, value]);
+      entries.delete(key); // the last one wins
+      entries.set(key, value);
       this.ws();
       const c = this.s[this.i];
       if (c === ',') this.i++;
@@ -453,7 +662,7 @@ class FlowReader {
     const s = this.s;
     const c = s[this.i];
     if (',[]{}'.includes(c)) throw new YamlError(`unexpected "${c}" in a flow collection`);
-    if ('*&%@`'.includes(c)) this.notes.push(rejected(c));
+    if ('*&%@`'.includes(c)) this.cx.notes.push(rejected(c));
     const start = this.i;
     while (this.i < s.length) {
       const ch = s[this.i];
@@ -551,20 +760,24 @@ class FlowReader {
         // `"$\beta$"` is a backspace and "eta" to YAML — and to pandoc.
         if (/[a-zA-Z]/.test(e) && /[a-zA-Z]/.test(s[this.i] ?? '')) {
           const word = '\\' + e + /^[a-zA-Z]*/.exec(s.slice(this.i))![0];
-          this.notes.push(`"${word}" inside double quotes is the YAML escape \\${e}, as pandoc reads it — write LaTeX unquoted or in single quotes`);
+          const ch = codePoint(ESCAPES[e]);
+          this.cx.notes.push(
+            `"${word}" inside double quotes is the YAML escape \\${e} (${ch}), as pandoc reads it; a save keeps ${ch}, not ${word} — write LaTeX unquoted or in single quotes`,
+          );
         }
       } else {
         const width = e === 'x' ? 2 : e === 'u' ? 4 : e === 'U' ? 8 : 0;
         const hex = width ? s.slice(this.i + 2, this.i + 2 + width) : '';
-        const code = width && new RegExp(`^[0-9a-fA-F]{${width}}$`).test(hex) ? parseInt(hex, 16) : -1;
-        if (code >= 0 && code <= 0x10ffff) {
+        const code = hex.length === width && /^[0-9a-fA-F]+$/.test(hex) ? parseInt(hex, 16) : -1;
+        // A surrogate is no character: pandoc rejects its escape.
+        if (code >= 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff)) {
           out += String.fromCodePoint(code);
           this.i += 2 + width;
         } else {
           // Not a YAML escape: pandoc rejects the file; keep the backslash.
           out += '\\' + e;
           this.i += 2;
-          this.notes.push(`"\\${e}" inside double quotes is not a YAML escape (pandoc rejects the file); read as a backslash`);
+          this.cx.notes.push(`"\\${e}" inside double quotes is not a YAML escape (pandoc rejects the file); read as a backslash`);
         }
       }
       keep = out.length;
@@ -580,6 +793,20 @@ class FlowReader {
 const NOT_A_STRING =
   /^(?:~|null|Null|NULL|true|True|TRUE|false|False|FALSE|y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF|=|<<|[-+]?(?:\.?[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?|0[xob][0-9a-fA-F_]+|[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?|\.(?:inf|Inf|INF))|\.(?:nan|NaN|NAN))$/;
 
+/** Characters no plain, single-quoted or block scalar can hold: C0 and C1
+ *  controls, DEL and U+FFFE/U+FFFF, which YAML does not allow as written;
+ *  NEL, LS and PS, which pandoc's YAML reader takes as line breaks; the
+ *  byte-order mark; and the tab, which pandoc turns into spaces before it
+ *  reads the YAML. A line feed is handled by each writer. */
+const UNWRITABLE = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029\ufeff\ufffe\uffff]/;
+/** The same, with the line feed, as `\uXXXX` in a double-quoted scalar. */
+const ESCAPED = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\ufeff\ufffe\uffff]/g;
+/** As written in a file: what the reader warns about (pandoc rejects the file, or breaks the line there). */
+const NOT_YAML_TEXT = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\ufffe\uffff]/g;
+
+/** A lone surrogate has no UTF-8 form: U+FFFD, as any UTF-8 encoder writes it. */
+const wellFormed = (v: string): string => v.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '\ufffd');
+
 function plainSafe(v: string, flow: boolean): boolean {
   if (!v || v !== v.trim() || /[\t\n\r]/.test(v)) return false;
   if (/^[-?:,[\]{}#&*!|>'"%@`]/.test(v)) return false;
@@ -592,18 +819,13 @@ function plainSafe(v: string, flow: boolean): boolean {
 
 /** A string in the YAML form that needs no backslash escaping: plain when
  *  safe, else single-quoted with `''`. Only a value no such form can hold
- *  (a line break or a control character) is double-quoted, its control
+ *  (a line break or an UNWRITABLE character) is double-quoted, those
  *  characters as `\uXXXX` (never `\n` or `\t`, which a letter after them
  *  would make look like LaTeX to the reader's warning). */
 function scalar(v: string, flow = false): string {
-  if (/[\u0000-\u0008\n\u000b-\u001f\u007f\u0085\u2028\u2029\ufeff]/.test(v) || v.includes('\r')) {
-    return (
-      '"' +
-      v.replace(/[\\"\u0000-\u001f\u007f\u0085\u2028\u2029\ufeff]/g, (c) =>
-        c === '\\' || c === '"' ? '\\' + c : `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
-      ) +
-      '"'
-    );
+  v = wellFormed(v);
+  if (v.includes('\n') || UNWRITABLE.test(v)) {
+    return '"' + v.replace(/[\\"]/g, '\\$&').replace(ESCAPED, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`) + '"';
   }
   return plainSafe(v, flow) ? v : `'${v.replace(/'/g, "''")}'`;
 }
@@ -612,8 +834,8 @@ function scalar(v: string, flow = false): string {
  *  newlines are not part of the value (clip chomping writes one, the reader
  *  drops it); a first line that starts with a space gets an indicator. */
 function blockLines(prefix: string, text: string, indent: number): string[] | null {
-  const body = text.replace(/\n+$/, '');
-  if (!body || /[\u0000-\u0008\u000b-\u001f\u007f\r\u0085\u2028\u2029\ufeff]/.test(body)) return null;
+  const body = trimNewlines(wellFormed(text));
+  if (!body || UNWRITABLE.test(body)) return null;
   const lines = body.split('\n');
   const first = lines.find((line) => line !== '') ?? '';
   const pad = ' '.repeat(indent);
@@ -626,7 +848,9 @@ function emitNode(node: YNode): string {
     case 'null':
       return '';
     case 'scalar':
-      return node.plain && !/\n/.test(node.value) && !/^[*&!%@`]/.test(node.value) ? node.value : scalar(node.value, true);
+      return node.plain && !node.value.includes('\n') && !/^[*&!%@`]/.test(node.value) && !UNWRITABLE.test(node.value)
+        ? node.value
+        : scalar(node.value, true);
     case 'map':
       return `{${node.entries.map(([k, v]) => `${scalar(k, true)}: ${emitNode(v)}`.trimEnd()).join(', ')}}`;
     case 'seq':
@@ -684,7 +908,7 @@ const UNIT: Partial<Record<keyof DocSettings, 'pt' | 'in'>> = {
 };
 
 const show = (field: keyof DocSettings, value: unknown): string =>
-  typeof value === 'number' ? `${num(value)}${UNIT[field] ?? ''}` : typeof value === 'string' ? scalar(value) : String(value);
+  typeof value === 'number' ? `${num(value)}${UNIT[field] ?? ''}` : typeof value === 'string' ? clip(scalar(value)) : String(value);
 
 /** Typst's paper names (pandoc's `papersize` for Typst output). */
 const PAPER_YAML: Partial<Record<PaperName, string>> = { a4: 'a4', legal: 'us-legal', b5: 'iso-b5', a5: 'a5' };
@@ -725,18 +949,26 @@ function bool(n: YNode): boolean {
   throw new Invalid(`expected true or false, found ${describe(n)}`);
 }
 
+// A number: digits with an optional fraction, or a bare fraction. One way
+// to match each digit run (`\d+\.?\d*` has many, and backtracks
+// quadratically on a long run of digits that fails to match).
+const NUMBER = String.raw`[-+]?(?:\d+(?:\.\d*)?|\.\d+)`;
+const NUMBER_RE = new RegExp(`^${NUMBER}(?:[eE][-+]?\\d+)?$`);
+const LENGTH_RE = new RegExp(`^(${NUMBER}(?:[eE][-+]?\\d+)?)[ \\t]*(in|mm|cm|pt)$`);
+const BARE_RE = new RegExp(`^${NUMBER}$`);
+
 function number(n: YNode): number {
-  if (n.t === 'scalar' && /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/.test(n.value.trim())) return Number(n.value);
+  if (n.t === 'scalar' && NUMBER_RE.test(n.value.trim())) return Number(n.value);
   throw new Invalid(`expected a number, found ${describe(n)}`);
 }
 
 const PER_INCH = { in: 1, mm: 25.4, cm: 2.54, pt: 72 } as const;
 
 function length(n: YNode, unit: 'in' | 'pt'): number {
-  const m = n.t === 'scalar' ? /^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)[ \t]*(in|mm|cm|pt)$/.exec(n.value.trim()) : null;
+  const m = n.t === 'scalar' ? LENGTH_RE.exec(n.value.trim()) : null;
   if (!m) {
-    const bare = n.t === 'scalar' && /^[-+]?(?:\d+\.?\d*|\.\d+)$/.test(n.value.trim());
-    throw new Invalid(bare ? `${n.value.trim()} needs a unit (in, mm, cm or pt)` : `expected a length (in, mm, cm or pt), found ${describe(n)}`);
+    const bare = n.t === 'scalar' && BARE_RE.test(n.value.trim());
+    throw new Invalid(bare ? `${clip(n.value.trim())} needs a unit (in, mm, cm or pt)` : `expected a length (in, mm, cm or pt), found ${describe(n)}`);
   }
   const from = m[2] as keyof typeof PER_INCH;
   const v = Number(m[1]);
@@ -750,7 +982,7 @@ function choice<T extends string>(n: YNode, values: readonly T[]): T {
 }
 
 function describe(n: YNode): string {
-  if (n.t === 'scalar') return n.value === '' ? 'an empty value' : scalar(n.value);
+  if (n.t === 'scalar') return n.value === '' ? 'an empty value' : clip(scalar(n.value));
   return n.t === 'null' ? 'nothing' : n.t === 'map' ? 'a map' : 'a list';
 }
 
@@ -762,13 +994,21 @@ function entriesOf(n: YNode): Array<[string, YNode]> {
 // ---------------------------------------------------------------- reading
 
 const DELIMITER = /^(?:---|\.\.\.)[ \t]*$/;
+const MAX_WARNINGS = 50;
 
-/** The metadata block at the very top, as pandoc finds it: a `---` line
- *  whose next line is not blank, closed by a `---` or `...` line. */
+/** The metadata block at the top, as pandoc finds it: after any blank
+ *  lines, a `---` line whose next line is not blank, closed by a `---` or
+ *  `...` line. */
 function splitFrontmatter(text: string): { yaml: string; body: string } | null {
-  const open = /^---[ \t]*\n/.exec(text);
+  let at = 0;
+  for (;;) {
+    const nl = text.indexOf('\n', at);
+    if (nl < 0 || !isBlank(text.slice(at, nl))) break;
+    at = nl + 1;
+  }
+  const open = /^---[ \t]*\n/.exec(text.slice(at));
   if (!open) return null;
-  const rest = text.slice(open[0].length);
+  const rest = text.slice(at + open[0].length);
   if (/^[ \t]*(?:\n|$)/.test(rest)) return null;
   const close = /^(?:---|\.\.\.)[ \t]*$/m.exec(rest);
   if (!close) return null;
@@ -779,7 +1019,7 @@ function splitFrontmatter(text: string): { yaml: string; body: string } | null {
 
 type ExtraPart = { kind: 'blank' } | { kind: 'lines'; lines: string[] } | { kind: 'plass'; lines: string[] };
 
-/** Join kept parts: runs of blank lines collapse to one, none at the ends. */
+/** Join kept parts: runs of blank lines between parts collapse to one, none at the ends. */
 function joinExtra(parts: ExtraPart[]): string {
   const out: string[] = [];
   let pendingBlank = false;
@@ -792,26 +1032,31 @@ function joinExtra(parts: ExtraPart[]): string {
     if (!lines.length) continue;
     if (pendingBlank) out.push('');
     pendingBlank = false;
-    out.push(...lines);
+    append(out, lines);
   }
   return out.join('\n');
 }
 
+/** Lines without the blank lines at their ends; the lines between are kept as they are (inside block text they are text). */
 function trimBlank(lines: string[]): string[] {
   let a = 0;
   let b = lines.length;
   while (a < b && isBlank(lines[a])) a++;
   while (b > a && isBlank(lines[b - 1])) b--;
-  // Inside, runs of blank lines collapse to one.
-  return lines.slice(a, b).filter((line, k, all) => !(isBlank(line) && k > 0 && isBlank(all[k - 1]))).map((line) => (isBlank(line) ? '' : line));
+  return lines.slice(a, b);
 }
 
-/** Shift a block from base indentation `from` to `to`, keeping relative indentation. */
+/** Shift lines from base indentation `from` to `to`, each keeping the
+ *  indentation it has past `from` (a whitespace-only line too: inside
+ *  block text it can be text); a line less indented than `from` (a comment
+ *  at the margin) moves to `to`. */
 function reindent(lines: string[], from: number, to: number): string[] {
+  if (from === to) return lines;
+  const pad = ' '.repeat(to);
   return lines.map((line) => {
-    if (isBlank(line)) return '';
     const ind = indentOf(line);
-    return ' '.repeat(to) + (ind >= from ? line.slice(from) : line.trimStart());
+    if (isBlank(line)) return ind > from ? pad + line.slice(from) : '';
+    return pad + (ind >= from ? line.slice(from) : line.trimStart());
   });
 }
 
@@ -821,6 +1066,9 @@ interface Acc {
   paperPlass: { page: PaperName; w?: number; h?: number } | null;
   restart: boolean;
   warn: (m: string) => void;
+  anchors: Map<string, YNode>;
+  /** Anchors defined inside known keys, which a save rewrites without them: [where, name]. */
+  dropped: Array<[string, string]>;
 }
 
 export function readFrontmatter(src: string): FrontmatterRead {
@@ -838,17 +1086,53 @@ export function readFrontmatter(src: string): FrontmatterRead {
   };
   const block = splitFrontmatter(text);
   if (!block) return out;
+  let orig = block.yaml ? block.yaml.split('\n') : [];
+  let lines = orig.map(detab);
+  // Pandoc takes the block as metadata only when YAML reads it as a map (or
+  // as nothing: comments alone); a scalar or a list is body text to it.
+  const firstContent = lines.find(isContent);
+  const opener = firstContent?.trimStart()[0];
+  if (firstContent !== undefined && opener !== '{' && opener !== '?' && !matchKey(firstContent.slice(indentOf(firstContent)))) return out;
   out.body = block.body;
-  const warn = (m: string) => out.warnings.push(m);
-  const lines = block.yaml ? block.yaml.split('\n') : [];
-  const items = splitItems(lines, 0);
-  const acc: Acc = { s: {}, paperTop: null, paperPlass: null, restart: false, warn };
+  // A crafted block can hold any number of faults: the first ones are listed, the rest counted.
+  let unlisted = 0;
+  const warn = (m: string): void => {
+    if (out.warnings.length < MAX_WARNINGS) out.warnings.push(m);
+    else unlisted++;
+  };
+  const bad = block.yaml.match(NOT_YAML_TEXT);
+  if (bad) {
+    warn(
+      `front matter: ${bad.length === 1 ? 'a character' : `${bad.length} characters`} YAML does not allow as written (${codePoint(bad[0])}) — pandoc rejects the file or breaks the line there; the values Plass writes are escaped`,
+    );
+  }
+  if (opener === '{') {
+    // The whole block as one flow map: read on, one key per line.
+    const cx = context();
+    try {
+      const reader = new FlowReader(lines.join('\n'), cx);
+      const node = reader.node();
+      reader.end();
+      if (node.t === 'map') {
+        for (const note of cx.notes) warn(`front matter: ${note}`);
+        orig = lines = [...node.entries.map(([k, v]) => `${scalar(k)}:${v.t === 'null' ? '' : ' ' + emitNode(v)}`), ...cx.comments];
+      }
+    } catch (e) {
+      if (!(e instanceof YamlError)) throw e;
+    }
+  }
+  // The keys sit at the least indentation: a uniformly indented block is a map too.
+  const root = baseIndent(lines);
+  const asWritten = (item: Item): string[] => (root ? reindent(lines.slice(item.start, item.end), root, 0) : orig.slice(item.start, item.end));
+  const items = splitItems(lines, root);
+  const hasAnchors = block.yaml.includes('&');
+  const acc: Acc = { s: {}, paperTop: null, paperPlass: null, restart: false, warn, anchors: new Map(), dropped: [] };
   const parts: ExtraPart[] = [];
 
   // A known key given twice: the last one is read, as pandoc does.
   const lastAt = new Map<string, number>();
   items.forEach((item, k) => {
-    const key = item.kind === 'entry' ? keyOf(lines[item.start], 0) : null;
+    const key = item.kind === 'entry' ? keyOf(lines[item.start], root) : null;
     if (key && KNOWN_TOP.has(key)) {
       if (lastAt.has(key)) warn(`${key} is given twice — the last one is read`);
       lastAt.set(key, k);
@@ -856,40 +1140,55 @@ export function readFrontmatter(src: string): FrontmatterRead {
   });
 
   items.forEach((item, k) => {
-    const raw = lines.slice(item.start, item.end);
+    const entry = lines.slice(item.start, item.end);
     if (item.kind === 'blank') return parts.push({ kind: 'blank' });
-    if (item.kind === 'comment') return parts.push({ kind: 'lines', lines: raw });
+    // A comment at the margin, where it cannot join the entry written before it.
+    if (item.kind === 'comment') return parts.push({ kind: 'lines', lines: [orig[item.start].trimStart()] });
     if (item.kind === 'stray') {
-      warn(`front matter line "${raw[0].trim()}" is not a "key: value" entry — kept as written`);
-      return parts.push({ kind: 'lines', lines: raw });
+      warn(`front matter line "${clip(entry[0].trim())}" is not a "key: value" entry — kept as written`);
+      return parts.push({ kind: 'lines', lines: asWritten(item) });
     }
-    const key = keyOf(raw[0], 0)!;
-    if (!KNOWN_TOP.has(key)) return parts.push({ kind: 'lines', lines: raw });
+    const key = keyOf(entry[0], root)!;
+    if (!KNOWN_TOP.has(key)) {
+      // Kept as written; read only for the anchors an alias later may name.
+      if (hasAnchors) {
+        try {
+          parseEntry(entry, root, context(acc.anchors));
+        } catch (e) {
+          if (!(e instanceof YamlError)) throw e;
+        }
+      }
+      return parts.push({ kind: 'lines', lines: asWritten(item) });
+    }
     if (lastAt.get(key) !== k) return;
     if (key === 'plass') {
-      const kept = readPlass(raw, acc);
+      const kept = readPlass(entry, root, acc);
       if (kept) parts.push(kept);
       return;
     }
-    const notes: string[] = [];
+    const cx = context(acc.anchors);
     let value: YNode;
     try {
-      value = parseEntry(raw, 0, notes).value;
+      value = parseEntry(entry, root, cx).value;
     } catch (e) {
       if (!(e instanceof YamlError)) throw e;
       warn(`${key}: ${e.message} — kept as written`);
-      return parts.push({ kind: 'lines', lines: raw });
+      return parts.push({ kind: 'lines', lines: asWritten(item) });
     }
-    for (const note of notes) warn(`${key}: ${note}`);
+    for (const note of cx.notes) warn(`${key}: ${note}`);
     try {
       readTop(key, value, out, acc);
     } catch (e) {
       if (!(e instanceof Invalid)) throw e;
       if (TEXT_KEYS.has(key)) {
         warn(`${key}: ${e.message} — kept as written`);
-        parts.push({ kind: 'lines', lines: raw });
-      } else warn(`${key}: ${e.message} — ignored`);
+        return parts.push({ kind: 'lines', lines: asWritten(item) });
+      }
+      warn(`${key}: ${e.message} — ignored`);
     }
+    // The key is rewritten; its comments stay, as whole lines after the known keys.
+    if (cx.comments.length) parts.push({ kind: 'lines', lines: cx.comments });
+    for (const name of cx.defined) acc.dropped.push([key, name]);
   });
 
   // The page: plass.page (half letter, a custom size) over papersize.
@@ -909,25 +1208,35 @@ export function readFrontmatter(src: string): FrontmatterRead {
       delete acc.s[field];
     }
   }
+  out.extra = joinExtra(parts);
+  // An alias in a kept entry of an anchor the save drops would name nothing.
+  if (acc.dropped.length) {
+    const aliases = aliasNames(out.extra);
+    for (const [key, name] of acc.dropped) {
+      if (aliases.has(name)) warn(`${key}: *${clip(name)} in a kept entry names its anchor &${clip(name)}, which a save does not write back (pandoc then rejects the file) — write the value there instead`);
+    }
+  }
+  if (unlisted) out.warnings.push(`front matter: ${unlisted} more warning(s) not listed`);
   out.settings = acc.s;
   out.frontMatterRestart = acc.restart;
-  out.extra = joinExtra(parts);
   return out;
 }
 
-const dropTrailingNewlines = (v: string | null): string | null => (v === null ? null : v.replace(/\n+$/, ''));
-
 function readTop(key: string, n: YNode, out: FrontmatterRead, acc: Acc): void {
   const s = acc.s;
+  const textOf = (node: YNode): string | null => {
+    const v = text(node);
+    return v === null ? null : trimNewlines(v);
+  };
   switch (key) {
     case 'title':
-      out.titleMd = dropTrailingNewlines(text(n));
+      out.titleMd = textOf(n);
       return;
     case 'date':
-      out.dateMd = dropTrailingNewlines(text(n));
+      out.dateMd = textOf(n);
       return;
     case 'abstract':
-      out.abstractMd = dropTrailingNewlines(text(n));
+      out.abstractMd = textOf(n);
       return;
     case 'author':
       out.authorsMd = authors(n, acc.warn);
@@ -949,7 +1258,7 @@ function readTop(key: string, n: YNode, out: FrontmatterRead, acc: Acc): void {
       const sides: Partial<Record<(typeof MARGINS)[number], number>> = {};
       const order = ['rest', 'x', 'y', 'top', 'right', 'bottom', 'left'];
       const given = new Map(n.entries);
-      for (const k of given.keys()) if (!order.includes(k)) acc.warn(`margin.${k} is not a margin side — ignored`);
+      for (const k of given.keys()) if (!order.includes(k)) acc.warn(`margin.${clip(k)} is not a margin side — ignored`);
       for (const k of order) {
         const v = given.get(k);
         if (!v) continue;
@@ -985,7 +1294,7 @@ function readTop(key: string, n: YNode, out: FrontmatterRead, acc: Acc): void {
       else {
         const v = text(n) ?? '';
         s.numberSections = v !== '';
-        if (v !== '' && v !== '1.1') acc.warn(`section-numbering: Plass numbers sections "1.1", not ${scalar(v)}`);
+        if (v !== '' && v !== '1.1') acc.warn(`section-numbering: Plass numbers sections "1.1", not ${clip(scalar(v))}`);
       }
       return;
     }
@@ -994,7 +1303,7 @@ function readTop(key: string, n: YNode, out: FrontmatterRead, acc: Acc): void {
       const files = n.t === 'seq' ? n.items : [n];
       const first = files[0] ? text(files[0]) : null;
       if (!first) throw new Invalid('expected a file path');
-      if (files.length > 1) acc.warn(`bibliography: only the first file (${scalar(first)}) is read`);
+      if (files.length > 1) acc.warn(`bibliography: only the first file (${clip(scalar(first))}) is read`);
       out.bibliography = first;
       return;
     }
@@ -1012,7 +1321,7 @@ function readTop(key: string, n: YNode, out: FrontmatterRead, acc: Acc): void {
 
 function authors(n: YNode, warn: (m: string) => void): string | null {
   if (isNull(n)) return null;
-  if (n.t === 'scalar') return dropTrailingNewlines(n.value);
+  if (n.t === 'scalar') return trimNewlines(n.value);
   const names: string[] = [];
   let dropped = false;
   for (const item of n.t === 'seq' ? n.items : [n]) {
@@ -1029,17 +1338,20 @@ function authors(n: YNode, warn: (m: string) => void): string | null {
   return names.length ? names.join(', ') : null;
 }
 
-/** The `plass:` entry. Known children are read; unknown ones, comments and
- *  children that cannot be read come back as a `plass` extra part (two-space
- *  indented child lines) for the writer to put back into the plass block. */
-function readPlass(raw: string[], acc: Acc): ExtraPart | null {
-  const head = KEY_RE.exec(raw[0])!;
-  const inline = head[2] ?? '';
+/** The `plass:` entry (its key line at `root`). Known children are read;
+ *  unknown ones, comments and children that cannot be read come back as a
+ *  `plass` extra part (child lines at two spaces) for the writer to put
+ *  back into the plass block. */
+function readPlass(raw: string[], root: number, acc: Acc): ExtraPart | null {
+  const head = matchKey(raw[0].slice(root))!;
   const kept: string[] = [];
+  const keepComments = (comments: string[]): void => {
+    for (const c of comments) kept.push('  ' + c);
+  };
   const child = (key: string, value: YNode, rawLines: string[] | null): void => {
     if (!KNOWN_PLASS.has(key)) {
-      acc.warn(`plass.${key} is not a Plass setting — kept as written`);
-      kept.push(...(rawLines ?? [`  ${scalar(key)}:${value.t === 'null' ? '' : ' ' + emitNode(value)}`]));
+      acc.warn(`plass.${clip(key)} is not a Plass setting — kept as written`);
+      append(kept, rawLines ?? [`  ${scalar(key)}:${value.t === 'null' ? '' : ' ' + emitNode(value)}`]);
       return;
     }
     try {
@@ -1049,32 +1361,33 @@ function readPlass(raw: string[], acc: Acc): ExtraPart | null {
       acc.warn(`plass.${key}: ${e.message} — ignored`);
     }
   };
-  if (!isBlank(inline) && !isComment(inline)) {
-    // `plass: {…}` on one line.
-    const notes: string[] = [];
+  if (head.rest !== '' && head.rest[0] !== '#') {
+    // `plass: {…}` on one line (or an alias of a map).
+    const cx = context(acc.anchors);
     let node: YNode;
     try {
-      node = parseEntry(raw, 0, notes).value;
+      node = parseEntry(raw, root, cx).value;
     } catch (e) {
       if (!(e instanceof YamlError)) throw e;
       acc.warn(`plass: ${e.message} — kept as written`);
-      return { kind: 'lines', lines: raw };
+      return { kind: 'lines', lines: reindent(raw, root, 0) };
     }
-    for (const note of notes) acc.warn(`plass: ${note}`);
+    for (const note of cx.notes) acc.warn(`plass: ${note}`);
     if (node.t !== 'map') {
       if (!isNull(node)) {
         acc.warn(`plass: expected a map, found ${describe(node)} — kept as written`);
-        return { kind: 'lines', lines: raw };
+        return { kind: 'lines', lines: reindent(raw, root, 0) };
       }
-      return null;
+      return cx.comments.length ? { kind: 'lines', lines: cx.comments } : null;
     }
     for (const [key, value] of node.entries) child(key, value, null);
+    keepComments(cx.comments);
+    for (const name of cx.defined) acc.dropped.push(['plass', name]);
     return kept.length ? { kind: 'plass', lines: kept } : null;
   }
+  if (head.rest) kept.push('  ' + head.rest); // a comment after `plass:`
   const cont = raw.slice(1);
-  const first = cont.find((line) => !isBlank(line) && !isComment(line));
-  if (!first) return { kind: 'plass', lines: reindent(cont, indentOf(cont.find((l) => !isBlank(l)) ?? ''), 2) };
-  const ci = indentOf(first);
+  const ci = baseIndent(cont);
   const items = splitItems(cont, ci);
   // A child given twice: the last one is read.
   const lastAt = new Map<string, number>();
@@ -1083,28 +1396,34 @@ function readPlass(raw: string[], acc: Acc): ExtraPart | null {
   });
   items.forEach((item, k) => {
     const rawLines = reindent(cont.slice(item.start, item.end), ci, 2);
-    if (item.kind === 'blank' || item.kind === 'comment') return kept.push(...rawLines);
+    if (item.kind === 'blank') {
+      if (kept.length && kept[kept.length - 1] !== '') kept.push('');
+      return;
+    }
+    if (item.kind === 'comment') return kept.push('  ' + cont[item.start].trim());
     if (item.kind === 'stray') {
-      acc.warn(`plass: the line "${cont[item.start].trim()}" is not a "key: value" entry — kept as written`);
-      return kept.push(...rawLines);
+      acc.warn(`plass: the line "${clip(cont[item.start].trim())}" is not a "key: value" entry — kept as written`);
+      return append(kept, rawLines);
     }
     const key = keyOf(cont[item.start], ci)!;
     if (lastAt.get(key) !== k) {
-      acc.warn(`plass.${key} is given twice — the last one is read`);
+      acc.warn(`plass.${clip(key)} is given twice — the last one is read`);
       return;
     }
     if (!KNOWN_PLASS.has(key)) return child(key, { t: 'null' }, rawLines);
-    const notes: string[] = [];
+    const cx = context(acc.anchors);
     let value: YNode;
     try {
-      value = parseEntry(cont.slice(item.start, item.end), ci, notes).value;
+      value = parseEntry(cont.slice(item.start, item.end), ci, cx).value;
     } catch (e) {
       if (!(e instanceof YamlError)) throw e;
       acc.warn(`plass.${key}: ${e.message} — kept as written`);
-      return kept.push(...rawLines);
+      return append(kept, rawLines);
     }
-    for (const note of notes) acc.warn(`plass.${key}: ${note}`);
+    for (const note of cx.notes) acc.warn(`plass.${key}: ${note}`);
     child(key, value, rawLines);
+    keepComments(cx.comments);
+    for (const name of cx.defined) acc.dropped.push([`plass.${key}`, name]);
   });
   return { kind: 'plass', lines: kept };
 }
@@ -1116,7 +1435,7 @@ function readPlassChild(key: string, n: YNode, acc: Acc): void {
     for (const [k, v] of entriesOf(n)) {
       const read = readers[k];
       if (!read) {
-        acc.warn(`plass.${path}.${k} is not a Plass setting — ignored`);
+        acc.warn(`plass.${path}.${clip(k)} is not a Plass setting — ignored`);
         continue;
       }
       try {
@@ -1173,7 +1492,7 @@ function readPlassChild(key: string, n: YNode, acc: Acc): void {
       const H = key === 'header';
       fields(key, {
         text: (v) => {
-          const t = dropTrailingNewlines(text(v)) ?? '';
+          const t = trimNewlines(text(v) ?? '');
           if (H) s.headerText = t;
           else s.footerText = t;
         },
@@ -1197,19 +1516,36 @@ function readPlassChild(key: string, n: YNode, acc: Acc): void {
       });
       return;
     case 'math-macros':
-      s.mathMacros = dropTrailingNewlines(text(n)) ?? '';
+      s.mathMacros = trimNewlines(text(n) ?? '');
       return;
   }
 }
 
 // ---------------------------------------------------------------- writing
 
+/** How kept lines before the first kept entry are written. A line there
+ *  indented deeper than `indent` with no key above it would join the entry
+ *  written before it; when the first such line reads as a key where it
+ *  stands, the run goes first, as it was read ('first'); otherwise it moves
+ *  to the margin ('margin'). 'none': nothing to move. */
+function leadingRun(items: Item[], lines: string[], indent: number): { count: number; place: 'none' | 'first' | 'margin' } {
+  const n = items.findIndex((item) => item.kind === 'entry');
+  const run = n < 0 ? items : items.slice(0, n);
+  const stray = run.find((item) => item.kind === 'stray');
+  if (!stray) return { count: 0, place: 'none' };
+  const line = lines[stray.start];
+  const ind = indentOf(line);
+  if (ind <= indent) return { count: 0, place: 'none' };
+  return { count: run.length, place: matchKey(line.slice(ind)) ? 'first' : 'margin' };
+}
+
 /** The front matter block (`---` … `---`, no trailing newline), or '' when
  *  there is nothing to write. Known keys first, in the plan's order and
- *  only when not the default; then `extra`, verbatim. An extra entry whose
- *  key the document now writes is dropped (with a warning); so is a
- *  `---`/`...` line, which would end the block. `bibliography:` is never
- *  written: the bibliography is embedded in the body. */
+ *  only when not the default; then `extra`: its entries as written, its
+ *  comments at the margin. An extra entry whose key the document now
+ *  writes is dropped (with a warning); so is a `---`/`...` line, which
+ *  would end the block. `bibliography:` is never written: the
+ *  bibliography is embedded in the body. */
 export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => void = () => {}): string {
   const s = normalizeSettings(fm.settings ?? null);
   const D = DEFAULT_SETTINGS;
@@ -1217,15 +1553,18 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
   const written = new Set<string>();
   const put = (key: string, ...lines: string[]): void => {
     lines[0] = `${key}: ${lines[0]}`;
-    top.push(...lines);
+    append(top, lines);
     written.add(key);
   };
   const block = (key: string, value: string): void => {
     const lines = blockLines(key, value, 2);
     if (lines) {
-      top.push(...lines);
+      append(top, lines);
       written.add(key);
-    } else put(key, scalar(value.replace(/\n+$/, '')));
+    }
+    // Quoted, with the final line break block text has: pandoc reads a
+    // value that ends in one as blocks, not as one line of inlines.
+    else put(key, scalar(trimNewlines(value) + '\n'));
   };
 
   if (fm.titleMd != null) put('title', scalar(fm.titleMd));
@@ -1287,66 +1626,93 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
   if (s.mathMacros.trim()) {
     const lines = blockLines('math-macros', s.mathMacros, 4);
     if (lines) {
-      plass.push('  ' + lines[0], ...lines.slice(1));
+      plass.push('  ' + lines[0]);
+      append(plass, lines.slice(1));
       plassKeys.add('math-macros');
-    } else sub('math-macros', scalar(s.mathMacros.replace(/\n+$/, '')));
+    } else sub('math-macros', scalar(trimNewlines(s.mathMacros)));
   }
 
   // The kept extra: unknown keys and comments in order; a kept `plass:`
-  // block's children join the plass block written above.
+  // block's children join the plass block written above. Comments go at
+  // the margin of their block, where none can join the entry written
+  // before it.
+  const head: string[] = [];
   const rest: string[] = [];
-  const plassKept: string[] = [];
-  const extra = (fm.extra ?? '').replace(/\r\n?/g, '\n');
-  const lines = extra.split('\n');
+  const plassHead: string[] = [];
+  const plassRest: string[] = [];
   let pendingBlank = false;
-  const keep = (raw: string[]): void => {
-    if (pendingBlank && rest.length) rest.push('');
+  const keep = (into: string[], raw: string[]): void => {
+    if (pendingBlank && into.length) into.push('');
     pendingBlank = false;
-    rest.push(...raw);
+    append(into, raw);
   };
-  for (const item of splitItems(lines, 0)) {
-    const raw = lines.slice(item.start, item.end);
+  const orig = (fm.extra ?? '').replace(/\r\n?/g, '\n').split('\n');
+  const lines = orig.map(detab);
+  const items = splitItems(lines, 0);
+  const lead = leadingRun(items, lines, 0);
+  items.forEach((item, k) => {
+    const raw = orig.slice(item.start, item.end);
+    const into = k < lead.count && lead.place === 'first' ? head : rest;
     if (item.kind === 'blank') {
       pendingBlank = true;
-      continue;
+      return;
     }
-    if (item.kind === 'stray' && DELIMITER.test(raw[0])) {
-      warn(`front matter: a "${raw[0].trim()}" line would end the block — dropped`);
-      continue;
+    if (item.kind === 'comment') return keep(into, [raw[0].trimStart()]);
+    if (item.kind === 'stray') {
+      if (DELIMITER.test(raw[0])) {
+        warn(`front matter: a "${raw[0].trim()}" line would end the block — dropped`);
+        return;
+      }
+      return keep(into, k < lead.count && lead.place === 'margin' ? [raw[0].trimStart()] : raw);
     }
-    const key = item.kind === 'entry' ? keyOf(raw[0], 0) : null;
-    const inline = item.kind === 'entry' ? (KEY_RE.exec(raw[0])![2] ?? '') : '';
-    if (key === 'plass' && (isBlank(inline) || isComment(inline))) {
-      const cont = raw.slice(1);
-      const ci = indentOf(cont.find((line) => !isBlank(line) && !isComment(line)) ?? cont.find((l) => !isBlank(l)) ?? '');
-      for (const child of splitItems(cont, ci)) {
-        const childRaw = reindent(cont.slice(child.start, child.end), ci, 2);
+    const key = keyOf(lines[item.start], 0);
+    const inline = matchKey(lines[item.start])!.rest;
+    if (key === 'plass' && (inline === '' || inline[0] === '#')) {
+      const cont = lines.slice(item.start + 1, item.end);
+      const ci = baseIndent(cont);
+      const children = splitItems(cont, ci);
+      const childLead = leadingRun(children, cont, ci);
+      if (inline) plassRest.push('  ' + inline); // a comment after `plass:`
+      let blank = false;
+      children.forEach((child, c) => {
+        const into = c < childLead.count && childLead.place === 'first' ? plassHead : plassRest;
+        if (child.kind === 'blank') {
+          blank = true;
+          return;
+        }
         const childKey = child.kind === 'entry' ? keyOf(cont[child.start], ci) : null;
         if (childKey !== null && plassKeys.has(childKey)) {
-          warn(`front matter: the document's plass.${childKey} replaces the one kept from the file`);
-          continue;
+          warn(`front matter: the document's plass.${clip(childKey)} replaces the one kept from the file`);
+          return;
         }
-        plassKept.push(...childRaw);
-      }
-      continue;
+        if (blank && into.length) into.push('');
+        blank = false;
+        if (child.kind === 'comment') into.push('  ' + cont[child.start].trim());
+        else if (child.kind === 'stray' && c < childLead.count && childLead.place === 'margin') into.push('  ' + cont[child.start].trim());
+        else append(into, reindent(cont.slice(child.start, child.end), ci, 2));
+      });
+      return;
     }
     if (key !== null && written.has(key)) {
-      warn(`front matter: the document's ${key} replaces the one kept from the file`);
-      continue;
+      warn(`front matter: the document's ${clip(key)} replaces the one kept from the file`);
+      return;
     }
     if (key === 'bibliography') {
       warn('front matter: bibliography: is not written — the bibliography is embedded in the document');
-      continue;
+      return;
     }
     if (key === 'plass' && plass.length) {
       warn("front matter: the document's plass settings replace the plass entry kept from the file");
-      continue;
+      return;
     }
-    keep(raw);
-  }
+    keep(into, raw);
+  });
 
-  const kept = trimBlank(plassKept);
-  if (plass.length || kept.length) top.push('plass:', ...plass, ...kept);
-  const all = [...top, ...rest];
+  const kept = [...trimBlank(plassHead), ...plass, ...trimBlank(plassRest)];
+  if (kept.length) {
+    top.push('plass:');
+    append(top, kept);
+  }
+  const all = [...head, ...top, ...rest];
   return all.length ? `---\n${all.join('\n')}\n---` : '';
 }
