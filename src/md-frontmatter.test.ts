@@ -2,8 +2,9 @@
 // setting round-trips through pandoc's and Plass's keys, defaults write
 // nothing, scalars are written with no backslash escaping (so LaTeX
 // survives), YAML's own escapes are decoded as pandoc decodes them, unknown
-// keys and comments are carried verbatim in order, and out-of-range values
-// are reported, not silently clamped.
+// keys and comments are carried verbatim in order, anchors and aliases are
+// written back as they are (never expanded), and out-of-range values are
+// reported, not silently clamped.
 // Run: npx tsx src/md-frontmatter.test.ts
 import { readFrontmatter, writeFrontmatter, type FrontmatterFields } from './md-frontmatter';
 import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings } from './settings';
@@ -698,7 +699,60 @@ console.log('kept plass children:');
   check('… and when re-indented to two spaces', deep.extra === 'plass:\n  note: |\n    a\n\n\n    b\n      \n    c', json(deep.extra));
 }
 
-// --- 19. a key that is an Object.prototype name is no setting ---
+// --- 19. an alias is never expanded on the way back out ---
+console.log('anchors and aliases written as they are:');
+{
+  // Seven anchors, each a list of ten aliases of the one before: expanded,
+  // the last is 10^7 values (32 MB written to disk; one level more ran Node
+  // out of memory).
+  const names = 'abcdefgh';
+  const defs = (levels: number): string[] => {
+    const out = [`a: &a [${Array(10).fill('x').join(', ')}]`];
+    for (let i = 1; i < levels; i++) out.push(`${names[i]}: &${names[i]} [${Array(10).fill('*' + names[i - 1]).join(', ')}]`);
+    return out;
+  };
+  const yaml = defs(7).join('\n') + '\nplass: {future: *g}';
+  let t0 = performance.now();
+  const laughs = read(yaml);
+  const w = writeFrontmatter(laughs);
+  let ms = performance.now() - t0;
+  check('seven chained anchors under a flow plass: map read and save in milliseconds', ms < 200, `${ms.toFixed(0)} ms`);
+  check('… the kept child is the alias, not its 10^7 values', laughs.extra.length < 2 * yaml.length && /\n {2}future: \*g$/.test(laughs.extra), `${laughs.extra.length} bytes`);
+  check('… and saved as the alias', w.includes('\nplass:\n  future: *g\n') && w.length < 2 * yaml.length, w.slice(0, 200));
+  const root = `{${defs(8).join(', ')}, z: *h}`;
+  t0 = performance.now();
+  const flowRoot = read(root);
+  const wr = writeFrontmatter(flowRoot);
+  ms = performance.now() - t0;
+  check('eight chained anchors in a block written as one flow map: read and saved in milliseconds', ms < 200 && flowRoot.extra.length < 2 * root.length, `${ms.toFixed(0)} ms, ${flowRoot.extra.length} bytes`);
+  check('… one entry per line, aliases as written', wr === `---\n${defs(8).join('\n')}\nz: *h\n---`, wr.slice(0, 200));
+  // A chain of aliases restarts no depth count on the way out: 20000 links, no stack overflow.
+  const chain = ['a0: &a0 x'];
+  for (let i = 1; i <= 20000; i++) chain.push(`a${i}: &a${i} [*a${i - 1}]`);
+  const chainYaml = chain.join('\n') + '\nplass: {future: *a20000}';
+  t0 = performance.now();
+  let linked: ReturnType<typeof read> | null = null;
+  let thrown = '';
+  try {
+    linked = read(chainYaml);
+    writeFrontmatter(linked);
+  } catch (e) {
+    thrown = String(e);
+  }
+  ms = performance.now() - t0;
+  check('a 20000-long alias chain reads and saves without overflowing the stack', !thrown && ms < 1500, thrown || `${ms.toFixed(0)} ms`);
+  check('… its extra no larger than the input', linked !== null && linked.extra.length <= chainYaml.length && linked.extra.endsWith('plass:\n  future: *a20000'), String(linked?.extra.length));
+
+  const kept = read('plass: {future: &f [1, 2], other: *f, landscape: true}');
+  check('a flow plass: map keeps its unknown children’s anchors and aliases', kept.settings.landscape === true && kept.extra === 'plass:\n  future: &f [1, 2]\n  other: *f' && kept.warnings.length === 2, json(kept));
+  check('… with no warning that the anchor is lost', !kept.warnings.some((m) => /not written back/.test(m)));
+  const empty = read('plass: {a: &x , b: *x}');
+  check('an anchor on an empty value is an anchor (pandoc reads both as empty)', empty.extra === 'plass:\n  a: &x\n  b: *x' && fixedPoint(empty), json(empty));
+  const dropped = read('plass: {header: {align: &f left}, future: *f}');
+  check('an alias of an anchor in a rewritten child is still warned about', dropped.settings.headerAlign === 'left' && dropped.warnings.some((m) => /\*f in a kept entry names its anchor/.test(m)), json(dropped.warnings));
+}
+
+// --- 20. a key that is an Object.prototype name is no setting ---
 console.log('keys named like Object.prototype members:');
 {
   for (const [yaml, want] of [

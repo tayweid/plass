@@ -7,8 +7,9 @@
 // block lists, block scalars (`|`, `>`, chomping and indentation
 // indicators) and `#` comments. An anchor (`&a`) or tag (`!t`) is skipped
 // and the value after it read, and an alias (`*a`) of an anchor read
-// earlier is that anchor's value, as pandoc reads them. Tabs are expanded
-// to four-column stops first, as pandoc expands them.
+// earlier is that anchor's value, as pandoc reads them; a value Plass
+// carries but has to re-emit keeps its anchors and aliases as written.
+// Tabs are expanded to four-column stops first, as pandoc expands them.
 //
 // Known keys are interpreted: pandoc's own names for the big knobs, Plass's
 // settings under one `plass:` key (which pandoc ignores). Everything else —
@@ -28,9 +29,11 @@
 // intent, warns, and the next save writes the value in a form pandoc reads.
 //
 // The file is untrusted: every pattern here runs in time linear in its
-// input, nesting is capped so a crafted file cannot overflow the stack, and
-// a key read from the file is looked up among own properties only
-// (`valueOf` is no setting).
+// input; nesting is capped and an alias is never expanded (a few anchors
+// that each alias the one before would grow exponentially), so a crafted
+// file can neither overflow the stack nor exhaust memory; and a key read
+// from the file is looked up among own properties only (`valueOf` is no
+// setting).
 
 import { DEFAULT_SETTINGS, FOOTNOTE_NUMBERINGS, FOOTNOTE_SEPARATORS, normalizeSettings, type DocSettings, type PaperName } from './settings';
 import { CITATION_STYLES } from './citation-styles';
@@ -68,10 +71,14 @@ export interface FrontmatterRead {
 
 // ---------------------------------------------------------------- the YAML subset
 
-type YScalar = { t: 'scalar'; plain: boolean; value: string };
-type YMap = { t: 'map'; entries: Array<[string, YNode]> };
-type YSeq = { t: 'seq'; items: YNode[] };
-type YNode = YScalar | YMap | YSeq | { t: 'null' };
+/** `anchor`: the anchor (`&a`) written on this node. `alias`: set on what
+ *  an alias (`*a`) reads — a shallow copy of the anchored node, so a reader
+ *  sees its value and a writer writes `*a`, never the value again. */
+type YProps = { anchor?: string; alias?: string };
+type YScalar = { t: 'scalar'; plain: boolean; value: string } & YProps;
+type YMap = { t: 'map'; entries: Array<[string, YNode]> } & YProps;
+type YSeq = { t: 'seq'; items: YNode[] } & YProps;
+type YNode = YScalar | YMap | YSeq | ({ t: 'null' } & YProps);
 
 /** YAML this subset cannot read: the entry is kept as written. */
 class YamlError extends Error {}
@@ -309,28 +316,33 @@ function valueOf(rest: string, cont: string[], indent: number, cx: Ctx): YNode {
 }
 
 /** An anchor (`&a`) or tag (`!t`, `!!str`) before a value: pandoc reads the
- *  value after it, and so does Plass. Anchor names go to `anchors`. */
+ *  value after it, and so does Plass. Anchor names go to `anchors` (whether
+ *  one is written back depends on where it is: dropAnchors). */
 function stripProperties(r: string, cx: Ctx, anchors: string[]): string {
   for (;;) {
     const m = /^(&[^\s,[\]{}]+|![^\s,[\]{}]*)(?=[\s,[\]{}]|$)[ \t]*/.exec(r);
     if (!m) return r;
-    if (m[1][0] === '&') {
-      anchors.push(m[1].slice(1));
-      cx.notes.push(`the YAML anchor ${m[1]} is not written back`);
-    } else cx.notes.push(`the YAML tag ${m[1]} is ignored`);
+    if (m[1][0] === '&') anchors.push(m[1].slice(1));
+    else cx.notes.push(`the YAML tag ${m[1]} is ignored`);
     r = r.slice(m[0].length);
   }
 }
 
 function define(cx: Ctx, name: string, node: YNode): void {
+  node.anchor = name;
   cx.anchors.set(name, node);
   cx.defined.push(name);
 }
 
-/** The names after every `*` that can start an alias, in one pass. */
-function aliasNames(text: string): Set<string> {
+/** What the alias `*name` of `node` reads: its value, marked as the alias
+ *  (one small object, however large the value is). */
+const aliasOf = (name: string, node: YNode): YNode => ({ ...node, alias: name });
+
+/** The names after every `*` (aliases) or `&` (anchors) that can start one, in one pass. */
+function propertyNames(text: string, sigil: '*' | '&'): Set<string> {
   const names = new Set<string>();
-  for (const m of text.matchAll(/(?:^|[\s[{,])\*([^\s,[\]{}]+)/g)) names.add(m[1]);
+  const re = sigil === '*' ? /(?:^|[\s[{,])\*([^\s,[\]{}]+)/g : /(?:^|[\s[{,])&([^\s,[\]{}]+)/g;
+  for (const m of text.matchAll(re)) names.add(m[1]);
   return names;
 }
 
@@ -344,7 +356,7 @@ function alias(r: string, cont: string[], cx: Ctx): YNode | null {
   if (after && after[0] !== '#') return null;
   if (after) cx.comments.push(after);
   for (const line of cont) if (isComment(line)) cx.comments.push(line.trim());
-  return node;
+  return aliasOf(m[1], node);
 }
 
 /** The note for an unquoted value pandoc's YAML reader rejects. */
@@ -564,14 +576,15 @@ class FlowReader {
   node(inFlow = false): YNode {
     this.ws();
     const anchors: string[] = [];
-    if (inFlow && (this.s[this.i] === '&' || this.s[this.i] === '!')) {
+    const props = inFlow && (this.s[this.i] === '&' || this.s[this.i] === '!');
+    if (props) {
       const rest = this.s.slice(this.i);
       this.i += rest.length - stripProperties(rest, this.cx, anchors).length;
       this.ws();
-      // A property with no value after it (`{a: !t, …}`) is an empty value.
-      if (this.i >= this.s.length || ',]}'.includes(this.s[this.i])) return { t: 'null' };
     }
-    const node = this.bare(inFlow);
+    // A property with no value after it (`{a: !t, b: &x, c: *x}`) is an empty value.
+    const empty = props && (this.i >= this.s.length || ',]}'.includes(this.s[this.i]));
+    const node: YNode = empty ? { t: 'null' } : this.bare(inFlow);
     for (const name of anchors) define(this.cx, name, node);
     return node;
   }
@@ -588,7 +601,7 @@ class FlowReader {
       const node = m ? this.cx.anchors.get(m[1]) : undefined;
       if (m && node) {
         this.i += m[0].length;
-        return node;
+        return aliasOf(m[1], node);
       }
     }
     return this.plain();
@@ -844,21 +857,44 @@ function blockLines(prefix: string, text: string, indent: number): string[] | nu
   return [`${prefix}: |${/^[ \t]/.test(first) ? '2' : ''}`, ...lines.map((line) => (line ? pad + line : ''))];
 }
 
-/** Re-emit a parsed node on one line (an unknown child of a flow `plass:` map). */
-function emitNode(node: YNode): string {
+/** Re-emit a parsed node on one line (an unknown child of a flow `plass:`
+ *  map, an entry of a block written as one flow map), with its anchors and
+ *  aliases as written: an alias is written `*a`, never its value again. So
+ *  the output is as long as the input, give or take quoting, and nests as
+ *  deep as the parse let it (an alias never restarts the depth count) —
+ *  expanded, a few anchors that each alias the one before grow
+ *  exponentially, and a long chain of them overflows the stack. The names
+ *  of the anchors written are added to `anchors`. */
+function emitNode(node: YNode, anchors: Set<string>): string {
+  if (node.alias !== undefined) return `*${node.alias}`;
+  let out: string;
   switch (node.t) {
     case 'null':
-      return '';
+      out = '';
+      break;
     case 'scalar':
-      return node.plain && !node.value.includes('\n') && !/^[*&!%@`]/.test(node.value) && !UNWRITABLE.test(node.value)
-        ? node.value
-        : scalar(node.value, true);
+      out =
+        node.plain && !node.value.includes('\n') && !/^[*&!%@`]/.test(node.value) && !UNWRITABLE.test(node.value)
+          ? node.value
+          : scalar(node.value, true);
+      break;
     case 'map':
-      return `{${node.entries.map(([k, v]) => `${scalar(k, true)}: ${emitNode(v)}`.trimEnd()).join(', ')}}`;
+      out = `{${node.entries.map(([k, v]) => `${scalar(k, true)}: ${emitNode(v, anchors)}`.trimEnd()).join(', ')}}`;
+      break;
     case 'seq':
-      return `[${node.items.map(emitNode).join(', ')}]`;
+      out = `[${node.items.map((v) => emitNode(v, anchors)).join(', ')}]`;
+      break;
   }
+  if (node.anchor === undefined) return out;
+  anchors.add(node.anchor);
+  return out ? `&${node.anchor} ${out}` : `&${node.anchor}`;
 }
+
+/** A parsed entry as one block-map line, `key: value` (emitNode). */
+const emitEntry = (key: string, value: YNode, anchors: Set<string>): string => {
+  const v = emitNode(value, anchors);
+  return `${scalar(key)}:${v ? ' ' + v : ''}`;
+};
 
 const num = (n: number): string => String(n);
 
@@ -1083,6 +1119,15 @@ interface Acc {
   dropped: Array<[string, string]>;
 }
 
+/** Anchors defined in a value a save rewrites without them: warned, and
+ *  remembered so that an alias of one in a kept entry is warned about too. */
+function dropAnchors(acc: Acc, where: string, names: Iterable<string>): void {
+  for (const name of names) {
+    acc.warn(`${where}: the YAML anchor &${clip(name)} is not written back`);
+    acc.dropped.push([where, name]);
+  }
+}
+
 export function readFrontmatter(src: string): FrontmatterRead {
   const text = src.replace(/^\ufeff/, '').replace(/\r\n?/g, '\n');
   const out: FrontmatterRead = {
@@ -1127,7 +1172,9 @@ export function readFrontmatter(src: string): FrontmatterRead {
       reader.end();
       if (node.t === 'map') {
         for (const note of cx.notes) warn(`front matter: ${note}`);
-        orig = lines = [...node.entries.map(([k, v]) => `${scalar(k)}:${v.t === 'null' ? '' : ' ' + emitNode(v)}`), ...cx.comments];
+        // Anchors and aliases are written as they are, never expanded (emitNode).
+        const written = new Set<string>();
+        orig = lines = [...node.entries.map(([k, v]) => emitEntry(k, v, written)), ...cx.comments];
       }
     } catch (e) {
       if (!(e instanceof YamlError)) throw e;
@@ -1200,7 +1247,7 @@ export function readFrontmatter(src: string): FrontmatterRead {
     }
     // The key is rewritten; its comments stay, as whole lines after the known keys.
     if (cx.comments.length) parts.push({ kind: 'lines', lines: cx.comments });
-    for (const name of cx.defined) acc.dropped.push([key, name]);
+    dropAnchors(acc, key, cx.defined);
   });
 
   // The page: plass.page (half letter, a custom size) over papersize.
@@ -1223,7 +1270,7 @@ export function readFrontmatter(src: string): FrontmatterRead {
   out.extra = joinExtra(parts);
   // An alias in a kept entry of an anchor the save drops would name nothing.
   if (acc.dropped.length) {
-    const aliases = aliasNames(out.extra);
+    const aliases = propertyNames(out.extra, '*');
     for (const [key, name] of acc.dropped) {
       if (aliases.has(name)) warn(`${key}: *${clip(name)} in a kept entry names its anchor &${clip(name)}, which a save does not write back (pandoc then rejects the file) — write the value there instead`);
     }
@@ -1359,12 +1406,8 @@ function readPlass(raw: string[], root: number, acc: Acc): ExtraPart | null {
   const keepComments = (comments: string[]): void => {
     for (const c of comments) kept.push('  ' + c);
   };
-  const child = (key: string, value: YNode, rawLines: string[] | null): void => {
-    if (!KNOWN_PLASS.has(key)) {
-      acc.warn(`plass.${clip(key)} is not a Plass setting — kept as written`);
-      append(kept, rawLines ?? [`  ${scalar(key)}:${value.t === 'null' ? '' : ' ' + emitNode(value)}`]);
-      return;
-    }
+  const unknown = (key: string): void => acc.warn(`plass.${clip(key)} is not a Plass setting — kept as written`);
+  const known = (key: string, value: YNode): void => {
     try {
       readPlassChild(key, value, acc);
     } catch (e) {
@@ -1391,9 +1434,17 @@ function readPlass(raw: string[], root: number, acc: Acc): ExtraPart | null {
       }
       return cx.comments.length ? { kind: 'lines', lines: cx.comments } : null;
     }
-    for (const [key, value] of node.entries) child(key, value, null);
+    // An unknown child is re-emitted, its anchors and aliases as written.
+    const written = new Set<string>();
+    for (const [key, value] of node.entries) {
+      if (KNOWN_PLASS.has(key)) known(key, value);
+      else {
+        unknown(key);
+        kept.push('  ' + emitEntry(key, value, written));
+      }
+    }
     keepComments(cx.comments);
-    for (const name of cx.defined) acc.dropped.push(['plass', name]);
+    dropAnchors(acc, 'plass', cx.defined.filter((name) => !written.has(name)));
     return kept.length ? { kind: 'plass', lines: kept } : null;
   }
   if (head.rest) kept.push('  ' + head.rest); // a comment after `plass:`
@@ -1421,7 +1472,10 @@ function readPlass(raw: string[], root: number, acc: Acc): ExtraPart | null {
       acc.warn(`plass.${clip(key)} is given twice — the last one is read`);
       return;
     }
-    if (!KNOWN_PLASS.has(key)) return child(key, { t: 'null' }, rawLines);
+    if (!KNOWN_PLASS.has(key)) {
+      unknown(key);
+      return append(kept, rawLines);
+    }
     const cx = context(acc.anchors);
     let value: YNode;
     try {
@@ -1432,9 +1486,9 @@ function readPlass(raw: string[], root: number, acc: Acc): ExtraPart | null {
       return append(kept, rawLines);
     }
     for (const note of cx.notes) acc.warn(`plass.${key}: ${note}`);
-    child(key, value, rawLines);
+    known(key, value);
     keepComments(cx.comments);
-    for (const name of cx.defined) acc.dropped.push([`plass.${key}`, name]);
+    dropAnchors(acc, `plass.${key}`, cx.defined);
   });
   return { kind: 'plass', lines: kept };
 }
