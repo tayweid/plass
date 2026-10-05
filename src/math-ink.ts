@@ -13,6 +13,7 @@ import { parseMathMacros, type DocSettings } from './settings';
 import { expandMacrosWith } from './typ-serializer';
 import { wrapAligned } from './math-src';
 import { compilerCircuitEpoch, onCompilerCircuitReset } from './compiler-circuit';
+import { MITEX_IMPORT } from './typst-config';
 
 export interface MathInk {
   svg: string;
@@ -242,7 +243,7 @@ async function compileOne(
   const src =
     `#set page(width: auto, height: auto, margin: 0pt)\n` +
     `#set text(size: ${item.sizePt}pt)\n` +
-    '#import "@preview/mitex:0.2.5": mi, mitex\n\n' +
+    MITEX_IMPORT + '\n\n' +
     (item.display
       ? `#mitex(\`\n${latex}\n\`)\n`
       : `#${expr}` +

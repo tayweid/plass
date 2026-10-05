@@ -20,7 +20,8 @@ backend.
   private/literal addresses, referrers, oversized responses, and active SVG
   content are rejected.
 - Typst package resolution is not a general network capability. Only
-  `@preview/mitex:0.2.5` is recognized. Its exact archive is fetched from the
+  `@preview/mitex:0.2.7` is recognized (the previous pin, 0.2.5, is now as
+  unknown as any other package). Its exact archive is fetched from the
   pinned `packages.typst.org` URL with no credentials or referrer, bounded to
   512 KiB, and checked against the SHA-256 digest in `src/typst-config.ts`
   before the compiler can read it. Other package names cause no request.

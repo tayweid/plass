@@ -21,8 +21,10 @@ Plass does not upload document contents to an application backend. It can make
 these narrowly scoped requests:
 
 - If a document uses the supported mitex package for math, the compiler fetches
-  one pinned, integrity-checked package archive from `packages.typst.org`. The
-  request sends no credentials or referrer.
+  one pinned, integrity-checked package archive (mitex 0.2.7) from
+  `packages.typst.org`. The request sends no credentials or referrer. A `.typ`
+  you export names the same package; compiling it with the Typst command-line
+  tool makes that tool fetch it from the same registry, outside Plass.
 - A remote image remains blocked until you explicitly approve its displayed
   HTTPS origin for the current session. The request sends no credentials or
   referrer. The image host can still observe ordinary connection information,

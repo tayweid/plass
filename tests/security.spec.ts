@@ -251,10 +251,10 @@ test('compiler package policy makes only one pinned integrity-checked request', 
 
   const tampered = await page.evaluate(async () => {
     const { compileSvg } = await import('/src/pdf.ts');
-    return compileSvg('#import "@preview/mitex:0.2.5": mitex\n#mitex(`x`)');
+    return compileSvg('#import "@preview/mitex:0.2.7": mitex\n#mitex(`x`)');
   });
   expect(tampered).toBeNull();
-  expect(packageRequests).toEqual(['https://packages.typst.org/preview/mitex-0.2.5.tar.gz']);
+  expect(packageRequests).toEqual(['https://packages.typst.org/preview/mitex-0.2.7.tar.gz']);
 });
 
 test('compiler timeout circuit blocks automatic retries until a document edit resets it', async ({ page }) => {

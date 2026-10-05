@@ -3,6 +3,7 @@ import { demoDoc } from './demo-doc.ts';
 import { docToTyp } from './typ-serializer.ts';
 import { migrateLegacyTableGeometry, typToDoc } from './typ-parser.ts';
 import { schema } from './schema.ts';
+import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config.ts';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = '') {
@@ -354,7 +355,7 @@ function firstDiff(a: string, b: string): string {
     '#set heading(numbering: "1.1")',
     '#counter(page).update(3)',
     '// typeset:math-macros "\\\\E = \\\\mathbb{E}"',
-    '#import "@preview/mitex:0.2.5": mi, mitex',
+    '#import "@preview/mitex:0.2.7": mi, mitex',
     '',
     '= Introduction <sec:intro>',
     '',
@@ -967,6 +968,20 @@ function firstDiff(a: string, b: string): string {
     const parsed = typToDoc(source).doc;
     check(`unsupported image width stays verbatim: ${expr}`, parsed.firstChild!.type.name === 'code_block' && parsed.firstChild!.textContent === source);
   }
+}
+
+// --- the export names its exact Typst version and the pinned mitex ---
+{
+  const out = docToTyp(demoDoc());
+  check('line 1 names the typst release the export is exact for', out.startsWith(`// Exported from Plass — exact on typst ${TYPST_EXACT_VERSION}\n#set page`), out.split('\n')[0]);
+  check('math imports the pinned mitex', out.includes(`\n${MITEX_IMPORT}\n`) && !out.includes('mitex:0.2.5'));
+  // A file saved under the old pin (the course folder's) opens with that
+  // line read as header and re-exports at the current pin.
+  const legacy = '// Exported from Plass\n#set page(paper: "us-letter", margin: 1in)\n#import "@preview/mitex:0.2.5": mi, mitex\n\nArea #mi(`\\pi r^2`).\n';
+  const { doc, warnings } = typToDoc(legacy);
+  const again = docToTyp(doc);
+  check('a 0.2.5 import is header, not an island', warnings.length === 0 && doc.childCount === 1 && doc.firstChild!.type.name === 'paragraph', warnings.join('; '));
+  check('a 0.2.5 file re-exports at the pinned version', again.includes(`\n${MITEX_IMPORT}\n`) && !again.includes('mitex:0.2.5'));
 }
 
 declare const process: { exitCode?: number };

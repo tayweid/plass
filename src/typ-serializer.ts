@@ -14,6 +14,7 @@ import { rowRuleArg, type RowRule } from './table-rules';
 import { CELL_FILL_TYPST, type CellFill } from './table-fills';
 import type { CitationStyle } from './citation-styles';
 import { commentToTyp } from './editor-comments-format';
+import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config';
 
 export interface TypExportOptions {
   /** When given, receives the text offset at which each top-level block's
@@ -952,7 +953,9 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
   try {
     const s: DocSettings = normalizeSettings(doc.attrs?.settings as Partial<DocSettings> | null);
     docMacros = parseMathMacros(s.mathMacros);
-    let out = '// Exported from Plass\n';
+    // Line 1 names the Typst release the export is exact for: the in-app
+    // compiler's. (It compiles on later CLIs too; their layout may differ.)
+    let out = `// Exported from Plass — exact on typst ${TYPST_EXACT_VERSION}\n`;
     // Named papers by Typst's names; half letter and a custom size by their
     // dimensions (Typst has no name for them).
     const paperName: Partial<Record<DocSettings['page'], string>> = { letter: 'us-letter', a4: 'a4', legal: 'us-legal', b5: 'iso-b5', a5: 'a5' };
@@ -1001,7 +1004,7 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     else if (s.footnoteSeparator === 'full') out += '#set footnote.entry(separator: line(length: 100%, stroke: 0.5pt))\n';
     if (s.pageNumStart !== 1) out += `#counter(page).update(${s.pageNumStart})\n`;
     if (s.mathMacros.trim()) out += `// typeset:math-macros ${JSON.stringify(s.mathMacros)}\n`;
-    if (containsMath(doc)) out += '#import "@preview/mitex:0.2.5": mi, mitex\n';
+    if (containsMath(doc)) out += MITEX_IMPORT + '\n';
     out += '\n';
     const offsets = opts.offsets;
     if (offsets) offsets.length = 0;
