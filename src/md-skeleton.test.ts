@@ -46,6 +46,7 @@ const MathD = (s: string): PandocNode => ({ t: 'Math', c: [{ t: 'DisplayMath' },
 const Note = (...blocks: PandocNode[]): PandocNode => ({ t: 'Note', c: blocks });
 const Code = (s: string): PandocNode => ({ t: 'Code', c: [attr(), s] });
 const Emph = (...inl: Inl[]): PandocNode => ({ t: 'Emph', c: inl.flat() });
+const Link = (inl: PandocNode[], url = 'u'): PandocNode => ({ t: 'Link', c: [attr(), inl, [url, '']] });
 const Image = (src: string, alt: PandocNode[] = [], a: Attr = attr()): PandocNode => ({ t: 'Image', c: [a, alt, [src, '']] });
 const Quote = (...blocks: PandocNode[]): PandocNode => ({ t: 'BlockQuote', c: blocks });
 const Bullets = (...items: PandocNode[][]): PandocNode => ({ t: 'BulletList', c: items });
@@ -115,6 +116,14 @@ same(
   ],
 );
 
+// A one-line `abstract:` is MetaInlines to pandoc: one paragraph.
+same(
+  'a single-line abstract is one paragraph',
+  doc(N.abstract.create(null, [p(t('One line with '), mi('x'), t(' and '), schema.text('em', [schema.marks.em.create()]), t('’s view.'))])),
+  ast([], { abstract: MetaInl([...w('One line with'), Sp, MathI('x'), Sp, S('and'), Sp, Emph(S('em')), S("'s"), Sp, S('view.')]) }),
+  [rec('abstract', 0), rec('paragraph', 1, { text: 'One line with ⟦$⟧ and em’s view.', math: ['x'] })],
+);
+
 // normalizations.md, each line its own paragraph (one quote state each).
 same(
   'Typst normalizations applied to pandoc text',
@@ -154,6 +163,16 @@ same(
   'printedForm per token, code verbatim',
   doc(p(schema.text('a', [schema.marks.em.create()]), t('−3, x −3 and '), schema.text('code -- -3', [schema.marks.code.create()]), t('.'))),
   ast([Para(Emph(S('a')), S('-3,'), Sp, S('x'), Sp, S('-3'), Sp, S('and'), Sp, Code('code -- -3'), S('.'))]),
+);
+
+// A link is its own markdown-it tokens: it ends the run before it (so
+// `costs -` before a link `3` keeps its hyphen) and starts a new one after
+// it (so `-3` right after a link holds a minus).
+same(
+  'a link ends a printedForm run',
+  doc(p(schema.text('3', [schema.marks.link.create({ href: 'u' })]), t('−3 and costs -'), schema.text('3', [schema.marks.link.create({ href: 'u' })]), t('.'))),
+  ast([Para(Link([S('3')]), S('-3'), Sp, S('and'), Sp, S('costs'), Sp, S('-'), Link([S('3')]), S('.'))]),
+  [rec('paragraph', 0, { text: '3−3 and costs -3.' })],
 );
 
 // The quoter sees a formula as an object (a quote after it closes, an
@@ -249,6 +268,82 @@ same(
     rec('math', 0, { math: ['\\frac{a}{b}'] }),
   ],
 );
+
+// The formula on the lines right after paragraph text, more text after its
+// closing `$$`: pandoc keeps it in the paragraph; Plass's model holds a
+// paragraph, the display math and a paragraph (pandoc 3.4 shapes).
+same(
+  'display math inside a paragraph splits it',
+  doc(
+    p(t('The supply relationship is')),
+    N.math_display.create({ src: 'P = 10 - Q', label: 'eq:supply' }),
+    p(t('and the demand follows.')),
+    p(t('The cost is')),
+    N.math_display.create({ src: 'C = 5q' }),
+    p(t('and “the price” follows.')),
+    p(t('Text before')),
+    N.math_display.create({ src: 'x', label: 'eq:next', numbered: false }),
+    p(t('text after.')),
+    p(t('Ends with math')),
+    N.math_display.create({ src: 'y' }),
+    N.math_display.create({ src: 'z' }),
+    p(t('then text more.')),
+    note('c'),
+    p(t('Inline')),
+    N.math_display.create({ src: 'a' }),
+    p(t('mid line')),
+    N.math_display.create({ src: 'b', label: 'eq:b' }),
+    p(t('end.')),
+  ),
+  ast([
+    Para(w('The supply relationship is'), SB, MathD('\nP = 10 - Q\n'), Sp, S('{#eq:supply}'), SB, w('and the demand follows.')),
+    Para(w('The cost is'), SB, MathD('\nC = 5q\n'), SB, S('and'), Sp, S('"the'), Sp, S('price"'), Sp, S('follows.')),
+    Para(w('Text before'), SB, MathD(' x '), SB, S('{#eq:next'), Sp, S('.unnumbered}'), SB, w('text after.')),
+    Para(w('Ends with math'), SB, MathD('\ny\n')),
+    Para(MathD('\nz\n'), SB, w('then text'), Sp, RawI('html', '<!-- c -->'), Sp, S('more.')),
+    Para(S('Inline'), Sp, MathD('a'), Sp, w('mid line'), Sp, MathD('b'), Sp, S('{#eq:b}'), Sp, S('end.')),
+  ]),
+  [
+    rec('paragraph', 0, { text: 'The supply relationship is' }),
+    rec('math', 0, { math: ['P = 10 - Q'], label: 'eq:supply' }),
+    rec('paragraph', 0, { text: 'and the demand follows.' }),
+    rec('paragraph', 0, { text: 'The cost is' }),
+    rec('math', 0, { math: ['C = 5q'] }),
+    rec('paragraph', 0, { text: 'and “the price” follows.' }),
+    rec('paragraph', 0, { text: 'Text before' }),
+    rec('math', 0, { math: ['x'], label: 'eq:next', classes: ['unnumbered'] }),
+    rec('paragraph', 0, { text: 'text after.' }),
+    rec('paragraph', 0, { text: 'Ends with math' }),
+    rec('math', 0, { math: ['y'] }),
+    rec('math', 0, { math: ['z'] }),
+    rec('paragraph', 0, { text: 'then text more.' }),
+    rec('comment', 0, { printed: false, text: 'c' }),
+    rec('paragraph', 0, { text: 'Inline' }),
+    rec('math', 0, { math: ['a'] }),
+    rec('paragraph', 0, { text: 'mid line' }),
+    rec('math', 0, { math: ['b'], label: 'eq:b' }),
+    rec('paragraph', 0, { text: 'end.' }),
+  ],
+);
+{
+  // Each piece is its own paragraph: no quote state carries across the
+  // formula (Plass's two paragraphs are smartened apart), so `5"` after it
+  // is a prime, not the close of the quote opened before it. A brace
+  // block that is not attributes stays text, and the one-paragraph
+  // reading (today's reader, which leaks a `B0` sentinel) is reported.
+  const b = pandocSkeleton(ast([Para(w('He said'), Sp, S('"so'), SB, MathD('x'), SB, S('5"'), Sp, S('tall'), Sp, S('{not'), Sp, S('attrs}'))]));
+  check(
+    'display math in a paragraph: pieces flattened apart, a non-attribute brace kept as text',
+    JSON.stringify(b.map((r) => r.text ?? r.math?.[0])) === JSON.stringify(['He said “so', 'x', '5″ tall {not attrs}']),
+    show(b),
+  );
+  check(
+    '…and the one-paragraph reading diverges',
+    firstDivergence(docSkeleton(doc(p(t('He said “so '), mi('x'), t(' 5” tall {not attrs}')))), b) === 0,
+  );
+  const kept = pandocSkeleton(ast([Div(attr('', ['center']), [Para(w('Centered'), SB, MathD('x'), SB, w('text.'))])]));
+  check('a center div whose paragraph holds display math is the unknown-div island', kept.length === 1 && kept[0].kind === 'island', show(kept));
+}
 
 same(
   'inline math over a line break is one formula',
@@ -387,12 +482,12 @@ same(
     rowDiv(['continued'], 'd', 'e', 'f'),
   ]),
   [
-    rec('columns', 0, { cols: 2 }),
+    rec('columns', 0, { cols: 2, rows: 1 }),
     rec('column', 1),
     rec('paragraph', 2, { text: 'Left.' }),
     rec('column', 1),
     rec('image', 2, { src: SVG_KEY }),
-    rec('columns', 0, { cols: 3 }),
+    rec('columns', 0, { cols: 3, rows: 2 }),
     ...cellRecs('a', 'b', 'c', 'd', 'e', 'f'),
   ],
 );
@@ -404,10 +499,10 @@ same(
     'columns: adjacent unmarked divs stay two grids',
     doc(N.grid.create({ columns: [1, 1], gutter: 1 }, [grow('a', 'b')]), N.grid.create({ columns: [1, 1], gutter: 1 }, [grow('c', 'd')])),
     pd,
-    [rec('columns', 0, { cols: 2 }), ...cellRecs('a', 'b'), rec('columns', 0, { cols: 2 }), ...cellRecs('c', 'd')],
+    [rec('columns', 0, { cols: 2, rows: 1 }), ...cellRecs('a', 'b'), rec('columns', 0, { cols: 2, rows: 1 }), ...cellRecs('c', 'd')],
   );
   const merged = docSkeleton(doc(N.grid.create({ columns: [1, 1], gutter: 1 }, [grow('a', 'b'), grow('c', 'd')])));
-  check('…and are not one two-row grid', firstDivergence(merged, pandocSkeleton(pd)) === 5, show(pandocSkeleton(pd)));
+  check('…and are not one two-row grid', firstDivergence(merged, pandocSkeleton(pd)) === 0 && merged[0].rows === 2, show(pandocSkeleton(pd)));
 }
 
 same(
@@ -432,20 +527,34 @@ same(
     rowDiv(['continued'], 'i', 'j'),
   ]),
   [
-    rec('columns', 0, { cols: 2 }),
+    rec('columns', 0, { cols: 2, rows: 2 }),
     ...cellRecs('a', 'b', 'c', 'd'),
     rec('comment', 0, { printed: false, text: 'between rows' }),
     rec('comment', 0, { printed: false, text: 'first in row two' }),
     rec('solution', 0),
     rec('paragraph', 1, { text: 'Lead.' }),
-    rec('columns', 1, { cols: 2 }),
+    rec('columns', 1, { cols: 2, rows: 2 }),
     ...['e', 'f', 'g', 'h'].flatMap((x) => [rec('column', 2), rec('paragraph', 3, { text: x })]),
     rec('comment', 0, { printed: false, text: 'nested between rows' }),
     rec('paragraph', 0, { text: 'After.' }),
-    rec('columns', 0, { cols: 2 }),
+    rec('columns', 0, { cols: 2, rows: 1 }),
     ...cellRecs('i', 'j'),
   ],
 );
+
+{
+  // A `.continued` row whose cell count differs from the first row's: the
+  // reader warns; the skeleton keeps the rows apart from three 2-cell rows.
+  const pd = ast([rowDiv([], 'a', 'b'), rowDiv(['continued'], 'c', 'd', 'e', 'f')]);
+  same(
+    'columns: a continued row with more cells is spelled out',
+    doc(N.grid.create({ columns: [1, 1], gutter: 1 }, [grow('a', 'b'), grow('c', 'd', 'e', 'f')])),
+    pd,
+    [rec('columns', 0, { cols: 2, rows: 2, classes: ['cells=2/4'] }), ...cellRecs('a', 'b', 'c', 'd', 'e', 'f')],
+  );
+  const threeRows = docSkeleton(doc(N.grid.create({ columns: [1, 1], gutter: 1 }, [grow('a', 'b'), grow('c', 'd'), grow('e', 'f')])));
+  check('…and is not three 2-cell rows', firstDivergence(threeRows, pandocSkeleton(pd)) === 0, show(threeRows));
+}
 
 same(
   'center, right and keep divs are paragraph attributes',
@@ -550,6 +659,43 @@ same(
   );
 }
 
+// A table caption is an attribute string: the same normalization on both
+// sides, outside `$…$`, whether the importer stored it verbatim (a div
+// attribute) or normalized (a caption line read as text).
+{
+  const tbl = (attrs: Record<string, unknown>) =>
+    N.table.create(attrs, [N.table_row.create(null, [N.table_header.create(null, [p(t('a'))])]), N.table_row.create(null, [N.table_cell.create(null, [p(t('1'))])])]);
+  const body = { aligns: ['AlignDefault'], head: [row(cell(Plain(S('a'))))], body: [row(cell(Plain(S('1'))))] };
+  const pd = ast([
+    Div(attr('', ['table'], [['caption', 'Colin\'s "costs" -- $f\'(x) -3$ ...']]), [Table(body)]),
+    Table({
+      ...body,
+      caption: [Plain(S("Colin's"), Sp, Emph(S('costs')), Sp, S('--'), Sp, MathI('x -3'), Sp, Cite({ id: 'k' }), Sp, Cite({ id: 'eq:a', mode: 'AuthorInText' }), Sp, RawI('html', '<!-- cap -->'), Sp, S('{#tbl:z}'))],
+    }),
+  ]);
+  const want = [
+    rec('table', 0, { text: 'Colin’s “costs” – $f\'(x) -3$ …', rows: 2, head: 1, cols: 1, aligns: ['left', 'left'] }),
+    rec('paragraph', 1, { text: 'a' }),
+    rec('paragraph', 1, { text: '1' }),
+    rec('table', 0, { text: 'Colin’s costs – $x -3$ [@k] @eq:a', label: 'tbl:z', rows: 2, head: 1, cols: 1, aligns: ['left', 'left'] }),
+    rec('paragraph', 1, { text: 'a' }),
+    rec('paragraph', 1, { text: '1' }),
+    rec('comment', 0, { printed: false, text: 'cap' }),
+  ];
+  same(
+    'table captions: verbatim as the div attribute stores it',
+    doc(tbl({ caption: 'Colin\'s "costs" -- $f\'(x) -3$ ...' }), tbl({ caption: "Colin's costs -- $x -3$ [@k] @eq:a", label: 'tbl:z' }), note('cap')),
+    pd,
+    want,
+  );
+  same(
+    'table captions: normalized as a caption line reads',
+    doc(tbl({ caption: 'Colin’s “costs” – $f\'(x) -3$ …' }), tbl({ caption: 'Colin’s costs – $x -3$ [@k] @eq:a', label: 'tbl:z' }), note('cap')),
+    pd,
+    want,
+  );
+}
+
 same(
   'figures and images by pandoc’s alt rule',
   doc(
@@ -565,7 +711,20 @@ same(
     Para(S('An'), Sp, Image(SVG, [S('box')]), Sp, S('inline.')),
   ]),
 );
-check('a long data URL is shown by type, length and digest', SVG_KEY === `data:image/svg+xml;base64,…${SVG.length}#` + SVG_KEY.slice(-8) && /#[0-9a-f]{8}$/.test(SVG_KEY), SVG_KEY);
+
+// The image precedes its caption, so a comment in the caption follows the
+// figure (pandoc 3.4 repeats the caption as the image's alt).
+{
+  const capInl = [S('Cap'), Sp, RawI('html', '<!-- in cap -->'), Sp, S('text')];
+  same(
+    'a comment in a figure caption moves after the figure',
+    doc(N.figure.create({ src: 'f.svg' }, [t('Cap text')]), note('in cap')),
+    ast([{ t: 'Figure', c: [attr(), [null, [Plain(capInl)]], [Plain(Image('f.svg', capInl))]] }]),
+    [rec('figure', 0, { text: 'Cap text', src: 'f.svg' }), rec('comment', 0, { printed: false, text: 'in cap' })],
+  );
+}
+// FNV-1a of SVG, computed independently (Python, 32-bit FNV-1a over the bytes).
+check('a long data URL is shown by type, length and digest', SVG.length === 191 && SVG_KEY === 'data:image/svg+xml;base64,…191#c1ea8887', SVG_KEY);
 
 // Islands: no text, children not descended, comments still hoisted; an
 // HTML element runs through its closing tag; headings inside still take
@@ -591,6 +750,26 @@ same(
   ]),
 );
 
+// Off-rail block forms. A line block is pandoc's lines with hard breaks
+// (markdown-it keeps the `|` as text: a reported divergence); a definition
+// list is an island with its comments hoisted; a bare LaTeX block is the
+// paragraph markdown-it reads.
+{
+  const lines = pandocSkeleton(ast([{ t: 'LineBlock', c: [w('line one'), w('line two')] }]));
+  check('a line block is one paragraph with hard breaks', JSON.stringify(lines) === JSON.stringify([rec('paragraph', 0, { text: 'line one⟦br⟧line two' })]), show(lines));
+  check('…which the markdown-it reading does not match', firstDivergence(docSkeleton(doc(p(t('| line one | line two')))), lines) === 0);
+}
+same(
+  'a definition list is an island; bare LaTeX blocks are paragraphs',
+  doc(island(), note('in def'), p(t('\\vspace{1em}')), p(t('\\begin{center} x – y \\end{center}'))),
+  ast([
+    { t: 'DefinitionList', c: [[[S('Term')], [[Plain(S('Definition'), Sp, RawI('html', '<!-- in def -->'))]]]] },
+    RawB('tex', '\\vspace{1em}'),
+    RawB('tex', '\\begin{center}\nx -- y\n\\end{center}'),
+  ]),
+  [rec('island', 0), rec('comment', 0, { printed: false, text: 'in def' }), rec('paragraph', 0, { text: '\\vspace{1em}' }), rec('paragraph', 0, { text: '\\begin{center} x – y \\end{center}' })],
+);
+
 same(
   'page breaks, the Typst hatch, the bibliography, listings, rules',
   N.doc.create({ bib: { name: 'references.bib', content: '@book{k, title={T}}' } }, [
@@ -611,6 +790,55 @@ same(
   ]),
 );
 check('a bibliography is its keys and a digest', /^k #[0-9a-f]{8}$/.test(pandocSkeleton(ast([RawB('bibtex', '@book{k, title={T}}')]))[0].text ?? ''));
+
+// A listing's language is pandoc's first class; every raw fence but typst
+// and bibtex is a listing on both sides.
+{
+  const code = (params: string, text = 'x = 1') => N.code_block.create({ params }, [t(text)]);
+  const CB = (a: Attr, text = 'x = 1'): PandocNode => ({ t: 'CodeBlock', c: [a, text] });
+  same(
+    'listings: the first class of the info string, raw fences as listings',
+    doc(
+      code('{#lst:a .python}'),
+      code('python {.numberLines}'),
+      code('{startFrom=3 title="a b" .r}'),
+      code('Python'),
+      code('c++'),
+      code('{#lst:b}'),
+      code('{-}'),
+      code('{=html}', '<b>x</b>'),
+      code('{=html}', '<aside>\nfoo\n</aside>'),
+      code('{=latex}', '\\vspace{1em}'),
+    ),
+    ast([
+      CB(attr('lst:a', ['python'])),
+      CB(attr('', ['python', 'numberLines'])),
+      CB(attr('', ['r'], [['startFrom', '3'], ['title', 'a b']])),
+      CB(attr('', ['python'])),
+      CB(attr('', ['cpp'])),
+      CB(attr('lst:b')),
+      CB(attr('', ['unnumbered'])),
+      RawB('html', '<b>x</b>'),
+      RawB('html', '<aside>\nfoo\n</aside>'),
+      RawB('latex', '\\vspace{1em}'),
+    ]),
+    [
+      rec('code', 0, { text: 'x = 1', classes: ['python'] }),
+      rec('code', 0, { text: 'x = 1', classes: ['python'] }),
+      rec('code', 0, { text: 'x = 1', classes: ['r'] }),
+      rec('code', 0, { text: 'x = 1', classes: ['python'] }),
+      rec('code', 0, { text: 'x = 1', classes: ['cpp'] }),
+      rec('code', 0, { text: 'x = 1' }),
+      rec('code', 0, { text: 'x = 1', classes: ['unnumbered'] }),
+      rec('code', 0, { text: '<b>x</b>', classes: ['=html'] }),
+      rec('code', 0, { text: '<aside>\nfoo\n</aside>', classes: ['=html'] }),
+      rec('code', 0, { text: '\\vspace{1em}', classes: ['=latex'] }),
+    ],
+  );
+  // The known limitation: pandoc's AST is the same as a bare block's.
+  const tex = pandocSkeleton(ast([RawB('tex', '\\vspace{1em}'), RawB('html', '<aside>'), RawB('html', '<script>\nvar x;\n</script>')]));
+  check('a {=tex} fence, a one-tag {=html} fence and a script element read as the bare blocks', tex.map((r) => r.kind).join(' ') === 'paragraph island island', show(tex));
+}
 
 same(
   'lists, nested and numbered',

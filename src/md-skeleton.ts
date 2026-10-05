@@ -25,11 +25,15 @@
 // solution's paragraphs are depth 1, a grid's `column` records depth 1 and
 // their blocks depth 2). `classes` holds a paragraph's center/right/keep,
 // display math's numbered/unnumbered, a list's bullet/ordered (and
-// `start=N`), a listing's language. A paragraph with no content is
+// `start=N`), a listing's language, a grid's `cells=a/b` when its rows
+// differ in cell count. A paragraph with no content is
 // dropped on both sides, except a table cell, which is always one
 // `paragraph` record. Inline atoms appear in `text` as sentinels:
 //   ⟦$⟧ inline math (source in `math`, whitespace-normalized)
-//   ⟦$$⟧ display math inside running text (pandoc only; Plass never does it)
+//   ⟦$$⟧ display math where Plass has no block for it: in a heading, a
+//     table cell, a footnote, a caption or inside emphasis or a link
+//     (pandoc only; Plass never does it). Directly in a paragraph it
+//     splits the paragraph (below).
 //   ⟦cite:key⟧ a citation, its pandoc mode in `mode` ('normal' |
 //     'in-text' | 'suppress'; Plass's are all 'normal' — the referee's
 //     accepted divergence), ⟦ref:eq:x⟧ a reference (a key whose prefix
@@ -65,6 +69,10 @@
 //   `columns.length`), then each row's `column` records in order. A row
 //   without `.continued` starts a new grid, so two adjacent unmarked rows
 //   are two grids; a `.continued` row with no grid before it starts one.
+//   The `columns` record carries `rows`, and `cells=a/b/…` (each row's
+//   cell count) when a row's count differs from `cols`, so a 2-cell row
+//   continued by a 4-cell one is not three 2-cell rows (the reader warns
+//   on that form and the skeleton shows what it built).
 //   A comment between rows is inside the grid and hoisted after it. Shares,
 //   gutters and `cols=` attributes are geometry, not content: not read;
 // - a table's comments are placed by its cells alone: one before the
@@ -76,9 +84,20 @@
 // - `Para [Image]` is `paragraph > image` (`image`), unless the image has
 //   an id: then it is a labeled figure with an empty caption; `Figure` is
 //   `figure`; a lone image in a `Plain` reads the same way;
-// - display math is a `Para` holding only `DisplayMath`, each optionally
-//   followed by a pandoc attribute block that pandoc leaves as text
-//   (`{#eq:x .unnumbered}`); `.numbered`/`.unnumbered` become `classes`;
+// - display math is a block wherever pandoc puts it in a `Para`/`Plain`:
+//   the inline list is split at each `DisplayMath` into paragraph / math /
+//   paragraph records, each paragraph flattened on its own (a fresh quote
+//   state, as Plass's separate paragraphs have). The pandoc attribute block
+//   pandoc leaves as text after the formula (`{#eq:x .unnumbered}`, after
+//   at most one Space or SoftBreak, on the closing line or the next) is
+//   the label and `.numbered`/`.unnumbered` the `classes`; anything else
+//   after it is the next paragraph's text. This is the only reading
+//   Plass's model can hold (no display math inside a paragraph), and the
+//   form is common in the course notes: a formula on the lines right after
+//   `The supply relationship is` with more text after its closing `$$`
+//   (75 paragraphs in 56 of the 759 course `.md` files). Step 6's reader
+//   must split the same way. Comments in such a paragraph are hoisted
+//   around the whole source paragraph, as for any top-level block;
 // - a heading id equal to pandoc's own auto-identifier is not a label
 //   (pandoc invents one for every heading; a hand-written `{#intro}` on
 //   "Intro" is therefore indistinguishable and reads as no label). A
@@ -90,7 +109,24 @@
 //   row whose cells are all empty is dropped (the headerless form); cells
 //   are one `paragraph` record each, row-major, their blocks joined by a
 //   space, and `aligns` lists every cell's alignment in the same order;
-// - a footnote's paragraphs are joined by a space (Plass flattens them).
+// - a table caption is an attribute string, not document text: the div's
+//   `caption=` value, or a `: Caption` line written out the way step 3's
+//   `takeCaptionLine` stores it (math as `$…$`, a citation `[@key]`, a
+//   reference `@label`, emphasis by its text, a note or an image dropped).
+//   Both sides then go through the SAME `captionText` (printedForm and the
+//   quoter outside `$…$`, whitespace collapsed), so a caption reads alike
+//   whether the importer kept it verbatim (a div attribute) or normalized
+//   it (a caption line read through the inline reader);
+// - a footnote's paragraphs are joined by a space (Plass flattens them);
+// - a fenced block's language is pandoc's first class: a bare word (lower-
+//   cased; `c++` is `cpp`) or the first `.class` of the attribute block,
+//   `#id` and `key=val` skipped, `-` read as `unnumbered`. Every
+//   ```` ```{=format} ```` fence but typst and bibtex is a listing on both
+//   sides (`code` with class `=format`). Pandoc's AST does not say whether
+//   a RawBlock came from a fence: an `html` RawBlock that is neither one
+//   tag, nor a whole `<script|style|pre|textarea>` element, nor comments is
+//   a `{=html}` fence (pandoc splits an HTML block into single tags), and a
+//   `tex` RawBlock is read as the bare LaTeX paragraph it usually is.
 //
 // Known limitation: an HTML `<div class="solution">` (or any rail class)
 // is the same `Div` in pandoc's JSON as `::: solution` (`native_divs`), so
@@ -99,6 +135,14 @@
 // cannot heal it from pandoc's side: an accepted-divergence candidate for
 // step 10 and a MARKDOWN-FORMAT.md pitfall ("write `:::`, not
 // `<div class>`"). The course corpus has no classed `<div>`.
+//
+// Known limitation, same cause (pandoc's AST is identical for two
+// sources): a ```` ```{=tex} ```` fence is the bare LaTeX paragraph it
+// holds, a ```` ```{=html} ```` fence holding one tag or one whole
+// script/style/pre/textarea element is that HTML block, and one holding
+// only a comment is that comment, while Plass reads all of them as
+// listings. Pitfall for MARKDOWN-FORMAT.md: write `{=latex}`, not
+// `{=tex}`; neither appears in the course corpus.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
@@ -181,6 +225,34 @@ function digest(text: string): string {
 function srcKey(src: string): string {
   const m = /^data:([^,]*),/.exec(src);
   return m && src.length > 80 ? `data:${m[1]},…${src.length}#${digest(src)}` : src;
+}
+
+/** A table caption as both sides compare it: printedForm and Typst's
+ *  quoter on the prose between `$…$` spans (Plass's inline-math reading;
+ *  a formula is an object to the quoter), whitespace collapsed. Applied to
+ *  a verbatim caption and to an already normalized one it gives the same
+ *  text, so the comparison does not depend on which the importer stored. */
+function captionText(caption: string): string {
+  const quotes = createQuoteState();
+  let before: string | null = null;
+  let text = '';
+  caption.split(/((?<!\\)\$\S(?:[^$\n]*?\S)?\$(?!\d))/).forEach((part, i) => {
+    if (i % 2) {
+      text += part;
+      before = OBJECT;
+    } else if (part) {
+      const r = smartenText(printedForm(part), quotes, before);
+      text += r.text;
+      before = r.before;
+    }
+  });
+  return collapse(text);
+}
+
+/** A grid's record: `cols` is the model's column count, `rows` its row
+ *  count, and a row whose cell count differs is spelled out. */
+function gridRecord(depth: number, cols: number, cells: number[]): SkeletonRecord {
+  return record('columns', depth, { cols, rows: cells.length, classes: cells.every((n) => n === cols) ? [] : [`cells=${cells.join('/')}`] });
 }
 
 /** A bibliography's identity: its entry keys in order and a digest. */
@@ -296,9 +368,21 @@ function pmBlocksFlat(node: PMNode): Flat {
   return joinFlats(flats);
 }
 
+/** A listing's language as pandoc 3.4 reads the fence's info string: a raw
+ *  fence `{=format}` is `=format`; a bare word comes first, lower-cased
+ *  (`toLanguageId`: `c++` is `cpp`); otherwise the attribute block's first
+ *  class, `#id` and `key=val` skipped, `-` being `.unnumbered`. */
 function pmCodeClass(params: string): string[] {
-  const first = params.trim().split(/\s+/)[0]?.replace(/^\{/, '').replace(/^\./, '').replace(/\}$/, '') ?? '';
-  return first ? [first] : [];
+  const info = params.trim();
+  const raw = /^\{=([^\s{}]+)\}$/.exec(info);
+  if (raw) return [`=${raw[1]}`];
+  const m = /^([^\s{]*)\s*(?:\{([^{}]*)\})?/.exec(info)!;
+  if (m[1]) return [m[1] === 'c++' ? 'cpp' : m[1] === 'objective-c' ? 'objectivec' : m[1].toLowerCase()];
+  for (const token of (m[2] ?? '').match(/[^\s"=]+="[^"]*"|\S+/g) ?? []) {
+    if (token === '-') return ['unnumbered'];
+    if (token.startsWith('.') && token.length > 1) return [token.slice(1)];
+  }
+  return [];
 }
 
 function pmBlocks(parent: PMNode, depth: number, out: SkeletonRecord[]): void {
@@ -352,8 +436,10 @@ function pmBlock(node: PMNode, depth: number, out: SkeletonRecord[]): void {
       out.push(record(a.kind === 'solution' ? 'solution' : 'quote', depth));
       pmBlocks(node, depth + 1, out);
       return;
-    case 'grid':
-      out.push(record('columns', depth, { cols: (a.columns as number[]).length }));
+    case 'grid': {
+      const cells: number[] = [];
+      node.forEach((row) => cells.push(row.childCount));
+      out.push(gridRecord(depth, (a.columns as number[]).length, cells));
       node.forEach((row) =>
         row.forEach((cell) => {
           out.push(record('column', depth + 1));
@@ -361,6 +447,7 @@ function pmBlock(node: PMNode, depth: number, out: SkeletonRecord[]): void {
         }),
       );
       return;
+    }
     case 'bullet_list':
     case 'ordered_list': {
       const ordered = node.type.name === 'ordered_list';
@@ -391,7 +478,7 @@ function pmBlock(node: PMNode, depth: number, out: SkeletonRecord[]): void {
       node.firstChild?.forEach((cell) => (cols += (cell.attrs.colspan as number) || 1));
       out.push(
         record('table', depth, {
-          text: (a.caption as string) ? collapse(a.caption as string) : undefined,
+          text: (a.caption as string) ? captionText(a.caption as string) || undefined : undefined,
           label: a.label as string,
           rows: node.childCount,
           head,
@@ -575,6 +662,30 @@ function parseAttrText(text: string): { id: string; classes: string[] } | null {
     else if (!part.startsWith('.') && !part.includes('=')) return null;
   }
   return { id, classes };
+}
+
+const isDisplayMath = (n: PandocNode) => n.t === 'Math' && (n.c as [PandocNode])[0].t === 'DisplayMath';
+
+/** The attribute block pandoc leaves as text after display math, from
+ *  `i` (the inline after the formula): at most one Space or SoftBreak, then
+ *  Strs joined by Spaces from one opening `{` to the closing `}`. Its parse
+ *  and the index after it, or null when no attribute block is there. */
+function displayAttr(inlines: PandocNode[], i: number): { id: string; classes: string[]; next: number } | null {
+  let j = i;
+  if (inlines[j]?.t === 'Space' || inlines[j]?.t === 'SoftBreak') j++;
+  if (inlines[j]?.t !== 'Str' || !(inlines[j].c as string).startsWith('{')) return null;
+  let text = '';
+  for (; j < inlines.length; j++) {
+    const n = inlines[j];
+    if (n.t === 'Space') text += ' ';
+    else if (n.t !== 'Str') return null;
+    else {
+      text += n.c as string;
+      if ((n.c as string).endsWith('}')) break;
+    }
+  }
+  const parsed = j < inlines.length ? parseAttrText(text) : null;
+  return parsed && { ...parsed, next: j + 1 };
 }
 
 // Inline flattening. A segment list first, then printedForm per run, then
@@ -846,8 +957,8 @@ function withoutComments(inlines: PandocNode[]): { rest: PandocNode[]; lead: str
   return { rest, lead, trail };
 }
 
-/** A Para/Plain's records: an image, a labeled figure, display math, or a
- *  paragraph. */
+/** A Para/Plain's records: an image, a labeled figure, a paragraph, or
+ *  paragraphs split by display math. */
 function paraRecords(inlines: PandocNode[], depth: number, ctx: Ctx, classes: string[] = []): SkeletonRecord[] {
   const { rest, lead, trail } = withoutComments(inlines);
   const solid = rest.filter((n) => n.t !== 'Space' && n.t !== 'SoftBreak');
@@ -868,24 +979,8 @@ function paraRecords(inlines: PandocNode[], depth: number, ctx: Ctx, classes: st
     return [record('image', depth, { src: srcKey(url), classes })];
   }
 
-  // Display math, each optionally followed by its attribute block.
-  if (solid.some((n) => n.t === 'Math' && (n.c as [PandocNode])[0].t === 'DisplayMath')) {
-    const groups: Array<{ src: string; attr: string[] }> = [];
-    let ok = true;
-    for (const n of solid) {
-      if (n.t === 'Math' && (n.c as [PandocNode])[0].t === 'DisplayMath') groups.push({ src: (n.c as [unknown, string])[1], attr: [] });
-      else if (n.t === 'Str' && groups.length) groups[groups.length - 1].attr.push(n.c as string);
-      else {
-        ok = false;
-        break;
-      }
-    }
-    const parsed = ok ? groups.map((g) => (g.attr.length ? parseAttrText(g.attr.join(' ')) : { id: '', classes: [] })) : [];
-    if (ok && parsed.every(Boolean)) {
-      hoistBoth();
-      return groups.map((g, i) => record('math', depth, { math: [normMath(g.src)], label: parsed[i]!.id, classes: parsed[i]!.classes }));
-    }
-  }
+  // Display math is a block: split the paragraph around each formula.
+  if (solid.some(isDisplayMath)) return displaySplit(inlines, depth, ctx, classes);
 
   // Nothing but raw HTML elements: an HTML block to markdown-it.
   if (solid.length && solid.every((n) => n.t === 'RawInline' && (n.c as [string])[0] === 'html')) {
@@ -893,10 +988,50 @@ function paraRecords(inlines: PandocNode[], depth: number, ctx: Ctx, classes: st
     return [record('island', depth)];
   }
 
+  return textParagraph(inlines, depth, ctx, classes);
+}
+
+/** One paragraph's records, or none when it holds nothing printed (its
+ *  comments are hoisted either way). */
+function textParagraph(inlines: PandocNode[], depth: number, ctx: Ctx, classes: string[]): SkeletonRecord[] {
   const flat = flattenInlines(inlines, ctx);
   if (isEmptyFlat(flat)) return [];
   ctx.seen = true;
   return textRecords('paragraph', depth, flat, { classes });
+}
+
+/** A paragraph holding display math, as Plass's model holds it:
+ *  paragraph / math / paragraph. Each formula takes the attribute block
+ *  after it (label, numbering); the text between formulas is flattened as
+ *  its own paragraph, with its own quote state. Comments are hoisted by
+ *  the paragraph's ordinary rule (`ctx.seen` advances through the pieces). */
+function displaySplit(inlines: PandocNode[], depth: number, ctx: Ctx, classes: string[]): SkeletonRecord[] {
+  const out: SkeletonRecord[] = [];
+  let start = 0;
+  for (let i = 0; i < inlines.length; i++) {
+    const n = inlines[i];
+    if (!isDisplayMath(n)) continue;
+    out.push(...textParagraph(inlines.slice(start, i), depth, ctx, classes));
+    const attr = displayAttr(inlines, i + 1);
+    ctx.seen = true;
+    out.push(record('math', depth, { math: [normMath((n.c as [unknown, string])[1])], label: attr?.id, classes: attr?.classes }));
+    start = attr ? attr.next : i + 1;
+    i = start - 1;
+  }
+  out.push(...textParagraph(inlines.slice(start), depth, ctx, classes));
+  return out;
+}
+
+/** Whether an `html` RawBlock is a ```` ```{=html} ```` fence's body:
+ *  pandoc splits an HTML block into single tags and keeps only a script,
+ *  style, pre or textarea element (and comments) whole, so anything else
+ *  came from a fence. A fence holding one tag, one such element or only a
+ *  comment cannot be told apart (the module header's known limitation). */
+function fencedHtml(raw: string): boolean {
+  const s = raw.trim();
+  if (/^<\/?[A-Za-z][^<>]*>$/.test(s)) return false;
+  if (/^<(script|style|pre|textarea)\b[\s\S]*<\/\1\s*>$/i.test(s)) return false;
+  return commentPayloads(s) === null;
 }
 
 const VOID_HTML = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
@@ -942,7 +1077,8 @@ function reduceBlocks(blocks: PandocNode[], depth: number, ctx: Ctx | null, ids:
     const local: Ctx = ctx ?? { seen: false, before: [], after: [], ids, keepInline: false };
     const recs: SkeletonRecord[] = [];
     // An HTML element: one island through its closing tag.
-    const tag = b.t === 'RawBlock' && (b.c as [string])[0] === 'html' && !htmlComments(b) ? openTag((b.c as [string, string])[1]) : null;
+    const html = b.t === 'RawBlock' && (b.c as [string])[0] === 'html' ? (b.c as [string, string])[1] : null;
+    const tag = html !== null && !htmlComments(b) && !fencedHtml(html) ? openTag(html) : null;
     if (tag) {
       const end = elementEnd(blocks, i, tag);
       local.seen = true;
@@ -1005,7 +1141,7 @@ function reduceBlock(b: PandocNode, depth: number, ctx: Ctx, out: SkeletonRecord
       else if (format === 'bibtex') out.push(record('bibliography', depth, { text: bibText(raw) }));
       else if (format === 'tex' && /^\\(?:newpage|pagebreak)$/.test(raw.trim())) out.push(record('pagebreak', depth));
       else if (format === 'tex') out.push(...paraRecords([{ t: 'Str', c: raw }], depth, ctx));
-      else if (format === 'html') out.push(record('island', depth));
+      else if (format === 'html' && !fencedHtml(raw)) out.push(record('island', depth));
       else out.push(record('code', depth, { text: raw, classes: [`=${format}`] }));
       return;
     }
@@ -1095,12 +1231,14 @@ function gridEnd(blocks: PandocNode[], i: number): number {
 }
 
 /** One grid from its row divs: one `columns` record, its `cols` the first
- *  row's cell count (the model's `columns.length`), then every row's
+ *  row's cell count (the model's `columns.length`) and its `rows` the row
+ *  count (with each row's cell count when they differ), then every row's
  *  `column` records in order. A comment between rows or between cells is
  *  inside the grid, so it is hoisted like any nested comment. */
 function gridRecords(group: PandocNode[], depth: number, ctx: Ctx, out: SkeletonRecord[]): void {
   const cells = (row: PandocNode) => (row.c as [unknown, PandocNode[]])[1];
-  out.push(record('columns', depth, { cols: cells(group[0]).filter((n) => n.t === 'Div').length }));
+  const counts = group.filter((row) => row.t === 'Div').map((row) => cells(row).filter((n) => n.t === 'Div').length);
+  out.push(gridRecord(depth, counts[0], counts));
   for (const row of group) {
     if (row.t !== 'Div') {
       reduceBlock(row, depth, ctx, out);
@@ -1157,8 +1295,11 @@ function divRecords(b: PandocNode, depth: number, ctx: Ctx, out: SkeletonRecord[
         reduceBlock(child, depth, ctx, out);
         continue;
       }
+      // Exactly one paragraph (or image) and its notes; display math split
+      // out of it, or anything else, is the unknown-div island.
       const recs = paraRecords(kids(child), depth, ctx, own);
-      if (recs.length && recs[0].kind !== 'paragraph' && recs[0].kind !== 'image') {
+      const blocks = recs.filter((r) => r.depth === depth);
+      if (blocks.length > 1 || (blocks.length && blocks[0].kind !== 'paragraph' && blocks[0].kind !== 'image')) {
         ctx.seen = true;
         out.push(record('island', depth));
       } else out.push(...recs);
@@ -1235,18 +1376,99 @@ function tableRecords(t: PandocNode, divAttr: Attr | null, depth: number, ctx: C
   let label = divAttr?.[0] || attrOf(attr)[0];
   const divCaption = divAttr ? kv(divAttr, 'caption') : undefined;
   let caption: string;
-  if (divCaption !== undefined) caption = flattenInlines([{ t: 'Str', c: divCaption }], ctx).text;
+  if (divCaption !== undefined) caption = captionText(divCaption);
   else {
-    caption = blocksFlat(captionBlocks, ctx).text;
+    let line = captionLine(captionBlocks, ctx).trim();
     // `: Caption {#tbl:x}` keeps the attribute block as text in 3.4.
-    const m = /^(.*?)\s*\{#([^\s{}]+)\}$/.exec(caption);
+    const m = /^(.*?)\s*\{#([^\s{}]+)\}$/.exec(line);
     if (m && !label) {
       label = m[2];
-      caption = m[1];
+      line = m[1];
     }
+    caption = captionText(line);
   }
   ctx.seen = true; // a table is printed even when every cell is empty
   return [record('table', depth, { text: caption || undefined, label, rows: rows.length, head: head.length, cols, aligns }), ...cells];
+}
+
+/** A `: Caption` line written out the way Plass stores a table caption
+ *  (step 3's `takeCaptionLine`, a plain string): math as `$…$`, a
+ *  citation `[@key]` and a reference `@label` with their prefix and suffix
+ *  text beside them, emphasis and links by their text, inline raw verbatim,
+ *  a note or an image dropped. Its comments are hoisted as a cell's are. */
+function captionLine(blocks: PandocNode[], ctx: Ctx): string {
+  let text = '';
+  const walk = (inlines: PandocNode[]) => {
+    for (const n of inlines) {
+      switch (n.t) {
+        case 'Str':
+          text += n.c as string;
+          break;
+        case 'Space':
+        case 'SoftBreak':
+        case 'LineBreak':
+          text += ' ';
+          break;
+        case 'Code':
+          text += (n.c as [unknown, string])[1];
+          break;
+        case 'Math':
+          text += `$${(n.c as [unknown, string])[1]}$`;
+          break;
+        case 'Quoted': {
+          const [type, inner] = n.c as [PandocNode, PandocNode[]];
+          const q = type.t === 'SingleQuote' ? "'" : '"';
+          text += q;
+          walk(inner);
+          text += q;
+          break;
+        }
+        case 'Cite': {
+          const cites = (n.c as [Citation[], unknown])[0];
+          cites.forEach((cite, i) => {
+            const prefix = cite.citationPrefix ?? [];
+            const suffix = cite.citationSuffix ?? [];
+            const mode = cite.citationMode?.t;
+            if (i > 0 && ((cites[i - 1].citationSuffix ?? []).length || prefix.length)) text += '; ';
+            if (prefix.length) {
+              walk(prefix);
+              text += ' ';
+            }
+            if (mode === 'SuppressAuthor') text += '-';
+            text += REF_PREFIX.test(cite.citationId) ? `@${cite.citationId}` : `[@${cite.citationId}]`;
+            if (suffix.length && mode === 'AuthorInText') {
+              text += ' [';
+              walk(suffix);
+              text += ']';
+            } else walk(suffix);
+          });
+          break;
+        }
+        case 'RawInline': {
+          const [format, raw] = n.c as [string, string];
+          const comments = format === 'html' ? commentPayloads(raw) : null;
+          if (!comments) text += raw;
+          else if (!ctx.keepInline) hoist(ctx, comments, ctx.seen || text.trim() !== '');
+          break;
+        }
+        case 'Note':
+        case 'Image':
+          break;
+        case 'Link':
+        case 'Span':
+          walk((n.c as [unknown, PandocNode[]])[1]);
+          break;
+        default:
+          if (BOUNDARY_WRAPPERS.has(n.t) || TRANSPARENT_WRAPPERS.has(n.t)) walk(kids(n));
+      }
+    }
+  };
+  for (const b of blocks) {
+    if (b.t !== 'Plain' && b.t !== 'Para') continue;
+    if (text) text += ' ';
+    walk(kids(b));
+  }
+  return text;
 }
 
 function metaInlines(v: PandocNode | undefined): PandocNode[] | null {
