@@ -228,7 +228,7 @@ test('the visible view switch and the shortcut toggle from either view', async (
   await expect(page.getByTitle('Side-by-side grid — any blocks in columns; the grid bar sets the split', { exact: true })).toBeDisabled();
   await expect(page.getByTitle('Edit bibliography', { exact: true })).toBeDisabled();
   await expect(page.getByTitle('Markdown & shortcuts', { exact: true })).toBeEnabled();
-  await expect(page.getByTitle('Export — PDF, .typ, .tex', { exact: true })).toBeEnabled();
+  await expect(page.getByTitle('Export — PDF, .md, .typ, .tex', { exact: true })).toBeEnabled();
   await page.keyboard.press('Escape');
   await page.locator('#source .cm-content').focus();
   // The shortcut from inside CodeMirror (it must not swallow it).
@@ -484,7 +484,7 @@ test('PDF export from the source runs on the parsed text', async ({ page }) => {
     const sv = window.__sourceView;
     sv.setText(sv.text()!.trimEnd() + '\n\n= Written in the source\n\nA paragraph the page view never saw.\n');
   });
-  await page.getByTitle('Export — PDF, .typ, .tex', { exact: true }).click();
+  await page.getByTitle('Export — PDF, .md, .typ, .tex', { exact: true }).click();
   const result = await page.evaluate(async () => {
     const toast = document.getElementById('toast')!;
     const messages: string[] = [];

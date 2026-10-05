@@ -16,6 +16,7 @@ import { kvGet as idbGet, kvSet as idbSet } from './kv-store';
 import { holdOpenFile, openInAnotherWindow } from './open-files';
 import { typToDoc } from './typ-parser';
 import { INPUT_LIMITS, inputSizeError, readBoundedText } from './input-limits';
+import { dataUrlBytes, projectImagePath } from './figures';
 
 export interface FileHooks {
   getDoc: () => PMNode;
@@ -878,19 +879,100 @@ export class FileManager {
     this.hooks.message(`Downloaded ${a.download}`);
   }
 
-  /** A .typ copy beside the document. When the document already IS that
-   *  file (a .typ in its folder) this is a save, not a second writer racing
-   *  the autosave poller on the same path. */
+  /** Export → Typst: a .typ beside the document holding the source Plass
+   *  compiles — islands printed as code, editorial comments absent — built
+   *  from the document directly, never through `serialize`, so a source view
+   *  open in Typst cannot hand out its editable text instead. In a project
+   *  folder every embedded image is written to figures/ and linked by path,
+   *  so the file compiles with the typst CLI; without a folder the data URLs
+   *  stay (the CLI cannot read them) and the toast says so. The open
+   *  document is never the target: a .typ that IS the open file is the
+   *  writer's source, not an export to overwrite. */
   async exportCopy() {
     const fileName = `${this.name}.typ`;
-    if (this.dir && this.handle?.name === fileName) {
+    if (this.handle?.name === fileName) {
+      this.hooks.message(`${fileName} is the open document — Export → Markdown, then export Typst from the .md`);
+      return;
+    }
+    const doc = this.hooks.getDoc();
+    const images = await this.writeEmbeddedImages(doc);
+    const text = docToTyp(doc, { islands: 'print', resolveImage: (src) => images.paths.get(src) ?? src });
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const where = await this.saveBeside(fileName, blob);
+    if (where === null) return;
+    const count = (n: number) => `${n} embedded image${n === 1 ? '' : 's'}`;
+    let note = '';
+    // One line of toast: it truncates rather than wraps.
+    if (images.kept && !images.inFolder) {
+      note = ' — embedded images need the project folder open to compile outside Plass';
+    } else if (images.kept) {
+      note = ` — ${count(images.kept)} could not be written to figures/`;
+    } else if (images.paths.size) {
+      note = ` — ${count(images.paths.size)} written to figures/`;
+    }
+    this.hooks.message(`Exported ${where}${note}`);
+  }
+
+  /** Export → Markdown: a .md beside the document — how a .typ document
+   *  becomes a Markdown source. Text the writer is typing in a Markdown
+   *  source view goes out verbatim, as a save would write it. When the open
+   *  file already is that .md, this is a save, not a second writer racing
+   *  the autosave poller on the same path. */
+  async exportMdCopy() {
+    const fileName = `${this.name}.md`;
+    if (this.handle?.name === fileName) {
       await this.save();
       return;
     }
     const text = await this.serialize(fileName);
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
     const where = await this.saveBeside(fileName, blob);
     if (where !== null) this.hooks.message(`Exported ${where}`);
+  }
+
+  /** Data-URL images already written to figures/ by Export → Typst, per
+   *  folder, so exporting again reuses the files instead of adding copies. */
+  private exportedImages = new WeakMap<FileSystemDirectoryHandle, Map<string, string>>();
+
+  /** Write every distinct data-URL image in `doc` to figures/ in the project
+   *  folder (the original bytes, collision-safe names), mapping each source
+   *  to its new path. `kept` counts the images that stay data URLs: all of
+   *  them without a folder, and any that cannot be decoded or written. */
+  private async writeEmbeddedImages(doc: PMNode): Promise<{ paths: Map<string, string>; kept: number; inFolder: boolean }> {
+    const found = new Map<string, string>();
+    doc.descendants((node) => {
+      const src = node.attrs.src;
+      if (typeof src === 'string' && /^data:/i.test(src) && !found.has(src)) {
+        found.set(src, String(node.attrs.name || node.attrs.alt || 'image'));
+      }
+      return true;
+    });
+    const paths = new Map<string, string>();
+    const dir = this.dir;
+    if (!dir) return { paths, kept: found.size, inFolder: false };
+    let written = this.exportedImages.get(dir);
+    if (!written) this.exportedImages.set(dir, (written = new Map()));
+    for (const [src, hint] of found) {
+      let decoded: ReturnType<typeof dataUrlBytes> = null;
+      try {
+        decoded = dataUrlBytes(src);
+      } catch {
+        // Past the size limit: it stays a data URL, like an unknown type.
+      }
+      if (!decoded) continue;
+      const earlier = written.get(src);
+      if (earlier && (await this.statAsset(earlier))?.size === decoded.blob.size) {
+        paths.set(src, earlier);
+        continue;
+      }
+      const stem = hint.replace(/\.[^.]+$/, '').slice(0, 40);
+      const path = projectImagePath(`${stem}.${decoded.ext}`);
+      if (await this.writeAsset(path, decoded.blob)) {
+        paths.set(src, path);
+        written.set(src, path);
+      }
+    }
+    return { paths, kept: found.size - paths.size, inFolder: true };
   }
 
   /** Reconnect this tab's own restored editor snapshot to its file without
