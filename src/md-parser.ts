@@ -88,9 +88,9 @@ type Stored =
 // Sentinels are wrapped in a symbol character (U+241F, the control
 // picture for the unit separator): markdown-it passes it through verbatim
 // (NUL would be rewritten to U+FFFD per CommonMark), and, being a symbol,
-// it flanks an emphasis delimiter the way the punctuation it stands for
-// does (`$`, a backtick, `{`, `<`, `\`), so `` `make`*(once)* `` is still
-// emphasis. A private-use character would read as a letter there.
+// it flanks a `_` delimiter the way the punctuation it stands for does
+// (`$`, a backtick, `{`, `<`, `\`). (`*` and `~~` follow pandoc's rule,
+// which asks only for white space; see `scanDelims` below.)
 const S = '\u241F';
 /** The sentinel character, for the tests that check none leaks into a
  *  document. */
@@ -153,15 +153,89 @@ const CONTAINER_MARKERS = /^(?:[ \t]*>[ \t]?|[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+|[
 const AUTOLINK =
   /<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\x00-\x20]*|[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)>/y;
 
-/** Whether a formula cannot continue onto `line`. pandoc's math parsers
- *  take line breaks themselves (never a blank line), so a formula runs on
- *  through a heading or quote marker inside a paragraph; what ends it is
+/** What runs across a line break: a code span, an inline formula, display
+ *  math. */
+type Span = 'code' | 'math' | 'display';
+
+/** Whether a span cannot continue onto `line`. pandoc's math parsers take
+ *  line breaks themselves (never a blank line), so a formula runs on
+ *  through a heading or quote marker inside a paragraph, and through a
+ *  nested list's marker (`  - b^2` in an item's formula); what ends it is
  *  the next item of the list it is in (pandoc splits a list into items
- *  before reading them) or a fence line. */
-function breaksMath(line: string, inList: boolean): boolean {
+ *  before reading them: a marker left of `itemIndent`, the content column
+ *  of the line the span opens on) or, for an inline formula, a fence
+ *  line. Display math runs on through a fence line too: everything up to
+ *  the closing `$$` is the formula's (pandoc's `$$\n```\n$$` is one). A
+ *  code span ends at any list marker, nested or not, as pandoc's does.
+ *  `depth` is the quotes the paragraph is in. */
+function breaksMath(line: string, inList: boolean, span: Span = 'code', itemIndent = 0, depth = 0): boolean {
   const b = body(line);
-  return /^(?:`{3,}|~{3,}|:{3,})/.test(b) || (inList && LIST_MARKER.test(b));
+  if (span !== 'display' && /^(?:`{3,}|~{3,}|:{3,})/.test(b)) return true;
+  if (!inList || !LIST_MARKER.test(b)) return false;
+  return span === 'code' || /^[ \t]*/.exec(stripQuotes(line, depth))![0].length < Math.max(itemIndent, 1);
 }
+
+/** Whether display math is open at the end of `line`, given whether it was
+ *  at its start, by the scan's own reading of the line: a `$$` opens or
+ *  closes it unless an escape, a code span, a comment or an inline formula
+ *  on the line holds it. (A span that runs past the line is left to the
+ *  scan: the line then opens nothing here.) */
+function displayOpenAfter(line: string, open: boolean): boolean {
+  let from = 0;
+  for (let k = 0; k < line.length; k++) {
+    if (open) {
+      const close = line.indexOf('$$', Math.max(k, from));
+      if (close < 0) return true;
+      open = false;
+      // `$$$$` holds no formula: the scan reads the first `$$` as text and
+      // goes on at the second.
+      k = close === from && from > 0 ? from - 1 : close + 1;
+      continue;
+    }
+    const c = line[k];
+    if (c === '\\') k++;
+    else if (c === '`') {
+      let run = 1;
+      while (line[k + run] === '`') run++;
+      let close = -1;
+      for (let j = k + run; j < line.length && close < 0; ) {
+        if (line[j] !== '`') {
+          j++;
+          continue;
+        }
+        let n = 1;
+        while (line[j + n] === '`') n++;
+        if (n === run) close = j;
+        j += n;
+      }
+      if (close < 0) return false;
+      k = close + run - 1;
+    } else if (line.startsWith('<!--', k)) {
+      const close = line.indexOf('-->', k + 4);
+      if (close < 0) return false;
+      k = close + 2;
+    } else if (c === '$' && line[k + 1] === '$') {
+      open = true;
+      from = k + 2;
+      k++;
+    } else if (c === '$' && line[k + 1] !== undefined && !/\s/.test(line[k + 1])) {
+      // An inline formula closing on the line (pandoc's rule, as the scan
+      // reads it): its `$`s are not a display's.
+      for (let j = k + 1; j < line.length; j++) {
+        if (line[j] === '\\') j++;
+        else if (line[j] === '$') {
+          if (!/\s/.test(line[j - 1]) && !/\d/.test(line[j + 1] ?? '')) k = j;
+          break;
+        }
+      }
+    }
+  }
+  return open;
+}
+
+/** How many quotes a line's container markers open, after a list marker
+ *  too (`> - > ` is two): the quotes a paragraph that starts on it is in. */
+const containerQuotes = (line: string) => (CONTAINER_MARKERS.exec(line)![0].match(/>/g) ?? []).length;
 
 /** How many quotes a line opens with (`> > ` is two). */
 const quoteDepth = (line: string) => (QUOTE_PREFIX.exec(line)?.[0].match(/>/g) ?? []).length;
@@ -202,6 +276,18 @@ function dedentMath(src: string, opener: string, depth: number): string {
       return l;
     })
     .join('\n');
+}
+
+/** A citation key's internal punctuation (pandoc's). */
+const KEY_PUNCT = /[:.#$%&\-+?<>~/]/;
+/** A citation key ending where the text does. */
+const KEY_SO_FAR = /(?<![\p{L}\p{N}_\\])@[\p{L}\p{N}_](?:[\p{L}\p{N}_]|[:.#$%&\-+?<>~/](?=[\p{L}\p{N}_]))*$/u;
+
+/** A formula's source without the white space at its end, except a space
+ *  a backslash escapes (TeX's control space, `x\ `), which pandoc keeps. */
+function trimMathEnd(src: string): string {
+  const trimmed = src.replace(/\s+$/, '');
+  return trimmed.length < src.length && (/\\+$/.exec(trimmed)?.[0].length ?? 0) % 2 ? trimmed + ' ' : trimmed;
 }
 
 /** The attribute block that ends a heading's text, by pandoc's rule: an
@@ -269,7 +355,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
     const lineAt = (offset: number) => text.slice(starts[lineIndexAt(offset)], text.indexOf('\n', offset) < 0 ? undefined : text.indexOf('\n', offset));
     /** The quotes the text is in: its first line has all their markers (a
      *  later line may lack them, lazily, or hold more, as text). */
-    const depth = quoteDepth(lineAt(0));
+    const depth = containerQuotes(lineAt(0));
     const result: Array<{ text: string; line: number }> = [];
     let cur = '';
     let prose = '';
@@ -299,9 +385,9 @@ function prepass(src: string, warn: (m: string) => void): Pre {
     /** Whether a newline inside a formula at `at` continues it: not out of
      *  a pipe-table row (a row is one line), not into the next list item
      *  or a fence. */
-    const softBreak = (at: number, opener: string) =>
+    const softBreak = (at: number, opener: string, span: Span = 'code') =>
       !/^\|/.test(body(opener)) &&
-      !breaksMath(text.slice(at + 1, text.indexOf('\n', at + 1) < 0 ? undefined : text.indexOf('\n', at + 1)), inList || LIST_MARKER.test(body(opener)));
+      !breaksMath(text.slice(at + 1, text.indexOf('\n', at + 1) < 0 ? undefined : text.indexOf('\n', at + 1)), inList || LIST_MARKER.test(body(opener)), span, contentIndent(opener), depth);
 
     /** Whether the `$` at `k` starts a line after the opener's, in its
      *  container's coordinates: quote markers off, and in a list the item's
@@ -350,7 +436,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
         if (/\s/.test(ch)) {
           let k = j;
           while (k < text.length && /\s/.test(text[k])) {
-            if (text[k] === '\n' && !softBreak(k, opener)) return -1;
+            if (text[k] === '\n' && !softBreak(k, opener, 'math')) return -1;
             k++;
           }
           if (text[k] === '$' && !startsLine(k, i, opener)) return -1;
@@ -380,12 +466,19 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       return seen.only;
     };
 
+    /** Whether a citation key runs up to `at` (`@k` or `@k$y` before it, the
+     *  `@` not escaped and not after a letter or digit). */
+    const keyBefore = (at: number): boolean => {
+      const from = Math.max(text.lastIndexOf('\n', at - 1) + 1, at - 256);
+      return KEY_SO_FAR.test(text.slice(from, at));
+    };
+
     /** Display math opening at `i`: everything up to the next `$$`. */
     const displayMath = (i: number): number => {
       const close = text.indexOf('$$', i + 2);
       if (close <= i + 2) return -1;
       const opener = lineAt(i);
-      for (let k = i + 2; k < close; k++) if (text[k] === '\n' && !softBreak(k, opener)) return -1;
+      for (let k = i + 2; k < close; k++) if (text[k] === '\n' && !softBreak(k, opener, 'display')) return -1;
       return close + 2;
     };
 
@@ -399,6 +492,13 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       }
       if (c === '\\') {
         const n = text[i + 1];
+        if (n !== undefined && KEY_PUNCT.test(n) && keyBefore(i)) {
+          // An escape ends a citation key (`@k\$x` is `@k` and `$x` to
+          // pandoc); markdown-it would hand the reader `@k$x`.
+          sentinel({ k: 'lit', ch: n, orig: '\\' + n });
+          i += 2;
+          continue;
+        }
         if (n === ' ') {
           // pandoc's escaped space: a no-break space.
           prose += '\u00a0';
@@ -493,6 +593,13 @@ function prepass(src: string, warn: (m: string) => void): Pre {
           continue;
         }
       }
+      if (c === '$' && /[\p{L}\p{N}_]/u.test(text[i + 1] ?? '') && keyBefore(i)) {
+        // Inside a citation key (`@k$y`, pandoc's internal punctuation): the
+        // citation, which pandoc reads first, holds it.
+        prose += c;
+        i++;
+        continue;
+      }
       if (c === '$') {
         if (text[i + 1] === '$') {
           const end = displayMath(i);
@@ -528,8 +635,8 @@ function prepass(src: string, warn: (m: string) => void): Pre {
         const end = inlineMath(i);
         if (end > 0) {
           // A formula closed at the start of a line ends in that line
-          // break, which pandoc trims.
-          sentinel({ k: 'math', src: dedentMath(text.slice(i + 1, end - 1), lineAt(i), depth).replace(/\s+$/, ''), orig: text.slice(i, end) });
+          // break, which pandoc trims (a control space, `x\ `, stays).
+          sentinel({ k: 'math', src: trimMathEnd(dedentMath(text.slice(i + 1, end - 1), lineAt(i), depth)), orig: text.slice(i, end) });
           i = end;
           continue;
         }
@@ -571,10 +678,12 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       // made that later backtick a code span's sentinel, and markdown-it
       // would then read a fence there that runs to the end of the file: the
       // run is set aside as a literal, so the line stays text.
+      // (The later backtick may also be on a later source line, when a
+      // formula runs across the line break: the scanned line holds both.)
       const lead = CONTAINER_MARKERS.exec(text)![0].length;
       const run = /^`{3,}/.exec(text.slice(lead))?.[0];
       const source = given.get(l.line) ?? '';
-      if (run && source.startsWith(run, lead) && source.slice(lead + run.length).includes('`')) {
+      if (run && source.startsWith(run, lead) && unlit(text.slice(lead + run.length)).includes('`')) {
         text = text.slice(0, lead) + keep({ k: 'lit', ch: run, orig: run }) + text.slice(lead + run.length);
       }
       push(text, l.line);
@@ -587,7 +696,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
   const lastClose = src.lastIndexOf('-->');
   const lineStart: number[] = [];
   for (let k = 0, at = 0; k < lines.length; at += lines[k].length + 1, k++) lineStart.push(at);
-  const closedLater = (i: number) => lastClose >= lineStart[i] + lines[i].indexOf('<!--') + 4;
+  const closedLater = (i: number) => work[i].indexOf('-->', work[i].indexOf('<!--') + 4) >= 0 || (i + 1 < lines.length && lastClose >= lineStart[i + 1]);
   /** The comment run that opens line `i`'s body: the line its last comment
    *  closes on, the column after that, and whether text follows there.
    *  Null when a comment runs into a blank line or another comment opens
@@ -625,13 +734,17 @@ function prepass(src: string, warn: (m: string) => void): Pre {
     }) ||
     (!paraListed && /^(?: {4}|\t)/.test(para[0].text.replace(QUOTE_PREFIX, '')));
 
-  let fence: { ch: string; len: number } | null = null;
+  /** The fence open, with, for one opened on a list item's marker line,
+   *  the quotes and the content column of that item: a line left of it
+   *  (or outside those quotes) ends the item, and the fence with it. */
+  let fence: { ch: string; len: number; depth: number; indent: number } | null = null;
   let html: RegExp | 'blank' | null = null;
   let inPara = false;
   let afterBlank = true;
   for (let i = 0; i < lines.length; i++) {
     const line = work[i];
     const b = body(line);
+    if (fence?.indent && b.trim() && (quoteDepth(line) < fence.depth || /^[ \t]*/.exec(stripQuotes(line, fence.depth))![0].length < fence.indent)) fence = null;
     if (fence) {
       push(line, i);
       const close = /^(`{3,}|~{3,})[ \t]*$/.exec(b);
@@ -662,14 +775,20 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       continue;
     }
     // A footnote's text, like a list item's, goes on in indented lines.
+    const wasListed = listed;
     if (LIST_MARKER.test(b) || /^\[\^[^\]\s]+\]:/.test(b)) listed = true;
     else if (afterBlank && !/^[ \t]/.test(line.replace(QUOTE_PREFIX, ''))) listed = false;
     afterBlank = false;
-    const open = /^(`{3,}|~{3,})/.exec(b);
-    if (open && !(open[1][0] === '`' && b.slice(open[1].length).includes('`'))) {
+    // A fence may open on a list item's marker line (`- ```python`): its
+    // lines are code, verbatim, as any fence's are. (An ordered item other
+    // than 1. cannot interrupt a paragraph, so there it is text.)
+    const marked = LIST_MARKER.test(b) && !(inPara && !wasListed && /^\d+[.)]/.test(b) && !/^0*1[.)]/.test(b));
+    const fenceText = marked ? line.slice(CONTAINER_MARKERS.exec(line)![0].length) : b;
+    const open = /^(`{3,}|~{3,})/.exec(fenceText);
+    if (open && !(open[1][0] === '`' && fenceText.slice(open[1].length).includes('`'))) {
       flush();
       push(line, i);
-      fence = { ch: open[1][0], len: open[1].length };
+      fence = { ch: open[1][0], len: open[1].length, depth: quoteDepth(line), indent: marked ? contentIndent(line) : 0 };
       inPara = false;
       continue;
     }
@@ -699,15 +818,16 @@ function prepass(src: string, warn: (m: string) => void): Pre {
         // with text: pandoc reads the comment as a block and the text as
         // the start of a paragraph, which the next lines continue.
         // markdown-it would keep the text in the HTML block, so the text
-        // moves to a line of its own.
+        // moves to a line of its own, read as any line is: as it is read
+        // when the next save writes it there (a `:::` or a fence there is
+        // not scanned as a paragraph's text would be).
         flush();
         for (let l = i; l < run.line; l++) push(work[l], l);
         push(work[run.line].slice(0, run.restAt).replace(/[ \t]+$/, ''), run.line);
         splitComments.add(out.length - 1);
-        paraListed = listed;
-        para.push({ text: line.slice(0, line.length - b.length) + work[run.line].slice(run.restAt).replace(/^[ \t]+/, ''), line: run.line });
-        inPara = true;
-        i = run.line;
+        work[run.line] = line.slice(0, line.length - b.length) + work[run.line].slice(run.restAt).replace(/^[ \t]+/, '');
+        inPara = false;
+        i = run.line - 1;
         continue;
       }
     }
@@ -765,6 +885,28 @@ function prepass(src: string, warn: (m: string) => void): Pre {
     if (!para.length) paraListed = listed;
     para.push({ text: line, line: i });
     inPara = true;
+    // Display math that opens on this line and closes on a later one takes
+    // the lines between as its own, as pandoc's formula does: a `# x`, a
+    // fence, a quote marker or a `:::` there is the formula's text, never a
+    // block. A blank line (inside the quotes the paragraph is in: a `>`
+    // alone outside them is the formula's), or the next item of the list
+    // it is in, ends the search (the formula then never opened, as the
+    // scan finds too).
+    const depth = containerQuotes(para[0].text);
+    for (let open = !/^\|/.test(b) && displayOpenAfter(line, false); open; ) {
+      let close = -1;
+      for (let k = i + 1; k < lines.length; k++) {
+        if (!stripQuotes(work[k], depth).trim() || breaksMath(work[k], paraListed || LIST_MARKER.test(b), 'display', contentIndent(line), depth)) break;
+        if (work[k].includes('$$')) {
+          close = k;
+          break;
+        }
+      }
+      if (close < 0) break;
+      for (let k = i + 1; k <= close; k++) para.push({ text: work[k], line: k });
+      i = close;
+      open = displayOpenAfter(work[close], true);
+    }
   }
   flush();
   origLine.push(lines.length);
@@ -791,6 +933,7 @@ class DisplayItem {
 const CUT = Symbol('cut');
 type Item = PMNode | DisplayItem | typeof CUT;
 const isNode = (x: Item): x is PMNode => x !== CUT && !(x instanceof DisplayItem);
+const isText = (x: Item | undefined): x is PMNode => x !== undefined && isNode(x) && x.isText;
 
 /** Where a hoisted comment sat in the source, so an island made of that
  *  source leaves it out. */
@@ -848,11 +991,12 @@ export function mdToDoc(src: string): MdImport {
   /** Every sentinel in `text` back to the source it replaced. */
   const restore = (text: string) => text.replace(SENTINEL, (all, n: string) => store[+n]?.orig ?? all);
   /** The same in a link's destination or title, where markdown-it has
-   *  resolved the escapes: an escape is its character. */
+   *  resolved the escapes: an escape is its character, in the text a
+   *  sentinel stands for too (`$$\($$` in a destination is `$$($$`). */
   const restoreLink = (text: string) =>
     text.replace(SENTINEL, (all, n: string) => {
       const s = store[+n];
-      return !s ? all : s.k === 'lit' ? s.ch : s.orig;
+      return !s ? all : s.k === 'lit' ? s.ch : md.utils.unescapeAll(s.orig);
     });
 
   /** An image's alt text as plain text (markdown-it's own rendering of
@@ -875,6 +1019,24 @@ export function mdToDoc(src: string): MdImport {
 
   // ---------- tokenize ----------
   const md = new MarkdownIt({ html: true }).use(footnotePlugin).use(fencedDivs);
+  // Strong, emphasis and strike delimiters by pandoc's rule, not
+  // CommonMark's: a `*` or `~~` run opens unless white space follows it and
+  // closes unless white space precedes it, whatever the character on its
+  // other side. CommonMark refuses a run between a letter and punctuation
+  // (`x**$y$**`, `**[@k]**s`), and every sentinel reads as punctuation, so
+  // bold around a formula or a citation glued to a word would read back as
+  // literal asterisks. `_` keeps CommonMark's intraword rule, which is
+  // pandoc's too.
+  md.inline.State = class extends md.inline.State {
+    scanDelims(start: number, canSplitWord: boolean) {
+      const scanned = super.scanDelims(start, canSplitWord);
+      const marker = this.src.charCodeAt(start);
+      if (marker !== 0x2a && marker !== 0x7e) return scanned;
+      const before = start > 0 ? this.src[start - 1] : ' ';
+      const after = start + scanned.length < this.posMax ? this.src[start + scanned.length] : ' ';
+      return { ...scanned, can_open: !md.utils.isWhiteSpace(after.charCodeAt(0)), can_close: !md.utils.isWhiteSpace(before.charCodeAt(0)) };
+    }
+  };
   // markdown-it drops every `data:` URL but a few raster types. An SVG
   // data URL is how a single-file document carries a figure, so an image's
   // destination may be one; a link's may not (an SVG opened from a link
@@ -1014,9 +1176,13 @@ export function mdToDoc(src: string): MdImport {
     }
   }
   const footnoteBodies = new Map<number, PMNode[]>();
+  /** The notes whose bodies are being read: a marker for one of them in
+   *  its own body (or in a note that body cites) closes a cycle. */
+  const building = new Set<number>();
   const footnoteBody = (id: number): PMNode[] => {
     const known = footnoteBodies.get(id);
     if (known) return known;
+    building.add(id);
     const parts: PMNode[][] = [];
     forceAfter++;
     const top = topParagraph;
@@ -1039,6 +1205,7 @@ export function mdToDoc(src: string): MdImport {
     forceAfter--;
     if (parts.length > 1) warn('multi-paragraph footnote flattened');
     const nodes = parts.flatMap((b, k) => (k > 0 ? [schema.text(' '), ...b] : b));
+    building.delete(id);
     footnoteBodies.set(id, nodes);
     return nodes;
   };
@@ -1284,8 +1451,23 @@ export function mdToDoc(src: string): MdImport {
         }
         case 'footnote_ref': {
           const label = (t.meta as { label?: string } | null)?.label;
+          const id = (t.meta as { id?: number } | null)?.id ?? -1;
+          if (building.has(id)) {
+            // A note that cites itself, directly or through another note,
+            // has no form: the marker that closes the cycle is its text, as
+            // pandoc reads every marker inside a note.
+            warn(`footnote [^${label ?? ''}] is cited inside itself — the marker there is kept as text`);
+            pushText(`[^${label ?? ''}]`, marks, out);
+            break;
+          }
           if (label !== undefined && !quiet) printedNotes.push(label);
-          const body = footnoteBody((t.meta as { id?: number } | null)?.id ?? -1);
+          const body = footnoteBody(id);
+          // The space run the marker swallows may span text tokens (a soft
+          // break's space, then `\ `): they are one text in the document,
+          // and the next read sees one.
+          for (let a = out[out.length - 2], b = out[out.length - 1]; isText(a) && isText(b) && a.sameMarkup(b); a = out[out.length - 2], b = out[out.length - 1]) {
+            out.splice(out.length - 2, 2, schema.text(a.text! + b.text!, a.marks));
+          }
           const nodes = out.filter(isNode);
           const lastText = nodes[nodes.length - 1];
           if (lastText && out[out.length - 1] === lastText) {
@@ -1332,10 +1514,24 @@ export function mdToDoc(src: string): MdImport {
         const prev = out[out.length - 1];
         const prevEnds = !prev || prev instanceof DisplayItem || (prev.isText && /\s$/.test(prev.text ?? ''));
         if (prevEnds) {
+          // White space alone after the gap goes, and the gap stays open.
           const trimmed = (item.text ?? '').replace(/^\s+/, '');
-          pending = false;
-          if (trimmed) out.push(schema.text(trimmed, item.marks));
+          if (trimmed) {
+            pending = false;
+            out.push(schema.text(trimmed, item.marks));
+          }
           continue;
+        }
+      }
+      if (pending && isNode(item) && item.type.name === 'footnote') {
+        // A footnote marker swallows the space a comment left before it
+        // (the comment prints nothing), as it does with none between.
+        const prev = out[out.length - 1];
+        if (prev && !(prev instanceof DisplayItem)) {
+          const one = [prev];
+          trimSpaceBeforeMarker(one);
+          if (one.length) out[out.length - 1] = one[0];
+          else out.pop();
         }
       }
       pending = false;
@@ -1473,7 +1669,9 @@ export function mdToDoc(src: string): MdImport {
     );
     // The command as the source writes it: `\\newpage` (an escaped
     // backslash) is text, as pandoc reads it.
-    const command = (text: string) => /^\\(?:newpage|pagebreak)$/.test(uncommented(text).replace(/<!--[\s\S]*?-->/g, '').trim());
+    // (A no-break space after it, `\newpage\ `, is text: JavaScript's trim
+    // would take it away.)
+    const command = (text: string) => /^\\(?:newpage|pagebreak)$/.test(uncommented(text).replace(/<!--[\s\S]*?-->/g, '').replace(/^[ \t\n]+|[ \t\n]+$/g, ''));
     if (solid.length === 1 && solid[0].type === 'text' && command(solid[0].content) && command(inline?.content ?? '')) {
       hoistIn(kids);
       H.seen = true;
@@ -1567,7 +1765,10 @@ export function mdToDoc(src: string): MdImport {
 
   /** Where the opener of div `t` starts on its source line: the last run
    *  of its colons that its attributes follow (a list marker, quote
-   *  markers or a comment may come before it on the line). -1 if none. */
+   *  markers or a comment may come before it on the line), or, when the
+   *  pre-pass changed the attributes' text (`\ ` is a no-break space to
+   *  markdown-it), the run right after the container markers or after a
+   *  comment closing there. -1 if none. */
   function openerColumn(line: string, t: MdToken): number {
     const info = restore(t.info).split('\n')[0];
     for (let p = line.lastIndexOf(t.markup); p >= 0; p = p > 0 ? line.lastIndexOf(t.markup, p - 1) : -1) {
@@ -1575,6 +1776,10 @@ export function mdToDoc(src: string): MdImport {
       if (line[p - 1] === ':' || line[q] === ':') continue;
       while (line[q] === ' ' || line[q] === '\t') q++;
       if (line.startsWith(info, q)) return p;
+    }
+    const close = line.lastIndexOf('-->');
+    for (const p of [CONTAINER_MARKERS.exec(line)![0].length, close < 0 ? -1 : close + 3 + /^[ \t]*/.exec(line.slice(close + 3))![0].length]) {
+      if (p >= 0 && line.startsWith(t.markup, p) && line[p + t.markup.length] !== ':') return p;
     }
     return -1;
   }
@@ -1983,7 +2188,18 @@ export function mdToDoc(src: string): MdImport {
         // markup, so there, as in a `:::` div, a comment that nothing but
         // `<div>` tags precedes goes before the block.
         const kept: string[] = [];
-        const src = restore(t.content).replace(/\n$/, '').split('\n');
+        // A formula or code span the pre-pass took across a line break in
+        // it holds its later lines as the source has them: the container's
+        // quote markers and indentation, which markdown-it took off the
+        // block's own lines, come off them too.
+        const opener = lines[t.map ? origLine[t.map[0]] : 0] ?? '';
+        const src = t.content
+          .replace(SENTINEL, (all, n: string) => {
+            const s = store[+n];
+            return !s ? all : s.orig.includes('\n') ? dedentMath(s.orig, opener, containerQuotes(opener)) : s.orig;
+          })
+          .replace(/\n$/, '')
+          .split('\n');
         const seen = H.seen;
         const divTags = (line: string) => /^(?:\s*<\/?div(?:\s[^>]*)?>)*\s*$/i.test(line);
         let text = !/^[ \t]*<div(?=[\s/>]|$)/i.test(src[0] ?? '');

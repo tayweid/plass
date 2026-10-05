@@ -1350,6 +1350,202 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   );
 }
 
+// Fix round 2: each of these changed the file again on every reopen-and-
+// save, or would not open at all: the second save must equal the first.
+{
+  const saves = (doc: PMNode) => {
+    const warned: string[] = [];
+    const md1 = docToMd(doc, (w) => warned.push(w));
+    const back = mdToDoc(md1).doc;
+    return { md1, md2: docToMd(back), back, warned };
+  };
+  const strong = schema.marks.strong.create();
+  const em = schema.marks.em.create();
+  const doc = (...blocks: PMNode[]) => schema.nodes.doc.create(null, blocks);
+  const para = (...nodes: PMNode[]) => schema.nodes.paragraph.create(null, nodes);
+  const hasMark = (n: PMNode | null | undefined, mark: string) => !!n?.marks.some((m) => m.type.name === mark);
+
+  // Strong, emphasis and strike open unless white space follows and close
+  // unless white space precedes, as pandoc reads them: around a formula, a
+  // citation, a footnote marker or an image glued to a word they are
+  // marks, never literal asterisks or tildes.
+  for (const [md, want, mark, atom] of [
+    ['the **$n$**th term\n', 'the **$n$**th term\n', 'strong', 'math_inline'],
+    ['x**$y$**\n', 'x**$y$**\n', 'strong', 'math_inline'],
+    ['a~~$x$~~b\n', 'a~~$x$~~b\n', 'strike', 'math_inline'],
+    ['the *$n$*th\n', 'the *$n$*th\n', 'em', 'math_inline'],
+    ['see **@k**s\n', 'see **[@k]**s\n', 'strong', 'citation'],
+    ['b **[^1]**\n\n[^1]: n\n', 'b**[^1]**\n\n[^1]: n\n', 'strong', 'footnote'],
+    ['a**![i](p.png)**b\n', 'a**![i](p.png)**b\n', 'strong', 'image'],
+  ] as const) {
+    const t = trip(md);
+    const node = find(t.doc, (n) => n.type.name === atom);
+    check(
+      `a delimiter beside an atom glued to a word is a mark: ${JSON.stringify(md)}`,
+      t.md1 === want && t.converges && hasMark(node, mark) && !/[*~]/.test(t.doc.textContent),
+      JSON.stringify([t.md1, t.md2]),
+    );
+  }
+  // Only the formula in "the $n$th term" bolded, in the editor.
+  const nth = saves(doc(para(schema.text('the '), schema.nodes.math_inline.create({ src: 'n' }, null, [strong]), schema.text('th term'))));
+  check(
+    'a formula bolded inside a word reads back bold',
+    nth.md1 === 'the **$n$**th term\n' && nth.md2 === nth.md1 && hasMark(find(nth.back, (n) => n.type.name === 'math_inline'), 'strong') && nth.back.textContent === 'the th term',
+    JSON.stringify([nth.md1, nth.md2]),
+  );
+  const nested = saves(doc(para(schema.nodes.citation.create({ key: 'k' }, null, [strong, em]), schema.text('z', [em]))));
+  const cite = find(nested.back, (n) => n.type.name === 'citation');
+  check(
+    'a bold citation inside emphasis that runs on into a word',
+    nested.md1 === '***[@k]**z*\n' && nested.md2 === nested.md1 && hasMark(cite, 'strong') && hasMark(cite, 'em') && nested.back.textContent === 'z',
+    JSON.stringify([nested.md1, nested.md2]),
+  );
+  // What CommonMark and pandoc both refuse stays literal, and an underscore
+  // inside a word is no delimiter.
+  for (const [md, text] of [
+    ['a ** b**\n', 'a ** b**'],
+    ['foo*bar\n', 'foo*bar'],
+    ['snake_case_name\n', 'snake_case_name'],
+  ] as const) {
+    const t = trip(md);
+    check(`no mark where none opens: ${JSON.stringify(md)}`, t.doc.textContent === text && t.converges, JSON.stringify([t.doc.toJSON(), t.md1]));
+  }
+
+  // A note that cites itself, directly or through another note, opens: the
+  // marker that closes the cycle is text, as pandoc reads a marker inside
+  // a note.
+  for (const md of ['Text[^1].\n\n[^1]: A note that cites itself[^1].\n', 'Text[^a].\n\n[^a]: See also[^b].\n\n[^b]: Back to[^a].\n']) {
+    let t: ReturnType<typeof trip> | null = null;
+    try {
+      t = trip(md);
+    } catch (e) {
+      check(`a footnote cycle opens: ${JSON.stringify(md)}`, false, String(e));
+      continue;
+    }
+    check(
+      `a footnote cycle opens and settles: ${JSON.stringify(md)}`,
+      t.converges && /\[\^(?:1|a)\]/.test(t.doc.textContent) && t.warnings.some((w) => /cited inside itself/.test(w)),
+      JSON.stringify([t.md1, t.md2, t.warnings]),
+    );
+  }
+
+  // A link address is written as the reader holds it (markdown-it's
+  // percent-encoding), so the first save is the last.
+  for (const [href, want] of [
+    ['C:\\a b', 'C:%5Ca%20b'],
+    ['a`b', 'a%60b'],
+    ['https://x.org/ä?q=a b', 'https://x.org/%C3%A4?q=a%20b'],
+  ]) {
+    const s = saves(doc(para(schema.text('see '), schema.text('x', [schema.marks.link.create({ href })]))));
+    const got = find(s.back, (n) => n.isText && n.marks.some((m) => m.type.name === 'link'))?.marks[0].attrs.href;
+    check(`a link address settles on the first save: ${JSON.stringify(href)}`, got === want && s.md2 === s.md1, JSON.stringify([s.md1, s.md2, got]));
+  }
+  // TeX's control space ends a formula as written; a lone backslash at the
+  // end gets one (`$x\$` would be an escaped dollar).
+  for (const [src, want, back] of [
+    ['x\\ ', 'a $x\\ $ b\n', 'x\\ '],
+    ['x\\', 'a $x\\ $ b\n', 'x\\ '],
+    ['x\\\\ ', 'a $x\\\\$ b\n', 'x\\\\'],
+  ]) {
+    const s = saves(doc(para(schema.text('a '), schema.nodes.math_inline.create({ src }), schema.text(' b'))));
+    check(`a formula ending ${JSON.stringify(src)}`, s.md1 === want && find(s.back, (n) => n.type.name === 'math_inline')?.attrs.src === back && s.md2 === s.md1, JSON.stringify([s.md1, s.md2]));
+  }
+
+  // Display math takes every line up to its closing `$$`, as pandoc's does:
+  // a line that would open a block there is the formula's.
+  for (const md of [
+    '$$\n# x\n$$\n',
+    '$$\n```x `y`\n$$\n',
+    '$$\n```\n$$\n',
+    '$$\n~~~\n$$\n',
+    '$$\n> x\n$$\n',
+    '$$\n::: x\n$$\n',
+    '$$\n<div>\n$$\n',
+    '$$\n<!-- c -->\n$$\n',
+    '$$\n- x\n$$\n',
+    '> $$\n> # x\n> $$\n',
+    '- item\n\n  $$\n  a^2\n  - b^2\n  $$\n',
+  ]) {
+    const t = trip(md);
+    check(`a display formula keeps a line that opens like a block: ${JSON.stringify(md)}`, kinds(t.doc).length === 1 && !!find(t.doc, (n) => n.type.name === 'math_display') && t.md1 === md && t.converges, JSON.stringify([kinds(t.doc), t.md1]));
+  }
+  for (const md of ['a $$# $$ b\n', 'a $$> $$ b\n', 'a $$```$$ b\n']) {
+    const t = trip(md);
+    check(`a display formula that opens like a block settles: ${JSON.stringify(md)}`, JSON.stringify(kinds(t.doc)) === '["paragraph","math_display","paragraph"]' && t.converges, JSON.stringify([kinds(t.doc), t.md1, t.md2]));
+  }
+  for (const md of ['> $$\n>\n> $$\n', '- a $x\n- b$ c\n', '- a\n  - b $x\n  - c$\n']) {
+    const t = trip(md);
+    check(`a blank line or the next item still ends a formula: ${JSON.stringify(md)}`, !find(t.doc, (n) => n.type.name === 'math_display' || n.type.name === 'math_inline') && t.converges, JSON.stringify([t.doc.toJSON(), t.md1]));
+  }
+  const nestedMarker = trip('- a $x\n  - b$ c\n');
+  check('an inline formula runs on through a nested list marker', find(nestedMarker.doc, (n) => n.type.name === 'math_inline')?.attrs.src === 'x\n- b' && nestedMarker.converges, JSON.stringify(nestedMarker.doc.toJSON()));
+
+  // Found by a random differential run against main: each settles now.
+  for (const md of [
+    // A footnote marker swallows the space a hoisted comment left before it.
+    'a <!-- c --> [^1] b\n\n[^1]: n\n',
+    '{.c}_1. <!-- c -->\\ [^1]\n\n[^1]: n\n',
+    // `$` inside a citation key is the key's; an escape ends the key.
+    '@k$y $$x$ z\n',
+    '[@k]@k\\$x$ z\n',
+    // A fence on a list item's marker line is verbatim.
+    '- ```python\n  x = $a\n  y = b$\n  ```\n',
+    '> - ```\n>   $$\n>   a\n>   $$\n>   ```\n',
+    '- ```![i](p.png)$$] !\n$$\n',
+    // An island on a marker line whose opener holds `\\ `; one whose formula
+    // runs across its lines in a list item; one a comment's line opens.
+    '1. :::\\ :::(a\n',
+    '- <div>:::> *$$> \n$$\n',
+    '<!-- c -->:::\\ :::_\n',
+    // The notes go before an island left open (a word opener with a brace).
+    'a# [^1]$$\n\n:::"{.c}\n\n[^1]: n\n',
+    // A backtick fence line whose formula runs onto the next line is text.
+    '<!-- c -->```\\ $$\n$$`c`^:::\n',
+    // A bang before a link is escaped (`![` is an image).
+    '(_\\![i](p.png)\n',
+    // An escape in a formula inside a link's destination is resolved, as
+    // markdown-it resolves one outside it.
+    '[^1]($$($$)@k\n\n[^1]: n\n',
+    // The space run a marker swallows spans a soft break and `\ `.
+    '~~**a@k\\$$\n\\ [^1]\n\n[^1]: n\n',
+    // A heading whose text is a hash; `\newpage` with a no-break space
+    // after it (text, not a page break); an underscore before an escape.
+    '# # <!-- c -->\n',
+    '\\newpage\\ \n<div>:::`c`\n',
+    '\\_<!-- c -->$$(_~~\n',
+    '~~<!-- c -->~{.c}]~~$x$\n',
+    '~~**\\~~~~\\**\n',
+    // A formula, and an island's formula, in a quote in a list item: the
+    // quote's markers after the item's are the paragraph's quotes.
+    '- > $$\n  > x\n  > $$\n',
+    '- > a `b\n  > c` d $x\n  > y$\n',
+    '- > <div>$$\n[l](u)# [l](u)\n$$\n',
+  ]) {
+    const t = trip(md);
+    check(`settles: ${JSON.stringify(md)}`, t.converges && !leaks(md, t.doc), JSON.stringify([t.md1, t.md2]));
+  }
+  const listFence = trip('- ```python\n  x = $a\n  y = b$\n  ```\n');
+  check('a fence on a marker line keeps its code as written', listFence.md1 === '- ```python\n  x = $a\n  y = b$\n  ```\n' && find(listFence.doc, (n) => n.type.name === 'code_block')?.textContent === 'x = $a\ny = b$', listFence.md1);
+  const keyed = mdToDoc('@k$y and @k\\$x\n').doc;
+  check('a citation key holds a `$` but not an escaped one', JSON.stringify(all(keyed, (n) => n.type.name === 'citation').map((n) => n.attrs.key)) === '["k$y","k"]' && keyed.textContent === ' and $x', JSON.stringify(keyed.toJSON()));
+  const ticked = saves(doc(schema.nodes.code_block.create({ params: 'x `y`' }, schema.text('code'))));
+  check('a code block whose info holds a backtick is fenced with tildes', ticked.md1 === '~~~x `y`\ncode\n~~~\n' && ticked.back.firstChild!.attrs.params === 'x `y`' && ticked.md2 === ticked.md1, JSON.stringify(ticked.md1));
+  // A text `~` beside a strike's `~~` is escaped: it would join the run
+  // (`~~~x~~` opens a fence at a line's start).
+  const strike = schema.marks.strike.create();
+  for (const [nodes, want] of [
+    [[schema.text('~x', [strike])], '~~\\~x~~\n'],
+    [[schema.text('~'), schema.text('x', [strike])], '\\~~~x~~\n'],
+    [[schema.text('x', [strike]), schema.text('~y')], '~~x~~\\~y\n'],
+    [[schema.text('x~', [strike]), schema.text('~y')], '~~x\\~~~\\~y\n'],
+  ] as const) {
+    const s = saves(doc(para(...nodes)));
+    check(`a tilde beside a strike stays text: ${JSON.stringify(want)}`, s.md1 === want && s.back.eq(doc(para(...nodes))) && s.md2 === s.md1, JSON.stringify([s.md1, s.back.toJSON()]));
+  }
+  const glue = saves(doc(para(schema.nodes.image.create({ src: 'p.png', alt: 'i' }), schema.text('\u00a0\u00a0'))));
+  check('no-break spaces after a lone image are written as its one space', glue.md1 === '![i](p.png)\u00a0\n' && glue.md2 === glue.md1, JSON.stringify([glue.md1, glue.md2]));
+}
+
 // Every fixture under tests/fixtures/md parses and converges.
 {
   const dir = new URL('../tests/fixtures/md/', import.meta.url);

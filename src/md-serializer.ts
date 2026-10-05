@@ -22,6 +22,7 @@
 // What Markdown cannot say is reported through `warn`, never dropped
 // silently.
 
+import MarkdownIt from 'markdown-it';
 import type { Node as PMNode, Mark } from 'prosemirror-model';
 import { DEFAULT_SETTINGS, type DocSettings } from './settings';
 import { commentToMd } from './editor-comments-format';
@@ -51,15 +52,21 @@ function codeSpan(text: string): string {
   return fence + pad + text + pad + fence;
 }
 
-/** A link's or an image's destination as Markdown writes it: white space
- *  percent-encoded (a space would end it), a backslash and a parenthesis
- *  (one unbalanced would end it) escaped, and outside a `data:` URL an
- *  angle bracket percent-encoded (an opening `<` would make it a bracketed
- *  destination; the reader encodes both, so the next save writes the
- *  same). */
+/** markdown-it's own normalization of a destination, which the reader
+ *  applies to every address but a `data:` URL. */
+let normalizer: { normalizeLink(url: string): string } | null = null;
+
+/** A link's or an image's destination as Markdown writes it: outside a
+ *  `data:` URL, as the reader will hold it after reading it back
+ *  (markdown-it's percent-encoding: white space, a backslash, a backtick,
+ *  angle brackets, non-ASCII), so the next save writes the same; inside
+ *  one, white space percent-encoded (a space would end it) and a backslash
+ *  escaped. A parenthesis is escaped in both (one unbalanced would end the
+ *  destination). */
 const destination = (href: string) => {
-  const data = /^data:/i.test(href);
-  return href.replace(/[\\()<>]|\s/g, (c) => (/\s/.test(c) || (!data && (c === '<' || c === '>')) ? encodeURIComponent(c) : c === '<' || c === '>' ? c : `\\${c}`));
+  if (/^data:/i.test(href)) return href.replace(/[\\()]|\s/g, (c) => (/\s/.test(c) ? encodeURIComponent(c) : `\\${c}`));
+  normalizer ??= new MarkdownIt();
+  return normalizer.normalizeLink(href).replace(/[()]/g, '\\$&');
 };
 
 /** A number as Markdown writes it: at most three decimals, no trailing
@@ -199,9 +206,10 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       .replace(/&(?=#?[A-Za-z0-9]+;)/g, '\\&')
       // Underscores: every one in a run of two or more (a blank to fill in
       // would otherwise be read as emphasis delimiters), and a lone one at
-      // a word boundary; snake_case stays bare.
+      // a word boundary (before an escape too: `_\$` opens emphasis);
+      // snake_case stays bare.
       .replace(/_{2,}/g, (run) => run.replace(/_/g, '\\_'))
-      .replace(/(^|\s)_(?!\\)/g, '$1\\_')
+      .replace(/(^|\s)_/g, '$1\\_')
       .replace(/(?<!\\)_(?=\s|$)/g, '\\_');
 
   /** Escape what would start a block at the head of a line of paragraph
@@ -246,12 +254,13 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     let mathEnd = -1;
     const put = (s: string) => {
       if (!s) return;
-      // `^[` opens an inline footnote: a caret that ended the text before
-      // a citation group, a footnote marker or a link is escaped.
-      if (s[0] === '[' && last === '^') {
+      // `^[` opens an inline footnote and `![` an image: a caret that ended
+      // the text before a citation group, a footnote marker or a link is
+      // escaped, and a bang before a link (`![^1]` and `![@k]` are text).
+      if (s[0] === '[' && (last === '^' || (last === '!' && !/^\[[@^]/.test(s)))) {
         let slashes = 0;
         while (md[md.length - 2 - slashes] === '\\') slashes++;
-        if (slashes % 2 === 0) md = md.slice(0, -1) + '\\^';
+        if (slashes % 2 === 0) md = md.slice(0, -1) + '\\' + last;
       }
       md += s;
       last = s[s.length - 1];
@@ -265,6 +274,17 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       if (s) opaque.push([md.length - s.length, md.length]);
     };
     const DELIM: Record<string, string> = { strike: '~~', strong: '**', em: '*' };
+    /** A delimiter. A text `~` right before a strike's `~~`, opening or
+     *  closing, would join its run (`~~~x~~` opens a fence at a line's
+     *  start; `~~x~~~` closes before the text's `~`): it is escaped. */
+    const putDelim = (mark: string) => {
+      if (mark === 'strike' && last === '~') {
+        let slashes = 0;
+        while (md[md.length - 2 - slashes] === '\\') slashes++;
+        if (slashes % 2 === 0) md = md.slice(0, -1) + '\\~';
+      }
+      putWhole(DELIM[mark]);
+    };
     let active: string[] = [];
     /** Whitespace that ended the last text, written once the marks around
      *  it have closed. */
@@ -285,7 +305,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     const moveTo = (want: string[], lead = '', at = -1): string => {
       let keep = 0;
       while (keep < active.length && want.includes(active[keep])) keep++;
-      for (let k = active.length - 1; k >= keep; k--) putWhole(DELIM[active[k]]);
+      for (let k = active.length - 1; k >= keep; k--) putDelim(active[k]);
       active = active.slice(0, keep);
       put(pending);
       pending = '';
@@ -296,7 +316,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         lead = '';
       }
       for (const m of opening) {
-        putWhole(DELIM[m]);
+        putDelim(m);
         active.push(m);
       }
       return lead;
@@ -366,6 +386,8 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           // attributes; `(`/`[` right after a citation's `]` as a link.
           const tail = last;
           if ((/^[{]/.test(t) && /[`)]$/.test(tail)) || (/^[([]/.test(t) && tail === ']')) t = '\\' + t;
+          // A `~` right after a strike's `~~` would join its run.
+          if (t[0] === '~' && tail === '~') t = '\\' + t;
           // A digit right after a formula's closing `$` would unmake the
           // formula (pandoc's rule): the digit is written as its character
           // reference, which reads back as the digit.
@@ -381,9 +403,15 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         case 'math_inline': {
           // One line: a formula's soft break reads back as its space. Spaces
           // at its edges print nothing and would unmake it (`$ y $` is
-          // text), so they go; a formula of spaces alone prints nothing and
-          // has no form (`$$` opens display math).
-          const src = (child.attrs.src as string).replace(/\s*\n\s*/g, ' ').trim();
+          // text), so they go, but for one a backslash escapes (TeX's
+          // control space: `$x\ $` is a formula, `$x\$` an escaped dollar);
+          // a formula of spaces alone prints nothing and has no form (`$$`
+          // opens display math).
+          const line = (child.attrs.src as string).replace(/\s*\n\s*/g, ' ').replace(/^\s+/, '');
+          let src = line.replace(/\s+$/, '');
+          // (A formula ending in a lone backslash gets the space too: `\$`
+          // would be an escaped dollar.)
+          if ((/\\+$/.exec(src)?.[0].length ?? 0) % 2) src += ' ';
           if (!src) {
             warn('an empty inline formula has no Markdown form — dropped');
             break;
@@ -587,6 +615,15 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           if (!(c.isText && /^[ \t\n]*$/.test(c.text ?? ''))) solid.push(c);
         });
         const marked = (c: PMNode) => c.marks.some((m) => ['em', 'strong', 'strike'].includes(m.type.name));
+        // No-break spaces after a lone image are that space to the reader,
+        // which drops them all: they print nothing at the paragraph's end,
+        // so the image is written alone.
+        const image = solid.find((c) => c.type.name === 'image');
+        const after = image ? solid.slice(solid.indexOf(image) + 1) : [];
+        if (image && solid[0] === image && !marked(image) && after.length && after.every((c) => c.isText && /^[ \t\n\u00a0]*$/.test(c.text ?? ''))) {
+          text = escLines(inline(node.type.create(node.attrs, [image])));
+          solid.length = 1;
+        }
         if (solid.length === 1 && solid[0].type.name === 'image' && String(solid[0].attrs.alt ?? '').trim() && !marked(solid[0])) text += '\u00a0';
         const classes = [...(node.attrs.keep ? ['keep'] : []), ...(node.attrs.align === 'center' || node.attrs.align === 'right' ? [node.attrs.align as string] : [])];
         if (node.attrs.align && node.attrs.align !== 'center' && node.attrs.align !== 'right') warn(`paragraph alignment "${node.attrs.align as string}" has no Markdown form — dropped`);
@@ -605,7 +642,9 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           const at = text.lastIndexOf('{');
           if (at >= 0 && readAttrBlock(text.trimEnd(), at)?.end === text.trimEnd().length) text = text.slice(0, at) + '\\' + text.slice(at);
         }
-        text = text.replace(/(\s)(#+\s*)$/, '$1\\$2');
+        // A closing run of hashes (the whole text included: `# #` is an
+        // empty heading) is escaped.
+        text = text.replace(/(^|\s)(#+\s*)$/, '$1\\$2');
         const label = node.attrs.label as string;
         return `${'#'.repeat(node.attrs.level as number)} ${text}${label ? ' ' + writeAttrBlock({ id: label, classes: [], kvs: [] }) : ''}`;
       }
@@ -629,7 +668,10 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         // A Markdown island is the file's own text: back verbatim.
         if (params === 'md-raw') return node.textContent;
         const info = params === 'typst-raw' ? '{=typst}' : params;
-        const ticks = '`'.repeat(Math.max(3, longestRun(node.textContent, '`') + 1));
+        // A backtick in the info string unmakes a backtick fence (the line
+        // is text): such a block is fenced with tildes.
+        const ch = info.includes('`') ? '~' : '`';
+        const ticks = ch.repeat(Math.max(3, longestRun(node.textContent, ch) + 1));
         return `${ticks}${info}\n${node.textContent}\n${ticks}`;
       }
       case 'blockquote': {
@@ -821,7 +863,9 @@ function leavesOpen(text: string): boolean {
     const start = HTML_ENDS.find(([re]) => re.test(line));
     if (start && !start[1].test(line)) html = start[1];
     else if (/^:{3,}[ \t]*$/.test(line)) divs = Math.max(0, divs - 1);
-    else if (/^:{3,}[ \t]*(?:\{|[^ \t{]+[ \t]*:*[ \t]*$)/.test(line)) divs++;
+    // An opener's class word is any run of non-spaces (`:::"{.c}` opens
+    // a div to the reader, as to pandoc).
+    else if (/^:{3,}[ \t]*(?:\{|[^ \t]+[ \t]*:*[ \t]*$)/.test(line)) divs++;
   }
   return fence !== null || html !== null || divs > 0;
 }
