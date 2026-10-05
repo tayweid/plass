@@ -1,6 +1,6 @@
 // The editorial comment's two file forms (docs/COMMENTS-AND-APPEARANCE-
 // HANDOFF.md). One helper keeps the .typ and .md serializers and parsers
-// symmetric: what one writes, the other reads back byte for byte.
+// symmetric: what one writes, the other reads back exactly.
 //
 // A comment is the one approved exception to "the page shows only printed
 // content": it lives in the working file, shows on the page as a strip that
@@ -40,31 +40,55 @@ export function readTypComment(lines: readonly string[], i: number): { text: str
   return { text: payload.join('\n'), next: j };
 }
 
-/** Markdown: a tagged HTML comment. The payload is escaped so no text can
- *  close the comment (`-->`) or read as markup: `&` → `&amp;` first, then
- *  every `--` → `-&#45;`, which leaves no `--` anywhere. Decoding runs the
- *  two in reverse; a literal `&#45;` in the payload survives because its
- *  ampersand was escaped before the hyphen pass could produce one. */
-export const MD_COMMENT_OPEN = '<!-- plass:comment';
-const MD_COMMENT_CLOSE = '-->';
-
-function encodeMd(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/--/g, '-&#45;');
-}
-
-function decodeMd(text: string): string {
-  return text.replace(/&#45;/g, '-').replace(/&amp;/g, '&');
-}
-
+/** Markdown: every HTML comment is an editorial comment
+ *  (docs/MARKDOWN-FORMAT.md, Comments). The payload is written verbatim —
+ *  `--`, `&` and quotes included, as pandoc keeps them — except `-->`,
+ *  which would close the comment and is written `--&gt;` (decoded on
+ *  read). A one-line payload with no space at either end is written
+ *  `<!-- text -->`; anything else (several lines, an empty payload, edge
+ *  whitespace) as a frame with the payload on its own lines, so it comes
+ *  back exactly. */
 export function commentToMd(text: string): string {
-  return text === '' ? `${MD_COMMENT_OPEN}\n${MD_COMMENT_CLOSE}` : `${MD_COMMENT_OPEN}\n${encodeMd(text)}\n${MD_COMMENT_CLOSE}`;
+  const body = text.replace(/-->/g, '--&gt;');
+  return text !== '' && !text.includes('\n') && text === text.trim() ? `<!-- ${body} -->` : `<!--\n${body}\n-->`;
 }
 
-/** The payload of a tagged HTML comment block (a markdown-it `html_block`
- *  token's content, trailing newline included), or null when the block is
- *  not exactly the frame — then it stays what it is today, a raw island. */
+/** The tagged frame Plass wrote before every comment was one. Still read,
+ *  with its old escapes (`&amp;`, `-&#45;`) decoded; never written. */
+const TAGGED_MD = /^<!-- plass:comment\n(?:([\s\S]*)\n)?-->$/;
+
+/** One comment's payload, from its source `<!--…-->`. The frame form
+ *  (`<!--\n…\n-->`) keeps the payload between the two line breaks exactly;
+ *  the inline form is trimmed. */
+function mdPayload(raw: string): string {
+  const tagged = TAGGED_MD.exec(raw);
+  if (tagged) return (tagged[1] ?? '').replace(/&#45;/g, '-').replace(/&amp;/g, '&');
+  const inner = raw.slice(4, -3);
+  const body = inner.length >= 2 && inner.startsWith('\n') && inner.endsWith('\n') ? inner.slice(1, -1) : inner.trim();
+  return body.replace(/--&gt;/g, '-->');
+}
+
+/** The comments a Markdown HTML block opens with (a markdown-it
+ *  `html_block` token's content), and the text after the last one on its
+ *  line, which pandoc reads as a paragraph: `<!-- a --> <!-- b --> text`
+ *  is two comments and "text". Null when the block does not start with a
+ *  comment. */
+export function readMdComments(content: string): { comments: string[]; rest: string } | null {
+  let s = content.replace(/^[ \t]{0,3}/, '');
+  if (!s.startsWith('<!--')) return null;
+  const comments: string[] = [];
+  while (s.startsWith('<!--')) {
+    const end = s.indexOf('-->', 4);
+    if (end < 0) return null;
+    comments.push(mdPayload(s.slice(0, end + 3)));
+    s = s.slice(end + 3).replace(/^[ \t]+/, '');
+  }
+  return { comments, rest: s.trim() };
+}
+
+/** The payload of `content` when it is exactly one HTML comment (a block
+ *  or an inline `<!--…-->`), or null. */
 export function readMdComment(content: string): string | null {
-  const m = /^<!-- plass:comment\n(?:([\s\S]*)\n)?-->\n?$/.exec(content);
-  if (!m) return null;
-  return decodeMd(m[1] ?? '');
+  const read = readMdComments(content);
+  return read && read.comments.length === 1 && !read.rest ? read.comments[0] : null;
 }

@@ -85,8 +85,9 @@ const richTable = table.create(
   check('rich table export is idempotent', emittedAgain === emitted, firstDiff(emitted, emittedAgain));
 }
 
-// Markdown keeps a grid in a standalone Typst fence. A nested table must
-// carry its defaults without relying on a whole-document export header.
+// Markdown writes a grid as `.columns`/`.column` divs; a table nested in a
+// cell keeps every alignment (default distinct from an explicit one) in its
+// own `.table` div, with no whole-document context to lean on.
 {
   const cell = (text: string, attrs = {}) => table_cell.create(attrs, paragraph.create(null, schema.text(text)));
   const nestedTable = table.create(null, [
@@ -180,9 +181,10 @@ const richTable = table.create(
   );
   const styledRound = roundMarkdown(styled);
   check(
-    'current-main styled-table degradation remains booktabs/default-size',
-    styledRound.table?.attrs.style === 'booktabs' && styledRound.table.attrs.fontSize === '',
-    JSON.stringify(styledRound.table?.attrs),
+    'a styled table keeps its style and font size through Markdown',
+    styledRound.table?.attrs.style === 'grid' && styledRound.table.attrs.fontSize === '0.85em' && !styledRound.warnings.length &&
+      styledRound.markdown.includes('::: {.table style=grid font-size=0.85em}'),
+    JSON.stringify([styledRound.table?.attrs, styledRound.warnings, styledRound.markdown]),
   );
 
   const captioned = table.create(
@@ -191,11 +193,11 @@ const richTable = table.create(
   );
   const captionedRound = roundMarkdown(captioned);
   check(
-    'current-main caption degradation warns and drops caption metadata',
-    captionedRound.warnings.some((warning) => warning.includes('not representable in Markdown')) &&
-      captionedRound.table?.attrs.caption === '' &&
-      captionedRound.table.attrs.label === '',
-    captionedRound.warnings.join('; '),
+    'a caption and a label survive Markdown, with no warning',
+    !captionedRound.warnings.length &&
+      captionedRound.table?.attrs.caption === 'Markdown caption' &&
+      captionedRound.table.attrs.label === 'tab:markdown',
+    JSON.stringify([captionedRound.table?.attrs, captionedRound.warnings]),
   );
 
   const merged = table.create(null, [
@@ -204,10 +206,10 @@ const richTable = table.create(
   ]);
   const mergedRound = roundMarkdown(merged);
   check(
-    'current-main merged-cell degradation warns and flattens the span',
-    mergedRound.warnings.some((warning) => warning.includes('merged table cells flattened')) &&
-      mergedRound.table?.child(0).child(0).attrs.colspan === 1,
-    mergedRound.warnings.join('; '),
+    'a merged cell keeps its span through Markdown, with no warning',
+    !mergedRound.warnings.length && mergedRound.table?.child(0).childCount === 1 && mergedRound.table.child(0).child(0).attrs.colspan === 2 &&
+      JSON.stringify(mergedRound.table.toJSON()) === JSON.stringify(merged.toJSON()),
+    JSON.stringify([mergedRound.table?.toJSON(), mergedRound.warnings, mergedRound.markdown]),
   );
 
   const multiParagraph = table.create(null, [
