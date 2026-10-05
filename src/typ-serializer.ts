@@ -916,23 +916,6 @@ let emitNumberEquations = true;
 let docCitationStyle: CitationStyle = 'ieee';
 let unnumberedEqLabels = new Set<string>();
 
-/** One block as Typst, with the document's export state (settings, bib,
- *  labels) in place — the Markdown serializer's form for a grid. */
-export function blockToTypStandalone(node: PMNode, doc: PMNode): string {
-  beginExport(doc, {});
-  try {
-    const s: DocSettings = normalizeSettings(doc.attrs?.settings as Partial<DocSettings> | null);
-    docMacros = parseMathMacros(s.mathMacros);
-    docSettings = s;
-    emitNumberEquations = s.numberEquations;
-    docCitationStyle = s.citationStyle;
-    return blockToTyp(node, '');
-  } finally {
-    docBib = null;
-    docMacros = {};
-  }
-}
-
 function beginExport(doc: PMNode, opts: TypExportOptions) {
   exportOpts = opts;
   docBib = (doc.attrs?.bib as { name: string; content: string } | null) ?? null;

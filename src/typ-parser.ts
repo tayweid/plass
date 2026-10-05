@@ -1048,7 +1048,10 @@ export function parseGridCall(src: string, warnings: string[] = []): PMNode | nu
           const parts = inner.split(',').map((p) => p.trim()).filter(Boolean);
           const shares = parts.map((p) => /^([\d.]+)fr$/.exec(p)?.[1]).map((x) => (x ? Number(x) : NaN));
           if (!shares.length || shares.some((x) => !Number.isFinite(x) || x <= 0)) return null;
-          columns = shares;
+          // Canonical shares (grid-editor.ts parseColumnShares): `(2fr,
+          // 2fr)` is [1, 1] and `(60fr, 40fr)` is [1.5, 1].
+          const min = Math.min(...shares);
+          columns = shares.map((x) => Math.round((x / min) * 1000) / 1000);
         }
       } else if (key === 'gutter') {
         gutter = em(value);

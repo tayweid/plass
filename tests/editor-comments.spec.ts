@@ -354,7 +354,7 @@ test('editing a note: newlines, exit, live sheet growth, insert, delete, undo', 
   await page.emulateMedia({ media: null });
 });
 
-test('the source view round-trips notes and a .md file keeps them as tagged comments', async ({ page }) => {
+test('the source view round-trips notes and a .md file keeps them as plain HTML comments', async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto('/?new=1');
   await page.waitForFunction(() => Boolean(window.__fm && window.view));
@@ -371,5 +371,9 @@ test('the source view round-trips notes and a .md file keeps them as tagged comm
     return { out, notes };
   });
   expect(md.notes).toEqual(NOTES);
-  expect(md.out).toContain('<!-- plass:comment\nBefore the heading.\n-->');
+  // Every HTML comment is a note: a one-line note is written plainly, a
+  // note of several lines as a frame with the text on its own lines.
+  expect(md.out).toContain('\n\n<!-- Before the heading. -->\n\n');
+  expect(md.out).toContain('<!--\nMid note between paragraphs.\nSecond line of the note.\n\nA blank line above.\n-->');
+  expect(md.out).not.toContain('plass:comment');
 });

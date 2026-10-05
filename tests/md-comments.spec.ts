@@ -12,11 +12,13 @@ declare global {
 const FILLER =
   'The Knuth Plass algorithm evaluates a complete paragraph and preserves globally optimal line endings while editing without visible jitter. ';
 
-// Editorial HTML comments and other HTML blocks in a .md file are Markdown
-// the page cannot render. They go through the editor — the load, the
-// edit-time normalizers (which turn a prose `--` into an en dash and would
-// otherwise break `<!--`), the save — as islands shown as code blocks, and
-// come back verbatim. MD_FILE=path runs the same check on a real file.
+// Every HTML comment in a .md file is an editorial comment: it goes
+// through the editor — the load, the edit-time normalizers (which turn a
+// prose `--` into an en dash and would otherwise break `<!--`), the save —
+// as a "Comment · Not printed" strip, and comes back verbatim. Any other
+// HTML block (the styled empty `<div>`) is an island shown as a code block,
+// also verbatim. MD_FILE=path runs the same check on a real file (whose
+// nested comments may move to a block boundary on that first save).
 const FIXTURE = [
   '# Notes',
   '',
@@ -33,7 +35,7 @@ const FIXTURE = [
   ...Array.from({ length: 6 }, () => FILLER.repeat(5).trimEnd() + '\n'),
 ].join('\n');
 
-test('Markdown islands survive the editor and show as code blocks', async ({ page }) => {
+test('Markdown comments survive the editor as strips, other HTML as code blocks', async ({ page }) => {
   test.setTimeout(90_000);
   const src = process.env.MD_FILE ? readFileSync(process.env.MD_FILE, 'utf8') : FIXTURE;
   await page.goto('/?new=1');
@@ -44,20 +46,35 @@ test('Markdown islands survive the editor and show as code blocks', async ({ pag
     const { state } = window.view;
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content).setMeta('addToHistory', false));
     await new Promise((r) => setTimeout(r, 3000));
-    const islands = [...document.querySelectorAll<HTMLElement>('.ProseMirror pre[data-params="md-raw"]')].map((el) => ({
-      height: el.getBoundingClientRect().height,
-      text: el.textContent ?? '',
-    }));
-    return { out: docToMd(window.view.state.doc), islands };
+    const measure = (selector: string) =>
+      [...document.querySelectorAll<HTMLElement>(selector)].map((el) => ({
+        height: el.getBoundingClientRect().height,
+        text: el.textContent ?? '',
+      }));
+    return {
+      out: docToMd(window.view.state.doc),
+      notes: measure('.ProseMirror .editor-comment .editor-comment-text'),
+      islands: measure('.ProseMirror pre[data-params="md-raw"]'),
+    };
   }, src);
   const comments = src.match(/<!--[\s\S]*?-->/g) ?? [];
+  const payload = (c: string) => c.slice(4, -3).replace(/^\n([\s\S]*)\n$/, '$1').trim().replace(/--&gt;/g, '-->');
   const critic = src.match(/\{(\+\+|--|~~|==|>>)[\s\S]*?(\+\+|--|~~|==|<<)\}/g) ?? [];
   expect(comments.filter((c) => !result.out.includes(c))).toEqual([]);
   expect(critic.filter((c) => !result.out.includes(c))).toEqual([]);
-  expect(result.islands.length).toBeGreaterThanOrEqual(Math.min(comments.length, 1));
-  for (const island of result.islands) expect(island.height).toBeGreaterThan(0);
-  for (const c of comments) expect(result.islands.some((i) => i.text === c || i.text.includes(c))).toBe(true);
-  if (!process.env.MD_FILE) expect(result.out).toBe(src);
+  // Each comment is a strip on the page holding exactly its text, never a
+  // code block.
+  for (const c of comments) expect(result.notes.some((n) => n.text === payload(c))).toBe(true);
+  for (const c of comments) expect(result.islands.some((i) => i.text.includes(c))).toBe(false);
+  for (const note of result.notes) expect(note.height).toBeGreaterThan(0);
+  if (!process.env.MD_FILE) {
+    expect(result.notes.length).toBe(comments.length);
+    // The styled empty <div> stays an island, shown as code.
+    expect(result.islands.map((i) => i.text)).toEqual(['<div style="margin-top: -70px;"></div>']);
+    for (const island of result.islands) expect(island.height).toBeGreaterThan(0);
+    // `--` inside a comment is untouched, so the save is byte for byte.
+    expect(result.out).toBe(src);
+  }
 
   // Pagination settles with islands in the flow.
   await expect

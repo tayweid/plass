@@ -104,7 +104,9 @@ Pandoc 3.4, default `markdown` reader (extensions `fenced_divs`,
   `Str "{#eq:x}"` in the same `Para`; `{.unnumbered}` and
   `{#eq:x .unnumbered}` likewise (two `Str`s); a label on the line after
   the closing `$$` lands in the same `Para` after a `SoftBreak`. Inline
-  math may span a soft line break (`$a +\nb$` is `Math "a +\nb"`).
+  math may span a soft line break (`$a +\nb$` is `Math "a +\nb"`), and a
+  closing `$` may start the next line (`$a\n$ b` is `Math "a"`; after a
+  space or tab it may not close).
 - `# H {#sec:x}` → `Header` id. Pandoc makes a `Figure` only for a lone
   image with NON-EMPTY alt: `![Cap](f.svg){#fig:f width=60%}` → `Figure`
   with id and an `Image` carrying `width`; `![](f.svg)`,
@@ -597,7 +599,11 @@ in place.
 Escaping in prose: the writer escapes `@` before a word character,
 `~` and `^` whenever another of the same follows on the line with no
 whitespace between (pandoc's sub/superscript rule), `^` before `[`
-(the inline-footnote opener), plus today's set. Readers decode all of
+(the inline-footnote opener), plus today's set. At the head of a line
+it also escapes what pandoc's extensions read as a block: fancy and
+example list markers (`a\)`, `iv\.`, `(1\)`, `(@\)`; one capital letter
+and a period only before two spaces), a line block's `|`, a definition's
+`:` or `~`, and a `%` that opens the file (the title block). Readers decode all of
 them to the bare character.
 
 Normalizations applied at import and by the edit-time normalizer (not

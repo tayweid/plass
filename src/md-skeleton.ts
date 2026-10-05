@@ -83,7 +83,10 @@
 //   image precedes its caption);
 // - `Para [Image]` is `paragraph > image` (`image`), unless the image has
 //   an id: then it is a labeled figure with an empty caption; `Figure` is
-//   `figure`; a lone image in a `Plain` reads the same way;
+//   `figure`; a lone image in a `Plain` reads the same way; an image
+//   followed by nothing but no-break spaces (`![alt](x.png)` and U+00A0,
+//   pandoc's idiom for keeping a captioned image out of a figure, which
+//   Plass writes) is `image`, id or not;
 // - display math is a block wherever pandoc puts it in a `Para`/`Plain`:
 //   the inline list is split at each `DisplayMath` into paragraph / math /
 //   paragraph records, each paragraph flattened on its own (a fresh quote
@@ -971,11 +974,16 @@ function paraRecords(inlines: PandocNode[], depth: number, ctx: Ctx, classes: st
   };
 
   // A lone image: `paragraph > image`, or a labeled figure (pandoc keeps
-  // the id of `![](src){#fig:x}` on the image).
-  if (solid.length === 1 && solid[0].t === 'Image') {
+  // the id of `![](src){#fig:x}` on the image). No-break spaces after it
+  // are pandoc's idiom for keeping an image out of a figure, which Plass
+  // writes after a lone image with alt text: an image in its paragraph,
+  // whatever it has (the reader drops the spaces, and an id with a
+  // warning).
+  const glue = solid.length > 1 && solid.slice(1).every((n) => n.t === 'Str' && /^[\s\u00a0]+$/.test(n.c as string));
+  if (solid[0]?.t === 'Image' && (solid.length === 1 || glue)) {
     const [attr, , [url]] = solid[0].c as [Attr, PandocNode[], [string, string]];
     hoistBoth();
-    if (attrOf(attr)[0]) return [record('figure', depth, { text: '', label: attrOf(attr)[0], src: srcKey(url) })];
+    if (attrOf(attr)[0] && !glue) return [record('figure', depth, { text: '', label: attrOf(attr)[0], src: srcKey(url) })];
     return [record('image', depth, { src: srcKey(url), classes })];
   }
 

@@ -8,7 +8,7 @@ import { typToDoc } from './typ-parser';
 import { mdToDoc } from './md-parser';
 import { docToMd } from './md-serializer';
 import { docToTex } from './tex-serializer';
-import { commentToMd, commentToTyp, readMdComment, readTypComment } from './editor-comments-format';
+import { commentToMd, commentToTyp, readMdComment, readMdComments, readTypComment } from './editor-comments-format';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = '') {
@@ -40,13 +40,18 @@ for (const text of PAYLOADS) {
   const back = readTypComment(lines, 0);
   check(`typ frame round-trips ${JSON.stringify(text).slice(0, 40)}`, back?.text === text && back.next === lines.length, JSON.stringify(back));
   const md = commentToMd(text);
-  check(`md frame round-trips ${JSON.stringify(text).slice(0, 40)}`, readMdComment(md + '\n') === text, JSON.stringify(readMdComment(md + '\n')));
-  check('md frame never holds -->', !md.slice('<!-- plass:comment'.length, -3).includes('-->'));
+  check(`md comment round-trips ${JSON.stringify(text).slice(0, 40)}`, readMdComment(md + '\n') === text, JSON.stringify(readMdComment(md + '\n')));
+  check('md comment holds no --> but its own', md.startsWith('<!--') && md.endsWith('-->') && !md.slice(4, -3).includes('-->'), md);
   check('typ frame is comment lines only', lines.every((l) => l.startsWith('//')));
 }
 check('typ frame: not an opener', readTypComment(['// plain remark'], 0) === null);
-check('md frame: a plain comment is not a note', readMdComment('<!-- ED: not ours -->\n') === null);
-check('md frame: a one-line tag is not a note', readMdComment('<!-- plass:comment -->\n') === null);
+check('md: a plain comment is a note', readMdComment('<!-- ED: not ours -->\n') === 'ED: not ours');
+check('md: a one-line payload is written plainly', commentToMd('Check the sign.') === '<!-- Check the sign. -->');
+check('md: --&gt; reads back as an arrow', readMdComment('<!-- a --&gt; b -->') === 'a --> b');
+check('md: the old tagged frame is read with its old escapes', readMdComment('<!-- plass:comment\nA -&#45; B &amp;amp; C\n-->\n') === 'A -- B &amp; C');
+check('md: a one-line tag is a plain comment', readMdComment('<!-- plass:comment -->\n') === 'plass:comment');
+check('md: two comments and text on one line', JSON.stringify(readMdComments('<!-- a --> <!-- b --> after\n')) === JSON.stringify({ comments: ['a', 'b'], rest: 'after' }));
+check('md: anything else is not a comment', readMdComment('<div>x</div>\n') === null && readMdComment('<!-- a --> b\n') === null);
 {
   // Malformed: a foreign line ends the frame there and stays visible.
   const lines = ['// plass:comment', '// | kept', '= Heading', '// /plass:comment'];
@@ -82,12 +87,15 @@ for (const text of PAYLOADS) {
   check('file export keeps the note', docToTyp(withNotes).includes('// | NOTE_MID'));
 }
 
-// --- 4. a plain `//` remark and a plain HTML comment keep today's meaning ---
+// --- 4. a plain `//` remark is dropped; every HTML comment is a note ---
 {
   const { doc } = typToDoc('// a remark\n\nText.\n');
   check('typ: a plain remark is still dropped', doc.childCount === 1 && doc.firstChild!.type.name === 'paragraph');
-  const md = mdToDoc('<!-- ED: keep -->\n\nText.\n').doc;
-  check('md: a plain HTML comment is still an island', md.firstChild!.type.name === 'code_block' && md.firstChild!.attrs.params === 'md-raw');
+  const src = '<!-- ED: keep -- & it -->\n\nText.\n';
+  const md = mdToDoc(src).doc;
+  check('md: a plain HTML comment is a note', md.firstChild!.type.name === 'editor_comment' && md.firstChild!.textContent === 'ED: keep -- & it', JSON.stringify(md.firstChild!.toJSON()));
+  check('md: a plain HTML comment is written back byte for byte', docToMd(md) === src, docToMd(md));
+  check('md: the old tagged frame is rewritten as a plain comment', docToMd(mdToDoc('<!-- plass:comment\nOld -&#45; form\n-->\n\nText.\n').doc) === '<!-- Old -- form -->\n\nText.\n');
 }
 
 // --- 5. a note directly after the settings header, and one that ends the file ---

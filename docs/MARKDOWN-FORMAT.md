@@ -137,7 +137,7 @@ plass:
 | a footnote | `a claim.[^1]` and, below, `[^1]: The note.`; or `a claim.^[The note.]` | one paragraph per footnote |
 | a bullet list | `- item` | |
 | a numbered list | `3. item` | keeps its starting number |
-| a loose list | a blank line between items | spaced like paragraphs. With no blank lines, the list is tight |
+| a loose list | a blank line between items | spaced like paragraphs. With no blank lines, the list is tight. A tight list cannot hold an item whose blocks need a blank line between them (a second paragraph, a quote, a div, a table): Plass saves such a list loose, with a warning |
 | a quote | `> text`, with a bare `>` line between paragraphs | |
 | a code listing | ```` ```python ```` … ```` ``` ```` | printed as a monospace block |
 | a horizontal rule | `---`, with a blank line above and below it | without them, pandoc can read `---` as the start of a metadata block and drop the text up to the next `---` |
@@ -171,6 +171,9 @@ $$ {.unnumbered}
 - The math itself is LaTeX. A `$` must touch the formula: `$x$`, not `$ x $`.
   A closing `$` that has a digit right after it does not end the formula.
 - Inline math can continue onto the next line, but not past a blank line.
+  A `$` at the start of a line closes a formula opened on the line before
+  (pandoc reads it that way), so a dollar sign at the end of a line, before
+  a `$$` block for instance, must be written `\$`.
 - Put `$$` on lines of their own. Attributes go right after the *closing*
   `$$` (or on the next line): `{#eq:name}` is a label;
   `{.unnumbered}` leaves one equation unnumbered; `{.numbered}` numbers one
@@ -259,7 +262,10 @@ The left panel shows the shift in demand.
   `mm` and `cm` are converted. Without it, the gutter is `1em`. Write the
   same `gutter` on every row.
 - Plass warns when a `.continued` row has a different number of cells or a
-  different gutter from the grid it joins.
+  different gutter from the grid it joins, when no grid comes directly
+  before it (the row then starts a grid of its own), and when a comment
+  stands between it and the grid's rows before it (the comment moves after
+  the grid).
 
 **Aligned or kept paragraph.** Wrap exactly one paragraph. `keep` stops it
 from breaking across pages. You can combine the classes. Anything else
@@ -342,7 +348,11 @@ counted including the cells a merged cell covers. In a merged cell, the
 cells it covers are written empty. Where an attribute takes several
 entries (`decimal`, `rules`, `fills`, `valign`, `aligns`, `spans`),
 separate them with spaces. A `: Caption` line after a table is also read
-as its caption.
+as its caption. A caption is plain text: emphasis, code and links in it
+keep only their text, with a warning. A caption line that holds a
+footnote, an image, inline HTML or display math is no caption: next to a
+table it stays a paragraph, and in a `.table` div the whole div is kept as
+source (see Kept, not rendered), with a warning.
 
 ## Figures and images
 
@@ -358,7 +368,13 @@ Text with an icon ![arrow](figures/arrow.svg){width=4%} in it.
   labels it, so you can reference it as `@fig:sd`.
 - An image on its own line with no caption and no label is a plain image,
   not numbered. With a label and no caption, `![](f.svg){#fig:x}`, it is
-  a numbered figure with an empty caption (see Pitfalls).
+  a numbered figure with an empty caption (see Pitfalls). A figure with
+  neither is saved with a made-up label, `{#fig:figure-1}`, so that it
+  stays a figure; Plass warns when it does.
+- An image on its own line with alt text and a nonbreaking space (U+00A0)
+  after it is a plain image that keeps its alt text, not a figure: that is
+  pandoc's way to say so, and how Plass writes one. The space itself is not
+  kept.
 - An image with text around it sits inline, in the text.
 - `width` is a percent of the text width, or of the cell's width.
 - `![Caption](src "title")` adds an optional title.
@@ -407,13 +423,17 @@ shows it as a "Comment · Not printed" strip. It is left out of the PDF,
 the Typst export and the LaTeX export, and kept in a Markdown export. Put
 it on its own lines, with a blank line before and after. A comment cannot
 contain `-->`: write `--&gt;` instead, and Plass shows it as `-->`. The old
-`<!-- plass:comment` form is still read.
+`<!-- plass:comment` form is still read. A `<!--` that no `-->` follows
+anywhere after it is not a comment: it is text, as pandoc reads it.
 
 A comment can also sit inside a block: a solution, a column, a list item, a
 quote, a table cell or a footnote, or in the middle of a paragraph. It is
 still kept and never printed. But on the first save it moves out of that
 block, to just before the block if it came before the block's text, and
-otherwise to just after it.
+otherwise to just after it. Inside an HTML element that Plass keeps as
+source, a comment on lines of its own moves out after the element, whose
+first line prints; a `<div>` counts as a div, so there a comment that
+comes before any of its text moves before it.
 
 ## Kept, not rendered
 
@@ -431,14 +451,18 @@ is an ordinary code listing.
 The same goes for anything else Plass has no form for: an unknown div class
 (`::: {.callout-note}`), an HTML block (`<div>`, `<aside>`), or inline HTML.
 Plass keeps it verbatim and prints it as code, with a tag in the margin. It
-never deletes it.
+never deletes it. A footnote or link definition (`[^1]: …`, `[site]: …`)
+that only such content uses is kept too: it moves to just after that
+content.
 
 ## Pitfalls
 
 1. Put a blank line before and after every `:::` line and every comment.
    Pandoc reads a `:::` that comes straight after a line of text as more
    text. A comment there becomes part of that paragraph.
-2. Write `\$` for a literal dollar sign.
+2. Write `\$` for a literal dollar sign, above all at the end of a line: a
+   `$` that starts the next line (the first `$` of a `$$` block too)
+   closes a formula opened by it.
 3. Equation attributes go after the closing `$$`, not the opening one.
 4. Write ```` ```{=typst} ````, not ```` ```typst ````. Write
    ```` ```{=bibtex} ````, not ```` ```bibtex ````. Without the braces, the
@@ -462,9 +486,12 @@ never deletes it.
     `::: {.solution color=red}`, the attribute is dropped with a warning.
 12. Put adjacent citations in one bracket: `[@a; @b]`. Pandoc reads
     `[@a][@b]` as an in-text citation of `a` inside literal brackets,
-    followed by a bracketed citation of `b`.
+    followed by a bracketed citation of `b`. A cross-reference next to a
+    citation goes in the same bracket: `[@eq:demand; @smith2020]`.
 13. Plass cites only the key. In `[see @smith2020, p. 3]`, "see" and
-    ", p. 3" stay as ordinary text next to the citation.
+    ", p. 3" stay as ordinary text next to the citation, and Plass warns
+    once ("citation prefix/suffix kept as text"). So do `-@smith2020` and
+    `@smith2020 [p. 3]`.
 14. Each line of display math prints as its own row (see Math). Do not end
     the lines with `\\`; either write plain lines, or write the whole
     `\begin{aligned} … \end{aligned}` yourself.
@@ -475,6 +502,16 @@ never deletes it.
     it, each `.columns` div is a grid of its own (see Divs).
 17. The Typst export is exact on typst 0.14.2 when it is compiled with
     Plass's fonts (see below).
+18. In a list item, put a blank line before a pipe table. Pandoc reads
+    table lines directly under the item's text as more text, so Plass saves
+    the blank line, which makes the list loose (see the loose list above).
+19. Pandoc reads a paragraph that starts with `a)`, `A)`, `a.`, `iv.`,
+    `(1)`, `(a)` or `(@)` as a list item, `| text` as a line block, and
+    `: text` or `~ text` after a paragraph as a definition. Plass's lists
+    are bulleted or numbered (`1.`) only: it shows these characters as text
+    and escapes them when it saves (`a\)`, `\|`, `\:`), so pandoc then
+    reads text too. Write the list with `1.` markers if it should stay a
+    list.
 
 ## What the first save rewrites
 
@@ -486,17 +523,23 @@ keep, it drops with a warning (see Pitfalls 10, 11 and 15).
   `--`, `---` and `...` become –, — and …. A hyphen after a space and before
   a digit becomes a minus sign (−3). `5'11"` gets primes (5′11″). The space
   before a footnote marker is removed.
-- **Layout of the text.** Each paragraph is written on one line. `_em_`
+- **Layout of the text.** Each paragraph is written on one line. A line
+  break (`\` or two spaces) that ends a paragraph, or comes just before a
+  `$$` formula, prints nothing and is dropped. `_em_`
   becomes `*em*`, and `__strong__` becomes `**strong**`. Bullets become `-`,
   numbered items are renumbered 1., 2., 3., … from the list's start
   number, and indents are made consistent. Footnotes become `[^1]`,
-  `[^2]`, … with their notes at the end, including inline `^[…]` notes.
+  `[^2]`, … with their notes at the end, including inline `^[…]` notes
+  (a label that content kept as source uses is skipped). Reference links
+  become inline links. A footnote or link definition that nothing uses is
+  dropped, with a warning.
 - **Blocks.** A blank line is added around every `:::` line and every
   comment. `\pagebreak` becomes `\newpage`. `::: {.solution}` becomes
   `::: solution`. A `: Caption` line moves into the table div's `caption=`.
   Each grid row is its own `.columns` div, and every row after the first
-  carries `.continued`. Column widths are written as percents, or left out
-  when the columns are equal.
+  carries `.continued`. Column widths are written as percents (to three
+  decimals, or more where three would read back as other widths), or left
+  out when the columns are equal.
 - **Front matter.** Keys are written in the order shown above, with unknown
   keys after them. Default values are dropped. An `author` list becomes one
   string. `bibliography:` becomes an embedded ```` ```{=bibtex} ```` block.
@@ -506,7 +549,12 @@ keep, it drops with a warning (see Pitfalls 10, 11 and 15).
   out of them.
 - **Escapes.** A backslash is added in front of any character that would
   change the meaning of the text, such as `\@`, `\~`, `\^`, `\$`, `\*` or
-  `\_`. `\ ` becomes a literal nonbreaking space.
+  `\_`, and in front of what would start a block at the head of a line:
+  `\#`, `\>`, `\-`, `1\.`, `a\)`, `(i\)`, `\|`, `\:` (see Pitfall 19), and a
+  `%` that opens the file (pandoc's title block). `\ ` becomes a literal
+  nonbreaking space. A digit directly after a formula is written as a
+  character reference (`$x$&#50;`), since `$x$2` is not a formula to
+  pandoc.
 
 ## The Typst export
 

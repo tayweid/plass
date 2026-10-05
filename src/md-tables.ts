@@ -93,19 +93,33 @@ interface Grid {
   cells: GridCell[];
 }
 
+/** The written grid, in one pass over the table map: a cell's origin is
+ *  the first slot holding its position, its span how far that position
+ *  repeats right and down (what `TableMap.findCell` computes, but that
+ *  and `nodeAt` scan from the start each call, which made a long table's
+ *  write quadratic). */
 function gridOf(table: PMNode): Grid {
   const map = TableMap.get(table);
+  const nodes = new Map<number, PMNode>();
+  table.forEach((row, rowOffset) => {
+    row.forEach((cell, cellOffset) => nodes.set(rowOffset + 1 + cellOffset, cell));
+  });
   const cells: GridCell[] = [];
-  for (let r = 0; r < map.height; r++) {
-    for (let c = 0; c < map.width; c++) {
-      const pos = map.map[r * map.width + c];
-      if (!pos) continue; // a hole in a malformed table: written empty
-      const rect = map.findCell(pos);
-      if (rect.left !== c || rect.top !== r) continue; // covered by a span
-      cells.push({ node: table.nodeAt(pos)!, row: r, col: c, colspan: rect.right - rect.left, rowspan: rect.bottom - rect.top });
-    }
+  const placed = new Set<number>();
+  const { width, height } = map;
+  for (let i = 0; i < map.map.length; i++) {
+    const pos = map.map[i];
+    if (!pos || placed.has(pos)) continue; // a hole in a malformed table (written empty), or covered by a span
+    placed.add(pos);
+    const col = i % width;
+    const row = (i / width) | 0;
+    let colspan = 1;
+    while (col + colspan < width && map.map[i + colspan] === pos) colspan++;
+    let rowspan = 1;
+    while (row + rowspan < height && map.map[i + width * rowspan] === pos) rowspan++;
+    cells.push({ node: nodes.get(pos) ?? table.nodeAt(pos)!, row, col, colspan, rowspan });
   }
-  return { width: map.width, height: map.height, cells };
+  return { width, height, cells };
 }
 
 /** A cell's horizontal alignment; a value with no Markdown form (a pasted
@@ -213,8 +227,10 @@ export function tableDivAttrs(table: PMNode, warnTo: Warn = noWarn): DivAttrs | 
     return '';
   };
   const fills: string[] = [];
+  const byRow = Array.from({ length: grid.height }, () => [] as GridCell[]);
+  for (const cell of grid.cells) byRow[cell.row].push(cell);
   for (let r = 0; r < grid.height; r++) {
-    const row = grid.cells.filter((cell) => cell.row === r);
+    const row = byRow[r];
     const values = row.map(fillOf);
     if (values.length && values[0] && values.every((v) => v === values[0])) fills.push(`r${r}:${values[0]}`);
     else row.forEach((cell, i) => values[i] && fills.push(`r${r}c${cell.col}:${values[i]}`));
