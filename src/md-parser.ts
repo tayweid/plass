@@ -178,6 +178,9 @@ function prepass(src: string, warn: (m: string) => void): Pre {
   const lines = src.split('\n');
   const store: Stored[] = [];
   const keep = (s: Stored) => `${S}${store.push(s) - 1}${S}`;
+  // A sentinel character already in the file is literal text: it becomes
+  // a sentinel of its own, so nothing the file holds can read as one.
+  const work = src.includes(S) ? src.replace(//g, () => keep({ k: 'lit', ch: S, orig: S })).split('\n') : lines;
   const out: string[] = [];
   const origLine: number[] = [];
   const headingAttrs = new Map<number, PandocAttrs>();
@@ -431,7 +434,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
   let html: RegExp | 'blank' | null = null;
   let inPara = false;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = work[i];
     const b = body(line);
     if (fence) {
       push(line, i);
@@ -477,10 +480,10 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       // An attribute block that continues over the following lines.
       const brace = b.indexOf('{');
       if (brace >= 0 && !b.includes('}', brace)) {
-        for (let k = i + 1; k < lines.length && k <= i + 32 && body(lines[k]).trim(); k++) {
-          push(lines[k], k);
+        for (let k = i + 1; k < lines.length && k <= i + 32 && body(work[k]).trim(); k++) {
+          push(work[k], k);
           i = k;
-          if (lines[k].includes('}')) break;
+          if (work[k].includes('}')) break;
         }
       }
       inPara = false;
@@ -508,7 +511,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       // pandoc reads the command alone on its line as a raw TeX block,
       // with or without a blank line after it.
       push(line, i);
-      if (lines[i + 1]?.trim()) push('', i + 1);
+      if (work[i + 1]?.trim()) push('', i + 1);
       inPara = false;
       continue;
     }
@@ -594,7 +597,7 @@ export function mdToDoc(src: string): MdImport {
   const lineNo = (preLine: number) => (origLine[preLine] ?? lines.length) + 1 + skipped;
 
   /** Every sentinel in `text` back to the source it replaced. */
-  const restore = (text: string) => text.replace(SENTINEL, (_, n: string) => store[+n].orig);
+  const restore = (text: string) => text.replace(SENTINEL, (all, n: string) => store[+n]?.orig ?? all);
 
   /** An image's alt text as plain text (markdown-it's own rendering of
    *  it): escapes resolved, a formula or code span as its source. */
@@ -602,9 +605,9 @@ export function mdToDoc(src: string): MdImport {
     children
       .map((c) =>
         c.type === 'text' || c.type === 'code_inline'
-          ? c.content.replace(SENTINEL, (_, n: string) => {
+          ? c.content.replace(SENTINEL, (all, n: string) => {
               const s = store[+n];
-              return s.k === 'lit' ? s.ch : s.k === 'code' ? s.code : s.orig;
+              return !s ? all : s.k === 'lit' ? s.ch : s.k === 'code' ? s.code : s.orig;
             })
           : c.type === 'softbreak' || c.type === 'hardbreak'
             ? ' '
@@ -692,7 +695,7 @@ export function mdToDoc(src: string): MdImport {
 
   /** Inline tokens for text the block parser left raw (after a comment). */
   const inlineTokens = (text: string): MdToken[] => {
-    const scanned = prepass(text, warn);
+    const scanned = prepass(restore(text), warn);
     const offset = store.length;
     store.push(...scanned.store);
     const shifted = scanned.text.replace(SENTINEL, (_, n: string) => `${S}${+n + offset}${S}`);
@@ -744,6 +747,10 @@ export function mdToDoc(src: string): MdImport {
       if (m.index! > last) pushText(text.slice(last, m.index), marks, out);
       last = m.index! + m[0].length;
       const s = store[+m[1]];
+      if (!s) {
+        pushText(m[0], marks, out);
+        continue;
+      }
       // Strong emboldens (and widens) Typst math, so a formula keeps the
       // span's marks; a link or code mark does not apply to it.
       const mathMarks = marks.filter((mk) => ['strong', 'em', 'strike'].includes(mk.type.name));

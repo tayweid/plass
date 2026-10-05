@@ -203,6 +203,36 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   let bold = false;
   p.forEach((n) => { if (n.type.name === 'math_inline' && n.attrs.src === '2') bold = n.marks.some((m) => m.type.name === 'strong'); });
   check('markdown import marks math inside bold', bold);
+  // Overlapping marks nest (the outer one held open), and edge whitespace
+  // sits outside the delimiters: the course files' forms come back as
+  // written instead of with stray asterisks.
+  for (const nested of [
+    '***Note.** This trick will not work here.*\n',
+    '### *MiniExam D | **Version 8***\n',
+    '- ~~*Supply and Demand* — begin here.~~\n',
+    '**a**[^1] **b** and *x **y** z*.\n\n[^1]: n\n',
+  ]) {
+    const t = trip(nested);
+    check(`nested marks write back as read: ${JSON.stringify(nested.slice(0, 30))}`, t.md1 === nested && t.converges, JSON.stringify(t.md1));
+  }
+  const spaced = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.text('a'), schema.text(' bold ', [schema.marks.strong.create()]), schema.text('b')]));
+  check('a mark\'s edge spaces move outside its delimiters', docToMd(spaced) === 'a **bold** b\n', docToMd(spaced));
+}
+
+// A tight list item may hold a paragraph and a table with no blank line
+// (markdown-it lets the table interrupt the paragraph); writing one there
+// would make the whole list loose.
+{
+  const md = '- One.\n- Vocabulary:\n  | a | b |\n  | --- | --- |\n  | 1 | 2 |\n- Three.\n';
+  const t = trip(md);
+  check('a tight item\'s table follows its paragraph directly', t.doc.firstChild!.attrs.tight === true && t.md1 === md && t.converges, JSON.stringify(t.md1));
+}
+
+// A sentinel character already in the file is text, never a sentinel.
+{
+  const md = 'Odd 0 and  text with $x$.\n';
+  const t = trip(md);
+  check('a literal U+E000 is carried as text', t.doc.firstChild!.textContent === 'Odd 0 and  text with .' && !!find(t.doc, (n) => n.type.name === 'math_inline' && n.attrs.src === 'x') && t.md1 === md && t.converges, JSON.stringify([t.doc.firstChild!.textContent, t.md1]));
 }
 
 // Nothing Markdown says is stripped on the way through the page view.

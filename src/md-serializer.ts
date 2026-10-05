@@ -137,30 +137,54 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
   /** A run of adjacent citations as one pandoc group. */
   const citeGroup = (keys: string[]) => `[${keys.map((k) => `@${k}`).join('; ')}]`;
 
-  /** Inline content. `alt` escapes every bracket (an image's caption). */
+  /** Inline content. `alt` escapes every bracket (an image's caption).
+   *  Strong, emphasis and strike are delimiter pairs held open across
+   *  neighbours that share them, outer marks staying outer (`*a **b** c*`),
+   *  so overlapping marks nest instead of colliding (`***Note.**** …*`
+   *  would read back with literal asterisks); a text's edge whitespace
+   *  moves outside the delimiters that open or close around it, where
+   *  CommonMark needs it. Inline math takes part like text, so a formula
+   *  stays inside its span (`**$2$ drinks**`, as the .typ exporter does);
+   *  other atoms carry their own marks (usually none). */
   const inline = (node: PMNode, alt = false): string => {
     let md = '';
-    // Text and inline math sharing strong/em/strike marks form one wrapped
-    // run (`**$2$ drinks**`), as the .typ exporter does; other atoms close
-    // the run.
-    let run = '';
-    let sig = '';
-    const signature = (child: PMNode) =>
-      ['strong', 'em', 'strike'].filter((n) => child.marks.some((m: Mark) => m.type.name === n)).join(',');
-    const flush = () => {
-      if (run) {
-        let t = run;
-        if (sig.includes('strong')) t = `**${t}**`;
-        if (sig.includes('em')) t = `*${t}*`;
-        if (sig.includes('strike')) t = `~~${t}~~`;
-        md += t;
-      }
-      run = '';
-    };
-    /** What the text so far ends in, across the open run. */
-    const tail = () => (run || md).slice(-1);
+    const DELIM: Record<string, string> = { strike: '~~', strong: '**', em: '*' };
+    let active: string[] = [];
+    /** Whitespace that ended the last text, written once the marks around
+     *  it have closed. */
+    let pending = '';
+    const marksOf = (child: PMNode) => Object.keys(DELIM).filter((n) => child.marks.some((m: Mark) => m.type.name === n));
     const children: PMNode[] = [];
     node.forEach((child) => children.push(child));
+    /** How many children from `at` on carry `mark`: the mark that runs
+     *  longest opens outermost, so it need not close and reopen. */
+    const spanOf = (at: number, mark: string) => {
+      let n = 0;
+      while (at + n < children.length && marksOf(children[at + n]).includes(mark)) n++;
+      return n;
+    };
+    /** Close the open marks `want` lacks (the innermost first), write the
+     *  held whitespace, then open what `want` adds — after `lead`, the
+     *  text's leading whitespace, which is returned when nothing opens. */
+    const moveTo = (want: string[], lead = '', at = -1): string => {
+      let keep = 0;
+      while (keep < active.length && want.includes(active[keep])) keep++;
+      for (let k = active.length - 1; k >= keep; k--) md += DELIM[active[k]];
+      active = active.slice(0, keep);
+      md += pending;
+      pending = '';
+      const opening = want.filter((m) => !active.includes(m));
+      if (at >= 0) opening.sort((a, b) => spanOf(at, b) - spanOf(at, a));
+      if (opening.length) {
+        md += lead;
+        lead = '';
+      }
+      for (const m of opening) {
+        md += DELIM[m];
+        active.push(m);
+      }
+      return lead;
+    };
     /** Text the next node starts with (for the guards below). */
     const nextText = (k: number) => {
       const next = children[k + 1];
@@ -171,44 +195,47 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       if (child.isText && child.text) {
         const marks = child.marks;
         const has = (name: string) => marks.some((m: Mark) => m.type.name === name);
-        const s = signature(child);
-        if (s !== sig) {
-          flush();
-          sig = s;
+        const want = marksOf(child);
+        // Code and link text are written exactly; other text gives its
+        // edge whitespace to the delimiters' outside.
+        const [, lead, inner, trail] = has('code') || has('link') ? ['', '', child.text, ''] : /^(\s*)([\s\S]*?)(\s*)$/.exec(child.text)!;
+        if (!inner) {
+          // Whitespace alone cannot open a mark in Markdown: it keeps
+          // only the marks already open around it.
+          moveTo(active.filter((m) => want.includes(m)));
+          pending += lead + trail;
+          continue;
         }
+        const rest = moveTo(want, lead, k);
+        md += rest;
         let t: string;
         if (has('code')) {
-          const fence = '`'.repeat(longestRun(child.text, '`') + 1);
-          const pad = /^`|`$|^ .* $/.test(child.text) ? ' ' : '';
-          t = fence + pad + child.text + pad + fence;
+          const fence = '`'.repeat(longestRun(inner, '`') + 1);
+          const pad = /^`|`$|^ .* $/.test(inner) ? ' ' : '';
+          t = fence + pad + inner + pad + fence;
         } else {
-          t = esc(child.text);
+          t = esc(inner);
           if (alt) t = t.replace(/(?<!\\)([[\]])/g, '\\$1');
           // A `{` right after code or an image would read as its
           // attributes; `(`/`[` right after a citation's `]` as a link.
-          if ((/^[{]/.test(t) && /[`)]$/.test(tail())) || (/^[([]/.test(t) && tail() === ']')) t = '\\' + t;
+          const tail = md.slice(-1);
+          if ((/^[{]/.test(t) && /[`)]$/.test(tail)) || (/^[([]/.test(t) && tail === ']')) t = '\\' + t;
         }
         const link = marks.find((m: Mark) => m.type.name === 'link');
         if (link) {
           const title = link.attrs.title as string | null;
           t = `[${t}](${link.attrs.href as string}${title ? ` "${title.replace(/"/g, '\\"')}"` : ''})`;
         }
-        run += t;
+        md += t;
+        pending = trail;
         continue;
       }
-      if (child.type.name === 'math_inline') {
-        const s = signature(child);
-        if (s !== sig) {
-          flush();
-          sig = s;
-        }
-        // One line: a formula's soft break reads back as its space.
-        run += `$${(child.attrs.src as string).replace(/\s*\n\s*/g, ' ')}$`;
-        continue;
-      }
-      flush();
-      sig = '';
+      moveTo(marksOf(child), '', k);
       switch (child.type.name) {
+        case 'math_inline':
+          // One line: a formula's soft break reads back as its space.
+          md += `$${(child.attrs.src as string).replace(/\s*\n\s*/g, ' ')}$`;
+          break;
         // Pandoc's raw-attribute syntax: standard markdown that other
         // tools understand as "Typst-only", and round-trips here.
         case 'typst_inline': {
@@ -223,7 +250,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         }
         case 'citation': {
           const keys = [child.attrs.key as string];
-          while (children[k + 1]?.type.name === 'citation') keys.push(children[++k].attrs.key as string);
+          while (children[k + 1]?.type.name === 'citation' && marksOf(children[k + 1]).join() === marksOf(child).join()) keys.push(children[++k].attrs.key as string);
           md += citeGroup(keys);
           break;
         }
@@ -231,7 +258,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           const label = child.attrs.label as string;
           if (!NAMESPACE.test(label)) warn(`the reference @${label} reads back as a citation — Markdown references are @eq:, @fig:, @sec: and @tbl: labels`);
           // Bare unless a letter or digit glues it to the text around it.
-          const glued = /[\p{L}\p{N}_]$/u.test(tail()) || KEY_CONTINUES.test(nextText(k)) || children[k + 1]?.type.name === 'citation';
+          const glued = /[\p{L}\p{N}_]$/u.test(md.slice(-1)) || KEY_CONTINUES.test(nextText(k)) || children[k + 1]?.type.name === 'citation';
           md += glued ? `[@${label}]` : `@${label}`;
           break;
         }
@@ -258,7 +285,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           md += esc(child.textContent);
       }
     }
-    flush();
+    moveTo([]);
     return md;
   };
 
@@ -286,14 +313,18 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
   const div = (depth: number, attrs: string, body: string) =>
     body ? `${fence(depth)} ${attrs}\n\n${body}\n\n${fence(depth)}` : `${fence(depth)} ${attrs}\n\n${fence(depth)}`;
 
-  /** Whether `next` may follow `prev` on the next line inside a tight
-   *  list item: a blank line between an item's blocks makes the whole list
-   *  loose, so a sublist or a fenced listing follows directly (both may
-   *  interrupt a paragraph; an ordered sublist only from 1). */
+  /** Whether `next` may follow the block before it on the next line inside
+   *  a tight list item: a blank line between an item's blocks makes the
+   *  whole list loose, so what may interrupt a paragraph follows directly —
+   *  a sublist (an ordered one only from 1), a fenced listing, a bare pipe
+   *  table — and display math, which the reader splits out of the
+   *  paragraph it continues. */
   const tightAfter = (next: PMNode) =>
     next.type.name === 'bullet_list' ||
     (next.type.name === 'ordered_list' && ((next.attrs.order as number) || 1) === 1) ||
-    (next.type.name === 'code_block' && next.attrs.params !== 'md-raw');
+    (next.type.name === 'code_block' && next.attrs.params !== 'md-raw') ||
+    (next.type.name === 'table' && !tableDivAttrs(next)) ||
+    next.type.name === 'math_display';
 
   /** Blocks in a container, joined by a blank line (in a tight list item,
    *  by a line break where Markdown allows); a paragraph next to a table
@@ -305,7 +336,8 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     kids.forEach((child, k) => {
       const nearTable = kids[k - 1]?.type.name === 'table' || kids[k + 1]?.type.name === 'table';
       const text = block(child, nearTable);
-      if (text) md += (md ? (tight && tightAfter(child) ? '\n' : '\n\n') : '') + text;
+      const plainBefore = kids[k - 1]?.type.name === 'paragraph' && !kids[k - 1].attrs.align && !kids[k - 1].attrs.keep;
+      if (text) md += (md ? (tight && plainBefore && tightAfter(child) ? '\n' : '\n\n') : '') + text;
     });
     return md;
   };
