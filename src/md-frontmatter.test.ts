@@ -347,7 +347,7 @@ for (const [yaml, field] of [
   ['margin: 5in', 'marginTop'],
   ['papersize: tabloid', 'page'],
   ['bibliographystyle: mla', 'citationStyle'],
-  ['indent: yes', 'parIndent'],
+  ['indent: maybe', 'parIndent'],
   ['plass:\n  landscape: maybe', 'landscape'],
   ['plass:\n  page-numbers: {start: 0}', 'pageNumStart'],
   ['plass:\n  page-numbers: {format: "1."}', 'pageNumFormat'],
@@ -496,13 +496,15 @@ console.log('lenient reading:');
   // Pandoc reads past an anchor or a tag (verified on 3.4): so does Plass.
   for (const [yaml, want] of [
     ['title: !important note', 'note'],
-    ['title: !!str 123', '123'],
     ['title: &a\n  long text', 'long text'],
     ['title: !x "quoted"', 'quoted'],
   ] as const) {
     const r = read(yaml);
     check(`${json(yaml)} reads ${json(want)}, as pandoc does`, r.titleMd === want && r.warnings.length === 1, json(r));
   }
+  // `!!str` is the one tag pandoc honors: the value is text, so no warning.
+  const str = read('title: !!str 123');
+  check('"title: !!str 123" reads "123" with no warning (pandoc honors !!str)', str.titleMd === '123' && str.warnings.length === 0, json(str));
   const tagged = read('plass:\n  header: !!map {text: !t, align: !t left}');
   check('properties inside a flow map are skipped too', tagged.settings.headerAlign === 'left' && tagged.warnings.length === 3, json(tagged));
   const bare = read('title: & more');
@@ -799,6 +801,106 @@ console.log('anchors across the plass block:');
   const again = readFrontmatter(once + '\n');
   check('… and written as it was, not as a child', once === '---\nplass:\n    landscape: true\n  hyphenate: false\n---' && again.settings.landscape === undefined && json(again.warnings) === json(stray.warnings), once);
   check('… a fixed point', writeFrontmatter(again) === once);
+}
+
+// --- 22. booleans, as pandoc reads them ---
+// pandoc 3.4 reads YAML 1.1's booleans: each spelling below was checked with
+// `pandoc -t json` to be a MetaBool, in a block map and in a flow map. A
+// mixed case (`yEs`, `tRue`), a quoted spelling and one tagged `!!str` are
+// text; any other tag is ignored.
+console.log('booleans:');
+{
+  const TRUE = ['true', 'True', 'TRUE', 'yes', 'Yes', 'YES', 'y', 'Y', 'on', 'On', 'ON'];
+  const FALSE = ['false', 'False', 'FALSE', 'no', 'No', 'NO', 'n', 'N', 'off', 'Off', 'OFF'];
+  const TEXT = ['yEs', 'tRue', 'oN', 'nO', 'oFF', 'fAlse', "'yes'", '"no"', "'off'", '!!str yes', '!!str off', 'maybe'];
+  // Every boolean setting, in each form the file can give it.
+  const FIELDS: Array<[string, (v: string) => string, keyof DocSettings]> = [
+    ['indent', (v) => `indent: ${v}`, 'parIndent'],
+    ['plass.landscape', (v) => `plass:\n  landscape: ${v}`, 'landscape'],
+    ['plass.hyphenate', (v) => `plass:\n  hyphenate: ${v}`, 'hyphenate'],
+    ['plass.number-equations', (v) => `plass:\n  number-equations: ${v}`, 'numberEquations'],
+    ['plass.page-numbers.show (flow)', (v) => `plass:\n  page-numbers: {show: ${v}}`, 'pageNumShow'],
+    ['plass.page-numbers.show (block)', (v) => `plass:\n  page-numbers:\n    show: ${v}`, 'pageNumShow'],
+    ['plass.header.first-page (flow)', (v) => `plass:\n  header: {first-page: ${v}}`, 'headerFirstPage'],
+    ['plass.footer.first-page (block)', (v) => `plass:\n  footer:\n    first-page: ${v}`, 'footerFirstPage'],
+    ['plass (one flow map)', (v) => `plass: {landscape: ${v}}`, 'landscape'],
+  ];
+  for (const [name, yaml, field] of FIELDS) {
+    for (const [spellings, want] of [[TRUE, true], [FALSE, false]] as const) {
+      const misread = spellings.filter((v) => {
+        const r = read(yaml(v));
+        return r.settings[field] !== want || r.warnings.length !== 0;
+      });
+      check(`${name}: ${spellings.join(' ')} read as ${want}, with no warning`, misread.length === 0, json(misread));
+      // The save writes the canonical spelling, which reads back the same.
+      const trip = spellings.filter((v) => {
+        const once = writeFrontmatter(read(yaml(v)));
+        const back = readFrontmatter(once + '\n');
+        const isDefault = DEFAULT_SETTINGS[field] === want;
+        return (
+          normalizeSettings(back.settings)[field] !== want ||
+          back.warnings.length !== 0 ||
+          writeFrontmatter(back) !== once ||
+          (isDefault ? once !== '' : !once.includes(`: ${want}`))
+        );
+      });
+      check(`${name}: … and round-trips through a save as ${want}`, trip.length === 0, json(trip));
+    }
+    const asText = TEXT.filter((v) => {
+      const r = read(yaml(v));
+      return r.settings[field] !== undefined || r.warnings.length === 0;
+    });
+    check(`${name}: ${TEXT.join(' ')} are text, not booleans: warned and ignored`, asText.length === 0, json(asText));
+  }
+  const quoted = read('indent: "yes"');
+  check('a quoted boolean spelling says why it is not a boolean', quoted.warnings[0] === "indent: expected true or false, found 'yes' (text, as quoted or tagged !!str: write it bare) — ignored", json(quoted.warnings));
+  // Tags pandoc ignores leave the boolean (one warning: the tag).
+  for (const v of ['!t no', '! no', '!!bool no', '&a no']) {
+    const r = read(`indent: ${v}`);
+    check(`indent: ${v} is false, as pandoc reads it (one warning: the tag or anchor is dropped)`, r.settings.parIndent === false && r.warnings.length === 1, json(r));
+  }
+
+  // section-numbering: present = numbered (pandoc's Typst template asks
+  // `$if(section-numbering)$`), and a boolean false is absent.
+  const offs = FALSE.filter((v) => {
+    const r = read(`section-numbering: ${v}`);
+    return r.settings.numberSections !== false || r.warnings.length !== 0 || writeFrontmatter(r) !== '';
+  });
+  check(`section-numbering: ${FALSE.join(' ')} is off, with no warning, and a save writes nothing`, offs.length === 0, json(offs));
+  const ons = TRUE.filter((v) => {
+    const r = read(`section-numbering: ${v}`);
+    const once = writeFrontmatter(r);
+    return r.settings.numberSections !== true || r.warnings.length !== 0 || once !== "---\nsection-numbering: '1.1'\n---" || readFrontmatter(once + '\n').settings.numberSections !== true;
+  });
+  check(`section-numbering: ${TRUE.join(' ')} is on, with no warning, and a save writes '1.1'`, ons.length === 0, json(ons));
+  const patterns = ['"no"', "'off'", '!!str no', 'nO', '"1.a"'].filter((v) => {
+    const r = read(`section-numbering: ${v}`);
+    return r.settings.numberSections !== true || r.warnings.length !== 1;
+  });
+  check('section-numbering: a quoted or !!str "no" is a pattern: numbered, with a warning', patterns.length === 0, json(patterns));
+  check('section-numbering: !!str alone is empty text: off', read('section-numbering: !!str').settings.numberSections === false);
+  const mixed = read('title: T\nsection-numbering: off\nindent: yes');
+  check('a file with yes/off booleans saves canonically, a fixed point', writeFrontmatter(mixed) === '---\ntitle: T\nindent: true\n---' && fixedPoint(mixed), writeFrontmatter(mixed));
+
+  // page-numbers.front-matter: a boolean false is no restart, as `false` was.
+  for (const v of ['no', 'Off', 'n', 'FALSE']) {
+    const r = read(`plass:\n  page-numbers: {front-matter: ${v}}`);
+    check(`plass.page-numbers.front-matter: ${v} is no restart, with no warning`, r.frontMatterRestart === false && r.warnings.length === 0, json(r));
+  }
+  const yes = read('plass:\n  page-numbers: {front-matter: yes}');
+  check('plass.page-numbers.front-matter: yes is not roman: warned', yes.frontMatterRestart === false && yes.warnings.length === 1, json(yes.warnings));
+
+  // A text setting whose value spells a boolean is written quoted, so pandoc
+  // (and Plass) read it back as text.
+  for (const v of ['yes', 'No', 'on', 'OFF', 'y', 'n', 'true']) {
+    const w = writeFrontmatter({ titleMd: v, settings: { ...DEFAULT_SETTINGS, headerText: v, footerText: v } });
+    const back = readFrontmatter(w + '\n');
+    check(
+      `the text ${json(v)} is written quoted and reads back as text`,
+      w.includes(`title: '${v}'`) && w.includes(`text: '${v}'`) && back.titleMd === v && back.settings.headerText === v && back.settings.footerText === v && back.warnings.length === 0,
+      w,
+    );
+  }
 }
 
 declare const process: { exitCode?: number };

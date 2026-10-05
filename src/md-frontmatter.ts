@@ -6,10 +6,14 @@
 // pandoc — decode them), block maps at any depth, flow maps and lists,
 // block lists, block scalars (`|`, `>`, chomping and indentation
 // indicators) and `#` comments. An anchor (`&a`) or tag (`!t`) is skipped
-// and the value after it read, and an alias (`*a`) of an anchor read
-// earlier is that anchor's value, as pandoc reads them; a value Plass
-// carries but has to re-emit keeps its anchors and aliases as written.
-// Tabs are expanded to four-column stops first, as pandoc expands them.
+// and the value after it read (only `!!str` means anything: text), and an
+// alias (`*a`) of an anchor read earlier is that anchor's value, as pandoc
+// reads them; a value Plass carries but has to re-emit keeps its anchors
+// and aliases as written. A boolean is any of YAML 1.1's spellings pandoc
+// 3.4 reads as one (`yes`, `No`, `on`, `OFF`, `y`, `n` as well as `true`
+// and `false`), so `section-numbering: no` is off, as it is to pandoc; the
+// writer writes `true` and `false`. Tabs are expanded to four-column stops
+// first, as pandoc expands them.
 //
 // Known keys are interpreted: pandoc's own names for the big knobs, Plass's
 // settings under one `plass:` key (which pandoc ignores). Everything else —
@@ -290,9 +294,9 @@ function parseEntry(lines: string[], indent: number, cx: Ctx): { key: string; va
 /** The value after `key:` (or after `- `): `rest` is the rest of its line,
  *  `cont` the lines after it, `indent` the key's indentation. */
 function parseValue(rest: string, cont: string[], indent: number, cx: Ctx): YNode {
-  const anchors: string[] = [];
-  const node = valueOf(stripProperties(rest.trimStart(), cx, anchors), cont, indent, cx);
-  for (const name of anchors) define(cx, name, node);
+  const props: Props = { anchors: [], str: false };
+  const node = typed(valueOf(stripProperties(rest.trimStart(), cx, props), cont, indent, cx), props);
+  for (const name of props.anchors) define(cx, name, node);
   return node;
 }
 
@@ -318,18 +322,42 @@ function valueOf(rest: string, cont: string[], indent: number, cx: Ctx): YNode {
   return parsePlain(r, cont, cx);
 }
 
+/** One anchor (`&a`) or tag (`!t`, `!!str`) at the start of a value. */
+const PROPERTY = /^(&[^\s,[\]{}]+|![^\s,[\]{}]*)(?=[\s,[\]{}]|$)[ \t]*/;
+
+/** What the properties before a value say: the anchors it defines, and
+ *  whether a `!!str` tag makes it text. */
+interface Props {
+  anchors: string[];
+  str: boolean;
+}
+
 /** An anchor (`&a`) or tag (`!t`, `!!str`) before a value: pandoc reads the
- *  value after it, and so does Plass. Anchor names go to `anchors` (whether
- *  one is written back depends on where it is: dropAnchors). */
-function stripProperties(r: string, cx: Ctx, anchors: string[]): string {
+ *  value after it, and so does Plass. Anchor names go to `props.anchors`
+ *  (whether one is written back depends on where it is: dropAnchors). Of
+ *  the tags pandoc 3.4 honors only `!!str` (verified with `-t json`:
+ *  `!!str yes` and `!!str ~` are text, `!t yes`, `! yes`, `!!int yes` a
+ *  boolean); so does Plass (`typed`), and warns that any other is ignored. */
+function stripProperties(r: string, cx: Ctx, props: Props): string {
   for (;;) {
-    const m = /^(&[^\s,[\]{}]+|![^\s,[\]{}]*)(?=[\s,[\]{}]|$)[ \t]*/.exec(r);
+    const m = PROPERTY.exec(r);
     if (!m) return r;
-    if (m[1][0] === '&') anchors.push(m[1].slice(1));
+    if (m[1][0] === '&') props.anchors.push(m[1].slice(1));
+    else if (m[1] === '!!str') props.str = true;
     else cx.notes.push(`the YAML tag ${m[1]} is ignored`);
     r = r.slice(m[0].length);
   }
 }
+
+/** A plain value tagged `!!str` is text, never a boolean, a number or null:
+ *  read as if it were quoted (`!!str` alone is the empty text). */
+function typed(node: YNode, props: Props): YNode {
+  if (!props.str || node.alias !== undefined) return node;
+  if (node.t === 'null') return { t: 'scalar', plain: false, value: '' };
+  if (node.t === 'scalar' && node.plain) return { ...node, plain: false };
+  return node;
+}
+
 
 function define(cx: Ctx, name: string, node: YNode): void {
   node.anchor = name;
@@ -578,17 +606,17 @@ class FlowReader {
 
   node(inFlow = false): YNode {
     this.ws();
-    const anchors: string[] = [];
+    const found: Props = { anchors: [], str: false };
     const props = inFlow && (this.s[this.i] === '&' || this.s[this.i] === '!');
     if (props) {
       const rest = this.s.slice(this.i);
-      this.i += rest.length - stripProperties(rest, this.cx, anchors).length;
+      this.i += rest.length - stripProperties(rest, this.cx, found).length;
       this.ws();
     }
     // A property with no value after it (`{a: !t, b: &x, c: *x}`) is an empty value.
     const empty = props && (this.i >= this.s.length || ',]}'.includes(this.s[this.i]));
-    const node: YNode = empty ? { t: 'null' } : this.bare(inFlow);
-    for (const name of anchors) define(this.cx, name, node);
+    const node = typed(empty ? { t: 'null' } : this.bare(inFlow), found);
+    for (const name of found.anchors) define(this.cx, name, node);
     return node;
   }
 
@@ -805,11 +833,19 @@ class FlowReader {
 
 // ---------------------------------------------------------------- writing YAML scalars
 
+/** The plain values pandoc 3.4 reads as booleans: YAML 1.1's, each one
+ *  verified with `pandoc -t json` to be a MetaBool (a mixed case such as
+ *  `yEs` or `tRue` is text, and so is any of these quoted or tagged
+ *  `!!str`). Every boolean setting is read through these (`boolOf`). */
+const YAML_TRUE: readonly string[] = ['true', 'True', 'TRUE', 'yes', 'Yes', 'YES', 'y', 'Y', 'on', 'On', 'ON'];
+const YAML_FALSE: readonly string[] = ['false', 'False', 'FALSE', 'no', 'No', 'NO', 'n', 'N', 'off', 'Off', 'OFF'];
+
 // Plain scalars a YAML reader would not read back as the same string: the
-// core schema's null, booleans and numbers, plus YAML 1.1's extra booleans,
+// core schema's null and numbers, YAML 1.1's booleans (pandoc's), and its
 // sexagesimals and underscored numbers (other readers still use 1.1).
-const NOT_A_STRING =
-  /^(?:~|null|Null|NULL|true|True|TRUE|false|False|FALSE|y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF|=|<<|[-+]?(?:\.?[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?|0[xob][0-9a-fA-F_]+|[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?|\.(?:inf|Inf|INF))|\.(?:nan|NaN|NAN))$/;
+const NOT_A_STRING = new RegExp(
+  String.raw`^(?:~|null|Null|NULL|${[...YAML_TRUE, ...YAML_FALSE].join('|')}|=|<<|[-+]?(?:\.?[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?|0[xob][0-9a-fA-F_]+|[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?|\.(?:inf|Inf|INF))|\.(?:nan|NaN|NAN))$`,
+);
 
 /** Characters no plain, single-quoted or block scalar can hold: C0 and C1
  *  controls, DEL and U+FFFE/U+FFFF, which YAML does not allow as written;
@@ -996,12 +1032,18 @@ function text(n: YNode): string | null {
   return n.value;
 }
 
+/** The boolean a value is to pandoc (YAML_TRUE, YAML_FALSE), or undefined. */
+function boolOf(n: YNode): boolean | undefined {
+  if (n.t !== 'scalar' || !n.plain) return undefined;
+  return YAML_TRUE.includes(n.value) ? true : YAML_FALSE.includes(n.value) ? false : undefined;
+}
+
 function bool(n: YNode): boolean {
-  if (n.t === 'scalar' && n.plain) {
-    if (/^(?:true|True|TRUE)$/.test(n.value)) return true;
-    if (/^(?:false|False|FALSE)$/.test(n.value)) return false;
-  }
-  throw new Invalid(`expected true or false, found ${describe(n)}`);
+  const b = boolOf(n);
+  if (b !== undefined) return b;
+  // `"yes"` or `!!str yes`: the spelling of a boolean, written as text.
+  const text = n.t === 'scalar' && (YAML_TRUE.includes(n.value) || YAML_FALSE.includes(n.value));
+  throw new Invalid(`expected true or false, found ${describe(n)}${text ? ' (text, as quoted or tagged !!str: write it bare)' : ''}`);
 }
 
 // A number: digits with an optional fraction, or a bare fraction. One way
@@ -1359,8 +1401,11 @@ function readTop(key: string, n: YNode, out: FrontmatterRead, acc: Acc): void {
       return;
     }
     case 'section-numbering': {
+      // Present = numbered, as pandoc's Typst template reads it: a pattern,
+      // or a boolean (`no` and `off` are false to pandoc, as `false` is).
+      const b = boolOf(n);
       if (isNull(n)) s.numberSections = false;
-      else if (n.t === 'scalar' && n.plain && /^(?:true|True|TRUE|false|False|FALSE)$/.test(n.value)) s.numberSections = bool(n);
+      else if (b !== undefined) s.numberSections = b;
       else {
         const v = text(n) ?? '';
         s.numberSections = v !== '';
@@ -1558,7 +1603,7 @@ function readPlassChild(key: string, n: YNode, acc: Acc): void {
         place: (v) => (s.pageNumPlace = choice(v, ['bottom', 'top'] as const)),
         start: (v) => (s.pageNumStart = number(v)),
         'front-matter': (v) => {
-          if (isNull(v) || (v.t === 'scalar' && /^(?:arabic|none|false)$/.test(v.value))) acc.restart = false;
+          if (isNull(v) || boolOf(v) === false || (v.t === 'scalar' && /^(?:arabic|none|false)$/.test(v.value))) acc.restart = false;
           else if (v.t === 'scalar' && v.value === 'roman') acc.restart = true;
           else throw new Invalid(`${describe(v)} is not roman`);
         },
