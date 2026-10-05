@@ -408,14 +408,21 @@ rails can always be finished in Typst itself, because the file is Typst.
   rewritten to reference them, so figures compile properly. Equation refs
   export as `(#ref(<label>, supplement: none))` so the PDF shows "(1)"
   exactly like the editor.
-- **Export**: `.typ` (Typst markup; math wrapped with the same pinned mitex
-  0.2.7 so it compiles — `typst compile document.typ` also works from the
-  CLI, except for embedded `data:` images, which the CLI cannot read). The
-  export is exact on typst 0.14.2, the in-app compiler's release, and says
-  so on its first line; typst 0.15.x compiles it too, but Typst 0.15 changed
-  some math layout (calligraphic letters and `\binom` among others), so
-  those formulas can sit differently there. Plus Print/PDF of the typeset
-  view itself.
+- **Export**: `.md` (the document as Markdown, beside it) and `.typ`, the
+  Typst source Plass compiles: kept-but-unrendered content prints as code,
+  editorial comments are left out, and math is wrapped with the same pinned
+  mitex 0.2.7. Exported with the project folder open, every embedded image
+  is written to `figures/` beside the `.typ` and linked by path, so
+  `typst compile document.typ` works from the CLI; exported without a
+  folder, the images stay `data:` URLs, which the CLI cannot read, and the
+  export says so. The `.typ` is for compiling and reading, not editing:
+  Export → Typst never overwrites the open document. The export is exact on
+  typst 0.14.2, the in-app compiler's release, compiled with Plass's own
+  fonts (`--ignore-system-fonts --ignore-embedded-fonts --font-path
+  public/fonts`), and says so on its first line; typst 0.15.x compiles it
+  too, but Typst 0.15 changed some math layout (calligraphic letters and
+  `\binom` among others), so those formulas can sit differently there.
+  Plus Print/PDF of the typeset view itself.
 
 ## Architecture (how the needle gets threaded)
 
