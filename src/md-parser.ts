@@ -192,7 +192,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
   /** Scan paragraph-ish text (lines joined by `\n`): the sentinels, the
    *  escapes, the fill-in blanks. Returns the scanned lines, each with the
    *  source line it starts at. */
-  const scan = (text: string, lineNos: number[]): Array<{ text: string; line: number }> => {
+  const scan = (text: string, lineNos: number[], listed = false): Array<{ text: string; line: number }> => {
     const starts = [0];
     for (let k = 0; k < text.length; k++) if (text[k] === '\n') starts.push(k + 1);
     /** The buffer line holding `offset` (binary search: a long table is
@@ -238,8 +238,9 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       cur += keep(s);
     };
 
-    // A list's lines: a formula there may not run into the next item.
-    const inList = LIST_MARKER.test(body(text.slice(0, starts[1] === undefined ? undefined : starts[1] - 1)));
+    // A list's lines (an item's, or a later paragraph's in a loose item): a
+    // formula or code span there may not run into the next item.
+    const inList = listed || LIST_MARKER.test(body(text.slice(0, starts[1] === undefined ? undefined : starts[1] - 1)));
     /** Whether a newline inside a formula at `at` continues it: not out of
      *  a pipe-table row (a row is one line), not into the next list item
      *  or a fence. */
@@ -330,8 +331,12 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       if (c === '`') {
         let run = 1;
         while (text[i + run] === '`') run++;
+        // A code span ends where its block does, as a formula does: never
+        // in the next list item, past a fence or out of a table row.
+        const opener = lineAt(i);
         let close = -1;
         for (let k = i + run; k < text.length; ) {
+          if (text[k] === '\n' && !softBreak(k, opener)) break;
           if (text[k] !== '`') {
             k++;
             continue;
@@ -349,7 +354,11 @@ function prepass(src: string, warn: (m: string) => void): Pre {
           i += run;
           continue;
         }
-        let code = text.slice(i + run, close).replace(/\n/g, ' ');
+        let code = text.slice(i + run, close);
+        // A quote's markers on the span's later lines are the quote's, not
+        // the code's (pandoc keeps a list's indentation there, though).
+        if (code.includes('\n') && QUOTE_PREFIX.test(opener)) code = code.replace(/\n(?:[ \t]{0,3}>[ \t]?)+/g, '\n');
+        code = code.replace(/\n/g, ' ');
         if (/^ [\s\S]* $/.test(code) && code.trim()) code = code.slice(1, -1);
         let end = close + run;
         const raw = /^\{=([A-Za-z0-9_+-]+)\}/.exec(text.slice(end));
@@ -431,15 +440,20 @@ function prepass(src: string, warn: (m: string) => void): Pre {
   };
 
   let para: Array<{ text: string; line: number }> = [];
+  /** Whether the lines read are inside a list: from a list marker until a
+   *  line at the left margin follows a blank line. */
+  let listed = false;
+  let paraListed = false;
   const flush = () => {
     if (!para.length) return;
-    for (const l of scan(para.map((p) => p.text).join('\n'), para.map((p) => p.line))) push(l.text, l.line);
+    for (const l of scan(para.map((p) => p.text).join('\n'), para.map((p) => p.line), paraListed)) push(l.text, l.line);
     para = [];
   };
 
   let fence: { ch: string; len: number } | null = null;
   let html: RegExp | 'blank' | null = null;
   let inPara = false;
+  let afterBlank = true;
   for (let i = 0; i < lines.length; i++) {
     const line = work[i];
     const b = body(line);
@@ -461,8 +475,12 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       flush();
       push(line, i);
       inPara = false;
+      afterBlank = true;
       continue;
     }
+    if (LIST_MARKER.test(b)) listed = true;
+    else if (afterBlank && !/^[ \t]/.test(line.replace(QUOTE_PREFIX, ''))) listed = false;
+    afterBlank = false;
     const open = /^(`{3,}|~{3,})/.exec(b);
     if (open && !(open[1][0] === '`' && b.slice(open[1].length).includes('`'))) {
       flush();
@@ -522,6 +540,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       inPara = false;
       continue;
     }
+    if (!para.length) paraListed = listed;
     para.push({ text: line, line: i });
     inPara = true;
   }
@@ -539,6 +558,7 @@ const KEY = String.raw`[\p{L}\p{N}_](?:[\p{L}\p{N}_]|[:.#$%&\-+?<>~/](?=[\p{L}\p
 const BARE_CITE = new RegExp(String.raw`(?<![\p{L}\p{N}_])(-?)@(${KEY})`, 'gu');
 const KEY_AT = new RegExp(String.raw`^(-?)@(${KEY})`, 'u');
 const RAILS = ['table', 'columns', 'solution', 'center', 'right', 'keep'];
+const CITE_EXTRAS = 'citation prefix/suffix kept as text; Plass cites the key only';
 const ALIGN_RAILS = ['center', 'right', 'keep'];
 
 /** A display formula in a paragraph's inline run, before the split. */
@@ -605,6 +625,13 @@ export function mdToDoc(src: string): MdImport {
 
   /** Every sentinel in `text` back to the source it replaced. */
   const restore = (text: string) => text.replace(SENTINEL, (all, n: string) => store[+n]?.orig ?? all);
+  /** The same in a link's destination or title, where markdown-it has
+   *  resolved the escapes: an escape is its character. */
+  const restoreLink = (text: string) =>
+    text.replace(SENTINEL, (all, n: string) => {
+      const s = store[+n];
+      return !s ? all : s.k === 'lit' ? s.ch : s.orig;
+    });
 
   /** An image's alt text as plain text (markdown-it's own rendering of
    *  it): escapes resolved, a formula or code span as its source. */
@@ -632,8 +659,13 @@ export function mdToDoc(src: string): MdImport {
     const s = url.trim().toLowerCase();
     return /^(vbscript|javascript|file|data):/.test(s) ? /^data:image\/(gif|png|jpeg|webp|svg\+xml);/.test(s) : true;
   };
+  // A destination may hold sentinels (`$`, a backtick, `\@` in a URL):
+  // they go back to their text before markdown-it percent-encodes it.
   const normalizeLink = md.normalizeLink.bind(md);
-  md.normalizeLink = (url: string) => (/^data:/i.test(url) ? url : normalizeLink(url));
+  md.normalizeLink = (url: string) => {
+    const text = restoreLink(url);
+    return /^data:/i.test(text) ? text : normalizeLink(text);
+  };
   const tokens = md.parse(pre.text, {}) as unknown as MdToken[];
 
   const { paragraph, heading, blockquote, code_block, horizontal_rule } = schema.nodes;
@@ -818,6 +850,9 @@ export function mdToDoc(src: string): MdImport {
       let at = 0;
       for (const m of seg.matchAll(BARE_CITE)) {
         expand(seg.slice(at, m.index), marks, displays, out);
+        // `-@key` and `@key [p. 3]` are pandoc's suppressed author and
+        // locator: kept as the text they are.
+        if (m[1] || /^ ?\[[^\]@]*\]/.test(seg.slice(m.index! + m[0].length))) warn(CITE_EXTRAS);
         if (m[1]) pushText('-', marks, out);
         out.push(refNode(m[2]));
         H.seen = true;
@@ -831,6 +866,7 @@ export function mdToDoc(src: string): MdImport {
       if (!group) continue;
       plain(p);
       group.items.forEach((it, k) => {
+        if (it.prefix || it.suffix || it.suppress) warn(CITE_EXTRAS);
         if (k > 0 && (group.items[k - 1].suffix || it.prefix)) expand('; ', marks, displays, out);
         if (it.prefix) expand(it.prefix + ' ', marks, displays, out);
         if (it.suppress) pushText('-', marks, out);
@@ -893,7 +929,7 @@ export function mdToDoc(src: string): MdImport {
           marks = [...marks, schema.marks.em.create()];
           break;
         case 'link_open':
-          marks = [...marks, schema.marks.link.create({ href: restore(t.attrGet('href') ?? ''), title: t.attrGet('title') })];
+          marks = [...marks, schema.marks.link.create({ href: restoreLink(t.attrGet('href') ?? ''), title: t.attrGet('title') === null ? null : restoreLink(t.attrGet('title')!) })];
           break;
         case 's_open':
           marks = [...marks, schema.marks.strike.create()];
@@ -917,9 +953,9 @@ export function mdToDoc(src: string): MdImport {
           const attrs = imageAttrs(children, ti + 1);
           if (attrs?.id) warn('an inline image has no label — its id was dropped');
           const alt = altText(t.children ?? []);
-          const title = restore(t.attrGet('title') ?? '');
+          const title = restoreLink(t.attrGet('title') ?? '');
           out.push(
-            schema.nodes.image.create({ src: restore(t.attrGet('src') ?? ''), alt: alt || null, title: title || null, widthPct: widthOf(attrs, 'image') }),
+            schema.nodes.image.create({ src: restoreLink(t.attrGet('src') ?? ''), alt: alt || null, title: title || null, widthPct: widthOf(attrs, 'image') }),
           );
           H.seen = true;
           break;
@@ -1014,6 +1050,9 @@ export function mdToDoc(src: string): MdImport {
     return !!read && !read.rest;
   };
 
+  /** Paragraphs whose source line is a caption line (`: Caption`). */
+  const captionLines = new WeakSet<PMNode>();
+
   /** The plain caption a paragraph states (`: Caption`), from its read
    *  nodes: math as `$…$`, citations and references in their Markdown
    *  form, as step 3's `takeCaptionLine` stores a caption row. */
@@ -1100,20 +1139,34 @@ export function mdToDoc(src: string): MdImport {
       return [code_block.create({ params: 'md-raw' }, [schema.text(solid[0].content.trim())])];
     }
     const at = kids.indexOf(solid[0]);
-    const attrsFollow = solid.length === 2 && solid[1].type === 'text' && /^\uE000(\d+)\uE000[ \t\n]*$/.test(solid[1].content) && store[+/\d+/.exec(solid[1].content)![0]].k === 'attrs';
-    if (solid[0]?.type === 'image' && (solid.length === 1 || attrsFollow)) {
+    // What may follow a lone image: its attribute block, then spaces and
+    // no-break spaces. A no-break space there is pandoc's way to keep the
+    // image out of a figure.
+    const tail = solid.length === 2 && solid[1].type === 'text' ? /^(?:\uE000(\d+)\uE000)?([ \t\n\u00a0]*)$/.exec(solid[1].content) : null;
+    const tailAttrs = tail?.[1] !== undefined ? store[+tail[1]] : null;
+    const tailOk = !!tail && (tailAttrs ? tailAttrs.k === 'attrs' : tail[2].includes('\u00a0'));
+    const glue = tailOk && tail![2].includes('\u00a0');
+    const lone = solid[0]?.type === 'image' && (solid.length === 1 || tailOk);
+    const img = solid[0];
+    const asFigure = lone && (altText(img.children ?? []).trim() !== '' || (tailAttrs?.k === 'attrs' && !!tailAttrs.attrs.id));
+    if (lone && (!glue || asFigure)) {
       // A lone image: a figure when it has a caption (pandoc's implicit
-      // figure) or a label; otherwise an image in its paragraph.
+      // figure) or a label; otherwise an image in its paragraph. With the
+      // no-break space after it, it is an image in its paragraph whatever
+      // it has, and the space (the file's way of saying so) is dropped.
       for (const k of kids.slice(0, at)) if (k.type === 'html_inline' && readMdComment(k.content) !== null) hoist(readMdComment(k.content)!, { inline: k.content, lines: inlineLines });
-      const img = solid[0];
       const attrs = imageAttrs(kids, kids.indexOf(img) + 1);
-      const src = restore(img.attrGet('src') ?? '');
-      const title = restore(img.attrGet('title') ?? '');
+      const src = restoreLink(img.attrGet('src') ?? '');
+      const title = restoreLink(img.attrGet('title') ?? '');
       const label = attrs?.id ?? '';
       const caption = altText(img.children ?? []).trim();
       H.seen = true;
       let node: PMNode;
-      if (caption || label) {
+      if (glue) {
+        if (label) warn('an inline image has no label — its id was dropped');
+        const alt = altText(img.children ?? []);
+        node = paragraph.create(null, [schema.nodes.image.create({ src, alt: alt || null, title: title || null, widthPct: widthOf(attrs, 'image') })]);
+      } else if (caption || label) {
         forceAfter++;
         const content = finishInline(inlineItems(img.children ?? [], false));
         forceAfter--;
@@ -1161,19 +1214,40 @@ export function mdToDoc(src: string): MdImport {
     const dropped = new Set<number>();
     const commentLines = new Set<number>();
     for (const c of within) if (!('inline' in c)) for (let l = c.lines[0]; l < c.lines[1]; l++) commentLines.add(l);
-    const text = new Map<number, string>();
+    /** Each source line's text; null for a line an inline cut joined into
+     *  the one before it. */
+    const text = new Map<number, string | null>();
     for (let l = from; l < to; l++) text.set(l, lines[l]);
     for (const c of within) {
       if (!('inline' in c)) continue;
+      // The comment as markdown-it saw it, matched in the source: a line
+      // break in it may be followed there by the container's quote
+      // markers and indentation, which markdown-it had removed.
+      const pattern = new RegExp(
+        c.inline
+          .split('\n')
+          .map((part, k) => (k ? part.replace(/^[ \t]+/, '') : part).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+          .join('\\n[ \\t>]*'),
+      );
       for (let l = c.lines[0]; l < c.lines[1]; l++) {
-        const line = text.get(l);
-        if (line?.includes(c.inline)) {
-          text.set(l, line.replace(c.inline, ''));
-          break;
-        }
+        if (text.get(l) == null) continue;
+        // The run of lines from `l` the comment can span.
+        const span: number[] = [];
+        for (let e = l; e < c.lines[1] && span.length <= (c.inline.match(/\n/g)?.length ?? 0); e++) if (text.get(e) != null) span.push(e);
+        const joined = span.map((e) => text.get(e)).join('\n');
+        const m = pattern.exec(joined);
+        if (!m || joined.slice(0, m.index).includes('\n')) continue;
+        const before = joined.slice(0, m.index);
+        let after = joined.slice(m.index + m[0].length);
+        // The gap closes to one space, as it does in a paragraph.
+        if (/[ \t]$/.test(before)) after = after.replace(/^[ \t]+/, '');
+        const merged = (before + after).split('\n');
+        span.forEach((e, k) => text.set(e, k < merged.length ? merged[k] : null));
+        break;
       }
     }
     for (let l = from; l < to; l++) {
+      if (text.get(l) === null) continue;
       if (commentLines.has(l)) {
         // A dropped comment takes one blank line with it.
         if (!commentLines.has(l + 1) && !(kept[kept.length - 1] ?? 'x').trim() && !(text.get(l + 1) ?? 'x').trim()) dropped.add(l + 1);
@@ -1384,9 +1458,10 @@ export function mdToDoc(src: string): MdImport {
         let kids = inline?.children ?? [];
         let attrs = t.map ? pre.headingAttrs.get(t.map[0]) ?? null : null;
         if (!attrs) {
-          // A setext heading's attributes end its text.
+          // A setext heading's (or one in a list item's) attributes end its
+          // text — so its source says, where an escaped `\{` is still seen.
           const last = kids[kids.length - 1];
-          const found = last?.type === 'text' ? trailingAttrs(last.content) : null;
+          const found = last?.type === 'text' && trailingAttrs(inline?.content ?? '') ? trailingAttrs(last.content) : null;
           if (found) {
             attrs = found.attrs;
             kids = [...kids.slice(0, -1), { ...last, content: last.content.slice(0, found.start).replace(/[ \t]+$/, '') } as MdToken];
@@ -1403,7 +1478,9 @@ export function mdToDoc(src: string): MdImport {
       }
       case 'paragraph_open': {
         const nodes = parseParagraph(i, top);
-        // A `: Caption` paragraph right before a table is its caption.
+        // A `: Caption` paragraph right before a table is its caption: so
+        // its source says (an escaped `\:` is a paragraph).
+        if (nodes.length === 1 && captionFromLine(tokens[i + 1]?.content ?? '') !== null) captionLines.add(nodes[0]);
         return { nodes, next: i + 3 };
       }
       case 'code_block':
@@ -1473,10 +1550,16 @@ export function mdToDoc(src: string): MdImport {
           return { nodes: [paragraph.create(null, finishInline(inlineItems(kids, false)))], next: i + 1 };
         }
         // An HTML element: kept verbatim, shown and printed as code. A
-        // comment on lines of its own inside it is lifted out after it.
-        H.seen = true;
+        // comment on lines of its own inside it is lifted out of it: after
+        // it, since its first line is printed code — except in a `<div>`,
+        // which pandoc reads as a div (`native_divs`) whose own tags are
+        // markup, so there, as in a `:::` div, a comment that nothing but
+        // `<div>` tags precedes goes before the block.
         const kept: string[] = [];
         const src = restore(t.content).replace(/\n$/, '').split('\n');
+        const seen = H.seen;
+        const divTags = (line: string) => /^(?:\s*<\/?div(?:\s[^>]*)?>)*\s*$/i.test(line);
+        let text = !/^[ \t]*<div(?=[\s/>]|$)/i.test(src[0] ?? '');
         for (let k = 0; k < src.length; k++) {
           const line = src[k];
           if (k > 0 && /^\s*<!--/.test(line)) {
@@ -1486,13 +1569,16 @@ export function mdToDoc(src: string): MdImport {
             const read = e < src.length ? readMdComments(chunk) : null;
             if (read && !read.rest) {
               const base = t.map ? origLine[t.map[0]] : 0;
+              H.seen = seen || text;
               for (const c of read.comments) hoist(c, { lines: [base + k, base + e + 1] });
               k = e;
               continue;
             }
           }
+          if (!divTags(line)) text = true;
           kept.push(line);
         }
+        H.seen = true;
         let tight = '';
         if (top) {
           // Which sides had no blank line, so the save keeps the file's
@@ -1551,7 +1637,7 @@ export function mdToDoc(src: string): MdImport {
       // A `: Caption` paragraph beside a table is the table's caption.
       if (r.nodes.length === 1 && r.nodes[0].type === schema.nodes.table && !r.nodes[0].attrs.caption) {
         const prev = nodes[nodes.length - 1];
-        const before = prev ? captionOf(prev) : null;
+        const before = prev && captionLines.has(prev) ? captionOf(prev) : null;
         if (before !== null) {
           nodes.pop();
           r.nodes[0] = r.nodes[0].type.create({ ...r.nodes[0].attrs, caption: printedCaption(before) }, r.nodes[0].content);

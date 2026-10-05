@@ -4,6 +4,7 @@
 // nothing the compiler sees beyond the drops a document declares.
 // Run: npx tsx src/md-round.test.ts
 import { readFileSync, readdirSync } from 'node:fs';
+import MarkdownIt from 'markdown-it';
 import type { Node as PMNode } from 'prosemirror-model';
 import { mdToDoc } from './md-parser';
 import { docToMd } from './md-serializer';
@@ -219,13 +220,61 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('a mark\'s edge spaces move outside its delimiters', docToMd(spaced) === 'a **bold** b\n', docToMd(spaced));
 }
 
-// A tight list item may hold a paragraph and a table with no blank line
-// (markdown-it lets the table interrupt the paragraph); writing one there
-// would make the whole list loose.
+// A tight list cannot hold an item whose blocks Markdown must set apart
+// with a blank line: such a list is written loose, with a warning, and
+// converges. A table directly under its paragraph is markdown-it's reading
+// only (pandoc reads its lines as the paragraph's text), so it takes the
+// blank line too. A sublist, a listing and display math follow directly.
 {
   const md = '- One.\n- Vocabulary:\n  | a | b |\n  | --- | --- |\n  | 1 | 2 |\n- Three.\n';
   const t = trip(md);
-  check('a tight item\'s table follows its paragraph directly', t.doc.firstChild!.attrs.tight === true && t.md1 === md && t.converges, JSON.stringify(t.md1));
+  const loose = '- One.\n\n- Vocabulary:\n\n  | a | b |\n  | --- | --- |\n  | 1 | 2 |\n\n- Three.\n';
+  check('a tight item\'s table is written pandoc-readable: the list loose, with a warning', t.doc.firstChild!.attrs.tight === true && t.md1 === loose && t.converges && t.written.some((w) => /saved loose/.test(w)), JSON.stringify([t.md1, t.written]));
+  const { doc: D, paragraph: P, ordered_list: OL, bullet_list: BL, list_item: LI, blockquote: BQ } = schema.nodes;
+  const tx = (x: string) => schema.text(x);
+  const solution = D.create(null, [OL.create({ tight: true }, [LI.create(null, [P.create(null, tx('Q1')), BQ.create({ kind: 'solution' }, [P.create(null, tx('A1'))])]), LI.create(null, [P.create(null, tx('Q2'))])])]);
+  const w: string[] = [];
+  const s1 = docToMd(solution, (m) => w.push(m));
+  const back = mdToDoc(s1).doc;
+  check('a solution in a numbered question: the list is written loose, says so, and converges', s1 === '1. Q1\n\n   ::: solution\n\n   A1\n\n   :::\n\n2. Q2\n' && w.some((m) => /saved loose/.test(m)) && back.firstChild!.attrs.tight === false && docToMd(back) === s1, JSON.stringify([s1, w]));
+  const centered = D.create(null, [BL.create({ tight: true }, [LI.create(null, [P.create(null, tx('Lead')), P.create({ align: 'center' }, tx('C'))]), LI.create(null, [P.create(null, tx('Next'))])])]);
+  const c1 = docToMd(centered);
+  check('a centered paragraph after an item\'s text: loose, and converges', c1 === docToMd(mdToDoc(c1).doc) && mdToDoc(c1).doc.firstChild!.attrs.tight === false, c1);
+  const alone = D.create(null, [OL.create({ tight: true }, [LI.create(null, [BQ.create({ kind: 'solution' }, [P.create(null, tx('A1'))])]), LI.create(null, [P.create(null, tx('Q2'))])])]);
+  const aw: string[] = [];
+  const a1 = docToMd(alone, (m) => aw.push(m));
+  check('an item holding only a div stays tight', !aw.length && JSON.stringify(mdToDoc(a1).doc.toJSON()) === JSON.stringify(alone.toJSON()), a1);
+  for (const tightMd of ['- a\n  - b\n- c\n', '- a\n  ```py\n  x\n  ```\n- c\n', '1. Estimate the model:\n   $$\n   y = x\n   $$\n   Report $b$.\n2. Next.\n']) {
+    const tt = trip(tightMd);
+    check(`a sublist, a listing or display math (and the text after it) follows directly in a tight item: ${JSON.stringify(tightMd.slice(0, 24))}`, tt.md1 === tightMd && tt.converges && !tt.written.length, tt.md1);
+  }
+}
+
+// A code span ends where its block does: never in the next list item, and
+// a quote's markers on its later lines are not its text. The corpus shapes:
+// a backtick in one item and one in a later item (the course style guide
+// lost an item to this), and a span wrapped inside a quote (a storyboard).
+{
+  const codes = (doc: PMNode) => all(doc, (n) => n.isText && n.marks.some((m) => m.type.name === 'code')).map((n) => n.text);
+  const items = mdToDoc('- press ` to open\n- then ` again\n- third\n').doc;
+  check('a backtick never pairs with one in the next item', items.firstChild!.childCount === 3 && !codes(items).length, JSON.stringify(items.toJSON()));
+  const guide = mdToDoc('- the sheet (` is not code) must accept the document.\n- **Gradescope sheets** (the ` again).\n').doc;
+  check('the style guide\'s shape keeps both items', guide.firstChild!.childCount === 2 && guide.firstChild!.child(1).textContent.startsWith('Gradescope sheets'), JSON.stringify(guide.toJSON()));
+  const quoted = mdToDoc('> Use `foo\n> bar` here.\n').doc;
+  check('a code span wrapped in a quote loses the quote marker', JSON.stringify(codes(quoted)) === '["foo bar"]', JSON.stringify(codes(quoted)));
+  const story = mdToDoc("> The caption reads `Molly's proposal:\n> 6 S for 4 C (Rate: 1 C = 1.5 S)` — gold label.\n").doc;
+  check('the storyboard\'s shape has no > in its code', JSON.stringify(codes(story)) === JSON.stringify(["Molly's proposal: 6 S for 4 C (Rate: 1 C = 1.5 S)"]), JSON.stringify(codes(story)));
+  const kept = mdToDoc('- a `b\n  c` d\n').doc;
+  check('a list\'s indentation stays in a wrapped code span (pandoc\'s reading)', JSON.stringify(codes(kept)) === '["b   c"]', JSON.stringify(codes(kept)));
+  const loose = mdToDoc('- a\n\n  para `x\n- c` y\n').doc;
+  check('a later paragraph of a loose item is in its list too', !codes(loose).length && loose.firstChild!.childCount === 2, JSON.stringify(loose.toJSON()));
+  // Where markdown-it's own blocks are the same, the pre-pass reads the same
+  // code spans as markdown-it does (pandoc agrees on these).
+  const plain = new MarkdownIt();
+  const itCodes = (md: string) => plain.parse(md, {}).flatMap((t) => (t.children ?? []).filter((c) => c.type === 'code_inline').map((c) => c.content));
+  for (const md of ['- one `a` and `b\n- two` c\n', '> x `p\n> q` y\n>\n> `r`\n', '1. `a|b` and\n2. `c` d\n', 'Text `` a ` b `` and `x\ny`.\n', '| `a|b` | c |\n|---|---|\n| `d | e` |\n']) {
+    check(`code spans as markdown-it reads them: ${JSON.stringify(md)}`, JSON.stringify(codes(mdToDoc(md).doc)) === JSON.stringify(itCodes(md)), JSON.stringify([codes(mdToDoc(md).doc), itCodes(md)]));
+  }
 }
 
 // A sentinel character already in the file is text, never a sentinel.
@@ -398,6 +447,27 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   const ragged = cols(['', '']) + '\n' + cols(['', '', '']).replace('{.columns ', '{.columns .continued ');
   const r = mdToDoc(ragged);
   check('a .continued row of another width warns and is refit', r.warnings.some((w) => /has 3 cell\(s\) where its grid has 2/.test(w)) && r.doc.firstChild!.childCount === 3 && r.doc.firstChild!.child(2).childCount === 2, JSON.stringify([r.warnings, r.doc.firstChild!.childCount]));
+  // Every canonical share list reads back as itself: typed whole-number
+  // shares (`1:12` is 7.692%/92.308% to three decimals, which would read
+  // as [1, 12.001]) and random ones.
+  {
+    const canon = (xs: number[]) => xs.map((x) => Math.round((x / Math.min(...xs)) * 1000) / 1000);
+    const gridDoc = (cols: number[]) =>
+      schema.nodes.doc.create(null, schema.nodes.grid.create({ columns: cols, gutter: 1 }, schema.nodes.grid_row.create(null, cols.map(() => schema.nodes.grid_cell.create(null, schema.nodes.paragraph.create(null, schema.text('c')))))));
+    const lists: number[][] = [];
+    for (let a = 1; a <= 12; a++) for (let b = 1; b <= 12; b++) for (let c = 1; c <= 12; c++) lists.push(canon([a, b, c]));
+    let seed = 7;
+    const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let k = 0; k < 3000; k++) lists.push(canon(Array.from({ length: 2 + Math.floor(rnd() * 5) }, () => 0.01 + rnd() * 20)));
+    const bad = lists.filter((cols) => {
+      const md = docToMd(gridDoc(cols));
+      const back = mdToDoc(md).doc;
+      return JSON.stringify(back.firstChild!.attrs.columns) !== JSON.stringify(cols) || docToMd(back) !== md;
+    });
+    check(`grid shares read back exactly (${lists.length} lists)`, !bad.length, JSON.stringify(bad.slice(0, 5)));
+    const w12 = docToMd(gridDoc([1, 12]));
+    check('1:12 is written to four decimals, which read back as [1, 12]; 60/40 still to none', w12.includes('width=7.6923%') && w12.includes('width=92.3077%') && docToMd(gridDoc([1.5, 1])).includes('width=60%'), w12);
+  }
   const fence = 'Intro.\n\n```typst\n#grid(\n  columns: (2fr, 1fr),\n  [a],\n  [b],\n)\n```\n';
   const f = mdToDoc(fence).doc;
   check('a typst fence holding a grid is a code listing', f.child(1).type.name === 'code_block' && f.child(1).attrs.params === 'typst' && docToMd(f) === fence, docToMd(f));
@@ -461,6 +531,15 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   const at = trip('follow @plass and mail a@b.org, or \\@plass.\n');
   check('bare @plass is a citation, an email and \\@plass are text', all(at.doc, (n) => n.type.name === 'citation').length === 1 && at.doc.firstChild!.textContent.includes('a@b.org') && at.doc.firstChild!.textContent.endsWith('@plass.'), at.md1);
   check('an escaped @ stays escaped through a save', at.md1 === 'follow [@plass] and mail a@b.org, or \\@plass.\n' && at.converges, at.md1);
+  for (const [name, kid] of [
+    ['a citation', schema.nodes.citation.create({ key: 'a' })],
+    ['a footnote', schema.nodes.footnote.create(null, schema.text('n'))],
+    ['a link', schema.text('y', [schema.marks.link.create({ href: 'u' })])],
+  ] as const) {
+    const d = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.text('x^'), kid]));
+    const out = docToMd(d);
+    check(`a caret before ${name} is escaped (^[ would open an inline footnote)`, out.startsWith('x\\^[') && JSON.stringify(mdToDoc(out).doc.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(mdToDoc(out).doc) === out, out);
+  }
   const sub = trip('Water is H\\~2\\~O and x\\^2\\^ and note\\^[x].\n');
   check('the written escapes read back as the characters', sub.doc.firstChild!.textContent === 'Water is H~2~O and x^2^ and note^[x].' && sub.md1 === 'Water is H\\~2\\~O and x\\^2\\^ and note\\^[x].\n', sub.md1);
 }
@@ -471,6 +550,14 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   const atoms = all(p, (n) => n.type.name === 'citation' || n.type.name === 'eq_ref').map((n) => `${n.type.name}:${(n.attrs.key ?? n.attrs.label) as string}`);
   check('every key is a node, namespaced keys references', JSON.stringify(atoms) === JSON.stringify(['citation:c', 'citation:a', 'citation:b', 'citation:a', 'citation:s', 'eq_ref:eq:x', 'eq_ref:fig:y']), JSON.stringify(atoms));
   check('prefix, suffix and the suppressed author stay as text', p.textContent === 'A see , p. 3 b  c - d  [p. 33] e  and .', JSON.stringify(p.textContent));
+  const extras = (md: string) => mdToDoc(md).warnings.filter((w) => w === 'citation prefix/suffix kept as text; Plass cites the key only').length;
+  check('a prefix, a suffix or a suppressed author warns, once per file', extras('Email … or [@b, p. 3] and [see @c] and [-@d] and -@e and @f [p. 9].\n') === 1 && extras('[see @c]\n') === 1 && extras('[-@d]\n') === 1 && extras('As -@e says.\n') === 1 && extras('@f [p. 9] says.\n') === 1);
+  check('plain citations do not warn', extras('Plain [@a; @b], @c and a@b.org [x].\n') === 0);
+  const mixed = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.text('See '), schema.nodes.eq_ref.create({ label: 'eq:x' }), schema.nodes.citation.create({ key: 'a' }), schema.text('.')]));
+  const mm = docToMd(mixed);
+  check('a reference next to a citation is one group (pandoc reads [@eq:x][@a] as brackets)', mm === 'See [@eq:x; @a].\n' && JSON.stringify(mdToDoc(mm).doc.toJSON()) === JSON.stringify(mixed.toJSON()), mm);
+  const refs = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.nodes.citation.create({ key: 'a' }), schema.nodes.eq_ref.create({ label: 'eq:x' }), schema.nodes.eq_ref.create({ label: 'eq:y' })]));
+  check('a run of citations and references is one group, in order', docToMd(refs) === '[@a; @eq:x; @eq:y]\n' && JSON.stringify(mdToDoc(docToMd(refs)).doc.toJSON()) === JSON.stringify(refs.toJSON()), docToMd(refs));
   const t = trip('Two [@a; @b] and [@eq:x] and @eq:y.5 and x[@c].\n');
   check('adjacent citations are written as one group; a key runs on through .5 (pandoc)', t.md1 === 'Two [@a; @b] and @eq:x and @eq:y.5 and x[@c].\n' && t.converges && !!find(t.doc, (n) => n.attrs.label === 'eq:y.5'), t.md1);
   const glued = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.text('see'), schema.nodes.eq_ref.create({ label: 'eq:y' }), schema.text('.5 and '), schema.nodes.eq_ref.create({ label: 'eq:z' }), schema.text('.')]));
@@ -479,6 +566,47 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   const group = mdToDoc('[@a][x](u)').doc.firstChild!;
   check('a citation before a link stays a citation', all(group, (n) => n.type.name === 'citation').length === 1);
   check('a citation followed by ( is escaped', trip('See [@a] (2020).\n').md1 === 'See [@a] (2020).\n' && docToMd(schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.nodes.citation.create({ key: 'a' }), schema.text('(x)')]))) === '[@a]\\(x)\n');
+}
+
+// Text the pre-pass sets aside inside a link's destination or title comes
+// back as written: a formula's dollars, a code span's backticks, an escape.
+{
+  for (const [md, href] of [
+    ['[x](http://a.com/?a=$x$&b=1)\n', 'http://a.com/?a=$x$&b=1'],
+    ['[x](http://a.com/\\@b)\n', 'http://a.com/@b'],
+    ['[x](http://a.com/`y`)\n', 'http://a.com/%60y%60'],
+  ] as const) {
+    const t = trip(md);
+    const got = find(t.doc, (n) => n.isText && n.marks.some((m) => m.type.name === 'link'))?.marks.find((m) => m.type.name === 'link')?.attrs.href;
+    check(`a link destination keeps its text: ${JSON.stringify(md)}`, got === href && t.converges && !/%EE%80%80|\uE000/i.test(JSON.stringify(t.doc.toJSON())), JSON.stringify([got, t.md1]));
+  }
+  const img = mdToDoc('See ![a](img$1$.png "t $x$ \\@k") here.\n').doc;
+  check('an image source and title keep their text', JSON.stringify(find(img, (n) => n.type.name === 'image')?.attrs) === JSON.stringify({ src: 'img$1$.png', alt: 'a', title: 't $x$ @k', widthPct: null }), JSON.stringify(img.toJSON()));
+}
+
+// A heading's escaped `\{…}` is text, never its label (an ATX heading, a
+// setext one, one in a list item).
+{
+  const esc = schema.nodes.doc.create(null, schema.nodes.heading.create({ level: 2 }, schema.text('Set {#x}')));
+  const em = docToMd(esc);
+  check('an escaped attribute block in a heading stays text', em === '## Set \\{#x}\n' && JSON.stringify(mdToDoc(em).doc.toJSON()) === JSON.stringify(esc.toJSON()), em);
+  const setext = mdToDoc('Title {#sec:t}\n=====\n\nEsc \\{#y}\n----\n\n- # In list {#sec:l}\n').doc;
+  const heads = all(setext, (n) => n.type.name === 'heading').map((n) => [n.textContent, n.attrs.label]);
+  check('setext and list-item headings: a label read, an escaped one kept as text', JSON.stringify(heads) === JSON.stringify([['Title', 'sec:t'], ['Esc {#y}', ''], ['In list', 'sec:l']]), JSON.stringify(heads));
+}
+
+// A footnote's text starts a line of its own (`[^1]: …`), so what would read
+// there as a block is escaped; a digit right after a formula is written as
+// its character reference (pandoc's `$x$2` is no formula).
+{
+  for (const body of ['2020. Published later.', '- a dash', '> a quote', '# a hash', '+ a plus']) {
+    const d = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.text('a'), schema.nodes.footnote.create(null, schema.text(body))]));
+    const out = docToMd(d);
+    check(`a footnote starting "${body.slice(0, 6)}" reads back as written`, JSON.stringify(mdToDoc(out).doc.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(mdToDoc(out).doc) === out, out);
+  }
+  const d = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.nodes.math_inline.create({ src: 'x' }), schema.text('2 and')]));
+  const out = docToMd(d);
+  check('a digit right after a formula is a character reference', out === '$x$&#50; and\n' && JSON.stringify(mdToDoc(out).doc.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(mdToDoc(out).doc) === out, out);
 }
 
 // Figures and images by pandoc's alt rule; SVG data URLs survive.
@@ -491,11 +619,18 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('the bare image keeps its width', doc.child(2).firstChild!.attrs.widthPct === 40);
   check('figures and images round-trip byte for byte', docToMd(doc) === md, firstDiff(docToMd(doc), md));
   const plain = schema.nodes.doc.create(null, [schema.nodes.figure.create({ src: 'a.svg' }), schema.nodes.figure.create({ src: 'b.svg', label: 'fig:figure-1' })]);
-  const pm = docToMd(plain);
-  check('an uncaptioned, unlabeled figure keeps a made-up label (its only Markdown form)', pm === '![](a.svg){#fig:figure-2}\n\n![](b.svg){#fig:figure-1}\n' && JSON.stringify(kinds(mdToDoc(pm).doc)) === '["figure","figure"]', pm);
+  const pw: string[] = [];
+  const pm = docToMd(plain, (w) => pw.push(w));
+  check('an uncaptioned, unlabeled figure keeps a made-up label (its only Markdown form), and says so', pm === '![](a.svg){#fig:figure-2}\n\n![](b.svg){#fig:figure-1}\n' && JSON.stringify(kinds(mdToDoc(pm).doc)) === '["figure","figure"]' && pw.length === 1 && /made-up label/.test(pw[0]), JSON.stringify([pm, pw]));
   const lone = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, schema.nodes.image.create({ src: 'a.svg', alt: 'An icon' })));
   const lm = docToMd(lone);
   check('a lone image with alt text stays an image, not a figure', lm === '![An icon](a.svg)\u00a0\n' && mdToDoc(lm).doc.firstChild!.type.name === 'paragraph' && trip(lm).converges, JSON.stringify(lm));
+  check('the no-break space that says so is dropped on read (the image is alone again)', JSON.stringify(mdToDoc(lm).doc.toJSON()) === JSON.stringify(lone.toJSON()), JSON.stringify(mdToDoc(lm).doc.toJSON()));
+  const spaced = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.nodes.image.create({ src: 'a.svg', alt: 'An icon' }), schema.text(' ')]));
+  const sm = docToMd(spaced);
+  check('a space beside a lone image does not make it a figure', sm === lm && trip(sm).converges && mdToDoc(sm).doc.firstChild!.type.name === 'paragraph', JSON.stringify(sm));
+  const hand = mdToDoc('![Alt](a.svg){width=40%}\u00a0\n\n![](b.svg)\u00a0\n').doc;
+  check('a hand-written image with a no-break space after it: an image; with no caption the space is text', hand.child(0).childCount === 1 && hand.child(0).firstChild!.attrs.alt === 'Alt' && hand.child(0).firstChild!.attrs.widthPct === 40 && hand.child(1).childCount === 2, JSON.stringify(hand.toJSON()));
   const width = mdToDoc('![](a.svg){width=3in}\n');
   check('a non-percent width warns and is dropped', width.warnings.some((w) => /width "3in"/.test(w)) && width.doc.firstChild!.firstChild!.attrs.widthPct === null);
 }
@@ -512,6 +647,11 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   const u = mdToDoc(unknown);
   check('an unknown div is one island of its own source', JSON.stringify(kinds(u.doc)) === '["editor_comment","code_block:md-raw"]' && u.doc.child(1).textContent === '::: {.callout-note}\n\nText with $x$ and `c`.\n\n::: inner\n\nNested.\n\n:::\n\n:::', JSON.stringify(u.doc.toJSON()));
   check('the comment inside it moved out and is not printed', u.doc.child(0).textContent === 'a note' && !docToTyp(u.doc, { islands: 'print' }).includes('a note') && trip(unknown).converges);
+  for (const wrapped of ['::: aside\n\nText <!-- a\nb --> more\n\n:::\n', '> ::: aside\n>\n> Text <!-- a\n> b --> more\n>\n> :::\n', '::: center\n\nOne <!-- x\ny --> z.\n\nTwo.\n\n:::\n']) {
+    const w = trip(wrapped);
+    const notes = (d: PMNode) => all(d, (n) => n.type.name === 'editor_comment').length;
+    check(`a wrapped inline comment leaves its island once: ${JSON.stringify(wrapped.slice(0, 24))}`, w.converges && notes(w.doc) === 1 && notes(w.doc2) === 1 && !docToTyp(w.doc, { islands: 'print' }).includes('<!--') && !w.md1.slice(0, w.md1.indexOf('\n\n<!--')).includes('<!--'), JSON.stringify([w.md1, w.md2]));
+  }
   const extra = mdToDoc('::: {.solution color=red}\n\nRed.\n\n:::\n');
   check('an attribute a known div has no use for is dropped with a warning', extra.doc.firstChild!.attrs.kind === 'solution' && extra.warnings.some((w) => /color/.test(w)), extra.warnings.join('; '));
   const glued = mdToDoc('Text.\n::: solution\n\nA.\n\n:::\n');
@@ -529,6 +669,18 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('a caption line before a table is its caption', before.childCount === 1 && before.firstChild!.attrs.caption === 'Caption before');
   const colon = trip('| A |\n|---|\n| 1 |\n\n\\: not a caption\n');
   check('an escaped colon paragraph next to a table stays a paragraph', colon.doc.childCount === 2 && colon.converges, colon.md1);
+  const T = () => schema.nodes.table.create(null, [
+    schema.nodes.table_row.create(null, schema.nodes.table_header.create(null, schema.nodes.paragraph.create(null, schema.text('A')))),
+    schema.nodes.table_row.create(null, schema.nodes.table_cell.create(null, schema.nodes.paragraph.create(null, schema.text('1')))),
+  ]);
+  for (const text of ['Table: Results by region', ': x', 'table: y']) {
+    for (const before of [true, false]) {
+      const para = schema.nodes.paragraph.create(null, schema.text(text));
+      const d = schema.nodes.doc.create(null, before ? [para, T()] : [T(), para]);
+      const out = docToMd(d);
+      check(`a paragraph "${text}" ${before ? 'before' : 'after'} a table stays a paragraph`, JSON.stringify(mdToDoc(out).doc.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(mdToDoc(out).doc) === out, out);
+    }
+  }
 }
 
 // Page breaks, raw Typst, bibliography at its position, nbsp, headings.
@@ -572,7 +724,7 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
     try {
       const t = trip(readFileSync(new URL(name, dir), 'utf8'));
       if (!t.converges) bad.push(`${name}: ${firstDiff(t.md1, t.md2)}`);
-      if (/\uE000/.test(JSON.stringify(t.doc.toJSON()))) bad.push(`${name}: a sentinel leaked`);
+      if (/\uE000|%EE%80%80/i.test(JSON.stringify(t.doc.toJSON()))) bad.push(`${name}: a sentinel leaked`);
     } catch (e) {
       bad.push(`${name}: ${(e as Error).message}`);
     }
@@ -630,7 +782,16 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
     ['13d sized', F.sizedTableDoc(), false],
     ['13e front matter', F.frontMatterDoc(), false],
     ['18 solution', F.solutionDoc(), false],
+    ['lone image with alt', schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, schema.nodes.image.create({ src: 'a.svg', alt: 'An icon' }))), false],
+    ['lone image with alt and a space', schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.nodes.image.create({ src: 'a.svg', alt: 'An icon' }), schema.text(' ')])), false],
+    ['uncaptioned figure', schema.nodes.doc.create(null, [schema.nodes.paragraph.create(null, schema.text('Before.')), schema.nodes.figure.create({ src: 'a.svg' })]), false],
   ];
+  // Declared differences beyond `params`: an uncaptioned, unlabeled figure
+  // is written with a made-up label (its only Markdown form as a figure),
+  // which the export then carries.
+  const EXPECTED: Record<string, (typ: string) => string> = {
+    'uncaptioned figure': (typ) => typ.replace('#figure(image("a.svg"), caption: [])', '#figure(image("a.svg"), caption: []) <fig:figure-1>'),
+  };
   // The params cases, declared: the drop list is executable, not prose.
   const PARAMS = ['11 params', '13d sized', '19c custom', '19d custom', ...F.UNSUPPORTED_TABLE_EXPRESSIONS.map((e) => `852 ${e}`)];
   const undeclared = fixtures.filter(([name, doc]) => hasParams(doc) !== PARAMS.includes(name)).map(([name]) => name);
@@ -638,7 +799,7 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   for (const [name, doc] of fixtures) {
     const md = docToMd(doc);
     const back = mdToDoc(md).doc;
-    const want = body(docToTyp(stripUnrepresentable(doc), { islands: 'print' }));
+    const want = (EXPECTED[name] ?? ((typ: string) => typ))(body(docToTyp(stripUnrepresentable(doc), { islands: 'print' })));
     const got = body(docToTyp(back, { islands: 'print' }));
     check(`cross-format: ${name}`, got === want, firstDiff(want, got) + '\n' + md.slice(0, 600));
     check(`cross-format converges: ${name}`, docToMd(back) === docToMd(mdToDoc(docToMd(back)).doc));

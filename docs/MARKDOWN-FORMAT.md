@@ -137,7 +137,7 @@ plass:
 | a footnote | `a claim.[^1]` and, below, `[^1]: The note.`; or `a claim.^[The note.]` | one paragraph per footnote |
 | a bullet list | `- item` | |
 | a numbered list | `3. item` | keeps its starting number |
-| a loose list | a blank line between items | spaced like paragraphs. With no blank lines, the list is tight |
+| a loose list | a blank line between items | spaced like paragraphs. With no blank lines, the list is tight. A tight list cannot hold an item whose blocks need a blank line between them (a second paragraph, a quote, a div, a table): Plass saves such a list loose, with a warning |
 | a quote | `> text`, with a bare `>` line between paragraphs | |
 | a code listing | ```` ```python ```` … ```` ``` ```` | printed as a monospace block |
 | a horizontal rule | `---`, with a blank line above and below it | without them, pandoc can read `---` as the start of a metadata block and drop the text up to the next `---` |
@@ -358,7 +358,13 @@ Text with an icon ![arrow](figures/arrow.svg){width=4%} in it.
   labels it, so you can reference it as `@fig:sd`.
 - An image on its own line with no caption and no label is a plain image,
   not numbered. With a label and no caption, `![](f.svg){#fig:x}`, it is
-  a numbered figure with an empty caption (see Pitfalls).
+  a numbered figure with an empty caption (see Pitfalls). A figure with
+  neither is saved with a made-up label, `{#fig:figure-1}`, so that it
+  stays a figure; Plass warns when it does.
+- An image on its own line with alt text and a nonbreaking space (U+00A0)
+  after it is a plain image that keeps its alt text, not a figure: that is
+  pandoc's way to say so, and how Plass writes one. The space itself is not
+  kept.
 - An image with text around it sits inline, in the text.
 - `width` is a percent of the text width, or of the cell's width.
 - `![Caption](src "title")` adds an optional title.
@@ -413,7 +419,10 @@ A comment can also sit inside a block: a solution, a column, a list item, a
 quote, a table cell or a footnote, or in the middle of a paragraph. It is
 still kept and never printed. But on the first save it moves out of that
 block, to just before the block if it came before the block's text, and
-otherwise to just after it.
+otherwise to just after it. Inside an HTML element that Plass keeps as
+source, a comment on lines of its own moves out after the element, whose
+first line prints; a `<div>` counts as a div, so there a comment that
+comes before any of its text moves before it.
 
 ## Kept, not rendered
 
@@ -462,9 +471,12 @@ never deletes it.
     `::: {.solution color=red}`, the attribute is dropped with a warning.
 12. Put adjacent citations in one bracket: `[@a; @b]`. Pandoc reads
     `[@a][@b]` as an in-text citation of `a` inside literal brackets,
-    followed by a bracketed citation of `b`.
+    followed by a bracketed citation of `b`. A cross-reference next to a
+    citation goes in the same bracket: `[@eq:demand; @smith2020]`.
 13. Plass cites only the key. In `[see @smith2020, p. 3]`, "see" and
-    ", p. 3" stay as ordinary text next to the citation.
+    ", p. 3" stay as ordinary text next to the citation, and Plass warns
+    once ("citation prefix/suffix kept as text"). So do `-@smith2020` and
+    `@smith2020 [p. 3]`.
 14. Each line of display math prints as its own row (see Math). Do not end
     the lines with `\\`; either write plain lines, or write the whole
     `\begin{aligned} … \end{aligned}` yourself.
@@ -475,6 +487,9 @@ never deletes it.
     it, each `.columns` div is a grid of its own (see Divs).
 17. The Typst export is exact on typst 0.14.2 when it is compiled with
     Plass's fonts (see below).
+18. In a list item, put a blank line before a pipe table. Pandoc reads
+    table lines directly under the item's text as more text, so Plass saves
+    the blank line, which makes the list loose (see the loose list above).
 
 ## What the first save rewrites
 
@@ -495,8 +510,9 @@ keep, it drops with a warning (see Pitfalls 10, 11 and 15).
   comment. `\pagebreak` becomes `\newpage`. `::: {.solution}` becomes
   `::: solution`. A `: Caption` line moves into the table div's `caption=`.
   Each grid row is its own `.columns` div, and every row after the first
-  carries `.continued`. Column widths are written as percents, or left out
-  when the columns are equal.
+  carries `.continued`. Column widths are written as percents (to three
+  decimals, or more where three would read back as other widths), or left
+  out when the columns are equal.
 - **Front matter.** Keys are written in the order shown above, with unknown
   keys after them. Default values are dropped. An `author` list becomes one
   string. `bibliography:` becomes an embedded ```` ```{=bibtex} ```` block.
@@ -506,7 +522,9 @@ keep, it drops with a warning (see Pitfalls 10, 11 and 15).
   out of them.
 - **Escapes.** A backslash is added in front of any character that would
   change the meaning of the text, such as `\@`, `\~`, `\^`, `\$`, `\*` or
-  `\_`. `\ ` becomes a literal nonbreaking space.
+  `\_`. `\ ` becomes a literal nonbreaking space. A digit directly after a
+  formula is written as a character reference (`$x$&#50;`), since `$x$2`
+  is not a formula to pandoc.
 
 ## The Typst export
 

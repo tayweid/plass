@@ -44,6 +44,28 @@ function longestRun(text: string, ch: string): number {
  *  zeros. */
 const num = (n: number) => String(Math.round(n * 1000) / 1000);
 
+/** Grid shares as the reader holds them: each over the smallest, to three
+ *  decimals (md-parser's `canonicalShares`). */
+const canonical = (shares: number[]) => {
+  const min = Math.min(...shares);
+  return shares.map((s) => Math.round((s / min) * 1000) / 1000);
+};
+
+/** Each share's percent of the row, to three decimals or, when three would
+ *  read back as other shares (`1:12` is 7.692%/92.308%, which reads as
+ *  `[1, 12.001]`), to as many as it takes; `Nfr` (read exactly) if none
+ *  does. */
+function percents(shares: number[]): string[] {
+  const want = canonical(shares).join();
+  const total = shares.reduce((a, b) => a + b, 0);
+  for (let digits = 3; digits <= 12; digits++) {
+    const scale = 10 ** digits;
+    const written = shares.map((s) => String(Math.round((s / total) * 100 * scale) / scale));
+    if (written.every((w) => Number(w) > 0) && canonical(written.map(Number)).join() === want) return written.map((w) => `${w}%`);
+  }
+  return canonical(shares).map((s) => `${s}fr`);
+}
+
 /** Serialize to Markdown. `offsets`, when given, receives the text offset
  *  at which each top-level block's serialization begins (index = position
  *  of the block in `doc`); blocks that produce no Markdown of their own
@@ -151,8 +173,17 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     /** The last character written (reading `md` itself would flatten the
      *  growing string on every call). */
     let last = '';
+    /** Where the last formula written ends. */
+    let mathEnd = -1;
     const put = (s: string) => {
       if (!s) return;
+      // `^[` opens an inline footnote: a caret that ended the text before
+      // a citation group, a footnote marker or a link is escaped.
+      if (s[0] === '[' && last === '^') {
+        let slashes = 0;
+        while (md[md.length - 2 - slashes] === '\\') slashes++;
+        if (slashes % 2 === 0) md = md.slice(0, -1) + '\\^';
+      }
       md += s;
       last = s[s.length - 1];
     };
@@ -228,6 +259,10 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           // attributes; `(`/`[` right after a citation's `]` as a link.
           const tail = last;
           if ((/^[{]/.test(t) && /[`)]$/.test(tail)) || (/^[([]/.test(t) && tail === ']')) t = '\\' + t;
+          // A digit right after a formula's closing `$` would unmake the
+          // formula (pandoc's rule): the digit is written as its character
+          // reference, which reads back as the digit.
+          if (md.length === mathEnd && /^\d/.test(t)) t = `&#${t.charCodeAt(0)};${t.slice(1)}`;
         }
         const link = marks.find((m: Mark) => m.type.name === 'link');
         if (link) {
@@ -243,6 +278,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         case 'math_inline':
           // One line: a formula's soft break reads back as its space.
           put(`$${(child.attrs.src as string).replace(/\s*\n\s*/g, ' ')}$`);
+          mathEnd = md.length;
           break;
         // Pandoc's raw-attribute syntax: standard markdown that other
         // tools understand as "Typst-only", and round-trips here.
@@ -256,18 +292,28 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           }
           break;
         }
-        case 'citation': {
-          const keys = [child.attrs.key as string];
-          while (children[k + 1]?.type.name === 'citation' && marksOf(children[k + 1]).join() === marksOf(child).join()) keys.push(children[++k].attrs.key as string);
-          put(citeGroup(keys));
-          break;
-        }
+        case 'citation':
         case 'eq_ref': {
-          const label = child.attrs.label as string;
-          if (!NAMESPACE.test(label)) warn(`the reference @${label} reads back as a citation — Markdown references are @eq:, @fig:, @sec: and @tbl: labels`);
-          // Bare unless a letter or digit glues it to the text around it.
-          const glued = /[\p{L}\p{N}_]$/u.test(last) || KEY_CONTINUES.test(nextText(k)) || children[k + 1]?.type.name === 'citation';
-          put(glued ? `[@${label}]` : `@${label}`);
+          // A run of adjacent citations and references is one pandoc group
+          // (`[@eq:x][@a]` would be literal brackets to pandoc); the reader
+          // splits it back by the namespace rule.
+          const keyOf = (n: PMNode) => {
+            if (n.type.name === 'citation') return n.attrs.key as string;
+            const label = n.attrs.label as string;
+            if (!NAMESPACE.test(label)) warn(`the reference @${label} reads back as a citation — Markdown references are @eq:, @fig:, @sec: and @tbl: labels`);
+            return label;
+          };
+          const keys = [keyOf(child)];
+          const ref = (n: PMNode | undefined) => n?.type.name === 'citation' || n?.type.name === 'eq_ref';
+          while (ref(children[k + 1]) && marksOf(children[k + 1]).join() === marksOf(child).join()) keys.push(keyOf(children[++k]));
+          if (keys.length > 1 || child.type.name === 'citation') {
+            put(citeGroup(keys));
+            break;
+          }
+          // A lone reference is bare unless a letter or digit glues it to
+          // the text around it.
+          const glued = /[\p{L}\p{N}_]$/u.test(last) || KEY_CONTINUES.test(nextText(k)) || ref(children[k + 1]);
+          put(glued ? `[@${keys[0]}]` : `@${keys[0]}`);
           break;
         }
         case 'hard_break':
@@ -285,7 +331,10 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         }
         case 'footnote': {
           const n = footnotes.length + 1;
-          footnotes.push(inline(child));
+          // The note's text starts a line of its own, `[^n]: …`: what
+          // would read there as a list, quote or heading is escaped, and
+          // leading spaces (code, or dropped) go.
+          footnotes.push(escLines(inline(child).replace(/^[ \t]+/, '')));
           put(`[^${n}]`);
           break;
         }
@@ -321,18 +370,35 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
   const div = (depth: number, attrs: string, body: string) =>
     body ? `${fence(depth)} ${attrs}\n\n${body}\n\n${fence(depth)}` : `${fence(depth)} ${attrs}\n\n${fence(depth)}`;
 
-  /** Whether `next` may follow the block before it on the next line inside
-   *  a tight list item: a blank line between an item's blocks makes the
-   *  whole list loose, so what may interrupt a paragraph follows directly —
-   *  a sublist (an ordered one only from 1), a fenced listing, a bare pipe
-   *  table — and display math, which the reader splits out of the
-   *  paragraph it continues. */
-  const tightAfter = (next: PMNode) =>
-    next.type.name === 'bullet_list' ||
-    (next.type.name === 'ordered_list' && ((next.attrs.order as number) || 1) === 1) ||
-    (next.type.name === 'code_block' && next.attrs.params !== 'md-raw') ||
-    (next.type.name === 'table' && !tableDivAttrs(next)) ||
-    next.type.name === 'math_display';
+  /** Whether `next` may follow `prev` on the next line inside a tight list
+   *  item: a blank line between an item's blocks makes the whole list
+   *  loose, so what may interrupt a paragraph, for markdown-it and pandoc
+   *  alike, follows a plain paragraph directly — a sublist (an ordered one
+   *  only from 1), a fenced listing — and display math, which the reader
+   *  splits out of the paragraph it is in, so the paragraph it splits off
+   *  follows the formula directly too. (A pipe table may not: pandoc reads
+   *  its lines as the paragraph's text.) */
+  const plainParagraph = (n: PMNode) => n.type.name === 'paragraph' && !n.attrs.align && !n.attrs.keep;
+  const tightAfter = (prev: PMNode, next: PMNode) =>
+    (plainParagraph(prev) || prev.type.name === 'math_display') &&
+    (next.type.name === 'bullet_list' ||
+      (next.type.name === 'ordered_list' && ((next.attrs.order as number) || 1) === 1) ||
+      (next.type.name === 'code_block' && next.attrs.params !== 'md-raw') ||
+      next.type.name === 'math_display' ||
+      (prev.type.name === 'math_display' && plainParagraph(next)));
+
+  /** A block that writes nothing (an empty paragraph). */
+  const silent = (n: PMNode) => n.type.name === 'paragraph' && n.childCount === 0;
+
+  /** Whether a list item's blocks need a blank line between them, which
+   *  makes its whole list loose. */
+  const needsBlank = (item: PMNode): boolean => {
+    const kids: PMNode[] = [];
+    item.forEach((c) => {
+      if (!silent(c)) kids.push(c);
+    });
+    return kids.some((c, k) => k > 0 && !tightAfter(kids[k - 1], c));
+  };
 
   /** Blocks in a container, joined by a blank line (in a tight list item,
    *  by a line break where Markdown allows); a paragraph next to a table
@@ -341,11 +407,13 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     let md = '';
     const kids: PMNode[] = [];
     parent.forEach((c) => kids.push(c));
+    let prev: PMNode | null = null;
     kids.forEach((child, k) => {
       const nearTable = kids[k - 1]?.type.name === 'table' || kids[k + 1]?.type.name === 'table';
       const text = block(child, nearTable);
-      const plainBefore = kids[k - 1]?.type.name === 'paragraph' && !kids[k - 1].attrs.align && !kids[k - 1].attrs.keep;
-      if (text) md += (md ? (tight && plainBefore && tightAfter(child) ? '\n' : '\n\n') : '') + text;
+      if (!text) return;
+      md += (md ? (tight && prev && tightAfter(prev, child) ? '\n' : '\n\n') : '') + text;
+      prev = child;
     });
     return md;
   };
@@ -359,13 +427,19 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
   const block = (node: PMNode, nearTable = false): string => {
     switch (node.type.name) {
       case 'paragraph': {
-        let text = escLines(inline(node));
+        // Spaces at a paragraph's edges never print, and Markdown drops
+        // them on read (four leading ones would make it code).
+        let text = escLines(inline(node).replace(/^[ \t]+|[ \t]+$/g, ''));
         if (!text) return '';
         if (nearTable) text = text.replace(/^:/, '\\:').replace(/^([Tt]able):/, '$1\\:');
         // A lone image with a caption is a figure to pandoc; the no-break
-        // space after it keeps it an image in its paragraph.
-        const only = node.childCount === 1 ? node.firstChild : null;
-        if (only?.type.name === 'image' && only.attrs.alt) text += '\u00a0';
+        // space after it keeps it an image in its paragraph (the reader
+        // drops that space again). Spaces beside it do not count.
+        const solid: PMNode[] = [];
+        node.forEach((c) => {
+          if (!(c.isText && /^[ \t\n]*$/.test(c.text ?? ''))) solid.push(c);
+        });
+        if (solid.length === 1 && solid[0].type.name === 'image' && solid[0].attrs.alt) text += '\u00a0';
         const classes = [...(node.attrs.keep ? ['keep'] : []), ...(node.attrs.align === 'center' || node.attrs.align === 'right' ? [node.attrs.align as string] : [])];
         if (node.attrs.align && node.attrs.align !== 'center' && node.attrs.align !== 'right') warn(`paragraph alignment "${node.attrs.align as string}" has no Markdown form — dropped`);
         return classes.length ? div(divDepth(node), writeFenceAttrs({ id: '', classes, kvs: [] }), text) : text;
@@ -412,16 +486,24 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       case 'ordered_list': {
         const ordered = node.type.name === 'ordered_list';
         const start = (node.attrs.order as number) || 1;
+        // An item whose blocks Markdown must set apart with a blank line (a
+        // second paragraph, a quote, a div, a table) makes the list loose:
+        // a tight list cannot hold it.
+        let tight = node.attrs.tight !== false;
+        if (tight && node.content.content.some(needsBlank)) {
+          tight = false;
+          warn('a tight list whose item has blocks Markdown must set apart with a blank line (a second paragraph, a quote, a div, a table) is saved loose — its items take paragraph spacing');
+        }
         const items: string[] = [];
         node.forEach((item, _o, i) => {
           const marker = ordered ? `${start + i}. ` : '- ';
           const hang = ' '.repeat(marker.length);
           // Every line after the first hangs under the marker; the blank
           // line between an item's blocks stays blank.
-          items.push(marker + blocks(item, node.attrs.tight !== false).replace(/\n(?!\n)/g, `\n${hang}`));
+          items.push(marker + blocks(item, tight).replace(/\n(?!\n)/g, `\n${hang}`));
         });
         // A loose list keeps the blank lines between its items.
-        return items.join(node.attrs.tight === false ? '\n\n' : '\n');
+        return items.join(tight ? '\n' : '\n\n');
       }
       case 'figure': {
         const src = node.attrs.src as string;
@@ -429,7 +511,11 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         const caption = inline(node, true);
         // An image with no caption and no label is not a figure to pandoc;
         // a label (made up when there is none) keeps it one.
-        const label = (node.attrs.label as string) || (caption ? '' : freshLabel());
+        let label = node.attrs.label as string;
+        if (!label && !caption) {
+          label = freshLabel();
+          warn('a figure with no caption and no label is saved with a made-up label (fig:figure-N) so that it stays a figure');
+        }
         const kvs: Array<[string, string]> = node.attrs.widthPct != null ? [['width', `${num(node.attrs.widthPct as number)}%`]] : [];
         const attrs = label || kvs.length ? writeAttrBlock({ id: label, classes: [], kvs }) : '';
         const title = node.attrs.title as string;
@@ -447,15 +533,14 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         // One `.columns` div per row; rows after the first `.continued`.
         // Equal shares write no width; others their percent of the row.
         const shares = node.attrs.columns as number[];
-        const total = shares.reduce((a, b) => a + b, 0);
         const equal = shares.every((s) => s === shares[0]);
+        const widths = equal ? [] : percents(shares);
         const depth = divDepth(node);
         const rows: string[] = [];
         node.forEach((row, _o, r) => {
           const cells: string[] = [];
           row.forEach((cell, _c, c) => {
-            const share = shares[c] ?? shares[shares.length - 1] ?? 1;
-            const kvs: Array<[string, string]> = equal ? [] : [['width', `${num((share / total) * 100)}%`]];
+            const kvs: Array<[string, string]> = equal ? [] : [['width', widths[c] ?? widths[widths.length - 1]]];
             cells.push(div(depth - 1, writeFenceAttrs({ id: '', classes: ['column'], kvs }), blocks(cell)));
           });
           const head = writeAttrBlock({ id: '', classes: r ? ['columns', 'continued'] : ['columns'], kvs: [['gutter', `${num(node.attrs.gutter as number)}em`]] });
