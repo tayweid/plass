@@ -354,6 +354,24 @@ function prepass(src: string, warn: (m: string) => void): Pre {
       return -1;
     };
 
+    /** Whether only white space and comments follow `at`. The stretch of
+     *  them a look found is remembered: a later comment that ends inside
+     *  it has the same answer, so a paragraph of many comments is read in
+     *  one pass. */
+    let seen = { from: -1, to: -1, only: false };
+    const onlyCommentsAfter = (at: number): boolean => {
+      if (at >= seen.from && at <= seen.to) return seen.only;
+      let k = at;
+      for (;;) {
+        while (k < text.length && /\s/.test(text[k])) k++;
+        const close = text.startsWith('<!--', k) ? text.indexOf('-->', k + 4) : -1;
+        if (close < 0) break;
+        k = close + 3;
+      }
+      seen = { from: at, to: k, only: k >= text.length };
+      return seen.only;
+    };
+
     /** Display math opening at `i`: everything up to the next `$$`. */
     const displayMath = (i: number): number => {
       const close = text.indexOf('$$', i + 2);
@@ -460,7 +478,7 @@ function prepass(src: string, warn: (m: string) => void): Pre {
           sentinel({
             k: 'comment',
             text: readMdComment(dedentMath(orig, lineAt(i), depth)) ?? '',
-            trailing: !text.slice(end + 3).replace(/<!--[\s\S]*?-->/g, '').trim(),
+            trailing: onlyCommentsAfter(end + 3),
             orig,
           });
           i = end + 3;
@@ -2052,7 +2070,33 @@ export function mdToDoc(src: string): MdImport {
   // warning; one printed links use is written into them.
   {
     const carried = new Map<PMNode, string[]>();
-    const inIsland = (from: number, to: number) => islands.some((x) => from >= x.range[0] && to <= x.range[1]);
+    // The islands by where they start (they never overlap), and the first
+    // island to use each footnote and link label: a definition is looked
+    // up, not searched for, so many islands and definitions read in
+    // linear time.
+    const byStart = [...islands].sort((a, b) => a.range[0] - b.range[0]);
+    const inIsland = (from: number, to: number) => {
+      let lo = 0;
+      let hi = byStart.length - 1;
+      let hit = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (byStart[mid].range[0] <= from) {
+          hit = mid;
+          lo = mid + 1;
+        } else hi = mid - 1;
+      }
+      return hit >= 0 && to <= byStart[hit].range[1];
+    };
+    const normalize = md.utils.normalizeReference;
+    const labelsIn = (text: string) => [...text.matchAll(/\[((?:[^[\]\\]|\\.)+)\]/g)].map((m) => normalize(m[1]));
+    const noteUser = new Map<string, PMNode>();
+    const linkUser = new Map<string, PMNode>();
+    for (const { node } of islands) {
+      const text = node.textContent;
+      for (const m of text.matchAll(/\[\^([^\]\s]+)\](?!:)/g)) if (!noteUser.has(m[1])) noteUser.set(m[1], node);
+      if (linkDefs.length) for (const label of labelsIn(text)) if (!linkUser.has(label)) linkUser.set(label, node);
+    }
     const defText = (from: number, to: number) => {
       const prefix = /^(?:[ \t]*>[ \t]?)*[ \t]*/.exec(lines[from])![0];
       return lines
@@ -2061,9 +2105,8 @@ export function mdToDoc(src: string): MdImport {
         .join('\n')
         .replace(/\s+$/, '');
     };
-    const carry = (uses: (text: string) => boolean, from: number, to: number) => {
-      const user = islands.find((x) => uses(x.node.textContent));
-      if (user) carried.set(user.node, [...(carried.get(user.node) ?? []), defText(from, to)]);
+    const carry = (user: PMNode | undefined, from: number, to: number) => {
+      if (user) carried.set(user, [...(carried.get(user) ?? []), defText(from, to)]);
       return !!user;
     };
     const dropped: string[] = [];
@@ -2077,13 +2120,10 @@ export function mdToDoc(src: string): MdImport {
       if (!lines[from].includes(`[^${label}]:`)) from = origLine[a];
       const to = origLine[b] ?? lines.length;
       if (inIsland(from, to)) continue;
-      const marker = `[^${label}]`;
-      if (carry((text) => text.split(marker).slice(1).some((after) => !after.startsWith(':')), from, to)) kept++;
-      else dropped.push(marker);
+      if (carry(noteUser.get(label), from, to)) kept++;
+      else dropped.push(`[^${label}]`);
     }
     if (linkDefs.length) {
-      const normalize = md.utils.normalizeReference;
-      const labelsIn = (text: string) => [...text.matchAll(/\[((?:[^[\]\\]|\\.)+)\]/g)].map((m) => normalize(m[1]));
       const defLines = new Set<number>();
       for (const d of linkDefs) for (let l = origLine[d.map[0]]; l < (origLine[d.map[1]] ?? lines.length); l++) defLines.add(l);
       const used = new Set(lines.flatMap((l, n) => (defLines.has(n) ? [] : labelsIn(l))));
@@ -2091,7 +2131,7 @@ export function mdToDoc(src: string): MdImport {
         const from = origLine[d.map[0]];
         const to = origLine[d.map[1]] ?? lines.length;
         if (inIsland(from, to)) continue;
-        if (carry((text) => labelsIn(text).includes(d.label), from, to)) kept++;
+        if (carry(linkUser.get(d.label), from, to)) kept++;
         else if (!used.has(d.label)) dropped.push(/^(?:[ \t]*>)*[ \t]*(\[(?:[^[\]\\]|\\.)+\])/.exec(lines[from])?.[1] ?? lines[from].trim());
       }
     }
