@@ -912,10 +912,10 @@ function emitNode(node: YNode, anchors: Set<string>): string {
       out = '';
       break;
     case 'scalar':
-      out =
-        node.plain && !node.value.includes('\n') && !/^[*&!%@`]/.test(node.value) && !UNWRITABLE.test(node.value)
-          ? node.value
-          : scalar(node.value, true);
+      // Plain only when it reads back the same in a flow collection: a
+      // boolean, number or null keeps its type; a string read in block
+      // context may hold `, [ ] { }`, which end a plain value in a flow one.
+      out = node.plain && NOT_A_STRING.test(node.value) ? node.value : scalar(node.value, true);
       break;
     case 'map':
       out = `{${node.entries.map(([k, v]) => `${scalar(k, true)}: ${emitNode(v, anchors)}`.trimEnd()).join(', ')}}`;

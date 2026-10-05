@@ -903,6 +903,25 @@ console.log('booleans:');
   }
 }
 
+// --- 23. a value re-emitted in a flow collection reads back the same ---
+// A kept plass child read in block context and re-emitted on one line (the
+// plass entry carried an anchor or was an alias): `, [ ] { }` are text in a
+// block value but end a plain value in a flow one.
+console.log('flow re-emission:');
+{
+  const anchored = read('plass: &p\n  landscape: true\n  future:\n    k: a, b');
+  check('a block value holding ", " is quoted in the flow form', anchored.extra === "plass:\n  future: {k: 'a, b'}" && anchored.settings.landscape === true, json(anchored));
+  const saved = writeFrontmatter(anchored);
+  const again = readFrontmatter(saved + '\n');
+  check('… and a save reads back the same value', saved === "---\nplass:\n  landscape: true\n  future: {k: 'a, b'}\n---" && again.extra === anchored.extra && writeFrontmatter(again) === saved, saved);
+  const aliased = read('base: &b\n  landscape: true\n  future:\n    k: f(x) [1], {y}\nplass: *b');
+  check('flow indicators in a block value under an aliased plass map are quoted', aliased.extra.endsWith("plass:\n  future: {k: 'f(x) [1], {y}'}") && fixedPoint(aliased), json(aliased.extra));
+  const items = read('base: &b\n  future:\n    - a, b\n    - c\nplass: *b');
+  check('a list item holding ", " stays one item', items.extra.endsWith("plass:\n  future: ['a, b', c]"), json(items.extra));
+  const types = read('plass: &p\n  future:\n    a: yes\n    b: 12\n    c: ~\n    d: off\n    e: "yes"\n    f: plain text');
+  check('a boolean, number or null stays plain (typed); text that spells one is quoted', types.extra === "plass:\n  future: {a: yes, b: 12, c: ~, d: off, e: 'yes', f: plain text}", json(types.extra));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);
