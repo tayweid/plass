@@ -729,6 +729,33 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   }
 }
 
+// A footnote or link definition that only an island uses stays in the file:
+// it moves next to the island, verbatim; Plass's own notes are numbered
+// around the island's labels. One that nothing uses is dropped, with a
+// warning (pandoc prints nothing for it either).
+{
+  const moved = (w: string[]) => w.filter((x) => /definition\(s\) that only content kept as source uses moved next to it/.test(x)).length;
+  const div = trip('::: weird\n\nText[^1].\n\n:::\n\nOutside.\n\n[^1]: The note text.\n');
+  check('a footnote used only in an unknown div keeps its definition', div.md1 === '::: weird\n\nText[^1].\n\n:::\n\n[^1]: The note text.\n\nOutside.\n' && div.converges && moved(div.warnings) === 1, JSON.stringify([div.md1, div.warnings]));
+  const align = trip('::: center\n\nOne[^1].\n\nTwo.\n\n:::\n\n[^1]: The note.\n');
+  check('a footnote in a ::: center kept as source keeps its definition', align.md1 === '::: center\n\nOne[^1].\n\nTwo.\n\n:::\n\n[^1]: The note.\n' && align.converges && moved(align.warnings) === 1, JSON.stringify([align.md1, align.warnings]));
+  const link = trip('::: weird\n\nSee [the site][ref].\n\n:::\n\nText.\n\n[ref]: https://example.org\n');
+  check('a link reference used only in an unknown div keeps its definition', link.md1 === '::: weird\n\nSee [the site][ref].\n\n:::\n\n[ref]: https://example.org\n\nText.\n' && link.converges && moved(link.warnings) === 1, JSON.stringify([link.md1, link.warnings]));
+  const html = trip('<div class="box">\nText[^n] and [x][r].\n</div>\n\n[^n]: Note.\n\n[r]: https://x.org\n');
+  check('definitions an HTML element uses stay with it', html.md1 === '<div class="box">\nText[^n] and [x][r].\n</div>\n\n[^n]: Note.\n\n[r]: https://x.org\n' && html.converges, JSON.stringify(html.md1));
+  const nested = trip('::: solution\n\n::: weird\nText[^n].\n:::\n\n:::\n\n[^n]: Nested.\n');
+  check('an island inside a solution keeps the definition inside the solution', nested.md1 === '::: solution\n\n::: weird\nText[^n].\n:::\n\n[^n]: Nested.\n\n:::\n' && nested.converges, JSON.stringify(nested.md1));
+  const both = trip('::: {.callout-note}\n\nA[^1] and B[^b].\n\n:::\n\nPrinted[^2] and [x][ref].\n\n[^1]: Note a.\n[^b]: Note b.\n[^2]: Note c.\n\n[ref]: https://x.org\n');
+  check('Plass numbers its own notes around an island\'s labels; a printed link is written inline', both.md1 === '::: {.callout-note}\n\nA[^1] and B[^b].\n\n:::\n\n[^1]: Note a.\n\n[^b]: Note b.\n\nPrinted[^2] and [x](https://x.org).\n\n[^2]: Note c.\n' && both.converges && moved(both.warnings) === 1 && both.warnings.length === 1, JSON.stringify([both.md1, both.warnings]));
+  check('the island keeps its notes, the paragraph its own', find(both.doc, (n) => n.type.name === 'footnote')?.textContent === 'Note c.' && both.doc.firstChild!.textContent.endsWith('[^b]: Note b.'), JSON.stringify(both.doc.toJSON()));
+  const inside = trip('::: weird\n\nText[^1].\n\n[^1]: Inside.\n\n:::\n\nAlso[^1].\n');
+  check('a definition inside the island stays there; a printed marker takes the next free label', inside.md1 === '::: weird\n\nText[^1].\n\n[^1]: Inside.\n\n:::\n\nAlso[^2].\n\n[^2]: Inside.\n' && inside.converges && inside.warnings.length === 0, JSON.stringify([inside.md1, inside.warnings]));
+  const unused = trip('Text.\n\n[^1]: Orphan.\n\n[ref]: https://x.org\n');
+  check('definitions nothing uses are dropped, with a warning naming them', unused.md1 === 'Text.\n' && unused.converges && JSON.stringify(unused.warnings) === JSON.stringify(['[^1], [ref]: defined but used nowhere, so never printed — dropped']), JSON.stringify(unused.warnings));
+  const usedLink = mdToDoc('A [link][r] here.\n\n[r]: https://x.org\n');
+  check('a link definition printed text uses is written into the link, silently', usedLink.warnings.length === 0 && docToMd(usedLink.doc) === 'A [link](https://x.org) here.\n', docToMd(usedLink.doc));
+}
+
 // Page breaks, raw Typst, bibliography at its position, nbsp, headings.
 {
   const pb = trip('One.\n\n\\pagebreak\n\nTwo.\n');

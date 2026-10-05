@@ -74,7 +74,8 @@ function percents(shares: number[]): string[] {
  *  (SOURCE-VIEW.md, decision 5). */
 export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offsets?: number[]): string {
   let out: string[] = [];
-  const footnotes: string[] = [];
+  /** Plass's notes, label and text, written after the body. */
+  const footnotes: Array<[string, string]> = [];
 
   // ---------- frontmatter ----------
   {
@@ -106,6 +107,21 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     while (labels.has(`fig:figure-${k}`)) k++;
     labels.add(`fig:figure-${k}`);
     return `fig:figure-${k}`;
+  };
+
+  // Footnote labels that content kept as source (an island) uses: Plass's
+  // own notes are numbered around them, so a kept `[^1]` never meets
+  // another note's definition.
+  const islandNotes = new Set<string>();
+  doc.descendants((n) => {
+    if (n.type.name === 'code_block' && n.attrs.params === 'md-raw') for (const m of n.textContent.matchAll(/\[\^([^\]\s]+)\]/g)) islandNotes.add(m[1]);
+    return !n.isTextblock;
+  });
+  let noteNo = 0;
+  const nextNote = () => {
+    do noteNo++;
+    while (islandNotes.has(String(noteNo)));
+    return String(noteNo);
   };
 
   const esc = (text: string): string =>
@@ -330,11 +346,11 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           break;
         }
         case 'footnote': {
-          const n = footnotes.length + 1;
+          const n = nextNote();
           // The note's text starts a line of its own, `[^n]: …`: what
           // would read there as a list, quote or heading is escaped, and
           // leading spaces (code, or dropped) go.
-          footnotes.push(escLines(inline(child).replace(/^[ \t]+/, '')));
+          footnotes.push([n, escLines(inline(child).replace(/^[ \t]+/, ''))]);
           put(`[^${n}]`);
           break;
         }
@@ -610,7 +626,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
   out = [body];
 
   if (footnotes.length) {
-    out.push(footnotes.map((f, i) => `[^${i + 1}]: ${f}`).join('\n'));
+    out.push(footnotes.map(([n, f]) => `[^${n}]: ${f}`).join('\n'));
   }
 
   // A bibliography with no node of its own (the node was deleted) still

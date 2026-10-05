@@ -440,7 +440,9 @@ is an ordinary code listing.
 The same goes for anything else Plass has no form for: an unknown div class
 (`::: {.callout-note}`), an HTML block (`<div>`, `<aside>`), or inline HTML.
 Plass keeps it verbatim and prints it as code, with a tag in the margin. It
-never deletes it.
+never deletes it. A footnote or link definition (`[^1]: …`, `[site]: …`)
+that only such content uses is kept too: it moves to just after that
+content.
 
 ## Pitfalls
 
@@ -505,7 +507,10 @@ keep, it drops with a warning (see Pitfalls 10, 11 and 15).
   becomes `*em*`, and `__strong__` becomes `**strong**`. Bullets become `-`,
   numbered items are renumbered 1., 2., 3., … from the list's start
   number, and indents are made consistent. Footnotes become `[^1]`,
-  `[^2]`, … with their notes at the end, including inline `^[…]` notes.
+  `[^2]`, … with their notes at the end, including inline `^[…]` notes
+  (a label that content kept as source uses is skipped). Reference links
+  become inline links. A footnote or link definition that nothing uses is
+  dropped, with a warning.
 - **Blocks.** A blank line is added around every `:::` line and every
   comment. `\pagebreak` becomes `\newpage`. `::: {.solution}` becomes
   `::: solution`. A `: Caption` line moves into the table div's `caption=`.

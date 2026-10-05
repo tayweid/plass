@@ -39,7 +39,7 @@
 
 import MarkdownIt from 'markdown-it';
 import footnotePlugin from 'markdown-it-footnote';
-import type { Node as PMNode, Mark } from 'prosemirror-model';
+import { Fragment, type Node as PMNode, type Mark } from 'prosemirror-model';
 import { schema } from './schema';
 import { readMdComment, readMdComments } from './editor-comments-format';
 import { DEFAULT_SETTINGS, type DocSettings } from './settings';
@@ -743,6 +743,27 @@ export function mdToDoc(src: string): MdImport {
     const text = restoreLink(url);
     return /^data:/i.test(text) ? text : normalizeLink(text);
   };
+  // Where definitions stand: markdown-it moves a footnote's to the end of
+  // the stream and drops a link reference's, so one that only kept-as-
+  // source content uses would vanish from the file on save (below).
+  const noteDefs = new Map<string, [number, number]>();
+  const linkDefs: Array<{ label: string; map: [number, number] }> = [];
+  md.core.ruler.before('footnote_tail', 'plass_note_defs', (state) => {
+    let label: string | null = null;
+    let range: [number, number] = [Infinity, -1];
+    for (const t of state.tokens as unknown as MdToken[]) {
+      if (t.type === 'footnote_reference_open') {
+        label = (t.meta as { label: string }).label;
+        range = [Infinity, -1];
+      } else if (t.type === 'footnote_reference_close') {
+        if (label !== null && range[1] >= 0) noteDefs.set(label, range);
+        label = null;
+      } else if (label !== null && t.map) range = [Math.min(range[0], t.map[0]), Math.max(range[1], t.map[1])];
+    }
+  });
+  md.core.ruler.before('strip_references', 'plass_link_defs', (state) => {
+    for (const t of state.tokens as unknown as MdToken[]) if (t.type === 'reference_definition' && t.map) linkDefs.push({ label: (t.meta as { label: string }).label, map: t.map });
+  });
   const tokens = md.parse(pre.text, {}) as unknown as MdToken[];
 
   const { paragraph, heading, blockquote, code_block, horizontal_rule } = schema.nodes;
@@ -773,6 +794,14 @@ export function mdToDoc(src: string): MdImport {
   /** Whether the paragraph being read is a top-level one (its trailing
    *  comments stay where they are). */
   let topParagraph = false;
+  /** Footnote labels whose marker is printed content's (not an island's). */
+  const printedNotes: string[] = [];
+  /** The islands made, with the source lines each keeps. */
+  const islands: Array<{ node: PMNode; range: [number, number] }> = [];
+  const keepIsland = (node: PMNode, map: [number, number] | null): PMNode => {
+    if (!quiet) islands.push({ node, range: mapLines(map) });
+    return node;
+  };
   /** The cut a comment block leaves: its lines, or, when the pre-pass split
    *  text off its closing line, the comment itself on those lines. */
   const blockCut = (t: MdToken): Cut =>
@@ -1076,6 +1105,8 @@ export function mdToDoc(src: string): MdImport {
           break;
         }
         case 'footnote_ref': {
+          const label = (t.meta as { label?: string } | null)?.label;
+          if (label !== undefined && !quiet) printedNotes.push(label);
           const body = footnoteBody((t.meta as { id?: number } | null)?.id ?? -1);
           const nodes = out.filter(isNode);
           const lastText = nodes[nodes.length - 1];
@@ -1417,7 +1448,7 @@ export function mdToDoc(src: string): MdImport {
       parseSeq(i + 1, 'div_close', false);
       quiet--;
       H.seen = true;
-      return { nodes: [code_block.create({ params: 'md-raw' }, textNode(islandSource(t.map ?? [0, 0], cuts.slice(mark))))], next };
+      return { nodes: [keepIsland(code_block.create({ params: 'md-raw' }, textNode(islandSource(t.map ?? [0, 0], cuts.slice(mark)))), t.map)], next };
     };
 
     if (rail === 'solution') {
@@ -1528,14 +1559,18 @@ export function mdToDoc(src: string): MdImport {
     }
 
     if (rail && ALIGN_RAILS.includes(rail)) {
-      const mark = { warnings: warnings.length, cuts: cuts.length };
+      const mark = { warnings: warnings.length, cuts: cuts.length, notes: printedNotes.length, islands: islands.length };
       const inner = parseSeq(i + 1, 'div_close', false);
       const only = inner.nodes.filter((n) => n.type !== schema.nodes.editor_comment);
       if (only.length !== 1 || only[0].type !== paragraph) {
+        // What was read is dropped for the island: its warnings, its notes
+        // and islands with it.
         warnings.length = mark.warnings;
+        printedNotes.length = mark.notes;
+        islands.length = mark.islands;
         H.seen = true;
         warn(`"${opener}" (${where}) holds something other than one paragraph — kept as source`);
-        return { nodes: [code_block.create({ params: 'md-raw' }, textNode(islandSource(t.map ?? [0, 0], cuts.slice(mark.cuts))))], next };
+        return { nodes: [keepIsland(code_block.create({ params: 'md-raw' }, textNode(islandSource(t.map ?? [0, 0], cuts.slice(mark.cuts)))), t.map)], next };
       }
       dropExtra(ALIGN_RAILS, []);
       const aligns = classes.filter((c) => c === 'center' || c === 'right');
@@ -1714,7 +1749,7 @@ export function mdToDoc(src: string): MdImport {
           const behind = !!t.map && !!after && after[0] === t.map[1];
           tight = before && behind ? 'both' : before ? 'before' : behind ? 'after' : '';
         }
-        return { nodes: [code_block.create({ params: 'md-raw', tight }, [schema.text(kept.join('\n'))])], next: i + 1 };
+        return { nodes: [keepIsland(code_block.create({ params: 'md-raw', tight }, [schema.text(kept.join('\n'))]), t.map)], next: i + 1 };
       }
       case 'div_open':
         return parseDiv(i, seq);
@@ -1803,8 +1838,83 @@ export function mdToDoc(src: string): MdImport {
     return { nodes: items, next: i + 1, tight };
   }
 
-  const { nodes: body } = parseSeq(0, null, true);
+  let { nodes: body } = parseSeq(0, null, true);
   if (hoisted) warnings.push(`${hoisted} comment(s) moved out of nested blocks — each is kept, unprinted, beside the block it was in`);
+
+  // ---------- definitions only kept-as-source content uses ----------
+  // A footnote whose only marker is in an island, and a link reference only
+  // an island uses, keep their definitions: appended, verbatim, to the
+  // first island that uses them, so the file still holds them after it (an
+  // island inside a block keeps them inside it too). A definition nothing
+  // uses prints nothing (pandoc's reading too) and is dropped, with a
+  // warning; one printed links use is written into them.
+  {
+    const carried = new Map<PMNode, string[]>();
+    const inIsland = (from: number, to: number) => islands.some((x) => from >= x.range[0] && to <= x.range[1]);
+    const defText = (from: number, to: number) => {
+      const prefix = /^(?:[ \t]*>[ \t]?)*[ \t]*/.exec(lines[from])![0];
+      return lines
+        .slice(from, to)
+        .map((l) => (l.startsWith(prefix) ? l.slice(prefix.length) : l.replace(/^(?:[ \t]*>)+[ \t]?/, '')))
+        .join('\n')
+        .replace(/\s+$/, '');
+    };
+    const carry = (uses: (text: string) => boolean, from: number, to: number) => {
+      const user = islands.find((x) => uses(x.node.textContent));
+      if (user) carried.set(user.node, [...(carried.get(user.node) ?? []), defText(from, to)]);
+      return !!user;
+    };
+    const dropped: string[] = [];
+    let kept = 0;
+    const printed = new Set(printedNotes);
+    for (const [label, [a, b]] of noteDefs) {
+      if (printed.has(label)) continue;
+      // The definition's own line (its text may start on the next one).
+      let from = origLine[a];
+      for (let back = 0; back < 2 && from > 0 && !lines[from].includes(`[^${label}]:`); back++) from--;
+      if (!lines[from].includes(`[^${label}]:`)) from = origLine[a];
+      const to = origLine[b] ?? lines.length;
+      if (inIsland(from, to)) continue;
+      const marker = `[^${label}]`;
+      if (carry((text) => text.split(marker).slice(1).some((after) => !after.startsWith(':')), from, to)) kept++;
+      else dropped.push(marker);
+    }
+    if (linkDefs.length) {
+      const normalize = md.utils.normalizeReference;
+      const labelsIn = (text: string) => [...text.matchAll(/\[((?:[^[\]\\]|\\.)+)\]/g)].map((m) => normalize(m[1]));
+      const defLines = new Set<number>();
+      for (const d of linkDefs) for (let l = origLine[d.map[0]]; l < (origLine[d.map[1]] ?? lines.length); l++) defLines.add(l);
+      const used = new Set(lines.flatMap((l, n) => (defLines.has(n) ? [] : labelsIn(l))));
+      for (const d of linkDefs) {
+        const from = origLine[d.map[0]];
+        const to = origLine[d.map[1]] ?? lines.length;
+        if (inIsland(from, to)) continue;
+        if (carry((text) => labelsIn(text).includes(d.label), from, to)) kept++;
+        else if (!used.has(d.label)) dropped.push(/^(?:[ \t]*>)*[ \t]*(\[(?:[^[\]\\]|\\.)+\])/.exec(lines[from])?.[1] ?? lines[from].trim());
+      }
+    }
+    if (kept) warnings.push(`${kept} footnote or link definition(s) that only content kept as source uses moved next to it`);
+    if (dropped.length) warnings.push(`${dropped.join(', ')}: defined but used nowhere, so never printed — dropped`);
+    const rebuild = (node: PMNode): PMNode => {
+      const defs = carried.get(node);
+      if (defs) {
+        // The definitions follow the island, so it can no longer sit
+        // directly against the block after it.
+        const tight = node.attrs.tight === 'both' ? 'before' : node.attrs.tight === 'after' ? '' : node.attrs.tight;
+        return node.type.create({ ...node.attrs, tight }, schema.text([node.textContent, ...defs].filter(Boolean).join('\n\n')));
+      }
+      if (node.isLeaf || node.isTextblock) return node;
+      let changed = false;
+      const kids: PMNode[] = [];
+      node.forEach((k) => {
+        const r = rebuild(k);
+        changed ||= r !== k;
+        kids.push(r);
+      });
+      return changed ? node.copy(Fragment.from(kids)) : node;
+    };
+    if (carried.size) body = body.map(rebuild);
+  }
 
   const front: PMNode[] = [];
   if (title) front.push(schema.nodes.doc_title.create(null, [schema.text(title)]));
