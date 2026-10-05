@@ -77,6 +77,28 @@ function percents(shares: number[]): string[] {
   return canonical(shares).map((s) => `${s}fr`);
 }
 
+/** An ordered-list marker at the head of a line, by pandoc's fancy_lists
+ *  and example_lists: a number, a letter, a roman numeral, `#` or an
+ *  example `@`, closed by `.` or `)` or wrapped in parentheses, then a
+ *  space, a tab or the line's end. */
+const LIST_MARK = /^([ \t]*)(\(?)(\d{1,9}|[a-zA-Z]|[ivxlcdm]+|[IVXLCDM]+|#|@)([.)])([ \t]*)/;
+
+/** A line whose head pandoc would read as an ordered-list marker, with its
+ *  delimiter escaped (`a\)`, `(iv\)`). One capital letter and a period
+ *  open a list only before two spaces, a tab or the line's end, so
+ *  `B. Russell` stays as written. */
+function escMarker(line: string): string {
+  const m = LIST_MARK.exec(line);
+  if (!m) return line;
+  const [all, lead, paren, mark, delim, gap] = m;
+  if (paren && delim !== ')') return line;
+  const ends = all.length === line.length;
+  if (!ends && !gap) return line;
+  if (!paren && delim === '.' && /^[A-Z]$/.test(mark) && !ends && gap.length < 2 && !gap.includes('\t')) return line;
+  const at = lead.length + paren.length + mark.length;
+  return line.slice(0, at) + '\\' + line.slice(at);
+}
+
 /** Serialize to Markdown. `offsets`, when given, receives the text offset
  *  at which each top-level block's serialization begins (index = position
  *  of the block in `doc`); blocks that produce no Markdown of their own
@@ -166,20 +188,23 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       .replace(/(?<!\\)_(?=\s|$)/g, '\\_');
 
   /** Escape what would start a block at the head of a line of paragraph
-   *  text: a heading, a quote, a list item, a div fence, a code fence, a
-   *  setext underline or rule, a reference definition. */
+   *  text: a heading, a quote, a list item (pandoc's fancy and example
+   *  markers too), a div fence, a code fence, a setext underline or rule,
+   *  a reference definition, a line block, a definition. */
   const escLines = (md: string): string =>
     md
       .split('\n')
       .map((line) =>
-        line
-          .replace(/^([ \t]*)([#>])/, '$1\\$2')
-          .replace(/^([ \t]*)([-+])(?=[ \t]|$)/, '$1\\$2')
-          .replace(/^([ \t]*)(\d{1,9})([.)])(?=[ \t]|$)/, '$1$2\\$3')
-          .replace(/^([ \t]*)(:{3,})/, '$1\\$2')
-          .replace(/^([ \t]*)(=+[ \t]*)$/, '$1\\$2')
-          .replace(/^([ \t]*)(-[- \t]*)$/, '$1\\$2')
-          .replace(/^(\[[^\]]*\]):/, '$1\\:'),
+        escMarker(
+          line
+            .replace(/^([ \t]*)([#>])/, '$1\\$2')
+            .replace(/^([ \t]*)([-+])(?=[ \t]|$)/, '$1\\$2')
+            .replace(/^([ \t]*)(:{3,})/, '$1\\$2')
+            .replace(/^([ \t]*)(=+[ \t]*)$/, '$1\\$2')
+            .replace(/^([ \t]*)(-[- \t]*)$/, '$1\\$2')
+            .replace(/^(\[[^\]]*\]):/, '$1\\:')
+            .replace(/^([ \t]*)([|:~])(?=[ \t]|$)/, '$1\\$2'),
+        ),
       )
       .join('\n');
 
@@ -653,7 +678,10 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
   doc.forEach((node) => top.push(node));
   top.forEach((node, k) => {
     const nearTable = top[k - 1]?.type.name === 'table' || top[k + 1]?.type.name === 'table';
-    const text = block(node, nearTable);
+    let text = block(node, nearTable);
+    // A `%` that opens the file (no front matter before it) starts pandoc's
+    // title block.
+    if (!out.length && !blockChunks.some((c) => c.text) && node.type.name === 'paragraph') text = text.replace(/^%/, '\\%');
     const island = node.type.name === 'code_block' && node.attrs.params === 'md-raw';
     const tight = island ? (node.attrs.tight as string) : '';
     const tightBefore = tight === 'before' || tight === 'both';

@@ -751,6 +751,53 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('a digit right after a formula is a character reference', out === '$x$&#50; and\n' && JSON.stringify(mdToDoc(out).doc.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(mdToDoc(out).doc) === out, out);
 }
 
+// What pandoc's extensions read as a block at the head of a paragraph is
+// escaped too: fancy and example list markers (`a)`, `iv.`, `(1)`, `(@)`),
+// a line block (`| `), a definition (`: `, `~ `) and, opening the file, a
+// title block (`%`). One capital letter and a period open a list only
+// before two spaces, so `B. Russell` stays bare.
+{
+  const para = (text: string) => schema.nodes.paragraph.create(null, schema.text(text));
+  for (const [text, want] of [
+    ['a) Identify it.', 'a\\) Identify it.'],
+    ['A) Identify it.', 'A\\) Identify it.'],
+    ['a. Identify it.', 'a\\. Identify it.'],
+    ['iv. Intro', 'iv\\. Intro'],
+    ['IV. Intro', 'IV\\. Intro'],
+    ['A.', 'A\\.'],
+    ['(a) x', '(a\\) x'],
+    ['(1) x', '(1\\) x'],
+    ['(#) x', '(#\\) x'],
+    ['(@) x', '(@\\) x'],
+    ['@. x', '@\\. x'],
+    ['| a line', '\\| a line'],
+    [': a fruit', '\\: a fruit'],
+    ['~ a fruit', '\\~ a fruit'],
+    ['B. Russell said', 'B. Russell said'],
+    ['e.g. this', 'e.g. this'],
+    ['1)x and (a.) y', '1)x and (a.) y'],
+  ] as const) {
+    for (const [shape, d, md] of [
+      ['after a paragraph', schema.nodes.doc.create(null, [para('Apples'), para(text)]), `Apples\n\n${want}\n`],
+      ['in a list item', schema.nodes.doc.create(null, schema.nodes.bullet_list.create({ tight: true }, schema.nodes.list_item.create(null, para(text)))), `- ${want}\n`],
+    ] as const) {
+      const out = docToMd(d);
+      check(`"${text}" ${shape} is written ${JSON.stringify(want)} and reads back as written`, out === md && JSON.stringify(mdToDoc(out).doc.toJSON()) === JSON.stringify(d.toJSON()) && docToMd(mdToDoc(out).doc) === out, JSON.stringify(out));
+    }
+  }
+  check(
+    'an escaped fancy marker is a paragraph to pandoc 3.4 (the referee agrees)',
+    referee('a\\) Identify it.\n', pandocDoc('[{"t":"Para","c":[{"t":"Str","c":"a)"},{"t":"Space"},{"t":"Str","c":"Identify"},{"t":"Space"},{"t":"Str","c":"it."}]}]')) < 0 &&
+      referee('Apples\n\n\\: a fruit\n', pandocDoc('[{"t":"Para","c":[{"t":"Str","c":"Apples"}]},{"t":"Para","c":[{"t":"Str","c":":"},{"t":"Space"},{"t":"Str","c":"a"},{"t":"Space"},{"t":"Str","c":"fruit"}]}]')) < 0,
+  );
+  const title = schema.nodes.doc.create(null, [para('% of the class'), para('% again')]);
+  const tm = docToMd(title);
+  check('a % that opens the file is escaped (pandoc\'s title block); later ones stay bare', tm === '\\% of the class\n\n% again\n' && JSON.stringify(mdToDoc(tm).doc.toJSON()) === JSON.stringify(title.toJSON()), JSON.stringify(tm));
+  const note = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.text('a'), schema.nodes.footnote.create(null, schema.text('a) the first'))]));
+  const nm = docToMd(note);
+  check('a footnote starting "a) " reads back as written', nm.includes('[^1]: a\\) the first') && JSON.stringify(mdToDoc(nm).doc.toJSON()) === JSON.stringify(note.toJSON()), nm);
+}
+
 // Figures and images by pandoc's alt rule; SVG data URLs survive.
 {
   const svg = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=';

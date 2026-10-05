@@ -599,7 +599,11 @@ in place.
 Escaping in prose: the writer escapes `@` before a word character,
 `~` and `^` whenever another of the same follows on the line with no
 whitespace between (pandoc's sub/superscript rule), `^` before `[`
-(the inline-footnote opener), plus today's set. Readers decode all of
+(the inline-footnote opener), plus today's set. At the head of a line
+it also escapes what pandoc's extensions read as a block: fancy and
+example list markers (`a\)`, `iv\.`, `(1\)`, `(@\)`; one capital letter
+and a period only before two spaces), a line block's `|`, a definition's
+`:` or `~`, and a `%` that opens the file (the title block). Readers decode all of
 them to the bare character.
 
 Normalizations applied at import and by the edit-time normalizer (not

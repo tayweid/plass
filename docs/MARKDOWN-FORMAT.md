@@ -497,6 +497,13 @@ content.
 18. In a list item, put a blank line before a pipe table. Pandoc reads
     table lines directly under the item's text as more text, so Plass saves
     the blank line, which makes the list loose (see the loose list above).
+19. Pandoc reads a paragraph that starts with `a)`, `A)`, `a.`, `iv.`,
+    `(1)`, `(a)` or `(@)` as a list item, `| text` as a line block, and
+    `: text` or `~ text` after a paragraph as a definition. Plass's lists
+    are bulleted or numbered (`1.`) only: it shows these characters as text
+    and escapes them when it saves (`a\)`, `\|`, `\:`), so pandoc then
+    reads text too. Write the list with `1.` markers if it should stay a
+    list.
 
 ## What the first save rewrites
 
@@ -532,9 +539,12 @@ keep, it drops with a warning (see Pitfalls 10, 11 and 15).
   out of them.
 - **Escapes.** A backslash is added in front of any character that would
   change the meaning of the text, such as `\@`, `\~`, `\^`, `\$`, `\*` or
-  `\_`. `\ ` becomes a literal nonbreaking space. A digit directly after a
-  formula is written as a character reference (`$x$&#50;`), since `$x$2`
-  is not a formula to pandoc.
+  `\_`, and in front of what would start a block at the head of a line:
+  `\#`, `\>`, `\-`, `1\.`, `a\)`, `(i\)`, `\|`, `\:` (see Pitfall 19), and a
+  `%` that opens the file (pandoc's title block). `\ ` becomes a literal
+  nonbreaking space. A digit directly after a formula is written as a
+  character reference (`$x$&#50;`), since `$x$2` is not a formula to
+  pandoc.
 
 ## The Typst export
 
