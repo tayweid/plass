@@ -718,7 +718,7 @@ console.log('anchors and aliases written as they are:');
   let ms = performance.now() - t0;
   check('seven chained anchors under a flow plass: map read and save in milliseconds', ms < 200, `${ms.toFixed(0)} ms`);
   check('… the kept child is the alias, not its 10^7 values', laughs.extra.length < 2 * yaml.length && /\n {2}future: \*g$/.test(laughs.extra), `${laughs.extra.length} bytes`);
-  check('… and saved as the alias', w.includes('\nplass:\n  future: *g\n') && w.length < 2 * yaml.length, w.slice(0, 200));
+  check('… written after its anchor, a fixed point', w === `---\n${defs(7).join('\n')}\nplass:\n  future: *g\n---` && fixedPoint(laughs), w.slice(0, 200));
   const root = `{${defs(8).join(', ')}, z: *h}`;
   t0 = performance.now();
   const flowRoot = read(root);
@@ -772,6 +772,33 @@ console.log('keys named like Object.prototype members:');
     }
     check(`${json(yaml)}: read, warned, nothing set`, !thrown && r !== null && json(r.settings) === '{}' && r.warnings.length === 1 && r.warnings[0].startsWith(want), thrown || json(r?.warnings));
   }
+}
+
+// --- 21. anchors across the plass block ---
+console.log('anchors across the plass block:');
+{
+  // pandoc rejects an alias before its anchor ("Unknown alias"), so a kept
+  // plass child that aliases a kept entry's anchor is written after it.
+  const block = read('base: &b 1\nplass:\n  future: *b');
+  check('a kept plass child aliasing a kept entry: the plass block is written after the anchor', writeFrontmatter(block) === '---\nbase: &b 1\nplass:\n  future: *b\n---' && fixedPoint(block), writeFrontmatter(block));
+  const flow = read('base: &b x\nplass: {landscape: true, future: *b}\nnote: n');
+  check('… with the known plass keys, from a flow map', writeFrontmatter(flow) === '---\nbase: &b x\nplass:\n  landscape: true\n  future: *b\nnote: n\n---' && fixedPoint(flow), writeFrontmatter(flow));
+  check('… and with the known keys when nothing aliases', writeFrontmatter(read('base: &b 1\nplass:\n  future: 2\n  landscape: true')) === '---\nplass:\n  landscape: true\n  future: 2\nbase: &b 1\n---');
+  // An unknown plass child is read for its anchors, as a top-level one is.
+  const later = read('plass:\n  future: &f left\n  header: {align: *f}');
+  check('a known plass child aliasing an unknown one reads its value', later.settings.headerAlign === 'left' && later.warnings.length === 1 && later.extra === 'plass:\n  future: &f left', json(later));
+  check('… and the save keeps both', writeFrontmatter(later) === '---\nplass:\n  header: {align: left}\n  future: &f left\n---' && fixedPoint(later), writeFrontmatter(later));
+  const top = read('plass:\n  future: &f Notes\ntitle: *f');
+  check('a title aliasing an unknown plass child reads its value', top.titleMd === 'Notes' && top.warnings.length === 1, json(top));
+  // A stray line under plass: (a tab is four columns, pandoc rejects the
+  // block) stays a stray through a save: the writer reads kept children at
+  // two spaces, not at their own least indentation.
+  const stray = read('plass:\n\tlandscape: true\n  hyphenate: false');
+  check('a stray plass line is kept, its sibling read', stray.settings.hyphenate === false && stray.settings.landscape === undefined && stray.extra === 'plass:\n    landscape: true' && stray.warnings.length === 1 && /kept as written/.test(stray.warnings[0]), json(stray));
+  const once = writeFrontmatter(stray);
+  const again = readFrontmatter(once + '\n');
+  check('… and written as it was, not as a child', once === '---\nplass:\n    landscape: true\n  hyphenate: false\n---' && again.settings.landscape === undefined && json(again.warnings) === json(stray.warnings), once);
+  check('… a fixed point', writeFrontmatter(again) === once);
 }
 
 declare const process: { exitCode?: number };

@@ -16,13 +16,16 @@
 // unknown keys, `#` comments, an entry that cannot be read — is carried, in
 // order, in `extra` (doc.attrs.frontmatter) and written back after the known
 // keys: an entry as written, a comment as a whole line at the margin of the
-// block it sat in. A comment inside or beside a known key moves out of it,
-// since Plass rewrites that key. title, author, date and abstract come back
-// as RAW Markdown for the body reader to parse; this module never
-// interprets Markdown. The writer emits only non-default settings, in the
-// plan's fixed order, `margin` as a dict, and every scalar in a form that
-// needs no backslash escaping (plain when YAML reads it back as the same
-// string, else single-quoted), so `$\beta$` survives a save.
+// block it sat in. (The `plass:` block is written with the known keys,
+// unless a kept child of it aliases an anchor a kept entry before it
+// defines: then where it was, after that anchor.) A comment inside or
+// beside a known key moves out of it, since Plass rewrites that key.
+// title, author, date and abstract come back as RAW Markdown for the body
+// reader to parse; this module never interprets Markdown. The writer emits
+// only non-default settings, in the plan's fixed order, `margin` as a dict,
+// and every scalar in a form that needs no backslash escaping (plain when
+// YAML reads it back as the same string, else single-quoted), so `$\beta$`
+// survives a save.
 //
 // Where pandoc rejects a file whose intent is plain (an unquoted `: ` or a
 // leading `*` in a title, an unknown `\` escape), the reader takes the
@@ -977,6 +980,10 @@ const KNOWN_PLASS = new Set([
   'page', 'landscape', 'hyphenate', 'number-equations', 'page-numbers', 'header', 'footer', 'footnotes', 'math-macros',
 ]);
 const TEXT_KEYS = new Set(['title', 'author', 'date', 'abstract']);
+/** Where the plass block's children sit: the reader keeps a child there
+ *  (re-indented from wherever the file had it), the writer looks for them
+ *  there, so a stray line kept deeper stays a stray. */
+const PLASS_INDENT = 2;
 
 /** A value of the wrong kind or out of range: warned and left out. */
 class Invalid extends Error {}
@@ -1114,9 +1121,22 @@ interface Acc {
   paperPlass: { page: PaperName; w?: number; h?: number } | null;
   restart: boolean;
   warn: (m: string) => void;
+  /** The block holds a `&`: kept entries are read for their anchors. */
+  hasAnchors: boolean;
   anchors: Map<string, YNode>;
   /** Anchors defined inside known keys, which a save rewrites without them: [where, name]. */
   dropped: Array<[string, string]>;
+}
+
+/** A kept entry (written back as it is) read only for the anchors an alias
+ *  after it may name, as pandoc reads them; when the block has none, not read. */
+function scanAnchors(entry: string[], indent: number, acc: Acc): void {
+  if (!acc.hasAnchors) return;
+  try {
+    parseEntry(entry, indent, context(acc.anchors));
+  } catch (e) {
+    if (!(e instanceof YamlError)) throw e;
+  }
 }
 
 /** Anchors defined in a value a save rewrites without them: warned, and
@@ -1184,8 +1204,7 @@ export function readFrontmatter(src: string): FrontmatterRead {
   const root = baseIndent(lines);
   const asWritten = (item: Item): string[] => (root ? reindent(lines.slice(item.start, item.end), root, 0) : orig.slice(item.start, item.end));
   const items = splitItems(lines, root);
-  const hasAnchors = block.yaml.includes('&');
-  const acc: Acc = { s: {}, paperTop: null, paperPlass: null, restart: false, warn, anchors: new Map(), dropped: [] };
+  const acc: Acc = { s: {}, paperTop: null, paperPlass: null, restart: false, warn, hasAnchors: block.yaml.includes('&'), anchors: new Map(), dropped: [] };
   const parts: ExtraPart[] = [];
 
   // A known key given twice: the last one is read, as pandoc does.
@@ -1209,14 +1228,7 @@ export function readFrontmatter(src: string): FrontmatterRead {
     }
     const key = keyOf(entry[0], root)!;
     if (!KNOWN_TOP.has(key)) {
-      // Kept as written; read only for the anchors an alias later may name.
-      if (hasAnchors) {
-        try {
-          parseEntry(entry, root, context(acc.anchors));
-        } catch (e) {
-          if (!(e instanceof YamlError)) throw e;
-        }
-      }
+      scanAnchors(entry, root, acc);
       return parts.push({ kind: 'lines', lines: asWritten(item) });
     }
     if (lastAt.get(key) !== k) return;
@@ -1398,8 +1410,8 @@ function authors(n: YNode, warn: (m: string) => void): string | null {
 
 /** The `plass:` entry (its key line at `root`). Known children are read;
  *  unknown ones, comments and children that cannot be read come back as a
- *  `plass` extra part (child lines at two spaces) for the writer to put
- *  back into the plass block. */
+ *  `plass` extra part (child lines at two spaces — PLASS_INDENT, where the
+ *  writer looks for them) for the writer to put back into the plass block. */
 function readPlass(raw: string[], root: number, acc: Acc): ExtraPart | null {
   const head = matchKey(raw[0].slice(root))!;
   const kept: string[] = [];
@@ -1457,7 +1469,7 @@ function readPlass(raw: string[], root: number, acc: Acc): ExtraPart | null {
     if (item.kind === 'entry') lastAt.set(keyOf(cont[item.start], ci)!, k);
   });
   items.forEach((item, k) => {
-    const rawLines = reindent(cont.slice(item.start, item.end), ci, 2);
+    const rawLines = reindent(cont.slice(item.start, item.end), ci, PLASS_INDENT);
     if (item.kind === 'blank') {
       if (kept.length && kept[kept.length - 1] !== '') kept.push('');
       return;
@@ -1473,6 +1485,7 @@ function readPlass(raw: string[], root: number, acc: Acc): ExtraPart | null {
       return;
     }
     if (!KNOWN_PLASS.has(key)) {
+      scanAnchors(cont.slice(item.start, item.end), ci, acc);
       unknown(key);
       return append(kept, rawLines);
     }
@@ -1704,6 +1717,8 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
   const rest: string[] = [];
   const plassHead: string[] = [];
   const plassRest: string[] = [];
+  /** Where the kept `plass:` entry sat among the kept lines (`rest`). */
+  let plassAt = -1;
   let pendingBlank = false;
   const keep = (into: string[], raw: string[]): void => {
     if (pendingBlank && into.length) into.push('');
@@ -1732,8 +1747,11 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
     const key = keyOf(lines[item.start], 0);
     const inline = matchKey(lines[item.start])!.rest;
     if (key === 'plass' && (inline === '' || inline[0] === '#')) {
+      plassAt = rest.length;
       const cont = lines.slice(item.start + 1, item.end);
-      const ci = baseIndent(cont);
+      // Not the children's own least indentation: when every kept child is
+      // a stray deeper than PLASS_INDENT, that would make them entries.
+      const ci = PLASS_INDENT;
       const children = splitItems(cont, ci);
       const childLead = leadingRun(children, cont, ci);
       if (inline) plassRest.push('  ' + inline); // a comment after `plass:`
@@ -1753,7 +1771,7 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
         blank = false;
         if (child.kind === 'comment') into.push('  ' + cont[child.start].trim());
         else if (child.kind === 'stray' && c < childLead.count && childLead.place === 'margin') into.push('  ' + cont[child.start].trim());
-        else append(into, reindent(cont.slice(child.start, child.end), ci, 2));
+        else append(into, cont.slice(child.start, child.end));
       });
       return;
     }
@@ -1773,10 +1791,22 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
   });
 
   const kept = [...trimBlank(plassHead), ...plass, ...trimBlank(plassRest)];
+  let after: string[] = [];
   if (kept.length) {
-    top.push('plass:');
-    append(top, kept);
+    // With the known keys, unless a kept plass line aliases an anchor that a
+    // kept entry before the plass entry defines: then where the plass entry
+    // was, after that anchor (pandoc rejects an alias before its anchor).
+    const aliases = propertyNames(kept.join('\n'), '*');
+    const anchors = aliases.size && plassAt > 0 ? propertyNames(rest.slice(0, plassAt).join('\n'), '&') : new Set<string>();
+    if ([...aliases].some((name) => anchors.has(name))) {
+      after = rest.splice(plassAt);
+      rest.push('plass:');
+      append(rest, kept);
+    } else {
+      top.push('plass:');
+      append(top, kept);
+    }
   }
-  const all = [...head, ...top, ...rest];
+  const all = [...head, ...top, ...rest, ...after];
   return all.length ? `---\n${all.join('\n')}\n---` : '';
 }
