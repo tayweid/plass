@@ -408,15 +408,17 @@ rails can always be finished in Typst itself, because the file is Typst.
   rewritten to reference them, so figures compile properly. Equation refs
   export as `(#ref(<label>, supplement: none))` so the PDF shows "(1)"
   exactly like the editor.
-- **Export**: `.md` (the document as Markdown, beside it) and `.typ`, the
+- **Export**: `.md` (the document as Markdown, beside it; an `.md`
+  already in the folder is replaced only if you say so) and `.typ`, the
   Typst source Plass compiles: kept-but-unrendered content prints as code,
   editorial comments are left out, and math is wrapped with the same pinned
   mitex 0.2.7. Exported with the project folder open, every embedded image
   is written to `figures/` beside the `.typ` and linked by path, so
-  `typst compile document.typ` works from the CLI; exported without a
-  folder, the images stay `data:` URLs, which the CLI cannot read, and the
-  export says so. The `.typ` is for compiling and reading, not editing:
-  Export → Typst never overwrites the open document. The export is exact on
+  `typst compile document.typ` works from the CLI; each file is named after
+  its content, so exporting again links the one already there. Exported
+  without a folder, the images stay `data:` URLs, which the CLI cannot
+  read, and the export says so. The `.typ` is for compiling and reading,
+  not editing: Export → Typst never overwrites the open document. The export is exact on
   typst 0.14.2, the in-app compiler's release, compiled with Plass's own
   fonts (`--ignore-system-fonts --ignore-embedded-fonts --font-path
   public/fonts`), and says so on its first line; typst 0.15.x compiles it

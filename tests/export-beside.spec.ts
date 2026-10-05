@@ -125,12 +125,17 @@ type ExportApp = typeof window & {
     name: string;
     exportCopy(): Promise<void>;
     exportMdCopy(): Promise<void>;
-    loadHandle(h: FileSystemFileHandle, dir?: FileSystemDirectoryHandle | null): Promise<boolean>;
+    loadHandle(h: FileSystemFileHandle, dir?: FileSystemDirectoryHandle | null, discardConfirmed?: boolean): Promise<boolean>;
+    newDoc(doc?: unknown, name?: string): boolean;
   };
   __loadDemo(): void;
   view: {
     state: {
-      schema: { nodes: Record<string, { create(attrs: null, content: unknown): unknown }>; text(t: string): unknown };
+      schema: {
+        nodes: Record<string, { create(attrs: Record<string, unknown> | null, content?: unknown): unknown }>;
+        text(t: string): unknown;
+      };
+      doc: { content: { size: number } };
       tr: { insert(pos: number, node: unknown): unknown };
     };
     dispatch(tr: unknown): void;
@@ -155,7 +160,11 @@ test('the .typ export writes embedded images to figures/ and leaves comments out
     const observer = new MutationObserver(() => messages.push(toast.textContent ?? ''));
     observer.observe(toast, { childList: true, characterData: true, subtree: true });
     await app.__fm.exportCopy();
-    // A second export links the image the first one wrote, adding no copy.
+    // A second export links the image the first one wrote, adding no copy —
+    // through a new handle on the same folder, as after a reload or with the
+    // folder attached again: the file is found by its content, not by
+    // anything this tab remembers.
+    app.__fm.dir = await root.getDirectoryHandle('typ-export');
     await app.__fm.exportCopy();
     await new Promise((r) => setTimeout(r, 0));
     observer.disconnect();
@@ -173,7 +182,7 @@ test('the .typ export writes embedded images to figures/ and leaves comments out
   expect(result.typ).not.toContain('Check the sign before posting.');
   expect(result.typ).not.toContain('image("data:');
   expect(result.names).toHaveLength(1);
-  expect(result.names[0]).toMatch(/\.svg$/);
+  expect(result.names[0]).toMatch(/-[0-9a-f]{12}\.svg$/);
   expect(result.typ).toContain(`image("figures/${result.names[0]}"`);
   expect(result.svg).toContain('<svg');
   expect(result.messages).toContain(`Exported typ-export/${result.name}.typ — 1 embedded image written to figures/`);
@@ -238,7 +247,9 @@ test('Export → Typst never overwrites the open .typ; Export → Markdown write
   // notices the "Exported" toast replaces at once.
   const exported = result.messages.filter((m) => m.startsWith('Exported open-typ/Paper.md'));
   expect(exported).toHaveLength(1);
-  expect(exported[0]).toMatch(/^Exported open-typ\/Paper\.md — \S/);
+  expect(exported[0]).toContain(
+    'Exported open-typ/Paper.md — table styling/captions are not representable in Markdown — simplified to a plain table',
+  );
 });
 
 test('the .typ export from an open Typst source is the print form, not the typed text', async ({ page }) => {
@@ -265,4 +276,196 @@ test('the .typ export from an open Typst source is the print form, not the typed
   expect(result.typ).toMatch(/^\/\/ Exported from Plass — exact on typst /);
   expect(result.typ).toContain('A paragraph typed in the source.');
   expect(result.typ).toContain('```\n#let width = 3cm\n```');
+});
+
+const PNG_1PX =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+test('Export → Markdown asks before replacing an .md already in the folder', async ({ page }) => {
+  // The chain that lost a writer's Markdown source: Paper.md is the source,
+  // Export → Typst writes Paper.typ beside it, Paper.typ is opened, and
+  // Export → Markdown would write the print form back over Paper.md.
+  await page.goto('/?new=1');
+  const answers = [false, true];
+  const asked: string[] = [];
+  page.on('dialog', (d) => {
+    asked.push(d.message());
+    if (/already exists/.test(d.message()) && !answers.shift()) void d.dismiss();
+    else void d.accept();
+  });
+  const result = await page.evaluate(async () => {
+    const list = async (d: FileSystemDirectoryHandle) => {
+      const names: string[] = [];
+      for await (const k of (d as unknown as { keys(): AsyncIterable<string> }).keys()) names.push(k);
+      return names.sort();
+    };
+    const app = window as ExportApp;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle('md-source', { create: true });
+    const source = '# Paper\n\n<!-- plass:comment\nKeep this note.\n-->\n\nBody text.\n';
+    const md = await dir.getFileHandle('Paper.md', { create: true });
+    const w = await md.createWritable();
+    await w.write(source);
+    await w.close();
+    await app.__fm.loadHandle(md, dir, true);
+
+    const toast = document.getElementById('toast')!;
+    const messages: string[] = [];
+    const observer = new MutationObserver(() => messages.push(toast.textContent ?? ''));
+    observer.observe(toast, { childList: true, characterData: true, subtree: true });
+    await app.__fm.exportCopy();
+    await app.__fm.loadHandle(await dir.getFileHandle('Paper.typ'), dir, true);
+    await app.__fm.exportCopy();
+    await app.__fm.exportMdCopy();
+    const declined = await (await md.getFile()).text();
+    await app.__fm.exportMdCopy();
+    await new Promise((r) => setTimeout(r, 0));
+    observer.disconnect();
+    const accepted = await (await md.getFile()).text();
+    return { source, declined, accepted, messages, files: await list(dir) };
+  });
+
+  expect(result.messages).toContain('Paper.typ is the open document — open Paper.md and export Typst from it');
+  expect(asked.filter((m) => m === 'Paper.md already exists in this folder — overwrite it?')).toHaveLength(2);
+  expect(result.declined).toBe(result.source);
+  expect(result.accepted).not.toContain('Keep this note.');
+  expect(result.messages.some((m) => m.startsWith('Exported md-source/Paper.md'))).toBe(true);
+  expect(result.files).toEqual(['Paper.md', 'Paper.typ']);
+});
+
+test('Export → Markdown from the open .md is a save, and a .typ export never writes over an open .TYP', async ({ page }) => {
+  await page.goto('/?new=1');
+  const result = await page.evaluate(async () => {
+    const list = async (d: FileSystemDirectoryHandle) => {
+      const names: string[] = [];
+      for await (const k of (d as unknown as { keys(): AsyncIterable<string> }).keys()) names.push(k);
+      return names.sort();
+    };
+    const app = window as ExportApp;
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle('open-md', { create: true });
+    const write = async (name: string, text: string) => {
+      const h = await dir.getFileHandle(name, { create: true });
+      const w = await h.createWritable();
+      await w.write(text);
+      await w.close();
+      return h;
+    };
+    const toast = document.getElementById('toast')!;
+    const messages: string[] = [];
+    const observer = new MutationObserver(() => messages.push(toast.textContent ?? ''));
+    observer.observe(toast, { childList: true, characterData: true, subtree: true });
+
+    await app.__fm.loadHandle(await write('Notes.md', '# Notes\n\nA line.\n'), dir, true);
+    await app.__fm.exportMdCopy();
+    await new Promise((r) => setTimeout(r, 0));
+    const afterMd = await list(dir);
+
+    // OPFS is case-sensitive, so a second file would show here; on APFS
+    // (case-insensitive) the write would have landed on the open file.
+    await app.__fm.loadHandle(await write('Upper.TYP', '= Upper\n\nText.\n'), dir, true);
+    await app.__fm.exportCopy();
+    await new Promise((r) => setTimeout(r, 0));
+    observer.disconnect();
+    return { messages, afterMd, afterTyp: await list(dir) };
+  });
+
+  expect(result.messages).toContain('Saved Notes.md');
+  expect(result.afterMd).toEqual(['Notes.md']);
+  expect(result.messages).toContain('Upper.typ is the open document — Export → Markdown, then export Typst from the .md');
+  expect(result.afterTyp).toEqual(['Notes.md', 'Upper.TYP']);
+});
+
+test('the .typ export names images by content and keeps what it cannot write as data', async ({ page }) => {
+  await page.goto('/?new=1');
+  const result = await page.evaluate(
+    async (png) => {
+      const list = async (d: FileSystemDirectoryHandle) => {
+        const names: string[] = [];
+        for await (const k of (d as unknown as { keys(): AsyncIterable<string> }).keys()) names.push(k);
+        return names.sort();
+      };
+      const app = window as ExportApp;
+      const { schema } = app.view.state;
+      const n = schema.nodes;
+      // An inline image whose alt has no ASCII letters (its file must not be
+      // a dotfile), a WebP figure (no figures/ form: it stays data), and a
+      // formula whose source starts "data:" (not an image at all).
+      const para = n.paragraph.create(null, [
+        n.image.create({ src: png, alt: 'α' }),
+        schema.text(' and '),
+        n.math_inline.create({ src: 'data:x' }),
+      ]);
+      const webp = n.figure.create(
+        { src: 'data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==', name: 'photo.webp' },
+        schema.text('A photo.'),
+      );
+      app.view.dispatch(app.view.state.tr.insert(0, para));
+      app.view.dispatch(app.view.state.tr.insert(app.view.state.doc.content.size, webp));
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle('typ-kept', { create: true });
+      app.__fm.dir = dir;
+
+      const toast = document.getElementById('toast')!;
+      const messages: string[] = [];
+      const observer = new MutationObserver(() => messages.push(toast.textContent ?? ''));
+      observer.observe(toast, { childList: true, characterData: true, subtree: true });
+      await app.__fm.exportCopy();
+      await new Promise((r) => setTimeout(r, 0));
+      observer.disconnect();
+      const typ = await (await (await dir.getFileHandle(`${app.__fm.name}.typ`)).getFile()).text();
+      return { typ, figures: await list(await dir.getDirectoryHandle('figures')), messages, name: app.__fm.name };
+    },
+    PNG_1PX,
+  );
+
+  expect(result.figures).toHaveLength(1);
+  expect(result.figures[0]).toMatch(/^image-[0-9a-f]{12}\.png$/);
+  expect(result.typ).toContain(`#image("figures/${result.figures[0]}")`);
+  expect(result.typ).toContain('image("data:image/webp;base64,');
+  expect(result.messages).toContain(`Exported typ-kept/${result.name}.typ — 1 embedded image could not be written to figures/`);
+});
+
+test('a .typ export the serializer refuses writes nothing and says why', async ({ page }) => {
+  await page.goto('/?new=1');
+  const result = await page.evaluate(
+    async (png) => {
+      const list = async (d: FileSystemDirectoryHandle) => {
+        const names: string[] = [];
+        for await (const k of (d as unknown as { keys(): AsyncIterable<string> }).keys()) names.push(k);
+        return names.sort();
+      };
+      const app = window as ExportApp;
+      const { schema } = app.view.state;
+      const n = schema.nodes;
+      // Inline Typst in a table cell is outside the cell subset the
+      // serializer writes (src/table-integrity.test.ts): it throws. The
+      // editor refuses to type such a cell, so the document arrives whole,
+      // as a file does.
+      const table = n.table.create(null, [
+        n.table_row.create(null, [n.table_cell.create(null, [n.paragraph.create(null, [n.typst_inline.create({ src: '#h(1em)' })])])]),
+      ]);
+      const figure = n.figure.create({ src: png, name: 'dot.png' }, schema.text('A dot.'));
+      app.__fm.newDoc(n.doc.create(null, [figure, table]), 'Refused');
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle('typ-refused', { create: true });
+      app.__fm.dir = dir;
+
+      const toast = document.getElementById('toast')!;
+      const messages: string[] = [];
+      const observer = new MutationObserver(() => messages.push(toast.textContent ?? ''));
+      observer.observe(toast, { childList: true, characterData: true, subtree: true });
+      let rejected = false;
+      await app.__fm.exportCopy().catch(() => (rejected = true));
+      await new Promise((r) => setTimeout(r, 0));
+      observer.disconnect();
+      return { rejected, files: await list(dir), messages };
+    },
+    PNG_1PX,
+  );
+
+  expect(result.rejected).toBe(false);
+  // No .typ, and no figures/ folder holding an orphan image.
+  expect(result.files).toEqual([]);
+  expect(result.messages.some((m) => m.startsWith('Typst export failed: Cannot export table cell 1:1: unsupported inline typst_inline'))).toBe(true);
 });

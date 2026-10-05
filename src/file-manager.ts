@@ -813,7 +813,9 @@ export class FileManager {
       }
       this.name = name;
       this.hooks.onState();
-      this.hooks.message(`Name set to “${name}” — the file on disk keeps its old name; use Export for a renamed copy`);
+      // Export → Typst is the print form (comments gone, islands as code),
+      // not a copy to keep editing; Export → Markdown is.
+      this.hooks.message(`Name set to “${name}” — the file on disk keeps its old name; Export → Markdown writes a renamed .md copy`);
       return;
     }
     this.name = name;
@@ -887,81 +889,144 @@ export class FileManager {
    *  so the file compiles with the typst CLI; without a folder the data URLs
    *  stay (the CLI cannot read them) and the toast says so. The open
    *  document is never the target: a .typ that IS the open file is the
-   *  writer's source, not an export to overwrite. */
+   *  writer's source, not an export to overwrite. Nothing is written until
+   *  the text is built, so a document the serializer refuses leaves no
+   *  images behind, and the refusal is said on the toast. */
   async exportCopy() {
     const fileName = `${this.name}.typ`;
-    if (this.handle?.name === fileName) {
-      this.hooks.message(`${fileName} is the open document — Export → Markdown, then export Typst from the .md`);
+    if (await this.isOpenFile(fileName)) {
+      const md = `${this.name}.md`;
+      this.hooks.message(
+        (await this.folderFile(md))
+          ? `${fileName} is the open document — open ${md} and export Typst from it`
+          : `${fileName} is the open document — Export → Markdown, then export Typst from the .md`,
+      );
       return;
     }
-    const doc = this.hooks.getDoc();
-    const images = await this.writeEmbeddedImages(doc);
-    const text = docToTyp(doc, { islands: 'print', resolveImage: (src) => images.paths.get(src) ?? src });
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-    const where = await this.saveBeside(fileName, blob);
-    if (where === null) return;
-    const count = (n: number) => `${n} embedded image${n === 1 ? '' : 's'}`;
-    let note = '';
-    // One line of toast: it truncates rather than wraps.
-    if (images.kept && !images.inFolder) {
-      note = ' — embedded images need the project folder open to compile outside Plass';
-    } else if (images.kept) {
-      note = ` — ${count(images.kept)} could not be written to figures/`;
-    } else if (images.paths.size) {
-      note = ` — ${count(images.paths.size)} written to figures/`;
+    try {
+      const doc = this.hooks.getDoc();
+      const images = await this.planEmbeddedImages(doc);
+      const build = (paths: Map<string, string>) =>
+        docToTyp(doc, { islands: 'print', resolveImage: (src) => paths.get(src) ?? src });
+      const planned = new Map([...images.planned].map(([src, p]) => [src, p.path]));
+      let text = build(planned);
+      const paths = new Map<string, string>();
+      for (const [src, p] of images.planned) {
+        if (!p.write || (await this.writeAsset(p.path, p.blob))) paths.set(src, p.path);
+      }
+      // An image that would not write stays a data URL rather than a path
+      // to nothing.
+      if (paths.size < planned.size) text = build(paths);
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const where = await this.saveBeside(fileName, blob);
+      if (where === null) return;
+      const kept = images.found - paths.size;
+      const count = (n: number) => `${n} embedded image${n === 1 ? '' : 's'}`;
+      let note = '';
+      // One line of toast: it truncates rather than wraps.
+      if (kept && !this.dir) {
+        note = ' — embedded images need the project folder open to compile outside Plass';
+      } else if (kept) {
+        note = ` — ${count(kept)} could not be written to figures/`;
+      } else if (paths.size) {
+        note = ` — ${count(paths.size)} written to figures/`;
+      }
+      this.hooks.message(`Exported ${where}${note}`);
+    } catch (e) {
+      console.error('Typst export failed', e);
+      this.hooks.message(`Typst export failed: ${e instanceof Error ? e.message : String(e)}`);
     }
-    this.hooks.message(`Exported ${where}${note}`);
   }
 
   /** Export → Markdown: a .md beside the document — how a .typ document
    *  becomes a Markdown source. Text the writer is typing in a Markdown
    *  source view goes out verbatim, as a save would write it. When the open
    *  file already is that .md, this is a save, not a second writer racing
-   *  the autosave poller on the same path. */
+   *  the autosave poller on the same path. An X.md already in the folder is
+   *  a Markdown source — most likely the writer's own, the one the open
+   *  .typ was exported from — so it is replaced only on a yes, as a first
+   *  save into a folder asks. (Outside a folder the save dialog asks.) */
   async exportMdCopy() {
     const fileName = `${this.name}.md`;
-    if (this.handle?.name === fileName) {
+    if (await this.isOpenFile(fileName)) {
       await this.save();
       return;
     }
-    // Not through `serialize`, which toasts each notice on its own: the
-    // "Exported" toast would replace them at once, and a conversion must
-    // say what it could not keep. They ride on that toast instead.
-    const typed = this.hooks.getText?.('.md');
-    const warned = new Set<string>();
-    let text: string;
-    if (typeof typed === 'string') text = typed;
-    else {
-      const { docToMd } = await import('./md-serializer');
-      text = docToMd(this.hooks.getDoc(), (m) => warned.add(m));
+    try {
+      // Not through `serialize`, which toasts each notice on its own: the
+      // "Exported" toast would replace them at once, and a conversion must
+      // say what it could not keep. They ride on that toast instead.
+      const typed = this.hooks.getText?.('.md');
+      const warned = new Set<string>();
+      let text: string;
+      if (typeof typed === 'string') text = typed;
+      else {
+        const { docToMd } = await import('./md-serializer');
+        text = docToMd(this.hooks.getDoc(), (m) => warned.add(m));
+      }
+      if ((await this.folderFile(fileName)) && !confirm(`${fileName} already exists in this folder — overwrite it?`)) return;
+      const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+      const where = await this.saveBeside(fileName, blob);
+      if (where !== null) this.hooks.message(`Exported ${where}${warned.size ? ` — ${[...warned].join('; ')}` : ''}`);
+    } catch (e) {
+      console.error('Markdown export failed', e);
+      this.hooks.message(`Markdown export failed: ${e instanceof Error ? e.message : String(e)}`);
     }
-    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
-    const where = await this.saveBeside(fileName, blob);
-    if (where !== null) this.hooks.message(`Exported ${where}${warned.size ? ` — ${[...warned].join('; ')}` : ''}`);
   }
 
-  /** Data-URL images already written to figures/ by Export → Typst, per
-   *  folder, so exporting again reuses the files instead of adding copies. */
-  private exportedImages = new WeakMap<FileSystemDirectoryHandle, Map<string, string>>();
+  /** `fileName` at the top of the project folder, or null when it is not
+   *  there or there is no folder. */
+  private async folderFile(fileName: string): Promise<FileSystemFileHandle | null> {
+    if (!this.dir) return null;
+    try {
+      return await this.dir.getFileHandle(fileName);
+    } catch {
+      return null;
+    }
+  }
 
-  /** Write every distinct data-URL image in `doc` to figures/ in the project
-   *  folder (the original bytes, collision-safe names), mapping each source
-   *  to its new path. `kept` counts the images that stay data URLs: all of
-   *  them without a folder, and any that cannot be decoded or written. */
-  private async writeEmbeddedImages(doc: PMNode): Promise<{ paths: Map<string, string>; kept: number; inFolder: boolean }> {
+  /** Whether `fileName` beside the document is the open file itself. Names
+   *  compare without case: APFS, the default macOS volume, ignores it, so
+   *  with "Paper.TYP" open a write to "Paper.typ" lands on the open file.
+   *  In a folder the two entries are compared as well. */
+  private async isOpenFile(fileName: string): Promise<boolean> {
+    const open = this.handle;
+    if (!open) return false;
+    if (open.name.toLowerCase() === fileName.toLowerCase()) return true;
+    const there = await this.folderFile(fileName);
+    try {
+      return !!there && (await open.isSameEntry(there));
+    } catch {
+      return false;
+    }
+  }
+
+  /** Where each distinct data-URL image in `doc` (image and figure nodes)
+   *  goes under figures/ — read-only, so nothing is on disk before the text
+   *  is built. A file is named after its content (a short SHA-256 of the
+   *  bytes), so exporting again, after a reload or with the folder attached
+   *  anew, links the file already there instead of adding a copy; a name
+   *  taken by other bytes gets a fresh collision-safe one. `found` counts
+   *  every embedded image; one not planned (no folder, a type other than
+   *  PNG/JPEG/GIF/SVG, past the size limit) stays a data URL. */
+  private async planEmbeddedImages(
+    doc: PMNode,
+  ): Promise<{ planned: Map<string, { path: string; blob: Blob; write: boolean }>; found: number }> {
     const found = new Map<string, string>();
     doc.descendants((node) => {
       const src = node.attrs.src;
-      if (typeof src === 'string' && /^data:/i.test(src) && !found.has(src)) {
-        found.set(src, String(node.attrs.name || node.attrs.alt || 'image'));
+      if (
+        (node.type.name === 'image' || node.type.name === 'figure') &&
+        typeof src === 'string' &&
+        /^data:/i.test(src) &&
+        !found.has(src)
+      ) {
+        found.set(src, String(node.attrs.name || node.attrs.alt || ''));
       }
       return true;
     });
-    const paths = new Map<string, string>();
-    const dir = this.dir;
-    if (!dir) return { paths, kept: found.size, inFolder: false };
-    let written = this.exportedImages.get(dir);
-    if (!written) this.exportedImages.set(dir, (written = new Map()));
+    const planned = new Map<string, { path: string; blob: Blob; write: boolean }>();
+    if (!this.dir) return { planned, found: found.size };
     for (const [src, hint] of found) {
       let decoded: ReturnType<typeof dataUrlBytes> = null;
       try {
@@ -970,19 +1035,25 @@ export class FileManager {
         // Past the size limit: it stays a data URL, like an unknown type.
       }
       if (!decoded) continue;
-      const earlier = written.get(src);
-      if (earlier && (await this.statAsset(earlier))?.size === decoded.blob.size) {
-        paths.set(src, earlier);
-        continue;
-      }
-      const stem = hint.replace(/\.[^.]+$/, '').slice(0, 40);
-      const path = projectImagePath(`${stem}.${decoded.ext}`);
-      if (await this.writeAsset(path, decoded.blob)) {
-        paths.set(src, path);
-        written.set(src, path);
-      }
+      const bytes = new Uint8Array(await decoded.blob.arrayBuffer());
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+      const hash = [...digest.slice(0, 6)].map((b) => b.toString(16).padStart(2, '0')).join('');
+      // A name from the alt text or file name, in the letters a path keeps;
+      // one with none of them (日本語, α, -) is "image", never a dotfile.
+      const stem =
+        hint
+          .replace(/\.[^.]+$/, '')
+          .replace(/[^a-zA-Z0-9_-]+/g, '-')
+          .slice(0, 40)
+          .replace(/^[-.]+|-+$/g, '') || 'image';
+      const path = `figures/${stem}-${hash}.${decoded.ext}`;
+      const there = await this.statAsset(path);
+      if (!there) planned.set(src, { path, blob: decoded.blob, write: true });
+      else if (there.size === bytes.length && sameBytes((await this.readAsset(path))?.data, bytes)) {
+        planned.set(src, { path, blob: decoded.blob, write: false });
+      } else planned.set(src, { path: projectImagePath(`${stem}.${decoded.ext}`), blob: decoded.blob, write: true });
     }
-    return { paths, kept: found.size - paths.size, inFolder: true };
+    return { planned, found: found.size };
   }
 
   /** Reconnect this tab's own restored editor snapshot to its file without
@@ -1197,6 +1268,12 @@ export class FileManager {
     });
     input.click();
   }
+}
+
+function sameBytes(a: Uint8Array | undefined, b: Uint8Array): boolean {
+  if (!a || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 // ---------- recents (persisted in the shared kv-store) ----------
