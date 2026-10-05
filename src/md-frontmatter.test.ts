@@ -698,6 +698,28 @@ console.log('kept plass children:');
   check('… and when re-indented to two spaces', deep.extra === 'plass:\n  note: |\n    a\n\n\n    b\n      \n    c', json(deep.extra));
 }
 
+// --- 19. a key that is an Object.prototype name is no setting ---
+console.log('keys named like Object.prototype members:');
+{
+  for (const [yaml, want] of [
+    ['plass:\n  page-numbers: {hasOwnProperty: 1}', 'plass.page-numbers.hasOwnProperty is not a Plass setting'],
+    ['plass:\n  footnotes:\n    valueOf: x', 'plass.footnotes.valueOf is not a Plass setting'],
+    ['plass:\n  header: {toLocaleString: x}', 'plass.header.toLocaleString is not a Plass setting'],
+    ['papersize: constructor', 'papersize: constructor is not one of'],
+    ['plass:\n  page: __proto__', 'plass.page: __proto__ is not half-letter'],
+    ['plass:\n  page: toString', 'plass.page: toString is not half-letter'],
+  ] as const) {
+    let r: ReturnType<typeof read> | null = null;
+    let thrown = '';
+    try {
+      r = read(yaml);
+    } catch (e) {
+      thrown = String(e);
+    }
+    check(`${json(yaml)}: read, warned, nothing set`, !thrown && r !== null && json(r.settings) === '{}' && r.warnings.length === 1 && r.warnings[0].startsWith(want), thrown || json(r?.warnings));
+  }
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

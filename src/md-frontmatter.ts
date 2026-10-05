@@ -28,7 +28,9 @@
 // intent, warns, and the next save writes the value in a form pandoc reads.
 //
 // The file is untrusted: every pattern here runs in time linear in its
-// input, and nesting is capped so a crafted file cannot overflow the stack.
+// input, nesting is capped so a crafted file cannot overflow the stack, and
+// a key read from the file is looked up among own properties only
+// (`valueOf` is no setting).
 
 import { DEFAULT_SETTINGS, FOOTNOTE_NUMBERINGS, FOOTNOTE_SEPARATORS, normalizeSettings, type DocSettings, type PaperName } from './settings';
 import { CITATION_STYLES } from './citation-styles';
@@ -754,7 +756,7 @@ class FlowReader {
         // An escaped line break joins the lines with nothing between.
         this.i += 2;
         while (this.i < s.length && ' \t'.includes(s[this.i])) this.i++;
-      } else if (e in ESCAPES) {
+      } else if (Object.hasOwn(ESCAPES, e)) {
         out += ESCAPES[e];
         this.i += 2;
         // `"$\beta$"` is a backspace and "eta" to YAML — and to pandoc.
@@ -915,6 +917,16 @@ const PAPER_YAML: Partial<Record<PaperName, string>> = { a4: 'a4', legal: 'us-le
 const PAPER_READ: Record<string, PaperName> = {
   'us-letter': 'letter', letter: 'letter', a4: 'a4', 'us-legal': 'legal', legal: 'legal',
   'iso-b5': 'b5', b5: 'b5', a5: 'a5', 'half-letter': 'half-letter', 'us-statement': 'half-letter',
+};
+
+/** `table[key]` for a key read from the file: own properties only, so
+ *  `constructor` or `__proto__` is no entry, not something Object.prototype has. */
+const own = <T>(table: Record<string, T>, key: string): T | undefined => (Object.hasOwn(table, key) ? table[key] : undefined);
+
+/** The paper a name means (`papersize`, `plass.page`), or undefined. */
+const paperNamed = (n: YNode): PaperName | undefined => {
+  const v = text(n);
+  return v === null ? undefined : own(PAPER_READ, v.toLowerCase());
 };
 const MARGINS = ['marginTop', 'marginRight', 'marginBottom', 'marginLeft'] as const;
 const ALIGNS = ['left', 'center', 'right'] as const;
@@ -1242,8 +1254,7 @@ function readTop(key: string, n: YNode, out: FrontmatterRead, acc: Acc): void {
       out.authorsMd = authors(n, acc.warn);
       return;
     case 'papersize': {
-      const v = text(n);
-      const page = v === null ? undefined : PAPER_READ[v.toLowerCase()];
+      const page = paperNamed(n);
       if (!page) throw new Invalid(`${describe(n)} is not one of us-letter, a4, us-legal, iso-b5, a5`);
       acc.paperTop = page;
       return;
@@ -1433,7 +1444,7 @@ function readPlassChild(key: string, n: YNode, acc: Acc): void {
   // Each field of a sub-map on its own: one bad value leaves the rest.
   const fields = (path: string, readers: Record<string, (v: YNode) => void>): void => {
     for (const [k, v] of entriesOf(n)) {
-      const read = readers[k];
+      const read = own(readers, k);
       if (!read) {
         acc.warn(`plass.${path}.${clip(k)} is not a Plass setting — ignored`);
         continue;
@@ -1458,8 +1469,7 @@ function readPlassChild(key: string, n: YNode, acc: Acc): void {
         acc.paperPlass = page;
         return;
       }
-      const v = text(n);
-      const page = v === null ? undefined : PAPER_READ[v.toLowerCase()];
+      const page = paperNamed(n);
       if (!page) throw new Invalid(`${describe(n)} is not half-letter, a paper name, or {width, height}`);
       acc.paperPlass = { page };
       return;
