@@ -6,7 +6,7 @@
 // written back as they are (never expanded), and out-of-range values are
 // reported, not silently clamped.
 // Run: npx tsx src/md-frontmatter.test.ts
-import { readFrontmatter, writeFrontmatter, type FrontmatterFields } from './md-frontmatter';
+import { bibliographyEntry, readFrontmatter, withoutEntry, writeFrontmatter, type FrontmatterFields } from './md-frontmatter';
 import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings } from './settings';
 
 let failures = 0;
@@ -653,7 +653,64 @@ console.log('control characters:');
   check('a lone surrogate is written as U+FFFD', writeFrontmatter({ titleMd: 'x\ud800y' }) === '---\ntitle: x\ufffdy\n---');
   check('a surrogate escape is not a YAML escape (pandoc rejects it)', read(`title: "x${BS}ud800y"`).warnings.length === 1);
   const beta = read(`title: "Effect of $${BS}beta$"`);
-  check('the \\beta warning says the save keeps the control character', /a save keeps U\+0008, not \\beta/.test(beta.warnings[0] ?? ''), json(beta.warnings));
+  check('in a text key, the \\beta warning says the line is written back as it is', /YAML escape \\b \(U\+0008\).*Plass writes the line back as it is until the text is edited/.test(beta.warnings[0] ?? ''), json(beta.warnings));
+  const header = read(`plass:\n  header: {text: "${BS}today"}`);
+  check('in a setting, it says the save keeps the control character', /a save keeps U\+0009, not \\today/.test(header.warnings[0] ?? ''), json(header.warnings));
+}
+
+// --- 16b. a text key whose escape reads as LaTeX is kept as written ---
+// (`date: "\today"` is a tab and "oday" to YAML and to pandoc: the value is
+// read, and the line is kept as written beside it, until the document edits
+// the text — a save never writes the control character over the author's.)
+console.log('text kept as written:');
+{
+  const today = read(`title: T\ndate: "${BS}today"   # the build date\nfoo: 1`);
+  check('the value is read as pandoc reads it', today.dateMd === '\today' && today.titleMd === 'T', json(today));
+  check('… and the line is kept as written, its comment with it', today.extra === `date: "${BS}today"   # the build date\nfoo: 1`, json(today.extra));
+  const unedited = writeFrontmatter({ ...today, asWritten: ['date'] });
+  check('unedited: the kept line is written in the key\'s place', unedited === `---\ntitle: T\ndate: "${BS}today"   # the build date\nfoo: 1\n---`, unedited);
+  check('… a fixed point', writeFrontmatter({ ...readFrontmatter(unedited + '\n'), asWritten: ['date'] }) === unedited);
+  const said: string[] = [];
+  const edited = writeFrontmatter({ ...today, dateMd: 'October 5' }, (m) => said.push(m));
+  check('edited: the document\'s text replaces it, silently', edited === '---\ntitle: T\ndate: October 5\nfoo: 1\n---' && !said.length, edited + json(said));
+  const deleted = writeFrontmatter({ ...today, dateMd: null });
+  check('deleted: the kept line goes too', deleted === '---\ntitle: T\nfoo: 1\n---', deleted);
+  const list = read(`author:\n  - "${BS}textbf{A}"\n  - B`);
+  check('an author list holding one is kept as written too', list.authorsMd === '\textbf{A}, B' && list.extra === `author:\n  - "${BS}textbf{A}"\n  - B`, json(list));
+  // Other kept text keys keep step 2's rules: an unreadable one is kept, and
+  // one an older Plass carried (a list) is kept until the document writes the key.
+  check('a kept list with no escape is not an as-written entry', writeFrontmatter({ extra: 'author:\n  - A\n  - B', asWritten: ['author'] }) === '---\nauthor:\n  - A\n  - B\n---');
+  const setting = read(`plass:\n  footer: {text: "${BS}today"}`);
+  check('a setting\'s escaped value is not kept as written', setting.extra === '' && setting.settings.footerText === '\today', json(setting));
+}
+
+// --- 16c. a block with a line that is not YAML at its top level ---
+console.log('lines that are not YAML:');
+{
+  const prose = readFrontmatter('---\nSummary: what this covers.\n\nThe body goes on here.\n---\n\nMore.\n');
+  check('a prose line at the top level is named (pandoc rejects the block)', prose.notYaml === 'The body goes on here.', json(prose.notYaml));
+  check('… and a list item', readFrontmatter('---\ntitle: T\n- a\n---\n').notYaml === '- a');
+  check('a misplaced key line is not prose', read('  indented: x\ntitle: T').notYaml === undefined);
+  check('a well-formed block has none', read('title: T\nplass:\n  landscape: true').notYaml === undefined);
+  check('nor does a stray under plass:', read('plass:\n\tlandscape: true\n  hyphenate: false').notYaml === undefined);
+}
+
+// --- 16d. the bibliography entry kept while the sidecar is unread ---
+console.log('a kept bibliography entry:');
+{
+  check('bibliographyEntry quotes what needs it', bibliographyEntry('refs.bib') === 'bibliography: refs.bib' && bibliographyEntry('my refs: 2026.bib') === "bibliography: 'my refs: 2026.bib'");
+  const extra = 'foo: 1\nbibliography: refs.bib';
+  const said: string[] = [];
+  check('written while the document has no bibliography', writeFrontmatter({ extra, keptBibliography: 'write' }, (m) => said.push(m)) === '---\nfoo: 1\nbibliography: refs.bib\n---' && !said.length);
+  check('dropped silently once it has one', writeFrontmatter({ extra, keptBibliography: 'drop' }, (m) => said.push(m)) === '---\nfoo: 1\n---' && !said.length, json(said));
+  check('withoutEntry takes an entry out', withoutEntry('a: 1\n\nbibliography: refs.bib\n\n# c\nb: |\n  x\n\n  y', 'bibliography') === 'a: 1\n\n# c\nb: |\n  x\n\n  y');
+  check('… and leaves no blank line at an end', withoutEntry('bibliography: refs.bib\n\na: 1', 'bibliography') === 'a: 1' && withoutEntry('bibliography: x', 'bibliography') === '');
+}
+
+// --- 16e. an empty abstract ---
+{
+  const empty = writeFrontmatter({ abstractMd: '' });
+  check('an empty abstract is written as the empty string', empty === "---\nabstract: ''\n---" && readFrontmatter(empty + '\n').abstractMd === '', empty);
 }
 
 // --- 17. finding the block, as pandoc finds it ---

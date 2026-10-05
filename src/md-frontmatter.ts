@@ -45,6 +45,9 @@
 import { DEFAULT_SETTINGS, FOOTNOTE_NUMBERINGS, FOOTNOTE_SEPARATORS, normalizeSettings, type DocSettings, type PaperName } from './settings';
 import { CITATION_STYLES } from './citation-styles';
 
+/** The keys whose values are the document's own text (Markdown). */
+export type TextKey = 'title' | 'author' | 'date' | 'abstract';
+
 export interface FrontmatterFields {
   /** Raw Markdown (inline), or null when the key is absent. */
   titleMd?: string | null;
@@ -58,6 +61,18 @@ export interface FrontmatterFields {
   frontMatterRestart?: boolean;
   /** Unknown keys and comments, verbatim YAML lines (doc.attrs.frontmatter). */
   extra?: string;
+  /** Text keys whose entry `extra` keeps as written (a double-quoted value
+   *  whose escape reads as LaTeX, `"\today"`: see readFrontmatter) and the
+   *  document has not edited: that entry is written in the key's place, as
+   *  it was, instead of the value. Such an entry for a key not listed here
+   *  was edited (or its block deleted): it is dropped, silently. */
+  asWritten?: readonly TextKey[];
+  /** A `bibliography:` entry kept in `extra` (bibliographyEntry): 'write'
+   *  while the document holds no bibliography of its own — written back,
+   *  so a save before the sidecar is read loses nothing; 'drop' once it
+   *  does — dropped, silently (the bibliography is written in the body).
+   *  Absent: dropped with a warning. */
+  keptBibliography?: 'write' | 'drop';
 }
 
 export interface FrontmatterRead {
@@ -74,6 +89,13 @@ export interface FrontmatterRead {
   warnings: string[];
   /** The text after the closing `---`/`...` line; the whole input when it opens with no metadata block. */
   body: string;
+  /** The first line at the block's top level that is not YAML at all —
+   *  neither a `key: value` entry (however indented), a comment nor part of
+   *  one — when the block has one. Pandoc rejects such a block; the
+   *  Markdown reader then reads the file as having no front matter, so a
+   *  document that opens with a horizontal rule never loses its text into
+   *  one. Everything above is read as usual. */
+  notYaml?: string;
 }
 
 // ---------------------------------------------------------------- the YAML subset
@@ -101,9 +123,14 @@ interface Ctx {
   /** The anchors this value defines (a save drops them from a known key). */
   defined: string[];
   depth: number;
+  /** The value is a text key's (title, author, date, abstract). */
+  textKey: boolean;
+  /** A double-quoted escape in it reads as LaTeX (`"\today"`): a text key's
+   *  entry is then kept as written, beside the value read. */
+  keepRaw: boolean;
 }
 
-const context = (anchors: Map<string, YNode> = new Map()): Ctx => ({ notes: [], comments: [], anchors, defined: [], depth: 0 });
+const context = (anchors: Map<string, YNode> = new Map()): Ctx => ({ notes: [], comments: [], anchors, defined: [], depth: 0, textKey: false, keepRaw: false });
 
 /** Values nested deeper than this are not read (kept as written). Plass
  *  reads three levels (`plass.page-numbers.start`); each level rescans the
@@ -814,9 +841,12 @@ class FlowReader {
         if (/[a-zA-Z]/.test(e) && /[a-zA-Z]/.test(s[this.i] ?? '')) {
           const word = '\\' + e + /^[a-zA-Z]*/.exec(s.slice(this.i))![0];
           const ch = codePoint(ESCAPES[e]);
-          this.cx.notes.push(
-            `"${word}" inside double quotes is the YAML escape \\${e} (${ch}), as pandoc reads it; a save keeps ${ch}, not ${word} — write LaTeX unquoted or in single quotes`,
-          );
+          // The document's own text is never rewritten out from under its
+          // author: a text key's line is kept as written until the text is
+          // edited (readFrontmatter); a setting's value is the setting.
+          const save = this.cx.textKey ? `Plass writes the line back as it is until the text is edited` : `a save keeps ${ch}, not ${word}`;
+          if (this.cx.textKey) this.cx.keepRaw = true;
+          this.cx.notes.push(`"${word}" inside double quotes is the YAML escape \\${e} (${ch}), as pandoc reads it; ${save} — write LaTeX unquoted or in single quotes`);
         }
       } else {
         const width = e === 'x' ? 2 : e === 'u' ? 4 : e === 'U' ? 8 : 0;
@@ -1253,7 +1283,11 @@ export function readFrontmatter(src: string): FrontmatterRead {
   const root = baseIndent(lines);
   const asWritten = (item: Item): string[] => (root ? reindent(lines.slice(item.start, item.end), root, 0) : orig.slice(item.start, item.end));
   const items = splitItems(lines, root);
-  const acc: Acc = { s: {}, paperTop: null, paperPlass: null, restart: false, warn, hasAnchors: block.yaml.includes('&'), anchors: new Map(), dropped: [] };
+  // A top-level line that is not even a misplaced `key: value` (prose, a
+  // list item) makes the block one pandoc rejects: say which.
+  const prose = items.find((item) => item.kind === 'stray' && !matchKey(lines[item.start].trim()));
+  if (prose) out.notYaml = clip(lines[prose.start].trim());
+  const acc: Acc ={ s: {}, paperTop: null, paperPlass: null, restart: false, warn, hasAnchors: block.yaml.includes('&'), anchors: new Map(), dropped: [] };
   const parts: ExtraPart[] = [];
 
   // A known key given twice: the last one is read, as pandoc does.
@@ -1287,6 +1321,7 @@ export function readFrontmatter(src: string): FrontmatterRead {
       return;
     }
     const cx = context(acc.anchors);
+    cx.textKey = TEXT_KEYS.has(key);
     let value: YNode;
     try {
       value = parseEntry(entry, root, cx).value;
@@ -1306,6 +1341,13 @@ export function readFrontmatter(src: string): FrontmatterRead {
       }
       warn(`${key}: ${e.message} — ignored`);
     }
+    // A text key whose double-quoted value decodes an escape that reads as
+    // LaTeX (`date: "\today"` is a tab and "oday" to YAML and pandoc): the
+    // value is read, and the entry is kept as written beside it, so that a
+    // save leaves the author's text alone until the document edits it
+    // (writeFrontmatter's `asWritten`). Its comments and anchors are in its
+    // lines.
+    if (cx.keepRaw) return parts.push({ kind: 'lines', lines: asWritten(item) });
     // The key is rewritten; its comments stay, as whole lines after the known keys.
     if (cx.comments.length) parts.push({ kind: 'lines', lines: cx.comments });
     dropAnchors(acc, key, cx.defined);
@@ -1674,7 +1716,11 @@ function leadingRun(items: Item[], lines: string[], indent: number): { count: nu
  *  comments at the margin. An extra entry whose key the document now
  *  writes is dropped (with a warning); so is a `---`/`...` line, which
  *  would end the block. `bibliography:` is never written: the
- *  bibliography is embedded in the body. */
+ *  bibliography is embedded in the body — but a `bibliography:` entry
+ *  kept in `extra` is, while the document holds no bibliography of its own
+ *  (`fm.keptBibliography`). A text key's entry `extra` keeps as written is
+ *  written in the key's place when the document has not edited it
+ *  (`fm.asWritten`), and dropped otherwise. */
 export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => void = () => {}): string {
   const s = normalizeSettings(fm.settings ?? null);
   const D = DEFAULT_SETTINGS;
@@ -1686,6 +1732,8 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
     written.add(key);
   };
   const block = (key: string, value: string): void => {
+    // An empty abstract (one empty paragraph) is the empty string.
+    if (!trimNewlines(value).trim()) return put(key, "''");
     const lines = blockLines(key, value, 2);
     if (lines) {
       append(top, lines);
@@ -1695,11 +1743,20 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
     // value that ends in one as blocks, not as one line of inlines.
     else put(key, scalar(trimNewlines(value) + '\n'));
   };
+  const keptText = keptTextEntries(fm.extra ?? '');
+  /** A text key: its kept entry as written when the document left it alone, else its value. */
+  const text = (key: TextKey, value: string | null | undefined, write: (v: string) => void): void => {
+    const kept = keptText.get(key);
+    if (kept && fm.asWritten?.includes(key)) {
+      append(top, kept);
+      written.add(key);
+    } else if (value != null) write(value);
+  };
 
-  if (fm.titleMd != null) put('title', scalar(fm.titleMd));
-  if (fm.authorsMd != null) put('author', scalar(fm.authorsMd));
-  if (fm.dateMd != null) put('date', scalar(fm.dateMd));
-  if (fm.abstractMd != null) block('abstract', fm.abstractMd);
+  text('title', fm.titleMd, (v) => put('title', scalar(v)));
+  text('author', fm.authorsMd, (v) => put('author', scalar(v)));
+  text('date', fm.dateMd, (v) => put('date', scalar(v)));
+  text('abstract', fm.abstractMd, (v) => block('abstract', v));
   const named = PAPER_YAML[s.page];
   if (named) put('papersize', named);
   if (MARGINS.some((f) => s[f] !== D[f])) {
@@ -1827,12 +1884,16 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
       });
       return;
     }
+    // A text key's entry kept as written: written in its place above, or
+    // replaced by the document's edit.
+    if (key !== null && keptText.get(key as TextKey)?.join('\n') === raw.join('\n')) return;
     if (key !== null && written.has(key)) {
       warn(`front matter: the document's ${clip(key)} replaces the one kept from the file`);
       return;
     }
     if (key === 'bibliography') {
-      warn('front matter: bibliography: is not written — the bibliography is embedded in the document');
+      if (fm.keptBibliography === 'write') return keep(into, raw);
+      if (fm.keptBibliography !== 'drop') warn('front matter: bibliography: is not written — the bibliography is embedded in the document');
       return;
     }
     if (key === 'plass' && plass.length) {
@@ -1861,4 +1922,57 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
   }
   const all = [...head, ...top, ...rest, ...after];
   return all.length ? `---\n${all.join('\n')}\n---` : '';
+}
+
+/** The text-key entries readFrontmatter kept in `extra` as written beside
+ *  the value it read: the ones whose double-quoted value decodes an escape
+ *  that reads as LaTeX, found by the same test. Any other text key there
+ *  (one that could not be read, a list an older Plass carried) is not one.
+ *  Raw lines by key. */
+function keptTextEntries(extra: string): Map<TextKey, string[]> {
+  const found = new Map<TextKey, string[]>();
+  if (!/^(?:title|author|date|abstract)[ \t]*:/m.test(extra)) return found;
+  const orig = extra.replace(/\r\n?/g, '\n').split('\n');
+  const lines = orig.map(detab);
+  for (const item of splitItems(lines, 0)) {
+    if (item.kind !== 'entry') continue;
+    const key = keyOf(lines[item.start], 0);
+    if (key === null || !TEXT_KEYS.has(key)) continue;
+    const cx = context();
+    cx.textKey = true;
+    try {
+      const value = parseEntry(lines.slice(item.start, item.end), 0, cx).value;
+      if (cx.keepRaw && (key === 'author' ? authors(value, () => {}) : text(value)) !== null) found.set(key as TextKey, orig.slice(item.start, item.end));
+    } catch (e) {
+      if (!(e instanceof YamlError) && !(e instanceof Invalid)) throw e;
+    }
+  }
+  return found;
+}
+
+/** The `bibliography:` entry the Markdown reader keeps in
+ *  doc.attrs.frontmatter while the document's bibliography is a sidecar it
+ *  has not read (writeFrontmatter's `keptBibliography: 'write'`). */
+export function bibliographyEntry(path: string): string {
+  return `bibliography: ${scalar(path)}`;
+}
+
+/** A kept `extra` without its top-level entries for `key` (the blank lines
+ *  around one collapse to one; none at the ends). */
+export function withoutEntry(extra: string, key: string): string {
+  const orig = extra.replace(/\r\n?/g, '\n').split('\n');
+  const lines = orig.map(detab);
+  const kept: string[] = [];
+  let pendingBlank = false;
+  for (const item of splitItems(lines, 0)) {
+    if (item.kind === 'blank') {
+      pendingBlank = kept.length > 0;
+      continue;
+    }
+    if (item.kind === 'entry' && keyOf(lines[item.start], 0) === key) continue;
+    if (pendingBlank) kept.push('');
+    pendingBlank = false;
+    append(kept, orig.slice(item.start, item.end));
+  }
+  return kept.join('\n');
 }
