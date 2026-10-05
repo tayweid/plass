@@ -1306,6 +1306,48 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
     JSON.stringify([glued.md1, glued.md2]),
   );
 
+  // A paragraph whose text is a literal `\newpage` stays text (`\\newpage`
+  // in the file, as pandoc reads it), never a page break.
+  for (const text of ['\\newpage', '\\pagebreak']) {
+    const s = saves(doc(schema.nodes.paragraph.create(null, schema.text(text))));
+    check(`the text ${text} is no page break`, s.md1 === `\\${text}\n` && s.back.firstChild!.type.name === 'paragraph' && s.back.firstChild!.textContent === text && s.md2 === s.md1, JSON.stringify([s.md1, s.back.toJSON()]));
+  }
+
+  // An image whose alt is spaces alone is no caption: no no-break space
+  // after it, which would read back as text.
+  for (const alt of [' ', ' ']) {
+    const s = saves(doc(schema.nodes.paragraph.create(null, schema.nodes.image.create({ src: 'a.png', alt }))));
+    check(`a lone image with alt ${JSON.stringify(alt)} reads back alone`, s.back.firstChild!.childCount === 1 && s.back.firstChild!.firstChild!.attrs.alt === alt && s.md2 === s.md1, JSON.stringify([s.md1, s.back.toJSON()]));
+  }
+
+  // A `.continued` row says when it cannot join its grid as written.
+  const between = mdToDoc(':::: {.columns gutter=1em}\n\n::: column\n\na\n\n:::\n\n::::\n\n<!-- between -->\n\n:::: {.columns .continued gutter=1em}\n\n::: column\n\nb\n\n:::\n\n::::\n');
+  check('a comment between grid rows is reported as moved', JSON.stringify(kinds(between.doc)) === '["grid","editor_comment"]' && between.warnings.some((w) => /between a grid's rows/.test(w)), JSON.stringify([kinds(between.doc), between.warnings]));
+  const orphan = mdToDoc('Para.\n\n:::: {.columns .continued gutter=1em}\n\n::: column\n\nb\n\n:::\n\n::::\n');
+  check('a .continued row with no grid before it is reported', JSON.stringify(kinds(orphan.doc)) === '["paragraph","grid"]' && orphan.warnings.some((w) => /continues no grid/.test(w)), JSON.stringify([kinds(orphan.doc), orphan.warnings]));
+
+  // A formula with spaces at its edges, a link address with a space or an
+  // unbalanced parenthesis, a line break in a heading.
+  const spaced = saves(doc(schema.nodes.paragraph.create(null, [schema.text('a '), schema.nodes.math_inline.create({ src: ' y ' }), schema.text(' b')])));
+  check('an inline formula is written without its edge spaces', spaced.md1 === 'a $y$ b\n' && find(spaced.back, (n) => n.type.name === 'math_inline')?.attrs.src === 'y' && spaced.md2 === spaced.md1, JSON.stringify(spaced.md1));
+  const blank = saves(doc(schema.nodes.paragraph.create(null, [schema.text('a '), schema.nodes.math_inline.create({ src: ' ' }), schema.text(' b')])));
+  check('an empty inline formula is dropped, with a warning', !/\$/.test(blank.md1) && blank.warned.some((w) => /empty inline formula/.test(w)) && blank.md2 === blank.md1, JSON.stringify(blank.md1));
+  for (const [href, want] of [
+    ['https://x.org/a b', 'https://x.org/a%20b'],
+    ['https://x.org/a)b', 'https://x.org/a)b'],
+    ['https://x.org/(a', 'https://x.org/(a'],
+    ['<x>', '%3Cx%3E'],
+  ]) {
+    const s = saves(doc(schema.nodes.paragraph.create(null, [schema.text('see '), schema.text('x', [schema.marks.link.create({ href })])])));
+    const got = find(s.back, (n) => n.isText && n.marks.some((m) => m.type.name === 'link'))?.marks[0].attrs.href;
+    check(`a link address is escaped: ${JSON.stringify(href)}`, got === want && s.md2 === s.md1, JSON.stringify([s.md1, got]));
+  }
+  const broken = saves(doc(schema.nodes.heading.create({ level: 2 }, [schema.text('Line one'), schema.nodes.hard_break.create(), schema.text('line two')])));
+  check(
+    'a line break in a heading is written as a space, with a warning',
+    broken.md1 === '## Line one line two\n' && broken.back.childCount === 1 && broken.warned.some((w) => /line break in a heading/.test(w)) && broken.md2 === broken.md1,
+    JSON.stringify(broken.md1),
+  );
 }
 
 // Every fixture under tests/fixtures/md parses and converges.

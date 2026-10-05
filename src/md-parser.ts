@@ -1471,7 +1471,10 @@ export function mdToDoc(src: string): MdImport {
     const solid = kids.filter(
       (k) => !(k.type === 'softbreak' || (k.type === 'text' && /^[ \t\n]*$/.test(uncommented(k.content))) || (k.type === 'html_inline' && readMdComment(k.content) !== null)),
     );
-    if (solid.length === 1 && solid[0].type === 'text' && /^\\(?:newpage|pagebreak)\s*$/.test(uncommented(solid[0].content))) {
+    // The command as the source writes it: `\\newpage` (an escaped
+    // backslash) is text, as pandoc reads it.
+    const command = (text: string) => /^\\(?:newpage|pagebreak)$/.test(uncommented(text).replace(/<!--[\s\S]*?-->/g, '').trim());
+    if (solid.length === 1 && solid[0].type === 'text' && command(solid[0].content) && command(inline?.content ?? '')) {
       hoistIn(kids);
       H.seen = true;
       if (top) return [schema.nodes.page_break.create()];
@@ -1512,7 +1515,9 @@ export function mdToDoc(src: string): MdImport {
         forceAfter--;
         node = schema.nodes.figure.create({ src, label, title, widthPct: widthOf(attrs, 'figure') }, content);
       } else {
-        node = paragraph.create(null, [schema.nodes.image.create({ src, alt: null, title: title || null, widthPct: widthOf(attrs, 'image') })]);
+        // No caption: an alt of spaces alone stays as written.
+        const alt = altText(img.children ?? []);
+        node = paragraph.create(null, [schema.nodes.image.create({ src, alt: alt || null, title: title || null, widthPct: widthOf(attrs, 'image') })]);
       }
       hoistIn(kids.slice(at + 1));
       return [node];
@@ -1735,6 +1740,8 @@ export function mdToDoc(src: string): MdImport {
       while (gi >= 0 && seq[gi].type === schema.nodes.editor_comment) gi--;
       const grid = continued && gi >= 0 && seq[gi].type === schema.nodes.grid ? seq[gi] : null;
       if (grid) H.seen = true;
+      if (continued && !grid) warn(`"${opener}" (${where}) continues no grid (none directly before it) — it starts a grid of its own`);
+      else if (grid && gi < seq.length - 1) warn(`a comment between a grid's rows (before ${where}) moves after the grid — the rows are one grid`);
       const shares: Array<number | null> = [];
       const cells: PMNode[] = [];
       for (let j = i + 1; j < close; ) {

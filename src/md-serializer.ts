@@ -51,6 +51,17 @@ function codeSpan(text: string): string {
   return fence + pad + text + pad + fence;
 }
 
+/** A link's or an image's destination as Markdown writes it: white space
+ *  percent-encoded (a space would end it), a backslash and a parenthesis
+ *  (one unbalanced would end it) escaped, and outside a `data:` URL an
+ *  angle bracket percent-encoded (an opening `<` would make it a bracketed
+ *  destination; the reader encodes both, so the next save writes the
+ *  same). */
+const destination = (href: string) => {
+  const data = /^data:/i.test(href);
+  return href.replace(/[\\()<>]|\s/g, (c) => (/\s/.test(c) || (!data && (c === '<' || c === '>')) ? encodeURIComponent(c) : c === '<' || c === '>' ? c : `\\${c}`));
+};
+
 /** A number as Markdown writes it: at most three decimals, no trailing
  *  zeros. */
 const num = (n: number) => String(Math.round(n * 1000) / 1000);
@@ -327,7 +338,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           true,
         );
         const title = link.attrs.title as string | null;
-        putWhole(`[${label}](${link.attrs.href as string}${title ? ` "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ''})`);
+        putWhole(`[${label}](${destination(link.attrs.href as string)}${title ? ` "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ''})`);
         k = end;
         continue;
       }
@@ -367,11 +378,20 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       }
       moveTo(marksOf(child), '', k);
       switch (child.type.name) {
-        case 'math_inline':
-          // One line: a formula's soft break reads back as its space.
-          putWhole(`$${(child.attrs.src as string).replace(/\s*\n\s*/g, ' ')}$`);
+        case 'math_inline': {
+          // One line: a formula's soft break reads back as its space. Spaces
+          // at its edges print nothing and would unmake it (`$ y $` is
+          // text), so they go; a formula of spaces alone prints nothing and
+          // has no form (`$$` opens display math).
+          const src = (child.attrs.src as string).replace(/\s*\n\s*/g, ' ').trim();
+          if (!src) {
+            warn('an empty inline formula has no Markdown form — dropped');
+            break;
+          }
+          putWhole(`$${src}$`);
           mathEnd = md.length;
           break;
+        }
         // Pandoc's raw-attribute syntax: standard markdown that other
         // tools understand as "Typst-only", and round-trips here.
         case 'typst_inline': {
@@ -411,9 +431,8 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           const altText = String(child.attrs.alt ?? '').replace(/([\\[\]])/g, '\\$1');
           const title = String(child.attrs.title ?? '');
           if (src.startsWith('data:')) warn('embedded image written as a data: URL — consider a project folder');
-          const destination = src.replace(/([\\()\s])/g, (c) => (c === ' ' ? '%20' : `\\${c}`));
           const width = child.attrs.widthPct != null ? `{width=${num(child.attrs.widthPct as number)}%}` : '';
-          putWhole(`![${altText}](${destination}${title ? ` "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ''})${width}`);
+          putWhole(`![${altText}](${destination(src)}${title ? ` "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ''})${width}`);
           break;
         }
         case 'footnote': {
@@ -559,7 +578,8 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         if (nearTable) text = text.replace(/^:/, '\\:').replace(/^([Tt]able):/, '$1\\:');
         // A lone image with a caption is a figure to pandoc; the no-break
         // space after it keeps it an image in its paragraph (the reader
-        // drops that space again). Spaces beside it do not count. An image
+        // drops that space again). Spaces beside it do not count, and an alt
+        // of spaces alone is no caption (the reader's test). An image
         // inside emphasis is no figure (pandoc's figure is an image alone in
         // its paragraph), so it needs no space.
         const solid: PMNode[] = [];
@@ -567,13 +587,18 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           if (!(c.isText && /^[ \t\n]*$/.test(c.text ?? ''))) solid.push(c);
         });
         const marked = (c: PMNode) => c.marks.some((m) => ['em', 'strong', 'strike'].includes(m.type.name));
-        if (solid.length === 1 && solid[0].type.name === 'image' && solid[0].attrs.alt && !marked(solid[0])) text += '\u00a0';
+        if (solid.length === 1 && solid[0].type.name === 'image' && String(solid[0].attrs.alt ?? '').trim() && !marked(solid[0])) text += '\u00a0';
         const classes = [...(node.attrs.keep ? ['keep'] : []), ...(node.attrs.align === 'center' || node.attrs.align === 'right' ? [node.attrs.align as string] : [])];
         if (node.attrs.align && node.attrs.align !== 'center' && node.attrs.align !== 'right') warn(`paragraph alignment "${node.attrs.align as string}" has no Markdown form — dropped`);
         return classes.length ? div(divDepth(node), writeFenceAttrs({ id: '', classes, kvs: [] }), text) : text;
       }
       case 'heading': {
-        let text = inline(node);
+        // A heading is one line: a line break in it is written as a space.
+        const kids: PMNode[] = [];
+        node.forEach((c) => kids.push(c.type.name === 'hard_break' ? node.type.schema.text(' ', c.marks) : c));
+        if (kids.some((c, k) => c !== node.child(k))) warn('a line break in a heading has no Markdown form — written as a space');
+        // Spaces at its edges never print, and Markdown drops them on read.
+        let text = inline(node.type.create(node.attrs, kids)).replace(/^[ \t]+|[ \t]+$/g, '');
         // Text that would read as the heading's own attributes or closing
         // hashes.
         if (/\}\s*$/.test(text)) {
@@ -657,8 +682,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         const kvs: Array<[string, string]> = node.attrs.widthPct != null ? [['width', `${num(node.attrs.widthPct as number)}%`]] : [];
         const attrs = label || kvs.length ? writeAttrBlock({ id: label, classes: [], kvs }) : '';
         const title = node.attrs.title as string;
-        const destination = src.replace(/([\\()\s])/g, (c) => (c === ' ' ? '%20' : `\\${c}`));
-        return `![${caption}](${destination}${title ? ` "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ''})${attrs}`;
+        return `![${caption}](${destination(src)}${title ? ` "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ''})${attrs}`;
       }
       case 'table': {
         const attrs = tableDivAttrs(node, warn);

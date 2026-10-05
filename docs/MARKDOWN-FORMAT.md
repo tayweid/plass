@@ -262,7 +262,10 @@ The left panel shows the shift in demand.
   `mm` and `cm` are converted. Without it, the gutter is `1em`. Write the
   same `gutter` on every row.
 - Plass warns when a `.continued` row has a different number of cells or a
-  different gutter from the grid it joins.
+  different gutter from the grid it joins, when no grid comes directly
+  before it (the row then starts a grid of its own), and when a comment
+  stands between it and the grid's rows before it (the comment moves after
+  the grid).
 
 **Aligned or kept paragraph.** Wrap exactly one paragraph. `keep` stops it
 from breaking across pages. You can combine the classes. Anything else
