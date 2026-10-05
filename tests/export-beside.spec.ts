@@ -248,7 +248,7 @@ test('Export → Typst never overwrites the open .typ; Export → Markdown write
   const exported = result.messages.filter((m) => m.startsWith('Exported open-typ/Paper.md'));
   expect(exported).toHaveLength(1);
   expect(exported[0]).toContain(
-    'Exported open-typ/Paper.md — table styling/captions are not representable in Markdown — simplified to a plain table',
+    'Exported open-typ/Paper.md — table Typst parameters (params) have no Markdown form — dropped',
   );
 });
 
