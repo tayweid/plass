@@ -21,7 +21,10 @@ import { atPaperSize } from './paper-scale';
 
 export const DEFAULT_GRID_GUTTER_EM = 1;
 
-/** "2 : 1", "2 1", "2,1", "60/40" → [2, 1] / [60, 40]; null when unusable. */
+/** "2 : 1", "2 1", "2,1", "60/40" → [2, 1] / [1.5, 1]; null when unusable.
+ *  Shares are canonical: each divided by the smallest and rounded to 3
+ *  decimals (ratio-equivalent shares lay out identically, and the
+ *  Markdown file writes them as percents that read back the same). */
 export function parseColumnShares(text: string): number[] | null {
   const parts = text
     .split(/[\s:,/]+/)
@@ -29,7 +32,8 @@ export function parseColumnShares(text: string): number[] | null {
     .filter(Boolean)
     .map((p) => Number(p.replace(/fr$/i, '')));
   if (!parts.length || parts.length > 12 || parts.some((n) => !Number.isFinite(n) || n <= 0)) return null;
-  return parts.map((n) => Math.round(n * 1000) / 1000);
+  const min = Math.min(...parts);
+  return parts.map((n) => Math.round((n / min) * 1000) / 1000);
 }
 
 export const formatColumnShares = (columns: number[]): string => columns.map((c) => String(c)).join(' : ');
