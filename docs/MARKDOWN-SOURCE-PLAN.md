@@ -642,9 +642,9 @@ never again.
 5. **Default format:** flips to `.md` in this plan (step 8).
 6. **Typst CLI version:** 0.14.2 is the version the export is exact for
    (above); 0.15.x compiles it.
-7. **Exported math:** pin mitex 0.2.7 now (step 0); native translation
-   (step 15, appendix A) deferred on 2026-10-05 to the in-app Typst
-   upgrade, which needs the same identity proof.
+7. **Exported math:** pin mitex 0.2.7 now (step 0); then step 15 (decided
+   2026-10-05): keep typst 0.14.2, bundle mitex's translator, and compile
+   and export plain Typst math with no package download.
    In plain terms: mitex is a plugin the export currently depends on to
    turn LaTeX into Typst math at compile time; step 15 writes the
    translated Typst math into the file instead, plus a short list of
@@ -1076,17 +1076,70 @@ rename/launch persistence tests, source-view autosave and fold, fallback)
 move to `.md` fixtures with YAML headers; the pure layout specs keep
 their `.typ` fixtures.
 
-### Deferred: the Typst upgrade (decided 2026-10-05)
+### Step 15 (back in this run, decided 2026-10-05: keep typst 0.14.2, export plain Typst)
 
-**Step 15 — Native-Typst math export** (deferred; design in appendix A).
-Taylor and the orchestrator agreed on 2026-10-05 to do this together with
-moving the in-app compiler (and the line-break port pinned to it) from
-typst 0.14.2 to a current release, because both changes need the same
-per-formula and per-line identity proof. mitex 0.2.7 already closes the
-brief's compile gap, so nothing is blocked meanwhile. Original scope, kept
-for that session:
-Translate each formula with mitex's own WASM converter driven from JS,
-emit `$ … # Pandoc Markdown as the on-disk source: the plan
+**Step 15 — Native-Typst math, with no mitex package.** Taylor, 2026-10-05:
+"just keep 14.2 and export plain typst". No Typst upgrade. Design (appendix
+A, made concrete):
+
+- **Translator, bundled.** mitex 0.2.7's own `mitex.wasm` (Apache-2.0,
+  280 KB) is vendored into the app with its license and pinned sha256 and
+  loaded locally, never fetched. A new `src/math-convert.ts` drives it
+  through the typst plugin protocol (`typst_env` write-args/send-result,
+  `convert_math(len, len)`): `ensureMathConverter(): Promise<void>`
+  loads it once (browser: the bundled asset; node: the file), and
+  `convertMath(latex): string` is synchronous after that, cached per
+  source. Every caller of a print-mode `docToTyp` (PDF export, the audit's
+  compile, `exportCopy`, math-ink, the node tests) awaits
+  `ensureMathConverter()` first; `docToTyp` throws a clear error if it is
+  asked for print output before the converter is loaded.
+- **Prelude.** `src/typst-math-prelude.ts` holds the `#let` definitions
+  mitex's output needs, copied from mitex 0.2.7's `specs/` (Apache-2.0,
+  credited): `mitexsqrt`, `mitexmathbf`, `mitexunderbrace`, `textmath`,
+  `operatorname`, `aligned`, the matrix handles, `frac`, the colour and
+  phantom handles — every handle-or-symbol entry of `standard.typ`. The
+  print header emits only the definitions the document's converted math
+  names.
+- **Two emit modes.** `islands: 'print'` (PDF, audit, Export → Typst)
+  emits native math: inline `$…$`, display `$ … $` with its label and the
+  existing numbering set/restore pairs, table cells likewise, bold math as
+  `strong(...)` around the equation. `islands: 'file'` (the legacy `.typ`
+  SAVE, editable until step 13) keeps today's `#mi`/`#mitex` form and
+  import, so a Plass-saved `.typ` reopens exactly and the
+  `typ-parser.test.ts` byte-identical round trips stay green. An exported
+  (print) `.typ` is for compiling, not reopening: its native math would
+  read back as LaTeX (documented in MARKDOWN-FORMAT.md by step 11).
+- **math-ink** compiles each formula as prelude + native equation with the
+  same baseline/width probe (plain and strong).
+- **No package fetch.** The worker's package registry denies every
+  package; `TYPST_PACKAGE_POLICY`, `loadPinnedPackage` and the fetch go;
+  `MITEX_IMPORT` stays only for the file-mode `.typ` save.
+  `security.test.ts` and `tests/security.spec.ts` assert that no package
+  request is ever made.
+- **Notices.** The vendored wasm and the copied prelude get their
+  Apache-2.0 notice so `npm run verify:licenses` stays green (extend the
+  generator or the hand-written notices file, whichever the scripts
+  expect).
+- **A formula the converter rejects** (step 0 found 20 such in the corpus,
+  e.g. `\hfill`, `\/`, an unexpanded macro) fails visibly exactly as it
+  does today: math-ink marks it failed (outlined), and the PDF export
+  reports the error rather than printing something else.
+- **Proof before merge (the acceptance).** Re-run step 0's A/B harness:
+  every formula of the demo, the fixtures and the course folders (about
+  950, plain and strong) compiled with the typst 0.14.2 binary as
+  `#mi`/`#mitex` (mitex 0.2.7) and as prelude + native math, using
+  math-ink's exact wrapper; identical SVG bytes and identical
+  `measure().width`, counts and every difference in the commit message.
+  Then `npm run audit` (mismatch 0, unmeasured 0), and the exported demo
+  compiles offline with an empty package cache.
+- **Files:** `src/math-convert.ts` (+ test), `src/typst-math-prelude.ts`,
+  the vendored wasm, `src/typ-serializer.ts`, `src/math-ink.ts`,
+  `src/pdf.ts`, `src/file-manager.ts` (`exportCopy` awaits the
+  converter), `src/typst-config.ts`, `src/typst-compiler.worker.ts`,
+  `src/security.test.ts`, `tests/security.spec.ts`,
+  `src/typ-export-compile.test.ts`, notices. Prose docs (README,
+  SECURITY.md, PRIVACY.md, MARKDOWN-FORMAT.md, demo-doc prose) are step
+  11's.
 
 ### Optional, later, each its own session
 
