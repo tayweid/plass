@@ -993,6 +993,40 @@ test('a reload after the sidecar was read with the folder reconnects clean (./ p
   await expect.poll(() => blocksAndList(page)).toEqual({ kinds: ['doc_title', 'paragraph', 'bibliography'], painted: 1 });
 });
 
+test('granting the folder after a folderless open reads the sidecar, and a reload reconnects clean', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-sidecar-grant', {
+    'refs.bib': ARROW,
+    'Paper.md': '---\ntitle: Paper\nbibliography: refs.bib\n---\n\nArrow [@arrow1951] started it.\n',
+  });
+  // A Finder launch: the file without its folder, then the folder granted.
+  await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await app.__fm.loadHandle(await dir.getFileHandle('Paper.md'));
+    (window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker = async () => dir;
+    await app.__fm.attachFolder();
+  }, dirName);
+  await expect(page.locator('#toast')).toContainText('bibliography read from refs.bib');
+
+  // The window's own record now carries the folder, so the reload reconnects
+  // with it and the bibliography read above is not a conflict.
+  await page.reload();
+  await page.waitForFunction(() => (window as unknown as SidecarApp).__fm?.handle?.name === 'Paper.md');
+  await expect(page.locator('#toast')).toContainText('Reconnected');
+  const after = await page.evaluate(() => {
+    const app = window as SidecarApp & { __fm: { hasConflict: boolean; dir: FileSystemDirectoryHandle | null } };
+    return {
+      conflict: app.__fm.hasConflict,
+      dirty: app.__fm.dirty,
+      folder: Boolean(app.__fm.dir),
+      bib: (app.view.state.doc.attrs.bib as { content: string } | null)?.content ?? null,
+    };
+  });
+  expect(after).toEqual({ conflict: false, dirty: false, folder: true, bib: expect.stringContaining('@book{arrow1951') });
+});
+
 test('a sidecar left unread stays pending across a reload, and the folder reads it', async ({ page }) => {
   await page.goto('/?new=1');
   await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));

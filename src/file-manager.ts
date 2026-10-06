@@ -753,6 +753,9 @@ export class FileManager {
         return false;
       }
       this.dir = dir;
+      // This window's record carries the folder now, so a reload reconnects
+      // with it: figures load, and a sidecar read here is not a conflict.
+      this.rememberTabFile();
       this.hooks.onState();
       const bib = await this.readPendingBibliography();
       this.hooks.message(`Project folder attached — ${dir.name}/${this.handle.name}${bib}`);
