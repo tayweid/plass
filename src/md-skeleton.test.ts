@@ -7,7 +7,7 @@
 // Run: npx tsx src/md-skeleton.test.ts
 import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
-import { docSkeleton, firstDivergence, pandocSkeleton, type PandocDoc, type PandocNode, type SkeletonRecord } from './md-skeleton';
+import { docSkeleton, firstDivergence, pandocSkeleton, refereeCompare, showDivergence, type PandocDoc, type PandocNode, type SkeletonRecord } from './md-skeleton';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = '') {
@@ -892,6 +892,33 @@ same(
   const a = [rec('paragraph', 0, { text: 'x', mode: ['normal'] })];
   const b = [rec('paragraph', 0, { text: 'x', mode: ['in-text'] })];
   check('firstDivergence: equal, ignored field, length', firstDivergence(a, a) === -1 && firstDivergence(a, b) === 0 && firstDivergence(a, b, ['mode']) === -1 && firstDivergence(a, [...a, ...a]) === 1);
+}
+
+// The referee's comparison (md-parity.test.ts runs it against pandoc): the
+// accepted divergences set aside record by record, nothing else.
+{
+  const cite = (mode: string[], text = 'see ⟦cite:a⟧') => rec('paragraph', 0, { text, mode });
+  const hr = rec('hr', 0);
+  const both = refereeCompare([cite(['normal']), hr, cite(['normal'])], [cite(['in-text']), hr, cite(['suppress'])]);
+  check(
+    'refereeCompare: citation mode is accepted wherever it occurs; the rest is still compared',
+    both.at === -1 && JSON.stringify(both.accepted) === '[{"at":0,"id":"citation mode"},{"at":2,"id":"citation mode"}]',
+    JSON.stringify(both),
+  );
+  const key = refereeCompare([cite(['normal'])], [cite(['in-text'], 'see ⟦cite:b⟧')]);
+  const count = refereeCompare([cite(['normal', 'normal'])], [cite(['in-text'])]);
+  check('refereeCompare: a mode difference beside any other difference is not accepted', key.at === 0 && !key.accepted.length && count.at === 0 && !count.accepted.length);
+  const later = refereeCompare([cite(['normal']), hr], [cite(['in-text']), rec('paragraph', 0, { text: 'x' })]);
+  const longer = refereeCompare([cite(['normal'])], [cite(['in-text']), hr]);
+  check('refereeCompare: the first divergence after an accepted one is reported, a missing record too', later.at === 1 && later.accepted.length === 1 && longer.at === 1);
+  check('refereeCompare: agreeing skeletons accept nothing', JSON.stringify(refereeCompare([hr], [hr])) === '{"at":-1,"accepted":[]}');
+  const shown = showDivergence([hr, rec('paragraph', 0, { text: 'a' })], [hr], 1, 1);
+  check(
+    'showDivergence: both skeletons around the divergence, the pair marked, a missing record named',
+    shown === ['  plass  0: {"kind":"hr","depth":0,"printed":true}', '  pandoc 0: {"kind":"hr","depth":0,"printed":true}', '> plass  1: {"kind":"paragraph","depth":0,"printed":true,"text":"a"}', '> pandoc 1: (none)'].join('\n'),
+    shown,
+  );
+  check('showDivergence: a long line is cut at the width', showDivergence([rec('paragraph', 0, { text: 'x'.repeat(50) })], [], 0, 0, 30).split('\n')[0].length === 30);
 }
 
 declare const process: { exitCode?: number };
