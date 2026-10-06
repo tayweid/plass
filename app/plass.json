@@ -8,7 +8,7 @@
   "scheme": "plass",
   "site": "https://plass.tayweid.io",
   "elsewhere": "Elsewhere, Plass runs in Chrome at https://plass.tayweid.io.",
-  "defaultDocument": "Untitled.typ",
+  "defaultDocument": "Untitled.md",
   "autosave": true,
   "window": {
     "width": 1100,

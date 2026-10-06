@@ -252,13 +252,16 @@ test('Export → Typst never overwrites the open .typ; Export → Markdown write
   );
 });
 
-test('the .typ export from an open Typst source is the print form, not the typed text', async ({ page }) => {
+test('the .typ export from an open source view is the print form, not the typed text', async ({ page }) => {
   // A save from the source writes the typed bytes verbatim; the export must
   // not take that shortcut, or an island typed there would run in the .typ.
+  // A document with no file is Markdown (plan step 8): the island is a
+  // {=typst} block typed in its Markdown source, and prints as code.
   await page.goto('/?new=1');
   await page.waitForFunction(() => !!(window as { __sourceView?: unknown }).__sourceView);
   const result = await page.evaluate(async () => {
     const app = window as ExportApp & {
+      __fm: { format: string };
       __sourceView: { enter(): Promise<boolean>; text(): string | null; setText(text: string): void };
     };
     const root = await navigator.storage.getDirectory();
@@ -266,13 +269,14 @@ test('the .typ export from an open Typst source is the print form, not the typed
     app.__fm.dir = dir;
     await app.__sourceView.enter();
     const sv = app.__sourceView;
-    sv.setText(sv.text()!.trimEnd() + '\n\n#let width = 3cm\n\nA paragraph typed in the source.\n');
+    sv.setText(sv.text()!.trimEnd() + '\n\n```{=typst}\n#let width = 3cm\n```\n\nA paragraph typed in the source.\n');
     await app.__fm.exportCopy();
     const typ = await (await (await dir.getFileHandle(`${app.__fm.name}.typ`)).getFile()).text();
-    return { typ, typed: sv.text() ?? '' };
+    return { typ, typed: sv.text() ?? '', format: app.__fm.format };
   });
 
-  expect(result.typed).toContain('\n\n#let width = 3cm\n\n');
+  expect(result.format).toBe('.md');
+  expect(result.typed).toContain('\n\n```{=typst}\n#let width = 3cm\n```\n\n');
   expect(result.typ).toMatch(/^\/\/ Exported from Plass — exact on typst /);
   expect(result.typ).toContain('A paragraph typed in the source.');
   expect(result.typ).toContain('```\n#let width = 3cm\n```');

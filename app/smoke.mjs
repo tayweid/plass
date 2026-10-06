@@ -1,5 +1,5 @@
 // A smoke test of Plass.app on the Claerbout shell: launch the shell from
-// the checkout (or a built app) on a .typ in a throwaway folder, see the
+// the checkout (or a built app) on a .md in a throwaway folder, see the
 // document open and typeset, edit it, save with ⌘S, and check the disk;
 // see the page fill the panel at its width, then drag the window wider
 // and zoom (the window stays, the page is drawn larger and nothing is
@@ -29,13 +29,13 @@ import { config, repo, shell } from './shell-path.mjs';
 const { _electron: electron } = createRequire(path.join(shell, 'package.json'))('@playwright/test');
 const bundle = process.argv[2];
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'plass-smoke-'));
-const doc = path.join(work, 'docs', 'smoke.typ');
+const doc = path.join(work, 'docs', 'smoke.md');
 fs.mkdirSync(path.dirname(doc));
 // Two sheets, so the scroll rail in its gutter (src/scroll-rail.ts: there
 // while the paper runs past the panel, as any Letter page does here) has a
 // page break to show.
 const filler = 'The Knuth Plass algorithm evaluates a complete paragraph and preserves globally optimal line endings while editing without visible jitter. ';
-fs.writeFileSync(doc, `= Smoke\n\nA paragraph typeset inside the shell.\n\n${Array.from({ length: 12 }, () => filler.repeat(3).trimEnd()).join('\n\n')}\n`);
+fs.writeFileSync(doc, `# Smoke\n\nA paragraph typeset inside the shell.\n\n${Array.from({ length: 12 }, () => filler.repeat(3).trimEnd()).join('\n\n')}\n`);
 
 const app = await electron.launch({
   ...(bundle

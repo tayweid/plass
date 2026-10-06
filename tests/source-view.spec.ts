@@ -99,9 +99,11 @@ test('toggling in and out of the source leaves the demo document identical', asy
   expect(await page.evaluate(() => window.__sourceView.isActive())).toBe(true);
   await expect(page.locator('#source .cm-content')).toBeVisible();
   await expect(page.locator('#editor')).toBeHidden();
+  // A document with no file is Markdown (plan step 8): the demo's source
+  // is Markdown, its footnote a [^1] note.
   const text = await sourceText(page);
-  expect(text).toContain('\n= Plass\n');
-  expect(text).toContain('#footnote[');
+  expect(text).toMatch(/^# Plass\n/);
+  expect(text).toMatch(/^\[\^1\]: /m);
   expect(await exit(page)).toBe(true);
   await expect(page.locator('#source')).toHaveCount(0);
   await expect(page.locator('#editor')).toBeVisible();
@@ -136,7 +138,7 @@ test('headings, paragraphs and footnotes typed in the source appear in the page'
   await enter(page);
   await page.evaluate(() => {
     const sv = window.__sourceView;
-    sv.setText(sv.text()!.trimEnd() + '\n\n== Written as text\n\nA new paragraph with a note.#footnote[From the source.]\n');
+    sv.setText(sv.text()!.trimEnd() + '\n\n## Written as text\n\nA new paragraph with a note.^[From the source.]\n');
   });
   await exit(page);
   const tail = await page.evaluate(() => {
@@ -316,7 +318,7 @@ test('entering carries the caret to its block and scrolls there', async ({ page 
     const sv = window.__sourceView;
     return sv.text()!.slice(sv.caret(), sv.caret() + 15);
   });
-  expect(at).toBe('== How it works');
+  expect(at).toBe('## How it works');
   // Scroll follows the caret: the caret line is in the viewport, well
   // below the top of the sheet.
   await expect.poll(() => page.evaluate(() => document.getElementById('scroll')!.scrollTop)).toBeGreaterThan(200);
@@ -339,7 +341,7 @@ test('leaving puts the page caret in the block the text caret was in', async ({ 
   // Untouched text: the mapping is exact.
   await page.evaluate(() => {
     const sv = window.__sourceView;
-    sv.setCaret(sv.text()!.indexOf('== Tables') + 5);
+    sv.setCaret(sv.text()!.indexOf('## Tables') + 5);
   });
   await exit(page);
   expect(await page.evaluate(() => window.view.state.selection.$from.parent.textContent)).toBe('Tables');
@@ -352,10 +354,10 @@ test('leaving puts the page caret in the block the text caret was in', async ({ 
   await page.evaluate(() => {
     const sv = window.__sourceView;
     const text = sv.text()!
-      .replace('== Why this exists', '== Why  this   exists\n\nAn inserted paragraph with a -- dash.')
-      .replace('== Figures', '== Figures, renamed');
+      .replace('## Why this exists', '## Why  this   exists\n\nAn inserted paragraph with a -- dash.')
+      .replace('## Figures', '## Figures, renamed');
     sv.setText(text);
-    sv.setCaret(text.indexOf('== How it works') + 3);
+    sv.setCaret(text.indexOf('## How it works') + 3);
   });
   await exit(page);
   expect(await page.evaluate(() => window.view.state.selection.$from.parent.textContent)).toBe('How it works');
@@ -363,7 +365,8 @@ test('leaving puts the page caret in the block the text caret was in', async ({ 
 });
 
 test('an off-rails #let typed in the source returns as one raw island, announced', async ({ page }) => {
-  await loadDemo(page);
+  await boot(page);
+  await openSeeded(page, 'Paper.typ', '= Paper\n\nBody text.\n');
   const islandsBefore = await page.evaluate(() => document.querySelectorAll('.ProseMirror pre').length);
   await enter(page);
   await page.evaluate(() => {
@@ -391,51 +394,69 @@ test('an off-rails #let typed in the source returns as one raw island, announced
   await expect(toast).toHaveText('');
 });
 
+test('raw Markdown typed in the source returns as islands, announced in Markdown words', async ({ page }) => {
+  await boot(page);
+  await openSeeded(page, 'Notes.md', '# Notes\n\nBody.\n');
+  await enter(page);
+  await page.evaluate(() => {
+    const sv = window.__sourceView;
+    sv.setText(sv.text()!.trimEnd() + '\n\n::: aside\nA note.\n:::\n\nPress <kbd>K</kbd>.\n');
+  });
+  const toast = page.locator('#toast');
+  await exit(page);
+  await expect(toast).toHaveText('1 Markdown block and 2 inline HTML spans kept as source, printed as code');
+  const islands = await page.evaluate(() => {
+    const kinds: string[] = [];
+    window.view.state.doc.descendants((node) => {
+      if (node.type.name === 'code_block' && node.attrs.params === 'md-raw') kinds.push('md-raw');
+      if (node.type.name === 'typst_inline') kinds.push(`inline ${node.attrs.lang}`);
+      return true;
+    });
+    return kinds;
+  });
+  expect(islands).toEqual(['md-raw', 'inline html', 'inline html']);
+});
+
 test('a format last left in the source view opens in the source view', async ({ page }) => {
   await page.goto('/?new=1');
   await page.waitForFunction(() => !!window.__sourceView);
-  // Nothing remembered: a .typ document opens in the page view.
+  // Nothing remembered: a .md document (the demo: a document with no file
+  // is Markdown) opens in the page view.
   await page.evaluate(() => (window as unknown as { __loadDemo: () => void }).__loadDemo());
+  expect(await page.evaluate(() => window.__fm.format)).toBe('.md');
   expect(await page.evaluate(() => window.__sourceView.isActive())).toBe(false);
-  // Enter the source and leave the document there; the next .typ opens in it.
+  // Enter the source and leave the document there; the next .md opens in it.
   await enter(page);
   await page.evaluate(() => (window as unknown as { __loadDemo: () => void }).__loadDemo());
   expect(await page.evaluate(() => window.__sourceView.isActive())).toBe(true);
-  expect(await page.evaluate(() => localStorage.getItem('typeset-source-mode'))).toContain('"source"');
-  // Leave the source; the memory follows, and the next .typ opens in the page.
+  expect(JSON.parse((await page.evaluate(() => localStorage.getItem('typeset-source-mode'))) ?? '{}')).toMatchObject({ '.md': 'source' });
+  // Leave the source; the memory follows, and the next .md opens in the page.
   await exit(page);
   await page.evaluate(() => (window as unknown as { __loadDemo: () => void }).__loadDemo());
   expect(await page.evaluate(() => window.__sourceView.isActive())).toBe(false);
-  // The memory is per format: a .typ left in the source does not drag a
-  // .md there.
-  await enter(page);
-  await exit(page);
-  await page.evaluate(() => localStorage.setItem('typeset-source-mode', JSON.stringify({ '.typ': 'source' })));
-  await page.evaluate(async () => {
-    const root = await navigator.storage.getDirectory();
-    const file = await root.getFileHandle(`memory-${Date.now()}.md`, { create: true });
-    const w = await file.createWritable();
-    await w.write('# Notes\n\nBody.\n');
-    await w.close();
-    await (window as unknown as { __fm: { loadHandle(h: FileSystemFileHandle): Promise<boolean> } }).__fm.loadHandle(file);
-  });
+  // The memory is per format: a .md left in the source does not drag a
+  // .typ there.
+  await page.evaluate(() => localStorage.setItem('typeset-source-mode', JSON.stringify({ '.md': 'source' })));
+  await openSeeded(page, `memory-${Date.now()}.typ`, '= Notes\n\nBody.\n');
+  expect(await page.evaluate(() => window.__fm.format)).toBe('.typ');
   expect(await page.evaluate(() => window.__sourceView.isActive())).toBe(false);
 });
 
 test('writing niceties: markup keys, focus mode, and typewriter scrolling', async ({ page }) => {
   await loadDemo(page);
   await enter(page);
-  // Mod-b / Mod-i wrap the selection in the format's markup; again unwraps.
+  // Mod-b / Mod-i wrap the selection in the format's markup (the demo's:
+  // Markdown); again unwraps.
   await page.evaluate(() => window.__sourceView.setText('alpha beta\n\nsecond paragraph here\n\nthird one\n'));
   await page.evaluate(() => window.__sourceView.setCaret(0));
   await page.keyboard.press('Shift+End');
   await page.keyboard.press('ControlOrMeta+b');
-  expect(await page.evaluate(() => window.__sourceView.text()!.split('\n')[0])).toBe('*alpha beta*');
+  expect(await page.evaluate(() => window.__sourceView.text()!.split('\n')[0])).toBe('**alpha beta**');
   await page.keyboard.press('ControlOrMeta+b');
   expect(await page.evaluate(() => window.__sourceView.text()!.split('\n')[0])).toBe('alpha beta');
   await page.evaluate(() => window.__sourceView.setCaret(2)); // inside "alpha"
   await page.keyboard.press('ControlOrMeta+i');
-  expect(await page.evaluate(() => window.__sourceView.text()!.split('\n')[0])).toBe('_alpha_ beta');
+  expect(await page.evaluate(() => window.__sourceView.text()!.split('\n')[0])).toBe('*alpha* beta');
 
   // Focus mode dims every paragraph but the caret's, and persists.
   await page.evaluate(() => window.__sourceView.setCaret(20)); // second paragraph
@@ -482,7 +503,7 @@ test('PDF export from the source runs on the parsed text', async ({ page }) => {
   await enter(page);
   await page.evaluate(() => {
     const sv = window.__sourceView;
-    sv.setText(sv.text()!.trimEnd() + '\n\n= Written in the source\n\nA paragraph the page view never saw.\n');
+    sv.setText(sv.text()!.trimEnd() + '\n\n# Written in the source\n\nA paragraph the page view never saw.\n');
   });
   await page.getByTitle('Export — PDF, .md, .typ, .tex', { exact: true }).click();
   const result = await page.evaluate(async () => {
@@ -519,7 +540,8 @@ test('PDF export from the source runs on the parsed text', async ({ page }) => {
 // ---------- step 3b: the folded preamble ----------
 
 test('a .typ source opens with the generated preamble folded and the caret on the body', async ({ page }) => {
-  await loadDemo(page);
+  await boot(page);
+  await openSeeded(page, 'Paper.typ', '= Paper\n\nBody text.\n');
   await enter(page);
   const fold = page.locator('#source .source-preamble-fold');
   await expect(fold).toBeVisible();
@@ -528,8 +550,8 @@ test('a .typ source opens with the generated preamble folded and the caret on th
   const lines = await page.locator('#source .cm-line').allTextContents();
   expect(lines[0]).toMatch(/Document settings/);
   expect(lines.some((l) => l.includes('#set page'))).toBe(false);
-  expect(lines.slice(1).find((l) => l.trim() !== '')).toBe('= Plass');
-  const caret = await page.evaluate(() => ({ at: window.__sourceView.caret(), body: window.__sourceView.text()!.indexOf('= Plass') }));
+  expect(lines.slice(1).find((l) => l.trim() !== '')).toBe('= Paper');
+  const caret = await page.evaluate(() => ({ at: window.__sourceView.caret(), body: window.__sourceView.text()!.indexOf('= Paper') }));
   expect(caret.at).toBe(caret.body);
   // The fold is presentation: the text still carries the preamble.
   expect(await sourceText(page)).toMatch(/^\/\/ Exported from Plass[^\n]*\n#set page/);
@@ -552,6 +574,30 @@ test('a Markdown source has no preamble fold', async ({ page }) => {
   await expect(page.locator('#source .cm-content')).toBeVisible();
   await expect(page.locator('#source .source-preamble-fold')).toHaveCount(0);
   await expect(page.locator('#source .source-preamble-bar')).toHaveCount(0);
+});
+
+test('a Markdown source dims a fenced div\'s ::: lines like other markup', async ({ page }) => {
+  await boot(page);
+  await openSeeded(page, 'Notes.md', '# Notes\n\n::: solution\nThe answer.\n:::\n');
+  await enter(page);
+  await expect(page.locator('#source .cm-line', { hasText: 'The answer.' })).toBeVisible();
+  const colors = await page.evaluate(() => {
+    const lines = [...document.querySelectorAll('#source .cm-line')];
+    const line = (text: string) => lines.find((l) => l.textContent === text)!;
+    const span = (el: Element, text: string) => [...el.querySelectorAll('span')].find((s) => s.textContent === text);
+    const color = (el: Element | undefined) => (el ? getComputedStyle(el).color : null);
+    return {
+      open: color(span(line('::: solution'), '::: solution')),
+      close: color(span(line(':::'), ':::')),
+      // The heading's `#` is markup the source view already dims.
+      mark: color(span(line('# Notes'), '#')),
+      body: color(line('The answer.')),
+    };
+  });
+  expect(colors.mark).not.toBeNull();
+  expect(colors.open).toBe(colors.mark);
+  expect(colors.close).toBe(colors.mark);
+  expect(colors.open).not.toBe(colors.body);
 });
 
 // A Markdown file's settings live in its front matter (plan step 7): the
@@ -580,7 +626,8 @@ test('a Markdown front matter carries the settings through the source', async ({
 });
 
 test('a settings edit in the unfolded preamble applies on exit', async ({ page }) => {
-  await loadDemo(page);
+  await boot(page);
+  await openSeeded(page, 'Paper.typ', '= Paper\n\nBody text.\n');
   expect(await page.evaluate(() => window.view.state.doc.attrs.settings.marginTop)).toBe(1.25);
   await enter(page);
   await page.locator('#source .source-preamble-fold').click();
@@ -593,7 +640,7 @@ test('a settings edit in the unfolded preamble applies on exit', async ({ page }
   expect(settings.marginTop).toBe(1);
   expect(settings.marginLeft).toBe(1);
   // The body came through untouched.
-  expect(await page.evaluate(() => window.view.state.doc.firstChild!.textContent)).toBe('Plass');
+  expect(await page.evaluate(() => window.view.state.doc.firstChild!.textContent)).toBe('Paper');
 });
 
 test('autosave writes the folded preamble too', async ({ page }) => {
