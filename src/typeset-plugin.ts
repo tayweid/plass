@@ -504,6 +504,16 @@ export function typesetPlugin(
         fitPaper();
         return false;
       },
+      handleDOMEvents: {
+        // The passes an IME's composition held (holdForComposition) run
+        // once it has ended, in a timeout: ProseMirror's own compositionend
+        // handler runs after this one, ends `view.composing`, and reads
+        // what the commit left in the DOM in a microtask.
+        compositionend(view) {
+          setTimeout(() => viewRegistry.get(view)?.releaseComposition(), 0);
+          return false;
+        },
+      },
     },
     view: (view) => new TypesetView(view, opts),
   });
@@ -638,6 +648,9 @@ class TypesetView {
    * points (liveRun/run) and the suffix-verification deferral — which
    * bypass the scheduler — refuse to touch the DOM. */
   private suspended = false;
+  /** A pass came while an IME composed and is owed when the composition
+   *  ends (holdForComposition). */
+  private heldForComposition = false;
 
   constructor(
     private view: EditorView,
@@ -872,6 +885,7 @@ class TypesetView {
     // A caret that moved is followed only if this transaction scrolls it
     // into view (followCaret, right after this).
     if (!view.state.selection.eq(prevState.selection)) this.caretFollowed = false;
+    this.releaseComposition();
     // Document settings (font, size, hyphenation, …) invalidate every metric.
     if (view.state.doc.attrs !== prevState.doc.attrs) {
       this.paginationGeometryEpoch++;
@@ -955,7 +969,7 @@ class TypesetView {
    * breaks in the same paint as the keystroke. LayoutScheduler owns the
    * microtask. */
   private liveRun() {
-    if (this.destroyed || this.suspended) return;
+    if (this.destroyed || this.suspended || this.holdForComposition()) return;
     const perfStart = performance.now();
     const state = this.view.state;
     const prev = this.lastLiveDoc;
@@ -1350,6 +1364,35 @@ class TypesetView {
 
   requestRun() {
     this.scheduler?.scheduleSettled();
+  }
+
+  /**
+   * Whether a pass waits for an IME's composition to end. Found
+   * 2026-10-06: a composition in a word that the layout re-broke while it
+   * ran (an accent typed into the two words a Backspace had joined across a
+   * page break) committed its text twice. Re-decorating the paragraph can
+   * take the text node Chrome is composing in out of the DOM and put it
+   * back (a line's word-spacing span redrawn round it); Chrome's
+   * composition does not survive that, so its commit is a plain insertion
+   * beside the text it had composed. So no pass lays out or dispatches
+   * while a composition runs: the paragraph keeps its decorations as
+   * mapped through the composed text, and is laid out when the
+   * composition ends (releaseComposition), as after an edit.
+   */
+  private holdForComposition(): boolean {
+    if (!this.view.composing) return false;
+    this.heldForComposition = true;
+    return true;
+  }
+
+  /** Run what a composition held, once it has ended: from compositionend,
+   *  or from the next update after ProseMirror let it go another way (a
+   *  press on the page). */
+  releaseComposition(): void {
+    if (!this.heldForComposition || this.view.composing || this.destroyed) return;
+    this.heldForComposition = false;
+    this.scheduler.scheduleLive();
+    this.scheduler.scheduleAfterEdit();
   }
 
   isSuspended(): boolean {
@@ -1944,7 +1987,7 @@ class TypesetView {
   }
 
   private run() {
-    if (this.destroyed || this.suspended) return;
+    if (this.destroyed || this.suspended || this.holdForComposition()) return;
     this.lastLiveDoc = this.view.state.doc;
 
     const t0 = performance.now();
