@@ -643,7 +643,8 @@ never again.
 6. **Typst CLI version:** 0.14.2 is the version the export is exact for
    (above); 0.15.x compiles it.
 7. **Exported math:** pin mitex 0.2.7 now (step 0); native translation
-   as the required step 15 after the Markdown work lands (appendix A).
+   (step 15, appendix A) deferred on 2026-10-05 to the in-app Typst
+   upgrade, which needs the same identity proof.
    In plain terms: mitex is a plugin the export currently depends on to
    turn LaTeX into Typst math at compile time; step 15 writes the
    translated Typst math into the file instead, plus a short list of
@@ -1075,9 +1076,15 @@ rename/launch persistence tests, source-view autosave and fold, fallback)
 move to `.md` fixtures with YAML headers; the pure layout specs keep
 their `.typ` fixtures.
 
-### Wave 4 (after 11)
+### Deferred: the Typst upgrade (decided 2026-10-05)
 
-**Step 15 — Native-Typst math export** (required; design in appendix A).
+**Step 15 — Native-Typst math export** (deferred; design in appendix A).
+Taylor and the orchestrator agreed on 2026-10-05 to do this together with
+moving the in-app compiler (and the line-break port pinned to it) from
+typst 0.14.2 to a current release, because both changes need the same
+per-formula and per-line identity proof. mitex 0.2.7 already closes the
+brief's compile gap, so nothing is blocked meanwhile. Original scope, kept
+for that session:
 Translate each formula with mitex's own WASM converter driven from JS,
 emit `$ … # Pandoc Markdown as the on-disk source: the plan
 
