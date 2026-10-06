@@ -36,8 +36,13 @@
 //   - ```` ```{=typst} ```` is the raw-Typst island, ```` ```{=bibtex} ````
 //     the embedded bibliography at its position; ```` ```typst ```` and
 //     ```` ```bibtex ```` are code listings. `\newpage` is the page break.
-//   - YAML frontmatter carries title/author/date; every other line rides
-//     along verbatim (doc.attrs.frontmatter) and is written back on save.
+//   - the YAML front matter (md-frontmatter.ts) carries the settings, the
+//     roman restart and the title block: title, author and date read as
+//     the body's inlines are, the abstract as paragraphs. Keys Plass does
+//     not interpret ride along verbatim (doc.attrs.frontmatter), and so
+//     does `bibliography:` until its sidecar is read (MdImport.bibliography).
+//     Only a YAML block is front matter: a `---` block that is not opens
+//     the body with a horizontal rule.
 
 import MarkdownIt from 'markdown-it';
 import footnotePlugin from 'markdown-it-footnote';
@@ -2453,7 +2458,7 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
   if (fields) {
     const fieldTokens = (name: string, text: string): MdToken[] => {
       const scanned = prepass(text, warn, true);
-      if (scanned.store.some((s) => s.k === 'display')) warn(`${name}: display math there is read as inline math — the ${name} holds text, not blocks`);
+      if (scanned.store.some((s) => s.k === 'display')) warn(`${name}: display math there is read as inline math — it holds text, not display formulas`);
       const offset = store.length;
       store.push(...scanned.store);
       const shifted = scanned.text.replace(SENTINEL, (_, n: string) => `${S}${+n + offset}${S}`);

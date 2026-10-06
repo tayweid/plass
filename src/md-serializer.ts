@@ -16,8 +16,9 @@
 //   - `<!-- … -->` editorial comments, `\newpage`, ```` ```{=typst} ````
 //     islands, the ```` ```{=bibtex} ```` bibliography where its node is,
 //     `[@a; @b]` citation groups and bare `@eq:x` references
-//   - only the standard title/author/date keys ride in YAML frontmatter
-//     (settings are the next step's)
+//   - the YAML front matter (md-frontmatter.ts): the settings that are not
+//     the defaults, the roman restart, and the title, author, date and
+//     abstract written as body text is
 //
 // What Markdown cannot say is reported through `warn`, never dropped
 // silently.
