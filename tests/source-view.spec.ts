@@ -576,6 +576,30 @@ test('a Markdown source has no preamble fold', async ({ page }) => {
   await expect(page.locator('#source .source-preamble-bar')).toHaveCount(0);
 });
 
+test('a Markdown source dims a fenced div\'s ::: lines like other markup', async ({ page }) => {
+  await boot(page);
+  await openSeeded(page, 'Notes.md', '# Notes\n\n::: solution\nThe answer.\n:::\n');
+  await enter(page);
+  await expect(page.locator('#source .cm-line', { hasText: 'The answer.' })).toBeVisible();
+  const colors = await page.evaluate(() => {
+    const lines = [...document.querySelectorAll('#source .cm-line')];
+    const line = (text: string) => lines.find((l) => l.textContent === text)!;
+    const span = (el: Element, text: string) => [...el.querySelectorAll('span')].find((s) => s.textContent === text);
+    const color = (el: Element | undefined) => (el ? getComputedStyle(el).color : null);
+    return {
+      open: color(span(line('::: solution'), '::: solution')),
+      close: color(span(line(':::'), ':::')),
+      // The heading's `#` is markup the source view already dims.
+      mark: color(span(line('# Notes'), '#')),
+      body: color(line('The answer.')),
+    };
+  });
+  expect(colors.mark).not.toBeNull();
+  expect(colors.open).toBe(colors.mark);
+  expect(colors.close).toBe(colors.mark);
+  expect(colors.open).not.toBe(colors.body);
+});
+
 // A Markdown file's settings live in its front matter (plan step 7): the
 // source carries them, an untouched trip keeps the editor's own, and an
 // edit there applies on exit, as a .typ preamble's does.

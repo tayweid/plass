@@ -276,17 +276,35 @@ const DOLLAR = 36;
 const AT = 64;
 const WORD = /[\p{L}\p{N}_]/u;
 const REF = /^@[\p{L}\p{N}_-]+(?:[:.][\p{L}\p{N}_-]+)*/u;
+/** A pandoc fenced-div line: an opener (`::: solution`,
+ *  `::: {.columns gutter=1em}`) or a closer (`:::`). */
+const DIV_FENCE = /^:{3,}/;
 
 /** Plass's Markdown beyond CommonMark+GFM: `$…$` / `$$` math (extracted
- *  before markdown-it sees it in md-parser.ts) and `@key` references.
+ *  before markdown-it sees it in md-parser.ts), `@key` references, and
+ *  pandoc's `:::` fenced-div lines, dimmed like other markup (the content
+ *  between them is ordinary Markdown, highlighted as such).
  *  Highlight-only: these exist so the source view can tint them. */
 const plassMarkdown: MarkdownExtension = {
   defineNodes: [
     { name: 'InlineMath', style: tags.special(tags.string) },
     { name: 'MathBlock', block: true, style: tags.special(tags.string) },
+    { name: 'DivFence', block: true, style: tags.processingInstruction },
     { name: 'PlassRef', style: tags.link },
   ],
   parseBlock: [
+    {
+      name: 'DivFence',
+      parse(cx: BlockContext, line: Line) {
+        if (!DIV_FENCE.test(line.text.slice(line.pos))) return false;
+        cx.addElement(cx.elt('DivFence', cx.lineStart + line.pos, cx.lineStart + line.text.length));
+        cx.nextLine();
+        return true;
+      },
+      // A closer right under a paragraph's last line ends the paragraph,
+      // as the reader (and pandoc, inside a div) takes it.
+      endLeaf: (_cx: BlockContext, line: Line) => DIV_FENCE.test(line.text.slice(line.pos)),
+    },
     {
       name: 'MathBlock',
       parse(cx: BlockContext, line: Line) {
