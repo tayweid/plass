@@ -11,6 +11,7 @@ import { isNativeShell, onShellReload, onShellSave, reportDocument, rewoundText,
 import { openInAnotherWindow } from './open-files';
 import { migrateLegacyTableGeometry } from './typ-parser';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
+import { breakSpaceInput } from './break-space';
 import { collapseSpaces } from './collapse-spaces';
 import { listIndent } from './list-indent';
 import { printPageAt, typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugin';
@@ -150,6 +151,8 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       figuresPlugin(),
       footnoteGuard(),
       collapseSpaces(),
+      // The space a line breaks at survives an edit beside it.
+      breakSpaceInput(),
       listIndent(),
       copyTextWithoutItsBlock(),
       gridPlugin(),
