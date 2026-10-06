@@ -182,3 +182,138 @@ test('a press on the margin of a page drawn larger than its layout writes', asyn
   await pressAndType(page, line.x + 80, line.bottom + 300, '>');
   await expect.poll(() => text(page)).toEqual(['<Wide>']);
 });
+
+type SourceHook = { text(): string | null; caret(): number };
+const sourceText = (page: Page) => page.evaluate(() => (window as unknown as { __sourceView: SourceHook }).__sourceView.text());
+const sourceCaret = (page: Page) => page.evaluate(() => (window as unknown as { __sourceView: SourceHook }).__sourceView.caret());
+const sourceFocused = (page: Page) => page.evaluate(() => !!document.activeElement?.closest('.cm-editor'));
+
+test('in the plain-text view, a press on the sheet outside the text writes', async ({ page }) => {
+  // CodeMirror's text is a measure in the middle of the sheet: its air
+  // (the editor's padding, the sheet either side, #paper under a short
+  // text) took the focus to the body as the page view's margins did.
+  await blank(page);
+  await page.keyboard.type('Hello');
+  await page.getByRole('button', { name: 'Plain text view' }).click();
+  await expect(page.locator('.cm-content')).toBeVisible();
+  await expect.poll(() => sourceText(page)).toMatch(/^Hello\n*$/);
+  const content = await box(page, '.cm-content');
+  const editor = await box(page, '.cm-editor');
+  const paper = await box(page, '#paper');
+  const line = await box(page, '.cm-line');
+  expect(editor.y).toBeLessThan(content.y - 40);
+  expect(paper.bottom).toBeGreaterThan(editor.bottom + 40);
+  const middle = line.y + line.height / 2;
+
+  const press = async (where: string, x: number, y: number, caret: (text: string) => number, keys: string) => {
+    await page.mouse.click(x, y);
+    await expect.poll(() => sourceFocused(page), { message: where }).toBe(true);
+    const before = (await sourceText(page))!;
+    const at = caret(before);
+    expect(await sourceCaret(page), where).toBe(at);
+    await page.keyboard.type(keys);
+    await expect.poll(() => sourceText(page), { message: where }).toBe(before.slice(0, at) + keys + before.slice(at));
+  };
+  const lineEnd = (text: string) => text.indexOf('\n') < 0 ? text.length : text.indexOf('\n');
+  await press('the left margin beside the line', editor.x + 20, middle, () => 0, '>');
+  await press('the right margin beside the line', editor.right - 20, middle, lineEnd, '<');
+  await press('the top margin, over the line\'s start', content.x + 2, editor.y + 20, () => 0, '^');
+  await press('the editor\'s padding below the text', content.x + 60, editor.bottom - 20, (t) => t.length, '!');
+  await press('the sheet below the editor', content.x + 60, (editor.bottom + paper.bottom) / 2, (t) => t.length, '?');
+  await expect.poll(() => sourceText(page)).toMatch(/^\^>Hello<\n*!\?$/);
+
+  // A right-click on the sheet keeps the caret where it is.
+  await page.mouse.click(editor.x + 20, middle, { button: 'right' });
+  await expect.poll(() => page.evaluate(() => !!document.getSelection()!.anchorNode?.parentElement?.closest('.cm-content'))).toBe(true);
+  await page.keyboard.type('.');
+  await expect.poll(() => sourceText(page)).toMatch(/^\^>Hello<\n*!\?\.$/);
+});
+
+test('a press in the margin beside a narrow table goes in its row, never in the comment before it', async ({ page }) => {
+  // A centered two-column table is narrower than the text column: a point
+  // beside it is over nothing, and the text before the table was an
+  // editorial comment, so a margin press wrote into the note.
+  await blank(page);
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const h = await root.getFileHandle('narrow-table.md', { create: true });
+    const w = await h.createWritable();
+    await w.write('First paragraph.\n\n<!-- plass:comment\nRemember to check this proof.\n-->\n\n| A | B |\n|---|---|\n| one | two |\n| three | four |\n\nLast paragraph.\n');
+    await w.close();
+    await (window as unknown as { __fm: { loadHandle(h: FileSystemFileHandle): Promise<unknown> } }).__fm.loadHandle(h);
+  });
+  await expect(page.locator('.ProseMirror table')).toBeVisible();
+  await expect(page.locator('.editor-comment')).toBeVisible();
+  const sheet = await box(page, '.page-box');
+  const table = await box(page, '.ProseMirror table');
+  const column = await box(page, '.ProseMirror');
+  expect(table.width).toBeLessThan(column.width / 2);
+  const cells = () => page.evaluate(() => {
+    const out: string[] = [];
+    window.view.state.doc.forEach((block) => {
+      if (block.type.name === 'table') block.forEach((row) => row.forEach((cell) => out.push(cell.textContent)));
+      else out.push(block.type.name + ':' + block.textContent);
+    });
+    return out;
+  });
+  const row = (i: number) => box(page, '.ProseMirror table tr', i);
+
+  const header = await row(0);
+  await pressAndType(page, sheet.x + 20, header.y + header.height / 2, '<');
+  const last = await row(2);
+  await pressAndType(page, sheet.x + 20, last.y + last.height / 2, '[');
+  const middle = await row(1);
+  await pressAndType(page, sheet.right - 20, middle.y + middle.height / 2, ']');
+  await expect.poll(cells).toEqual([
+    'paragraph:First paragraph.',
+    'editor_comment:Remember to check this proof.',
+    '<A', 'B', 'one', 'two]', '[three', 'four',
+    'paragraph:Last paragraph.',
+  ]);
+});
+
+test('a right-click on the paper and a press on a table toolbar\'s background keep the caret', async ({ page }) => {
+  await blank(page);
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const { table, table_row, table_cell, paragraph } = state.schema.nodes;
+    const cell = (text: string) => table_cell.create(null, paragraph.create(null, state.schema.text(text)));
+    window.view.dispatch(state.tr.insert(state.doc.content.size, table.create(null, [table_row.create(null, [cell('A'), cell('B')])])));
+  });
+  await page.locator('.ProseMirror td').first().click();
+  await page.keyboard.press('End');
+  const toolbar = page.getByRole('toolbar', { name: 'Table controls' });
+  await expect(toolbar).toBeVisible();
+  // A point of the toolbar between its controls.
+  const free = await toolbar.evaluate((root) => {
+    const r = root.getBoundingClientRect();
+    for (let y = r.top + 1; y < r.bottom; y += 2)
+      for (let x = r.left + 1; x < r.right; x += 2) {
+        const el = document.elementFromPoint(x, y);
+        if (el && root.contains(el) && !el.closest('button, input, select, label')) return { x, y };
+      }
+    return null;
+  });
+  expect(free).not.toBeNull();
+  await page.mouse.click(free!.x, free!.y);
+  expect(await focused(page)).toBe(true);
+  await page.keyboard.type('1');
+
+  await page.evaluate(() => {
+    (window as unknown as { menus: number }).menus = 0;
+    document.addEventListener('contextmenu', () => (window as unknown as { menus: number }).menus++);
+  });
+  const sheet = await box(page, '.page-box');
+  await page.mouse.click(sheet.x + 20, sheet.y + 300, { button: 'right' });
+  expect(await page.evaluate(() => (window as unknown as { menus: number }).menus)).toBe(1);
+  expect(await focused(page)).toBe(true);
+  // The menu's word selection (a Mac's, off the text: the page number) is
+  // given back to the editor.
+  await expect.poll(() => page.evaluate(() => window.view.dom.contains(document.getSelection()!.anchorNode))).toBe(true);
+  await page.keyboard.type('2');
+  await expect.poll(() => page.evaluate(() => {
+    let cell = '';
+    window.view.state.doc.descendants((n) => { if (n.type.name === 'table_cell' && !cell) cell = n.textContent; });
+    return cell;
+  })).toBe('A12');
+});

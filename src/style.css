@@ -1072,6 +1072,16 @@ body {
   overflow-anchor: none;
 }
 
+/* Nothing on the paper but the text can be selected: the editors' text
+   stays selectable (an editable element's text always is), and the rest
+   (the page chrome, the margins) cannot be. A Mac's context menu selects
+   the word nearest a right-click, and off the text that was a page
+   number, where the keys after the menu went nowhere (paper-caret.ts). */
+#scroll {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 /* The clip box round the stack: the drawn pages' size, or the editor's
    while a burst of typing runs it past the last page (paper-scale.ts
    writes its height), so the panel scrolls exactly them; the stack's own

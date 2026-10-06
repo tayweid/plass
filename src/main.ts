@@ -400,8 +400,9 @@ const sourceView = createSourceView({
 
 // A press on the paper outside the text (a margin, the blank sheet below
 // the last block, the frame under a short paper) puts the caret in the
-// text, and a press on the bare frame keeps it (paper-caret.ts).
-attachPaperCaret(view, scrollEl, () => !sourceView.isActive());
+// text, in the page view and the plain-text view alike, and a press on the
+// bare frame keeps it (paper-caret.ts).
+attachPaperCaret(view, scrollEl, sourceView);
 
 let reportedFile: FileSystemFileHandle | null = null;
 /** This window's file as the shell knows it (its answer to `document`),

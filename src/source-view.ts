@@ -58,6 +58,9 @@ export interface SourceView {
   persist: () => void;
   /** Focus whichever editor is the truth. */
   focus: () => void;
+  /** A press on the sheet outside the source text (paper-caret.ts): the
+   *  caret nearest the point, or the selection extended to it. */
+  pressAt: (x: number, y: number, extend: boolean) => void;
   /** Focus mode (step 4): dim every paragraph but the caret's. */
   focusMode: () => boolean;
   setFocusMode: (on: boolean) => void;
@@ -481,6 +484,9 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
     },
     persist: persistSession,
     focus: () => (active ? active.editor.focus() : view.focus()),
+    pressAt(x, y, extend) {
+      active?.editor.pressAt(x, y, extend);
+    },
     text: () => active?.editor.text() ?? null,
     setText(text) {
       active?.editor.setText(text);
