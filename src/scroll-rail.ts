@@ -53,6 +53,7 @@ import type { EditorView } from 'prosemirror-view';
 import type { PageInfo } from './typeset-plugin';
 import { stackHeight } from './layout/page-geometry';
 import { paperScale } from './paper-scale';
+import { caretBox } from './caret-box';
 
 /** px either side of a mark, in the rail, within which the pointer takes it. */
 const HIT = 7;
@@ -264,7 +265,7 @@ export function attachScrollRail(view: EditorView, panel: HTMLElement, stack: HT
   function caretPlace(): { y: number; t: string } | null {
     try {
       const { $head, head } = view.state.selection;
-      const box = view.coordsAtPos(head);
+      const box = caretBox(view, head);
       const y = (box.top - stack.getBoundingClientRect().top) / paperScale();
       const before = words($head.parent.textBetween(0, $head.parentOffset, ' ', ' ')).split(' ').slice(-6).join(' ');
       return Number.isFinite(y) ? { y, t: before ? `…${before}` : '' } : null;
