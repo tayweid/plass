@@ -118,7 +118,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     // An unsaved paper names itself the same way and then goes on to the one
     // question a first save asks — where should it live? The name has to be
     // settable here: a folder picker has no filename field to type it into,
-    // so otherwise the paper is born as Plass.typ and can only be renamed
+    // so otherwise the paper is born as Plass.md and can only be renamed
     // afterwards. Escape backs out of the save entirely; ⌘S still saves
     // straight away for anyone who does not care what it is called.
     if (fileLabel.isContentEditable) return;
