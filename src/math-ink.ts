@@ -264,9 +264,8 @@ export function inkTypst(latex: string, display: boolean, sizePt: number, bold: 
   // Display equations hug the page tightly with no instrumentation (a
   // trailing probe would start a phantom paragraph below the ink). Inline
   // math needs the baseline probe; #box() anchors it in the flow.
-  // One code-mode expression for both the ink and its measurement. (A
-  // content block `strong[$…$]` would be markup, a different context from
-  // the one measured.)
+  // One code-mode expression for both the ink and its measurement, so the
+  // width measured is the width of the ink drawn.
   const eq = display ? displayEquation(typ) : inlineEquation(typ);
   const expr = bold ? `strong(${eq})` : eq;
   return (
