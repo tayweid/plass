@@ -81,7 +81,9 @@ function importNote(r: ImportReport): string {
   const blocks = r.warnings.length - fm.length;
   const parts: string[] = [];
   if (blocks) parts.push(`${blocks} block(s) preserved as raw Typst`);
-  if (fm.length) parts.push(`front matter: ${fm.length === 1 ? '1 warning' : `${fm.length} warnings`} — ${fm[0]}${fm.length > 1 ? ' …' : ''}`);
+  // The toast names one: a warning that a save loses something, if any.
+  const first = fm.find((m) => /\bdrop|\bignored\b|\bonly the\b/i.test(m)) ?? fm[0];
+  if (fm.length) parts.push(`front matter: ${fm.length === 1 ? '1 warning' : `${fm.length} warnings`} — ${first}${fm.length > 1 ? ' …' : ''}`);
   return parts.length ? ` — ${parts.join('; ')}` : '';
 }
 
@@ -90,6 +92,22 @@ function importNote(r: ImportReport): string {
 function sidecarNote(path: string, fileName: string, kept: number): string {
   const held = kept ? ` (${kept === 1 ? '1 key the document already held keeps its entry' : `${kept} keys the document already held keep their entries`})` : '';
   return ` — bibliography read from ${path}${held}; the next save embeds it in ${fileName} (a {=bibtex} block in place of bibliography:)`;
+}
+
+/** The toast's tail for a `bibliography:` sidecar left unread, no folder
+ *  being open. */
+function unreadNote(path: string): string {
+  return ` — its bibliography is ${path}, beside it: open its project folder to read it (until then a save keeps the bibliography: line)`;
+}
+
+/** The `bibliography:` sidecar a Markdown document still carries the line
+ *  of in its front matter (the reader keeps it there until the sidecar is
+ *  read: md-parser's withSidecarBib), or null. */
+async function carriedBibliography(doc: PMNode): Promise<string | null> {
+  const kept = String(doc.attrs.frontmatter ?? '');
+  if (!/^bibliography[ \t]*:/m.test(kept)) return null;
+  const { readFrontmatter } = await import('./md-frontmatter');
+  return readFrontmatter(`---\n${kept}\n---\n`).bibliography ?? null;
 }
 
 export interface RecentEntry {
@@ -112,6 +130,11 @@ const TYP_TYPE: FilePickerType[] = [
 ];
 
 const isMd = (name: string) => /\.md$/i.test(name);
+
+/** A project-relative path's segments: `./refs.bib` is `refs.bib`, as a
+ *  `.` segment names the folder it is in (a `..` one is refused by the
+ *  callers). */
+const projectPathParts = (path: string): string[] => path.split('/').filter((seg) => seg && seg !== '.');
 
 /** The name a document carries before it has one of its own. Names here are
  *  stored without an extension; the tab adds it, so a fresh tab reads
@@ -313,9 +336,7 @@ export class FileManager {
   ): Promise<{ doc: PMNode; pending: string | null; note: string }> {
     const path = parsed.bibliography;
     if (!path) return { doc: parsed.doc, pending: null, note: '' };
-    if (!dir) {
-      return { doc: parsed.doc, pending: path, note: ` — its bibliography is ${path}, beside it: open its project folder to read it (until then a save keeps the bibliography: line)` };
-    }
+    if (!dir) return { doc: parsed.doc, pending: path, note: unreadNote(path) };
     const read = await this.readSidecar(path, dir);
     if (typeof read === 'string') return { doc: parsed.doc, pending: path, note: ` — bibliography: ${read}` };
     const { withSidecarBib } = await import('./md-parser');
@@ -334,9 +355,15 @@ export class FileManager {
       return inputSizeError(INPUT_LIMITS.bibliographyBytes + 1, INPUT_LIMITS.bibliographyBytes, path) ?? `${path} could not be read`;
     }
     if (!data) return `${path} is not in ${dir.name} — nothing was read`;
-    // The bibliography panel's own clean-up of what it saves.
-    // eslint-disable-next-line no-control-regex
-    const content = new TextDecoder().decode(data).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim();
+    // The bibliography panel's own clean-up of what it saves, with line
+    // breaks as the Markdown reader holds them (CRLF and CR as \n), so the
+    // {=bibtex} block a save writes reads back as the same text.
+    const content = new TextDecoder()
+      .decode(data)
+      .replace(/\r\n?/g, '\n')
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+      .trim();
     if (!content) return `${path} is empty — nothing was read`;
     return { content };
   }
@@ -767,7 +794,7 @@ export class FileManager {
 
   private async walkTo(path: string, from = this.dir): Promise<FileSystemFileHandle | null> {
     if (!from) return null;
-    const parts = path.split('/').filter(Boolean);
+    const parts = projectPathParts(path);
     if (!parts.length || parts.some((seg) => seg === '..')) return null;
     let d = from;
     for (let i = 0; i < parts.length - 1; i++) d = await d.getDirectoryHandle(parts[i]);
@@ -811,7 +838,7 @@ export class FileManager {
   async writeAsset(path: string, data: Uint8Array | Blob): Promise<boolean> {
     try {
       if (!this.dir) return false;
-      const parts = path.split('/').filter(Boolean);
+      const parts = projectPathParts(path);
       if (!parts.length || parts.some((seg) => seg === '..')) return false;
       let d = this.dir;
       for (let i = 0; i < parts.length - 1; i++) d = await d.getDirectoryHandle(parts[i], { create: true });
@@ -1263,6 +1290,10 @@ export class FileManager {
     diskText: string,
   ): Promise<void> {
     const localText = await this.serialize(file.name);
+    const differs = localText !== diskText && !(await this.sidecarOnly(file.name, diskText, dir, localText));
+    // A `bibliography:` sidecar the session document still carries the
+    // line of is unread: read now if the folder is here, else when it is.
+    const pending = isMd(file.name) ? await carriedBibliography(this.hooks.getDoc()) : null;
     clearTimeout(this.saveTimer);
     this.handle = handle;
     this.dir = dir;
@@ -1270,11 +1301,31 @@ export class FileManager {
     this.diskBaseline = diskText;
     this.name = file.name.replace(/\.(typ|md)$/i, '');
     this.fileFormat = isMd(file.name) ? '.md' : '.typ';
-    this.conflict = localText !== diskText;
+    this.bibliographyPath = pending;
+    this.conflict = differs;
     this.dirty = this.conflict;
     this.hooks.onState();
-    if (this.conflict) this.reportConflict(file.name);
-    else this.hooks.message(`Reconnected — ${dir ? `${dir.name}/` : ''}${file.name}`);
+    if (this.conflict) {
+      this.reportConflict(file.name);
+      return;
+    }
+    const bib = pending && !dir ? unreadNote(pending) : await this.readPendingBibliography();
+    if (handle !== this.handle) return;
+    this.hooks.message(`Reconnected — ${dir ? `${dir.name}/` : ''}${file.name}${bib}`);
+  }
+
+  /** Whether the session document's text `localText` differs from the
+   *  file's only by its `bibliography:` sidecar, read in when the file was
+   *  opened with its folder (withSidecar): the session holds that read,
+   *  the file does not until a save embeds it. Not an outside change. */
+  private async sidecarOnly(fileName: string, diskText: string, dir: FileSystemDirectoryHandle | null, localText: string): Promise<boolean> {
+    if (!dir || !isMd(fileName)) return false;
+    const parsed = await this.parse(fileName, diskText);
+    if (!parsed.bibliography) return false;
+    const opened = await this.withSidecar(parsed, dir, fileName);
+    if (opened.pending !== null) return false;
+    const { docToMd } = await import('./md-serializer');
+    return docToMd(opened.doc, () => {}) === localText;
   }
 
   /** Remember which file THIS window has open. The origin-wide 'last'

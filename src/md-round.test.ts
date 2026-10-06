@@ -1717,6 +1717,74 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   );
   const leading = mdToDoc('\n\n---\ntitle: T\n---\n\nBody.\n').doc;
   check('a YAML block after blank lines is front matter, as pandoc reads it', leading.firstChild!.type.name === 'doc_title');
+
+  // Valid YAML whose lines are not each a `key: value` is still front
+  // matter: a quoted value or a flow list continued on a line at the
+  // margin, an anchored key, a `?` complex key (pandoc 3.4 reads each as
+  // metadata). Nothing of it is read as the body, and a save keeps it.
+  const valid: Array<[string, string, (d: PMNode) => boolean]> = [
+    ['a flow list continued at the margin', 'title: Notes\nkeywords: [supply, demand,\nelasticity]', (d) => d.attrs.frontmatter === 'keywords: [supply, demand,\nelasticity]' && d.firstChild!.textContent === 'Notes'],
+    ['a flow map continued at the margin', 'title: T\nmap: {a: 1,\nb: 2}', (d) => d.attrs.frontmatter === 'map: {a: 1,\nb: 2}'],
+    ['a double-quoted title continued at the margin', 'title: "Supply and Demand:\na primer"\nauthor: X', (d) => d.firstChild!.textContent === 'Supply and Demand: a primer' && d.child(1).textContent === 'X'],
+    ['a single-quoted title continued at the margin', "title: 'Supply and Demand:\na primer'", (d) => d.firstChild!.textContent === 'Supply and Demand: a primer'],
+    ['a quoted author in a list, continued at the margin', 'author:\n- "Alice\nSmith"\n- Bob', (d) => d.firstChild!.textContent === 'Alice Smith, Bob'],
+    ['an anchored key', 'title: T\n&a k: 1', (d) => d.attrs.frontmatter === '&a k: 1'],
+    ['a complex key', 'title: T\n? a\n: b', (d) => d.attrs.frontmatter === '? a\n: b'],
+  ];
+  for (const [what, yaml, read] of valid) {
+    const t = trip(`---\n${yaml}\n---\n\nBody.\n`);
+    check(
+      `${what}: front matter, kept, converging`,
+      read(t.doc) && t.doc.lastChild!.textContent === 'Body.' && !t.doc.content.content.some((n) => n.type.name === 'horizontal_rule') && !t.warnings.some((w) => /not front matter/.test(w)) && t.md1.startsWith('---\n') && t.converges,
+      JSON.stringify([kinds(t.doc), t.doc.attrs.frontmatter, t.warnings]) + t.md1,
+    );
+  }
+  const flow = trip('---\ntitle: Notes\nkeywords: [supply, demand,\nelasticity]\n---\n\nBody.\n');
+  check('… the kept lines are written as they were', flow.md1 === '---\ntitle: Notes\nkeywords: [supply, demand,\nelasticity]\n---\n\nBody.\n', flow.md1);
+  // A line that only looks wrong under an entry (a plain value mistyped
+  // across lines, which pandoc rejects) keeps the block front matter, the
+  // line kept as written: the text stays where the author put it.
+  const typo = trip('---\ntitle: Supply and\ndemand\n---\n\nBody.\n');
+  check('a stray line directly under an entry keeps the block front matter (kept as written)', typo.doc.firstChild!.type.name === 'doc_title' && typo.doc.attrs.frontmatter === 'demand' && typo.converges, JSON.stringify([kinds(typo.doc), typo.warnings]));
+  // A --- block YAML reads as a list (or as text) is not front matter to
+  // pandoc either (it prints it): read as the body, and said.
+  const list = trip('---\n- a\n- b\n---\n\nBody.\n');
+  check('a --- block that is a YAML list is the body, with a warning', list.doc.firstChild!.type.name === 'horizontal_rule' && !list.doc.attrs.frontmatter && list.warnings.some((w) => /not front matter: YAML reads it as a list/.test(w)) && list.converges, JSON.stringify([kinds(list.doc), list.warnings]));
+  const prose = mdToDoc('---\nSome intro text\n---\n\nBody.\n');
+  check('… and one it reads as text', prose.doc.firstChild!.type.name === 'horizontal_rule' && prose.warnings.some((w) => /not front matter: YAML reads it as text/.test(w)), JSON.stringify(prose.warnings));
+
+  // A `>` at a title's head opens a block quote to pandoc, which drops it
+  // (verified, pandoc 3.4: `title: '> quoted title'` reads "quoted title";
+  // `title: \> quoted title` reads "> quoted title"). Plass keeps it as
+  // text and says so; a save escapes it, so pandoc and Plass read the
+  // saved file alike.
+  const quoted = trip("---\ntitle: '> quoted title'\nauthor: '>Ann'\ndate: '\\> 2026'\n---\n\nBody.\n");
+  check(
+    'a title, author or date opening with > is saved as \\>, read back as >',
+    quoted.md1 === '---\ntitle: \\> quoted title\nauthor: \\>Ann\ndate: \\> 2026\n---\n\nBody.\n' && quoted.doc.firstChild!.textContent === '> quoted title' && quoted.doc2.eq(quoted.doc) && quoted.converges,
+    quoted.md1,
+  );
+  check('… with a warning where the file has it unescaped', quoted.warnings.filter((w) => /opens a block quote to pandoc/.test(w)).length === 2, JSON.stringify(quoted.warnings));
+}
+
+// A footnote label defined twice: the last definition is the note, as
+// markdown-it's tail and pandoc read it (pandoc warns), and so is the save.
+{
+  const twice = trip('Text[^1] more.\n\n[^1]: First.\n\n[^1]: Second.\n');
+  check('a footnote defined twice: the last definition wins, with a warning', twice.doc.textContent === 'TextSecond. more.' && twice.md1 === 'Text[^1] more.\n\n[^1]: Second.\n' && twice.warnings.some((w) => /\[\^1\] is defined more than once/.test(w)) && twice.converges, JSON.stringify([twice.doc.textContent, twice.warnings]) + twice.md1);
+}
+
+// A `bibliography:` sidecar with CRLF line breaks reads as one with \n:
+// a save embeds it as the Markdown reader reads it back, so the trip is the
+// identity and the save converges.
+{
+  const crlf = '@book{arrow,\r\n  title = {Social Choice},\r\n  year = {1951}\r\n}\r\n';
+  const opened = withSidecarBib(mdToDoc('---\ntitle: T\nbibliography: refs.bib\n---\n\nAs [@arrow] shows.\n').doc, crlf).doc;
+  const saved = docToMd(opened);
+  const back = mdToDoc(saved).doc;
+  check('a CRLF sidecar has no \\r once read', !(opened.attrs.bib as { content: string }).content.includes('\r'), JSON.stringify(opened.attrs.bib));
+  check('… and its save reads back as the same document, converging', back.eq(opened) && docToMd(back) === saved, saved);
+  check('… merged into an existing bibliography too', !mergeSidecarBib({ name: 'references.bib', content: '@book{own, title = {Own}}' }, crlf).bib.content.includes('\r'));
 }
 
 // The cross-format check: a Markdown trip changes nothing the compiler

@@ -1005,6 +1005,13 @@ export function mdToDoc(src: string): MdImport {
       `the --- block at the top is not front matter: "${fm.notYaml}" is not YAML (pandoc rejects the file) — read as text, a horizontal rule and what follows it; fix the YAML, or put a blank line after that first --- if it is a rule`,
     );
     fm = null;
+  } else if (fm.notMap !== undefined) {
+    // YAML reads it, but as a list or as text, not as keys and values:
+    // pandoc does not take it for front matter either, and prints it.
+    fmWarnings.push(
+      `the --- block at the top is not front matter: YAML reads it as ${fm.notMap}, not as keys and values (pandoc prints it too) — read as text, a horizontal rule and what follows it; write it as key: value lines, or put a blank line after that first --- if it is a rule`,
+    );
+    fm = null;
   } else if (fm.body.length === src.length) fm = null;
   else fmWarnings.push(...fm.warnings);
   const bodySrc = fm ? fm.body : src;
@@ -1049,6 +1056,9 @@ type Bib = { name: string; content: string };
  *  stays as it holds it (`kept` counts those). Named as a {=bibtex}
  *  block's bibliography is, so a save and a reopen give it back as it is. */
 export function mergeSidecarBib(bib: Bib | null, sidecar: string): { bib: Bib; kept: number } {
+  // Line breaks as the Markdown reader holds them (a {=bibtex} block reads
+  // back with \n alone), so a save and a reopen give the same text.
+  sidecar = sidecar.replace(/\r\n?/g, '\n');
   const own = bib?.content.trim() ?? '';
   if (!own) return { bib: { name: 'references.bib', content: sidecar.trim() }, kept: 0 };
   const have = new Set(parseBibTeX(own).map((e) => e.key));
@@ -1219,7 +1229,10 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
         text = [];
       } else if (t.type === 'footnote_reference_close') {
         if (label !== null && range[1] >= 0) noteDefs.set(label, range);
-        if (label !== null && !noteText.has(label)) noteText.set(label, text);
+        // A label defined twice: the last definition is the note, as in
+        // markdown-it's tail and in pandoc (which warns too).
+        if (label !== null && noteText.has(label)) warn(`footnote [^${label}] is defined more than once — the last definition is read, and a save drops the others`);
+        if (label !== null) noteText.set(label, text);
         label = null;
       } else if (label !== null) {
         text.push(t);
@@ -2531,9 +2544,16 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
       hoisted = was;
       return nodes;
     };
-    if (fields.title !== null) front.push(schema.nodes.doc_title.create(null, field('title', fields.title)));
-    if (fields.author !== null) front.push(schema.nodes.doc_authors.create(null, field('author', fields.author)));
-    if (fields.date !== null) front.push(schema.nodes.doc_date.create(null, field('date', fields.date)));
+    /** A title, author or date: a `>` at its head opens a block quote to
+     *  pandoc, which prints the text without it. Kept as text (as a quote
+     *  in the abstract is), said, and escaped by a save (md-serializer). */
+    const line = (name: string, text: string): PMNode[] => {
+      if (/^[ \t\n]*>/.test(text)) warn(`${name}: the > at its start opens a block quote to pandoc, which prints the text without it — kept as text, and a save writes it as \\> so pandoc prints it too`);
+      return field(name, text);
+    };
+    if (fields.title !== null) front.push(schema.nodes.doc_title.create(null, line('title', fields.title)));
+    if (fields.author !== null) front.push(schema.nodes.doc_authors.create(null, line('author', fields.author)));
+    if (fields.date !== null) front.push(schema.nodes.doc_date.create(null, line('date', fields.date)));
     if (fields.abstract !== null) {
       const paras: PMNode[] = [];
       for (const chunk of fields.abstract.split(/\n[ \t]*\n/)) {

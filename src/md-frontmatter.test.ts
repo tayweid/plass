@@ -695,6 +695,31 @@ console.log('lines that are not YAML:');
   check('a misplaced key line is not prose', read('  indented: x\ntitle: T').notYaml === undefined);
   check('a well-formed block has none', read('title: T\nplass:\n  landscape: true').notYaml === undefined);
   check('nor does a stray under plass:', read('plass:\n\tlandscape: true\n  hyphenate: false').notYaml === undefined);
+  // Valid YAML that is not one `key: value` per line (pandoc 3.4 reads each).
+  const flow = read('title: Notes\nkeywords: [supply, demand,\nelasticity]');
+  check('a flow list continued at the margin is one entry, kept as written', flow.notYaml === undefined && flow.extra === 'keywords: [supply, demand,\nelasticity]' && !flow.warnings.length, json(flow));
+  const quoted = read('title: "Supply and Demand:\na primer"');
+  check('a quoted title continued at the margin is read', quoted.notYaml === undefined && quoted.titleMd === 'Supply and Demand: a primer' && quoted.extra === '', json(quoted));
+  check('… across a blank line too', read('title: "a\n\nb"').titleMd === 'a\nb');
+  check('… and a single-quoted one', read("title: 'it''s\na test'").titleMd === "it's a test");
+  check('a quoted list item continued at the margin', read('author:\n- "Alice\nSmith"\n- Bob').authorsMd === 'Alice Smith, Bob');
+  check('a flow map under plass: continued less indented', read('plass:\n  header: {text: "{page}",\n  align: left}').settings.headerAlign === 'left');
+  check('a comment inside a flow list does not close it', read('keywords: [a, # c\nb]\ntitle: T').extra === 'keywords: [a, # c\nb]');
+  check("a quote inside a plain word opens nothing (`[it's, b]`)", read("keywords: [it's, b]\ntitle: T").titleMd === 'T');
+  check('a quote in block text opens nothing', read('abstract: |\n  "a quoted start\n  more\ntitle: T').titleMd === 'T');
+  check('nor one in a plain value continued below it', read('title: Foo\n  "bar\ndate: D').dateMd === 'D');
+  check('nor one after a second key on the line (a plain value to the scan)', read('title: Note: "draft\nauthor: "Ann"').authorsMd === 'Ann');
+  const unclosed = read('title: "unclosed\nauthor: X');
+  check('a quote never closed takes nothing below it (not YAML: kept as written)', unclosed.authorsMd === 'X' && unclosed.extra === 'title: "unclosed', json(unclosed));
+  check('an anchored key is YAML, not prose: kept as written', read('title: T\n&a k: 1').notYaml === undefined && read('title: T\n&a k: 1').extra === '&a k: 1');
+  check('… a tagged one too', read('title: T\n!!str k: v').notYaml === undefined);
+  check('a ? complex key is not prose', read('title: T\n? a\n: b').notYaml === undefined);
+  check('a block opening with an anchored key is metadata', read('&a k: 1\ntitle: T').titleMd === 'T');
+  check('a line directly under an entry is not named (kept as written)', read('title: Supply and\ndemand').notYaml === undefined && read('title: Supply and\ndemand').extra === 'demand');
+  // A block YAML reads as a list or as text: not front matter (notMap).
+  check('a --- block that is a YAML list is not a map', readFrontmatter('---\n- a\n- b\n---\n\nBody.\n').notMap === 'a list');
+  check('… nor one of text', readFrontmatter('---\nSome intro\n---\n\nBody.\n').notMap === 'text');
+  check('… a map is', readFrontmatter('---\ntitle: T\n---\n').notMap === undefined && readFrontmatter('Body.\n').notMap === undefined);
 }
 
 // --- 16d. the bibliography entry kept while the sidecar is unread ---

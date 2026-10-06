@@ -87,13 +87,22 @@ export interface FrontmatterRead {
   warnings: string[];
   /** The text after the closing `---`/`...` line; the whole input when it opens with no metadata block. */
   body: string;
-  /** The first line at the block's top level that is not YAML at all —
-   *  neither a `key: value` entry (however indented), a comment nor part of
-   *  one — when the block has one. Pandoc rejects such a block; the
-   *  Markdown reader then reads the file as having no front matter, so a
-   *  document that opens with a horizontal rule never loses its text into
-   *  one. Everything above is read as usual. */
+  /** The first line at the block's top level that is not YAML at all,
+   *  where no entry can hold it — a list item, or prose after a blank line
+   *  — when the block has one. Never a `key: value` line (however
+   *  indented), a comment, a line a quoted or flow value continues, YAML
+   *  this subset keeps as written (an anchored or tagged key, a `?`
+   *  complex key), nor a line directly under an entry (kept as written).
+   *  Pandoc rejects such a block; the Markdown reader then reads the file
+   *  as having no front matter, so a document that opens with a horizontal
+   *  rule never loses its text into one. Everything above is read as
+   *  usual. */
   notYaml?: string;
+  /** What YAML reads the block as when it is not a map (keys and values)
+   *  — 'a list' or 'text' — and so neither Plass nor pandoc takes it for
+   *  front matter: `body` is then the whole input. Unset when there is no
+   *  `---` block at all. */
+  notMap?: 'a list' | 'text';
 }
 
 // ---------------------------------------------------------------- the YAML subset
@@ -244,6 +253,12 @@ function matchKey(s: string): KeyLine | null {
   return { raw, rest: after.replace(/^[ \t]+/, '') };
 }
 
+/** A line YAML reads as part of a map that this subset does not: a key
+ *  after an anchor or a tag (`&a key: v`, `!!str key: v`, both read by
+ *  pandoc), or a complex key's `? key` and `: value` lines. Kept as
+ *  written, never taken for prose. */
+const yamlOnly = (s: string): boolean => /^[?:](?:[ \t]|$)/.test(s) || (/^[&!]/.test(s) && matchKey(afterProperties(s)) !== null);
+
 function decodeKey(raw: string): string {
   if (raw.startsWith('"')) return (new FlowReader(raw, context()).node() as YScalar).value;
   if (raw.startsWith("'")) return raw.slice(1, -1).replace(/''/g, "'");
@@ -261,16 +276,118 @@ interface Item {
   end: number;
 }
 
+/** Whether a quoted scalar or a flow collection (`[…]`, `{…}`) is still
+ *  open after the lines fed to it. YAML continues one on the lines after it
+ *  at any indentation, the margin included: pandoc reads `keywords: [a,`
+ *  over `b]`, and a quoted title folded onto a line at the margin. Only the
+ *  value a line starts (after its `- `, its key, an anchor or tag) is
+ *  scanned; a block scalar's text and a plain value's continuation lines
+ *  (indented deeper than their node) are passed over, never scanned, so a
+ *  quote in prose there opens nothing. */
+class OpenFlow {
+  /** The brackets open, innermost last. */
+  private brackets: string[] = [];
+  private quote: '"' | "'" | null = null;
+  /** Lines indented deeper than this column continue a block scalar or a
+   *  plain value: not scanned (-1: none). */
+  private passOver = -1;
+
+  get open(): boolean {
+    return this.quote !== null || this.brackets.length > 0;
+  }
+
+  line(l: string): void {
+    if (this.open) return this.scan(l, 0);
+    if (!isContent(l)) return;
+    const ind = indentOf(l);
+    if (this.passOver >= 0 && ind > this.passOver) return;
+    this.passOver = -1;
+    // The node the line starts, and the column it belongs to: after its
+    // `- ` indicators and one key (a second `key: ` on the line is a plain
+    // value's text to this scan — YAML rejects it either way).
+    let at = ind;
+    let col = ind;
+    while (l[at] === '-' && (at + 1 === l.length || l[at + 1] === ' ' || l[at + 1] === '\t')) {
+      col = at;
+      at++;
+      while (l[at] === ' ' || l[at] === '\t') at++;
+    }
+    const m = matchKey(l.slice(at));
+    if (m) {
+      col = at;
+      at = l.length - m.rest.length;
+    }
+    const v = afterProperties(l.slice(at));
+    if (v === '' || v[0] === '#') return;
+    if ('"\'[{'.includes(v[0])) return this.scan(l, l.length - v.length);
+    // Block text or a plain value: the lines deeper than its node continue it.
+    this.passOver = col;
+  }
+
+  /** Scan from `from` until what is open closes (the rest of that line is
+   *  the value's tail, a comment or a fault: not scanned). */
+  private scan(l: string, from: number): void {
+    // The last character before k on this line that is not a space ('' at its start).
+    let last = '';
+    for (let k = from; k < l.length; k++) {
+      const c = l[k];
+      if (this.quote === '"') {
+        if (c === '\\') k++;
+        else if (c === '"') this.quote = null;
+      } else if (this.quote === "'") {
+        if (c === "'" && l[k + 1] === "'") k++;
+        else if (c === "'") this.quote = null;
+      } else if (c === '"' || c === "'") {
+        // A quote opens a scalar only where a node starts: not inside a plain one (`[it's]`).
+        if (k === from || last === '' || '[{,:'.includes(last)) this.quote = c;
+      } else if (c === '#' && (k === 0 || l[k - 1] === ' ' || l[k - 1] === '\t')) return;
+      else if (c === '[' || c === '{') this.brackets.push(c);
+      else if (c === ']' || c === '}') this.brackets.pop();
+      if (!this.open) return;
+      if (c !== ' ' && c !== '\t') last = c;
+    }
+  }
+}
+
+/** The end of a block item starting at `i`: past the lines `deeper` takes
+ *  (and blank and comment lines between them); past every line a quoted
+ *  or flow value left open takes, at any indentation, when `flow` — unless
+ *  it never closes, which is not YAML: then null. */
+function itemEnd(lines: string[], next: number[], i: number, deeper: (k: number) => boolean, indent: number, flow: boolean): number | null {
+  const open = new OpenFlow();
+  if (flow) open.line(lines[i]);
+  let end = i + 1;
+  for (let j = i + 1; j < lines.length; j++) {
+    const l = lines[j];
+    if (open.open) {
+      open.line(l);
+      end = j + 1;
+    } else if (isContent(l)) {
+      if (!deeper(j)) break;
+      end = j + 1;
+      if (flow) open.line(l);
+    } else if (indentOf(l) > indent) {
+      // Spaces past the indent may be block text, a comment there the entry's own.
+      end = j + 1;
+    } else if (isComment(l) && !(next[j] < lines.length && deeper(next[j]))) break;
+  }
+  return open.open ? null : end;
+}
+
 /** Partition lines into the items of a block map at `indent`. An entry runs
  *  from its key line through every line indented deeper (and through a
  *  compact list, `- item` lines at the key's own indentation directly under
- *  a `key:` with no value on its line, an anchor or tag aside). Comment and blank lines are not content: one at the
+ *  a `key:` with no value on its line, an anchor or tag aside), and through
+ *  any line a quoted or flow value left open continues (OpenFlow). Comment and blank lines are not content: one at the
  *  margin stays inside the entry when more of the entry follows it, and
  *  trailing blank lines are left out. Comments and blank lines between
  *  entries are items of their own; a line that is none of these is `stray`. */
 function splitItems(lines: string[], indent: number): Item[] {
   const next = nextContent(lines);
   const items: Item[] = [];
+  // A value left open to the end is not YAML: from there on, lines are
+  // split by indentation alone (and each is scanned at most once more).
+  let flow = true;
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
@@ -293,16 +410,10 @@ function splitItems(lines: string[], indent: number): Item[] {
       const ni = indentOf(lines[k]);
       return ni > indent || (compact && ni === indent && SEQ_ITEM.test(lines[k].slice(indent)));
     };
-    let end = i + 1;
-    for (let j = i + 1; j < lines.length; j++) {
-      const l = lines[j];
-      if (isContent(l)) {
-        if (!continues(j)) break;
-        end = j + 1;
-      } else if (indentOf(l) > indent) {
-        // Spaces past the indent may be block text, a comment there the entry's own.
-        end = j + 1;
-      } else if (isComment(l) && !(next[j] < lines.length && continues(next[j]))) break;
+    let end = flow ? itemEnd(lines, next, i, continues, indent, true) : null;
+    if (end === null) {
+      flow = false;
+      end = itemEnd(lines, next, i, continues, indent, false)!;
     }
     items.push({ kind: 'entry', start: i, end });
     i = end;
@@ -467,6 +578,8 @@ function parseMap(lines: string[], indent: number, cx: Ctx): YMap {
 function parseSeq(lines: string[], indent: number, cx: Ctx): YSeq {
   const next = nextContent(lines);
   const items: YNode[] = [];
+  const deeper = (k: number): boolean => indentOf(lines[k]) > indent;
+  let flow = true;
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
@@ -478,12 +591,12 @@ function parseSeq(lines: string[], indent: number, cx: Ctx): YSeq {
     if (indentOf(line) !== indent || !SEQ_ITEM.test(line.slice(indent))) {
       throw new YamlError(`unexpected line "${clip(line.trim())}" in a list`);
     }
-    let end = i + 1;
-    for (let j = i + 1; j < lines.length; j++) {
-      const l = lines[j];
-      if (indentOf(l) > indent) end = j + 1;
-      else if (isContent(l)) break;
-      else if (isComment(l) && !(next[j] < lines.length && indentOf(lines[next[j]]) > indent)) break;
+    // An item runs through the lines deeper than its dash, and through any
+    // a quoted or flow value left open continues (`- "Alice` over `Smith"`).
+    let end = flow ? itemEnd(lines, next, i, deeper, indent, true) : null;
+    if (end === null) {
+      flow = false;
+      end = itemEnd(lines, next, i, deeper, indent, false)!;
     }
     // The dash becomes a space, so a compact map (`- name: x`) or a nested
     // list reads at its own column.
@@ -1246,7 +1359,11 @@ export function readFrontmatter(src: string): FrontmatterRead {
   // as nothing: comments alone); a scalar or a list is body text to it.
   const firstContent = lines.find(isContent);
   const opener = firstContent?.trimStart()[0];
-  if (firstContent !== undefined && opener !== '{' && opener !== '?' && !matchKey(firstContent.slice(indentOf(firstContent)))) return out;
+  if (firstContent !== undefined && opener !== '{' && opener !== '?' && !matchKey(firstContent.trim()) && !yamlOnly(firstContent.trim())) {
+    // Not front matter, to pandoc either: the Markdown reader warns.
+    out.notMap = SEQ_ITEM.test(firstContent.trim()) || opener === '[' ? 'a list' : 'text';
+    return out;
+  }
   out.body = block.body;
   // A crafted block can hold any number of faults: the first ones are listed, the rest counted.
   let unlisted = 0;
@@ -1281,11 +1398,21 @@ export function readFrontmatter(src: string): FrontmatterRead {
   const root = baseIndent(lines);
   const asWritten = (item: Item): string[] => (root ? reindent(lines.slice(item.start, item.end), root, 0) : orig.slice(item.start, item.end));
   const items = splitItems(lines, root);
-  // A top-level line that is not even a misplaced `key: value` (prose, a
-  // list item) makes the block one pandoc rejects: say which.
-  const prose = items.find((item) => item.kind === 'stray' && !matchKey(lines[item.start].trim()));
+  // A top-level line that is not YAML at all makes the block one pandoc
+  // rejects: say which. Only where no entry can hold it — a list item (a
+  // `key:` that takes one already has: splitItems), or prose after a blank
+  // line, which is how a document that opens with a horizontal rule
+  // reads. A line directly under an entry may be a mistyped continuation
+  // of it, and one YAML reads that Plass does not (yamlOnly) is no fault:
+  // both are kept as written, and the block stays front matter.
+  const prose = items.find((item, k) => {
+    if (item.kind !== 'stray') return false;
+    const s = lines[item.start].trim();
+    if (matchKey(s) || yamlOnly(s)) return false;
+    return SEQ_ITEM.test(s) || items[k - 1]?.kind === 'blank';
+  });
   if (prose) out.notYaml = clip(lines[prose.start].trim());
-  const acc: Acc ={ s: {}, paperTop: null, paperPlass: null, restart: false, warn, hasAnchors: block.yaml.includes('&'), anchors: new Map(), dropped: [] };
+  const acc: Acc = { s: {}, paperTop: null, paperPlass: null, restart: false, warn, hasAnchors: block.yaml.includes('&'), anchors: new Map(), dropped: [] };
   const parts: ExtraPart[] = [];
 
   // A known key given twice: the last one is read, as pandoc does.
@@ -1304,7 +1431,12 @@ export function readFrontmatter(src: string): FrontmatterRead {
     // A comment at the margin, where it cannot join the entry written before it.
     if (item.kind === 'comment') return parts.push({ kind: 'lines', lines: [orig[item.start].trimStart()] });
     if (item.kind === 'stray') {
-      warn(`front matter line "${clip(entry[0].trim())}" is not a "key: value" entry — kept as written`);
+      const s = entry[0].trim();
+      warn(
+        yamlOnly(s)
+          ? `front matter line "${clip(s)}" is YAML Plass does not read (an anchor, a tag or a ? before a key) — kept as written`
+          : `front matter line "${clip(s)}" is not a "key: value" entry — kept as written`,
+      );
       return parts.push({ kind: 'lines', lines: asWritten(item) });
     }
     const key = keyOf(entry[0], root)!;

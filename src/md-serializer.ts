@@ -772,10 +772,14 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     // A title, author or date is one run of inlines, as pandoc reads a YAML
     // string (no block can start in it); spaces at its edges print nothing.
     const line = (n: PMNode) => inline(n).replace(/^[ \t]+|[ \t]+$/g, '');
+    // Pandoc reads the string as Markdown blocks: of what opens one, only a
+    // `>` at its head does in a title (a block quote, its `>` dropped —
+    // `1.`, `#` and `-` there stay text), so that one is escaped, as the
+    // abstract's line heads are (escLines).
     const one = (nodes: PMNode[], what: string, sep: string): string | null => {
       if (!nodes.length) return null;
       if (nodes.length > 1) warn(`${nodes.length} ${what} blocks are saved as one — the front matter holds one ${what}`);
-      return nodes.map(line).join(sep);
+      return nodes.map(line).join(sep).replace(/^>/, '\\>');
     };
     // The abstract is paragraphs, each on a line of its own, a blank line
     // between: pandoc reads a block of lines as blocks, so what would open

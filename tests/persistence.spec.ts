@@ -962,3 +962,79 @@ test('an opened .md file words its front-matter warnings as warnings', async ({ 
   await expect(page.locator('#toast')).toContainText('front matter: 1 warning — fontsize: 99pt is out of range');
   await expect(page.locator('#toast')).not.toContainText('raw Typst');
 });
+
+// A reload brings back the session's own document. A sidecar read on the
+// open (with the folder) is in it and not yet in the file — no outside
+// change, so the reload reconnects clean; one left unread (no folder) is
+// still pending, and attaching the folder later reads it.
+test('a reload after the sidecar was read with the folder reconnects clean (./ path)', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-sidecar-reload', {
+    'refs.bib': ARROW.replace(/\n/g, '\r\n'),
+    'Paper.md': '---\ntitle: Paper\nbibliography: ./refs.bib\n---\n\nArrow [@arrow1951] started it.\n',
+  });
+  await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await app.__fm.loadHandle(await dir.getFileHandle('Paper.md'), dir);
+  }, dirName);
+  await expect(page.locator('#toast')).toContainText('bibliography read from ./refs.bib');
+  expect(await page.evaluate(() => ((window as SidecarApp).view.state.doc.attrs.bib as { content: string } | null)?.content.includes('\r'))).toBe(false);
+
+  await page.reload();
+  await page.waitForFunction(() => (window as unknown as SidecarApp).__fm?.handle?.name === 'Paper.md');
+  await expect(page.locator('#toast')).toContainText('Reconnected');
+  const after = await page.evaluate(() => {
+    const app = window as SidecarApp & { __fm: { hasConflict: boolean } };
+    return { conflict: app.__fm.hasConflict, dirty: app.__fm.dirty, bib: (app.view.state.doc.attrs.bib as { content: string } | null)?.content ?? null };
+  });
+  expect(after).toEqual({ conflict: false, dirty: false, bib: expect.stringContaining('@book{arrow1951') });
+  await expect.poll(() => blocksAndList(page)).toEqual({ kinds: ['doc_title', 'paragraph', 'bibliography'], painted: 1 });
+});
+
+test('a sidecar left unread stays pending across a reload, and the folder reads it', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-sidecar-pending', {
+    'refs.bib': ARROW,
+    'Paper.md': '---\ntitle: Paper\nbibliography: refs.bib\n---\n\nArrow [@arrow1951] started it.\n',
+  });
+  await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await app.__fm.loadHandle(await dir.getFileHandle('Paper.md'));
+  }, dirName);
+  await expect(page.locator('#toast')).toContainText('its bibliography is refs.bib');
+
+  await page.reload();
+  await page.waitForFunction(() => (window as unknown as SidecarApp).__fm?.handle?.name === 'Paper.md');
+  await expect(page.locator('#toast')).toContainText('its bibliography is refs.bib');
+  expect(await page.evaluate(() => (window as unknown as SidecarApp).__fm.pendingBibliography)).toBe('refs.bib');
+
+  const attached = await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    (window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker = async () => dir;
+    await app.__fm.attachFolder();
+    const { bib, frontmatter } = app.view.state.doc.attrs;
+    return { content: (bib as { content: string } | null)?.content ?? null, frontmatter, pending: app.__fm.pendingBibliography, dirty: app.__fm.dirty };
+  }, dirName);
+  expect(attached).toEqual({ content: expect.stringContaining('@book{arrow1951'), frontmatter: '', pending: null, dirty: false });
+  await expect(page.locator('#toast')).toContainText('bibliography read from refs.bib');
+});
+
+test('the open toast names a front-matter warning that a save loses something first', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const h = await root.getFileHandle('Authors.md', { create: true });
+    const w = await h.createWritable();
+    // The plass.foo warning (kept as written: nothing lost) comes first.
+    await w.write('---\nplass:\n  foo: 1\nauthor:\n  - name: Alice Smith\n    affiliation: Pitt\n  - name: Bob\n---\n\nBody.\n');
+    await w.close();
+    await (window as unknown as SidecarApp).__fm.loadHandle(h);
+  });
+  await expect(page.locator('#toast')).toContainText('front matter: 2 warnings — author: only the names are kept');
+});
