@@ -142,7 +142,7 @@ jobs:
       # day: a sibling clone needs the exact Electron). Its own checkout
       # carries Electron and the packager; Plass's node_modules are not
       # needed here.
-      CLAERBOUT_TAG: v0.2.6
+      CLAERBOUT_TAG: v0.2.8
       CLAERBOUT_SHELL: ${{ github.workspace }}/../claerbout
       # The packager fetches Electron for each architecture itself.
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
