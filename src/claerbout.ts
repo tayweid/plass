@@ -42,6 +42,14 @@
 //   window hears `reload` with the paths it wrote or removed: the window
 //   whose file is among them reads it again (`onShellSave`,
 //   `onShellReload`).
+// - Closing a window with unsaved work (shell 0.2.8). The page tells the
+//   shell whether closing now would lose work, and what the close
+//   dialog's Save can do (`unsaved`, `unsavedReporter`); at ⌘W, the red
+//   button, File › Close, ⌘Q and an update's relaunch the shell asks the
+//   page to `save {reason: 'close', choose}` quietly first, and shows the
+//   standard sheet (Save / Don't Save / Cancel) when that cannot be done.
+//   The page never registers `beforeunload` in the shell: Electron would
+//   refuse the close without a word, and block ⌘Q with it.
 // - The History page in the room (shell 0.2.3). The History tile beside
 //   the name, File › History… and the shell's View › History… toggle the
 //   shell's History page over this window's panel, the room (#scroll),
@@ -215,21 +223,94 @@ export function onUpdate(listener: (step: UpdateStep) => void): () => void {
   return shell.on('update', (detail) => listener((detail ?? {}) as UpdateStep));
 }
 
-/** The shell's `save {id, reason: 'rewind'}`: a rewind is about to write
- *  the project's files, and every window on it writes its open document
- *  first. `save` writes it and resolves to null once it is on disk (at
- *  once when nothing changed), or to why it could not, in words that
- *  follow "could not be saved:" on the History page's card; the answer
- *  is `{type: 'saved', id, ok: true}` or `{type: 'saved', id, ok: false,
- *  error}`, which refuses the rewind. The shell waits 3 s for it. Returns
- *  the unsubscribe; nothing outside the app. */
-export function onShellSave(save: () => Promise<string | null>): () => void {
+/** What closing this window now would cost, as the page tells the shell
+ *  (`{type: 'unsaved', ...}`), and what the close dialog's Save can do.
+ *  - `unsaved`: closing now would lose work. A blank sheet that was never
+ *    saved is not unsaved: it closes without a question.
+ *  - `name`: the document's name with its extension, for the dialog's
+ *    "Do you want to save the changes you made to “Notes.md”?".
+ *  - `save`: 'quiet', the document has a file and its edits can be
+ *    written without asking (autosave has not got to them yet); 'choose',
+ *    the writer picks a place (never saved, or the file moved away);
+ *    'none', no Save at all (the file changed outside Plass, which is
+ *    never overwritten quietly: the writer settles it in the window).
+ *  - `label`: the Save button's words when they are not the shell's
+ *    ("Save…" for 'choose', "Save" for 'quiet').
+ *  - `detail`: the dialog's second line when it is not the shell's. */
+export interface UnsavedReport {
+  unsaved: boolean;
+  name: string;
+  save: 'quiet' | 'choose' | 'none';
+  label?: string;
+  detail?: string;
+}
+
+/** The window's `unsaved` reports. Call the function it returns with the
+ *  window's values once after load and whenever they may have changed;
+ *  it sends only when they did. It resolves to whether the shell guards
+ *  this window's close: a shell from 0.2.8 answers `{guarded: true}`; an
+ *  older one answers null, after which nothing more is sent (its log
+ *  would fill with "unknown shell message") and the close is the shell's
+ *  as it always was. A report the bridge failed is sent again with the
+ *  next call. Nothing in a browser tab, whose close is the page's own
+ *  `beforeunload`. Never rejects. */
+export function unsavedReporter(): (report: UnsavedReport) => Promise<boolean> {
+  let refused = false;
+  let guarded = false;
+  let sent = '';
+  return (report) => {
+    const shell = bridge();
+    if (!shell || refused) return Promise.resolve(false);
+    const message: Record<string, unknown> = { type: 'unsaved', unsaved: report.unsaved, name: report.name, save: report.save };
+    if (report.label) message.label = report.label;
+    if (report.detail) message.detail = report.detail;
+    const key = JSON.stringify(message);
+    if (key === sent) return Promise.resolve(guarded);
+    sent = key;
+    return shell.request(message).then(
+      (reply) => {
+        guarded = (reply as { guarded?: unknown } | null)?.guarded === true;
+        if (!guarded) refused = true;
+        return guarded;
+      },
+      () => {
+        if (sent === key) sent = '';
+        return false;
+      },
+    );
+  };
+}
+
+/** What a shell's `save` asks: `reason`, 'rewind' (a rewind is about to
+ *  write the project) or 'close' (the window is closing with unsaved
+ *  work); `choose`, for a close, whether the writer pressed Save in the
+ *  shell's dialog, so the page may open its own picker to give the
+ *  document a place (the shell has granted the page a user activation
+ *  for it), or only the quiet write it tries first. */
+export interface ShellSaveAsk {
+  reason: string;
+  choose: boolean;
+}
+
+/** The shell's `save {id, reason, choose?}`. For a rewind (`reason:
+ *  'rewind'`), every window on the project writes its open document
+ *  before the rewind writes the project's files; for a close (`reason:
+ *  'close'`), the closing window saves first, quietly or, with `choose`,
+ *  through its own picker. `save` resolves to null once the document is
+ *  on disk (at once when nothing changed), or to why it could not, in
+ *  words that follow "could not be saved:" on the History page's card;
+ *  the answer is `{type: 'saved', id, ok: true}` or `{type: 'saved', id,
+ *  ok: false, error}`, which refuses the rewind or keeps the window open.
+ *  The shell waits 3 s for a rewind's and a quiet close's answer, and as
+ *  long as it takes for a chosen one (a picker stays open as long as the
+ *  writer needs). Returns the unsubscribe; nothing outside the app. */
+export function onShellSave(save: (ask: ShellSaveAsk) => Promise<string | null>): () => void {
   const shell = bridge();
   if (!shell) return () => {};
   return shell.on('save', (detail) => {
-    const id = (detail as { id?: unknown } | null)?.id;
+    const { id, reason, choose } = (detail ?? {}) as { id?: unknown; reason?: unknown; choose?: unknown };
     if (typeof id !== 'string') return;
-    void save()
+    void save({ reason: typeof reason === 'string' ? reason : 'rewind', choose: choose === true })
       .then(
         (error) => error,
         (e: unknown) => (e instanceof Error ? e.message : String(e)) || 'Plass could not write it',

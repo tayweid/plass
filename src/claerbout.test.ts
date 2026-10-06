@@ -21,13 +21,20 @@
 // file again only when this window's path is among the paths, however
 // /private spells it.
 //
+// Closing with unsaved work (shell 0.2.8): `unsaved` reports go when their
+// values change, label and detail only when given; a shell that answers
+// {guarded: true} guards the close, and an older one's null stops the
+// reports for good; a report the bridge failed goes again. The shell's
+// `save` hands the page its reason and, for a close, whether the writer
+// chose Save in the dialog.
+//
 // The History page in the room: the tile asks `{type: 'history', action:
 // 'open', inline: <the room's box>}`, and only `{opened: true, inline:
 // true}` is the page in the room; `{opened: true}` alone is an older shell
 // that opened its window instead; anything else, no history view. `bounds`
 // and `close` carry what they should, and the shell's `history` events
 // reach the page as inline open/closed and toggle, nothing else.
-import { closeHistory, focusThisWindow, isNativeShell, moveHistory, onHistoryView, onShellReload, onShellSave, openHistory, reportDocument, rewoundText, samePath, type HistoryViewEvent } from './claerbout';
+import { closeHistory, focusThisWindow, isNativeShell, moveHistory, onHistoryView, onShellReload, onShellSave, openHistory, reportDocument, rewoundText, samePath, unsavedReporter, type HistoryViewEvent, type ShellSaveAsk, type UnsavedReport } from './claerbout';
 
 let failed = 0;
 function check(name: string, ok: boolean) {
@@ -214,6 +221,59 @@ await settle();
 await settle();
 process.off('unhandledRejection', onUnhandled);
 check('a bridge that fails the answer: no unhandled rejection', !unhandled);
+
+shell(async () => null);
+const saveAsks: ShellSaveAsk[] = [];
+onShellSave(async (ask) => {
+  saveAsks.push(ask);
+  return null;
+});
+fire('save', { id: 'e1', reason: 'close', choose: true });
+fire('save', { id: 'e2', reason: 'close' });
+fire('save', { id: 'e3', reason: 'close', choose: 'yes' });
+fire('save', { id: 'e4' });
+await settle();
+check(
+  'the reason and the choice reach the page: choose only when true, a save without a reason is a rewind’s',
+  JSON.stringify(saveAsks) === '[{"reason":"close","choose":true},{"reason":"close","choose":false},{"reason":"close","choose":false},{"reason":"rewind","choose":false}]',
+);
+
+console.log('unsaved (closing with unsaved work)');
+
+const unsavedSent = () => asked.filter((message) => message.type === 'unsaved');
+const blank: UnsavedReport = { unsaved: false, name: 'Plass.md', save: 'choose' };
+delete global.window;
+check('no shell: nothing sent, nothing guarded', (await unsavedReporter()(blank)) === false);
+
+shell(async (message) => (message.type === 'unsaved' ? { guarded: true } : null));
+asked.length = 0;
+const report = unsavedReporter();
+check('a shell from 0.2.8 guards the close', (await report(blank)) === true);
+check('what it was sent', JSON.stringify(unsavedSent().at(-1)) === '{"type":"unsaved","unsaved":false,"name":"Plass.md","save":"choose"}');
+check('the same values again: nothing sent, still guarded', (await report({ ...blank })) === true && unsavedSent().length === 1);
+await report({ unsaved: true, name: 'Close.typ', save: 'none', detail: 'Close.typ was changed outside Plass.' });
+check('a detail goes when given, a label when given', JSON.stringify(unsavedSent().at(-1)) === '{"type":"unsaved","unsaved":true,"name":"Close.typ","save":"none","detail":"Close.typ was changed outside Plass."}');
+await report({ unsaved: true, name: 'Close.typ', save: 'choose', label: 'Save to a Folder…', detail: '' });
+check('an empty detail is none', JSON.stringify(unsavedSent().at(-1)) === '{"type":"unsaved","unsaved":true,"name":"Close.typ","save":"choose","label":"Save to a Folder…"}');
+
+shell(async () => null);
+asked.length = 0;
+const older = unsavedReporter();
+check('an older shell answers null: not guarded', (await older(blank)) === false);
+await older({ ...blank, unsaved: true });
+check('and nothing more is sent to it', unsavedSent().length === 1);
+
+let bridgeDown = true;
+shell(async () => {
+  if (bridgeDown) throw new Error('the bridge is down');
+  return { guarded: true };
+});
+asked.length = 0;
+const flaky = unsavedReporter();
+check('a failing bridge: not guarded, never a rejection', (await flaky(blank)) === false);
+bridgeDown = false;
+check('the report it failed goes again with the next call', (await flaky(blank)) === true && unsavedSent().length === 2);
+delete global.window;
 
 console.log('reload (a rewind wrote the file)');
 

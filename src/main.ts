@@ -7,7 +7,7 @@ import { closeHistory, history } from 'prosemirror-history';
 import { tableEditing } from 'prosemirror-tables';
 import { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
-import { isNativeShell, onShellReload, onShellSave, reportDocument, rewoundText, takeLaunchFile } from './claerbout';
+import { isNativeShell, onShellReload, onShellSave, reportDocument, rewoundText, takeLaunchFile, unsavedReporter } from './claerbout';
 import { openInAnotherWindow } from './open-files';
 import { migrateLegacyTableGeometry } from './typ-parser';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
@@ -42,6 +42,9 @@ import { FROM_DISK, reloadTransaction } from './reload-in-place';
 
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
+/** Kept beside the session copy: the document was not on disk when it was
+ *  taken, so a reload (⌘R) leaves it unsaved, as it was. */
+const SESSION_DIRTY_KEY = 'typeset-doc-session-dirty';
 const SECONDARY_KEY = 'typeset-secondary-tab';
 const TAB_ID_KEY = 'typeset-tab-id';
 
@@ -67,6 +70,8 @@ function tabFileKey(): string {
  *  restores its own session must STAY primary. */
 let primaryTab = false;
 let restoredSessionDoc = false;
+/** The restored session copy was not on disk (SESSION_DIRTY_KEY). */
+let restoredSessionDirty = false;
 
 /** Installed-app window (Finder launch or Dock open) vs plain browser tab.
  *  A Plass.app window is an app window too. */
@@ -79,6 +84,7 @@ function loadDoc(): PMNode {
   // its own work through the session branch below.
   if (new URLSearchParams(location.search).has('new')) {
     sessionStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_DIRTY_KEY);
     sessionStorage.removeItem(SOURCE_SESSION_KEY);
     // window.open copies sessionStorage, so the inherited tab id would make
     // this window adopt the opener's file. It gets its own on first use.
@@ -95,6 +101,7 @@ function loadDoc(): PMNode {
     const own = sessionStorage.getItem(SESSION_KEY);
     if (own) {
       restoredSessionDoc = true;
+      restoredSessionDirty = sessionStorage.getItem(SESSION_DIRTY_KEY) === '1';
       return migrateLegacyTableGeometry(PMNode.fromJSON(schema, JSON.parse(own)));
     }
   } catch (e) {
@@ -120,6 +127,8 @@ function persistSession(view: EditorView) {
   try {
     const json = JSON.stringify(view.state.doc.toJSON());
     sessionStorage.setItem(SESSION_KEY, json);
+    if (fileManager.dirty) sessionStorage.setItem(SESSION_DIRTY_KEY, '1');
+    else sessionStorage.removeItem(SESSION_DIRTY_KEY);
     if (primaryTab) localStorage.setItem(STORAGE_KEY, json);
   } catch (e) {
     console.warn('Autosave failed.', e);
@@ -314,8 +323,56 @@ function onStats(s: TypesetStats) {
 window.addEventListener('vite:preloadError', () => {
   if (sessionStorage.getItem('typeset-reloaded-for-update')) return;
   sessionStorage.setItem('typeset-reloaded-for-update', '1');
+  // The session copy comes back after it: nothing to ask about.
+  leavingOnPurpose = true;
   location.reload();
 });
+
+// Closing with unsaved work. In Plass.app the shell asks (Save / Don't
+// Save / Cancel) from what the page reports (`unsaved`, claerbout.ts),
+// and the page never registers `beforeunload` there: Electron would refuse
+// the close without a word. In a browser tab Chrome's own "Leave site?"
+// asks, through a `beforeunload` registered only while closing would lose
+// work, and never for Plass's own reloads (`leavingOnPurpose`).
+let leavingOnPurpose = false;
+const reportUnsaved = unsavedReporter();
+const askBeforeLeaving = (event: BeforeUnloadEvent) => {
+  if (leavingOnPurpose) return;
+  event.preventDefault();
+  event.returnValue = '';
+};
+let askingBeforeLeaving = false;
+/** Tell the shell (or the tab) what closing now would cost: called once
+ *  after load, on every file-manager state change and every document
+ *  change; the report goes only when its values change. */
+function reportClose() {
+  const report = fileManager.closeReport();
+  void reportUnsaved(report);
+  if (isNativeShell() || report.unsaved === askingBeforeLeaving) return;
+  askingBeforeLeaving = report.unsaved;
+  if (report.unsaved) window.addEventListener('beforeunload', askBeforeLeaving);
+  else window.removeEventListener('beforeunload', askBeforeLeaving);
+}
+
+/** The settings a new document has, to tell a blank sheet by. */
+const DEFAULT_DOC_ATTRS = JSON.stringify(schema.nodes.doc.createAndFill()!.attrs);
+/** A blank sheet: no text and nothing else (a figure, math, a table …),
+ *  every block an empty paragraph, the default settings; in the source
+ *  view, no text. Asked on every keystroke in a document with no file, so
+ *  the walk stops at the first block with anything in it. */
+function isBlankDoc(): boolean {
+  const doc = view.state.doc;
+  if (sourceView.isActive()) {
+    const text = sourceView.textFor(fileManager.format);
+    if (text === null || text.trim()) return false;
+  } else {
+    for (let i = 0; i < doc.childCount; i++) {
+      const block = doc.child(i);
+      if (block.type !== schema.nodes.paragraph || block.content.size > 0) return false;
+    }
+  }
+  return JSON.stringify(doc.attrs) === DEFAULT_DOC_ATTRS;
+}
 
 const view = new EditorView(editorEl, {
   state: makeState(loadDoc(), onStats),
@@ -358,6 +415,8 @@ const view = new EditorView(editorEl, {
       scheduleSave(view);
       // A reload from disk is not an edit: the document matches the file.
       if (!tr.getMeta(FROM_DISK)) fileManager.noteChange();
+      // Emptied or filled: whether closing would lose anything.
+      reportClose();
       updateStatus();
     }
   },
@@ -388,6 +447,7 @@ const sourceView = createSourceView({
   format: () => fileManager.format,
   onChange() {
     fileManager.noteChange();
+    reportClose();
     updateStatus();
   },
   onMode(active) {
@@ -453,10 +513,12 @@ const fileManager = new FileManager({
     // Just the file name, as Knuth does: an installed PWA window already
     // prepends the app's name, so " - Plass" made the window read it twice.
     document.title = `${fileManager.name}${fileManager.format}${fileManager.dirty ? ' •' : ''}`;
+    reportClose();
   },
   message: showMessage,
   messageAction: showMessage,
   hasSessionDoc: () => restoredSessionDoc,
+  isBlank: isBlankDoc,
   // Plass.app: the shell follows this window's file (its represented file,
   // and the project whose autosave record it keeps), and answers with its
   // path, which the bar shows the folder of; a browser tab has nobody to
@@ -478,8 +540,10 @@ const fileManager = new FileManager({
 
 // Plass.app: a rewind from the shell's History window saves every window
 // on the project first, through ⌘S's write, and then the window whose
-// file it wrote or removed reads it again (claerbout.ts).
-onShellSave(() => fileManager.saveForShell());
+// file it wrote or removed reads it again; a window closing with unsaved
+// work saves first, quietly or, from the close dialog's Save, through the
+// first save's folder picker (claerbout.ts).
+onShellSave((ask) => (ask.reason === 'close' ? fileManager.saveForClose(ask.choose) : fileManager.saveForShell()));
 onShellReload(() => documentPath, (rewound) => void fileManager.reloadFromDisk(rewoundText(rewound)));
 
 toolbar = buildToolbar(toolbarEl, railEl, view, fileManager, { toggleSource: () => void sourceView.toggle() });
@@ -495,6 +559,13 @@ void import('./pdf').then(({ setAssetReader }) =>
 toolbar.update(view.state);
 toolbar.setFile(fileManager.name, fileManager.dirty);
 applySettings(view.state);
+// A reload (⌘R) of a document that was not on disk leaves it unsaved, the
+// dot and the close's question with it; a reconnect to the window's file
+// below decides again, against the disk.
+if (restoredSessionDirty) fileManager.keepUnsaved();
+// Once after load: the shell learns this window's state (and whether it
+// guards the close at all).
+reportClose();
 
 /** Open a file-handler launch: the file arrives as a bare handle with no
  *  directory context, so documents with on-disk figures get a one-click

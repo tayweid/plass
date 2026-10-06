@@ -38,7 +38,18 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   another Plass.app window already shows fronts that window and closes
   itself (`openLaunched` in `main.ts`: the holder asks the shell's
   `focus` request for itself over `open-files.ts`; under a shell older
-  than 0.2.1, which answers null, the toast stays). `npm run app` runs
+  than 0.2.1, which answers null, the toast stays). Closing a window with
+  unsaved work (⌘W, the red button, ⌘Q for each window in turn, an
+  update's relaunch) asks, on shell 0.2.8: the page reports what closing
+  would cost (`unsaved`, `unsavedReporter` in `src/claerbout.ts`) and
+  answers the shell's `save {reason: 'close', choose}`; a file's pending
+  edits are written quietly, a never-saved document gets the shell's Save
+  / Don't Save / Cancel sheet with the first save's folder picker behind
+  Save, a file changed outside Plass is never written over (no Save), and
+  a blank never-saved sheet closes without asking. The page never
+  registers `beforeunload` in the shell (Electron would refuse the close
+  without a word); a browser tab gets Chrome's "Leave site?" instead
+  (`docs/CLAERBOUT-SHELL.md`, OPEN). `npm run app` runs
   the shell from the checkout (needs `dist/` and the `claerbout` checkout
   beside this one, or `CLAERBOUT_SHELL`); `npm run app:build` packages
   and installs it (`--zip`, `--arch`, `--web` pass through to the shell's
