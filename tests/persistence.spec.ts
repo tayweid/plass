@@ -1100,16 +1100,21 @@ test('the open toast names a front-matter warning that a save loses something fi
 
 // ---------- plan step 8: .md is the default ----------
 
-/** Every toast the page shows from now on, in order. */
+/** Every toast the page shows from now on, in order — each one shown, the
+ *  same text twice in a row included (main.ts showMessage puts a new text
+ *  span in the toast every time). */
 const recordToasts = (page: Page) =>
   page.evaluate(() => {
     const toast = document.getElementById('toast')!;
     const seen: string[] = [];
     (window as unknown as { __toasts: string[] }).__toasts = seen;
-    new MutationObserver(() => {
-      const text = toast.querySelector('.toast-text')?.textContent ?? '';
-      if (text && seen.at(-1) !== text) seen.push(text);
-    }).observe(toast, { childList: true, subtree: true, characterData: true });
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (node instanceof HTMLElement && node.classList.contains('toast-text')) seen.push(node.textContent ?? '');
+        }
+      }
+    }).observe(toast, { childList: true });
   });
 const toasts = (page: Page) => page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts.slice());
 
