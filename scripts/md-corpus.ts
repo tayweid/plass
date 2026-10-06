@@ -39,6 +39,9 @@ const loose = (s: string) => normalize(s).replace(/[ \t]+$/gm, '').replace(/\n{3
 const noBlank = (s: string) => loose(s).replace(/\n\n+/g, '\n');
 
 type Kind =
+  | 'front matter'
+  | 'fenced div'
+  | 'comment'
   | 'hard-wrapped paragraph re-flowed'
   | 'smart quotes'
   | 'h4+ demoted'
@@ -52,7 +55,22 @@ type Kind =
   | 'blank lines'
   | 'other';
 
-function classify(a: string, b: string, nextA: string | undefined): Kind {
+/** The last line of a leading `---` YAML block, -1 when there is none. */
+function frontEnd(lines: string[]): number {
+  if (lines[0] !== '---') return -1;
+  return lines.findIndex((l, i) => i > 0 && (l === '---' || l === '...'));
+}
+
+/** A `:::` div fence line, at any quote depth. */
+const DIV_FENCE = /^\s*(?:>\s*)*:{3,}/;
+
+function classify(a: string, b: string, nextA: string | undefined, inFront: boolean): Kind {
+  // The Markdown source's own forms first (docs/MARKDOWN-FORMAT.md): the
+  // front matter rewritten in its key order, a blank line around every
+  // `:::` and every comment, a nested comment hoisted out of its block.
+  if (inFront) return 'front matter';
+  if (DIV_FENCE.test(a) || DIV_FENCE.test(b)) return 'fenced div';
+  if (/<!--|-->/.test(a) || /<!--|-->/.test(b)) return 'comment';
   if (/^#{4,6} /.test(a)) return 'h4+ demoted';
   if (/^\s*[-*] \[[ x]\]/.test(a)) return 'task list';
   if (/['"]/.test(a) && a.replace(/['"]/g, '') === b.replace(/[‘’“”′″]/g, '')) return 'smart quotes';
@@ -99,7 +117,7 @@ for (const file of files) {
   const b = loose(out).split('\n');
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     if (a[i] === b[i]) continue;
-    const kind = classify(a[i] ?? '', b[i] ?? '', a[i + 1]);
+    const kind = classify(a[i] ?? '', b[i] ?? '', a[i + 1], i <= Math.max(frontEnd(a), frontEnd(b)));
     byKind.set(kind, (byKind.get(kind) ?? 0) + 1);
     const rel = file.startsWith(root) ? file.slice(root.length + 1) : file;
     const ex = `${rel}:${i + 1}\n      in : ${(a[i] ?? '').slice(0, 110)}\n      out: ${(b[i] ?? '').slice(0, 110)}`;
