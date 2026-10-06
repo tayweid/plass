@@ -596,3 +596,86 @@ prompted.
     opens (`tests/rewind.spec.ts` presses Export, the rail and the keys). All
     of it ships with the shell tag that brings the view; under v0.2.0
     nothing sends the events.
+- ~~What closing a window with unsaved work does.~~ DECIDED 2026-10-06
+  (Taylor's answers: autosave quietly; a never-saved document asks, and a
+  blank one closes without asking; never overwrite a file changed outside
+  Plass quietly; ⌘Q asks for each window in turn; Chrome's "Leave site?"
+  in a browser tab; an update's relaunch asks the same way; the shell
+  change for every app). Before it nothing asked: ⌘W, the red button and
+  ⌘Q closed the window with edits autosave had not yet written (up to
+  1.2 s of typing), a never-saved document, a conflict's or a moved
+  file's copy, all lost; the shell's autosave record commits only what is
+  on disk. The page cannot ask by itself in the shell: a `beforeunload`
+  there makes Electron refuse the close without a dialog, and blocks ⌘Q
+  with it (measured on Electron 44.5). So the page tells, and the shell
+  asks, from shell 0.2.8 (the claerbout README, "The protocol"; Knuth
+  implements the same):
+  - **`{type: 'unsaved', unsaved, name, save, label?, detail?}`**, page →
+    shell, through the request channel `document` and `focus` use
+    (`unsavedReporter` in `src/claerbout.ts`; `closeReport` in
+    `src/file-manager.ts`; `reportClose` in `src/main.ts`, called once
+    after load, on every file-manager state change and on every document
+    change, and sent only when the values change). `unsaved`: closing now
+    would lose work, the file manager's `dirty`, except that a document
+    with no file that is a blank sheet (no text, nothing else in it — a
+    figure, math, a table, a page break —, every block an empty
+    paragraph, the default settings; `isBlankDoc` in `main.ts`) closes
+    without asking, edited or not. `name`: the name with its extension
+    ("Notes.md", "Plass.md"). `save`, what the dialog's Save can do:
+    `'quiet'` for a file autosave has not yet written to; `'choose'` for a
+    document that never had a file (the first save's folder picker), a
+    file that moved or was renamed (`label: 'Save to a Folder…'`) and a
+    file awaiting its permission again after a reload; `'none'` for a file
+    changed outside Plass, with a `detail` that says how to settle it in
+    the window (Cancel, then ⌘S and Overwrite disk; Don't Save keeps the
+    version on disk). The shell answers `{guarded: true}`; an older shell
+    answers null, and the page sends nothing more.
+  - **`save {id, reason: 'close', choose}`**, shell → page, the rewind's
+    `save` with a reason, answered with the same `saved {id, ok, error?}`
+    (`onShellSave` hands the page `{reason, choose}`; `saveForClose` in
+    `src/file-manager.ts`). `choose: false` writes a file now through
+    ⌘S's write without its toast (the autosave timer cleared, written
+    again if a keystroke landed during the write), and answers why not for
+    everything else ("it has no file yet", a conflict, a file gone).
+    `choose: true` is the writer's Save in the dialog: the shell has
+    granted the page a user activation (`webContents.executeJavaScript('0',
+    true)`), so the page may open its picker — the first save's folder
+    picker for a never-saved document, Save to a folder… for a file gone,
+    the permission prompt for a file awaiting it — and answers ok only
+    once the document is on disk. A conflict is never written, chosen or
+    not. A picker that would not open (a SecurityError: no activation)
+    answers so, and a toast offers Save to a folder… from a click.
+  - The shell's side: at a window's `close` (⌘W, the red button, File ›
+    Close) with a last report of unsaved, it holds the close, tries the
+    quiet save when `save` is `'quiet'` (closing without a dialog on ok),
+    and otherwise shows the standard sheet, "Do you want to save the
+    changes you made to “Notes.md”?" with the page's detail or "Your
+    changes will be lost if you don't save them.", Save (the page's label,
+    absent for `'none'`), Don't Save, Cancel. Save sends `choose: true`
+    with no time limit; a page that does not answer the quiet save in time
+    gets only Don't Save and Cancel. ⌘Q and an update's relaunch settle
+    every unsaved window in turn before anything stops, and a Cancel
+    leaves everything running. An older page never reports, so the new
+    shell closes it as before; a newer page under an older shell gets null
+    and stops.
+  - **A browser tab** (no shell): `beforeunload` is registered exactly
+    while the report says unsaved (preventDefault, `returnValue = ''`), so
+    Chrome asks "Leave site?" — on a reload too — and never for Plass's own
+    reload after a deploy (`vite:preloadError`, `leavingOnPurpose`). Never
+    in the shell.
+  - **⌘R keeps a never-saved document unsaved**: the dirty bit is kept
+    beside the session copy (`typeset-doc-session-dirty` in
+    sessionStorage, written with it), and boot restores it
+    (`keepUnsaved`); a reconnect to the window's file decides again,
+    against the disk. Before, the text came back but the dot and the
+    close's question did not.
+  - Tests: `src/claerbout.test.ts` (the report's sending, the null that
+    stops it, the ask's reason and choice) and `tests/close-guard.spec.ts`
+    (a stand-in shell: the reports for a never-saved, blank, file,
+    conflicted and moved document; the quiet save; the chosen save through
+    a stand-in folder picker, cancelled, refused and taken; an older
+    shell; no `beforeunload` in the shell; Chrome's dialog in a tab only
+    while unsaved, and not for the update reload; ⌘R). Ships with shell
+    0.2.8; the deploy's `CLAERBOUT_TAG` moves to it once the tag is
+    published. Under an older shell the page's report is answered null and
+    the window closes as it always did.

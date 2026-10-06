@@ -19,6 +19,7 @@ import { holdOpenFile, openInAnotherWindow } from './open-files';
 import { typToDoc } from './typ-parser';
 import { INPUT_LIMITS, inputSizeError, readBoundedText } from './input-limits';
 import { dataUrlBytes, projectImagePath } from './figures';
+import type { UnsavedReport } from './claerbout';
 
 export interface FileHooks {
   getDoc: () => PMNode;
@@ -59,6 +60,10 @@ export interface FileHooks {
    *  the document matches its file but for the bibliography, which the
    *  next save embeds. */
   setBib?: (bib: { name: string; content: string }, frontmatter: string) => void;
+  /** The document is a blank sheet: no text, nothing else in it (a figure,
+   *  math, a table …), the default settings. A blank document with no file
+   *  loses nothing when its window closes (`closeReport`). */
+  isBlank?: () => boolean;
 }
 
 /** What a parse of the open file said, for its toast. */
@@ -248,6 +253,10 @@ export class FileManager {
   private changeRevision = 0;
   private writeQueue: Promise<void> = Promise.resolve();
   private conflict = false;
+  /** The last folder picker would not open for want of a user activation
+   *  (a SecurityError: a picker asked for from a shell's event, not a
+   *  click). Reset by every ask. */
+  private pickerRefused = false;
   /** Last-session file awaiting a permission re-grant (browsers downgrade
    *  stored handles to 'prompt' across reloads; re-requesting needs a
    *  user gesture). Preserve a restored/edited screen copy on reconnect,
@@ -755,6 +764,7 @@ export class FileManager {
       this.hooks.message('Project folders need the File System Access API (Chrome/Edge)');
       return null;
     }
+    this.pickerRefused = false;
     try {
       // Start where the document already is. A Finder-launched file has a
       // handle but no folder, and its own folder is the answer the user
@@ -765,7 +775,10 @@ export class FileManager {
       });
       return await this.adoptFolder(dir, intent);
     } catch (e) {
-      if ((e as DOMException)?.name !== 'AbortError') console.warn(e);
+      const name = (e as DOMException)?.name;
+      if (name !== 'AbortError') console.warn(e);
+      // No user activation to open it with (saveForClose says so).
+      this.pickerRefused = name === 'SecurityError';
       return null;
     }
   }
@@ -1023,6 +1036,121 @@ export class FileManager {
       default:
         return null;
     }
+  }
+
+  /** What closing this window now would cost, for the shell's close
+   *  dialog (claerbout.ts `UnsavedReport`). Unsaved: edits not on disk
+   *  (`dirty`), unless the document has no file and is a blank sheet.
+   *  Save: 'quiet' for a file autosave has not yet written to; 'none'
+   *  for a file changed outside Plass, which is never written over
+   *  without the writer's word (they settle it in the window: ⌘S, then
+   *  Overwrite disk); 'choose' for a file that moved away (Save to a
+   *  Folder…), a file awaiting its permission again, and a document that
+   *  never had a file (the first save's folder picker). */
+  closeReport(): UnsavedReport {
+    const name = this.handle?.name ?? `${this.name}${this.format}`;
+    const untitled = !this.handle && !this.pendingRestore;
+    const unsaved = this.dirty && !(untitled && (this.hooks.isBlank?.() ?? false));
+    if (this.handle && this.conflict) {
+      return {
+        unsaved,
+        name,
+        save: 'none',
+        detail: `${name} was changed outside Plass. To keep this window's version, choose Cancel, then press ⌘S and choose Overwrite disk. Don't Save keeps the version on disk.`,
+      };
+    }
+    if (this.handle && this.missing) {
+      return {
+        unsaved,
+        name,
+        save: 'choose',
+        label: 'Save to a Folder…',
+        detail: `${name} has moved or been renamed, so Plass can no longer save to it. Your changes will be lost if you don't save them.`,
+      };
+    }
+    if (this.handle) return { unsaved, name, save: 'quiet' };
+    if (this.pendingRestore) {
+      return {
+        unsaved,
+        name,
+        save: 'choose',
+        detail: `Plass needs your permission to save to ${name} again. Your changes will be lost if you don't save them.`,
+      };
+    }
+    return { unsaved, name, save: 'choose' };
+  }
+
+  /** The shell's `save {reason: 'close', choose}` (claerbout.ts
+   *  onShellSave): this window is closing with unsaved work. Null once the
+   *  document is on disk (or there is nothing to lose), else why not —
+   *  and the window stays open.
+   *  - A file: written now through ⌘S's write, without its toast, whether
+   *    or not `choose` (autosave had not got to it yet).
+   *  - A file changed outside Plass: never written over here.
+   *  - A file that moved away, with `choose`: Save to a folder… (the
+   *    first save's folder picker); without, why not.
+   *  - A file awaiting its permission again, with `choose`: the
+   *    permission asked for, then the write.
+   *  - No file, with `choose`: the first save (the folder picker, opened
+   *    on the user activation the shell grants the page for this); a
+   *    picker that cannot open for want of one is said on a toast that
+   *    offers it again. Without `choose`: 'it has no file yet'. */
+  async saveForClose(choose: boolean): Promise<string | null> {
+    clearTimeout(this.saveTimer);
+    if (!this.handle && this.pendingRestore) {
+      const name = this.pendingRestore.handle.name;
+      if (!choose) return `Plass needs your permission to save to ${name} again`;
+      if (!(await this.completeRestore()) || !this.handle) return `Plass was not allowed to save to ${name}`;
+    }
+    if (!this.handle) {
+      if (!this.closeReport().unsaved) return null;
+      if (!choose) return 'it has no file yet';
+      await this.save();
+      return this.handle && !this.dirty ? null : this.notChosen();
+    }
+    if (this.conflict) return 'it changed on disk outside Plass, and Plass will not save over that change without asking';
+    if (this.missing) {
+      if (!choose) return 'it has moved or been renamed';
+      await this.saveElsewhere();
+      return this.handle && !this.dirty ? null : this.notChosen();
+    }
+    // A keystroke that lands during the write leaves it 'pending': write
+    // again, a few times at most.
+    for (let tries = 0; this.dirty && tries < 3; tries++) {
+      switch (await this.writeOpenFile()) {
+        case 'conflict':
+          return 'it changed on disk outside Plass, and Plass will not save over that change without asking';
+        case 'missing':
+          return 'it has moved or been renamed';
+        case 'failed':
+          return 'Plass could not write it';
+        case 'stale':
+          return 'the window opened another document meanwhile';
+      }
+    }
+    return this.dirty ? 'it was still changing' : null;
+  }
+
+  /** Why a close's chosen save left the document without a file: the
+   *  picker cancelled, or one that could not open (said on a toast that
+   *  offers it again, from a click this time). */
+  private notChosen(): string {
+    if (!this.pickerRefused) return 'it was not saved';
+    const name = this.handle?.name ?? `${this.name}${this.format}`;
+    this.notifyAction(`Plass could not open the folder picker for ${name} — save it from here, then close the window`, {
+      label: 'Save to a folder…',
+      run: () => void this.save(),
+    });
+    return 'the folder picker could not open';
+  }
+
+  /** A reload of a window whose document was not on disk: it still is not
+   *  (main.ts keeps the bit with the session copy). A reconnect to the
+   *  window's file decides again, against the disk. */
+  keepUnsaved(): void {
+    if (this.dirty) return;
+    this.dirty = true;
+    this.hooks.onState();
   }
 
   /** Surface a transient status message. */
