@@ -213,7 +213,7 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
 
   const parse = (text: string, format: SourceFormat): PMNode => {
     const parsed = format === '.md' ? md!.mdToDoc(text).doc : typToDoc(text).doc;
-    return withBaseAttrs(parsed, view.state.doc, format);
+    return withBaseAttrs(parsed, view.state.doc);
   };
 
   const persistSession = () => {
@@ -492,14 +492,11 @@ export function createSourceView(hooks: SourceViewHooks): SourceView {
 }
 
 /** The parsed document with the editor's own attrs where the text carries
- *  nothing different: Markdown never carries settings, and a `.typ` whose
- *  settings and bibliography parse back equal keeps the editor's objects so
- *  an untouched round trip is the identity (`doc.eq`). */
-function withBaseAttrs(parsed: PMNode, base: PMNode, format: SourceFormat): PMNode {
-  const settings =
-    format === '.md' || sameJson(normalizeSettings(parsed.attrs.settings), normalizeSettings(base.attrs.settings))
-      ? base.attrs.settings
-      : parsed.attrs.settings;
+ *  nothing different: text in either format (a `.typ`'s preamble, a `.md`'s
+ *  front matter) whose settings and bibliography parse back equal keeps the
+ *  editor's objects, so an untouched round trip is the identity (`doc.eq`). */
+function withBaseAttrs(parsed: PMNode, base: PMNode): PMNode {
+  const settings = sameJson(normalizeSettings(parsed.attrs.settings), normalizeSettings(base.attrs.settings)) ? base.attrs.settings : parsed.attrs.settings;
   const bib = sameJson(parsed.attrs.bib, base.attrs.bib) ? base.attrs.bib : parsed.attrs.bib;
   if (settings === parsed.attrs.settings && bib === parsed.attrs.bib) return parsed;
   return parsed.type.create({ ...parsed.attrs, settings, bib }, parsed.content);

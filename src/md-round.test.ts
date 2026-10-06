@@ -6,12 +6,12 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import MarkdownIt from 'markdown-it';
 import type { Node as PMNode } from 'prosemirror-model';
-import { mdToDoc, SENTINEL_CHAR } from './md-parser';
+import { mdToDoc, mergeSidecarBib, SENTINEL_CHAR, withSidecarBib } from './md-parser';
 import { docToMd } from './md-serializer';
 import { docToTyp } from './typ-serializer';
 import { typToDoc } from './typ-parser';
 import { demoDoc } from './demo-doc';
-import { DEFAULT_SETTINGS } from './settings';
+import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings } from './settings';
 import { schema } from './schema';
 import { docSkeleton, firstDivergence, pandocSkeleton, type PandocDoc } from './md-skeleton';
 import * as F from './typ-fixtures';
@@ -334,10 +334,11 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
 {
   const fm = '---\ntitle: "T"\nauthor:\n  - Alice\n  - Bob\nkeywords: [a, b]\nabstract: |\n  Two lines\n  of it\n---\n\nBody.\n';
   const { doc, warnings } = mdToDoc(fm);
-  check('unknown and block frontmatter is kept verbatim', doc.attrs.frontmatter === 'author:\n  - Alice\n  - Bob\nkeywords: [a, b]\nabstract: |\n  Two lines\n  of it', JSON.stringify(doc.attrs.frontmatter));
+  check('an unknown key is kept verbatim; an author list and an abstract are read', doc.attrs.frontmatter === 'keywords: [a, b]' && doc.child(1).textContent === 'Alice, Bob' && doc.child(2).textContent === 'Two lines of it', JSON.stringify(doc.toJSON()));
   check('kept frontmatter raises no warning', warnings.length === 0, warnings.join('; '));
   const out = docToMd(doc);
-  check('kept frontmatter is written back', out === fm, out);
+  check('front matter is written in the plan\'s order, the unknown key after', out === '---\ntitle: T\nauthor: Alice, Bob\nabstract: |\n  Two lines of it\nkeywords: [a, b]\n---\n\nBody.\n', out);
+  check('… and converges', docToMd(mdToDoc(out).doc) === out);
 
   const code = 'Para.\n\n    indented one\n    indented two\n\nAfter.\n';
   const outCode = docToMd(mdToDoc(code).doc);
@@ -973,16 +974,22 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('inline raw Typst', !!find(raw.doc, (n) => n.type.name === 'typst_inline' && n.attrs.src === '#h(1fr)') && raw.md1 === 'Inline `#h(1fr)`{=typst} here.\n');
 }
 
-// The abstract (until front matter carries it) rides as a quote led by
-// **Abstract.**; quoted paragraphs are separated by a bare `>` line.
+// The abstract lives in the front matter, its paragraphs separated by a
+// blank line. A quote an older Plass led with **Abstract.** still reads as
+// the abstract (and moves to the front matter on save); quoted paragraphs
+// are separated by a bare `>` line.
 {
   const abs = schema.nodes.doc.create(null, [
     schema.nodes.abstract.create(null, [schema.nodes.paragraph.create(null, schema.text('First.')), schema.nodes.paragraph.create(null, schema.text('Second.'))]),
     schema.nodes.paragraph.create(null, schema.text('Body.')),
   ]);
   const md = docToMd(abs);
-  check('the abstract is a quote with a bare > between paragraphs', md === '> **Abstract.** First.\n>\n> Second.\n\nBody.\n', JSON.stringify(md));
+  check('the abstract is written in the front matter, a blank line between its paragraphs', md === '---\nabstract: |\n  First.\n\n  Second.\n---\n\nBody.\n', JSON.stringify(md));
   check('the abstract reads back exactly', JSON.stringify(mdToDoc(md).doc.toJSON().content) === JSON.stringify(abs.toJSON().content), JSON.stringify(mdToDoc(md).doc.toJSON()));
+  const legacy = mdToDoc('> **Abstract.** First.\n>\n> Second.\n\nBody.\n').doc;
+  check('the older quote form still reads as the abstract, and saves to the front matter', JSON.stringify(legacy.toJSON().content) === JSON.stringify(abs.toJSON().content) && docToMd(legacy) === md, JSON.stringify(legacy.toJSON()));
+  const both = mdToDoc('---\nabstract: Real.\n---\n\n> **Abstract.** A quote.\n').doc;
+  check('… but not beside a front-matter abstract: there it is a quote', both.child(0).type.name === 'abstract' && both.child(1).type.name === 'blockquote', JSON.stringify(both.toJSON()));
   const quote = trip('> One.\n>\n> Two.\n');
   check('a two-paragraph quote round-trips byte for byte', quote.md1 === '> One.\n>\n> Two.\n' && quote.doc.firstChild!.childCount === 2, quote.md1);
 }
@@ -1564,25 +1571,251 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check(`all ${names.length} Markdown fixtures parse and converge`, names.length > 20 && !bad.length, bad.join('\n'));
 }
 
+// The front matter (plan step 7): settings, the title block and the roman
+// restart are read from the YAML and written back to it. Title, author and
+// date are read as body text is (a run of inlines, as pandoc reads a YAML
+// string), the abstract as paragraphs.
+{
+  const em = (n: PMNode) => n.isText && n.marks.some((m) => m.type.name === 'em');
+  const t = trip('---\ntitle: The $x$ of *em*\n---\n\nBody.\n');
+  check(
+    'a title keeps its formula and its emphasis, and converges',
+    t.doc.firstChild!.type.name === 'doc_title' && !!find(t.doc.firstChild!, (n) => n.type.name === 'math_inline' && n.attrs.src === 'x') && !!find(t.doc.firstChild!, em) && t.md1 === '---\ntitle: The $x$ of *em*\n---\n\nBody.\n' && t.converges,
+    t.md1,
+  );
+  const q = trip("---\ntitle: Taylor's -- draft\nauthor: O'Brien\ndate: 2026-10-04\n---\n\nBody.\n");
+  check(
+    "Taylor's -- draft and O'Brien import as Typst prints them, and converge",
+    q.doc.child(0).textContent === 'Taylor’s – draft' && q.doc.child(1).textContent === 'O’Brien' && q.doc.child(2).textContent === '2026-10-04' && q.md1 === '---\ntitle: Taylor’s – draft\nauthor: O’Brien\ndate: 2026-10-04\n---\n\nBody.\n' && q.converges,
+    q.md1,
+  );
+  const a = trip('---\nabstract: |\n  Demand is $q = a - bp$, so [@smith2020] holds.\n\n  A second paragraph.\n---\n\nBody.\n\n```{=bibtex}\n@book{smith2020, title={T}}\n```\n');
+  const abs = a.doc.child(0);
+  check(
+    'an abstract with a formula, a citation and two paragraphs, converging',
+    abs.type.name === 'abstract' && abs.childCount === 2 && !!find(abs, (n) => n.type.name === 'math_inline' && n.attrs.src === 'q = a - bp') && !!find(abs, (n) => n.type.name === 'citation' && n.attrs.key === 'smith2020') && a.md1.startsWith('---\nabstract: |\n  Demand is $q = a - bp$, so [@smith2020] holds.\n\n  A second paragraph.\n---\n') && a.converges && !a.warnings.length,
+    a.md1 + JSON.stringify(a.warnings),
+  );
+  const pandocSay = trip('---\ntitle: 1. Introduction\nauthor: "# Not a heading"\n---\n\nBody.\n');
+  check('a block construct in a title or author is text, as pandoc reads a YAML string', pandocSay.doc.child(0).textContent === '1. Introduction' && pandocSay.doc.child(1).textContent === '# Not a heading' && pandocSay.converges, pandocSay.md1);
+  const note = trip('---\ntitle: Title[^1]\n---\n\nBody.\n\n[^1]: The note.\n');
+  check('a footnote marker in the title finds the body\'s definition, and nothing is dropped', note.doc.firstChild!.lastChild?.type.name === 'footnote' && note.doc.firstChild!.lastChild!.textContent === 'The note.' && !note.warnings.length && note.converges, note.md1 + JSON.stringify(note.warnings));
+  const display = mdToDoc('---\ntitle: The $$x$$ case\n---\n\nB.\n');
+  check('display math in a title is inline math there, with a warning', !!find(display.doc.firstChild!, (n) => n.type.name === 'math_inline' && n.attrs.src === 'x') && display.warnings.some((w) => /title: display math/.test(w)), JSON.stringify(display.warnings));
+  const list = trip('---\nabstract: |\n  - one\n  - two\n---\n\nB.\n');
+  check('a list in the abstract is kept as its text, with a warning', list.doc.firstChild!.textContent === '- one - two' && list.warnings.some((w) => /abstract: a list there is read as paragraph text/.test(w)) && list.converges, list.md1);
+  const comment = trip('---\ntitle: A <!-- check the name --> B\n---\n\nBody.\n');
+  check('a comment in the title moves out after the front matter, unprinted', JSON.stringify(kinds(comment.doc)) === '["doc_title","editor_comment","paragraph"]' && comment.doc.firstChild!.textContent === 'A B' && comment.converges, JSON.stringify(kinds(comment.doc)) + comment.md1);
+  // What reading the front matter's text says is said of the front matter
+  // (the open toast words those as warnings, not as blocks kept as source).
+  const said = (src: string) => mdToDoc(src);
+  const shown = [display, said('---\nabstract: |\n  - one\n  - two\n---\n\nB.\n'), said('---\ntitle: A <!-- check the name --> B\n---\n\nBody.\n')];
+  check(
+    'display math, a list in the abstract and a comment in the title are front-matter warnings',
+    shown.every((r) => r.warnings.length === 1 && r.frontmatterWarnings.length === 1 && r.frontmatterWarnings[0] === r.warnings[0]) && /^title: 1 comment\(s\) there moved out, after the front matter/.test(shown[2].frontmatterWarnings[0]),
+    JSON.stringify(shown.map((r) => [r.warnings, r.frontmatterWarnings])),
+  );
+  const bodyComment = said('---\ntitle: T\n---\n\n> Quote <!-- c --> here.\n');
+  check('… while a comment moved out of the body is the body\'s', bodyComment.frontmatterWarnings.length === 0 && bodyComment.warnings.some((w) => /moved out of nested blocks/.test(w)), JSON.stringify(bodyComment.warnings));
+  const titleLink = trip('---\ntitle: "[link][ref]"\n---\n\nx\n\n[ref]: http://example.com\n');
+  check(
+    'a link definition only the title uses is used: written into the link, with no "used nowhere" warning',
+    !!find(titleLink.doc.firstChild!, (n) => n.marks.some((m) => m.type.name === 'link' && m.attrs.href === 'http://example.com')) && !titleLink.warnings.length && titleLink.md1 === "---\ntitle: '[link](http://example.com)'\n---\n\nx\n",
+    JSON.stringify(titleLink.warnings) + titleLink.md1,
+  );
+  check('… one nothing uses still is', said('---\ntitle: T\n---\n\nx\n\n[ref]: http://example.com\n').warnings.some((w) => /\[ref\]: defined but used nowhere/.test(w)));
+  const empty = trip("---\ntitle: ''\n---\n\nBody.\n");
+  check('an empty title is an empty title block, and back', empty.doc.firstChild!.type.name === 'doc_title' && empty.doc.firstChild!.childCount === 0 && empty.md1 === "---\ntitle: ''\n---\n\nBody.\n", empty.md1);
+
+  // Settings: read through normalizeSettings; out-of-range ones warn (as
+  // warnings, apart from the body's) and keep the default.
+  const s = mdToDoc('---\npapersize: a4\nfontsize: 11pt\nplass:\n  landscape: true\n---\n\nBody.\n');
+  const ss = s.doc.attrs.settings as DocSettings;
+  check('settings are read from the YAML', ss.page === 'a4' && ss.sizePt === 11 && ss.landscape && !s.warnings.length && !s.frontmatterWarnings.length, JSON.stringify(ss));
+  const bad = mdToDoc('---\nfontsize: 99pt\nlinestretch: 9\n---\n\nBody.\n');
+  const bs = bad.doc.attrs.settings as DocSettings;
+  check('out-of-range settings keep their defaults and are reported as front-matter warnings', bs.sizePt === DEFAULT_SETTINGS.sizePt && bs.lineHeight === DEFAULT_SETTINGS.lineHeight && bad.frontmatterWarnings.length === 2 && bad.frontmatterWarnings.every((w) => bad.warnings.includes(w)), JSON.stringify(bad.frontmatterWarnings));
+  const written: string[] = [];
+  const md = docToMd(s.doc, (w) => written.push(w));
+  check('settings are written, with no "not stored" warning', md === '---\npapersize: a4\nfontsize: 11pt\nplass:\n  landscape: true\n---\n\nBody.\n' && !written.length, md + JSON.stringify(written));
+  const gutter = mdToDoc('---\nfontsize: 10pt\n---\n\n::: {.columns gutter=5pt}\n\n::: column\n\na\n\n:::\n\n::: column\n\nb\n\n:::\n\n:::\n').doc;
+  check('a gutter in points is read at the document\'s own font size', gutter.firstChild!.attrs.gutter === 0.5, JSON.stringify(gutter.firstChild!.attrs));
+
+  // The roman front matter: the numbering_restart block, where the
+  // settings panel puts it (after block 0 and the title block's blocks).
+  const r = trip('---\ntitle: T\nauthor: A\nplass:\n  page-numbers: {front-matter: roman}\n---\n\n# Body\n\nText.\n');
+  check('front-matter: roman is the restart block after the title block', JSON.stringify(kinds(r.doc)) === '["doc_title","doc_authors","numbering_restart","heading","paragraph"]' && r.md1 === '---\ntitle: T\nauthor: A\nplass:\n  page-numbers: {front-matter: roman}\n---\n\n# Body\n\nText.\n' && !r.warnings.length && r.converges, JSON.stringify(kinds(r.doc)) + r.md1);
+  const lone = mdToDoc('---\nplass:\n  page-numbers: {front-matter: roman}\n---\n\n# Body\n\nText.\n');
+  check('… with no title block it follows the first block, with a warning', JSON.stringify(kinds(lone.doc)) === '["heading","numbering_restart","paragraph"]' && lone.frontmatterWarnings.some((w) => /no title, author, date or abstract/.test(w)), JSON.stringify(kinds(lone.doc)));
+  const P = (text: string) => schema.nodes.paragraph.create(null, schema.text(text));
+  const elsewhere = schema.nodes.doc.create(null, [schema.nodes.doc_title.create(null, schema.text('T')), P('One.'), schema.nodes.numbering_restart.create(), P('Two.')]);
+  check('a restart elsewhere moves to that place on the next open', JSON.stringify(kinds(mdToDoc(docToMd(elsewhere)).doc)) === '["doc_title","numbering_restart","paragraph","paragraph"]');
+}
+
+// The bibliography: an embedded {=bibtex} block is the document's own; a
+// `bibliography:` path is returned for the FileManager to read once, and its
+// line rides along until it is — a save before then keeps it, whatever
+// bibliography the document holds meanwhile. The read (withSidecarBib)
+// puts the entries in, the line out, and a bibliography block at the end
+// when there is none, so the page prints the references and Typst finds
+// the keys.
+{
+  const b = mdToDoc('---\nbibliography: refs.bib\n---\n\nSee [@k].\n');
+  check('bibliography: is returned, and carried', b.bibliography === 'refs.bib' && !b.doc.attrs.bib && b.doc.attrs.frontmatter === 'bibliography: refs.bib' && !b.warnings.length, JSON.stringify([b.bibliography, b.doc.attrs.frontmatter, b.warnings]));
+  const said: string[] = [];
+  const before = docToMd(b.doc, (w) => said.push(w));
+  check('… a save with no bibliography loaded keeps the line', before === '---\nbibliography: refs.bib\n---\n\nSee [@k].\n' && !said.length, before + JSON.stringify(said));
+  const loaded = withSidecarBib(b.doc, '@book{k, title={T}}\n').doc;
+  check('… the read adds a bibliography block at the end, and takes the line out', JSON.stringify(kinds(loaded)) === '["paragraph","bibliography"]' && loaded.attrs.frontmatter === '' && (loaded.attrs.bib as { content: string }).content === '@book{k, title={T}}', JSON.stringify([kinds(loaded), loaded.attrs]));
+  check('… so Typst gets the bibliography the citation needs', /#bibliography\(bytes\("@book\{k, title=\{T\}\}"\)/.test(docToTyp(loaded)), docToTyp(loaded));
+  const after = docToMd(loaded, (w) => said.push(w));
+  check('… a save writes the {=bibtex} block where it prints, and no key, silently', after === 'See [@k].\n\n```{=bibtex}\n@book{k, title={T}}\n```\n' && !said.length, after + JSON.stringify(said));
+  check('… and reads back as the document it was (a source-view trip is the identity)', mdToDoc(after).doc.eq(loaded), JSON.stringify(mdToDoc(after).doc.toJSON()));
+  const placed = withSidecarBib(mdToDoc('---\nbibliography: refs.bib\n---\n\nSee [@k].\n\n```{=bibtex}\n```\n\nAfter.\n').doc, '@book{k, title={T}}');
+  check('… a bibliography block the document has stays where it is', JSON.stringify(kinds(placed.doc)) === '["paragraph","bibliography","paragraph"]', JSON.stringify(kinds(placed.doc)));
+
+  // Entries arriving another way while the sidecar is unread (merge-on-cite,
+  // the Bibliography panel) do not take the line with them: the read merges.
+  const cited = b.doc.type.create({ ...b.doc.attrs, bib: { name: 'references.bib', content: '@book{own, title={O}}' } }, b.doc.content.addToEnd(schema.nodes.bibliography.create()));
+  const kept = docToMd(cited);
+  check('a save keeps the line while the sidecar is unread, beside the document\'s own entries', kept.startsWith('---\nbibliography: refs.bib\n---\n') && kept.includes('```{=bibtex}\n@book{own, title={O}}\n```'), kept);
+  const both = mdToDoc(kept);
+  check('… and reopens with both: the path returned, its line carried, nothing warned', both.bibliography === 'refs.bib' && both.doc.attrs.frontmatter === 'bibliography: refs.bib' && (both.doc.attrs.bib as { content: string }).content === '@book{own, title={O}}' && !both.warnings.length, JSON.stringify([both.bibliography, both.doc.attrs, both.warnings]));
+  const merged = withSidecarBib(both.doc, '@string{p = "P"}\n\n@book{own, title={Theirs}}\n\n@book{k, title={T}}');
+  const mergedBib = (merged.doc.attrs.bib as { content: string }).content;
+  check(
+    '… the read merges: entries the document lacks are added, one it holds stays as it holds it',
+    mergedBib === '@book{own, title={O}}\n\n@string{p = "P"}\n\n@book{k, title={T}}' && merged.kept === 1 && merged.doc.attrs.frontmatter === '' && JSON.stringify(kinds(merged.doc)) === '["paragraph","bibliography"]',
+    JSON.stringify([mergedBib, merged.kept, kinds(merged.doc)]),
+  );
+  check('a sidecar read into no bibliography is the whole sidecar', mergeSidecarBib(null, ' @book{a, title={A}}\n').bib.content === '@book{a, title={A}}' && mergeSidecarBib({ name: 'x.bib', content: '' }, '@book{a, title={A}}').bib.name === 'references.bib');
+
+  const many = mdToDoc('---\nbibliography:\n  - a.bib\n  - b.bib\ntitle: T\n---\n\nSee [@k].\n');
+  check('a list of files: the first is read, the line keeps every file', many.bibliography === 'a.bib' && docToMd(many.doc) === '---\ntitle: T\nbibliography:\n  - a.bib\n  - b.bib\n---\n\nSee [@k].\n' && many.frontmatterWarnings.some((w) => /drops the line, b\.bib with it/.test(w)), docToMd(many.doc) + JSON.stringify(many.frontmatterWarnings));
+}
+
+// Decided for step 7: a text key whose double-quoted value decodes an
+// escape that reads as LaTeX keeps its line as written until the document
+// edits it (Plass never writes the control character over the author's
+// text); and only a YAML block is front matter (a document that opens with
+// a horizontal rule loses nothing into one).
+{
+  const src = '---\ntitle: Notes\ndate: "\\today"\n---\n\nBody.\n';
+  const today = mdToDoc(src);
+  check('date: "\\today" reads as pandoc reads it, with the warning', today.doc.child(1).type.name === 'doc_date' && today.doc.child(1).textContent === 'oday' && today.frontmatterWarnings.some((w) => /YAML escape \\t/.test(w)), JSON.stringify([today.doc.toJSON(), today.warnings]));
+  check('… and the save writes the line as it was', docToMd(today.doc) === src, docToMd(today.doc));
+  const edited = today.doc.type.create(today.doc.attrs, [today.doc.child(0), schema.nodes.doc_date.create(null, schema.text('October 5')), today.doc.child(2)]);
+  check('… until the date is edited: then the edit is written', docToMd(edited) === '---\ntitle: Notes\ndate: October 5\n---\n\nBody.\n', docToMd(edited));
+  const deleted = today.doc.type.create(today.doc.attrs, [today.doc.child(0), today.doc.child(2)]);
+  check('… or deleted: then it goes', docToMd(deleted) === '---\ntitle: Notes\n---\n\nBody.\n', docToMd(deleted));
+
+  const rule = trip('---\nSummary: what the lecture covers.\n\nThe body goes on.\n\n---\n\nMore.\n');
+  check(
+    'a --- block that is not YAML is the body, from a horizontal rule: nothing goes into front matter',
+    rule.doc.firstChild!.type.name === 'horizontal_rule' && rule.doc.textContent === 'Summary: what the lecture covers.The body goes on.More.' && !rule.doc.attrs.frontmatter && rule.warnings.some((w) => /not front matter: "The body goes on\." is not YAML/.test(w)) && rule.converges,
+    JSON.stringify([kinds(rule.doc), rule.warnings]) + rule.md1,
+  );
+  const leading = mdToDoc('\n\n---\ntitle: T\n---\n\nBody.\n').doc;
+  check('a YAML block after blank lines is front matter, as pandoc reads it', leading.firstChild!.type.name === 'doc_title');
+
+  // Valid YAML whose lines are not each a `key: value` is still front
+  // matter: a quoted value or a flow list continued on a line at the
+  // margin, an anchored key, a `?` complex key (pandoc 3.4 reads each as
+  // metadata). Nothing of it is read as the body, and a save keeps it.
+  const valid: Array<[string, string, (d: PMNode) => boolean]> = [
+    ['a flow list continued at the margin', 'title: Notes\nkeywords: [supply, demand,\nelasticity]', (d) => d.attrs.frontmatter === 'keywords: [supply, demand,\nelasticity]' && d.firstChild!.textContent === 'Notes'],
+    ['a flow map continued at the margin', 'title: T\nmap: {a: 1,\nb: 2}', (d) => d.attrs.frontmatter === 'map: {a: 1,\nb: 2}'],
+    ['a double-quoted title continued at the margin', 'title: "Supply and Demand:\na primer"\nauthor: X', (d) => d.firstChild!.textContent === 'Supply and Demand: a primer' && d.child(1).textContent === 'X'],
+    ['a single-quoted title continued at the margin', "title: 'Supply and Demand:\na primer'", (d) => d.firstChild!.textContent === 'Supply and Demand: a primer'],
+    ['a quoted author in a list, continued at the margin', 'author:\n- "Alice\nSmith"\n- Bob', (d) => d.firstChild!.textContent === 'Alice Smith, Bob'],
+    ['an anchored key', 'title: T\n&a k: 1', (d) => d.attrs.frontmatter === '&a k: 1'],
+    ['a complex key', 'title: T\n? a\n: b', (d) => d.attrs.frontmatter === '? a\n: b'],
+  ];
+  for (const [what, yaml, read] of valid) {
+    const t = trip(`---\n${yaml}\n---\n\nBody.\n`);
+    check(
+      `${what}: front matter, kept, converging`,
+      read(t.doc) && t.doc.lastChild!.textContent === 'Body.' && !t.doc.content.content.some((n) => n.type.name === 'horizontal_rule') && !t.warnings.some((w) => /not front matter/.test(w)) && t.md1.startsWith('---\n') && t.converges,
+      JSON.stringify([kinds(t.doc), t.doc.attrs.frontmatter, t.warnings]) + t.md1,
+    );
+  }
+  const flow = trip('---\ntitle: Notes\nkeywords: [supply, demand,\nelasticity]\n---\n\nBody.\n');
+  check('… the kept lines are written as they were', flow.md1 === '---\ntitle: Notes\nkeywords: [supply, demand,\nelasticity]\n---\n\nBody.\n', flow.md1);
+  // A line that only looks wrong under an entry (a plain value mistyped
+  // across lines, which pandoc rejects) keeps the block front matter, the
+  // line kept as written: the text stays where the author put it.
+  const typo = trip('---\ntitle: Supply and\ndemand\n---\n\nBody.\n');
+  check('a stray line directly under an entry keeps the block front matter (kept as written)', typo.doc.firstChild!.type.name === 'doc_title' && typo.doc.attrs.frontmatter === 'demand' && typo.converges, JSON.stringify([kinds(typo.doc), typo.warnings]));
+  // A --- block YAML reads as a list (or as text) is not front matter to
+  // pandoc either (it prints it): read as the body, and said.
+  const list = trip('---\n- a\n- b\n---\n\nBody.\n');
+  check('a --- block that is a YAML list is the body, with a warning', list.doc.firstChild!.type.name === 'horizontal_rule' && !list.doc.attrs.frontmatter && list.warnings.some((w) => /not front matter: YAML reads it as a list/.test(w)) && list.converges, JSON.stringify([kinds(list.doc), list.warnings]));
+  const prose = mdToDoc('---\nSome intro text\n---\n\nBody.\n');
+  check('… and one it reads as text', prose.doc.firstChild!.type.name === 'horizontal_rule' && prose.warnings.some((w) => /not front matter: YAML reads it as text/.test(w)), JSON.stringify(prose.warnings));
+
+  // A `>` at a title's head opens a block quote to pandoc, which drops it
+  // (verified, pandoc 3.4: `title: '> quoted title'` reads "quoted title";
+  // `title: \> quoted title` reads "> quoted title"). Plass keeps it as
+  // text and says so; a save escapes it, so pandoc and Plass read the
+  // saved file alike.
+  const quoted = trip("---\ntitle: '> quoted title'\nauthor: '>Ann'\ndate: '\\> 2026'\n---\n\nBody.\n");
+  check(
+    'a title, author or date opening with > is saved as \\>, read back as >',
+    quoted.md1 === '---\ntitle: \\> quoted title\nauthor: \\>Ann\ndate: \\> 2026\n---\n\nBody.\n' && quoted.doc.firstChild!.textContent === '> quoted title' && quoted.doc2.eq(quoted.doc) && quoted.converges,
+    quoted.md1,
+  );
+  check('… with a warning where the file has it unescaped', quoted.warnings.filter((w) => /opens a block quote to pandoc/.test(w)).length === 2, JSON.stringify(quoted.warnings));
+}
+
+// A footnote label defined twice: the last definition is the note, as
+// markdown-it's tail and pandoc read it (pandoc warns), and so is the save.
+{
+  const twice = trip('Text[^1] more.\n\n[^1]: First.\n\n[^1]: Second.\n');
+  check('a footnote defined twice: the last definition wins, with a warning', twice.doc.textContent === 'TextSecond. more.' && twice.md1 === 'Text[^1] more.\n\n[^1]: Second.\n' && twice.warnings.some((w) => /\[\^1\] is defined more than once/.test(w)) && twice.converges, JSON.stringify([twice.doc.textContent, twice.warnings]) + twice.md1);
+}
+
+// A `bibliography:` sidecar with CRLF line breaks reads as one with \n:
+// a save embeds it as the Markdown reader reads it back, so the trip is the
+// identity and the save converges.
+{
+  const crlf = '@book{arrow,\r\n  title = {Social Choice},\r\n  year = {1951}\r\n}\r\n';
+  const opened = withSidecarBib(mdToDoc('---\ntitle: T\nbibliography: refs.bib\n---\n\nAs [@arrow] shows.\n').doc, crlf).doc;
+  const saved = docToMd(opened);
+  const back = mdToDoc(saved).doc;
+  check('a CRLF sidecar has no \\r once read', !(opened.attrs.bib as { content: string }).content.includes('\r'), JSON.stringify(opened.attrs.bib));
+  check('… and its save reads back as the same document, converging', back.eq(opened) && docToMd(back) === saved, saved);
+  check('… merged into an existing bibliography too', !mergeSidecarBib({ name: 'references.bib', content: '@book{own, title = {Own}}' }, crlf).bib.content.includes('\r'));
+}
+
 // The cross-format check: a Markdown trip changes nothing the compiler
-// sees, except what a document declares it drops. `params` (verbatim
-// #table arguments only the .typ reader makes) has no Markdown form, and
-// document settings reach Markdown in the next step.
+// sees — the whole Typst source, the page setup and every other setting
+// included — except what a document declares it drops: `params` (verbatim
+// #table arguments only the .typ reader makes) has no Markdown form.
 {
   const stripUnrepresentable = (doc: PMNode): PMNode => {
     const strip = (node: PMNode): PMNode => {
       if (node.isText) return node;
       const kids: PMNode[] = [];
       node.forEach((c) => kids.push(strip(c)));
-      const attrs = node.type.name === 'table' ? { ...node.attrs, params: '' } : node.type.name === 'doc' ? { ...node.attrs, settings: DEFAULT_SETTINGS } : node.attrs;
+      const attrs = node.type.name === 'table' ? { ...node.attrs, params: '' } : node.attrs;
       return node.type.create(attrs, kids, node.marks);
     };
     return strip(doc);
   };
-  const body = (typ: string) => typ.slice(typ.indexOf('\n\n'));
   const hasParams = (doc: PMNode) => !!find(doc, (n) => n.type.name === 'table' && !!(n.attrs.params as string));
+  // typ-parser.test.ts sections 3, 3b and 13: page setup and footnote
+  // options set in the demo's own Typst.
+  const demoTyp = docToTyp(demoDoc());
   const fixtures: Array<[string, PMNode, boolean]> = [
     ['demo', demoDoc(), false],
+    ...([
+      ['3 settings', demoTyp.replace('paper: "us-letter"', 'paper: "a4"').replace('margin: 1.25in', 'margin: 1in').replace('size: 12.5pt', 'size: 11pt')],
+      ['3b half letter', demoTyp.replace('paper: "us-letter"', 'width: 5.5in, height: 8.5in')],
+      ['3b metric custom size', demoTyp.replace('paper: "us-letter"', 'width: 148mm, height: 210mm')],
+      ['3b a5', demoTyp.replace('paper: "us-letter"', 'paper: "a5"')],
+      ['3b footnotes', demoTyp.replace('#set text(', '#set footnote(numbering: "a")\n#set footnote.entry(separator: none)\n#set text(')],
+      ['13 page numbers hidden', '#set page(paper: "us-letter", margin: 1in)\n\nHello.\n'],
+    ] as Array<[string, string]>).map(([name, src]): [string, PMNode, boolean] => [name, typToDoc(src).doc, false]),
     ...([
       ['4 hand-written', F.HAND_WRITTEN_TYP],
       ['5 labels', F.LABELS_TYP],
@@ -1631,11 +1864,34 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   for (const [name, doc] of fixtures) {
     const md = docToMd(doc);
     const back = mdToDoc(md).doc;
-    const want = (EXPECTED[name] ?? ((typ: string) => typ))(body(docToTyp(stripUnrepresentable(doc), { islands: 'print' })));
-    const got = body(docToTyp(back, { islands: 'print' }));
+    const want = (EXPECTED[name] ?? ((typ: string) => typ))(docToTyp(stripUnrepresentable(doc), { islands: 'print' }));
+    const got = docToTyp(back, { islands: 'print' });
     check(`cross-format: ${name}`, got === want, firstDiff(want, got) + '\n' + md.slice(0, 600));
     check(`cross-format converges: ${name}`, docToMd(back) === docToMd(mdToDoc(docToMd(back)).doc));
   }
+  // The settings themselves come back, not only their Typst.
+  const settingsOf = (doc: PMNode) => JSON.stringify(normalizeSettings(doc.attrs.settings as Partial<DocSettings>));
+  const lost = fixtures.filter(([, doc]) => settingsOf(mdToDoc(docToMd(doc)).doc) !== settingsOf(doc)).map(([name]) => name);
+  check('every fixture\'s settings survive the Markdown trip', !lost.length, lost.join(', '));
+  const settingsFixtures = fixtures.filter(([name]) => /^(?:3|3b|12|13|chrome)\b/.test(name));
+  check(
+    'the eight settings fixtures (sections 3, 3b, 12, 13, chrome) each set something',
+    settingsFixtures.length === 8 && settingsFixtures.every(([, doc]) => settingsOf(doc) !== JSON.stringify(normalizeSettings(DEFAULT_SETTINGS))),
+    settingsFixtures.map(([name]) => name).join(', '),
+  );
+}
+
+// A front-matter block opening with a line of node properties only (`!!map`,
+// `&a`) is front matter to pandoc: the title is read, the line is kept as
+// written, and the save keeps it first (the only place YAML allows it).
+{
+  const src = "---\n!!map\ntitle: T\n---\n\nB\n";
+  const r = mdToDoc(src);
+  const first = r.doc.firstChild;
+  const md1 = docToMd(r.doc);
+  check("a tag-only first front-matter line keeps the block front matter", first?.type.name === "doc_title" && first.textContent === "T", String(first?.type.name));
+  check("a tag-only first front-matter line is written back first", md1 === src, JSON.stringify(md1));
+  check("a tag-only first front-matter line converges", docToMd(mdToDoc(md1).doc) === md1);
 }
 
 declare const process: { exitCode?: number };

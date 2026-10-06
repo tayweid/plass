@@ -16,18 +16,21 @@
 //   - `<!-- … -->` editorial comments, `\newpage`, ```` ```{=typst} ````
 //     islands, the ```` ```{=bibtex} ```` bibliography where its node is,
 //     `[@a; @b]` citation groups and bare `@eq:x` references
-//   - only the standard title/author/date keys ride in YAML frontmatter
-//     (settings are the next step's)
+//   - the YAML front matter (md-frontmatter.ts): the settings that are not
+//     the defaults, the roman restart, and the title, author, date and
+//     abstract written as body text is
 //
 // What Markdown cannot say is reported through `warn`, never dropped
 // silently.
 
 import MarkdownIt from 'markdown-it';
 import type { Node as PMNode, Mark } from 'prosemirror-model';
-import { DEFAULT_SETTINGS, type DocSettings } from './settings';
+import type { DocSettings } from './settings';
 import { commentToMd } from './editor-comments-format';
 import { writeAttrBlock, writeFenceAttrs, readAttrBlock, type PandocAttrs } from './md-attrs';
 import { pipeTableMd, tableDivAttrs } from './md-tables';
+import { readFrontmatter, writeFrontmatter, type TextKey } from './md-frontmatter';
+import { readFrontText } from './md-parser';
 
 const NAMESPACE = /^(?:eq|fig|sec|tbl):/;
 // A character a citation key may continue with (pandoc: letters, digits,
@@ -124,27 +127,9 @@ function escMarker(line: string): string {
  *  follows them. Block-level caret mapping for the source view
  *  (SOURCE-VIEW.md, decision 5). */
 export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offsets?: number[]): string {
-  let out: string[] = [];
+  const out: string[] = [];
   /** Plass's notes, label and text, written after the body. */
   const footnotes: Array<[string, string]> = [];
-
-  // ---------- frontmatter ----------
-  {
-    const fm: string[] = [];
-    doc.forEach((n) => {
-      if (n.type.name === 'doc_title' && n.textContent) fm.push(`title: "${n.textContent.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
-      if (n.type.name === 'doc_authors' && n.textContent) fm.push(`author: "${n.textContent.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
-      if (n.type.name === 'doc_date' && n.textContent) fm.push(`date: "${n.textContent.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
-    });
-    // Frontmatter the import had no field for comes back verbatim.
-    const extra = ((doc.attrs.frontmatter as string | undefined) ?? '').replace(/^\n+|\n+$/g, '');
-    if (extra) fm.push(extra);
-    const s = doc.attrs.settings as DocSettings;
-    if (JSON.stringify(s) !== JSON.stringify(DEFAULT_SETTINGS)) {
-      warn('document settings (page, font, numbering) are not yet stored in Markdown — they reopen at the defaults');
-    }
-    if (fm.length) out.push(`---\n${fm.join('\n')}\n---`);
-  }
 
   // Labels in use, so an uncaptioned figure written with a made-up label
   // (its only Markdown form as a figure) takes one nobody else has.
@@ -678,11 +663,6 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         if (node.attrs.kind === 'solution') return div(divDepth(node), 'solution', blocks(node));
         return quote(blocks(node));
       }
-      case 'abstract': {
-        const inner: string[] = [];
-        node.forEach((child, _o, i) => inner.push((i === 0 ? '**Abstract.** ' : '') + block(child)));
-        return quote(inner.join('\n\n'));
-      }
       case 'bullet_list':
       case 'ordered_list': {
         const ordered = node.type.name === 'ordered_list';
@@ -756,9 +736,6 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         return '---';
       case 'page_break':
         return '\\newpage';
-      case 'numbering_restart':
-        warn('the front-matter page-number restart is not yet stored in Markdown — dropped');
-        return '';
       case 'bibliography': {
         const bib = doc.attrs.bib as { name: string; content: string } | null;
         if (!bib?.content) return '';
@@ -766,16 +743,104 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         const ticks = '`'.repeat(Math.max(3, longestRun(bib.content, '`') + 1));
         return `${ticks}{=bibtex}\n${bib.content.trim()}\n${ticks}`;
       }
+      // The front matter's: written there (frontMatter below).
       case 'doc_title':
       case 'doc_authors':
       case 'doc_date':
-        return ''; // frontmatter
+      case 'abstract':
+      case 'numbering_restart':
+        return '';
       default:
         warn(`"${node.type.name}" has no Markdown form — dropped`);
         return '';
     }
   };
   let wroteBib = false;
+
+  /** The YAML front matter (md-frontmatter.ts): the settings that are not
+   *  the defaults; the title, author, date and abstract written as body
+   *  text is (a title keeps its `$x$` and `*em*`); the roman restart as its
+   *  key, wherever its block is; and the lines the file had that Plass does
+   *  not interpret, as they were. */
+  const frontMatter = (): string => {
+    const of: Record<string, PMNode[]> = { doc_title: [], doc_authors: [], doc_date: [], abstract: [] };
+    let restart = false;
+    doc.forEach((n) => {
+      if (Object.hasOwn(of, n.type.name)) of[n.type.name].push(n);
+      if (n.type.name === 'numbering_restart') restart = true;
+    });
+    // A title, author or date is one run of inlines, as pandoc reads a YAML
+    // string (no block can start in it); spaces at its edges print nothing.
+    const line = (n: PMNode) => inline(n).replace(/^[ \t]+|[ \t]+$/g, '');
+    // Pandoc reads the string as Markdown blocks: of what opens one, only a
+    // `>` at its head does in a title (a block quote, its `>` dropped —
+    // `1.`, `#` and `-` there stay text), so that one is escaped, as the
+    // abstract's line heads are (escLines).
+    const one = (nodes: PMNode[], what: string, sep: string): string | null => {
+      if (!nodes.length) return null;
+      if (nodes.length > 1) warn(`${nodes.length} ${what} blocks are saved as one — the front matter holds one ${what}`);
+      return nodes.map(line).join(sep).replace(/^>/, '\\>');
+    };
+    // The abstract is paragraphs, each on a line of its own, a blank line
+    // between: pandoc reads a block of lines as blocks, so what would open
+    // one at a paragraph's head is escaped, as in the body.
+    let abstractMd: string | null = null;
+    if (of.abstract.length) {
+      if (of.abstract.length > 1) warn(`${of.abstract.length} abstract blocks are saved as one — the front matter holds one abstract`);
+      const paras: string[] = [];
+      for (const a of of.abstract) {
+        a.forEach((p) => {
+          if (p.attrs.align || p.attrs.keep) warn('alignment and keep on a paragraph of the abstract have no Markdown form — dropped');
+          const text = escLines(line(p));
+          if (text) paras.push(text);
+        });
+      }
+      abstractMd = paras.join('\n\n');
+    }
+    // A title, author, date or abstract line the file holds as written (an
+    // escape that reads as LaTeX, `date: "\today"`): written back so while
+    // the document's block is what that line reads as — not yet edited.
+    const extra = (doc.attrs.frontmatter as string | undefined) ?? '';
+    const asWritten: TextKey[] = [];
+    if (/^(?:title|author|date|abstract)[ \t]*:/m.test(extra)) {
+      const kept = readFrontmatter(`---\n${extra}\n---\n`);
+      const fields: Array<[TextKey, string | null, PMNode[]]> = [
+        ['title', kept.titleMd, of.doc_title],
+        ['author', kept.authorsMd, of.doc_authors],
+        ['date', kept.dateMd, of.doc_date],
+        ['abstract', kept.abstractMd, of.abstract],
+      ];
+      for (const [key, text, nodes] of fields) {
+        if (text === null || nodes.length !== 1) continue;
+        if (readFrontText(key, text)?.content.eq(nodes[0].content)) asWritten.push(key);
+      }
+    }
+    // A `bibliography:` line the reader carried while its sidecar is unread
+    // rides in `extra` and is written back, whatever bibliography the
+    // document holds meanwhile: the read takes it out (withSidecarBib), so
+    // a save never loses the sidecar it names.
+    return writeFrontmatter(
+      {
+        titleMd: one(of.doc_title, 'title', ' '),
+        authorsMd: one(of.doc_authors, 'author', ', '),
+        dateMd: one(of.doc_date, 'date', ' '),
+        abstractMd,
+        settings: doc.attrs.settings as Partial<DocSettings> | null,
+        frontMatterRestart: restart,
+        extra,
+        asWritten,
+      },
+      warn,
+    );
+  };
+
+  // ---------- front matter ----------
+  // The settings, the title block and the roman restart, before the body
+  // (so a footnote in the title is note 1, as it reads).
+  {
+    const fm = frontMatter();
+    if (fm) out.push(fm);
+  }
 
   // Chunks join with a blank line between them — one newline where a
   // Markdown island was tight against its neighbour in the file. A block's

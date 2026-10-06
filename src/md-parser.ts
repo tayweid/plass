@@ -36,25 +36,42 @@
 //   - ```` ```{=typst} ```` is the raw-Typst island, ```` ```{=bibtex} ````
 //     the embedded bibliography at its position; ```` ```typst ```` and
 //     ```` ```bibtex ```` are code listings. `\newpage` is the page break.
-//   - YAML frontmatter carries title/author/date; every other line rides
-//     along verbatim (doc.attrs.frontmatter) and is written back on save.
+//   - the YAML front matter (md-frontmatter.ts) carries the settings, the
+//     roman restart and the title block: title, author and date read as
+//     the body's inlines are, the abstract as paragraphs. Keys Plass does
+//     not interpret ride along verbatim (doc.attrs.frontmatter), and so
+//     does `bibliography:` until its sidecar is read (MdImport.bibliography).
+//     Only a YAML block is front matter: a `---` block that is not opens
+//     the body with a horizontal rule.
 
 import MarkdownIt from 'markdown-it';
 import footnotePlugin from 'markdown-it-footnote';
 import { Fragment, type Node as PMNode, type Mark } from 'prosemirror-model';
 import { schema } from './schema';
 import { readMdComment, readMdComments } from './editor-comments-format';
-import { DEFAULT_SETTINGS, type DocSettings } from './settings';
+import { DEFAULT_SETTINGS, normalizeSettings } from './settings';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 import { printedForm, trimSpaceBeforeMarker } from './collapse-spaces';
 import { createQuoteState, smartenInline, smartenText } from './smart-quotes';
 import { readAttrBlock, type PandocAttrs } from './md-attrs';
 import { fencedDivs, type DivMeta } from './md-divs';
 import { captionFromLine, delimiterAlign, readPipeTable } from './md-tables';
+import { bibliographyEntry, readFrontmatter, withoutEntry, type FrontmatterRead, type TextKey } from './md-frontmatter';
+import { parseBibTeX } from './bibtex';
 
 export interface MdImport {
   doc: PMNode;
+  /** Every import warning: the front matter's first, then the body's. */
   warnings: string[];
+  /** The front matter's warnings (a setting out of range, a key Plass does
+   *  not know …), also in `warnings`: the open toast words them as
+   *  warnings, not as blocks kept as source. */
+  frontmatterWarnings: string[];
+  /** `bibliography:` in the front matter: a .bib path beside the
+   *  document, which the FileManager reads once it has the folder
+   *  (withSidecarBib), into the bibliography the document embeds if it
+   *  embeds one. */
+  bibliography?: string;
 }
 
 interface MdToken {
@@ -69,6 +86,7 @@ interface MdToken {
   attrGet(name: string): string | null;
   hidden: boolean;
   level: number;
+  nesting: number;
 }
 
 // ---------------------------------------------------------------- pre-pass
@@ -309,7 +327,9 @@ function trailingAttrs(text: string): { attrs: PandocAttrs; start: number } | nu
   return null;
 }
 
-function prepass(src: string, warn: (m: string) => void): Pre {
+/** `inline`: the text is one run of inlines (a YAML title, as pandoc reads
+ *  one): no line opens a block, so every line is scanned as paragraph text. */
+function prepass(src: string, warn: (m: string) => void, inline = false): Pre {
   const lines = src.split('\n');
   const store: Stored[] = [];
   const keep = (s: Stored) => `${S}${store.push(s) - 1}${S}`;
@@ -734,6 +754,12 @@ function prepass(src: string, warn: (m: string) => void): Pre {
     }) ||
     (!paraListed && /^(?: {4}|\t)/.test(para[0].text.replace(QUOTE_PREFIX, '')));
 
+  if (inline) {
+    for (const l of scan(work.join('\n'), work.map((_, k) => k))) push(l.text, l.line);
+    origLine.push(lines.length);
+    return { text: out.join('\n'), origLine, lines, store, headingAttrs, splitComments };
+  }
+
   /** The fence open, with, for one opened on a list item's marker line,
    *  the quotes and the content column of that item: a line left of it
    *  (or outside those quotes) ends the item, and the fence with it. */
@@ -939,43 +965,156 @@ const isText = (x: Item | undefined): x is PMNode => x !== undefined && isNode(x
  *  source leaves it out. */
 type Cut = { lines: [number, number] } | { inline: string; lines: [number, number] };
 
-export function mdToDoc(src: string): MdImport {
-  const warnings: string[] = [];
-  src = src.replace(/\r\n?/g, '\n');
+/** The front matter's text keys, raw Markdown for the body's reader (null:
+ *  the key is absent). */
+interface FrontText {
+  title: string | null;
+  author: string | null;
+  date: string | null;
+  abstract: string | null;
+}
 
-  // ---------- frontmatter ----------
-  const settings: DocSettings = { ...DEFAULT_SETTINGS };
-  let title: string | null = null;
-  let authors: string | null = null;
-  let date: string | null = null;
-  let frontmatter = '';
-  let skipped = 0;
-  if (src.startsWith('---\n')) {
-    const end = src.indexOf('\n---\n', 4);
-    if (end > 0) {
-      // A known key with a scalar value on its own line becomes the title/
-      // author/date block. Every other line — unknown keys, a YAML list
-      // under `author:`, a block scalar (`abstract: |`), comments — is kept
-      // in order, verbatim, and written back on save.
-      const extra: string[] = [];
-      for (const line of src.slice(4, end).split('\n')) {
-        const m = /^(title|authors?|date):\s*(\S.*)$/i.exec(line);
-        const value = m ? m[2].trim() : '';
-        if (!m || /^[|>][-+]?\d*$/.test(value)) {
-          extra.push(line);
-          continue;
-        }
-        const key = m[1].toLowerCase();
-        const text = value.replace(/^["']|["']$/g, '');
-        if (key === 'title') title = text;
-        else if (key === 'date') date = text;
-        else authors = text;
-      }
-      frontmatter = extra.join('\n').replace(/^\n+|\n+$/g, '');
-      skipped = src.slice(0, end + 5).split('\n').length - 1;
-      src = src.slice(end + 5);
+/** What the reader makes of a body and the front matter's text. */
+interface BodyRead {
+  body: PMNode[];
+  /** The title, authors, date and abstract blocks, in that order. */
+  front: PMNode[];
+  /** Comments that came out of the front matter's text, for after it. */
+  moved: PMNode[];
+  bib: { name: string; content: string } | null;
+  warnings: string[];
+  /** What reading the front matter's text raised (front-matter warnings). */
+  frontWarnings: string[];
+}
+
+/** The blocks the roman front matter runs over: block 0, then any of these
+ *  that follow it (the settings panel's rule, settings.ts). */
+const FRONT_BLOCKS = new Set(['doc_title', 'doc_authors', 'doc_date', 'abstract']);
+
+export function mdToDoc(src: string): MdImport {
+  src = src.replace(/\r\n?/g, '\n').replace(/^﻿/, '');
+
+  // ---------- front matter ----------
+  // Only a YAML block is front matter, as pandoc requires: one that is not
+  // (a `---` rule opening the document, its text running to the next rule)
+  // is read as the body it is.
+  let fm: FrontmatterRead | null = readFrontmatter(src);
+  const fmWarnings: string[] = [];
+  if (fm.notYaml !== undefined) {
+    fmWarnings.push(
+      `the --- block at the top is not front matter: "${fm.notYaml}" is not YAML (pandoc rejects the file) — read as text, a horizontal rule and what follows it; fix the YAML, or put a blank line after that first --- if it is a rule`,
+    );
+    fm = null;
+  } else if (fm.notMap !== undefined) {
+    // YAML reads it, but as a list or as text, not as keys and values:
+    // pandoc does not take it for front matter either, and prints it.
+    fmWarnings.push(
+      `the --- block at the top is not front matter: YAML reads it as ${fm.notMap}, not as keys and values (pandoc prints it too) — read as text, a horizontal rule and what follows it; write it as key: value lines, or put a blank line after that first --- if it is a rule`,
+    );
+    fm = null;
+  } else if (fm.body.length === src.length) fm = null;
+  else fmWarnings.push(...fm.warnings);
+  const bodySrc = fm ? fm.body : src;
+  const skipped = src.slice(0, src.length - bodySrc.length).split('\n').length - 1;
+  const settings = normalizeSettings(fm?.settings);
+  const read = readMarkdown(bodySrc, skipped, fm && { title: fm.titleMd, author: fm.authorsMd, date: fm.dateMd, abstract: fm.abstractMd }, settings.sizePt);
+
+  const blocks = [...read.front, ...read.moved, ...read.body];
+  if (!blocks.length) blocks.push(schema.nodes.paragraph.create());
+  if (fm?.frontMatterRestart) {
+    // Where the settings panel puts it: after block 0 and the title,
+    // author, date and abstract blocks that follow it.
+    let at = 0;
+    while (at < blocks.length && (at === 0 || FRONT_BLOCKS.has(blocks[at].type.name))) at++;
+    if (!read.front.length) {
+      fmWarnings.push('plass.page-numbers.front-matter: roman — the document has no title, author, date or abstract, so its roman pages hold only its first block');
     }
+    blocks.splice(at, 0, schema.nodes.numbering_restart.create());
   }
+  // `bibliography:` names a sidecar the FileManager reads once, with the
+  // folder (withSidecarBib), into the bibliography the document embeds, if
+  // it embeds one; until then its line rides in the carried front matter,
+  // so a save keeps it.
+  let frontmatter = fm?.extra ?? '';
+  const bibliography = fm?.bibliography;
+  if (bibliography !== undefined) frontmatter = [frontmatter, bibliographyEntry(fm!.bibliographyFiles ?? [bibliography])].filter(Boolean).join('\n');
+  fmWarnings.push(...read.frontWarnings);
+  const doc = schema.nodes.doc.create({ settings, bib: read.bib, frontmatter }, blocks);
+  return {
+    doc,
+    warnings: [...fmWarnings, ...read.warnings],
+    frontmatterWarnings: fmWarnings,
+    ...(bibliography !== undefined ? { bibliography } : {}),
+  };
+}
+
+type Bib = { name: string; content: string };
+
+/** A `bibliography:` sidecar's text put in the bibliography `bib` (the
+ *  document's own, or none): the whole of it when there is none; else
+ *  what of it the document lacks, appended — an entry whose key it holds
+ *  stays as it holds it (`kept` counts those). Named as a {=bibtex}
+ *  block's bibliography is, so a save and a reopen give it back as it is. */
+export function mergeSidecarBib(bib: Bib | null, sidecar: string): { bib: Bib; kept: number } {
+  // Line breaks as the Markdown reader holds them (a {=bibtex} block reads
+  // back with \n alone), so a save and a reopen give the same text.
+  sidecar = sidecar.replace(/\r\n?/g, '\n');
+  const own = bib?.content.trim() ?? '';
+  if (!own) return { bib: { name: 'references.bib', content: sidecar.trim() }, kept: 0 };
+  const have = new Set(parseBibTeX(own).map((e) => e.key));
+  let add = sidecar;
+  let kept = 0;
+  for (const e of parseBibTeX(sidecar)) {
+    const at = have.has(e.key) ? add.indexOf(e.raw) : -1;
+    if (at < 0) continue;
+    // The entry and the blank lines after it.
+    const end = at + e.raw.length;
+    add = add.slice(0, at) + add.slice(end).replace(/^\s+/, '');
+    kept++;
+  }
+  add = add.trim();
+  return { bib: { name: bib!.name, content: add ? `${own}\n\n${add}` : own }, kept };
+}
+
+/** The document a Markdown file's `bibliography:` sidecar makes once it is
+ *  read: its entries in the bibliography (mergeSidecarBib), the carried
+ *  `bibliography:` line out of the front matter, and a bibliography block
+ *  at the end when there is none — where pandoc prints the references,
+ *  and where a save's {=bibtex} block reads back from. */
+export function withSidecarBib(doc: PMNode, sidecar: string): { doc: PMNode; kept: number } {
+  const { bib, kept } = mergeSidecarBib(doc.attrs.bib as Bib | null, sidecar);
+  const frontmatter = withoutEntry(String(doc.attrs.frontmatter ?? ''), 'bibliography');
+  let content = doc.content;
+  if (!hasBibliography(doc)) content = content.addToEnd(schema.nodes.bibliography.create());
+  return { doc: doc.type.create({ ...doc.attrs, bib, frontmatter }, content), kept };
+}
+
+/** Whether a document has its bibliography block. */
+function hasBibliography(doc: PMNode): boolean {
+  let found = false;
+  doc.descendants((n) => {
+    found ||= n.type === schema.nodes.bibliography;
+    return !found;
+  });
+  return found;
+}
+
+/** Title, author, date or abstract text as the reader reads it in a front
+ *  matter, alone (no body around it): the block it makes. The writer
+ *  compares a document's block with this to tell whether the document
+ *  edited a line kept as written. */
+export function readFrontText(key: TextKey, text: string): PMNode | null {
+  return readMarkdown('', 0, { title: null, author: null, date: null, abstract: null, [key]: text }, DEFAULT_SETTINGS.sizePt).front[0] ?? null;
+}
+
+/** `sizePt`: the document's font size (a grid gutter in points is read in
+ *  em at it). */
+function readMarkdown(src: string, skipped: number, fields: FrontText | null, sizePt: number): BodyRead {
+  const bodyWarnings: string[] = [];
+  const frontWarnings: string[] = [];
+  /** Where a warning goes: the body's, or the front matter text's while
+   *  that is read. */
+  let warnings = bodyWarnings;
 
   // Warnings raised while reading content that ends up an island are not
   // the user's concern: the island keeps that content verbatim.
@@ -1076,23 +1215,38 @@ export function mdToDoc(src: string): MdImport {
   // source content uses would vanish from the file on save (below).
   const noteDefs = new Map<string, [number, number]>();
   const linkDefs: Array<{ label: string; map: [number, number] }> = [];
+  /** Every definition's tokens by label, used or not: the stream keeps only
+   *  those the body uses, and the front matter's text may use another. */
+  const noteText = new Map<string, MdToken[]>();
   md.core.ruler.before('footnote_tail', 'plass_note_defs', (state) => {
     let label: string | null = null;
     let range: [number, number] = [Infinity, -1];
+    let text: MdToken[] = [];
     for (const t of state.tokens as unknown as MdToken[]) {
       if (t.type === 'footnote_reference_open') {
         label = (t.meta as { label: string }).label;
         range = [Infinity, -1];
+        text = [];
       } else if (t.type === 'footnote_reference_close') {
         if (label !== null && range[1] >= 0) noteDefs.set(label, range);
+        // A label defined twice: the last definition is the note, as in
+        // markdown-it's tail and in pandoc (which warns too).
+        if (label !== null && noteText.has(label)) warn(`footnote [^${label}] is defined more than once — the last definition is read, and a save drops the others`);
+        if (label !== null) noteText.set(label, text);
         label = null;
-      } else if (label !== null && t.map) range = [Math.min(range[0], t.map[0]), Math.max(range[1], t.map[1])];
+      } else if (label !== null) {
+        text.push(t);
+        if (t.map) range = [Math.min(range[0], t.map[0]), Math.max(range[1], t.map[1])];
+      }
     }
   });
   md.core.ruler.before('strip_references', 'plass_link_defs', (state) => {
     for (const t of state.tokens as unknown as MdToken[]) if (t.type === 'reference_definition' && t.map) linkDefs.push({ label: (t.meta as { label: string }).label, map: t.map });
   });
-  const tokens = md.parse(pre.text, {}) as unknown as MdToken[];
+  // The front matter's text is read in this environment after the body, so
+  // a footnote marker there finds the body's definition (pandoc's reading).
+  const env = {};
+  const tokens = md.parse(pre.text, env) as unknown as MdToken[];
 
   const { paragraph, heading, blockquote, code_block, horizontal_rule } = schema.nodes;
 
@@ -1162,19 +1316,27 @@ export function mdToDoc(src: string): MdImport {
 
   // ---------- footnotes (definitions arrive at the stream tail) ----------
   const footnoteDefs = new Map<number, MdToken[]>();
-  {
+  /** The definitions a token stream ends with, by note id. A later stream
+   *  (the front matter's text, read in the body's environment) repeats the
+   *  body's notes with no text: only its own new ones count. */
+  const collectNotes = (stream: MdToken[]) => {
     let current = -1;
+    let label: string | undefined;
     let buf: MdToken[] = [];
-    for (const t of tokens) {
+    for (const t of stream) {
       if (t.type === 'footnote_open') {
         current = (t.meta as { id?: number } | null)?.id ?? -1;
+        label = (t.meta as { label?: string } | null)?.label;
         buf = [];
       } else if (t.type === 'footnote_close') {
-        footnoteDefs.set(current, buf);
+        // A definition the body never used is not in its stream: its tokens
+        // were set aside by label as the body was read.
+        if (!footnoteDefs.has(current)) footnoteDefs.set(current, label !== undefined && noteText.has(label) ? noteText.get(label)! : buf);
         current = -1;
       } else if (current >= 0) buf.push(t);
     }
-  }
+  };
+  collectNotes(tokens);
   const footnoteBodies = new Map<number, PMNode[]>();
   /** The notes whose bodies are being read: a marker for one of them in
    *  its own body (or in a note that body cites) closes a cycle. */
@@ -2074,8 +2236,8 @@ export function mdToDoc(src: string): MdImport {
       return 1;
     }
     const n = Number(m[1]);
-    const pt = { em: n * settings.sizePt, pt: n, in: n * 72, mm: (n * 72) / 25.4, cm: (n * 72) / 2.54 }[m[2] ?? 'em']!;
-    return Math.round((pt / settings.sizePt) * 1000) / 1000;
+    const pt = { em: n * sizePt, pt: n, in: n * 72, mm: (n * 72) / 25.4, cm: (n * 72) / 2.54 }[m[2] ?? 'em']!;
+    return Math.round((pt / sizePt) * 1000) / 1000;
   }
 
   /** The blocks of one block-level token at `i`; `captionLine` when it is
@@ -2138,11 +2300,13 @@ export function mdToDoc(src: string): MdImport {
       }
       case 'blockquote_open': {
         const inner = parseSeq(i + 1, 'blockquote_close', false);
-        // The serializer writes the abstract as a quote led by
-        // "**Abstract.**" — recognize it coming back.
+        // An older Plass wrote the abstract as a quote led by
+        // "**Abstract.**": read so while the front matter holds none (the
+        // abstract now lives there, and a save moves this one there).
         const first = inner.nodes[0];
         const lead = first?.firstChild;
         if (
+          fields?.abstract == null &&
           first?.type === paragraph &&
           lead?.isText &&
           lead.marks.some((m) => m.type === schema.marks.strong) &&
@@ -2344,6 +2508,66 @@ export function mdToDoc(src: string): MdImport {
   }
 
   let { nodes: body } = parseSeq(0, null, true);
+
+  // ---------- the front matter's text ----------
+  // Title, author and date are one run of inlines, read as pandoc reads a
+  // YAML string: Markdown in it, but no block — `1. Intro` and `# Notes`
+  // are text. The abstract is paragraphs (blank lines between), each read
+  // the same way; a list or a heading there is read as its text, with a
+  // warning, since the abstract holds paragraphs only. All of it is read
+  // as the body's text is (formulas, citations, Typst's quotes and dashes)
+  // and after the body, so a footnote marker there finds the body's
+  // definition. A comment there moves out, after the front matter's blocks.
+  const front: PMNode[] = [];
+  const moved: PMNode[] = [];
+  if (fields) {
+    warnings = frontWarnings;
+    const fieldTokens = (name: string, text: string): MdToken[] => {
+      const scanned = prepass(text, warn, true);
+      if (scanned.store.some((s) => s.k === 'display')) warn(`${name}: display math there is read as inline math — it holds text, not display formulas`);
+      const offset = store.length;
+      store.push(...scanned.store);
+      const shifted = scanned.text.replace(SENTINEL, (_, n: string) => `${S}${+n + offset}${S}`);
+      const stream = md.parseInline(shifted, env) as unknown as MdToken[];
+      collectNotes(stream);
+      return stream[0]?.children ?? [];
+    };
+    const field = (name: string, text: string): PMNode[] => {
+      H = { seen: false, before: [], after: [] };
+      topParagraph = false;
+      inlineLines = [0, 0];
+      const was = hoisted;
+      const nodes = finishInline(inlineItems(fieldTokens(name, text.replace(/^[ \t\n]+/, '').replace(/(?<!\\)[ \t\n]+$/, '')), false));
+      moved.push(...H.before, ...H.after);
+      // Said of the front matter, not counted with the body's.
+      if (hoisted > was) warn(`${name}: ${hoisted - was} comment(s) there moved out, after the front matter — kept, unprinted`);
+      hoisted = was;
+      return nodes;
+    };
+    /** A title, author or date: a `>` at its head opens a block quote to
+     *  pandoc, which prints the text without it. Kept as text (as a quote
+     *  in the abstract is), said, and escaped by a save (md-serializer). */
+    const line = (name: string, text: string): PMNode[] => {
+      if (/^[ \t\n]*>/.test(text)) warn(`${name}: the > at its start opens a block quote to pandoc, which prints the text without it — kept as text, and a save writes it as \\> so pandoc prints it too`);
+      return field(name, text);
+    };
+    if (fields.title !== null) front.push(schema.nodes.doc_title.create(null, line('title', fields.title)));
+    if (fields.author !== null) front.push(schema.nodes.doc_authors.create(null, line('author', fields.author)));
+    if (fields.date !== null) front.push(schema.nodes.doc_date.create(null, line('date', fields.date)));
+    if (fields.abstract !== null) {
+      const paras: PMNode[] = [];
+      for (const chunk of fields.abstract.split(/\n[ \t]*\n/)) {
+        if (!chunk.trim()) continue;
+        const kind = blockKind(chunk);
+        if (kind) warn(`abstract: ${kind} there is read as paragraph text — the abstract holds paragraphs`);
+        const p = paragraph.create(null, field('abstract', chunk));
+        if (p.childCount) paras.push(p);
+      }
+      front.push(schema.nodes.abstract.create(null, paras.length ? paras : [paragraph.create()]));
+    }
+    warnings = bodyWarnings;
+  }
+
   if (hoisted) warnings.push(`${hoisted} comment(s) moved out of nested blocks — each is kept, unprinted, beside the block it was in`);
 
   // ---------- definitions only kept-as-source content uses ----------
@@ -2412,6 +2636,8 @@ export function mdToDoc(src: string): MdImport {
       const defLines = new Set<number>();
       for (const d of linkDefs) for (let l = origLine[d.map[0]]; l < (origLine[d.map[1]] ?? lines.length); l++) defLines.add(l);
       const used = new Set(lines.flatMap((l, n) => (defLines.has(n) ? [] : labelsIn(l))));
+      // A link in the title, author, date or abstract uses one too.
+      for (const text of fields ? [fields.title, fields.author, fields.date, fields.abstract] : []) for (const label of text ? labelsIn(text) : []) used.add(label);
       for (const d of linkDefs) {
         const from = origLine[d.map[0]];
         const to = origLine[d.map[1]] ?? lines.length;
@@ -2443,15 +2669,40 @@ export function mdToDoc(src: string): MdImport {
     if (carried.size) body = body.map(rebuild);
   }
 
-  const front: PMNode[] = [];
-  if (title) front.push(schema.nodes.doc_title.create(null, [schema.text(title)]));
-  if (authors) front.push(schema.nodes.doc_authors.create(null, [schema.text(authors)]));
-  if (date) front.push(schema.nodes.doc_date.create(null, [schema.text(date)]));
+  return { body, front, moved, bib, warnings: bodyWarnings, frontWarnings };
+}
 
-  const blocks = [...front, ...body];
-  if (!blocks.length) blocks.push(paragraph.create());
-  const doc = schema.nodes.doc.create({ settings, bib, frontmatter }, blocks);
-  return { doc, warnings };
+/** A chunk of an abstract that opens a block other than a paragraph (as
+ *  pandoc reads the abstract's lines: blocks), named; null when it is a
+ *  paragraph, or a comment. */
+let blockProbe: InstanceType<typeof MarkdownIt> | null = null;
+function blockKind(chunk: string): string | null {
+  blockProbe ??= new MarkdownIt({ html: true }).use(footnotePlugin).use(fencedDivs);
+  for (const t of blockProbe.parse(chunk, {}) as unknown as MdToken[]) {
+    if (t.level !== 0 || t.nesting === -1) continue;
+    switch (t.type) {
+      case 'html_block':
+        if (readMdComments(t.content)?.rest === '') continue;
+        return 'an HTML block';
+      case 'bullet_list_open':
+      case 'ordered_list_open':
+        return 'a list';
+      case 'heading_open':
+        return 'a heading';
+      case 'fence':
+      case 'code_block':
+        return 'a code block';
+      case 'blockquote_open':
+        return 'a quote';
+      case 'table_open':
+        return 'a table';
+      case 'hr':
+        return 'a rule';
+      case 'div_open':
+        return 'a div';
+    }
+  }
+  return null;
 }
 
 /** Grid shares as the model holds them: each divided by the smallest and

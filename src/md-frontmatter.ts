@@ -45,6 +45,9 @@
 import { DEFAULT_SETTINGS, FOOTNOTE_NUMBERINGS, FOOTNOTE_SEPARATORS, normalizeSettings, type DocSettings, type PaperName } from './settings';
 import { CITATION_STYLES } from './citation-styles';
 
+/** The keys whose values are the document's own text (Markdown). */
+export type TextKey = 'title' | 'author' | 'date' | 'abstract';
+
 export interface FrontmatterFields {
   /** Raw Markdown (inline), or null when the key is absent. */
   titleMd?: string | null;
@@ -58,6 +61,12 @@ export interface FrontmatterFields {
   frontMatterRestart?: boolean;
   /** Unknown keys and comments, verbatim YAML lines (doc.attrs.frontmatter). */
   extra?: string;
+  /** Text keys whose entry `extra` keeps as written (a double-quoted value
+   *  whose escape reads as LaTeX, `"\today"`: see readFrontmatter) and the
+   *  document has not edited: that entry is written in the key's place, as
+   *  it was, instead of the value. Such an entry for a key not listed here
+   *  was edited (or its block deleted): it is dropped, silently. */
+  asWritten?: readonly TextKey[];
 }
 
 export interface FrontmatterRead {
@@ -67,13 +76,33 @@ export interface FrontmatterRead {
   abstractMd: string | null;
   /** Only the settings the YAML sets, each valid (an invalid one is warned and left out). */
   settings: Partial<DocSettings>;
-  /** `bibliography:` — a sidecar path to read once; never written back. */
+  /** `bibliography:` — a sidecar path to read once (the Markdown reader
+   *  carries the line in `extra` until it is: bibliographyEntry). */
   bibliography?: string;
+  /** Every file `bibliography:` names, the first one (`bibliography`)
+   *  included: pandoc reads them all, Plass the first. */
+  bibliographyFiles?: string[];
   frontMatterRestart: boolean;
   extra: string;
   warnings: string[];
   /** The text after the closing `---`/`...` line; the whole input when it opens with no metadata block. */
   body: string;
+  /** The first line at the block's top level that is not YAML at all,
+   *  where no entry can hold it — a list item, or prose after a blank line
+   *  — when the block has one. Never a `key: value` line (however
+   *  indented), a comment, a line a quoted or flow value continues, YAML
+   *  this subset keeps as written (an anchored or tagged key, a `?`
+   *  complex key), nor a line directly under an entry (kept as written).
+   *  Pandoc rejects such a block; the Markdown reader then reads the file
+   *  as having no front matter, so a document that opens with a horizontal
+   *  rule never loses its text into one. Everything above is read as
+   *  usual. */
+  notYaml?: string;
+  /** What YAML reads the block as when it is not a map (keys and values)
+   *  — 'a list' or 'text' — and so neither Plass nor pandoc takes it for
+   *  front matter: `body` is then the whole input. Unset when there is no
+   *  `---` block at all. */
+  notMap?: 'a list' | 'text';
 }
 
 // ---------------------------------------------------------------- the YAML subset
@@ -101,9 +130,14 @@ interface Ctx {
   /** The anchors this value defines (a save drops them from a known key). */
   defined: string[];
   depth: number;
+  /** The value is a text key's (title, author, date, abstract). */
+  textKey: boolean;
+  /** A double-quoted escape in it reads as LaTeX (`"\today"`): a text key's
+   *  entry is then kept as written, beside the value read. */
+  keepRaw: boolean;
 }
 
-const context = (anchors: Map<string, YNode> = new Map()): Ctx => ({ notes: [], comments: [], anchors, defined: [], depth: 0 });
+const context = (anchors: Map<string, YNode> = new Map()): Ctx => ({ notes: [], comments: [], anchors, defined: [], depth: 0, textKey: false, keepRaw: false });
 
 /** Values nested deeper than this are not read (kept as written). Plass
  *  reads three levels (`plass.page-numbers.start`); each level rescans the
@@ -219,6 +253,16 @@ function matchKey(s: string): KeyLine | null {
   return { raw, rest: after.replace(/^[ \t]+/, '') };
 }
 
+/** A line YAML reads as part of a map that this subset does not: a key
+ *  after an anchor or a tag (`&a key: v`, `!!str key: v`, both read by
+ *  pandoc), or a complex key's `? key` and `: value` lines. Kept as
+ *  written, never taken for prose. */
+// A line YAML reads that Plass does not: a complex key, a property before a
+// key, or a line holding only node properties (`!!map`, `&a`), which tags
+// the block that follows and is still front matter to pandoc.
+const yamlOnly = (s: string): boolean =>
+  /^[?:](?:[ \t]|$)/.test(s) || (/^[&!]/.test(s) && (matchKey(afterProperties(s)) !== null || /^(?:[&!]\S*\s*)+$/.test(s)));
+
 function decodeKey(raw: string): string {
   if (raw.startsWith('"')) return (new FlowReader(raw, context()).node() as YScalar).value;
   if (raw.startsWith("'")) return raw.slice(1, -1).replace(/''/g, "'");
@@ -236,16 +280,118 @@ interface Item {
   end: number;
 }
 
+/** Whether a quoted scalar or a flow collection (`[…]`, `{…}`) is still
+ *  open after the lines fed to it. YAML continues one on the lines after it
+ *  at any indentation, the margin included: pandoc reads `keywords: [a,`
+ *  over `b]`, and a quoted title folded onto a line at the margin. Only the
+ *  value a line starts (after its `- `, its key, an anchor or tag) is
+ *  scanned; a block scalar's text and a plain value's continuation lines
+ *  (indented deeper than their node) are passed over, never scanned, so a
+ *  quote in prose there opens nothing. */
+class OpenFlow {
+  /** The brackets open, innermost last. */
+  private brackets: string[] = [];
+  private quote: '"' | "'" | null = null;
+  /** Lines indented deeper than this column continue a block scalar or a
+   *  plain value: not scanned (-1: none). */
+  private passOver = -1;
+
+  get open(): boolean {
+    return this.quote !== null || this.brackets.length > 0;
+  }
+
+  line(l: string): void {
+    if (this.open) return this.scan(l, 0);
+    if (!isContent(l)) return;
+    const ind = indentOf(l);
+    if (this.passOver >= 0 && ind > this.passOver) return;
+    this.passOver = -1;
+    // The node the line starts, and the column it belongs to: after its
+    // `- ` indicators and one key (a second `key: ` on the line is a plain
+    // value's text to this scan — YAML rejects it either way).
+    let at = ind;
+    let col = ind;
+    while (l[at] === '-' && (at + 1 === l.length || l[at + 1] === ' ' || l[at + 1] === '\t')) {
+      col = at;
+      at++;
+      while (l[at] === ' ' || l[at] === '\t') at++;
+    }
+    const m = matchKey(l.slice(at));
+    if (m) {
+      col = at;
+      at = l.length - m.rest.length;
+    }
+    const v = afterProperties(l.slice(at));
+    if (v === '' || v[0] === '#') return;
+    if ('"\'[{'.includes(v[0])) return this.scan(l, l.length - v.length);
+    // Block text or a plain value: the lines deeper than its node continue it.
+    this.passOver = col;
+  }
+
+  /** Scan from `from` until what is open closes (the rest of that line is
+   *  the value's tail, a comment or a fault: not scanned). */
+  private scan(l: string, from: number): void {
+    // The last character before k on this line that is not a space ('' at its start).
+    let last = '';
+    for (let k = from; k < l.length; k++) {
+      const c = l[k];
+      if (this.quote === '"') {
+        if (c === '\\') k++;
+        else if (c === '"') this.quote = null;
+      } else if (this.quote === "'") {
+        if (c === "'" && l[k + 1] === "'") k++;
+        else if (c === "'") this.quote = null;
+      } else if (c === '"' || c === "'") {
+        // A quote opens a scalar only where a node starts: not inside a plain one (`[it's]`).
+        if (k === from || last === '' || '[{,:'.includes(last)) this.quote = c;
+      } else if (c === '#' && (k === 0 || l[k - 1] === ' ' || l[k - 1] === '\t')) return;
+      else if (c === '[' || c === '{') this.brackets.push(c);
+      else if (c === ']' || c === '}') this.brackets.pop();
+      if (!this.open) return;
+      if (c !== ' ' && c !== '\t') last = c;
+    }
+  }
+}
+
+/** The end of a block item starting at `i`: past the lines `deeper` takes
+ *  (and blank and comment lines between them); past every line a quoted
+ *  or flow value left open takes, at any indentation, when `flow` — unless
+ *  it never closes, which is not YAML: then null. */
+function itemEnd(lines: string[], next: number[], i: number, deeper: (k: number) => boolean, indent: number, flow: boolean): number | null {
+  const open = new OpenFlow();
+  if (flow) open.line(lines[i]);
+  let end = i + 1;
+  for (let j = i + 1; j < lines.length; j++) {
+    const l = lines[j];
+    if (open.open) {
+      open.line(l);
+      end = j + 1;
+    } else if (isContent(l)) {
+      if (!deeper(j)) break;
+      end = j + 1;
+      if (flow) open.line(l);
+    } else if (indentOf(l) > indent) {
+      // Spaces past the indent may be block text, a comment there the entry's own.
+      end = j + 1;
+    } else if (isComment(l) && !(next[j] < lines.length && deeper(next[j]))) break;
+  }
+  return open.open ? null : end;
+}
+
 /** Partition lines into the items of a block map at `indent`. An entry runs
  *  from its key line through every line indented deeper (and through a
  *  compact list, `- item` lines at the key's own indentation directly under
- *  a `key:` with no value on its line, an anchor or tag aside). Comment and blank lines are not content: one at the
+ *  a `key:` with no value on its line, an anchor or tag aside), and through
+ *  any line a quoted or flow value left open continues (OpenFlow). Comment and blank lines are not content: one at the
  *  margin stays inside the entry when more of the entry follows it, and
  *  trailing blank lines are left out. Comments and blank lines between
  *  entries are items of their own; a line that is none of these is `stray`. */
 function splitItems(lines: string[], indent: number): Item[] {
   const next = nextContent(lines);
   const items: Item[] = [];
+  // A value left open to the end is not YAML: from there on, lines are
+  // split by indentation alone (and each is scanned at most once more).
+  let flow = true;
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
@@ -268,16 +414,10 @@ function splitItems(lines: string[], indent: number): Item[] {
       const ni = indentOf(lines[k]);
       return ni > indent || (compact && ni === indent && SEQ_ITEM.test(lines[k].slice(indent)));
     };
-    let end = i + 1;
-    for (let j = i + 1; j < lines.length; j++) {
-      const l = lines[j];
-      if (isContent(l)) {
-        if (!continues(j)) break;
-        end = j + 1;
-      } else if (indentOf(l) > indent) {
-        // Spaces past the indent may be block text, a comment there the entry's own.
-        end = j + 1;
-      } else if (isComment(l) && !(next[j] < lines.length && continues(next[j]))) break;
+    let end = flow ? itemEnd(lines, next, i, continues, indent, true) : null;
+    if (end === null) {
+      flow = false;
+      end = itemEnd(lines, next, i, continues, indent, false)!;
     }
     items.push({ kind: 'entry', start: i, end });
     i = end;
@@ -442,6 +582,8 @@ function parseMap(lines: string[], indent: number, cx: Ctx): YMap {
 function parseSeq(lines: string[], indent: number, cx: Ctx): YSeq {
   const next = nextContent(lines);
   const items: YNode[] = [];
+  const deeper = (k: number): boolean => indentOf(lines[k]) > indent;
+  let flow = true;
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
@@ -453,12 +595,12 @@ function parseSeq(lines: string[], indent: number, cx: Ctx): YSeq {
     if (indentOf(line) !== indent || !SEQ_ITEM.test(line.slice(indent))) {
       throw new YamlError(`unexpected line "${clip(line.trim())}" in a list`);
     }
-    let end = i + 1;
-    for (let j = i + 1; j < lines.length; j++) {
-      const l = lines[j];
-      if (indentOf(l) > indent) end = j + 1;
-      else if (isContent(l)) break;
-      else if (isComment(l) && !(next[j] < lines.length && indentOf(lines[next[j]]) > indent)) break;
+    // An item runs through the lines deeper than its dash, and through any
+    // a quoted or flow value left open continues (`- "Alice` over `Smith"`).
+    let end = flow ? itemEnd(lines, next, i, deeper, indent, true) : null;
+    if (end === null) {
+      flow = false;
+      end = itemEnd(lines, next, i, deeper, indent, false)!;
     }
     // The dash becomes a space, so a compact map (`- name: x`) or a nested
     // list reads at its own column.
@@ -814,9 +956,12 @@ class FlowReader {
         if (/[a-zA-Z]/.test(e) && /[a-zA-Z]/.test(s[this.i] ?? '')) {
           const word = '\\' + e + /^[a-zA-Z]*/.exec(s.slice(this.i))![0];
           const ch = codePoint(ESCAPES[e]);
-          this.cx.notes.push(
-            `"${word}" inside double quotes is the YAML escape \\${e} (${ch}), as pandoc reads it; a save keeps ${ch}, not ${word} — write LaTeX unquoted or in single quotes`,
-          );
+          // The document's own text is never rewritten out from under its
+          // author: a text key's line is kept as written until the text is
+          // edited (readFrontmatter); a setting's value is the setting.
+          const save = this.cx.textKey ? `Plass writes the line back as it is until the text is edited` : `a save keeps ${ch}, not ${word}`;
+          if (this.cx.textKey) this.cx.keepRaw = true;
+          this.cx.notes.push(`"${word}" inside double quotes is the YAML escape \\${e} (${ch}), as pandoc reads it; ${save} — write LaTeX unquoted or in single quotes`);
         }
       } else {
         const width = e === 'x' ? 2 : e === 'u' ? 4 : e === 'U' ? 8 : 0;
@@ -1218,7 +1363,11 @@ export function readFrontmatter(src: string): FrontmatterRead {
   // as nothing: comments alone); a scalar or a list is body text to it.
   const firstContent = lines.find(isContent);
   const opener = firstContent?.trimStart()[0];
-  if (firstContent !== undefined && opener !== '{' && opener !== '?' && !matchKey(firstContent.slice(indentOf(firstContent)))) return out;
+  if (firstContent !== undefined && opener !== '{' && opener !== '?' && !matchKey(firstContent.trim()) && !yamlOnly(firstContent.trim())) {
+    // Not front matter, to pandoc either: the Markdown reader warns.
+    out.notMap = SEQ_ITEM.test(firstContent.trim()) || opener === '[' ? 'a list' : 'text';
+    return out;
+  }
   out.body = block.body;
   // A crafted block can hold any number of faults: the first ones are listed, the rest counted.
   let unlisted = 0;
@@ -1253,6 +1402,20 @@ export function readFrontmatter(src: string): FrontmatterRead {
   const root = baseIndent(lines);
   const asWritten = (item: Item): string[] => (root ? reindent(lines.slice(item.start, item.end), root, 0) : orig.slice(item.start, item.end));
   const items = splitItems(lines, root);
+  // A top-level line that is not YAML at all makes the block one pandoc
+  // rejects: say which. Only where no entry can hold it — a list item (a
+  // `key:` that takes one already has: splitItems), or prose after a blank
+  // line, which is how a document that opens with a horizontal rule
+  // reads. A line directly under an entry may be a mistyped continuation
+  // of it, and one YAML reads that Plass does not (yamlOnly) is no fault:
+  // both are kept as written, and the block stays front matter.
+  const prose = items.find((item, k) => {
+    if (item.kind !== 'stray') return false;
+    const s = lines[item.start].trim();
+    if (matchKey(s) || yamlOnly(s)) return false;
+    return SEQ_ITEM.test(s) || items[k - 1]?.kind === 'blank';
+  });
+  if (prose) out.notYaml = clip(lines[prose.start].trim());
   const acc: Acc = { s: {}, paperTop: null, paperPlass: null, restart: false, warn, hasAnchors: block.yaml.includes('&'), anchors: new Map(), dropped: [] };
   const parts: ExtraPart[] = [];
 
@@ -1272,7 +1435,12 @@ export function readFrontmatter(src: string): FrontmatterRead {
     // A comment at the margin, where it cannot join the entry written before it.
     if (item.kind === 'comment') return parts.push({ kind: 'lines', lines: [orig[item.start].trimStart()] });
     if (item.kind === 'stray') {
-      warn(`front matter line "${clip(entry[0].trim())}" is not a "key: value" entry — kept as written`);
+      const s = entry[0].trim();
+      warn(
+        yamlOnly(s)
+          ? `front matter line "${clip(s)}" is YAML Plass does not read (an anchor, a tag or a ? before a key) — kept as written`
+          : `front matter line "${clip(s)}" is not a "key: value" entry — kept as written`,
+      );
       return parts.push({ kind: 'lines', lines: asWritten(item) });
     }
     const key = keyOf(entry[0], root)!;
@@ -1287,6 +1455,7 @@ export function readFrontmatter(src: string): FrontmatterRead {
       return;
     }
     const cx = context(acc.anchors);
+    cx.textKey = TEXT_KEYS.has(key);
     let value: YNode;
     try {
       value = parseEntry(entry, root, cx).value;
@@ -1306,6 +1475,13 @@ export function readFrontmatter(src: string): FrontmatterRead {
       }
       warn(`${key}: ${e.message} — ignored`);
     }
+    // A text key whose double-quoted value decodes an escape that reads as
+    // LaTeX (`date: "\today"` is a tab and "oday" to YAML and pandoc): the
+    // value is read, and the entry is kept as written beside it, so that a
+    // save leaves the author's text alone until the document edits it
+    // (writeFrontmatter's `asWritten`). Its comments and anchors are in its
+    // lines.
+    if (cx.keepRaw) return parts.push({ kind: 'lines', lines: asWritten(item) });
     // The key is rewritten; its comments stay, as whole lines after the known keys.
     if (cx.comments.length) parts.push({ kind: 'lines', lines: cx.comments });
     dropAnchors(acc, key, cx.defined);
@@ -1425,8 +1601,13 @@ function readTop(key: string, n: YNode, out: FrontmatterRead, acc: Acc): void {
       const files = n.t === 'seq' ? n.items : [n];
       const first = files[0] ? text(files[0]) : null;
       if (!first) throw new Invalid('expected a file path');
-      if (files.length > 1) acc.warn(`bibliography: only the first file (${clip(scalar(first))}) is read`);
+      const all = files.map(text).filter((f): f is string => !!f);
+      if (files.length > 1) {
+        const others = all.slice(1).map((f) => clip(scalar(f))).join(', ') || 'the others';
+        acc.warn(`bibliography: only the first file (${clip(scalar(first))}) is read — once it is, a save embeds its entries and drops the line, ${others} with it (until then a save keeps every file)`);
+      }
       out.bibliography = first;
+      out.bibliographyFiles = all;
       return;
     }
     case 'linestretch':
@@ -1674,7 +1855,12 @@ function leadingRun(items: Item[], lines: string[], indent: number): { count: nu
  *  comments at the margin. An extra entry whose key the document now
  *  writes is dropped (with a warning); so is a `---`/`...` line, which
  *  would end the block. `bibliography:` is never written: the
- *  bibliography is embedded in the body. */
+ *  bibliography is embedded in the body — but a `bibliography:` entry
+ *  kept in `extra` is, like any kept line: the Markdown reader carries one
+ *  while its sidecar is unread, and takes it out once it reads it
+ *  (md-parser's withSidecarBib). A text key's entry `extra` keeps as written is
+ *  written in the key's place when the document has not edited it
+ *  (`fm.asWritten`), and dropped otherwise. */
 export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => void = () => {}): string {
   const s = normalizeSettings(fm.settings ?? null);
   const D = DEFAULT_SETTINGS;
@@ -1686,6 +1872,8 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
     written.add(key);
   };
   const block = (key: string, value: string): void => {
+    // An empty abstract (one empty paragraph) is the empty string.
+    if (!trimNewlines(value).trim()) return put(key, "''");
     const lines = blockLines(key, value, 2);
     if (lines) {
       append(top, lines);
@@ -1695,11 +1883,20 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
     // value that ends in one as blocks, not as one line of inlines.
     else put(key, scalar(trimNewlines(value) + '\n'));
   };
+  const keptText = keptTextEntries(fm.extra ?? '');
+  /** A text key: its kept entry as written when the document left it alone, else its value. */
+  const text = (key: TextKey, value: string | null | undefined, write: (v: string) => void): void => {
+    const kept = keptText.get(key);
+    if (kept && fm.asWritten?.includes(key)) {
+      append(top, kept);
+      written.add(key);
+    } else if (value != null) write(value);
+  };
 
-  if (fm.titleMd != null) put('title', scalar(fm.titleMd));
-  if (fm.authorsMd != null) put('author', scalar(fm.authorsMd));
-  if (fm.dateMd != null) put('date', scalar(fm.dateMd));
-  if (fm.abstractMd != null) block('abstract', fm.abstractMd);
+  text('title', fm.titleMd, (v) => put('title', scalar(v)));
+  text('author', fm.authorsMd, (v) => put('author', scalar(v)));
+  text('date', fm.dateMd, (v) => put('date', scalar(v)));
+  text('abstract', fm.abstractMd, (v) => block('abstract', v));
   const named = PAPER_YAML[s.page];
   if (named) put('papersize', named);
   if (MARGINS.some((f) => s[f] !== D[f])) {
@@ -1783,7 +1980,10 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
   const lead = leadingRun(items, lines, 0);
   items.forEach((item, k) => {
     const raw = orig.slice(item.start, item.end);
-    const into = k < lead.count && lead.place === 'first' ? head : rest;
+    // A line holding only node properties (`!!map`, `&a`) that opened the
+    // block tags the whole map: it is valid YAML only before every key.
+    const rootProps = k === 0 && item.kind === 'stray' && /^(?:[&!]\S*\s*)+$/.test(raw[0].trim());
+    const into = rootProps || (k < lead.count && lead.place === 'first') ? head : rest;
     if (item.kind === 'blank') {
       pendingBlank = true;
       return;
@@ -1827,12 +2027,11 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
       });
       return;
     }
+    // A text key's entry kept as written: written in its place above, or
+    // replaced by the document's edit.
+    if (key !== null && keptText.get(key as TextKey)?.join('\n') === raw.join('\n')) return;
     if (key !== null && written.has(key)) {
       warn(`front matter: the document's ${clip(key)} replaces the one kept from the file`);
-      return;
-    }
-    if (key === 'bibliography') {
-      warn('front matter: bibliography: is not written — the bibliography is embedded in the document');
       return;
     }
     if (key === 'plass' && plass.length) {
@@ -1861,4 +2060,58 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
   }
   const all = [...head, ...top, ...rest, ...after];
   return all.length ? `---\n${all.join('\n')}\n---` : '';
+}
+
+/** The text-key entries readFrontmatter kept in `extra` as written beside
+ *  the value it read: the ones whose double-quoted value decodes an escape
+ *  that reads as LaTeX, found by the same test. Any other text key there
+ *  (one that could not be read, a list an older Plass carried) is not one.
+ *  Raw lines by key. */
+function keptTextEntries(extra: string): Map<TextKey, string[]> {
+  const found = new Map<TextKey, string[]>();
+  if (!/^(?:title|author|date|abstract)[ \t]*:/m.test(extra)) return found;
+  const orig = extra.replace(/\r\n?/g, '\n').split('\n');
+  const lines = orig.map(detab);
+  for (const item of splitItems(lines, 0)) {
+    if (item.kind !== 'entry') continue;
+    const key = keyOf(lines[item.start], 0);
+    if (key === null || !TEXT_KEYS.has(key)) continue;
+    const cx = context();
+    cx.textKey = true;
+    try {
+      const value = parseEntry(lines.slice(item.start, item.end), 0, cx).value;
+      if (cx.keepRaw && (key === 'author' ? authors(value, () => {}) : text(value)) !== null) found.set(key as TextKey, orig.slice(item.start, item.end));
+    } catch (e) {
+      if (!(e instanceof YamlError) && !(e instanceof Invalid)) throw e;
+    }
+  }
+  return found;
+}
+
+/** The `bibliography:` entry the Markdown reader keeps in
+ *  doc.attrs.frontmatter while the sidecar it names is unread: every file
+ *  the file named, so a save before the read keeps them all. */
+export function bibliographyEntry(files: readonly string[]): string {
+  if (files.length === 1) return `bibliography: ${scalar(files[0])}`;
+  return ['bibliography:', ...files.map((f) => `  - ${scalar(f)}`)].join('\n');
+}
+
+/** A kept `extra` without its top-level entries for `key` (the blank lines
+ *  around one collapse to one; none at the ends). */
+export function withoutEntry(extra: string, key: string): string {
+  const orig = extra.replace(/\r\n?/g, '\n').split('\n');
+  const lines = orig.map(detab);
+  const kept: string[] = [];
+  let pendingBlank = false;
+  for (const item of splitItems(lines, 0)) {
+    if (item.kind === 'blank') {
+      pendingBlank = kept.length > 0;
+      continue;
+    }
+    if (item.kind === 'entry' && keyOf(lines[item.start], 0) === key) continue;
+    if (pendingBlank) kept.push('');
+    pendingBlank = false;
+    append(kept, orig.slice(item.start, item.end));
+  }
+  return kept.join('\n');
 }

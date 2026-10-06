@@ -48,6 +48,66 @@ export interface FileHooks {
    *  writer returns to the page view (SOURCE-VIEW.md, decision 3). Null
    *  when the page view is the truth or the source is in the other format. */
   getText?: (format: '.md' | '.typ') => string | null;
+  /** The bibliography a Markdown file's `bibliography:` sidecar makes,
+   *  read once the folder is there (attachFolder; md-parser's
+   *  mergeSidecarBib): put in the shown document, with `frontmatter` — the
+   *  carried front matter less its `bibliography:` line — and a
+   *  bibliography block at the end when it has none, as withSidecarBib
+   *  makes the document on open. Not the writer's edit and no undo step:
+   *  the document matches its file but for the bibliography, which the
+   *  next save embeds. */
+  setBib?: (bib: { name: string; content: string }, frontmatter: string) => void;
+}
+
+/** What a parse of the open file said, for its toast. */
+interface ImportReport {
+  warnings: string[];
+  /** A Markdown file's front-matter warnings (also in `warnings`). */
+  frontmatterWarnings?: string[];
+}
+
+/** The open file read in its format (mdToDoc or typToDoc). */
+type ParsedFile = ImportReport & {
+  doc: PMNode;
+  /** A Markdown file's `bibliography:` sidecar path. */
+  bibliography?: string;
+};
+
+/** The tail of an open or reload toast: blocks kept as source, counted, and
+ *  a Markdown file's front-matter warnings worded as warnings, the first
+ *  one shown. Empty when there is nothing to say. */
+function importNote(r: ImportReport): string {
+  const fm = r.frontmatterWarnings ?? [];
+  const blocks = r.warnings.length - fm.length;
+  const parts: string[] = [];
+  if (blocks) parts.push(`${blocks} block(s) preserved as raw Typst`);
+  // The toast names one: a warning that a save loses something, if any.
+  const first = fm.find((m) => /\bdrop|\bignored\b|\bonly the\b/i.test(m)) ?? fm[0];
+  if (fm.length) parts.push(`front matter: ${fm.length === 1 ? '1 warning' : `${fm.length} warnings`} — ${first}${fm.length > 1 ? ' …' : ''}`);
+  return parts.length ? ` — ${parts.join('; ')}` : '';
+}
+
+/** The toast's tail for a `bibliography:` sidecar read into the document:
+ *  `kept`, its entries the document already held (kept as it held them). */
+function sidecarNote(path: string, fileName: string, kept: number): string {
+  const held = kept ? ` (${kept === 1 ? '1 key the document already held keeps its entry' : `${kept} keys the document already held keep their entries`})` : '';
+  return ` — bibliography read from ${path}${held}; the next save embeds it in ${fileName} (a {=bibtex} block in place of bibliography:)`;
+}
+
+/** The toast's tail for a `bibliography:` sidecar left unread, no folder
+ *  being open. */
+function unreadNote(path: string): string {
+  return ` — its bibliography is ${path}, beside it: open its project folder to read it (until then a save keeps the bibliography: line)`;
+}
+
+/** The `bibliography:` sidecar a Markdown document still carries the line
+ *  of in its front matter (the reader keeps it there until the sidecar is
+ *  read: md-parser's withSidecarBib), or null. */
+async function carriedBibliography(doc: PMNode): Promise<string | null> {
+  const kept = String(doc.attrs.frontmatter ?? '');
+  if (!/^bibliography[ \t]*:/m.test(kept)) return null;
+  const { readFrontmatter } = await import('./md-frontmatter');
+  return readFrontmatter(`---\n${kept}\n---\n`).bibliography ?? null;
 }
 
 export interface RecentEntry {
@@ -70,6 +130,11 @@ const TYP_TYPE: FilePickerType[] = [
 ];
 
 const isMd = (name: string) => /\.md$/i.test(name);
+
+/** A project-relative path's segments: `./refs.bib` is `refs.bib`, as a
+ *  `.` segment names the folder it is in (a `..` one is refused by the
+ *  callers). */
+const projectPathParts = (path: string): string[] => path.split('/').filter((seg) => seg && seg !== '.');
 
 /** The name a document carries before it has one of its own. Names here are
  *  stored without an extension; the tab adds it, so a fresh tab reads
@@ -118,6 +183,9 @@ export class FileManager {
 
   /** Project folder: relative asset paths resolve inside it. */
   dir: FileSystemDirectoryHandle | null = null;
+  /** The `bibliography:` sidecar the open Markdown file names, until it is
+   *  read (it needs the folder): attachFolder reads it then. */
+  private bibliographyPath: string | null = null;
   name = DEFAULT_DOC_NAME;
   dirty = false;
   readonly supportsFS = typeof window.showOpenFilePicker === 'function';
@@ -176,9 +244,9 @@ export class FileManager {
     // now would eat keystrokes — the conflict flow owns that case.
     if (handle !== this.handle || this.dirty) return;
     if (text === this.diskBaseline) return; // our own write, or a bare touch
-    const warnings = await this.putInPlace(handle, file, text);
-    if (typeof warnings !== 'number') return;
-    this.hooks.message(`${file.name} changed on disk — reloaded${warnings ? ` (${warnings} raw block(s))` : ''}`);
+    const note = await this.putInPlace(handle, file, text);
+    if (note === null || note === 'shown') return;
+    this.hooks.message(`${file.name} changed on disk — reloaded${note}`);
   }
 
   /** The shell's `reload`: a rewind (`lead`, "Rewound to 1a2b3c4" or
@@ -219,29 +287,91 @@ export class FileManager {
       this.reportConflict(handle.name, `${lead} under unsaved edits to ${handle.name} — autosave is paused and your editor copy is safe`);
       return;
     }
-    const warnings = await this.putInPlace(handle, file, text);
+    const note = await this.putInPlace(handle, file, text);
     // Typing began while it was parsed: the write path's conflict flow has it.
-    if (warnings === null) return;
-    this.hooks.message(`${lead}${typeof warnings === 'number' && warnings ? ` — ${warnings} block(s) preserved as raw Typst` : ''}`);
+    if (note === null) return;
+    this.hooks.message(`${lead}${note === 'shown' ? '' : note}`);
   }
 
   /** The file's text put in place of the clean document it already shows
-   *  (hooks.reloadDoc), the disk baseline moved to it. The count of blocks
-   *  kept as raw Typst; 'shown' when the other reader (the watcher, or a
-   *  rewind's reload) put this text in place while it was parsed, so only
-   *  one of them speaks of it; null when the document began changing, or
-   *  the window took another file, meanwhile. */
-  private async putInPlace(handle: FileSystemFileHandle, file: File, text: string): Promise<number | 'shown' | null> {
-    const { doc, warnings } = isMd(file.name)
-      ? (await import('./md-parser')).mdToDoc(text)
-      : typToDoc(text);
+   *  (hooks.reloadDoc), the disk baseline moved to it. What its toast says
+   *  of the read (importNote; '' for nothing); 'shown' when the other
+   *  reader (the watcher, or a rewind's reload) put this text in place
+   *  while it was parsed, so only one of them speaks of it; null when the
+   *  document began changing, or the window took another file, meanwhile.
+   *  A Markdown file's `bibliography:` sidecar is read again with it. */
+  private async putInPlace(handle: FileSystemFileHandle, file: File, text: string): Promise<string | 'shown' | null> {
+    const parsed = await this.parse(file.name, text);
+    const shown = (this.hooks.getDoc().attrs.bib as { content?: string } | null)?.content;
+    const sidecar = await this.withSidecar(parsed, this.dir, file.name, shown);
     if (handle !== this.handle || this.dirty) return null;
     if (text === this.diskBaseline) return 'shown';
     this.diskBaseline = text;
     this.diskMtime = file.lastModified;
-    this.hooks.reloadDoc(doc);
+    this.bibliographyPath = sidecar.pending;
+    this.hooks.reloadDoc(sidecar.doc);
     this.hooks.onState();
-    return warnings.length;
+    return importNote(parsed) + sidecar.note;
+  }
+
+  /** The open file's text read in its format. */
+  private async parse(fileName: string, text: string): Promise<ParsedFile> {
+    return isMd(fileName) ? (await import('./md-parser')).mdToDoc(text) : typToDoc(text);
+  }
+
+  /** The sidecar a Markdown file's `bibliography:` names (beside it, in
+   *  `dir`), read once and put in the parsed document (withSidecarBib):
+   *  its entries in the bibliography, with a block to print it, and the
+   *  carried front matter less that line, so the next save embeds the
+   *  entries (a {=bibtex} block) in place of the key. Without the folder
+   *  it stays to be read (`pending`), and its line stays in the file.
+   *  `note` is what the toast says about it, unless the read found
+   *  `shown`, the bibliography the document already shows (a reload says
+   *  nothing of a read it announced before). */
+  private async withSidecar(
+    parsed: ParsedFile,
+    dir: FileSystemDirectoryHandle | null,
+    fileName: string,
+    shown?: string,
+  ): Promise<{ doc: PMNode; pending: string | null; note: string }> {
+    const path = parsed.bibliography;
+    if (!path) return { doc: parsed.doc, pending: null, note: '' };
+    if (!dir) return { doc: parsed.doc, pending: path, note: unreadNote(path) };
+    const read = await this.readSidecar(path, dir);
+    if (typeof read === 'string') return { doc: parsed.doc, pending: path, note: ` — bibliography: ${read}` };
+    const { withSidecarBib } = await import('./md-parser');
+    const put = withSidecarBib(parsed.doc, read.content);
+    const content = (put.doc.attrs.bib as { content: string }).content;
+    return { doc: put.doc, pending: null, note: shown === content ? '' : sidecarNote(path, fileName, put.kept) };
+  }
+
+  /** A `bibliography:` sidecar's entries, read through `readAsset` (4 MiB
+   *  at most) from `dir`; or why they could not be. */
+  private async readSidecar(path: string, dir: FileSystemDirectoryHandle): Promise<{ content: string } | string> {
+    let data: Uint8Array | null;
+    try {
+      data = (await this.readAsset(path, INPUT_LIMITS.bibliographyBytes, dir))?.data ?? null;
+    } catch {
+      return inputSizeError(INPUT_LIMITS.bibliographyBytes + 1, INPUT_LIMITS.bibliographyBytes, path) ?? `${path} could not be read`;
+    }
+    if (!data) return `${path} is not in ${dir.name} — nothing was read`;
+    // The bibliography panel's own clean-up of what it saves, with line
+    // breaks as the Markdown reader holds them (CRLF and CR as \n), so the
+    // {=bibtex} block a save writes reads back as the same text.
+    const content = new TextDecoder()
+      .decode(data)
+      .replace(/\r\n?/g, '\n')
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+      .trim();
+    if (!content) return `${path} is empty — nothing was read`;
+    return { content };
+  }
+
+  /** The `bibliography:` sidecar the open Markdown file names, while it is
+   *  unread (no folder yet): null when there is none, or it was read. */
+  get pendingBibliography(): string | null {
+    return this.bibliographyPath;
   }
 
   /** Call on every document change: marks dirty, schedules a disk autosave. */
@@ -435,6 +565,7 @@ export class FileManager {
     this.changeRevision = 0;
     this.name = name;
     this.fileFormat = '.typ';
+    this.bibliographyPath = null;
     this.dirty = false;
     this.hooks.setDoc(doc ?? this.hooks.emptyDoc());
     this.hooks.onState();
@@ -489,9 +620,8 @@ export class FileManager {
       !confirm(`Open ${handle.name}? Your current document has unsaved changes.`)
     ) return false;
     const text = await this.readDocumentText(file);
-    const { doc, warnings } = isMd(file.name)
-      ? (await import('./md-parser')).mdToDoc(text)
-      : typToDoc(text);
+    const parsed = await this.parse(file.name, text);
+    const sidecar = await this.withSidecar(parsed, dir, file.name);
     clearTimeout(this.saveTimer);
     this.handle = handle;
     this.dir = dir;
@@ -501,15 +631,12 @@ export class FileManager {
     this.changeRevision = 0;
     this.name = file.name.replace(/\.(typ|md)$/i, '');
     this.fileFormat = isMd(file.name) ? '.md' : '.typ';
+    this.bibliographyPath = sidecar.pending;
     this.dirty = false;
-    this.hooks.setDoc(doc);
+    this.hooks.setDoc(sidecar.doc);
     this.hooks.onState();
     const where = dir ? `${dir.name}/${file.name}` : file.name;
-    this.hooks.message(
-      warnings.length
-        ? `Opened ${where} — ${warnings.length} block(s) preserved as raw Typst`
-        : `Opened ${where}`,
-    );
+    this.hooks.message(`Opened ${where}${importNote(parsed)}${sidecar.note}`);
     try {
       await addRecent(handle, file.name, dir);
       await idbSet('last', dir ? { handle, dir } : handle);
@@ -626,8 +753,12 @@ export class FileManager {
         return false;
       }
       this.dir = dir;
+      // This window's record carries the folder now, so a reload reconnects
+      // with it: figures load, and a sidecar read here is not a conflict.
+      this.rememberTabFile();
       this.hooks.onState();
-      this.hooks.message(`Project folder attached — ${dir.name}/${this.handle.name}`);
+      const bib = await this.readPendingBibliography();
+      this.hooks.message(`Project folder attached — ${dir.name}/${this.handle.name}${bib}`);
       try {
         await addRecent(this.handle, this.handle.name, dir);
         await idbSet('last', { handle: this.handle, dir });
@@ -641,11 +772,34 @@ export class FileManager {
     }
   }
 
-  private async walkTo(path: string): Promise<FileSystemFileHandle | null> {
-    if (!this.dir) return null;
-    const parts = path.split('/').filter(Boolean);
+  /** The open file's unread `bibliography:` sidecar, now that the folder is
+   *  here: read, and put in the shown document (hooks.setBib) — merged
+   *  into the bibliography it holds by now, if it holds one (entries added
+   *  while the sidecar was unread). What the toast says of it. */
+  private async readPendingBibliography(): Promise<string> {
+    const path = this.bibliographyPath;
+    const handle = this.handle;
+    if (!path || !this.dir || !handle) return '';
+    // While the Markdown source is open, its text is the document: a
+    // bibliography put in the page under it would be lost on the way back.
+    if (typeof this.hooks.getText?.('.md') === 'string') return ` — ${path} is read when ${handle.name} is next opened (not while its source is open)`;
+    const read = await this.readSidecar(path, this.dir);
+    if (handle !== this.handle) return '';
+    if (typeof read === 'string') return ` — bibliography: ${read}`;
+    const [{ mergeSidecarBib }, { withoutEntry }] = await Promise.all([import('./md-parser'), import('./md-frontmatter')]);
+    if (handle !== this.handle) return '';
+    const doc = this.hooks.getDoc();
+    const merged = mergeSidecarBib(doc.attrs.bib as { name: string; content: string } | null, read.content);
+    this.bibliographyPath = null;
+    this.hooks.setBib?.(merged.bib, withoutEntry(String(doc.attrs.frontmatter ?? ''), 'bibliography'));
+    return sidecarNote(path, handle.name, merged.kept);
+  }
+
+  private async walkTo(path: string, from = this.dir): Promise<FileSystemFileHandle | null> {
+    if (!from) return null;
+    const parts = projectPathParts(path);
     if (!parts.length || parts.some((seg) => seg === '..')) return null;
-    let d = this.dir;
+    let d = from;
     for (let i = 0; i < parts.length - 1; i++) d = await d.getDirectoryHandle(parts[i]);
     return d.getFileHandle(parts[parts.length - 1]);
   }
@@ -665,11 +819,13 @@ export class FileManager {
 
   /** Read a project-relative asset (image). Null when absent/no folder.
    *  Callers that process untrusted document references can impose a byte
-   *  budget before the browser allocates the file's ArrayBuffer. */
-  async readAsset(path: string, maxBytes?: number): Promise<{ data: Uint8Array; mtime: number; type: string } | null> {
+   *  budget before the browser allocates the file's ArrayBuffer. `from`:
+   *  the folder to read in, when it is not yet the project's (a file being
+   *  opened in it). */
+  async readAsset(path: string, maxBytes?: number, from = this.dir): Promise<{ data: Uint8Array; mtime: number; type: string } | null> {
     let f: File;
     try {
-      const h = await this.walkTo(path);
+      const h = await this.walkTo(path, from);
       if (!h) return null;
       f = await h.getFile();
     } catch {
@@ -685,7 +841,7 @@ export class FileManager {
   async writeAsset(path: string, data: Uint8Array | Blob): Promise<boolean> {
     try {
       if (!this.dir) return false;
-      const parts = path.split('/').filter(Boolean);
+      const parts = projectPathParts(path);
       if (!parts.length || parts.some((seg) => seg === '..')) return false;
       let d = this.dir;
       for (let i = 0; i < parts.length - 1; i++) d = await d.getDirectoryHandle(parts[i], { create: true });
@@ -1137,6 +1293,10 @@ export class FileManager {
     diskText: string,
   ): Promise<void> {
     const localText = await this.serialize(file.name);
+    const differs = localText !== diskText && !(await this.sidecarOnly(file.name, diskText, dir, localText));
+    // A `bibliography:` sidecar the session document still carries the
+    // line of is unread: read now if the folder is here, else when it is.
+    const pending = isMd(file.name) ? await carriedBibliography(this.hooks.getDoc()) : null;
     clearTimeout(this.saveTimer);
     this.handle = handle;
     this.dir = dir;
@@ -1144,11 +1304,31 @@ export class FileManager {
     this.diskBaseline = diskText;
     this.name = file.name.replace(/\.(typ|md)$/i, '');
     this.fileFormat = isMd(file.name) ? '.md' : '.typ';
-    this.conflict = localText !== diskText;
+    this.bibliographyPath = pending;
+    this.conflict = differs;
     this.dirty = this.conflict;
     this.hooks.onState();
-    if (this.conflict) this.reportConflict(file.name);
-    else this.hooks.message(`Reconnected — ${dir ? `${dir.name}/` : ''}${file.name}`);
+    if (this.conflict) {
+      this.reportConflict(file.name);
+      return;
+    }
+    const bib = pending && !dir ? unreadNote(pending) : await this.readPendingBibliography();
+    if (handle !== this.handle) return;
+    this.hooks.message(`Reconnected — ${dir ? `${dir.name}/` : ''}${file.name}${bib}`);
+  }
+
+  /** Whether the session document's text `localText` differs from the
+   *  file's only by its `bibliography:` sidecar, read in when the file was
+   *  opened with its folder (withSidecar): the session holds that read,
+   *  the file does not until a save embeds it. Not an outside change. */
+  private async sidecarOnly(fileName: string, diskText: string, dir: FileSystemDirectoryHandle | null, localText: string): Promise<boolean> {
+    if (!dir || !isMd(fileName)) return false;
+    const parsed = await this.parse(fileName, diskText);
+    if (!parsed.bibliography) return false;
+    const opened = await this.withSidecar(parsed, dir, fileName);
+    if (opened.pending !== null) return false;
+    const { docToMd } = await import('./md-serializer');
+    return docToMd(opened.doc, () => {}) === localText;
   }
 
   /** Remember which file THIS window has open. The origin-wide 'last'
@@ -1318,9 +1498,8 @@ export class FileManager {
       }
       if (this.dirty && !confirm(`Open ${file.name}? Your current document has unsaved changes.`)) return;
       const text = await this.readDocumentText(file);
-      const { doc, warnings } = isMd(file.name)
-        ? (await import('./md-parser')).mdToDoc(text)
-        : typToDoc(text);
+      const parsed = await this.parse(file.name, text);
+      const sidecar = await this.withSidecar(parsed, null, file.name);
       clearTimeout(this.saveTimer);
       this.handle = null; // no write access in fallback mode
       this.dir = null;
@@ -1330,12 +1509,11 @@ export class FileManager {
       this.changeRevision = 0;
       this.name = file.name.replace(/\.(typ|md)$/i, '');
       this.fileFormat = isMd(file.name) ? '.md' : '.typ';
+      this.bibliographyPath = sidecar.pending;
       this.dirty = false;
-      this.hooks.setDoc(doc);
+      this.hooks.setDoc(sidecar.doc);
       this.hooks.onState();
-      this.hooks.message(
-        `Opened ${file.name}${warnings.length ? ` — ${warnings.length} raw block(s)` : ''} (read-only source; saving downloads a copy)`,
-      );
+      this.hooks.message(`Opened ${file.name}${importNote(parsed)}${sidecar.note} (read-only source; saving downloads a copy)`);
     });
     input.click();
   }

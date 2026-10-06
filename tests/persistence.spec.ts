@@ -1,4 +1,5 @@
 import { expect, test } from './fixture';
+import { settleLocal } from './settle';
 
 test('autosave pauses instead of overwriting an externally changed file', async ({ page }) => {
   await page.goto('/?new=1');
@@ -753,4 +754,321 @@ test('an opened .md file shows .md in the window title', async ({ page }) => {
     await fm.loadHandle(h);
   });
   await expect(page).toHaveTitle('Notes.md');
+});
+
+// A Markdown file's `bibliography:` names a .bib beside it (plan step 7):
+// read once the folder is there, put in the document — with a bibliography
+// block at the end when it has none, so the page prints the references and
+// Typst finds the keys — and embedded by the next save as a {=bibtex} block
+// in place of the key. Without the folder nothing is read and a save keeps
+// the line, so nothing is lost.
+type SidecarApp = typeof window & {
+  view: import('prosemirror-view').EditorView;
+  __fm: {
+    loadHandle(h: FileSystemFileHandle, dir?: FileSystemDirectoryHandle | null): Promise<boolean>;
+    attachFolder(): Promise<boolean>;
+    save(): Promise<void>;
+    pendingBibliography: string | null;
+    handle: FileSystemFileHandle | null;
+    dirty: boolean;
+  };
+  __sourceView: { enter(): Promise<void> | void; exit(): Promise<void> | void };
+  __audit: () => Promise<unknown>;
+};
+type Page = import('playwright/test').Page;
+
+const ARROW = '@book{arrow1951, title={Social Choice and Individual Values}, author={Arrow, Kenneth J.}, year={1951}}\n';
+
+/** A folder in the origin's private file system holding `files`. */
+async function seedFolder(page: Page, prefix: string, files: Record<string, string>): Promise<string> {
+  const dirName = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  await page.evaluate(
+    async ([name, entries]) => {
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle(name, { create: true });
+      for (const [file, text] of Object.entries(entries)) {
+        const w = await (await dir.getFileHandle(file, { create: true })).createWritable();
+        await w.write(text);
+        await w.close();
+      }
+    },
+    [dirName, files] as const,
+  );
+  return dirName;
+}
+
+/** The document's top-level block kinds, and whether the references list is painted. */
+const blocksAndList = (page: Page) =>
+  page.evaluate(() => {
+    const app = window as SidecarApp;
+    const kinds: string[] = [];
+    app.view.state.doc.forEach((n) => kinds.push(n.type.name));
+    return { kinds, painted: document.querySelectorAll('#editor [data-bib-sig]').length };
+  });
+
+/** Opening and closing the source view with no edit is the identity, and no edit. */
+async function sourceTripIsIdentity(page: Page): Promise<void> {
+  const trip = await page.evaluate(async () => {
+    const app = window as SidecarApp;
+    const before = JSON.stringify(app.view.state.doc.toJSON());
+    await app.__sourceView.enter();
+    await app.__sourceView.exit();
+    return { same: JSON.stringify(app.view.state.doc.toJSON()) === before, dirty: app.__fm.dirty };
+  });
+  expect(trip).toEqual({ same: true, dirty: false });
+}
+
+test('a bibliography: sidecar is read once the folder is attached, and the save embeds it', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-sidecar', {
+    'refs.bib': ARROW,
+    'Paper.md': '---\ntitle: Paper\nbibliography: refs.bib\n---\n\nArrow [@arrow1951] started it.\n',
+  });
+
+  const opened = await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    // A launched file: a handle and no folder.
+    await app.__fm.loadHandle(await dir.getFileHandle('Paper.md'));
+    return { bib: app.view.state.doc.attrs.bib, pending: app.__fm.pendingBibliography };
+  }, dirName);
+  expect(opened.bib).toBeNull();
+  expect(opened.pending).toBe('refs.bib');
+  await expect(page.locator('#toast')).toContainText('its bibliography is refs.bib');
+
+  // With no folder, a save keeps the key (and writes no bibliography).
+  const unread = await page.evaluate(async () => {
+    const app = window as SidecarApp;
+    const end = app.view.state.doc.content.size - 1;
+    app.view.dispatch(app.view.state.tr.insertText(' Then', end));
+    await app.__fm.save();
+    return (await app.__fm.handle!.getFile()).text();
+  });
+  expect(unread).toContain('bibliography: refs.bib');
+  expect(unread).not.toContain('{=bibtex}');
+
+  // The folder is granted: the sidecar is read, not as an edit, and the
+  // document gets the block that prints it.
+  const attached = await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    (window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker = async () => dir;
+    const ok = await app.__fm.attachFolder();
+    const { bib, frontmatter } = app.view.state.doc.attrs;
+    return { ok, bib, frontmatter, pending: app.__fm.pendingBibliography, dirty: app.__fm.dirty };
+  }, dirName);
+  expect(attached.ok).toBe(true);
+  expect(attached.bib?.content).toContain('@book{arrow1951');
+  expect(attached.frontmatter).toBe('');
+  expect(attached.pending).toBeNull();
+  expect(attached.dirty).toBe(false);
+  await expect(page.locator('#toast')).toContainText('bibliography read from refs.bib');
+  await expect.poll(() => blocksAndList(page)).toEqual({ kinds: ['doc_title', 'paragraph', 'bibliography'], painted: 1 });
+  await sourceTripIsIdentity(page);
+  // Typst compiles it: the citation's key is in the document now.
+  await settleLocal(page);
+  expect(await page.evaluate(() => (window as SidecarApp).__audit())).not.toBeNull();
+
+  // The next save writes the entries as a {=bibtex} block, and the key goes.
+  const saved = await page.evaluate(async () => {
+    const app = window as SidecarApp;
+    const end = app.view.state.doc.child(1).nodeSize + app.view.state.doc.child(0).nodeSize - 1;
+    app.view.dispatch(app.view.state.tr.insertText(' it.', end));
+    await app.__fm.save();
+    return (await app.__fm.handle!.getFile()).text();
+  });
+  expect(saved).toContain('```{=bibtex}\n@book{arrow1951');
+  expect(saved).not.toContain('bibliography:');
+  expect(saved).toMatch(/^---\ntitle: Paper\n---\n/);
+});
+
+test('a bibliography: sidecar read on an open with the folder prints, and the source trip is the identity', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-sidecar-open', {
+    'refs.bib': ARROW,
+    'Paper.md': '---\ntitle: Paper\nbibliography: refs.bib\n---\n\nArrow [@arrow1951] started it.\n',
+  });
+  const opened = await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await app.__fm.loadHandle(await dir.getFileHandle('Paper.md'), dir);
+    const { bib, frontmatter } = app.view.state.doc.attrs;
+    return { bib, frontmatter, pending: app.__fm.pendingBibliography, dirty: app.__fm.dirty };
+  }, dirName);
+  expect(opened.bib?.content).toContain('@book{arrow1951');
+  expect(opened.frontmatter).toBe('');
+  expect(opened.pending).toBeNull();
+  expect(opened.dirty).toBe(false);
+  await expect(page.locator('#toast')).toContainText('bibliography read from refs.bib');
+  await expect.poll(() => blocksAndList(page)).toEqual({ kinds: ['doc_title', 'paragraph', 'bibliography'], painted: 1 });
+  await sourceTripIsIdentity(page);
+});
+
+// Entries that arrive another way while the sidecar is unread (merge-on-
+// cite, the Bibliography panel) take nothing with them: a save keeps the
+// line, and the folder's read merges the sidecar into them.
+test('a bibliography: sidecar read after the document gained entries of its own is merged in', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-sidecar-merge', {
+    'refs.bib': ARROW,
+    'Paper.md': '---\ntitle: Paper\nbibliography: refs.bib\n---\n\nArrow [@arrow1951] and Knuth [@knuth1984].\n',
+  });
+  const saved = await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await app.__fm.loadHandle(await dir.getFileHandle('Paper.md'));
+    // What merge-on-cite does: the entry, and the block to print it.
+    const { state } = app.view;
+    const tr = state.tr.setDocAttribute('bib', { name: 'references.bib', content: '@book{knuth1984, title={The TeXbook}, year={1984}}' });
+    app.view.dispatch(tr.insert(tr.doc.content.size, state.schema.nodes.bibliography.create()));
+    await app.__fm.save();
+    return (await app.__fm.handle!.getFile()).text();
+  }, dirName);
+  expect(saved).toContain('bibliography: refs.bib');
+  expect(saved).toContain('```{=bibtex}\n@book{knuth1984');
+
+  const attached = await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    (window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker = async () => dir;
+    await app.__fm.attachFolder();
+    const { bib, frontmatter } = app.view.state.doc.attrs;
+    return { content: bib?.content as string, frontmatter, pending: app.__fm.pendingBibliography };
+  }, dirName);
+  expect(attached.content).toMatch(/^@book\{knuth1984[^]*\n\n@book\{arrow1951/);
+  expect(attached.frontmatter).toBe('');
+  expect(attached.pending).toBeNull();
+  await expect.poll(() => blocksAndList(page)).toEqual({ kinds: ['doc_title', 'paragraph', 'bibliography'], painted: 1 });
+});
+
+test('an opened .md file words its front-matter warnings as warnings', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const settings = await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const h = await root.getFileHandle('Settings.md', { create: true });
+    const w = await h.createWritable();
+    await w.write('---\nfontsize: 99pt\npapersize: a4\n---\n\nBody.\n');
+    await w.close();
+    const app = window as unknown as { view: import('prosemirror-view').EditorView; __fm: { loadHandle: (h: FileSystemFileHandle) => Promise<unknown> } };
+    await app.__fm.loadHandle(h);
+    return app.view.state.doc.attrs.settings;
+  });
+  expect(settings.page).toBe('a4');
+  expect(settings.sizePt).toBe(12.5);
+  await expect(page.locator('#toast')).toContainText('front matter: 1 warning — fontsize: 99pt is out of range');
+  await expect(page.locator('#toast')).not.toContainText('raw Typst');
+});
+
+// A reload brings back the session's own document. A sidecar read on the
+// open (with the folder) is in it and not yet in the file — no outside
+// change, so the reload reconnects clean; one left unread (no folder) is
+// still pending, and attaching the folder later reads it.
+test('a reload after the sidecar was read with the folder reconnects clean (./ path)', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-sidecar-reload', {
+    'refs.bib': ARROW.replace(/\n/g, '\r\n'),
+    'Paper.md': '---\ntitle: Paper\nbibliography: ./refs.bib\n---\n\nArrow [@arrow1951] started it.\n',
+  });
+  await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await app.__fm.loadHandle(await dir.getFileHandle('Paper.md'), dir);
+  }, dirName);
+  await expect(page.locator('#toast')).toContainText('bibliography read from ./refs.bib');
+  expect(await page.evaluate(() => ((window as SidecarApp).view.state.doc.attrs.bib as { content: string } | null)?.content.includes('\r'))).toBe(false);
+
+  await page.reload();
+  await page.waitForFunction(() => (window as unknown as SidecarApp).__fm?.handle?.name === 'Paper.md');
+  await expect(page.locator('#toast')).toContainText('Reconnected');
+  const after = await page.evaluate(() => {
+    const app = window as SidecarApp & { __fm: { hasConflict: boolean } };
+    return { conflict: app.__fm.hasConflict, dirty: app.__fm.dirty, bib: (app.view.state.doc.attrs.bib as { content: string } | null)?.content ?? null };
+  });
+  expect(after).toEqual({ conflict: false, dirty: false, bib: expect.stringContaining('@book{arrow1951') });
+  await expect.poll(() => blocksAndList(page)).toEqual({ kinds: ['doc_title', 'paragraph', 'bibliography'], painted: 1 });
+});
+
+test('granting the folder after a folderless open reads the sidecar, and a reload reconnects clean', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-sidecar-grant', {
+    'refs.bib': ARROW,
+    'Paper.md': '---\ntitle: Paper\nbibliography: refs.bib\n---\n\nArrow [@arrow1951] started it.\n',
+  });
+  // A Finder launch: the file without its folder, then the folder granted.
+  await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await app.__fm.loadHandle(await dir.getFileHandle('Paper.md'));
+    (window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker = async () => dir;
+    await app.__fm.attachFolder();
+  }, dirName);
+  await expect(page.locator('#toast')).toContainText('bibliography read from refs.bib');
+
+  // The window's own record now carries the folder, so the reload reconnects
+  // with it and the bibliography read above is not a conflict.
+  await page.reload();
+  await page.waitForFunction(() => (window as unknown as SidecarApp).__fm?.handle?.name === 'Paper.md');
+  await expect(page.locator('#toast')).toContainText('Reconnected');
+  const after = await page.evaluate(() => {
+    const app = window as SidecarApp & { __fm: { hasConflict: boolean; dir: FileSystemDirectoryHandle | null } };
+    return {
+      conflict: app.__fm.hasConflict,
+      dirty: app.__fm.dirty,
+      folder: Boolean(app.__fm.dir),
+      bib: (app.view.state.doc.attrs.bib as { content: string } | null)?.content ?? null,
+    };
+  });
+  expect(after).toEqual({ conflict: false, dirty: false, folder: true, bib: expect.stringContaining('@book{arrow1951') });
+});
+
+test('a sidecar left unread stays pending across a reload, and the folder reads it', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-sidecar-pending', {
+    'refs.bib': ARROW,
+    'Paper.md': '---\ntitle: Paper\nbibliography: refs.bib\n---\n\nArrow [@arrow1951] started it.\n',
+  });
+  await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await app.__fm.loadHandle(await dir.getFileHandle('Paper.md'));
+  }, dirName);
+  await expect(page.locator('#toast')).toContainText('its bibliography is refs.bib');
+
+  await page.reload();
+  await page.waitForFunction(() => (window as unknown as SidecarApp).__fm?.handle?.name === 'Paper.md');
+  await expect(page.locator('#toast')).toContainText('its bibliography is refs.bib');
+  expect(await page.evaluate(() => (window as unknown as SidecarApp).__fm.pendingBibliography)).toBe('refs.bib');
+
+  const attached = await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    (window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker = async () => dir;
+    await app.__fm.attachFolder();
+    const { bib, frontmatter } = app.view.state.doc.attrs;
+    return { content: (bib as { content: string } | null)?.content ?? null, frontmatter, pending: app.__fm.pendingBibliography, dirty: app.__fm.dirty };
+  }, dirName);
+  expect(attached).toEqual({ content: expect.stringContaining('@book{arrow1951'), frontmatter: '', pending: null, dirty: false });
+  await expect(page.locator('#toast')).toContainText('bibliography read from refs.bib');
+});
+
+test('the open toast names a front-matter warning that a save loses something first', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const h = await root.getFileHandle('Authors.md', { create: true });
+    const w = await h.createWritable();
+    // The plass.foo warning (kept as written: nothing lost) comes first.
+    await w.write('---\nplass:\n  foo: 1\nauthor:\n  - name: Alice Smith\n    affiliation: Pitt\n  - name: Bob\n---\n\nBody.\n');
+    await w.close();
+    await (window as unknown as SidecarApp).__fm.loadHandle(h);
+  });
+  await expect(page.locator('#toast')).toContainText('front matter: 2 warnings — author: only the names are kept');
 });
