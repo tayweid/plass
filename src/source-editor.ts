@@ -42,6 +42,10 @@ export interface SourceEditor {
   caret(): number;
   /** Put the caret at a text offset and scroll it into view. */
   setCaret(offset: number): void;
+  /** A press on the sheet outside the text (paper-caret.ts): the caret at
+   *  the text nearest the point (taken into the text's box; below it, the
+   *  end of the text), or the selection extended to it, and the focus. */
+  pressAt(x: number, y: number, extend: boolean): void;
   focus(): void;
   destroy(): void;
 }
@@ -422,6 +426,18 @@ export function mountSourceEditor(host: HTMLElement, opts: SourceEditorOptions):
     setCaret(offset) {
       const pos = Math.max(0, Math.min(view.state.doc.length, offset));
       view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+    },
+    pressAt(x, y, extend) {
+      const box = view.contentDOM.getBoundingClientRect();
+      const { doc, selection } = view.state;
+      let head = doc.length;
+      if (y < box.bottom) {
+        const point = { x: Math.min(Math.max(x, box.left + 1), box.right - 1), y: Math.min(Math.max(y, box.top + 1), box.bottom - 1) };
+        head = view.posAtCoords(point) ?? (y < box.top ? 0 : doc.length);
+      }
+      const anchor = extend ? selection.main.anchor : head;
+      view.dispatch({ selection: EditorSelection.single(anchor, head), userEvent: 'select.pointer' });
+      view.focus();
     },
     focus: () => view.focus(),
     setFocusMode(on) {

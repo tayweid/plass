@@ -37,6 +37,7 @@ import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
 import { describeVerdict } from './environment-check';
 import { attachPaper, paperSheets } from './paper-scale';
 import { attachScrollRail, type ScrollRail } from './scroll-rail';
+import { attachPaperCaret } from './paper-caret';
 import { FROM_DISK, reloadTransaction } from './reload-in-place';
 
 const STORAGE_KEY = 'typeset-doc-v1';
@@ -396,6 +397,12 @@ const sourceView = createSourceView({
   },
   message: showMessage,
 });
+
+// A press on the paper outside the text (a margin, the blank sheet below
+// the last block, the frame under a short paper) puts the caret in the
+// text, in the page view and the plain-text view alike, and a press on the
+// bare frame keeps it (paper-caret.ts).
+attachPaperCaret(view, scrollEl, sourceView);
 
 let reportedFile: FileSystemFileHandle | null = null;
 /** This window's file as the shell knows it (its answer to `document`),
