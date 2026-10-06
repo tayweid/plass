@@ -24,11 +24,17 @@ install:
 npm audit --audit-level=moderate
 npm run verify:licenses
 npm test
+npm run test:parity
 npm run test:layout
 npm run test:browser
 npm run build
 npm run verify:production
 ```
+
+`npm run test:parity` is the pandoc content referee and needs pandoc 3.4
+(`$PANDOC`, `pandoc` on PATH, or Quarto's bundled binary). `npm test` runs
+the same suite but skips it when there is no pandoc; `test:parity` sets
+`PANDOC_REQUIRED=1`, which turns the skip into a failure.
 
 For a release or any change under `sidecar/`, also run the pinned Rust audit
 and native sidecar tests:
@@ -171,8 +177,9 @@ For each release, also confirm:
   lockfiles, and bundled font notices match the production dependency and
   asset tree;
 - the built preview passes document creation, open/save and external-conflict
-  handling, project-image reload, remote-image consent, Typst round-trip, PDF
-  export, refresh/session recovery, and supported-browser smoke tests;
+  handling, project-image reload, remote-image consent, Markdown round-trip
+  and Typst export, PDF export, refresh/session recovery, and
+  supported-browser smoke tests;
 - `npm run verify:production` passes after the final build, and the deployed
   HTTPS site is checked again for its CSP, compiler worker, startup, and PDF
   export; and

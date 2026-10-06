@@ -117,11 +117,12 @@ or every browser raster detail is identical.
 
 ## Typst on rails
 
-Plass is not a Typst editor. It is a writing surface whose documents happen to
-be plain Typst files, and it deliberately supports a fixed set of things
-rather than the whole language. That is what makes the fidelity contract
-above possible: the editor can only show live, exactly, what it can mirror,
-and arbitrary Typst can lay out in ways no browser surface can follow.
+Plass is not a Typst editor. It is a writing surface whose documents are
+plain Markdown files that Typst prints, and it deliberately supports a fixed
+set of things rather than the whole of Typst. That is what makes the
+fidelity contract above possible: the editor can only show live, exactly,
+what it can mirror, and arbitrary Typst can lay out in ways no browser
+surface can follow.
 Everything Plass supports therefore falls into one of three tiers, and the
 tier is always visible to the writer.
 
@@ -129,10 +130,12 @@ tier is always visible to the writer.
   tables, citations, and the document settings the toolbar exposes. These
   are edited directly in the page, laid out live by the local mirror, and
   verified by the compiler. What you see is what prints.
-- **Tolerated.** Typst that arrives in a file and that Plass does not
-  model is preserved verbatim as a raw island: a code block tagged in the
-  margin ("typst · not run"), never altered in the file, and printed by
-  Plass as the same code block — its source, never executed. It can be
+- **Tolerated.** Content that arrives in a file and that Plass does not
+  model (a `{=typst}` block, an HTML block, an unknown div, Typst in a
+  `.typ`) is preserved verbatim as a raw island: a code block tagged in the
+  margin ("typst · not run", "markdown · printed as code"), never altered
+  in the file, and printed by Plass as the same code block — its source,
+  never executed. It can be
   read, moved, or deleted. Page and print agree because both show the same
   block. This is how files survive round trips through other
   tools; it is not an authoring path.
@@ -145,8 +148,8 @@ One thing the page shows that the printer never does, on purpose:
 **editorial comments** (Comment, on the rail). A comment is a plain-text note
 between blocks, drawn as a full-width strip labeled "Comment · Not
 printed" so it can never be mistaken for the page. It lives in the working
-file (a `// plass:comment` frame in `.typ`, a `<!-- plass:comment -->`
-block in `.md`), it is omitted from the PDF and the TeX export, and it has
+file (in `.md` every HTML comment is one; in `.typ`, a `// plass:comment`
+frame), it is omitted from the PDF, the Typst and the TeX export, and it has
 no printed height: adding, editing, or deleting one moves no line break
 and no page start — the displayed sheet simply grows by the note's height.
 
@@ -157,7 +160,8 @@ and Typst export and checked by the audit. The source view is a second
 editor for the same rails: a plain-text surface in the spirit of iA Writer for simpler files, editing
 the same headings, lists, math, and notes as text. It does not admit
 constructs the page view cannot show. A document that needs more than the
-rails can always be finished in Typst itself, because the file is Typst.
+rails can always be finished in Typst itself: Export → Typst writes it as a
+plain Typst file.
 
 ## What works today
 
@@ -210,17 +214,17 @@ rails can always be finished in Typst itself, because the file is Typst.
   its first cell. Click an existing image to show its replacement and size
   controls. Typst's `#grid(columns:
   (2fr, 1fr), gutter: 1em, [...], [...])`, cells unbreakable, the grid
-  breaking between rows; a `.md` file carries it as a ```typst fence the
-  importer reads back. Cells are normalized to the paragraph's frame so a
-  table's top rule meets the paragraph's cap top, as Typst aligns them;
+  breaking between rows; a `.md` file carries it as one `::: columns` div
+  per row of `::: column` cells, later rows marked `.continued`. Cells
+  are normalized to the paragraph's frame so a table's top rule meets the paragraph's cap top, as Typst aligns them;
   the audit matches every cell's text block and the page starts.
 - **Solution blocks**: the Block control (plain / quote / solution) turns
   the selected paragraphs into a solution — red text with a red rule down
   the left, for problem-set answers. It is a preset on the quote rail:
   the same container, exported as a left-stroked Typst block, laid out and
   paginated exactly like a quote (a long solution splits across pages and
-  the rule stops at each page's last line, as in the PDF). Markdown keeps
-  it as a plain quote.
+  the rule stops at each page's last line, as in the PDF). Markdown writes
+  it as a `::: solution` div.
 - **Typora-style chrome**: a slim quiet bar — filename on the left, and on
   the right a row of small monochrome icon groups whose text labels appear on
   hover. The title/File controls own document lifecycle and recents; the
@@ -231,9 +235,11 @@ rails can always be finished in Typst itself, because the file is Typst.
   appear as transient toasts. Insert
   shortcuts: ⌘⌥T table, ⌘⌥I figure, ⌘⌥F footnote, ⌘M/⌘⇧M math.
 - **Math**: type `$e^{i\pi}+1=0$` for inline math, `$$` on an empty line for
-  display math. Formulas display **Typst's own ink** — each is compiled by
-  the in-app compiler (mitex + New Computer Modern Math) and shown from that
-  compiled result, baseline-aligned to the text; KaTeX provides the immediate
+  display math. Formulas display **Typst's own ink** — each is converted
+  to native Typst math by mitex's translator, which ships inside Plass
+  (`src/math-convert.ts`), compiled by the in-app compiler (New Computer
+  Modern Math) and shown from that compiled result, baseline-aligned to
+  the text; KaTeX provides the immediate
   editing preview and the compiled ink replaces it when ready. Click-to-edit
   popover with live preview. The port justifies
   around inline math using the Typst-exact atom width.
@@ -241,11 +247,12 @@ rails can always be finished in Typst itself, because the file is Typst.
   inline captions with a painted "Figure N:" prefix that renumbers live; a
   label chip on the figure (hover top-right) names it for `@label`
   references, which share the machinery with equation refs. Figures paginate
-  atomically (never split across pages). Exports as Typst
-  `#figure(image(...), caption: [...]) <label>`; image data (data: URLs) is
-  exported verbatim so our own files round-trip losslessly — swap in a real
-  image path when compiling with Typst. Project-relative images are watched
-  by lightweight metadata polling every four seconds and on window focus, so
+  atomically (never split across pages). Markdown writes
+  `![Caption](src){#fig:label width=60%}`; the Typst export writes
+  `#figure(image(...), caption: [...]) <label>`. An embedded image (a
+  `data:` URL) keeps the document one file; with the project folder open,
+  Export → Typst writes it to `figures/` (below). Project-relative
+  images are watched by lightweight metadata polling every four seconds and on window focus, so
   regenerating a plot on disk refreshes the editor without reopening it.
   **Click the image itself** to open Image controls:
   **Replace image** keeps its grid cell, surrounding text, caption, and
@@ -324,7 +331,8 @@ rails can always be finished in Typst itself, because the file is Typst.
   count, ⌘Enter to save, Download .bib to get it back out; saves are
   undoable) or loadable from a `.bib`
   file into the document — the BibTeX lives in a document attribute, so it
-  autosaves, participates in undo, and is embedded in the `.typ` export
+  autosaves, participates in undo, is saved in the `.md` as a
+  ```` ```{=bibtex} ```` block, and is embedded in the Typst export
   (`#bibliography(bytes(...), style: "ieee")`), keeping files fully
   self-contained. Cite with the same `@` picker (searchable by key, author,
   or title); citations render live in the document's **citation style**
@@ -352,11 +360,12 @@ rails can always be finished in Typst itself, because the file is Typst.
   clean. Exports as Typst `#set math.equation(numbering: "(1)")` +
   `<label>`/`@label`.
 - **Source view** (the `<>` button or ⌘/): the same document as its own
-  text, `.typ` or `.md`, in a quiet wide-margined sheet in the spirit of iA
-  Writer — a second editor for the same rails, not an escape hatch. The
-  caret and scroll position map across by block; the generated Typst
-  preamble is folded; Typst typed there is kept but never run (it comes
-  back as an island shown as code). Writing niceties: **Focus** (a toggle
+  text, Markdown (or Typst for a legacy `.typ`), in a quiet wide-margined
+  sheet in the spirit of iA Writer — a second editor for the same rails,
+  not an escape hatch. The caret and scroll position map across by block;
+  a `.typ`'s generated preamble is folded, a `.md`'s front matter stays in
+  view; Typst typed there is kept but never run (it comes back as an
+  island shown as code). Writing niceties: **Focus** (a toggle
   in the sheet's corner, ⌘⇧F) dims every paragraph but the one you are in,
   typewriter scrolling keeps your line in the middle of the screen, ⌘B/⌘I
   wrap the selection in the format's markup, and a format you last left
@@ -380,30 +389,42 @@ rails can always be finished in Typst itself, because the file is Typst.
   against Typst's), and
   **math macros** (define `\E = \mathbb{E}` once; live in every KaTeX
   render and expanded to plain LaTeX on export so files compile anywhere;
-  persisted via a `// typeset:math-macros` header directive). Settings are
-  document attributes — undoable, autosaved, applied live (the layout
-  re-measures and re-typesets), and exported as Typst `#set` rules. This is
-  the WYSIWYG face of a preamble.
-- **Real files** (File controls, ⌘O/⌘S): open and save `.typ` documents on
+  persisted as `plass: math-macros:` in a `.md`'s front matter, or a
+  `// typeset:math-macros` header directive in a `.typ`). Settings are
+  document attributes — undoable, autosaved (in a `.md`, as its YAML front
+  matter: pandoc's names where pandoc has one, the rest under `plass:`),
+  applied live (the layout re-measures and re-typesets), and exported as
+  Typst `#set` rules. This is the WYSIWYG face of a preamble.
+- **Formats**: a document is one `.md` file in Pandoc Markdown.
+  [`docs/MARKDOWN-FORMAT.md`](./docs/MARKDOWN-FORMAT.md) is the one-page
+  reference for writing one by hand, or having a model write one: YAML
+  front matter for the settings, `:::` divs for solutions, grids, aligned
+  paragraphs and table attributes, HTML comments as editorial comments,
+  `{=typst}` for Typst kept as code. It exports to PDF, Typst and LaTeX.
+- **Real files** (File controls, ⌘O/⌘S): open and save `.md` documents on
   disk via the File System Access API, with silent autosave to the open file,
   a dirty indicator, recent files (IndexedDB-persisted handles), and
   automatic reconnection to the last file when the browser still grants
-  access. Safari/Firefox fall back to upload/download. Opening runs the
-  importer (`typ-parser.ts`): full fidelity for our own output — the
-  export→import→export round trip is byte-identical (tested) — plus a
-  pragmatic subset of hand-written Typst (headings, marked-up paragraphs,
-  lists, quotes, fenced code, mitex math, labels/references, and the
-  settings header, which applies live). Anything else (`#let`, `#show`,
-  unknown directives) is preserved verbatim as a raw-Typst island and
-  re-exported unchanged — open + save never destroys what we don't model.
+  access. Safari/Firefox fall back to upload/download. A new document is
+  Markdown. Opening runs the reader (`md-parser.ts`), which reads a
+  hand-written file the way pandoc does (checked against pandoc itself,
+  `npm run test:parity`); the first save rewrites such a file once into
+  Plass's spelling of it (`docs/MARKDOWN-FORMAT.md` lists what changes),
+  and after that a save leaves it as it is. Anything Plass has no form
+  for is kept verbatim as an island — open + save never destroys what we
+  don't model. A legacy `.typ` still opens and saves as Typst
+  (`typ-parser.ts`: full fidelity for Plass's own output, a pragmatic
+  subset of hand-written Typst, anything else kept as a raw-Typst island)
+  until the course notes are converted; after that it will open as an
+  import into Markdown.
 - **One-click PDF export (Export flyout → PDF)**: the document compiles with
   the real Typst engine, as WASM, in a watchdog-protected Web Worker — no CLI,
   no install. The compiler (~28 MB) and bundled fonts in `public/fonts/` load
   lazily; those fonts retain the individual licenses documented in
-  [`public/fonts/README.md`](./public/fonts/README.md). Math uses only the
-  pinned mitex 0.2.7 archive: it is fetched from
-  the Typst registry when first needed, size-bounded, and SHA-256 verified;
-  imported documents cannot request arbitrary packages. Embedded images are
+  [`public/fonts/README.md`](./public/fonts/README.md). Math compiles as
+  native Typst, converted inside Plass, so the compiler needs no package:
+  it resolves none and makes no network request, and an imported document
+  cannot import one. Embedded images are
   decoded into the compiler's bounded virtual filesystem and the markup is
   rewritten to reference them, so figures compile properly. Equation refs
   export as `(#ref(<label>, supplement: none))` so the PDF shows "(1)"
@@ -411,15 +432,16 @@ rails can always be finished in Typst itself, because the file is Typst.
 - **Export**: `.md` (the document as Markdown, beside it; an `.md`
   already in the folder is replaced only if you say so) and `.typ`, the
   Typst source Plass compiles: kept-but-unrendered content prints as code,
-  editorial comments are left out, and math is wrapped with the same pinned
-  mitex 0.2.7. Exported with the project folder open, every embedded image
+  editorial comments are left out, and math is native Typst, so the file
+  imports no package and compiles with no network. Exported with the
+  project folder open, every embedded image
   is written to `figures/` beside the `.typ` and linked by path, so
   `typst compile document.typ` works from the CLI; each file is named after
   its content, so exporting again links the one already there. Exported
   without a folder, the images stay `data:` URLs, which the CLI cannot
   read, and the export says so. The `.typ` is for compiling and reading,
-  not editing: Export → Typst never overwrites the open document, asks
-  before replacing a `.typ` already in the folder unless it is still the
+  not editing or reopening: Export → Typst never overwrites the open
+  document, asks before replacing a `.typ` already in the folder unless it is still the
   one the last export wrote there, and neither export touches a file open
   in another Plass window. The export is exact on
   typst 0.14.2, the in-app compiler's release, compiled with Plass's own
@@ -468,7 +490,9 @@ Current architecture notes:
    The conservative suffix candidate runs only in development and the full
    result is always installed.
 3. **Math is LaTeX/KaTeX, not Typst syntax** — friendlier to most academics;
-   the `.typ` export bridges via mitex.
+   Plass converts each formula to native Typst math with mitex's
+   translator, bundled with the app (`src/math-convert.ts`), for the PDF,
+   the formula ink and the `.typ` export.
 
 ## Found & fixed while building (measurement-agreement war stories)
 

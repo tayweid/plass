@@ -58,6 +58,7 @@ every applicable item is complete on the exact commit being published.
    npm run verify:licenses
    npm run verify:sidecar
    npm test
+   npm run test:parity
    cargo test --locked --manifest-path sidecar/Cargo.toml
    npm run test:layout
    npx --no-install playwright install chromium firefox webkit
@@ -68,10 +69,13 @@ every applicable item is complete on the exact commit being published.
 
    The binary audit is expected to fail on the current upstream packages. Do
    not treat the sidecar's clean result as covering these precompiled modules.
+   `npm run test:parity` needs pandoc 3.4 (`$PANDOC`, `pandoc` on PATH, or
+   Quarto's); `npm test` skips the same suite without it unless
+   `PANDOC_REQUIRED=1`, which `test:parity` sets.
 
 4. Smoke-test a new document, open/save/autosave conflict handling, project
-   image reload, remote-image consent, Typst import/round-trip, PDF export,
-   and refresh/session recovery against the built preview.
+   image reload, remote-image consent, Markdown round-trip and Typst export,
+   PDF export, and refresh/session recovery against the built preview.
 5. Confirm `dist/LICENSE.txt`, `dist/THIRD_PARTY_NOTICES.txt`,
    `dist/SIDECAR_THIRD_PARTY_NOTICES.txt`,
    `dist/TYPST_WASM_THIRD_PARTY_NOTICES.txt`,

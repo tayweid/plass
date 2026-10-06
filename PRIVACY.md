@@ -20,17 +20,19 @@ your device.
 Plass does not upload document contents to an application backend. It can make
 these narrowly scoped requests:
 
-- If a document uses the supported mitex package for math, the compiler fetches
-  one pinned, integrity-checked package archive (mitex 0.2.7) from
-  `packages.typst.org`. The request sends no credentials or referrer. A `.typ`
-  you export names the same package; compiling it with the Typst command-line
-  tool makes that tool fetch it from the same registry, outside Plass.
 - A remote image remains blocked until you explicitly approve its displayed
   HTTPS origin for the current session. The request sends no credentials or
   referrer. The image host can still observe ordinary connection information,
   such as your IP address.
 - GitHub hosts the static application through GitHub Pages and may process
   ordinary web-server connection data under GitHub's own privacy terms.
+
+Math and Typst need no request. Plass converts math to native Typst itself,
+with a translator that ships with the app, and its compiler fetches no
+package. A `.typ` you export imports none either. A document saved in the
+older `.typ` format still names the mitex package so it reopens exactly;
+compiling that file with the Typst command-line tool makes that tool fetch
+it from `packages.typst.org`, outside Plass.
 
 Files you deliberately upload through the browser's file picker are read
 locally by Plass; they are not uploaded to a Plass server. Files you save or

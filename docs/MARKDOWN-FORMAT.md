@@ -15,9 +15,8 @@ To see how pandoc reads a file, run `pandoc -f markdown -t native paper.md`.
 In a Plass checkout, `node --import tsx scripts/pandoc-parity.ts paper.md`
 compares pandoc's reading with Plass's.
 
-Status: this page was written for step 5 of `docs/MARKDOWN-SOURCE-PLAN.md`,
-before the reader and writer it describes were built. Step 11 checks it
-against what was actually built.
+Status: checked on 2026-10-05 against the reader, the writer and the pandoc
+referee as built (step 11 of `docs/MARKDOWN-SOURCE-PLAN.md`).
 
 ## A short file
 
@@ -119,11 +118,15 @@ plass:
 - `front-matter: roman` gives the title block its own pages, numbered in
   roman numerals. The body starts on a new page, numbered from 1.
 - `bibliography:` is read once, and only when the document's folder is open
-  in Plass. When Plass saves, it copies the entries into a
-  ```` ```{=bibtex} ```` block (see References) and removes the key.
+  in Plass; until then a save keeps the line as it is. Once the file has
+  been read, the next save copies its entries into the
+  ```` ```{=bibtex} ```` block (see References) and removes the key. Of a
+  list of files, only the first is read, with a warning.
 - Plass keeps keys it does not know, and `#` comments, and writes them back
-  after its own keys. If a value is out of range, Plass changes it and
-  warns you when it opens the file.
+  after its own keys. YAML it does not read (an anchor or a tag before a
+  key, a `? key`) is kept as written, with a warning; a first line that
+  holds only a tag or an anchor (`!!map`, `&a`) stays first. If a value is
+  out of range, Plass changes it and warns you when it opens the file.
 
 ## Everything else at a glance
 
@@ -188,6 +191,9 @@ $$ {.unnumbered}
   exactly as written. Pandoc reads plain lines as one line, so if the file
   must also read correctly in pandoc or LaTeX, use the second form.
 - To reference an equation, write `@eq:price`.
+- Plass turns the LaTeX into native Typst math itself, with mitex's
+  translator, which is part of Plass. A formula it cannot convert is
+  outlined on the page, and the PDF and the Typst export stop and name it.
 
 ## Divs
 
@@ -195,7 +201,9 @@ A div is a block between a `:::` line that opens it and a `:::` line that
 closes it. Put a blank line before and after every `:::` line. A fence can
 have more than three colons: a closing fence closes the innermost open div
 whatever its length, so a longer fence on an outer div (`::::`) only makes
-the nesting easier to read.
+the nesting easier to read. A div with no closing fence runs to the end of
+what holds it (the document, or the quote or list item it opened in), as
+pandoc reads it; Plass warns, and its first save writes the closer.
 
 **Solution block.** Printed in red, with a red rule down the left side. It can hold
 any blocks: paragraphs, math, lists, columns, tables. `::: {.solution}`
@@ -374,7 +382,7 @@ Text with an icon ![arrow](figures/arrow.svg){width=4%} in it.
 - An image on its own line with alt text and a nonbreaking space (U+00A0)
   after it is a plain image that keeps its alt text, not a figure: that is
   pandoc's way to say so, and how Plass writes one. The space itself is not
-  kept.
+  kept, and a label on such an image is dropped, with a warning.
 - An image with text around it sits inline, in the text.
 - `width` is a percent of the text width, or of the cell's width.
 - `![Caption](src "title")` adds an optional title.
@@ -404,7 +412,16 @@ Two sources: [@smith2020; @jones2019].
 
 - An `@` key that starts with `eq:`, `fig:`, `sec:` or `tbl:` is a
   cross-reference to a label. Any other `@key`, bare or in brackets, is a
-  citation.
+  citation. A key ends before punctuation that no letter or digit follows:
+  `@eq:price.` refers to `eq:price`.
+- Brackets are a citation group when every `;`-separated part holds one
+  `@key`, with optional text before and after it: `[see @smith2020, p. 3;
+  @jones2019]`. That text stays beside the citation (Pitfall 13). Brackets
+  that do not fit are text, and an `@key` inside them is still a citation.
+- Plass writes a citation as `[@key]`, a run of adjacent citations and
+  references as one group, and a lone reference bare (`@eq:price`). A
+  reference to a label without one of the four prefixes (possible in an
+  older `.typ`) is saved with a warning and reads back as a citation.
 - The references list prints where the ```` ```{=bibtex} ```` block is. In
   Plass, the bibliography's Edit panel has **Import .bib…** and
   **Download .bib**. A `bibliography:` key in the front matter is read
@@ -512,12 +529,26 @@ content.
     and escapes them when it saves (`a\)`, `\|`, `\:`), so pandoc then
     reads text too. Write the list with `1.` markers if it should stay a
     list.
+20. Put a blank line between paragraph text and a list, a quote or a
+    table under it. Plass, like CommonMark, starts the block on the next
+    line; pandoc reads those lines as more of the paragraph. The first save
+    writes the blank line.
+21. Write a solution as `::: solution`, not `<div class="solution">`:
+    pandoc reads both as the solution, but Plass keeps the HTML form as
+    source and prints it as code.
+22. Write a horizontal rule as `---`. A line of only underscores is a rule
+    to pandoc and a fill-in blank to Plass. Likewise `- [ ]` is a task box
+    to pandoc and text to Plass.
+23. Write a raw LaTeX block as ```` ```{=latex} ````, not
+    ```` ```{=tex} ````, which pandoc reads differently. Either one, and any
+    raw block but `{=typst}` and `{=bibtex}`, is a code listing to Plass.
 
 ## What the first save rewrites
 
 Plass rewrites a hand-written file once, the first time it saves it, and
-after that leaves it as it is. Nothing is lost silently: what Plass cannot
-keep, it drops with a warning (see Pitfalls 10, 11 and 15).
+after that leaves it as it is. What Plass cannot keep, it drops with a
+warning (see Pitfalls 10, 11 and 15), with one known exception: a link on
+an image or a formula (`[$x$](url)`) is dropped without one.
 
 - **Typography, as Typst prints it.** Straight quotes become curly quotes.
   `--`, `---` and `...` become –, — and …. A hyphen after a space and before
@@ -534,16 +565,19 @@ keep, it drops with a warning (see Pitfalls 10, 11 and 15).
   become inline links. A footnote or link definition that nothing uses is
   dropped, with a warning.
 - **Blocks.** A blank line is added around every `:::` line and every
-  comment. `\pagebreak` becomes `\newpage`. `::: {.solution}` becomes
-  `::: solution`. A `: Caption` line moves into the table div's `caption=`.
+  comment, and between paragraph text and a list, quote or table under it.
+  A div left open gets its closing `:::`. `\pagebreak` becomes `\newpage`.
+  `::: {.solution}` becomes `::: solution`. A `: Caption` line moves into
+  the table div's `caption=`.
   Each grid row is its own `.columns` div, and every row after the first
   carries `.continued`. Column widths are written as percents (to three
   decimals, or more where three would read back as other widths), or left
   out when the columns are equal.
 - **Front matter.** Keys are written in the order shown above, with unknown
-  keys after them. Default values are dropped. An `author` list becomes one
-  string. `bibliography:` becomes an embedded ```` ```{=bibtex} ```` block.
-  Quoting may change.
+  keys after them (a first line of only a tag or an anchor stays first).
+  Default values are dropped. An `author` list becomes one string.
+  `bibliography:` becomes an embedded ```` ```{=bibtex} ```` block once its
+  file has been read. Quoting may change.
 - **Comments.** A `-->` inside a comment becomes `--&gt;`. The old
   `plass:comment` form becomes a plain comment. Comments inside blocks move
   out of them.
@@ -560,8 +594,10 @@ keep, it drops with a warning (see Pitfalls 10, 11 and 15).
 
 **Export → Typst (.typ)** writes the same Typst source that Plass compiles.
 Kept-but-unrendered content prints as code, and comments are left out. Use
-the `.typ` to compile or to read, not to edit: edit the `.md`. If you open
-the `.typ` in Plass again, its kept content shows up as plain code listings.
+the `.typ` to compile or to read, not to edit or reopen: edit the `.md`.
+Plass does not read the export back faithfully: its math is Typst, which
+Plass would take for LaTeX, and its kept content shows up as plain code
+listings.
 
 - **The export is exact on typst 0.14.2**, the Typst inside Plass (the
   same line breaks and the same page breaks), when it is compiled with
@@ -586,10 +622,9 @@ the `.typ` in Plass again, its kept content shows up as plain code listings.
 - The export also compiles on typst 0.15.x. But Typst 0.15 changed how it
   lays out some math (`\underbrace`, `\mathcal`, binomials), so a few
   formulas can come out slightly different there.
-- For now, math compiles through the mitex 0.2.7 package. The typst
-  command-line tool downloads it from the Typst package registry the first
-  time you compile, which needs a network connection. A later step will
-  write plain Typst math instead.
+- Math is written as native Typst math, with the few definitions it needs
+  at the top of the file. The `.typ` imports no package, so it compiles
+  with no network connection.
 - If the project folder is open, embedded images are written to `figures/`
   next to the export and linked by path. If it is not, the images stay as
   data URLs, and the `.typ` will not compile outside Plass.

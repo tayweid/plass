@@ -15,10 +15,31 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
 2. **Markdown fidelity, exit criterion.** `scripts/md-corpus.ts` reports the
    course-notes folder byte-identical except for the decided normalizations
    (smart quotes, one-time reflow of hard-wrapped paragraphs, list
-   re-indents, loose lists written with their blank lines), and
+   re-indents, loose lists written with their blank lines);
+   `node --import tsx scripts/pandoc-parity.ts` on the course folder
+   reports no divergence from pandoc beyond the accepted ones
+   (`npm run test:parity` holds the fixtures to the same); and
    `MD_FILE=… npx playwright test tests/md-comments.spec.ts` passes on a
    sample through the live editor.
-3. **Small open items** (each a short session):
+3. **Markdown follow-ups.** On 2026-10-05 the referee found 34 of 470
+   econ-0100 notes diverging from pandoc. Each item is a decision first,
+   then a reader fix:
+   - Fancy list markers (`a.`, `i.`) are lists to pandoc and text to Plass
+     (decided, pitfall 19 in `docs/MARKDOWN-FORMAT.md`; reported by design).
+   - A list, quote or table directly after paragraph text interrupts the
+     paragraph in CommonMark (Plass) but not in pandoc.
+   - A line of only underscores is a rule to pandoc, a fill-in blank to
+     Plass.
+   - Four emphasis edge cases (`*…(*$R$*)…*`, `*~~*1*~~*`, `**P*=4**`,
+     `*… L * w*`) and task-list boxes (`[ ]`, ☐ to pandoc).
+   - A hand-written `H~2~O` or `x^2^` gets no import warning.
+   - A link on an image or a formula is dropped silently.
+4. **The rest of the Markdown plan** (`docs/MARKDOWN-SOURCE-PLAN.md`):
+   step 12, the course conversion (Taylor's, outside the repo); step 13,
+   `.typ` import-only (required, after 12); step 14, comments in place
+   instead of hoisted; step 16, citation supplements; step 17, unresolved
+   references printed as text.
+5. **Small open items** (each a short session):
    - Multi-paragraph footnotes flatten to one paragraph.
    - A `.typ` save has no home for the Markdown-only carry (frontmatter
      extras) and drops it silently.

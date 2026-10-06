@@ -15,18 +15,14 @@ version, as the official release binary), markdown-it 15.0.2 (the reader
 Plass uses) and Plass's own `mdToDoc`/`docToTyp`. Every pandoc, markdown-it
 and mitex claim below was run, not asserted.
 
-Status: a plan. Nothing in it is implemented. Phase 2 implements it with
-worktree-isolated subagents, one per step, each adversarially reviewed
-before merge, with the merge gate below green after every merge. Commit
-locally only; never push; no attribution lines in commits.
-
-Repo state to repair first (a review agent ran a merge simulation in the
-real checkout): `main` carries one stray commit `140086c` that appends a
-nonexistent `src/md-divs.test.ts` to the `npm test` chain (so `npm test`
-is red at HEAD), and four empty branches exist. Taylor runs
-`git reset --hard b8148de` (the two untracked docs survive) and
-`git branch -D step-md-divs step-md-frontmatter step-md-skeleton
-step-md-tables`. Nothing was pushed; identity and config are intact.
+Status (2026-10-05): implemented through step 11 — the pre-step, steps
+0–10, step 15 (native-Typst math, no package) and step 11 (these docs) are
+merged on local `main`, each built in a worktree-isolated subagent and
+reviewed before merge. Remaining: step 12 (course conversion, Taylor's), step
+13 (`.typ` import-only, required after 12), and the optional steps 14
+(comments in place), 16 (citation supplements) and 17 (unresolved
+references). Commit locally only; never push; no attribution lines in
+commits.
 
 ## The decision, restated
 

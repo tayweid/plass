@@ -2,9 +2,8 @@
 
 Plass is a client-side document editor. Opened documents, bibliography data,
 and project files are untrusted input. They stay in the browser unless the
-user explicitly approves a remote image origin or the isolated compiler needs
-the pinned mitex package described below. There is no analytics or application
-backend.
+user explicitly approves a remote image origin. The compiler fetches no Typst
+package (below). There is no analytics or application backend.
 
 ## Enforced boundaries
 
@@ -19,12 +18,18 @@ backend.
   one validated HTTPS origin for the current session; redirects, credentials,
   private/literal addresses, referrers, oversized responses, and active SVG
   content are rejected.
-- Typst package resolution is not a general network capability. Only
-  `@preview/mitex:0.2.7` is recognized (the previous pin, 0.2.5, is now as
-  unknown as any other package). Its exact archive is fetched from the
-  pinned `packages.typst.org` URL with no credentials or referrer, bounded to
-  512 KiB, and checked against the SHA-256 digest in `src/typst-config.ts`
-  before the compiler can read it. Other package names cause no request.
+- The compiler resolves no Typst package. Its registry returns nothing, so
+  every `#import "@preview/…"` fails to resolve and no request is made.
+  Nothing Plass compiles needs one: math prints as native Typst, converted
+  on the main thread by mitex 0.2.7's translator (`src/math-convert.ts`),
+  which ships with the app as `src/mitex/mitex.wasm` (Apache-2.0, listed in
+  `THIRD_PARTY_NOTICES.md` and the generated `THIRD_PARTY_NOTICES.txt`)
+  and is checked against its SHA-256 digest on
+  every load. A formula whose converted form would not stay inside its
+  equation (a backtick, a comment opener, an open string, an unbalanced
+  delimiter) is refused by name. Raw Typst in a document is printed as
+  code, never run. Only the legacy `.typ` save still writes the mitex
+  import, so that file reopens exactly; Plass never fetches it.
 - File writes are revision-ordered and compare against the exact on-disk
   baseline. External conflicts stop autosave instead of overwriting either
   copy, and dirty navigation requires an explicit decision.

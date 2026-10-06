@@ -45,9 +45,9 @@ either serializer, or a code editor dependency.
    transaction (a single undo step, per the roadmap). No live two-view sync:
    syncing would need a position map in both directions on every keystroke,
    and iA-style use is "write here for a while", not "watch both".
-2. **The text is the file's format.** A `.typ` document shows Typst markup,
-   a `.md` document shows Markdown. An unsaved document shows Typst (the
-   native format). No third "source dialect".
+2. **The text is the file's format.** A `.md` document shows Markdown, a
+   `.typ` document shows Typst markup. An unsaved document shows Markdown
+   (the default format since 2026-10-05). No third "source dialect".
 3. **Saving in source mode writes exactly the typed text.** `FileHooks`
    gains `getText?: () => string | null`; `serialize()` prefers it when it
    returns a string. Nothing the writer typed is re-normalized until they
