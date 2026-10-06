@@ -100,41 +100,42 @@ interface Active {
   stackHeight: string;
   /** Islands the document had on entry, so the exit toast counts only
    *  what the source round trip produced. */
-  islands: { blocks: number; inline: number; hidden: number };
+  islands: IslandCount;
 }
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
-/** Islands in a document: raw-Typst blocks and inline spans, and raw
- *  Markdown blocks — content the page keeps verbatim and shows as code,
- *  never run. */
-function countIslands(doc: PMNode): { blocks: number; inline: number; hidden: number } {
-  let blocks = 0;
-  let inline = 0;
-  let hidden = 0;
+/** Islands in a document, by kind — content the page keeps verbatim and
+ *  shows as code, never run: raw-Typst blocks and inline spans (a .typ's
+ *  unknown Typst, a Markdown {=typst} block or span), and raw Markdown
+ *  blocks (an HTML block, an unknown div) and inline HTML spans. */
+type IslandCount = { blocks: number; inline: number; mdBlocks: number; html: number };
+
+function countIslands(doc: PMNode): IslandCount {
+  const count: IslandCount = { blocks: 0, inline: 0, mdBlocks: 0, html: 0 };
   doc.descendants((n) => {
-    if (n.type.name === 'code_block' && n.attrs.params === 'typst-raw') blocks++;
-    else if (n.type.name === 'typst_inline') inline++;
-    else if (n.type.name === 'code_block' && n.attrs.params === 'md-raw') hidden++;
+    if (n.type.name === 'code_block' && n.attrs.params === 'typst-raw') count.blocks++;
+    else if (n.type.name === 'code_block' && n.attrs.params === 'md-raw') count.mdBlocks++;
+    else if (n.type.name === 'typst_inline') count[n.attrs.lang === 'html' ? 'html' : 'inline']++;
     return true;
   });
-  return { blocks, inline, hidden };
+  return count;
 }
 
-/** The toast for islands the source round trip produced (decision 8). */
-function islandNotice(
-  before: { blocks: number; inline: number; hidden: number },
-  after: { blocks: number; inline: number; hidden: number },
-): string | null {
-  const blocks = Math.max(0, after.blocks - before.blocks);
-  const inline = Math.max(0, after.inline - before.inline);
-  const hidden = Math.max(0, after.hidden - before.hidden);
+const counted = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
+
+/** The toast for islands the source round trip produced (decision 8),
+ *  each kind in the words of its chrome: raw Typst is not run (the margin
+ *  tag "typst · not run"), raw Markdown is printed as code ("markdown ·
+ *  printed as code"; inline HTML's own title). */
+function islandNotice(before: IslandCount, after: IslandCount): string | null {
+  const more = (key: keyof IslandCount) => Math.max(0, after[key] - before[key]);
+  const typst = [more('blocks') ? counted(more('blocks'), 'block') : '', more('inline') ? counted(more('inline'), 'inline span') : ''].filter(Boolean);
+  const md = [more('mdBlocks') ? counted(more('mdBlocks'), 'Markdown block') : '', more('html') ? counted(more('html'), 'inline HTML span') : ''].filter(Boolean);
   const parts: string[] = [];
-  if (blocks) parts.push(`${blocks} block${blocks === 1 ? '' : 's'}`);
-  if (inline) parts.push(`${inline} inline span${inline === 1 ? '' : 's'}`);
-  const typst = parts.length ? `${parts.join(' and ')} kept as Typst source, not run` : '';
-  const md = hidden ? `${hidden} Markdown block${hidden === 1 ? '' : 's'} kept as source` : '';
-  return [typst, md].filter(Boolean).join('; ') || null;
+  if (typst.length) parts.push(`${typst.join(' and ')} kept as Typst source, not run`);
+  if (md.length) parts.push(`${md.join(' and ')} kept as source, printed as code`);
+  return parts.join('; ') || null;
 }
 
 /** Which top-level block a caret in the typed text sits in (decision 5).

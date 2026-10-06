@@ -1,14 +1,19 @@
 // Inline raw Typst: `#h(1fr)`, `#box(width: 2in, line(length: 100%))`, or
-// any other Typst expression mid-sentence, from a .typ file or typed in the
-// source view. An island: the node stores the source, the file keeps it
-// verbatim, and the page shows it as inline code — which is also how it
-// prints (`#raw(...)` in the compile). It never runs: Plass renders only
-// its rails, and page and print show the same thing.
+// any other Typst expression mid-sentence, from a .typ file, a Markdown
+// `` `…`{=typst} `` span, or typed in the source view — and, in a .md file,
+// inline HTML that is not a comment (`lang: 'html'`). An island: the node
+// stores the source, the file keeps it verbatim, and the page shows it as
+// inline code — which is also how it prints (`#raw(...)` in the compile).
+// It never runs: Plass renders only its rails, and page and print show the
+// same thing.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { NodeSelection } from 'prosemirror-state';
 import type { EditorView, NodeView } from 'prosemirror-view';
 import { schema } from './schema';
+
+/** What the island is, by its `lang`: the words its chrome uses. */
+const islandName = (node: PMNode) => (node.attrs.lang === 'html' ? 'Inline HTML' : 'Raw Typst');
 
 export class TypstInlineView implements NodeView {
   dom: HTMLElement;
@@ -21,7 +26,6 @@ export class TypstInlineView implements NodeView {
     this.dom = document.createElement('span');
     this.dom.className = 'ts-inline-raw';
     this.dom.contentEditable = 'false';
-    this.dom.title = 'Raw Typst — kept in the file, shown as code, never run. Click to edit.';
     this.dom.addEventListener('mousedown', (e) => {
       e.preventDefault();
       const pos = this.getPos();
@@ -42,6 +46,7 @@ export class TypstInlineView implements NodeView {
 
   private render() {
     this.dom.textContent = this.node.attrs.src as string;
+    this.dom.title = `${islandName(this.node)} — kept, shown as code, never run. Click to edit.`;
   }
 
   stopEvent() {
@@ -63,10 +68,11 @@ export function openInlineRawEditor(view: EditorView, pos: number) {
   const panel = document.createElement('div');
   panel.className = 'math-editor inline-raw-editor';
   panel.innerHTML = `
-    <textarea class="math-editor-input" rows="2" spellcheck="false"
-      placeholder="#h(1fr)  ·  #box(width: 2in, line(length: 100%))"></textarea>
-    <div class="math-editor-hint">Raw Typst — kept, shown as code, never run · <kbd>Enter</kbd> save · <kbd>Esc</kbd> cancel · <kbd>⌫</kbd> on empty removes</div>`;
+    <textarea class="math-editor-input" rows="2" spellcheck="false"></textarea>
+    <div class="math-editor-hint"><span class="inline-raw-what"></span> — kept, shown as code, never run · <kbd>Enter</kbd> save · <kbd>Esc</kbd> cancel · <kbd>⌫</kbd> on empty removes</div>`;
   const input = panel.querySelector('.math-editor-input') as HTMLTextAreaElement;
+  (panel.querySelector('.inline-raw-what') as HTMLElement).textContent = islandName(node);
+  input.placeholder = node.attrs.lang === 'html' ? '<span class="note">…</span>' : '#h(1fr)  ·  #box(width: 2in, line(length: 100%))';
   input.value = node.attrs.src as string;
 
   const coords = view.coordsAtPos(pos);
@@ -89,7 +95,9 @@ export function openInlineRawEditor(view: EditorView, pos: number) {
       return close();
     }
     if (src !== cur.attrs.src) {
-      view.dispatch(view.state.tr.setNodeMarkup(at, undefined, { src }));
+      // The island stays what it was (its `lang`): an edit of inline HTML is
+      // still inline HTML.
+      view.dispatch(view.state.tr.setNodeMarkup(at, undefined, { ...cur.attrs, src }));
     }
     close();
   };

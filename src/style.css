@@ -1691,9 +1691,10 @@ body {
   border-radius: 2px;
 }
 
-/* Islands — raw Typst from a .typ file or the source view, raw Markdown
-   (HTML blocks, editorial comments) from a .md file — are code blocks with
-   a tag in the margin. They print as the same code block, never run. */
+/* Islands — raw Typst from a .typ file, a {=typst} block or the source
+   view; raw Markdown (an HTML block, an unknown div) from a .md file — are
+   code blocks with a tag in the margin. They print as the same code block,
+   never run. The tag is out of flow: no block height depends on it. */
 .ProseMirror pre[data-params='typst-raw'],
 .ProseMirror pre[data-params='md-raw'] {
   position: relative;
@@ -1719,7 +1720,11 @@ body {
 }
 
 .ProseMirror pre[data-params='md-raw']::before {
-  content: 'markdown';
+  content: 'markdown ·\A printed as code';
+  /* Two lines, so the tag is no wider than the margin it sits in. */
+  white-space: pre;
+  text-align: right;
+  line-height: 1.35;
 }
 
 .ProseMirror pre code {

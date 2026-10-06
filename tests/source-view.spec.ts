@@ -394,6 +394,29 @@ test('an off-rails #let typed in the source returns as one raw island, announced
   await expect(toast).toHaveText('');
 });
 
+test('raw Markdown typed in the source returns as islands, announced in Markdown words', async ({ page }) => {
+  await boot(page);
+  await openSeeded(page, 'Notes.md', '# Notes\n\nBody.\n');
+  await enter(page);
+  await page.evaluate(() => {
+    const sv = window.__sourceView;
+    sv.setText(sv.text()!.trimEnd() + '\n\n::: aside\nA note.\n:::\n\nPress <kbd>K</kbd>.\n');
+  });
+  const toast = page.locator('#toast');
+  await exit(page);
+  await expect(toast).toHaveText('1 Markdown block and 2 inline HTML spans kept as source, printed as code');
+  const islands = await page.evaluate(() => {
+    const kinds: string[] = [];
+    window.view.state.doc.descendants((node) => {
+      if (node.type.name === 'code_block' && node.attrs.params === 'md-raw') kinds.push('md-raw');
+      if (node.type.name === 'typst_inline') kinds.push(`inline ${node.attrs.lang}`);
+      return true;
+    });
+    return kinds;
+  });
+  expect(islands).toEqual(['md-raw', 'inline html', 'inline html']);
+});
+
 test('a format last left in the source view opens in the source view', async ({ page }) => {
   await page.goto('/?new=1');
   await page.waitForFunction(() => !!window.__sourceView);

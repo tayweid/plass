@@ -1260,4 +1260,8 @@ test('an opened .md file counts what it keeps as source, in Markdown words', asy
   }, dirName);
   await expect(page.locator('#toast')).toContainText('Islands.md — 2 block(s) and 2 inline span(s) kept as source');
   await expect(page.locator('#toast')).not.toContainText('raw Typst');
+  // The chrome says what each island is.
+  await expect(page.locator('.ProseMirror .ts-inline-raw').first()).toHaveAttribute('title', /^Inline HTML — kept, shown as code, never run/);
+  const tag = await page.evaluate(() => getComputedStyle(document.querySelector('.ProseMirror pre[data-params="md-raw"]')!, '::before').content);
+  expect(tag).toContain('printed as code');
 });
