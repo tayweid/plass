@@ -316,11 +316,22 @@ FIXTURES.push({
       text: TYP_HEAD('paper: "us-letter", margin: 1.25in, numbering: "1", number-align: center') + body(typNote, (t, l) => '='.repeat(l) + ' ' + t, '#pagebreak()', (t) => `#footnote[${t}]`),
     },
     {
+      // The page break is Markdown's `\newpage`. It used to be a ```typst
+      // fence, which has always reopened as an island, so this twin never
+      // exercised the seam after an explicit break; now it does.
       name: 'comments.md',
-      text: body(mdNote, (t, l) => '#'.repeat(l) + ' ' + t, '```typst\n#pagebreak()\n```', (t) => `^[${t}]`),
+      text: body(mdNote, (t, l) => '#'.repeat(l) + ' ' + t, '\\newpage', (t) => `^[${t}]`),
     },
   );
 }
+
+// The Markdown source's rails together in a course-style solutions file
+// long enough to paginate (the step-4 fixture the referee also reads):
+// front matter with plass: keys, a solution holding a two-column grid with
+// a data-URL image, labeled and unnumbered equations, a table with math in
+// a .table div, comments at the top level and nested, a page break, a
+// {=typst} block, a {=bibtex} fence, footnotes, a strike and a {++ ++} mark.
+FIXTURES.push({ name: 'guide.md', text: readFileSync(new URL('./fixtures/md/guide.md', import.meta.url), 'utf8') });
 
 FIXTURES.push({
   name: 'table-bare.md',

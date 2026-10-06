@@ -134,10 +134,10 @@
 // Known limitation: an HTML `<div class="solution">` (or any rail class)
 // is the same `Div` in pandoc's JSON as `::: solution` (`native_divs`), so
 // it reduces as the rail, while Plass (markdown-it) reads it as an
-// `md-raw` island. The referee reports that divergence and the format
-// cannot heal it from pandoc's side: an accepted-divergence candidate for
-// step 10 and a MARKDOWN-FORMAT.md pitfall ("write `:::`, not
-// `<div class>`"). The course corpus has no classed `<div>`.
+// `md-raw` island. The referee reports that divergence; it is not one of
+// the ACCEPTED_DIVERGENCES (below), since the file heals it by writing
+// `:::`, not `<div class>`. No fixture and no course file has a classed
+// `<div>`.
 //
 // Known limitation, same cause (pandoc's AST is identical for two
 // sources): a ```` ```{=tex} ```` fence is the bare LaTeX paragraph it
@@ -302,8 +302,8 @@ function joinFlats(flats: Flat[]): Flat {
 }
 
 /** The first difference between two skeletons, or -1 when they agree.
- *  `ignore` names fields left out of the comparison (the referee's
- *  accepted divergences, such as `mode`). */
+ *  `ignore` names fields left out of the comparison (an accepted
+ *  divergence compares a pair of records without its field, `mode`). */
 export function firstDivergence(a: SkeletonRecord[], b: SkeletonRecord[], ignore: Array<keyof SkeletonRecord> = []): number {
   const key = (r: SkeletonRecord | undefined) => {
     if (!r) return '';
@@ -314,6 +314,73 @@ export function firstDivergence(a: SkeletonRecord[], b: SkeletonRecord[], ignore
   const n = Math.max(a.length, b.length);
   for (let i = 0; i < n; i++) if (key(a[i]) !== key(b[i])) return i;
   return -1;
+}
+
+// ------------------------------------------------------------- the referee
+
+/** A difference the referee accepts: the two readers disagree about what
+ *  the same text means, and no spelling of the file can make them agree.
+ *  Each entry says why. The list is short on purpose, and md-parity.test.ts
+ *  fails on an entry no fixture needs, so a healed divergence leaves it. */
+interface AcceptedDivergence {
+  id: string;
+  why: string;
+  /** This pair of records, at the same index, differs only in this way. */
+  accepts(plass: SkeletonRecord, pandoc: SkeletonRecord): boolean;
+}
+
+export const ACCEPTED_DIVERGENCES: readonly AcceptedDivergence[] = [
+  {
+    id: 'citation mode',
+    why:
+      "pandoc's citation mode: it reads a bare `@key` as an author-in-text citation and `[-@key]` as one that " +
+      'suppresses the author. Plass has one citation form, the bracketed one, and no way to hold either mode, ' +
+      'so a citation reads as the same key in the same place with a mode only pandoc has. The text, the key ' +
+      'and the order are still compared (a `-` stays text beside the citation).',
+    accepts: (plass, pandoc) =>
+      firstDivergence([plass], [pandoc], ['mode']) < 0 &&
+      (plass.mode?.length ?? 0) === (pandoc.mode?.length ?? 0) &&
+      (plass.mode ?? []).every((m, i) => m === 'normal' || m === pandoc.mode?.[i]),
+  },
+];
+
+/** The referee's verdict on one file: the first divergence no accepted
+ *  entry covers (-1 when there is none), and the accepted ones before it. */
+interface RefereeVerdict {
+  at: number;
+  accepted: Array<{ at: number; id: string }>;
+}
+
+/** Compare Plass's skeleton of a file with pandoc's, record by record,
+ *  setting aside the accepted divergences. */
+export function refereeCompare(plass: SkeletonRecord[], pandoc: SkeletonRecord[]): RefereeVerdict {
+  const accepted: RefereeVerdict['accepted'] = [];
+  for (let from = 0; ; ) {
+    const j = firstDivergence(plass.slice(from), pandoc.slice(from));
+    if (j < 0) return { at: -1, accepted };
+    const at = from + j;
+    const rule = plass[at] && pandoc[at] ? ACCEPTED_DIVERGENCES.find((r) => r.accepts(plass[at], pandoc[at])) : undefined;
+    if (!rule) return { at, accepted };
+    accepted.push({ at, id: rule.id });
+    from = at + 1;
+  }
+}
+
+/** Both skeletons around record `at`, Plass's and pandoc's record on
+ *  alternate lines, the diverging pair marked with `>`. A line longer than
+ *  `width` is cut. */
+export function showDivergence(plass: SkeletonRecord[], pandoc: SkeletonRecord[], at: number, context = 2, width = Infinity): string {
+  const line = (mark: string, side: string, i: number, r: SkeletonRecord | undefined) => {
+    const s = `${mark} ${side} ${i}: ${r ? JSON.stringify(r) : '(none)'}`;
+    return s.length > width ? s.slice(0, width - 1) + '…' : s;
+  };
+  const out: string[] = [];
+  const last = Math.min(at + context, Math.max(plass.length, pandoc.length) - 1);
+  for (let i = Math.max(0, at - context); i <= last; i++) {
+    const mark = i === at ? '>' : ' ';
+    out.push(line(mark, 'plass ', i, plass[i]), line(mark, 'pandoc', i, pandoc[i]));
+  }
+  return out.join('\n');
 }
 
 // ------------------------------------------------------- ProseMirror side
