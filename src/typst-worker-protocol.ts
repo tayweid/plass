@@ -21,7 +21,7 @@ export const COMPILER_LIMITS = {
 
 /** A task's deadline runs only while Typst works on it: it guards against
  * source that makes synchronous WASM run away. Loading the compiler (a 28 MB
- * wasm download on a slow connection, fonts, the pinned package) is
+ * wasm download on a slow connection, fonts) is
  * document-independent I/O, bounded separately by `loadMs`. */
 export const COMPILER_DEADLINES = {
   loadMs: 180_000,
@@ -52,7 +52,7 @@ export interface CompilerRequest {
 export type CompilerResponse =
   | { id: number; ok: true; value: string | Uint8Array | unknown[] | null }
   // `unavailable`: the compiler could not be loaded (network, fonts, the
-  // package, the wasm). Says nothing about the document.
+  // wasm). Says nothing about the document.
   | { id: number; ok: false; code: 'invalid' | 'compile' | 'output-limit' | 'unavailable'; message: string }
   // A cold worker loads before it runs: the client suspends the task's
   // deadline at `loading` and starts it at `running`.

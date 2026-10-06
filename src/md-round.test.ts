@@ -15,6 +15,10 @@ import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings } from './setting
 import { schema } from './schema';
 import { docSkeleton, firstDivergence, pandocSkeleton, type PandocDoc } from './md-skeleton';
 import * as F from './typ-fixtures';
+import { ensureMathConverter } from './math-convert';
+
+// The print form (`islands: 'print'`) converts math to native Typst.
+await ensureMathConverter();
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = '') {

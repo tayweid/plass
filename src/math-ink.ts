@@ -1,19 +1,21 @@
 // Typst math ink: formulas rendered by the same compiler that makes the PDF.
 //
 // KaTeX renders instantly while typing (the optimistic echo); this module
-// compiles each formula through the in-app Typst (via mitex, with the same
-// bundled NewCM Math fonts) and hands the node view the exact ink the PDF
-// will show, plus its baseline geometry so inline math sits on the text
-// baseline. Results are cached by (source, display, size, macros); node
-// views re-render and the typesetter re-runs when ink arrives, so line
-// justification uses Typst-exact atom widths.
+// compiles each formula through the in-app Typst (as the native Typst math
+// the PDF prints — math-convert.ts — with the same bundled NewCM Math
+// fonts) and hands the node view the exact ink the PDF will show, plus its
+// baseline geometry so inline math sits on the text baseline. Results are
+// cached by (source, display, size, macros); node views re-render and the
+// typesetter re-runs when ink arrives, so line justification uses
+// Typst-exact atom widths.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { parseMathMacros, type DocSettings } from './settings';
 import { expandMacrosWith } from './typ-serializer';
 import { wrapAligned } from './math-src';
 import { compilerCircuitEpoch, onCompilerCircuitReset } from './compiler-circuit';
-import { MITEX_IMPORT } from './typst-config';
+import { convertMath, displayEquation, ensureMathConverter, inlineEquation, MathConvertError } from './math-convert';
+import { mathPrelude } from './typst-math-prelude';
 
 export interface MathInk {
   svg: string;
@@ -173,10 +175,17 @@ async function flush() {
     const { COMPILER_DEADLINES } = await import('./typst-worker-protocol');
     const run = <T extends string | unknown[] | null>(task: Parameters<typeof runCompilerTask>[0]) =>
       runCompilerTask<T>(task, { timeoutMs: COMPILER_DEADLINES.previewMs });
+    // The converter loads once; a load that fails says nothing about any
+    // formula, so the batch is deferred (below) and asked for again later.
+    const converter = await ensureMathConverter().then(
+      () => null,
+      (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+    );
     let compiled = false;
     for (const item of batch) {
       const epoch = compilerCircuitEpoch();
       try {
+        if (converter) throw converter;
         const ink = await compileOne(item, run);
         setEntry(item.key, ink ?? 'failed');
         compiled = true;
@@ -225,32 +234,70 @@ async function flush() {
   for (const fn of listeners) fn();
 }
 
-/** Compile one formula. Resolves null when Typst rejects the formula (or
- * its ink is unusable); throws when the compiler could not run it. */
-async function compileOne(
-  item: { src: string; display: boolean; sizePt: number; macros: string; bold: boolean },
-  run: <T extends string | unknown[] | null>(task: { kind: 'svg'; source: string } | { kind: 'query'; source: string; selector: string }) => Promise<T>,
-): Promise<MathInk | null> {
+interface InkItem {
+  src: string;
+  display: boolean;
+  sizePt: number;
+  macros: string;
+  bold: boolean;
+}
+
+/**
+ * The Typst source a formula's ink compiles from (see inkTypst). Display
+ * math gets the LaTeX the export converts: the source, wrapped and
+ * expanded, between two newlines. Null for an empty formula; throws
+ * MathConvertError for one the converter rejects.
+ */
+function inkSource(item: InkItem): string | null {
   const latex = expandMacrosWith(item.display ? wrapAligned(item.src) : item.src, parseMathMacros(item.macros));
   if (!latex.trim()) return null;
+  return inkTypst(item.display ? '\n' + latex + '\n' : latex, item.display, item.sizePt, item.bold);
+}
+
+/**
+ * One formula's ink compile: the prelude its math names and the equation
+ * as the print has it, on an auto-sized page at the document's size.
+ * `latex` is exactly what the converter is given.
+ */
+export function inkTypst(latex: string, display: boolean, sizePt: number, bold: boolean): string {
+  const typ = convertMath(latex);
   // Display equations hug the page tightly with no instrumentation (a
   // trailing probe would start a phantom paragraph below the ink). Inline
   // math needs the baseline probe; #box() anchors it in the flow.
-  // One code-mode expression for both the ink and its measurement. (A
-  // content block `strong[mi(...)]` would be markup: it measured the
-  // literal text "mi(a)", 29pt for a 6.6pt formula.)
-  const expr = item.bold ? `strong(mi(\`${latex}\`))` : `mi(\`${latex}\`)`;
-  const src =
+  // One code-mode expression for both the ink and its measurement, so the
+  // width measured is the width of the ink drawn.
+  const eq = display ? displayEquation(typ) : inlineEquation(typ);
+  const expr = bold ? `strong(${eq})` : eq;
+  return (
     `#set page(width: auto, height: auto, margin: 0pt)\n` +
-    `#set text(size: ${item.sizePt}pt)\n` +
-    MITEX_IMPORT + '\n\n' +
-    (item.display
-      ? `#mitex(\`\n${latex}\n\`)\n`
-      : `#${expr}` +
+    `#set text(size: ${sizePt}pt)\n` +
+    mathPrelude([typ]) +
+    '\n' +
+    (display
+      ? `${eq}\n`
+      : `#(${expr})` +
         // The baseline, and the formula's exact advance: an auto-sized page
         // rounds to whole points (68.8pt came back as a 69pt page), and the
         // port needs the width Typst measures in the flow.
-        `#context metadata((pos: here().position(), width: measure(${expr}).width));#box()\n`);
+        `#context metadata((pos: here().position(), width: measure(${expr}).width));#box()\n`)
+  );
+}
+
+/** Compile one formula. Resolves null when Typst (or the converter)
+ * rejects the formula, or its ink is unusable; throws when the compiler
+ * could not run it. */
+async function compileOne(
+  item: InkItem,
+  run: <T extends string | unknown[] | null>(task: { kind: 'svg'; source: string } | { kind: 'query'; source: string; selector: string }) => Promise<T>,
+): Promise<MathInk | null> {
+  let src: string | null;
+  try {
+    src = inkSource(item);
+  } catch (error) {
+    if (error instanceof MathConvertError) return null;
+    throw error;
+  }
+  if (!src) return null;
 
   const svg = await compileVerdict<string>(run({ kind: 'svg', source: src }));
   if (!svg) return null;

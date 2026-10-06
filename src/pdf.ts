@@ -1,13 +1,16 @@
 // In-app PDF export: compile the document with Typst (WASM) in the browser.
 //
 // Untrusted Typst evaluation runs in a dedicated worker with input/output
-// budgets and a main-thread watchdog. The compiler, bundled fonts, and mitex
-// package load lazily there and are cached until the worker is idle or must be
-// terminated. Embedded images are decoded into its virtual filesystem and
-// markup is rewritten to reference them, so figures compile properly.
+// budgets and a main-thread watchdog. The compiler and bundled fonts load
+// lazily there and are cached until the worker is idle or must be
+// terminated; it resolves no package. Math reaches it as native Typst,
+// converted on this thread (math-convert.ts) before the source is built.
+// Embedded images are decoded into its virtual filesystem and markup is
+// rewritten to reference them, so figures compile properly.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { docToTyp } from './typ-serializer';
+import { ensureMathConverter } from './math-convert';
 import { loadRemoteImage, remoteImageStatus, sanitizeSvgImage } from './remote-images';
 import { FONT_FALLBACK } from './typst-config';
 import { runCompilerTask } from './typst-worker-client';
@@ -248,6 +251,7 @@ export function compileDocSvg(doc: PMNode, onMsg: (m: string) => void = () => {}
   return (async () => {
     try {
       const { map, assets } = await prepareAssets(doc);
+      await ensureMathConverter();
       const source = docToTyp(doc, { resolveImage: (s) => map.get(s) ?? s, fontFallback: FONT_FALLBACK, islands: 'print' });
       return await runCompilerTask<string>(
         { kind: 'document-svg', source, assets },
@@ -298,6 +302,9 @@ export async function exportPdf(
   try {
     onMsg('Preparing document…');
     const { map, assets, missing, blockedRemote } = await prepareAssets(doc);
+    // With the converter loaded, docToTyp throws for a formula it rejects,
+    // naming the formula, and the export reports that instead of printing.
+    await ensureMathConverter();
     const src = docToTyp(doc, {
       resolveImage: (s) => map.get(s) ?? s,
       fontFallback: FONT_FALLBACK,
