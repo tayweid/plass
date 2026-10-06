@@ -638,7 +638,7 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
 
   const hint = document.createElement('div');
   hint.className = 'settings-hint';
-  hint.textContent = 'Applied live and to the .typ export. Undo works.';
+  hint.textContent = 'Applied live and saved with the document — a .md keeps them in its front matter. Undo works.';
   panel.appendChild(hint);
 
   document.body.appendChild(panel);
