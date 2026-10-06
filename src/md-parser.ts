@@ -56,7 +56,8 @@ import { createQuoteState, smartenInline, smartenText } from './smart-quotes';
 import { readAttrBlock, type PandocAttrs } from './md-attrs';
 import { fencedDivs, type DivMeta } from './md-divs';
 import { captionFromLine, delimiterAlign, readPipeTable } from './md-tables';
-import { bibliographyEntry, readFrontmatter, type FrontmatterRead, type TextKey } from './md-frontmatter';
+import { bibliographyEntry, readFrontmatter, withoutEntry, type FrontmatterRead, type TextKey } from './md-frontmatter';
+import { parseBibTeX } from './bibtex';
 
 export interface MdImport {
   doc: PMNode;
@@ -66,9 +67,10 @@ export interface MdImport {
    *  not know …), also in `warnings`: the open toast words them as
    *  warnings, not as blocks kept as source. */
   frontmatterWarnings: string[];
-  /** `bibliography:` in the front matter, when the document embeds no
-   *  bibliography of its own: a .bib path beside the document, which the
-   *  FileManager reads once it has the folder. */
+  /** `bibliography:` in the front matter: a .bib path beside the
+   *  document, which the FileManager reads once it has the folder
+   *  (withSidecarBib), into the bibliography the document embeds if it
+   *  embeds one. */
   bibliography?: string;
 }
 
@@ -981,6 +983,8 @@ interface BodyRead {
   moved: PMNode[];
   bib: { name: string; content: string } | null;
   warnings: string[];
+  /** What reading the front matter's text raised (front-matter warnings). */
+  frontWarnings: string[];
 }
 
 /** The blocks the roman front matter runs over: block 0, then any of these
@@ -1021,17 +1025,13 @@ export function mdToDoc(src: string): MdImport {
     blocks.splice(at, 0, schema.nodes.numbering_restart.create());
   }
   // `bibliography:` names a sidecar the FileManager reads once, with the
-  // folder; until then its line rides in the carried front matter, so a
-  // save keeps it. An embedded bibliography is the document's own.
+  // folder (withSidecarBib), into the bibliography the document embeds, if
+  // it embeds one; until then its line rides in the carried front matter,
+  // so a save keeps it.
   let frontmatter = fm?.extra ?? '';
-  let bibliography: string | undefined;
-  if (fm?.bibliography !== undefined) {
-    if (read.bib) fmWarnings.push(`bibliography: ${fm.bibliography} is not read — the document embeds its bibliography in a {=bibtex} block, and a save drops the key`);
-    else {
-      bibliography = fm.bibliography;
-      frontmatter = [frontmatter, bibliographyEntry(bibliography)].filter(Boolean).join('\n');
-    }
-  }
+  const bibliography = fm?.bibliography;
+  if (bibliography !== undefined) frontmatter = [frontmatter, bibliographyEntry(fm!.bibliographyFiles ?? [bibliography])].filter(Boolean).join('\n');
+  fmWarnings.push(...read.frontWarnings);
   const doc = schema.nodes.doc.create({ settings, bib: read.bib, frontmatter }, blocks);
   return {
     doc,
@@ -1039,6 +1039,54 @@ export function mdToDoc(src: string): MdImport {
     frontmatterWarnings: fmWarnings,
     ...(bibliography !== undefined ? { bibliography } : {}),
   };
+}
+
+type Bib = { name: string; content: string };
+
+/** A `bibliography:` sidecar's text put in the bibliography `bib` (the
+ *  document's own, or none): the whole of it when there is none; else
+ *  what of it the document lacks, appended — an entry whose key it holds
+ *  stays as it holds it (`kept` counts those). Named as a {=bibtex}
+ *  block's bibliography is, so a save and a reopen give it back as it is. */
+export function mergeSidecarBib(bib: Bib | null, sidecar: string): { bib: Bib; kept: number } {
+  const own = bib?.content.trim() ?? '';
+  if (!own) return { bib: { name: 'references.bib', content: sidecar.trim() }, kept: 0 };
+  const have = new Set(parseBibTeX(own).map((e) => e.key));
+  let add = sidecar;
+  let kept = 0;
+  for (const e of parseBibTeX(sidecar)) {
+    const at = have.has(e.key) ? add.indexOf(e.raw) : -1;
+    if (at < 0) continue;
+    // The entry and the blank lines after it.
+    const end = at + e.raw.length;
+    add = add.slice(0, at) + add.slice(end).replace(/^\s+/, '');
+    kept++;
+  }
+  add = add.trim();
+  return { bib: { name: bib!.name, content: add ? `${own}\n\n${add}` : own }, kept };
+}
+
+/** The document a Markdown file's `bibliography:` sidecar makes once it is
+ *  read: its entries in the bibliography (mergeSidecarBib), the carried
+ *  `bibliography:` line out of the front matter, and a bibliography block
+ *  at the end when there is none — where pandoc prints the references,
+ *  and where a save's {=bibtex} block reads back from. */
+export function withSidecarBib(doc: PMNode, sidecar: string): { doc: PMNode; kept: number } {
+  const { bib, kept } = mergeSidecarBib(doc.attrs.bib as Bib | null, sidecar);
+  const frontmatter = withoutEntry(String(doc.attrs.frontmatter ?? ''), 'bibliography');
+  let content = doc.content;
+  if (!hasBibliography(doc)) content = content.addToEnd(schema.nodes.bibliography.create());
+  return { doc: doc.type.create({ ...doc.attrs, bib, frontmatter }, content), kept };
+}
+
+/** Whether a document has its bibliography block. */
+function hasBibliography(doc: PMNode): boolean {
+  let found = false;
+  doc.descendants((n) => {
+    found ||= n.type === schema.nodes.bibliography;
+    return !found;
+  });
+  return found;
 }
 
 /** Title, author, date or abstract text as the reader reads it in a front
@@ -1052,7 +1100,11 @@ export function readFrontText(key: TextKey, text: string): PMNode | null {
 /** `sizePt`: the document's font size (a grid gutter in points is read in
  *  em at it). */
 function readMarkdown(src: string, skipped: number, fields: FrontText | null, sizePt: number): BodyRead {
-  const warnings: string[] = [];
+  const bodyWarnings: string[] = [];
+  const frontWarnings: string[] = [];
+  /** Where a warning goes: the body's, or the front matter text's while
+   *  that is read. */
+  let warnings = bodyWarnings;
 
   // Warnings raised while reading content that ends up an island are not
   // the user's concern: the island keeps that content verbatim.
@@ -2456,6 +2508,7 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
   const front: PMNode[] = [];
   const moved: PMNode[] = [];
   if (fields) {
+    warnings = frontWarnings;
     const fieldTokens = (name: string, text: string): MdToken[] => {
       const scanned = prepass(text, warn, true);
       if (scanned.store.some((s) => s.k === 'display')) warn(`${name}: display math there is read as inline math — it holds text, not display formulas`);
@@ -2470,8 +2523,12 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
       H = { seen: false, before: [], after: [] };
       topParagraph = false;
       inlineLines = [0, 0];
+      const was = hoisted;
       const nodes = finishInline(inlineItems(fieldTokens(name, text.replace(/^[ \t\n]+/, '').replace(/(?<!\\)[ \t\n]+$/, '')), false));
       moved.push(...H.before, ...H.after);
+      // Said of the front matter, not counted with the body's.
+      if (hoisted > was) warn(`${name}: ${hoisted - was} comment(s) there moved out, after the front matter — kept, unprinted`);
+      hoisted = was;
       return nodes;
     };
     if (fields.title !== null) front.push(schema.nodes.doc_title.create(null, field('title', fields.title)));
@@ -2488,6 +2545,7 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
       }
       front.push(schema.nodes.abstract.create(null, paras.length ? paras : [paragraph.create()]));
     }
+    warnings = bodyWarnings;
   }
 
   if (hoisted) warnings.push(`${hoisted} comment(s) moved out of nested blocks — each is kept, unprinted, beside the block it was in`);
@@ -2558,6 +2616,8 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
       const defLines = new Set<number>();
       for (const d of linkDefs) for (let l = origLine[d.map[0]]; l < (origLine[d.map[1]] ?? lines.length); l++) defLines.add(l);
       const used = new Set(lines.flatMap((l, n) => (defLines.has(n) ? [] : labelsIn(l))));
+      // A link in the title, author, date or abstract uses one too.
+      for (const text of fields ? [fields.title, fields.author, fields.date, fields.abstract] : []) for (const label of text ? labelsIn(text) : []) used.add(label);
       for (const d of linkDefs) {
         const from = origLine[d.map[0]];
         const to = origLine[d.map[1]] ?? lines.length;
@@ -2589,7 +2649,7 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
     if (carried.size) body = body.map(rebuild);
   }
 
-  return { body, front, moved, bib, warnings };
+  return { body, front, moved, bib, warnings: bodyWarnings, frontWarnings };
 }
 
 /** A chunk of an abstract that opens a block other than a paragraph (as

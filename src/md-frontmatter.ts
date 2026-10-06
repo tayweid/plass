@@ -67,12 +67,6 @@ export interface FrontmatterFields {
    *  it was, instead of the value. Such an entry for a key not listed here
    *  was edited (or its block deleted): it is dropped, silently. */
   asWritten?: readonly TextKey[];
-  /** A `bibliography:` entry kept in `extra` (bibliographyEntry): 'write'
-   *  while the document holds no bibliography of its own — written back,
-   *  so a save before the sidecar is read loses nothing; 'drop' once it
-   *  does — dropped, silently (the bibliography is written in the body).
-   *  Absent: dropped with a warning. */
-  keptBibliography?: 'write' | 'drop';
 }
 
 export interface FrontmatterRead {
@@ -82,8 +76,12 @@ export interface FrontmatterRead {
   abstractMd: string | null;
   /** Only the settings the YAML sets, each valid (an invalid one is warned and left out). */
   settings: Partial<DocSettings>;
-  /** `bibliography:` — a sidecar path to read once; never written back. */
+  /** `bibliography:` — a sidecar path to read once (the Markdown reader
+   *  carries the line in `extra` until it is: bibliographyEntry). */
   bibliography?: string;
+  /** Every file `bibliography:` names, the first one (`bibliography`)
+   *  included: pandoc reads them all, Plass the first. */
+  bibliographyFiles?: string[];
   frontMatterRestart: boolean;
   extra: string;
   warnings: string[];
@@ -1467,8 +1465,13 @@ function readTop(key: string, n: YNode, out: FrontmatterRead, acc: Acc): void {
       const files = n.t === 'seq' ? n.items : [n];
       const first = files[0] ? text(files[0]) : null;
       if (!first) throw new Invalid('expected a file path');
-      if (files.length > 1) acc.warn(`bibliography: only the first file (${clip(scalar(first))}) is read`);
+      const all = files.map(text).filter((f): f is string => !!f);
+      if (files.length > 1) {
+        const others = all.slice(1).map((f) => clip(scalar(f))).join(', ') || 'the others';
+        acc.warn(`bibliography: only the first file (${clip(scalar(first))}) is read — once it is, a save embeds its entries and drops the line, ${others} with it (until then a save keeps every file)`);
+      }
       out.bibliography = first;
+      out.bibliographyFiles = all;
       return;
     }
     case 'linestretch':
@@ -1717,8 +1720,9 @@ function leadingRun(items: Item[], lines: string[], indent: number): { count: nu
  *  writes is dropped (with a warning); so is a `---`/`...` line, which
  *  would end the block. `bibliography:` is never written: the
  *  bibliography is embedded in the body — but a `bibliography:` entry
- *  kept in `extra` is, while the document holds no bibliography of its own
- *  (`fm.keptBibliography`). A text key's entry `extra` keeps as written is
+ *  kept in `extra` is, like any kept line: the Markdown reader carries one
+ *  while its sidecar is unread, and takes it out once it reads it
+ *  (md-parser's withSidecarBib). A text key's entry `extra` keeps as written is
  *  written in the key's place when the document has not edited it
  *  (`fm.asWritten`), and dropped otherwise. */
 export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => void = () => {}): string {
@@ -1891,11 +1895,6 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
       warn(`front matter: the document's ${clip(key)} replaces the one kept from the file`);
       return;
     }
-    if (key === 'bibliography') {
-      if (fm.keptBibliography === 'write') return keep(into, raw);
-      if (fm.keptBibliography !== 'drop') warn('front matter: bibliography: is not written — the bibliography is embedded in the document');
-      return;
-    }
     if (key === 'plass' && plass.length) {
       warn("front matter: the document's plass settings replace the plass entry kept from the file");
       return;
@@ -1951,10 +1950,11 @@ function keptTextEntries(extra: string): Map<TextKey, string[]> {
 }
 
 /** The `bibliography:` entry the Markdown reader keeps in
- *  doc.attrs.frontmatter while the document's bibliography is a sidecar it
- *  has not read (writeFrontmatter's `keptBibliography: 'write'`). */
-export function bibliographyEntry(path: string): string {
-  return `bibliography: ${scalar(path)}`;
+ *  doc.attrs.frontmatter while the sidecar it names is unread: every file
+ *  the file named, so a save before the read keeps them all. */
+export function bibliographyEntry(files: readonly string[]): string {
+  if (files.length === 1) return `bibliography: ${scalar(files[0])}`;
+  return ['bibliography:', ...files.map((f) => `  - ${scalar(f)}`)].join('\n');
 }
 
 /** A kept `extra` without its top-level entries for `key` (the blank lines

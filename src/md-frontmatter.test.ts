@@ -462,7 +462,9 @@ console.log('the plan’s example:');
   check('a bibliography list reads its first file, with a warning', list.bibliography === 'a.bib' && list.warnings.length === 1);
   const bibWarnings: string[] = [];
   const fromExtra = writeFrontmatter({ extra: 'bibliography: refs.bib\nfoo: 1' }, (m) => bibWarnings.push(m));
-  check('a bibliography: carried in extra is not written either', fromExtra === '---\nfoo: 1\n---' && bibWarnings.length === 1, fromExtra);
+  // The Markdown reader's carry while the sidecar is unread: its read takes
+  // the line out (md-parser's withSidecarBib), never the writer.
+  check('a bibliography: carried in extra is written back, as it was', fromExtra === '---\nbibliography: refs.bib\nfoo: 1\n---' && !bibWarnings.length, fromExtra);
 }
 
 // --- 11. finding the block ---
@@ -698,11 +700,15 @@ console.log('lines that are not YAML:');
 // --- 16d. the bibliography entry kept while the sidecar is unread ---
 console.log('a kept bibliography entry:');
 {
-  check('bibliographyEntry quotes what needs it', bibliographyEntry('refs.bib') === 'bibliography: refs.bib' && bibliographyEntry('my refs: 2026.bib') === "bibliography: 'my refs: 2026.bib'");
+  check('bibliographyEntry quotes what needs it', bibliographyEntry(['refs.bib']) === 'bibliography: refs.bib' && bibliographyEntry(['my refs: 2026.bib']) === "bibliography: 'my refs: 2026.bib'");
+  check('… and names every file', bibliographyEntry(['a.bib', 'b.bib']) === 'bibliography:\n  - a.bib\n  - b.bib');
   const extra = 'foo: 1\nbibliography: refs.bib';
   const said: string[] = [];
-  check('written while the document has no bibliography', writeFrontmatter({ extra, keptBibliography: 'write' }, (m) => said.push(m)) === '---\nfoo: 1\nbibliography: refs.bib\n---' && !said.length);
-  check('dropped silently once it has one', writeFrontmatter({ extra, keptBibliography: 'drop' }, (m) => said.push(m)) === '---\nfoo: 1\n---' && !said.length, json(said));
+  check('a kept entry is written back, silently', writeFrontmatter({ extra }, (m) => said.push(m)) === '---\nfoo: 1\nbibliography: refs.bib\n---' && !said.length, json(said));
+  const two = readFrontmatter('---\nbibliography:\n  - a.bib\n  - b.bib\n---\n');
+  check('every file of a list is read, the first one first', two.bibliography === 'a.bib' && json(two.bibliographyFiles) === '["a.bib","b.bib"]');
+  check('… and the warning says a read drops the others', two.warnings.some((w) => /only the first file \(a\.bib\) is read — once it is, a save embeds its entries and drops the line, b\.bib with it/.test(w)), json(two.warnings));
+  check('… and that a read re-reads as the same list', json(readFrontmatter(`---\n${bibliographyEntry(two.bibliographyFiles!)}\n---\n`).bibliographyFiles) === '["a.bib","b.bib"]');
   check('withoutEntry takes an entry out', withoutEntry('a: 1\n\nbibliography: refs.bib\n\n# c\nb: |\n  x\n\n  y', 'bibliography') === 'a: 1\n\n# c\nb: |\n  x\n\n  y');
   check('… and leaves no blank line at an end', withoutEntry('bibliography: refs.bib\n\na: 1', 'bibliography') === 'a: 1' && withoutEntry('bibliography: x', 'bibliography') === '');
 }

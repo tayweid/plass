@@ -6,7 +6,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import MarkdownIt from 'markdown-it';
 import type { Node as PMNode } from 'prosemirror-model';
-import { mdToDoc, SENTINEL_CHAR } from './md-parser';
+import { mdToDoc, mergeSidecarBib, SENTINEL_CHAR, withSidecarBib } from './md-parser';
 import { docToMd } from './md-serializer';
 import { docToTyp } from './typ-serializer';
 import { typToDoc } from './typ-parser';
@@ -1606,6 +1606,24 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('a list in the abstract is kept as its text, with a warning', list.doc.firstChild!.textContent === '- one - two' && list.warnings.some((w) => /abstract: a list there is read as paragraph text/.test(w)) && list.converges, list.md1);
   const comment = trip('---\ntitle: A <!-- check the name --> B\n---\n\nBody.\n');
   check('a comment in the title moves out after the front matter, unprinted', JSON.stringify(kinds(comment.doc)) === '["doc_title","editor_comment","paragraph"]' && comment.doc.firstChild!.textContent === 'A B' && comment.converges, JSON.stringify(kinds(comment.doc)) + comment.md1);
+  // What reading the front matter's text says is said of the front matter
+  // (the open toast words those as warnings, not as blocks kept as source).
+  const said = (src: string) => mdToDoc(src);
+  const shown = [display, said('---\nabstract: |\n  - one\n  - two\n---\n\nB.\n'), said('---\ntitle: A <!-- check the name --> B\n---\n\nBody.\n')];
+  check(
+    'display math, a list in the abstract and a comment in the title are front-matter warnings',
+    shown.every((r) => r.warnings.length === 1 && r.frontmatterWarnings.length === 1 && r.frontmatterWarnings[0] === r.warnings[0]) && /^title: 1 comment\(s\) there moved out, after the front matter/.test(shown[2].frontmatterWarnings[0]),
+    JSON.stringify(shown.map((r) => [r.warnings, r.frontmatterWarnings])),
+  );
+  const bodyComment = said('---\ntitle: T\n---\n\n> Quote <!-- c --> here.\n');
+  check('… while a comment moved out of the body is the body\'s', bodyComment.frontmatterWarnings.length === 0 && bodyComment.warnings.some((w) => /moved out of nested blocks/.test(w)), JSON.stringify(bodyComment.warnings));
+  const titleLink = trip('---\ntitle: "[link][ref]"\n---\n\nx\n\n[ref]: http://example.com\n');
+  check(
+    'a link definition only the title uses is used: written into the link, with no "used nowhere" warning',
+    !!find(titleLink.doc.firstChild!, (n) => n.marks.some((m) => m.type.name === 'link' && m.attrs.href === 'http://example.com')) && !titleLink.warnings.length && titleLink.md1 === "---\ntitle: '[link](http://example.com)'\n---\n\nx\n",
+    JSON.stringify(titleLink.warnings) + titleLink.md1,
+  );
+  check('… one nothing uses still is', said('---\ntitle: T\n---\n\nx\n\n[ref]: http://example.com\n').warnings.some((w) => /\[ref\]: defined but used nowhere/.test(w)));
   const empty = trip("---\ntitle: ''\n---\n\nBody.\n");
   check('an empty title is an empty title block, and back', empty.doc.firstChild!.type.name === 'doc_title' && empty.doc.firstChild!.childCount === 0 && empty.md1 === "---\ntitle: ''\n---\n\nBody.\n", empty.md1);
 
@@ -1636,19 +1654,44 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
 
 // The bibliography: an embedded {=bibtex} block is the document's own; a
 // `bibliography:` path is returned for the FileManager to read once, and its
-// line rides along until the document holds a bibliography — a save before
-// then keeps it, one after drops it (the block is written instead).
+// line rides along until it is — a save before then keeps it, whatever
+// bibliography the document holds meanwhile. The read (withSidecarBib)
+// puts the entries in, the line out, and a bibliography block at the end
+// when there is none, so the page prints the references and Typst finds
+// the keys.
 {
   const b = mdToDoc('---\nbibliography: refs.bib\n---\n\nSee [@k].\n');
   check('bibliography: is returned, and carried', b.bibliography === 'refs.bib' && !b.doc.attrs.bib && b.doc.attrs.frontmatter === 'bibliography: refs.bib' && !b.warnings.length, JSON.stringify([b.bibliography, b.doc.attrs.frontmatter, b.warnings]));
   const said: string[] = [];
   const before = docToMd(b.doc, (w) => said.push(w));
   check('… a save with no bibliography loaded keeps the line', before === '---\nbibliography: refs.bib\n---\n\nSee [@k].\n' && !said.length, before + JSON.stringify(said));
-  const loaded = b.doc.type.create({ ...b.doc.attrs, bib: { name: 'refs.bib', content: '@book{k, title={T}}' } }, b.doc.content);
+  const loaded = withSidecarBib(b.doc, '@book{k, title={T}}\n').doc;
+  check('… the read adds a bibliography block at the end, and takes the line out', JSON.stringify(kinds(loaded)) === '["paragraph","bibliography"]' && loaded.attrs.frontmatter === '' && (loaded.attrs.bib as { content: string }).content === '@book{k, title={T}}', JSON.stringify([kinds(loaded), loaded.attrs]));
+  check('… so Typst gets the bibliography the citation needs', /#bibliography\(bytes\("@book\{k, title=\{T\}\}"\)/.test(docToTyp(loaded)), docToTyp(loaded));
   const after = docToMd(loaded, (w) => said.push(w));
-  check('… one with it loaded writes the {=bibtex} block and drops the key, silently', after === 'See [@k].\n\n```{=bibtex}\n@book{k, title={T}}\n```\n' && !said.length, after + JSON.stringify(said));
-  const both = mdToDoc('---\nbibliography: refs.bib\n---\n\nSee [@k].\n\n```{=bibtex}\n@book{k, title={T}}\n```\n');
-  check('beside an embedded bibliography, bibliography: is not read, and a save drops it', both.bibliography === undefined && both.frontmatterWarnings.some((w) => /refs\.bib is not read/.test(w)) && !/bibliography:/.test(docToMd(both.doc)), JSON.stringify(both.frontmatterWarnings));
+  check('… a save writes the {=bibtex} block where it prints, and no key, silently', after === 'See [@k].\n\n```{=bibtex}\n@book{k, title={T}}\n```\n' && !said.length, after + JSON.stringify(said));
+  check('… and reads back as the document it was (a source-view trip is the identity)', mdToDoc(after).doc.eq(loaded), JSON.stringify(mdToDoc(after).doc.toJSON()));
+  const placed = withSidecarBib(mdToDoc('---\nbibliography: refs.bib\n---\n\nSee [@k].\n\n```{=bibtex}\n```\n\nAfter.\n').doc, '@book{k, title={T}}');
+  check('… a bibliography block the document has stays where it is', JSON.stringify(kinds(placed.doc)) === '["paragraph","bibliography","paragraph"]', JSON.stringify(kinds(placed.doc)));
+
+  // Entries arriving another way while the sidecar is unread (merge-on-cite,
+  // the Bibliography panel) do not take the line with them: the read merges.
+  const cited = b.doc.type.create({ ...b.doc.attrs, bib: { name: 'references.bib', content: '@book{own, title={O}}' } }, b.doc.content.addToEnd(schema.nodes.bibliography.create()));
+  const kept = docToMd(cited);
+  check('a save keeps the line while the sidecar is unread, beside the document\'s own entries', kept.startsWith('---\nbibliography: refs.bib\n---\n') && kept.includes('```{=bibtex}\n@book{own, title={O}}\n```'), kept);
+  const both = mdToDoc(kept);
+  check('… and reopens with both: the path returned, its line carried, nothing warned', both.bibliography === 'refs.bib' && both.doc.attrs.frontmatter === 'bibliography: refs.bib' && (both.doc.attrs.bib as { content: string }).content === '@book{own, title={O}}' && !both.warnings.length, JSON.stringify([both.bibliography, both.doc.attrs, both.warnings]));
+  const merged = withSidecarBib(both.doc, '@string{p = "P"}\n\n@book{own, title={Theirs}}\n\n@book{k, title={T}}');
+  const mergedBib = (merged.doc.attrs.bib as { content: string }).content;
+  check(
+    '… the read merges: entries the document lacks are added, one it holds stays as it holds it',
+    mergedBib === '@book{own, title={O}}\n\n@string{p = "P"}\n\n@book{k, title={T}}' && merged.kept === 1 && merged.doc.attrs.frontmatter === '' && JSON.stringify(kinds(merged.doc)) === '["paragraph","bibliography"]',
+    JSON.stringify([mergedBib, merged.kept, kinds(merged.doc)]),
+  );
+  check('a sidecar read into no bibliography is the whole sidecar', mergeSidecarBib(null, ' @book{a, title={A}}\n').bib.content === '@book{a, title={A}}' && mergeSidecarBib({ name: 'x.bib', content: '' }, '@book{a, title={A}}').bib.name === 'references.bib');
+
+  const many = mdToDoc('---\nbibliography:\n  - a.bib\n  - b.bib\ntitle: T\n---\n\nSee [@k].\n');
+  check('a list of files: the first is read, the line keeps every file', many.bibliography === 'a.bib' && docToMd(many.doc) === '---\ntitle: T\nbibliography:\n  - a.bib\n  - b.bib\n---\n\nSee [@k].\n' && many.frontmatterWarnings.some((w) => /drops the line, b\.bib with it/.test(w)), docToMd(many.doc) + JSON.stringify(many.frontmatterWarnings));
 }
 
 // Decided for step 7: a text key whose double-quoted value decodes an

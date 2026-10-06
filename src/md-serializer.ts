@@ -811,7 +811,10 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         if (readFrontText(key, text)?.content.eq(nodes[0].content)) asWritten.push(key);
       }
     }
-    const bib = doc.attrs.bib as { content?: string } | null;
+    // A `bibliography:` line the reader carried while its sidecar is unread
+    // rides in `extra` and is written back, whatever bibliography the
+    // document holds meanwhile: the read takes it out (withSidecarBib), so
+    // a save never loses the sidecar it names.
     return writeFrontmatter(
       {
         titleMd: one(of.doc_title, 'title', ' '),
@@ -822,10 +825,6 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         frontMatterRestart: restart,
         extra,
         asWritten,
-        // A `bibliography:` line the reader carried while its sidecar was
-        // unread goes once the document holds a bibliography (the body's
-        // {=bibtex} block); until then it stays, so nothing is lost.
-        keptBibliography: bib?.content ? 'drop' : 'write',
       },
       warn,
     );

@@ -426,11 +426,20 @@ const fileManager = new FileManager({
     if (sourceView.isActive()) sourceView.afterSetDoc();
   },
   // A `bibliography:` sidecar read once the folder is here: the document
-  // takes its entries (the next save embeds them), and the carried front
-  // matter loses the line. Not an edit to save or undo — it is what the
-  // file says, read late.
+  // takes its entries (the next save embeds them), the carried front
+  // matter loses the line, and a document with no bibliography block gets
+  // one at its end, to print them (as an open with the folder makes it:
+  // withSidecarBib). Not an edit to save or undo — it is what the file
+  // says, read late.
   setBib(bib, frontmatter) {
-    view.dispatch(view.state.tr.setDocAttribute('bib', bib).setDocAttribute('frontmatter', frontmatter).setMeta('addToHistory', false).setMeta(FROM_DISK, true));
+    const tr = view.state.tr.setDocAttribute('bib', bib).setDocAttribute('frontmatter', frontmatter);
+    let block = false;
+    tr.doc.descendants((n) => {
+      block ||= n.type === schema.nodes.bibliography;
+      return !block;
+    });
+    if (!block) tr.insert(tr.doc.content.size, schema.nodes.bibliography.create());
+    view.dispatch(tr.setMeta('addToHistory', false).setMeta(FROM_DISK, true));
   },
   onState() {
     toolbar?.setFile(fileManager.name, fileManager.dirty);

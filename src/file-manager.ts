@@ -48,12 +48,14 @@ export interface FileHooks {
    *  writer returns to the page view (SOURCE-VIEW.md, decision 3). Null
    *  when the page view is the truth or the source is in the other format. */
   getText?: (format: '.md' | '.typ') => string | null;
-  /** The bibliography a Markdown file's `bibliography:` sidecar holds, read
-   *  once the folder is there (attachFolder): put in the shown document,
-   *  with `frontmatter` — the carried front matter less its
-   *  `bibliography:` line. Not the writer's edit and no undo step: the
-   *  document matches its file but for the bibliography, which the next
-   *  save embeds. */
+  /** The bibliography a Markdown file's `bibliography:` sidecar makes,
+   *  read once the folder is there (attachFolder; md-parser's
+   *  mergeSidecarBib): put in the shown document, with `frontmatter` — the
+   *  carried front matter less its `bibliography:` line — and a
+   *  bibliography block at the end when it has none, as withSidecarBib
+   *  makes the document on open. Not the writer's edit and no undo step:
+   *  the document matches its file but for the bibliography, which the
+   *  next save embeds. */
   setBib?: (bib: { name: string; content: string }, frontmatter: string) => void;
 }
 
@@ -81,6 +83,13 @@ function importNote(r: ImportReport): string {
   if (blocks) parts.push(`${blocks} block(s) preserved as raw Typst`);
   if (fm.length) parts.push(`front matter: ${fm.length === 1 ? '1 warning' : `${fm.length} warnings`} — ${fm[0]}${fm.length > 1 ? ' …' : ''}`);
   return parts.length ? ` — ${parts.join('; ')}` : '';
+}
+
+/** The toast's tail for a `bibliography:` sidecar read into the document:
+ *  `kept`, its entries the document already held (kept as it held them). */
+function sidecarNote(path: string, fileName: string, kept: number): string {
+  const held = kept ? ` (${kept === 1 ? '1 key the document already held keeps its entry' : `${kept} keys the document already held keep their entries`})` : '';
+  return ` — bibliography read from ${path}${held}; the next save embeds it in ${fileName} (a {=bibtex} block in place of bibliography:)`;
 }
 
 export interface RecentEntry {
@@ -288,11 +297,12 @@ export class FileManager {
   }
 
   /** The sidecar a Markdown file's `bibliography:` names (beside it, in
-   *  `dir`), read once and put in the parsed document: its bibliography,
-   *  and the carried front matter less that line, so the next save embeds
-   *  the entries (a {=bibtex} block) in place of the key. Without the
-   *  folder it stays to be read (`pending`), and its line stays in the
-   *  file. `note` is what the toast says about it, unless the read found
+   *  `dir`), read once and put in the parsed document (withSidecarBib):
+   *  its entries in the bibliography, with a block to print it, and the
+   *  carried front matter less that line, so the next save embeds the
+   *  entries (a {=bibtex} block) in place of the key. Without the folder
+   *  it stays to be read (`pending`), and its line stays in the file.
+   *  `note` is what the toast says about it, unless the read found
    *  `shown`, the bibliography the document already shows (a reload says
    *  nothing of a read it announced before). */
   private async withSidecar(
@@ -308,18 +318,15 @@ export class FileManager {
     }
     const read = await this.readSidecar(path, dir);
     if (typeof read === 'string') return { doc: parsed.doc, pending: path, note: ` — bibliography: ${read}` };
-    const { withoutEntry } = await import('./md-frontmatter');
-    const attrs = { ...parsed.doc.attrs, bib: read, frontmatter: withoutEntry(String(parsed.doc.attrs.frontmatter ?? ''), 'bibliography') };
-    return {
-      doc: parsed.doc.type.create(attrs, parsed.doc.content),
-      pending: null,
-      note: shown === read.content ? '' : ` — bibliography read from ${path}; the next save embeds it in ${fileName} (a {=bibtex} block in place of bibliography:)`,
-    };
+    const { withSidecarBib } = await import('./md-parser');
+    const put = withSidecarBib(parsed.doc, read.content);
+    const content = (put.doc.attrs.bib as { content: string }).content;
+    return { doc: put.doc, pending: null, note: shown === content ? '' : sidecarNote(path, fileName, put.kept) };
   }
 
   /** A `bibliography:` sidecar's entries, read through `readAsset` (4 MiB
    *  at most) from `dir`; or why they could not be. */
-  private async readSidecar(path: string, dir: FileSystemDirectoryHandle): Promise<{ name: string; content: string } | string> {
+  private async readSidecar(path: string, dir: FileSystemDirectoryHandle): Promise<{ content: string } | string> {
     let data: Uint8Array | null;
     try {
       data = (await this.readAsset(path, INPUT_LIMITS.bibliographyBytes, dir))?.data ?? null;
@@ -331,7 +338,7 @@ export class FileManager {
     // eslint-disable-next-line no-control-regex
     const content = new TextDecoder().decode(data).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim();
     if (!content) return `${path} is empty — nothing was read`;
-    return { name: path.split('/').pop() || 'references.bib', content };
+    return { content };
   }
 
   /** The `bibliography:` sidecar the open Markdown file names, while it is
@@ -736,8 +743,9 @@ export class FileManager {
   }
 
   /** The open file's unread `bibliography:` sidecar, now that the folder is
-   *  here: read, and put in the shown document (hooks.setBib) unless it
-   *  holds a bibliography of its own by now. What the toast says of it. */
+   *  here: read, and put in the shown document (hooks.setBib) — merged
+   *  into the bibliography it holds by now, if it holds one (entries added
+   *  while the sidecar was unread). What the toast says of it. */
   private async readPendingBibliography(): Promise<string> {
     const path = this.bibliographyPath;
     const handle = this.handle;
@@ -745,18 +753,16 @@ export class FileManager {
     // While the Markdown source is open, its text is the document: a
     // bibliography put in the page under it would be lost on the way back.
     if (typeof this.hooks.getText?.('.md') === 'string') return ` — ${path} is read when ${handle.name} is next opened (not while its source is open)`;
-    const doc = this.hooks.getDoc();
-    if ((doc.attrs.bib as { content?: string } | null)?.content) {
-      this.bibliographyPath = null;
-      return '';
-    }
     const read = await this.readSidecar(path, this.dir);
     if (handle !== this.handle) return '';
     if (typeof read === 'string') return ` — bibliography: ${read}`;
-    const { withoutEntry } = await import('./md-frontmatter');
+    const [{ mergeSidecarBib }, { withoutEntry }] = await Promise.all([import('./md-parser'), import('./md-frontmatter')]);
+    if (handle !== this.handle) return '';
+    const doc = this.hooks.getDoc();
+    const merged = mergeSidecarBib(doc.attrs.bib as { name: string; content: string } | null, read.content);
     this.bibliographyPath = null;
-    this.hooks.setBib?.(read, withoutEntry(String(this.hooks.getDoc().attrs.frontmatter ?? ''), 'bibliography'));
-    return ` — bibliography read from ${path}; the next save embeds it in ${handle.name} (a {=bibtex} block in place of bibliography:)`;
+    this.hooks.setBib?.(merged.bib, withoutEntry(String(doc.attrs.frontmatter ?? ''), 'bibliography'));
+    return sidecarNote(path, handle.name, merged.kept);
   }
 
   private async walkTo(path: string, from = this.dir): Promise<FileSystemFileHandle | null> {
