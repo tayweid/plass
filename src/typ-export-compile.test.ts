@@ -8,8 +8,9 @@
 // command the plan names) and with Plass's fonts only, `--ignore-embedded-
 // fonts`, the command docs/MARKDOWN-FORMAT.md documents as exact, so a family
 // the serializer emits that public/fonts lacks cannot pass by borrowing the
-// CLI's own copy. This is the guard on the mitex pin: a typst release that
-// breaks the pinned package fails here.
+// CLI's own copy. The export's math is native Typst with its handles
+// defined in the header, so it needs no package: the compile runs with an
+// empty package cache and package path, and must not download anything.
 //
 // The demo is extended first with what the print form exists for, which
 // the starter document does not hold: a raw-Typst island and an inline
@@ -18,9 +19,8 @@
 // block, a grid and a page break.
 //
 // Self-skipping: typst comes from $TYPST or PATH; absent, or a version other
-// than 0.14.x (exact) or 0.15.x (compiles), it prints why and passes. So
-// does a machine that cannot download the mitex package (offline, nothing
-// cached). pdf.ts and figures.ts do not load under node (a ?worker import,
+// than 0.14.x (exact) or 0.15.x (compiles), it prints why and passes.
+// pdf.ts and figures.ts do not load under node (a ?worker import,
 // a .css import), so the image is decoded here by its own few lines.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -33,6 +33,7 @@ import { demoDoc } from './demo-doc.ts';
 import { schema } from './schema.ts';
 import { docToTyp } from './typ-serializer.ts';
 import { TYPST_EXACT_VERSION } from './typst-config.ts';
+import { ensureMathConverter } from './math-convert.ts';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail = '') {
@@ -58,6 +59,11 @@ console.log(`typ-export: typst ${version} (the export is exact on ${TYPST_EXACT_
 const fonts = fileURLToPath(new URL('../public/fonts', import.meta.url));
 const work = mkdtempSync(join(tmpdir(), 'plass-typ-export-'));
 mkdirSync(join(work, 'figures'));
+// The CLI's package cache and local package path, both empty: a package
+// the export needed could come only from a download, which fails the run.
+mkdirSync(join(work, 'no-packages'));
+const noPackages = { ...process.env, TYPST_PACKAGE_CACHE_PATH: join(work, 'no-packages'), TYPST_PACKAGE_PATH: join(work, 'no-packages') };
+await ensureMathConverter();
 
 // The app writes each distinct data: image once and links it by path
 // (figures.ts dataUrlBytes + projectImagePath); this names them image-N.
@@ -125,6 +131,10 @@ check('the inline Typst span prints as inline raw', source.includes('#raw("#pani
 check('the Markdown island prints as code', source.includes('```\n<div class="note">\n<!-- a remark kept as code -->\n</div>\n```'));
 check('the grid and the page break are in the export', source.includes('#grid(') && source.includes('#pagebreak()'));
 check(
+  'the math is native Typst: no package import, no #mi/#mitex call',
+  !source.includes('#import') && !/#mi(?:tex)?\(/.test(source) && /\$e \^\(i pi \) \+  1  =  0 \$/.test(source),
+);
+check(
   'the header names the version the export is exact on',
   source.startsWith(`// Exported from Plass — exact on typst ${TYPST_EXACT_VERSION}\n`),
   source.split('\n')[0],
@@ -135,13 +145,10 @@ const compile = (label: string, extra: string[]) => {
   const run = spawnSync(
     typst,
     ['compile', '--diagnostic-format', 'short', '--ignore-system-fonts', ...extra, '--font-path', fonts, 'demo.typ', pdf],
-    { cwd: work, encoding: 'utf8' },
+    { cwd: work, encoding: 'utf8', env: noPackages },
   );
   const output = `${run.stdout ?? ''}${run.stderr ?? ''}`.trim();
-  if (!failures && /failed to download package/.test(output)) {
-    rmSync(work, { recursive: true, force: true });
-    skip(`could not download a package: ${output.split('\n')[0]}`);
-  }
+  check(`${label}: nothing is downloaded`, !/download/i.test(output), output);
   const diagnostics = output.split('\n').filter((line) => /\b(warning|error):/.test(line));
   check(`${label}: typst compile exits 0`, run.status === 0, output);
   check(`${label}: no warning or error`, diagnostics.length === 0, diagnostics.join('\n'));

@@ -1,7 +1,11 @@
 // PM doc -> Typst markup (.typ) serialization (spec §3.3, serialize half).
 //
-// Math is authored as LaTeX (KaTeX) in v1, so exported math goes through the
-// mitex Typst package, which compiles LaTeX math inside Typst documents.
+// Math is authored as LaTeX (KaTeX). What Plass compiles and exports
+// (`islands: 'print'`) is native Typst math, converted formula by formula
+// (math-convert.ts), with the handles it names defined in the header
+// (typst-math-prelude.ts). The working .typ file (`'file'`) keeps each
+// formula's LaTeX in a `#mi`/`#mitex` call of the mitex package, so the
+// file reopens exactly.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { TableMap } from 'prosemirror-tables';
@@ -15,6 +19,8 @@ import { CELL_FILL_TYPST, type CellFill } from './table-fills';
 import type { CitationStyle } from './citation-styles';
 import { commentToTyp } from './editor-comments-format';
 import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config';
+import { convertMath, displayEquation, inlineEquation, mathConverterReady } from './math-convert';
+import { mathPrelude } from './typst-math-prelude';
 
 export interface TypExportOptions {
   /** When given, receives the text offset at which each top-level block's
@@ -37,7 +43,10 @@ export interface TypExportOptions {
    * on disk: raw Typst verbatim, so the file never loses content. 'print'
    * is what Plass compiles (the audit, PDF): every island is a raw code
    * block or inline raw, shown as source and never run — the page shows the
-   * same code block, so page and print agree (Typst on rails).
+   * same code block, so page and print agree (Typst on rails). Math too:
+   * 'file' keeps each formula's LaTeX (`#mi`/`#mitex`); 'print' converts it
+   * to native Typst math, which needs `ensureMathConverter()` awaited first
+   * and throws MathConvertError for a formula the converter rejects.
    */
   islands?: 'file' | 'print';
 }
@@ -411,8 +420,9 @@ function inlineToTyp(node: PMNode, tableCell = false): string {
         flush();
         sig = s;
       }
-      const source = expandMacros(child.attrs.src);
-      run += tableCell ? `#mi(raw(${JSON.stringify(source)}, block: false))` : `#mi(\`${source}\`)`;
+      const source = inlineLatex(child);
+      if (exportOpts.islands === 'print') run += inlineEquation(convertMath(source));
+      else run += tableCell ? `#mi(raw(${JSON.stringify(source)}, block: false))` : `#mi(\`${source}\`)`;
       return;
     }
     flush();
@@ -611,7 +621,8 @@ function blockToTyp(node: PMNode, indent = ''): string {
       // a compile error (Typst: cannot ref an unnumbered equation) — drop
       // it; the references degrade to literal placeholders.
       const label = node.attrs.label && effNumbered ? ` <${node.attrs.label}>` : '';
-      const body = '#mitex(`\n' + expandMacros(wrapAligned(node.attrs.src as string)) + '\n`)' + label;
+      const latex = displayLatex(node);
+      const body = (exportOpts.islands === 'print' ? displayEquation(convertMath(latex)) : '#mitex(`' + latex + '`)') + label;
       const numbered = node.attrs.numbered as boolean | null;
       // Per-equation override as bare set/restore rules: a wrapping content
       // block (#[...]) changes Typst's block spacing (~0.5em) and shifted
@@ -910,6 +921,34 @@ function containsMath(doc: PMNode): boolean {
   return found;
 }
 
+/** The LaTeX an inline formula prints from: its macros expanded. */
+function inlineLatex(node: PMNode): string {
+  return expandMacros(node.attrs.src as string);
+}
+
+/** The LaTeX a display formula prints from, between the two newlines the
+ * `#mitex` raw block holds: what the converter has always been given. */
+function displayLatex(node: PMNode): string {
+  return '\n' + expandMacros(wrapAligned(node.attrs.src as string)) + '\n';
+}
+
+/** The print header's math definitions: every formula converted first (so
+ * a rejected one throws before any text is built), then the prelude for
+ * the handles they name. */
+function printMathPrelude(doc: PMNode): string {
+  if (!mathConverterReady()) {
+    throw new Error('Printing math needs the math converter: await ensureMathConverter() before docToTyp');
+  }
+  const converted: string[] = [];
+  doc.descendants((n) => {
+    if (n.type.name === 'math_inline') converted.push(convertMath(inlineLatex(n)));
+    else if (n.type.name === 'math_display') converted.push(convertMath(displayLatex(n)));
+    return true;
+  });
+  const prelude = mathPrelude(converted);
+  return prelude ? '// LaTeX math handles, from mitex 0.2.7 (Apache-2.0)\n' + prelude : '';
+}
+
 let docNumFormat = '1';
 let docSettings: DocSettings = DEFAULT_SETTINGS;
 let emitNumberEquations = true;
@@ -987,7 +1026,7 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     else if (s.footnoteSeparator === 'full') out += '#set footnote.entry(separator: line(length: 100%, stroke: 0.5pt))\n';
     if (s.pageNumStart !== 1) out += `#counter(page).update(${s.pageNumStart})\n`;
     if (s.mathMacros.trim()) out += `// typeset:math-macros ${JSON.stringify(s.mathMacros)}\n`;
-    if (containsMath(doc)) out += MITEX_IMPORT + '\n';
+    if (containsMath(doc)) out += opts.islands === 'print' ? printMathPrelude(doc) : MITEX_IMPORT + '\n';
     out += '\n';
     const offsets = opts.offsets;
     if (offsets) offsets.length = 0;

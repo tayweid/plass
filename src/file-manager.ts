@@ -12,6 +12,7 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { docToTyp } from './typ-serializer';
+import { ensureMathConverter } from './math-convert';
 import { kvGet as idbGet, kvSet as idbSet } from './kv-store';
 import { holdOpenFile, openInAnotherWindow } from './open-files';
 import { typToDoc } from './typ-parser';
@@ -1066,6 +1067,8 @@ export class FileManager {
     }
     try {
       const doc = this.hooks.getDoc();
+      // The export's math is native Typst, converted by the local converter.
+      await ensureMathConverter();
       const images = await this.planEmbeddedImages(doc);
       const build = (paths: Map<string, string>) =>
         docToTyp(doc, { islands: 'print', resolveImage: (src) => paths.get(src) ?? src });
