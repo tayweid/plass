@@ -200,4 +200,5 @@ function main(argv: string[]): number {
   return diverge || failed.length ? 1 : 0;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(main(process.argv.slice(2)));
+// Run as a script, not when md-parity.test.ts imports the plumbing.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = main(process.argv.slice(2));
