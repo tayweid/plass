@@ -42,6 +42,7 @@ import { portBreaks, shapedWidthPt } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
 import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdict } from './environment-check';
 import { atPaperSize, fitPaper, paperPass } from './paper-scale';
+import { caretBox } from './caret-box';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { escapeTyp, expandMacrosWith, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
 import {
@@ -861,7 +862,7 @@ class TypesetView {
   private followedCaret = (): { top: number; bottom: number } | null => {
     if (!this.caretFollowed) return null;
     try {
-      return this.view.coordsAtPos(this.view.state.selection.head);
+      return caretBox(this.view, this.view.state.selection.head);
     } catch {
       return null;
     }
