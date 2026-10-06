@@ -443,7 +443,6 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           const src = String(child.attrs.src ?? '');
           const altText = String(child.attrs.alt ?? '').replace(/([\\[\]])/g, '\\$1');
           const title = String(child.attrs.title ?? '');
-          if (src.startsWith('data:')) warn('embedded image written as a data: URL — consider a project folder');
           const width = child.attrs.widthPct != null ? `{width=${num(child.attrs.widthPct as number)}%}` : '';
           putWhole(`![${altText}](${destination(src)}${title ? ` "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ''})${width}`);
           break;
@@ -688,7 +687,6 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       }
       case 'figure': {
         const src = node.attrs.src as string;
-        if (src.startsWith('data:')) warn('embedded figure written as a data: URL — consider a project folder');
         // Spaces at a caption's edges never print, and a caption of spaces
         // alone is no caption to the reader (or pandoc): it reads back as
         // an image in a paragraph unless a label keeps it a figure.

@@ -1,4 +1,4 @@
-// Real files: open/save .typ documents on disk.
+// Real files: open/save .md (and .typ) documents on disk.
 //
 // Chromium: File System Access API — Open/Save with real handles,
 // silent autosave to the open file, recents persisted in IndexedDB (file
@@ -6,9 +6,10 @@
 // file when the browser still grants permission.
 // Safari/Firefox fallback: open via <input type=file>, save via download.
 //
-// The on-disk format is .typ (the serializer's output); opening runs the
-// importer, which preserves unrecognized Typst verbatim as raw islands — so
-// open + save never destroys content we don't model.
+// A new document is Pandoc Markdown (docs/MARKDOWN-FORMAT.md); a .typ still
+// opens and saves as Typst. A document keeps its file's format. Opening runs
+// that format's importer, which keeps what it cannot model verbatim as an
+// island — so open + save never destroys content we don't model.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { docToTyp } from './typ-serializer';
@@ -74,17 +75,48 @@ type ParsedFile = ImportReport & {
 };
 
 /** The tail of an open or reload toast: blocks kept as source, counted, and
- *  a Markdown file's front-matter warnings worded as warnings, the first
- *  one shown. Empty when there is nothing to say. */
-function importNote(r: ImportReport): string {
+ *  warnings worded as warnings, the first one shown. A Typst file's
+ *  warnings are its raw-Typst blocks, one each; a Markdown file's are what
+ *  the reader says (a front-matter setting out of range, a citation's
+ *  extras kept as text …), and what it kept as source — an HTML block, an
+ *  unknown div, a {=typst} block, inline HTML — is counted in the document
+ *  it read. Empty when there is nothing to say. */
+function importNote(r: ParsedFile, md: boolean): string {
   const fm = r.frontmatterWarnings ?? [];
-  const blocks = r.warnings.length - fm.length;
   const parts: string[] = [];
-  if (blocks) parts.push(`${blocks} block(s) preserved as raw Typst`);
-  // The toast names one: a warning that a save loses something, if any.
-  const first = fm.find((m) => /\bdrop|\bignored\b|\bonly the\b/i.test(m)) ?? fm[0];
-  if (fm.length) parts.push(`front matter: ${fm.length === 1 ? '1 warning' : `${fm.length} warnings`} — ${first}${fm.length > 1 ? ' …' : ''}`);
+  if (!md) {
+    if (r.warnings.length) parts.push(`${r.warnings.length} block(s) preserved as raw Typst`);
+    return parts.length ? ` — ${parts.join('; ')}` : '';
+  }
+  const kept = keptAsSource(r.doc);
+  if (kept.blocks || kept.inline) {
+    const what = [kept.blocks ? `${kept.blocks} block(s)` : '', kept.inline ? `${kept.inline} inline span(s)` : ''].filter(Boolean);
+    parts.push(`${what.join(' and ')} kept as source`);
+  }
+  const body = r.warnings.filter((m) => !fm.includes(m));
+  if (body.length) parts.push(warningsNote(body));
+  if (fm.length) parts.push(`front matter: ${warningsNote(fm)}`);
   return parts.length ? ` — ${parts.join('; ')}` : '';
+}
+
+/** "N warning(s) — the first", naming a warning that a save loses something
+ *  first when there is one. */
+function warningsNote(warnings: string[]): string {
+  const first = warnings.find((m) => /\bdrop|\bignored\b|\bonly the\b/i.test(m)) ?? warnings[0];
+  return `${warnings.length === 1 ? '1 warning' : `${warnings.length} warnings`} — ${first}${warnings.length > 1 ? ' …' : ''}`;
+}
+
+/** Islands in a document: blocks (raw Markdown, raw Typst) and inline spans
+ *  the page keeps verbatim and shows as code, never run. */
+function keptAsSource(doc: PMNode): { blocks: number; inline: number } {
+  let blocks = 0;
+  let inline = 0;
+  doc.descendants((n) => {
+    if (n.type.name === 'code_block' && (n.attrs.params === 'md-raw' || n.attrs.params === 'typst-raw')) blocks++;
+    else if (n.type.name === 'typst_inline') inline++;
+    return true;
+  });
+  return { blocks, inline };
 }
 
 /** The toast's tail for a `bibliography:` sidecar read into the document:
@@ -120,12 +152,12 @@ export interface RecentEntry {
 
 // ONE picker type covering both formats: multiple entries become an
 // either/or filter dropdown in Chrome's dialog (defaulting to the first,
-// which greys the other format out); a single entry keeps .typ and .md
+// which greys the other format out); a single entry keeps .md and .typ
 // selectable together.
-const TYP_TYPE: FilePickerType[] = [
+const DOC_TYPE: FilePickerType[] = [
   {
-    description: 'Plass documents (.typ, .md)',
-    accept: { 'text/plain': ['.typ'], 'text/markdown': ['.md'] },
+    description: 'Plass documents (.md, .typ)',
+    accept: { 'text/markdown': ['.md'], 'text/plain': ['.typ'] },
   },
 ];
 
@@ -138,7 +170,7 @@ const projectPathParts = (path: string): string[] => path.split('/').filter((seg
 
 /** The name a document carries before it has one of its own. Names here are
  *  stored without an extension; the tab adds it, so a fresh tab reads
- *  Plass.typ and says which app it is rather than that the file is nameless. */
+ *  Plass.md and says which app it is rather than that the file is nameless. */
 export const DEFAULT_DOC_NAME = 'Plass';
 type WriteResult = 'clean' | 'pending' | 'conflict' | 'stale' | 'noop';
 
@@ -147,7 +179,8 @@ export class FileManager {
 
   /** The open file. Assigning it announces this window's claim on it, so no
    *  assignment site can forget to (see open-files.ts), and clears a stale
-   *  "file has vanished" state along with the handle that vanished. */
+   *  "file has vanished" state along with the handle that vanished, and
+   *  what the saves of the file before it have said (`lastWarned`). */
   get handle(): FileSystemFileHandle | null {
     return this.openHandle;
   }
@@ -155,6 +188,9 @@ export class FileManager {
   set handle(handle: FileSystemFileHandle | null) {
     this.openHandle = handle;
     this.missing = false;
+    this.lastWarned = new Set();
+    this.unsaid = [];
+    this.imagesHinted = false;
     holdOpenFile(handle);
     this.hooks.onFile?.(handle);
     // Every site assigns dir on the line after handle, so recording waits
@@ -168,13 +204,25 @@ export class FileManager {
 
   /** The file this document was being written to is no longer there. */
   private missing = false;
+  /** What the last save's text could not keep (the Markdown writer's
+   *  notices), so a save says only what is new: a notice that stands is
+   *  said once, not again on every autosave while it stands. Per file:
+   *  cleared when the handle changes. */
+  private lastWarned = new Set<string>();
+  /** Notices a save raised that the writer has not been told yet: said on
+   *  the toast of the write that raised them (takeNotices). */
+  private unsaid: string[] = [];
+  /** The embedded-images hint was said for this file (once per file). */
+  private imagesHinted = false;
   /** The format the open document is written in — its file's extension.
    *  A document's format IS its file's, so nothing Plass does on the user's
    *  behalf may change one without rewriting the other: a Markdown file
    *  renamed to .typ is read back as Typst, and its headings return as raw
    *  islands. Tracked rather than derived from the handle, because fallback
-   *  mode has a document and a name but no handle to read it off. */
-  private fileFormat: '.md' | '.typ' = '.typ';
+   *  mode has a document and a name but no handle to read it off. A
+   *  document with no file yet is Markdown, the source format; a .typ is
+   *  a file opened as one. */
+  private fileFormat: '.md' | '.typ' = '.md';
 
   /** The format the open document is written in (see `fileFormat`). */
   get format(): '.md' | '.typ' {
@@ -311,7 +359,7 @@ export class FileManager {
     this.bibliographyPath = sidecar.pending;
     this.hooks.reloadDoc(sidecar.doc);
     this.hooks.onState();
-    return importNote(parsed) + sidecar.note;
+    return importNote(parsed, isMd(file.name)) + sidecar.note;
   }
 
   /** The open file's text read in its format. */
@@ -390,7 +438,13 @@ export class FileManager {
   private async flush() {
     if (!this.handle || !this.dirty || this.conflict || this.missing) return;
     try {
-      await this.enqueueWrite(false);
+      const result = await this.enqueueWrite(false);
+      // An autosave has no toast of its own: what it could not keep is said
+      // on one (a conflict says its own, and keeps them for the overwrite).
+      if (result === 'clean' || result === 'pending') {
+        const said = this.takeNotices();
+        if (said) this.hooks.message(said.slice(' — '.length));
+      }
     } catch (e) {
       if (!this.noteMissingFile(e)) console.warn('Autosave to file failed', e);
     }
@@ -440,20 +494,56 @@ export class FileManager {
 
   /** The on-disk text for the current doc in the handle's format. Text the
    *  writer is typing in a source view of that format is the document and
-   *  goes out verbatim. */
-  private async serialize(fileName: string, doc?: PMNode): Promise<string> {
+   *  goes out verbatim. What the text could not keep is noted for the
+   *  write's toast (`unsaid`) when it is new since the file's last save —
+   *  unless `quiet`, for a text no one writes (a comparison). */
+  private async serialize(fileName: string, quiet = false): Promise<string> {
     const typed = this.hooks.getText?.(isMd(fileName) ? '.md' : '.typ');
     if (typeof typed === 'string') return typed;
-    doc ??= this.hooks.getDoc();
-    if (isMd(fileName)) {
-      const { docToMd } = await import('./md-serializer');
-      const warned = new Set<string>();
-      const text = docToMd(doc, (m) => warned.add(m));
-      // Lossy-save notices, once per distinct message per save.
-      for (const m of warned) this.hooks.message(m);
-      return text;
-    }
-    return docToTyp(doc);
+    const doc = this.hooks.getDoc();
+    if (quiet) return this.docText(fileName, doc);
+    const warned = new Set<string>();
+    const text = await this.docText(fileName, doc, (m) => warned.add(m));
+    for (const m of warned) if (!this.lastWarned.has(m) && !this.unsaid.includes(m)) this.unsaid.push(m);
+    this.lastWarned = warned;
+    const hint = isMd(fileName) ? this.embeddedImagesHint(doc, fileName) : null;
+    if (hint) this.unsaid.push(hint);
+    return text;
+  }
+
+  /** `doc` written in `fileName`'s format, its notices to `warn`. */
+  private async docText(fileName: string, doc: PMNode, warn: (m: string) => void = () => {}): Promise<string> {
+    if (!isMd(fileName)) return docToTyp(doc);
+    const { docToMd } = await import('./md-serializer');
+    return docToMd(doc, warn);
+  }
+
+  /** The notices a write raised (serialize), as the tail of its toast
+   *  (" — a; b"), or '' when there are none; said once. */
+  private takeNotices(): string {
+    const said = this.unsaid;
+    this.unsaid = [];
+    return said.length ? ` — ${said.join('; ')}` : '';
+  }
+
+  /** Once per file, in a project folder: the images the Markdown file holds
+   *  as data, and how to move one to figures/ (the image's own Save to
+   *  project). A data URL is a valid source, and the only one for a
+   *  single-file document; with a folder, a path is the lighter file. */
+  private embeddedImagesHint(doc: PMNode, fileName: string): string | null {
+    if (this.imagesHinted || !this.dir) return null;
+    let n = 0;
+    doc.descendants((node) => {
+      const src = node.attrs.src;
+      // The images Save to project can write out (figures.ts).
+      if ((node.type.name === 'image' || node.type.name === 'figure') && typeof src === 'string' && /^data:image\/(?:png|jpe?g|gif|svg\+xml)[;,]/i.test(src)) n++;
+      return true;
+    });
+    if (!n) return null;
+    this.imagesHinted = true;
+    return n === 1
+      ? `${fileName} holds an image as data — select it and choose Save to project to keep it in figures/`
+      : `${fileName} holds ${n} images as data — select one and choose Save to project to keep it in figures/`;
   }
 
   get hasConflict(): boolean {
@@ -544,7 +634,7 @@ export class FileManager {
     try {
       const result = await this.enqueueWrite(true);
       if (this.handle === handle && result !== 'stale' && result !== 'conflict') {
-        this.hooks.message(`Overwrote ${handle.name} with the Plass version`);
+        this.hooks.message(`Overwrote ${handle.name} with the Plass version${this.takeNotices()}`);
       }
     } catch (e) {
       if (this.noteMissingFile(e)) return;
@@ -564,7 +654,7 @@ export class FileManager {
     this.conflict = false;
     this.changeRevision = 0;
     this.name = name;
-    this.fileFormat = '.typ';
+    this.fileFormat = '.md';
     this.bibliographyPath = null;
     this.dirty = false;
     this.hooks.setDoc(doc ?? this.hooks.emptyDoc());
@@ -579,7 +669,7 @@ export class FileManager {
       return;
     }
     try {
-      const [handle] = await window.showOpenFilePicker!({ types: TYP_TYPE, startIn: this.dir ?? this.handle ?? undefined });
+      const [handle] = await window.showOpenFilePicker!({ types: DOC_TYPE, startIn: this.dir ?? this.handle ?? undefined });
       await this.loadHandle(handle);
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') console.warn(e);
@@ -636,7 +726,7 @@ export class FileManager {
     this.hooks.setDoc(sidecar.doc);
     this.hooks.onState();
     const where = dir ? `${dir.name}/${file.name}` : file.name;
-    this.hooks.message(`Opened ${where}${importNote(parsed)}${sidecar.note}`);
+    this.hooks.message(`Opened ${where}${importNote(parsed, isMd(file.name))}${sidecar.note}`);
     try {
       await addRecent(handle, file.name, dir);
       await idbSet('last', dir ? { handle, dir } : handle);
@@ -680,17 +770,23 @@ export class FileManager {
   }
 
   /**
-   * Adopt a folder. If it contains a .typ, open (the newest) one; if it is
-   * a fresh folder, the CURRENT document moves in — that is how "make what
-   * I'm writing into a project" works.
+   * Adopt a folder. If it holds a document, open one: the newest .md, or,
+   * with none, the newest .typ — a .md is the source, and a .typ beside it
+   * is most likely its export (Export → Typst), never the file to land on.
+   * If it is a fresh folder, the CURRENT document moves in — that is how
+   * "make what I'm writing into a project" works.
    */
   async adoptFolder(dir: FileSystemDirectoryHandle, intent: 'open' | 'save' = 'open'): Promise<'kept' | 'loaded' | null> {
     if (intent === 'open') {
-      let best: { handle: FileSystemFileHandle; time: number } | null = null;
+      let best: { handle: FileSystemFileHandle; time: number; md: boolean } | null = null;
       for await (const entry of dir.values()) {
         if (entry.kind === 'file' && /\.(typ|md)$/i.test(entry.name)) {
+          const md = isMd(entry.name);
+          if (best && best.md && !md) continue;
           const f = await (entry as FileSystemFileHandle).getFile();
-          if (!best || f.lastModified > best.time) best = { handle: entry as FileSystemFileHandle, time: f.lastModified };
+          if (!best || (md && !best.md) || f.lastModified > best.time) {
+            best = { handle: entry as FileSystemFileHandle, time: f.lastModified, md };
+          }
         }
       }
       if (best) {
@@ -701,7 +797,7 @@ export class FileManager {
       }
     }
     // The current document moves in, keeping its shown name — an unsaved
-    // doc still called Plass becomes Plass.typ, matching the tab.
+    // doc still called Plass becomes Plass.md, matching the tab.
     const fileName = `${this.name}${this.format}`;
     let overwriteConfirmed = false;
     if (intent === 'save') {
@@ -727,7 +823,7 @@ export class FileManager {
     this.name = fileName.replace(/\.(typ|md)$/i, '');
     this.dirty = true;
     await this.enqueueWrite(overwriteConfirmed);
-    this.hooks.message(`Saved — ${dir.name}/${fileName}`);
+    this.hooks.message(`Saved — ${dir.name}/${fileName}${this.takeNotices()}`);
     try {
       await addRecent(handle, fileName, dir);
       await idbSet('last', { handle, dir });
@@ -878,7 +974,7 @@ export class FileManager {
       const result = await this.writeOpenFile();
       if (result === 'failed') this.hooks.message('Save failed');
       else if (this.handle === handle && result !== 'conflict' && result !== 'stale' && result !== 'missing') {
-        this.hooks.message(`Saved ${handle.name}`);
+        this.hooks.message(`Saved ${handle.name}${this.takeNotices()}`);
       }
       return;
     }
@@ -955,9 +1051,14 @@ export class FileManager {
           this.name = name;
           this.hooks.onState();
           this.hooks.message(`Renamed to ${name}${ext}`);
+          // The records hold the handle as it was stored, under its old
+          // name: each is written again, with the folder, so a recent or a
+          // reload reopens the renamed file in its project (figures, a
+          // sidecar) rather than a bare file or the old name.
+          this.rememberTabFile();
           try {
-            await addRecent(this.handle, `${name}${ext}`);
-            await idbSet('last', this.handle);
+            await addRecent(this.handle, `${name}${ext}`, this.dir);
+            await idbSet('last', this.dir ? { handle: this.handle, dir: this.dir } : this.handle);
           } catch {
             /* non-fatal */
           }
@@ -1034,7 +1135,7 @@ export class FileManager {
     a.download = fileName;
     a.click();
     URL.revokeObjectURL(a.href);
-    this.hooks.message(`Downloaded ${a.download}`);
+    this.hooks.message(`Downloaded ${a.download}${this.takeNotices()}`);
   }
 
   /** Export → Typst: a .typ beside the document holding the source Plass
@@ -1285,15 +1386,20 @@ export class FileManager {
 
   /** Reconnect this tab's own restored editor snapshot to its file without
    * guessing which copy is newer. Equal content resumes normally; differing
-   * content enters the same explicit conflict flow as an external edit. */
+   * content enters the same explicit conflict flow as an external edit.
+   * Equal is decided on what Plass makes of the file (`sameDocument`), not
+   * its bytes: a file Plass has not saved yet — written by hand, by another
+   * tool — is the session's document while its text still reads into it.
+   * The disk baseline stays the file's own bytes, so nothing is written
+   * until the writer edits. */
   private async attachRestoredSession(
     handle: FileSystemFileHandle,
     dir: FileSystemDirectoryHandle | null,
     file: File,
     diskText: string,
   ): Promise<void> {
-    const localText = await this.serialize(file.name);
-    const differs = localText !== diskText && !(await this.sidecarOnly(file.name, diskText, dir, localText));
+    const localText = await this.serialize(file.name, true);
+    const differs = localText !== diskText && !(await this.sameDocument(file.name, diskText, dir, localText));
     // A `bibliography:` sidecar the session document still carries the
     // line of is unread: read now if the folder is here, else when it is.
     const pending = isMd(file.name) ? await carriedBibliography(this.hooks.getDoc()) : null;
@@ -1317,18 +1423,28 @@ export class FileManager {
     this.hooks.message(`Reconnected — ${dir ? `${dir.name}/` : ''}${file.name}${bib}`);
   }
 
-  /** Whether the session document's text `localText` differs from the
-   *  file's only by its `bibliography:` sidecar, read in when the file was
-   *  opened with its folder (withSidecar): the session holds that read,
-   *  the file does not until a save embeds it. Not an outside change. */
-  private async sidecarOnly(fileName: string, diskText: string, dir: FileSystemDirectoryHandle | null, localText: string): Promise<boolean> {
-    if (!dir || !isMd(fileName)) return false;
-    const parsed = await this.parse(fileName, diskText);
-    if (!parsed.bibliography) return false;
+  /** Whether the session document's text `localText` is the file's
+   *  `diskText` as Plass reads it and would write it back: the save of the
+   *  file's parse. A hand-written file (straight quotes, `--`, a wrapped
+   *  paragraph) reads into the document a save would rewrite it as, so the
+   *  session holding that document has nothing the file lacks. A Markdown
+   *  file whose `bibliography:` sidecar was read in on the open with its
+   *  folder (withSidecar) is compared with that read as well: the session
+   *  holds it, the file does not until a save embeds it. Not an outside
+   *  change either way. */
+  private async sameDocument(fileName: string, diskText: string, dir: FileSystemDirectoryHandle | null, localText: string): Promise<boolean> {
+    let parsed: ParsedFile;
+    try {
+      parsed = await this.parse(fileName, diskText);
+    } catch (e) {
+      console.warn('Could not read the file to compare it with the session', e);
+      return false;
+    }
+    if ((await this.docText(fileName, parsed.doc)) === localText) return true;
+    if (!dir || !isMd(fileName) || !parsed.bibliography) return false;
     const opened = await this.withSidecar(parsed, dir, fileName);
     if (opened.pending !== null) return false;
-    const { docToMd } = await import('./md-serializer');
-    return docToMd(opened.doc, () => {}) === localText;
+    return (await this.docText(fileName, opened.doc)) === localText;
   }
 
   /** Remember which file THIS window has open. The origin-wide 'last'
@@ -1487,7 +1603,7 @@ export class FileManager {
   private openViaInput() {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.typ,.md,text/plain,text/markdown';
+    input.accept = '.md,.typ,text/markdown,text/plain';
     input.addEventListener('change', async () => {
       const file = input.files?.[0];
       if (!file) return;
@@ -1513,7 +1629,7 @@ export class FileManager {
       this.dirty = false;
       this.hooks.setDoc(sidecar.doc);
       this.hooks.onState();
-      this.hooks.message(`Opened ${file.name}${importNote(parsed)}${sidecar.note} (read-only source; saving downloads a copy)`);
+      this.hooks.message(`Opened ${file.name}${importNote(parsed, isMd(file.name))}${sidecar.note} (read-only source; saving downloads a copy)`);
     });
     input.click();
   }

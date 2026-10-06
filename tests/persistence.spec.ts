@@ -52,7 +52,7 @@ test('autosave pauses instead of overwriting an externally changed file', async 
       try {
         const root = await navigator.storage.getDirectory();
         const dir = await root.getDirectoryHandle(name);
-        const handle = await dir.getFileHandle('Plass.typ');
+        const handle = await dir.getFileHandle('Plass.md');
         return await (await handle.getFile()).text();
       } catch {
         return '';
@@ -333,7 +333,7 @@ test('reconnecting a recovered session never guesses past a differing disk copy'
   const disk = await page.evaluate(async (name) => {
     const root = await navigator.storage.getDirectory();
     const dir = await root.getDirectoryHandle(name);
-    return (await (await dir.getFileHandle('Plass.typ')).getFile()).text();
+    return (await (await dir.getFileHandle('Plass.md')).getFile()).text();
   }, dirName);
   expect(disk).toBe('EXTERNAL RECONNECT VERSION');
 });
@@ -342,8 +342,9 @@ test('a fresh document names the tab after the app', async ({ page }) => {
   // The tab is how you find Plass among a dozen others, so an untouched
   // document should say which app it is rather than that it has no name.
   // Matches Knuth, whose tab reads Knuth.py for the same reason.
+  // A new document is Markdown, the source format (plan step 8).
   await page.goto('/');
-  await expect(page).toHaveTitle('Plass.typ');
+  await expect(page).toHaveTitle('Plass.md');
   await expect(page.locator('#file-name')).toHaveText('Plass');
 });
 
@@ -436,7 +437,28 @@ test('renaming a Markdown document keeps it Markdown', async ({ page }) => {
 
     const names: string[] = [];
     for await (const key of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) names.push(key);
-    return { names, name: app.__fm.handle.name, bytes: await (await app.__fm.handle.getFile()).text() };
+    // What a recent or a fresh tab reopens (kv-store.ts): the renamed file,
+    // in its folder.
+    const kv = (key: string) =>
+      new Promise<any>((resolve, reject) => {
+        const open = indexedDB.open('typeset-files', 1);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const req = open.result.transaction('kv').objectStore('kv').get(key);
+          req.onsuccess = () => resolve(req.result ?? null);
+          req.onerror = () => reject(req.error);
+        };
+      });
+    const last = await kv('last');
+    const recent = ((await kv('recents')) ?? [])[0];
+    return {
+      names,
+      name: app.__fm.handle.name,
+      bytes: await (await app.__fm.handle.getFile()).text(),
+      last: { file: last?.handle?.name ?? last?.name ?? null, folder: last?.dir?.name ?? null },
+      recent: { name: recent?.name ?? null, file: recent?.handle?.name ?? null, folder: recent?.dir?.name ?? null },
+      folder: dir.name,
+    };
   });
 
   expect(out.name).toBe('Block_Outline_2.md');
@@ -444,6 +466,9 @@ test('renaming a Markdown document keeps it Markdown', async ({ page }) => {
   expect(out.bytes).toContain('Extra.');
   expect(out.bytes).toMatch(/^# .*Microeconomics Outline/m); // a Markdown heading
   expect(out.bytes).not.toContain('#set page'); // not a Typst preamble
+  // The rename keeps the folder in both records, as the open wrote them.
+  expect(out.last).toEqual({ file: 'Block_Outline_2.md', folder: out.folder });
+  expect(out.recent).toEqual({ name: `${out.folder}/Block_Outline_2.md`, file: 'Block_Outline_2.md', folder: out.folder });
 });
 
 test('a second window refuses a file the first already has open', async ({ context }) => {
@@ -1071,4 +1096,168 @@ test('the open toast names a front-matter warning that a save loses something fi
     await (window as unknown as SidecarApp).__fm.loadHandle(h);
   });
   await expect(page.locator('#toast')).toContainText('front matter: 2 warnings — author: only the names are kept');
+});
+
+// ---------- plan step 8: .md is the default ----------
+
+/** Every toast the page shows from now on, in order. */
+const recordToasts = (page: Page) =>
+  page.evaluate(() => {
+    const toast = document.getElementById('toast')!;
+    const seen: string[] = [];
+    (window as unknown as { __toasts: string[] }).__toasts = seen;
+    new MutationObserver(() => {
+      const text = toast.querySelector('.toast-text')?.textContent ?? '';
+      if (text && seen.at(-1) !== text) seen.push(text);
+    }).observe(toast, { childList: true, subtree: true, characterData: true });
+  });
+const toasts = (page: Page) => page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts.slice());
+
+test('a hand-written .md reloads with no conflict, and its bytes stay as written', async ({ page }) => {
+  // Straight quotes, a -- and a wrapped paragraph: the page shows them as
+  // Plass prints them (curled, an en dash, one line), so the session's
+  // document is not the file's bytes — but it is what Plass reads them as,
+  // and nothing changed outside Plass.
+  const HAND = '# Hand\n\nIt\'s a "draft" -- with a\nwrapped paragraph.\n';
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-hand', { 'Hand.md': HAND });
+  await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await app.__fm.loadHandle(await dir.getFileHandle('Hand.md'), dir);
+  }, dirName);
+  expect(await page.evaluate(() => (window as SidecarApp).view.state.doc.child(1).textContent)).toBe('It’s a “draft” – with a wrapped paragraph.');
+  await page.waitForTimeout(600);
+
+  await page.reload();
+  await page.waitForFunction(() => (window as unknown as SidecarApp).__fm?.handle?.name === 'Hand.md');
+  await expect(page.locator('#toast')).toContainText('Reconnected');
+  // Past an autosave's delay: nothing is written.
+  await page.waitForTimeout(1_700);
+  const after = await page.evaluate(async (name) => {
+    const app = window as SidecarApp & { __fm: { hasConflict: boolean } };
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    return {
+      conflict: app.__fm.hasConflict,
+      dirty: app.__fm.dirty,
+      disk: await (await (await dir.getFileHandle('Hand.md')).getFile()).text(),
+    };
+  }, dirName);
+  expect(after).toEqual({ conflict: false, dirty: false, disk: HAND });
+  await expect(page.locator('#toast')).not.toContainText('changed outside Plass');
+});
+
+test('a folder holding X.md and a newer X.typ opens X.md', async ({ page }) => {
+  // The .typ beside a .md is most likely its export: the folder opens on
+  // the source, the newest .md, whatever .typ is newer.
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const opened = await page.evaluate(async () => {
+    const fm = (window as unknown as { __fm: { adoptFolder(d: FileSystemDirectoryHandle, i: 'open'): Promise<unknown>; handle: FileSystemFileHandle | null } }).__fm;
+    const root = await navigator.storage.getDirectory();
+    const write = async (dir: FileSystemDirectoryHandle, name: string, text: string) => {
+      const w = await (await dir.getFileHandle(name, { create: true })).createWritable();
+      await w.write(text);
+      await w.close();
+      await new Promise((r) => setTimeout(r, 30)); // a later lastModified for the next
+    };
+    const suffix = Math.random().toString(36).slice(2);
+    const one = await root.getDirectoryHandle(`rank-one-${suffix}`, { create: true });
+    await write(one, 'X.md', '# X\n\nThe source.\n');
+    await write(one, 'X.typ', '= X\n\nIts export.\n');
+    await fm.adoptFolder(one, 'open');
+    const first = fm.handle?.name ?? null;
+    // Newest within the winning extension.
+    const two = await root.getDirectoryHandle(`rank-two-${suffix}`, { create: true });
+    await write(two, 'Old.md', '# Old\n');
+    await write(two, 'New.md', '# New\n');
+    await write(two, 'Newest.typ', '= Newest\n');
+    await fm.adoptFolder(two, 'open');
+    return { first, second: fm.handle?.name ?? null };
+  });
+  expect(opened).toEqual({ first: 'X.md', second: 'New.md' });
+});
+
+test('a save says what Markdown cannot keep once, not on every autosave', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-notices', { 'Warn.md': '# Warn\n\nBody.\n' });
+  await page.evaluate(async (name) => {
+    const app = window as SidecarApp;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await app.__fm.loadHandle(await dir.getFileHandle('Warn.md'), dir);
+  }, dirName);
+  await recordToasts(page);
+  const NOTICE = 'line breaks at the end of a paragraph have no Markdown form';
+  // Two line breaks closing the paragraph (Typst prints the second as a
+  // blank line): every save of it drops them.
+  await page.evaluate(() => {
+    const { view } = window as SidecarApp;
+    const end = view.state.doc.child(0).nodeSize + view.state.doc.child(1).nodeSize - 1;
+    const br = view.state.schema.nodes.hard_break;
+    view.dispatch(view.state.tr.insert(end, [br.create(), br.create()]));
+  });
+  await expect.poll(() => toasts(page)).toContainEqual(expect.stringContaining(NOTICE));
+  // Two more autosaves while the break stands: the notice is not said again.
+  for (const word of [' One.', ' Two.']) {
+    await page.evaluate((word) => {
+      const { view } = window as SidecarApp;
+      view.dispatch(view.state.tr.insertText(word, view.state.doc.child(0).nodeSize - 1));
+    }, word);
+    await expect.poll(() => page.evaluate(() => (window as SidecarApp).__fm.handle!.getFile().then((f) => f.text()))).toContain(`# Warn${word === ' One.' ? ' One.' : ' One. Two.'}`);
+  }
+  await page.evaluate(() => (window as SidecarApp).__fm.save());
+  await expect(page.locator('#toast')).toHaveText('Saved Warn.md');
+  expect((await toasts(page)).filter((t) => t.includes(NOTICE))).toHaveLength(1);
+});
+
+test('the embedded-image hint comes once per file, and only in a project folder', async ({ page }) => {
+  const SVG = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIvPg==';
+  const FIG = `# Fig\n\n![](data:image/svg+xml;base64,${SVG})\n\nBody.\n`;
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-data-image', { 'Fig.md': FIG, 'Bare.md': FIG });
+  await recordToasts(page);
+  const edit = (word: string) =>
+    page.evaluate((word) => {
+      const { view } = window as SidecarApp;
+      view.dispatch(view.state.tr.insertText(word, view.state.doc.content.size - 1));
+    }, word);
+  const disk = () => page.evaluate(() => (window as SidecarApp).__fm.handle!.getFile().then((f) => f.text()));
+
+  // A launched file, no folder: a data URL is the only source it can hold.
+  await page.evaluate(async (name) => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await (window as SidecarApp).__fm.loadHandle(await dir.getFileHandle('Bare.md'));
+  }, dirName);
+  await edit(' Bare.');
+  await expect.poll(disk).toContain('Body. Bare.');
+  await expect.poll(() => page.evaluate(() => (window as SidecarApp).__fm.dirty)).toBe(false);
+
+  // In its folder: said on the first save, with the image's own action.
+  await page.evaluate(async (name) => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await (window as SidecarApp).__fm.loadHandle(await dir.getFileHandle('Fig.md'), dir);
+  }, dirName);
+  await edit(' One.');
+  await expect.poll(disk).toContain('Body. One.');
+  await edit(' Two.');
+  await expect.poll(disk).toContain('Body. One. Two.');
+  const hints = (await toasts(page)).filter((t) => t.includes('as data'));
+  expect(hints).toEqual(['Fig.md holds an image as data — select it and choose Save to project to keep it in figures/']);
+});
+
+test('an opened .md file counts what it keeps as source, in Markdown words', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean((window as unknown as { __fm?: unknown }).__fm));
+  const dirName = await seedFolder(page, 'plass-islands', {
+    'Islands.md': '# Islands\n\n<div class="x">kept</div>\n\nText with <kbd>K</kbd> HTML.\n\n::: aside\nA note.\n:::\n',
+  });
+  await page.evaluate(async (name) => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await (window as SidecarApp).__fm.loadHandle(await dir.getFileHandle('Islands.md'), dir);
+  }, dirName);
+  await expect(page.locator('#toast')).toContainText('Islands.md — 2 block(s) and 2 inline span(s) kept as source');
+  await expect(page.locator('#toast')).not.toContainText('raw Typst');
 });
