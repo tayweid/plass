@@ -50,6 +50,29 @@ jobs:
       - name: Audit the Plass-owned sidecar dependency graph
         run: cargo audit --file sidecar/Cargo.lock
       - run: npm run verify:licenses
+      # Two unit suites check Plass against outside tools and skip, saying
+      # so, when the tool is missing: the content referee
+      # (src/md-parity.test.ts) needs pandoc, and the export compile
+      # (src/typ-export-compile.test.ts) needs the typst the export is exact
+      # for. Each is a pinned release checked against its sha256. Only the
+      # install may fail: a download that does not come through leaves the
+      # suite's skip notice in the npm test log, while a pandoc that runs
+      # makes the referee gate the deploy.
+      - name: Install pandoc 3.4 for the content referee
+        continue-on-error: true
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/pandoc.deb" https://github.com/jgm/pandoc/releases/download/3.4/pandoc-3.4-1-amd64.deb
+          echo "5813dac3384b9ab3e8fc2cb6f080d24ebff7d29bfef295242c01898225d3e2f3  $RUNNER_TEMP/pandoc.deb" | sha256sum -c -
+          sudo dpkg -i "$RUNNER_TEMP/pandoc.deb"
+          pandoc --version | head -n 1
+      - name: Install typst 0.14.2 for the export compile test
+        continue-on-error: true
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/typst.tar.xz" https://github.com/typst/typst/releases/download/v0.14.2/typst-x86_64-unknown-linux-musl.tar.xz
+          echo "a6044cbad2a954deb921167e257e120ac0a16b20339ec01121194ff9d394996d  $RUNNER_TEMP/typst.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/typst.tar.xz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/typst-x86_64-unknown-linux-musl/typst" --version
+          echo "TYPST=$RUNNER_TEMP/typst-x86_64-unknown-linux-musl/typst" >> "$GITHUB_ENV"
       - run: npm test
       - name: Test the Plass-owned sidecar source
         run: cargo test --locked --manifest-path sidecar/Cargo.toml
