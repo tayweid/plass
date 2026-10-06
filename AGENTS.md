@@ -6,7 +6,16 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
 ## Commands
 
 - `npm run dev` — dev server on 5199 (hardcoded in `vite.config.ts`, strictPort)
-- `npm test` — node test suites (knuth-plass, typ-parser, md round-trip)
+- `npm test` — every `src/**/*.test.ts` suite, found by
+  `scripts/run-unit-tests.ts` and run one at a time (a new suite registers
+  by existing; the four layout-port suites are `npm run test:layout`)
+- `npm run test:parity` — the pandoc content referee
+  (`src/md-parity.test.ts`) on `tests/fixtures/md`; needs pandoc 3.4
+  (`$PANDOC`, `pandoc` on PATH, or Quarto's). `npm test` runs the same
+  suite but skips it when there is no pandoc; `test:parity` sets
+  `PANDOC_REQUIRED=1`, which makes that a failure. CI installs pandoc 3.4.
+  `node --import tsx scripts/pandoc-parity.ts <file-or-folder>` runs the
+  comparison on the course corpus.
 - `npm run build` — production build with host-independent relative paths (CI runs this);
   deploy = push `main`: `.github/workflows/deploy.yml` builds and
   publishes to plass.tayweid.io via GitHub Pages.
@@ -127,6 +136,16 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   `src/environment-check.ts` measures one prose run against the port's
   shaped width, and a disagreement beyond 0.4% (a browser hinting the
   bundled fonts) turns the exact path off for the session with a notice.
+- **Math is LaTeX in the document and native Typst in print**
+  (2026-10-05). `src/math-convert.ts` converts each formula locally with
+  mitex 0.2.7's own translator, bundled as `src/mitex/mitex.wasm` and
+  digest-checked on load; `src/typst-math-prelude.ts` defines the handles
+  the converted math names. The PDF, the audit's compile, math ink and
+  Export → Typst all print `$…$`; the compiler resolves no package and
+  fetches nothing. Only the legacy `.typ` save keeps `#mi`/`#mitex` and
+  the mitex import, so those files reopen exactly. Typst stays 0.14.2. A
+  formula the converter rejects fails by name (outlined on the page,
+  refused by the export).
 - The 2026-08-27 "single Typst publication" rebuild was reverted (fe94326);
   it lives on `codex/archive-proof-architecture`. Native editable tables were
   ported from it (merged 2026-09-02); executable Typst code cells still are
@@ -204,9 +223,10 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   margins, so a row lands and fits like a paragraph (`blockTopAdjustPx`,
   `bottomInsetFor`; a later row's gutter is taken back at a page top like
   a table's margin). The audit matches a row cell by cell (`inner` units
-  in page-oracle). Markdown: a ```typst fence the importer recognizes
-  (`parseGridCall`). Off the rail (auto/fixed columns, spans, fills,
-  differing gutters) → island.
+  in page-oracle). Markdown: one `::: {.columns gutter=…}` div per row
+  of `::: {.column width=…%}` cells, later rows marked `.continued`. A
+  `.typ` `#grid` is read by `parseGridCall`; off the rail (auto/fixed
+  columns, spans, fills, differing gutters) → island.
 
 ## Product principle: Typst on rails
 
@@ -217,13 +237,15 @@ tiers, always visible to the writer, never silent:
   tables, citations, toolbar settings. Edited directly, laid out live by the
   local mirror, measured against Typst by the port audit. Exact by contract.
 - **Tolerated** — an island: unknown Typst in a `.typ` file (or typed in
-  the source view), an HTML block or `<!-- comment -->` in a `.md` file.
-  Kept verbatim in its file, never run. The page shows it as a code block
-  tagged in the margin, and Plass's compile (PDF, the audit) prints the
-  same code block (`docToTyp` with `islands: 'print'`), so page and print
-  agree and nothing is hidden. `code_block` with `params` `typst-raw` or
-  `md-raw`; `typst_inline` for inline Typst. Preservation, not an
-  authoring path — there is no island rendering to extend.
+  the source view); in a `.md` file a ```` ```{=typst} ```` block or
+  `` `…`{=typst} `` span, an HTML block, inline HTML, or a div whose class
+  is not a rail. Kept verbatim in its file, never run. The page shows it
+  as a code block tagged in the margin, and Plass's compile (PDF, the
+  audit) prints the same code block (`docToTyp` with `islands: 'print'`),
+  so page and print agree and nothing is hidden. `code_block` with
+  `params` `typst-raw` or `md-raw`; `typst_inline` (`lang` `typst` or
+  `html`) for an inline one. Preservation, not an authoring path — there
+  is no island rendering to extend.
 - **Off** — multi-column, floats, custom show/set rules, hand-written layout
   code. Declined on purpose. A new capability is a new rail: local mirror +
   an audit fixture, one at a time (PAGE-PORT's phase discipline,
@@ -235,8 +257,12 @@ tiers, always visible to the writer, never silent:
   plain text, shown as a full-sheet-width warm strip labeled "Comment ·
   Not printed" (`editor-comments.ts`/`.css`), kept in the working file
   (`.typ`: a `// plass:comment` … `// | line` … `// /plass:comment` frame;
-  `.md`: a `<!-- plass:comment` … `-->` HTML comment with `&`/`--` escaped
-  — `editor-comments-format.ts`), and absent from every rendered export
+  `.md`: every HTML comment is one, written plainly with `-->` escaped as
+  `--&gt;`, the old `<!-- plass:comment` frame still read —
+  `editor-comments-format.ts`; a comment the `.md` reader finds inside a
+  block (a div, list item, quote, cell or footnote, or mid-paragraph) is
+  hoisted to the nearest top-level boundary, with one warning per file),
+  and absent from every rendered export
   (`docToTyp` with `islands: 'print'` returns nothing for it, TeX likewise).
   Zero printed height: the paginator subtracts each note's painted height
   when it recovers print geometry (`commentHeights` in the snapshot, keyed
@@ -246,8 +272,8 @@ tiers, always visible to the writer, never silent:
   is per-sheet `top`/`height`, never `k * (pageH + gap)`; `printPageAt`
   maps a position to its PRINT page). A note follows the printed block
   before it; after an explicit page break it opens the new page. The
-  audit skips notes (`buildUnits`, `canonicalStart`). Plain `//` remarks
-  and plain HTML comments keep their old meanings (dropped; md-raw island).
+  audit skips notes (`buildUnits`, `canonicalStart`). A plain `//` remark
+  in a `.typ` keeps its old meaning (dropped).
   This authorizes no other hidden content, second renderer, or font
   substitution.
 
@@ -286,17 +312,34 @@ items against this before scope.
 
 ## Formats
 
-- `.typ` is the native serialization (`typ-serializer`/`typ-parser`;
-  unknown Typst survives as raw islands — never destroy content).
-- `.md` open/edit/save (`md-parser`/`md-serializer`, markdown-it):
-  pure markdown, no app metadata in frontmatter (standard
-  title/author/date only; settings are .typ territory). ```typst fences
-  are raw islands; ```bibtex is the embedded bibliography. Markdown the
-  page cannot render is carried, never stripped: HTML blocks (editorial
-  `<!-- comments -->`, `<div>`s) become `md-raw` islands — a code block
-  in the page and the print, verbatim on save; frontmatter lines with no
-  Plass field ride in `doc.attrs.frontmatter`. A `.typ` save writes the
-  island as a plain raw block and has no home for the frontmatter.
+- `.md` is the source of truth and the default (a new document is
+  Markdown; `docs/MARKDOWN-SOURCE-PLAN.md`). The format is Pandoc
+  Markdown as `docs/MARKDOWN-FORMAT.md` specifies, read by `md-parser`
+  (markdown-it, plus `md-divs`, `md-attrs`, `md-tables`) and written by
+  `md-serializer`; pandoc is the content referee (`npm run test:parity`),
+  never a renderer. YAML front matter carries the settings
+  (`md-frontmatter`): pandoc's names where pandoc has one (`papersize`,
+  `margin`, `fontsize` …), the rest under `plass:`; keys Plass does not
+  read ride along in `doc.attrs.frontmatter`. Fenced divs carry the rails
+  Markdown has no syntax for: `::: solution`; a grid as one `::: columns`
+  div per row of `::: column` cells, later rows `.continued`; `::: center`,
+  `::: right`, `::: keep` around one paragraph; `::: {.table …}` around a
+  pipe table. Every HTML comment is an editorial comment (nested ones
+  hoisted to top level on read). ```` ```{=typst} ```` and
+  `` `…`{=typst} `` are the hatch: kept verbatim, printed as code, never
+  run; any other div or an HTML block is carried the same way as an
+  `md-raw` island, inline HTML as an inline one. ```` ```typst ```` and ```` ```bibtex ````
+  are code listings. The bibliography is a ```` ```{=bibtex} ```` fence
+  at its position; a `bibliography:` key is read once, when the folder is
+  open, and the next save embeds it as the fence (until then the key is
+  kept).
+- `.typ` is an export (Export → Typst: the source Plass compiles, native
+  math, no package, comments left out; for compiling, not reopening).
+  Until the course corpus is converted (plan step 12), a legacy `.typ`
+  still opens and autosaves as `.typ` (`typ-parser`/`typ-serializer`
+  'file' mode; unknown Typst survives as raw islands — never destroy
+  content); step 13 makes it import-only. A `.typ` save has no home for
+  the Markdown front-matter carry.
 - `.tex` export is semantic (journals reformat); `.pdf` via Typst.
   Editorial comments are in both editable files and in neither export.
 
