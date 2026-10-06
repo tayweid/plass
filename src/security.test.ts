@@ -3,7 +3,9 @@ import { schema } from './schema';
 import { docToTyp, textSetLine } from './typ-serializer';
 import { isRemoteSource, remoteImageStatus } from './remote-images';
 import { contentSecurityPolicy } from './security-policy';
-import { isAllowedTypstPackage, MITEX_IMPORT, sourceNeedsPinnedTypstPackage, TYPST_PACKAGE_POLICY } from './typst-config';
+import { readFileSync } from 'node:fs';
+import { MITEX_IMPORT } from './typst-config';
+import { convertMath, ensureMathConverter, MathConvertError } from './math-convert';
 import { COMPILER_LIMITS, validateCompilerTask } from './typst-worker-protocol';
 import { INPUT_LIMITS, inputSizeError, textSizeError } from './input-limits';
 import { DEFAULT_SETTINGS, normalizeSettings } from './settings';
@@ -142,22 +144,45 @@ check(
   contentSecurityPolicy({ responseHeader: true }).includes("frame-ancestors 'none'"),
 );
 
-check('the generated mitex package is explicitly allowed', isAllowedTypstPackage(TYPST_PACKAGE_POLICY));
+// No package, ever: what Plass compiles has native math, and the compiler
+// resolves no package, so it fetches nothing from a registry.
+const workerSource = readFileSync(new URL('./typst-compiler.worker.ts', import.meta.url), 'utf8');
 check(
-  'arbitrary Typst Universe packages are denied',
-  !isAllowedTypstPackage({ namespace: 'preview', name: 'other', version: '1.0.0' }),
+  'the compiler worker resolves no package',
+  /TypstSnippet\.fetchPackageBy\(accessModel, \(\) => undefined\)/.test(workerSource) &&
+    !/packages\.typst\.org|TYPST_PACKAGE|pinnedPackage/.test(workerSource),
 );
+await ensureMathConverter();
+const mathDoc = schema.nodes.doc.create(null, [
+  schema.nodes.paragraph.create(null, [schema.text('Area '), schema.nodes.math_inline.create({ src: '\\frac{1}{2} b h' })]),
+  schema.nodes.math_display.create({ src: '\\sqrt{x}' }),
+]);
+const printed = docToTyp(mathDoc, { islands: 'print' });
+check('printed math imports no package', !printed.includes('#import') && printed.includes('$frac(1 ,2 ) b  h $'));
+check('the working .typ file keeps the mitex form it reopens from', docToTyp(mathDoc).includes(`\n${MITEX_IMPORT}\n`));
+// Converted math is inlined, no longer evaluated inside a string: a
+// formula whose Typst would reach past its own equation is refused.
+const contained = (latex: string) => {
+  try {
+    convertMath(latex);
+    return false;
+  } catch (error) {
+    return error instanceof MathConvertError;
+  }
+};
+check('a backtick in math is refused (it would open raw text past the equation)', contained('a ` b') && contained('x`) #panic("ran") $(`'));
+const unescapedCode = (typ: string) => /(^|[^\\])#(?!textmath\[|math\.equation\()/.test(typ);
 check(
-  'only source using the pinned package triggers its prefetch',
-  sourceNeedsPinnedTypstPackage('#import "@preview/mitex:0.2.7": mitex') &&
-    !sourceNeedsPinnedTypstPackage('#import "@preview/other:1.0.0": other'),
+  'code typed into a formula converts to escaped text',
+  ['a $ #panic("ran") $ b', '#panic("x")', 'x" #panic("ran") "', '\\text{a #panic("ran") b}'].every((latex) => {
+    try {
+      return !unescapedCode(convertMath(latex));
+    } catch (error) {
+      return error instanceof MathConvertError;
+    }
+  }),
 );
-check(
-  'the previous mitex pin is just another unlisted package',
-  !isAllowedTypstPackage({ namespace: 'preview', name: 'mitex', version: '0.2.5' }) &&
-    !sourceNeedsPinnedTypstPackage('#import "@preview/mitex:0.2.5": mitex'),
-);
-check('generated math imports exactly the pinned package', sourceNeedsPinnedTypstPackage(MITEX_IMPORT));
+check('text-mode math stays balanced', convertMath('\\text{$}]#') === '#textmath[#math.equation(block: false, $$);];\\]\\#');
 
 if (failed) {
   console.error(`\n${failed} security test(s) failed`);

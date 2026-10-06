@@ -4,13 +4,7 @@
 // watchdog and can terminate this entire global (including its WASM memory)
 // when a request exceeds its deadline.
 
-import {
-  isAllowedTypstPackage,
-  sourceNeedsPinnedTypstPackage,
-  TYPST_FONT_FILES,
-  TYPST_FONT_LIMITS,
-  TYPST_PACKAGE_POLICY,
-} from './typst-config';
+import { TYPST_FONT_FILES, TYPST_FONT_LIMITS } from './typst-config';
 import {
   COMPILER_LIMITS,
   type CompilerAsset,
@@ -71,8 +65,6 @@ Object.defineProperty(scope, 'Function', {
 });
 
 let typstPromise: Promise<TypstLike> | null = null;
-let pinnedPackageBytes: Uint8Array | null = null;
-let pinnedPackagePromise: Promise<void> | null = null;
 
 async function readBoundedResponse(response: Response, maxBytes: number, label: string): Promise<Uint8Array> {
   const declared = Number(response.headers.get('content-length'));
@@ -107,44 +99,6 @@ async function readBoundedResponse(response: Response, maxBytes: number, label: 
     offset += chunk.byteLength;
   }
   return data;
-}
-
-function hex(bytes: ArrayBuffer): string {
-  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-/** Fetch the one audited package asynchronously, with redirect, size, and
- * integrity checks, before synchronous Typst package resolution begins. */
-function loadPinnedPackage(): Promise<void> {
-  if (!pinnedPackagePromise) {
-    pinnedPackagePromise = (async () => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), TYPST_PACKAGE_POLICY.fetchTimeoutMs);
-      try {
-        const response = await fetch(TYPST_PACKAGE_POLICY.url, {
-          credentials: 'omit',
-          referrerPolicy: 'no-referrer',
-          redirect: 'error',
-          mode: 'cors',
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new Error(`Pinned Typst package returned HTTP ${response.status}`);
-        const data = await readBoundedResponse(
-          response,
-          TYPST_PACKAGE_POLICY.maxBytes,
-          'Pinned Typst package',
-        );
-        const digest = hex(await crypto.subtle.digest('SHA-256', data.slice().buffer as ArrayBuffer));
-        if (digest !== TYPST_PACKAGE_POLICY.sha256) {
-          throw new Error('Pinned Typst package failed its integrity check');
-        }
-        pinnedPackageBytes = data;
-      } finally {
-        clearTimeout(timer);
-      }
-    })();
-  }
-  return pinnedPackagePromise;
 }
 
 interface FontBuildContext {
@@ -205,10 +159,12 @@ function loadTypst(): Promise<TypstLike> {
       $typst.setCompilerInitOptions({ getModule: () => wasm.default });
       $typst.setRendererInitOptions({ getModule: () => rendererWasm.default });
       const accessModel = new MemoryAccessModel();
-      const registry = TypstSnippet.fetchPackageBy(accessModel, (spec, defaultUrl) => {
-        if (!isAllowedTypstPackage(spec) || defaultUrl !== TYPST_PACKAGE_POLICY.url) return undefined;
-        return pinnedPackageBytes ?? undefined;
-      });
+      // Plass-generated source imports no package (its math is native
+      // Typst), and imported raw Typst never runs: the registry resolves
+      // nothing and fetches nothing, so the compiler is no network client.
+      // (typst.ts's default registry would fetch from Typst Universe with a
+      // synchronous request.)
+      const registry = TypstSnippet.fetchPackageBy(accessModel, () => undefined);
       $typst.use(
         TypstSnippet.withAccessModel(accessModel),
         registry,
@@ -225,10 +181,9 @@ function loadTypst(): Promise<TypstLike> {
 
 let compilerReady = false;
 
-/** Everything a task needs before Typst sees its source: network I/O and
+/** Everything a task needs before Typst sees its source: font I/O and
  * instantiation only, the same for every document. */
-async function warm(needsPackage: boolean): Promise<void> {
-  if (needsPackage) await loadPinnedPackage();
+async function warm(): Promise<void> {
   const typst = (await loadTypst()) as TypstLike & { getRenderer(): Promise<unknown> };
   await typst.getCompiler();
   await typst.getRenderer();
@@ -260,7 +215,6 @@ async function runTask(task: CompilerTask): Promise<string | Uint8Array | unknow
     return null;
   }
 
-  if (sourceNeedsPinnedTypstPackage(task.source)) await loadPinnedPackage();
   const typst = await loadTypst();
   if (task.kind === 'svg') {
     await typst.resetShadow();
@@ -306,11 +260,10 @@ async function handleRequest(request: CompilerRequest) {
   }
   const task = request.task;
   if (task.kind !== 'test-busy') {
-    const needsPackage = sourceNeedsPinnedTypstPackage(task.source);
-    if (!compilerReady || (needsPackage && !pinnedPackageBytes)) {
+    if (!compilerReady) {
       scope.postMessage({ id: request.id, phase: 'loading' } satisfies CompilerResponse);
       try {
-        await warm(needsPackage);
+        await warm();
       } catch (error) {
         const response: CompilerResponse = {
           id: request.id,

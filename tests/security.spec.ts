@@ -229,32 +229,57 @@ test('raw Typst islands are shown as code and never compiled or linked', async (
   expect((typ.match(/^#link/gm) ?? []).length).toBe((typ.match(/```\n#link/g) ?? []).length);
 });
 
-test('compiler package policy makes only one pinned integrity-checked request', async ({ page }) => {
+test('the compiler resolves no package and requests none, math included', async ({ page }) => {
   const packageRequests: string[] = [];
   await page.route('https://packages.typst.org/**', async (route) => {
     packageRequests.push(route.request().url());
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/gzip',
-      headers: { 'access-control-allow-origin': '*' },
-      body: Buffer.from('tampered package'),
-    });
+    await route.abort();
   });
   await page.goto('/?new=1');
 
-  const unsupported = await page.evaluate(async () => {
+  // No package resolves, the one Plass's math once used included.
+  const imports = await page.evaluate(async () => {
     const { compileSvg } = await import('/src/pdf.ts');
-    return compileSvg('#import "@preview/not-a-real-package:9.9.9": *\n[probe]');
+    return Promise.all([
+      compileSvg('#import "@preview/not-a-real-package:9.9.9": *\n[probe]'),
+      compileSvg('#import "@preview/mitex:0.2.7": mitex\n#mitex(`x`)'),
+    ]);
   });
-  expect(unsupported).toBeNull();
-  expect(packageRequests).toEqual([]);
+  expect(imports).toEqual([null, null]);
 
-  const tampered = await page.evaluate(async () => {
-    const { compileSvg } = await import('/src/pdf.ts');
-    return compileSvg('#import "@preview/mitex:0.2.7": mitex\n#mitex(`x`)');
+  // A document with inline, bold and display math, a table cell's formula
+  // and a numbered label prints (native Typst math, its handles defined in
+  // the header) and compiles, with the math converter loaded from the app.
+  const printed = await page.evaluate(async () => {
+    const app = window as typeof window & { view: import('prosemirror-view').EditorView };
+    const { schema } = app.view.state;
+    const n = schema.nodes;
+    const strong = schema.marks.strong.create();
+    const doc = n.doc.create(null, [
+      n.paragraph.create(null, [
+        schema.text('Area '),
+        n.math_inline.create({ src: '\\frac{1}{2} b h' }),
+        schema.text('; and '),
+        n.math_inline.create({ src: '\\sqrt[3]{x}' }, null, [strong]),
+        schema.text(' bold.', [strong]),
+      ]),
+      n.math_display.create({ src: 'a &= b \\\\\nc &= \\underbrace{d}_{e}', label: 'eq:sys' }),
+      n.table.create(null, n.table_row.create(null, [n.table_cell.create(null, n.paragraph.create(null, n.math_inline.create({ src: '\\mathbf{v}' })))])),
+    ]);
+    const { docToTyp } = await import('/src/typ-serializer.ts');
+    const { ensureMathConverter } = await import('/src/math-convert.ts');
+    await ensureMathConverter();
+    const { compileDocSvg } = await import('/src/pdf.ts');
+    const svg = await compileDocSvg(doc);
+    return { typ: docToTyp(doc, { islands: 'print' }), compiled: typeof svg === 'string' && svg.includes('<svg') };
   });
-  expect(tampered).toBeNull();
-  expect(packageRequests).toEqual(['https://packages.typst.org/preview/mitex-0.2.7.tar.gz']);
+  expect(printed.typ).not.toContain('#import');
+  expect(printed.typ).not.toMatch(/#mi(?:tex)?\(/);
+  expect(printed.typ).toContain('$frac(1 ,2 ) b  h $; and ');
+  expect(printed.typ).toContain('#let mitexsqrt = ');
+  expect(printed.typ).toContain('$ <eq:sys>');
+  expect(printed.compiled).toBe(true);
+  expect(packageRequests).toEqual([]);
 });
 
 test('compiler timeout circuit blocks automatic retries until a document edit resets it', async ({ page }) => {
