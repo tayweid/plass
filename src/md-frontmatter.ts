@@ -257,7 +257,11 @@ function matchKey(s: string): KeyLine | null {
  *  after an anchor or a tag (`&a key: v`, `!!str key: v`, both read by
  *  pandoc), or a complex key's `? key` and `: value` lines. Kept as
  *  written, never taken for prose. */
-const yamlOnly = (s: string): boolean => /^[?:](?:[ \t]|$)/.test(s) || (/^[&!]/.test(s) && matchKey(afterProperties(s)) !== null);
+// A line YAML reads that Plass does not: a complex key, a property before a
+// key, or a line holding only node properties (`!!map`, `&a`), which tags
+// the block that follows and is still front matter to pandoc.
+const yamlOnly = (s: string): boolean =>
+  /^[?:](?:[ \t]|$)/.test(s) || (/^[&!]/.test(s) && (matchKey(afterProperties(s)) !== null || /^(?:[&!]\S*\s*)+$/.test(s)));
 
 function decodeKey(raw: string): string {
   if (raw.startsWith('"')) return (new FlowReader(raw, context()).node() as YScalar).value;
@@ -1976,7 +1980,10 @@ export function writeFrontmatter(fm: FrontmatterFields, warn: (m: string) => voi
   const lead = leadingRun(items, lines, 0);
   items.forEach((item, k) => {
     const raw = orig.slice(item.start, item.end);
-    const into = k < lead.count && lead.place === 'first' ? head : rest;
+    // A line holding only node properties (`!!map`, `&a`) that opened the
+    // block tags the whole map: it is valid YAML only before every key.
+    const rootProps = k === 0 && item.kind === 'stray' && /^(?:[&!]\S*\s*)+$/.test(raw[0].trim());
+    const into = rootProps || (k < lead.count && lead.place === 'first') ? head : rest;
     if (item.kind === 'blank') {
       pendingBlank = true;
       return;

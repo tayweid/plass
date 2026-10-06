@@ -1881,6 +1881,19 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   );
 }
 
+// A front-matter block opening with a line of node properties only (`!!map`,
+// `&a`) is front matter to pandoc: the title is read, the line is kept as
+// written, and the save keeps it first (the only place YAML allows it).
+{
+  const src = "---\n!!map\ntitle: T\n---\n\nB\n";
+  const r = mdToDoc(src);
+  const first = r.doc.firstChild;
+  const md1 = docToMd(r.doc);
+  check("a tag-only first front-matter line keeps the block front matter", first?.type.name === "doc_title" && first.textContent === "T", String(first?.type.name));
+  check("a tag-only first front-matter line is written back first", md1 === src, JSON.stringify(md1));
+  check("a tag-only first front-matter line converges", docToMd(mdToDoc(md1).doc) === md1);
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);
