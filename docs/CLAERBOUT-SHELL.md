@@ -401,11 +401,14 @@ prompted.
   pass the bar is Knuth's (the name pill carries the folder, from the
   shell's answer to the `document` report, below) and the panel is the
   paper: the pages are laid out at their own width and drawn at the
-  panel's by a transform (`src/paper-scale.ts`), so the window is the
-  zoom, and `followZoom`'s scaled window is a wider window drawing the
-  page larger, with no layout. The bar's height is the overlay's
-  (`env(titlebar-area-height)`), so a zoom step keeps its row on the
-  lights. The app's `minWidth` stays 740. Plass.app from the deploy
+  panel's by a transform (`src/paper-scale.ts`), so a wider window draws
+  the page larger, with no layout. The bar's height is the overlay's
+  (`env(titlebar-area-height)`). Since shell 0.2.11 (`zoom: "page"` in
+  `app/plass.json`, which replaced `followZoom`) the View menu's zoom
+  scales the paper alone: the shell holds Chromium's zoom at 1, so the
+  bar and the rail never change size, and sends the page `zoom {step}`;
+  `zoomPaper` sets a factor on the paper's scale (wider than the panel
+  pans across it, narrower is centred), remembered for the app. The app's `minWidth` stays 740. Plass.app from the deploy
   is built on tag v0.2.0: the frame and the end of the window-fitting
   ship with the next Plass deploy, the bar beside the lights with the
   next shell tag.
@@ -550,10 +553,8 @@ prompted.
       sends `{action: 'bounds', inline}` (`moveHistory`) whenever the
       room's size changes: a resize of the window, or the scroll rail's
       gutter coming or going (the panel's right edge); its top and left
-      are the bar's and the rail's and never move. A zoom step (the
-      device pixel ratio's change, heard on a resolution media query)
-      sends it too, since under `followZoom` the box in CSS px may not
-      change while the shell's factor does;
+      are the bar's and the rail's and never move (a zoom scales only
+      the paper inside the room, never the room);
     - View › History… (⇧⌘H) sends the page `history {kind: 'toggle'}`, and
       the page does what its tile does, so the box is the page's;
     - while it is up the paper, its shadow, the HUD and the scroll rail

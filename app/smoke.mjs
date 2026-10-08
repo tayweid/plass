@@ -2,8 +2,8 @@
 // the checkout (or a built app) on a .md in a throwaway folder, see the
 // document open and typeset, edit it, save with ⌘S, and check the disk;
 // see the page fill the panel at its width, then drag the window wider
-// and zoom (the window stays, the page is drawn larger and nothing is
-// laid out again), see the rail under the bar, the scroll rail in its
+// and zoom (the window and its bar stay, the paper is drawn larger and
+// nothing is laid out again), see the rail under the bar, the scroll rail in its
 // gutter at the window's right, the paper's corners rounded only where
 // they are the page's, and the menus' blur, and,
 // on a shell that hides the title bar, see Knuth's bar beside the
@@ -107,17 +107,16 @@ if (!saved.includes('Edited.')) await fail(`⌘S did not reach the disk:\n${save
 // The paper is the panel (src/style.css, src/paper-scale.ts): the page is
 // laid out at its own width, 816 CSS px, and drawn at the panel's width by
 // a transform, so it meets the panel's edges at any window width, and a
-// resize or a zoom draws it larger or smaller without laying anything out
-// again. Every pagination pass writes its stats into the HUD's title (the
+// resize draws it larger or smaller without laying anything out again. Every pagination pass writes its stats into the HUD's title (the
 // built page has no test hooks), so a pass is a mutation of that
 // attribute: there must be none across the drag and the zoom. The page
 // once resized the window to the paper 180 ms after every resize, which
 // snapped a drag back and, under a zoom, walked the window there in four
 // steps over a second; nothing sizes the window now. A zoom step goes
-// through View → Zoom In as a user takes it, where a shell that follows
-// the zoom (app/plass.json followZoom, shell 0.2.1) scales the window in
-// one step; a zoom level set from outside the menu is the page's alone.
-// One item is a half step, ×1.2^0.5.
+// through View → Zoom In as a user takes it: the shell (0.2.11,
+// app/plass.json `zoom: "page"`) holds Chromium's zoom at 1 and tells the
+// page, which draws the paper larger (1.1, then 1.25 of the panel's
+// width) and pans across it; the window, the bar and the rail stay.
 // The shell this runs on: the checkout's main.js, or the bundle's, read for what it can do.
 const shellMain = bundle ? path.join(bundle, 'Contents', 'Resources', 'app', 'main.js') : path.join(shell, 'main.js');
 const bounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
@@ -139,12 +138,10 @@ if (!filled(atRest)) await fail(`the page does not fill the panel: ${JSON.string
 await page.evaluate(() => {
   window.__passes = 0;
   window.__passAt = performance.now();
-  window.__resizes = 0;
   new MutationObserver((records) => {
     window.__passes += records.length;
     window.__passAt = performance.now();
   }).observe(document.getElementById('hud'), { attributes: true, attributeFilter: ['title'] });
-  window.addEventListener('resize', () => { window.__resizes += 1; });
 });
 // The edit's own settled pass first (it runs 250 ms after the last key):
 // a second without one, then count from nothing.
@@ -160,44 +157,45 @@ const dragged = await bounds();
 if (dragged.width !== window0.width + 200) await fail(`a drag from ${window0.width} to ${window0.width + 200} wide was answered with ${dragged.width}`);
 const wider = await paper();
 if (!filled(wider) || !(wider.drawn.width > atRest.drawn.width + 150)) await fail(`a wider window did not draw the page wider: ${JSON.stringify({ atRest, wider })}`);
-await page.evaluate(() => { window.__resizes = 0; });
-const follows = fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('followZoom');
+const pageZoom = fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes("config.window?.zoom === 'page'");
 const viewItem = (label) => app.evaluate(({ Menu }, name) => {
   const view = Menu.getApplicationMenu().items.find((item) => item.label === 'View');
   view.submenu.items.find((item) => item.label === name && item.visible !== false).click();
 }, label);
-if (follows) { await viewItem('Zoom In'); await page.waitForTimeout(200); await viewItem('Zoom In'); }
-else await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomLevel(1));
-await page.waitForTimeout(800);
-const zoomed = await bounds();
-const resizes = await page.evaluate(() => window.__resizes);
-const underZoom = await paper();
-// Knuth's bar (src/style.css, the name pill; knuth/src/styles.css): its
-// height is the lights' band at every zoom (--topbar is the overlay's
-// height in CSS px), so its row stays on the traffic lights.
-const band = await page.evaluate(() => {
-  const overlay = navigator.windowControlsOverlay;
-  return { lights: overlay?.visible ? overlay.getTitlebarAreaRect().height : null, bar: document.getElementById('toolbar').getBoundingClientRect().height };
-});
-if (band.lights !== null && Math.abs(band.lights - band.bar) > 0.5) await fail(`under a zoom step the lights' band is ${band.lights}px and the bar ${band.bar}px`);
-if (follows) await viewItem('Actual Size');
-else await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomLevel(0));
-await page.waitForTimeout(600);
-const passes = await page.evaluate(() => window.__passes);
-const grew = zoomed.width / dragged.width;
-// The shell scales the window with the zoom only as far as its display: on
-// the deploy's Mac the screen is small (1224 px dragged, no room for a
-// tenth more), and the step is fitted to the display instead, which the
-// check cannot read as a zoom. There the growth is not checked, and said.
-const display = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workAreaSize);
-const roomToGrow = display.width >= Math.ceil(dragged.width * 1.1) && display.height >= Math.ceil(dragged.height * 1.1);
-if (follows && !roomToGrow) console.log(`smoke: the display (${display.width}×${display.height}) has no room for a zoom step from ${dragged.width}×${dragged.height}: the window's growth is not checked here`);
-else if (follows ? grew < 1.09 || grew > 1.25 : zoomed.width !== dragged.width || zoomed.height !== dragged.height) {
-  await fail(`a zoom step took the window from ${dragged.width}×${dragged.height} to ${zoomed.width}×${zoomed.height}${follows ? ' (the shell should have scaled it with the zoom, up to its display)' : ''}`);
+const barAtRest = await page.evaluate(() => document.getElementById('toolbar').getBoundingClientRect().height);
+if (pageZoom) {
+  await viewItem('Zoom In');
+  await page.waitForTimeout(200);
+  await viewItem('Zoom In');
+  await page.waitForTimeout(600);
+  const zoomed = await bounds();
+  const factor = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomFactor());
+  const underZoom = await paper();
+  const pans = await page.evaluate(() => {
+    const panel = document.getElementById('scroll');
+    return { pan: panel.classList.contains('pan'), scrollWidth: panel.scrollWidth, clientWidth: panel.clientWidth };
+  });
+  // Knuth's bar (src/style.css, the name pill; knuth/src/styles.css): its
+  // height is the lights' band, and a zoom leaves it alone.
+  const band = await page.evaluate(() => {
+    const overlay = navigator.windowControlsOverlay;
+    return { lights: overlay?.visible ? overlay.getTitlebarAreaRect().height : null, bar: document.getElementById('toolbar').getBoundingClientRect().height };
+  });
+  if (band.lights !== null && Math.abs(band.lights - band.bar) > 0.5) await fail(`under a zoom step the lights' band is ${band.lights}px and the bar ${band.bar}px`);
+  if (band.bar !== barAtRest) await fail(`a zoom step took the bar from ${barAtRest}px to ${band.bar}px`);
+  if (factor !== 1) await fail(`View → Zoom In zoomed the page in Chromium (factor ${factor}); the shell should hold it at 1`);
+  if (zoomed.width !== dragged.width || zoomed.height !== dragged.height) await fail(`a zoom step took the window from ${dragged.width}×${dragged.height} to ${zoomed.width}×${zoomed.height}`);
+  if (Math.abs(underZoom.drawn.width - underZoom.panel.width * 1.25) > 0.5) await fail(`two zoom steps drew the paper ${underZoom.drawn.width}px in a ${underZoom.panel.width}px panel, not 1.25 of it`);
+  if (!pans.pan || !(pans.scrollWidth > pans.clientWidth)) await fail(`zoomed in, the panel does not pan across the paper: ${JSON.stringify(pans)}`);
+  if (underZoom.editor !== atRest.editor || wider.editor !== atRest.editor) await fail(`the editor's width moved: ${atRest.editor}, ${wider.editor}, ${underZoom.editor} CSS px`);
+  await viewItem('Actual Size');
+  await page.waitForTimeout(600);
+  const back = await paper();
+  if (!filled(back)) await fail(`after Actual Size the page does not fill the panel: ${JSON.stringify(back)}`);
+} else {
+  console.log('smoke: this shell zooms the window (older than 0.2.11): the paper\'s zoom is not checked here');
 }
-if (resizes < 1 || resizes > 4) await fail(`a zoom step fired ${resizes} resize events`);
-if (!filled(underZoom)) await fail(`under a zoom step the page does not fill the panel: ${JSON.stringify(underZoom)}`);
-if (underZoom.editor !== atRest.editor || wider.editor !== atRest.editor) await fail(`the editor's width moved: ${atRest.editor}, ${wider.editor}, ${underZoom.editor} CSS px`);
+const passes = await page.evaluate(() => window.__passes);
 if (passes) await fail(`a drag and a zoom step ran ${passes} pagination pass(es); they should only draw the page at another scale`);
 
 // Zen's shape (src/style.css): the bar across the top, the rail down the

@@ -7,7 +7,7 @@ import { closeHistory, history } from 'prosemirror-history';
 import { tableEditing } from 'prosemirror-tables';
 import { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
-import { isNativeShell, onShellReload, onShellSave, reportDocument, rewoundText, takeLaunchFile, unsavedReporter } from './claerbout';
+import { isNativeShell, onShellReload, onShellSave, onShellZoom, reportDocument, rewoundText, takeLaunchFile, unsavedReporter } from './claerbout';
 import { openInAnotherWindow } from './open-files';
 import { migrateLegacyTableGeometry } from './typ-parser';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
@@ -35,7 +35,7 @@ import { FileManager } from './file-manager';
 import { resetCompilerCircuit } from './compiler-circuit';
 import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
 import { describeVerdict } from './environment-check';
-import { attachPaper, paperSheets } from './paper-scale';
+import { attachPaper, paperSheets, zoomPaper } from './paper-scale';
 import { attachScrollRail, type ScrollRail } from './scroll-rail';
 import { attachPaperCaret } from './paper-caret';
 import { FROM_DISK, reloadTransaction } from './reload-in-place';
@@ -183,8 +183,8 @@ const stackEl = document.getElementById('stack')!;
 const pagesEl = document.getElementById('pages')!;
 
 // The paper is the panel (style.css): the pages fill its width by scaling,
-// never by re-flowing, so the window is the zoom (paper-scale.ts). Nothing
-// here sizes the window, and a resize lays nothing out. The shadow on the
+// never by re-flowing (paper-scale.ts). Nothing here sizes the window, and
+// a resize lays nothing out. The shadow on the
 // frame is drawn round the paper in view, its corners rounded only where
 // they are a sheet's (style.css, the paper's corners).
 attachPaper({
@@ -194,6 +194,10 @@ attachPaper({
   pages: pagesEl,
   shadow: document.getElementById('paper-shadow')!,
 });
+// Plass.app's View › Zoom In / Zoom Out / Actual Size: the paper drawn
+// larger or smaller, nothing else (paper-scale.ts); the toast says where
+// it is.
+onShellZoom((step) => showMessage(`Zoom ${Math.round(zoomPaper(step) * 100)}%`));
 
 let pageCount = 0;
 let pageSignature = '';

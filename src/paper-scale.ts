@@ -5,8 +5,15 @@
 // re-flowed one. A resize writes three things (the scale, the height of
 // the clip box round the stack, so the panel scrolls exactly the drawn
 // pages, and the scroll offset, so the same line stays at the top) and
-// nothing else: no layout of the editor, no pagination pass, no zoom. The
-// window is the zoom.
+// nothing else: no layout of the editor, no pagination pass.
+//
+// The zoom (Plass.app's View menu, ⌘+ ⌘− ⌘0: the shell zooms nothing and
+// tells the page, claerbout.ts onShellZoom) is a factor on that scale and
+// nothing else: at 100% the paper is the panel's width, zoomed in it is
+// wider and the panel pans sideways (as Preview's page does), zoomed out
+// it is narrower, centred on the frame. The bar, the rail and every other
+// thing round the paper keep their size, and the layout, laid out at the
+// page's own width, never sees a zoom. One zoom for the app, remembered.
 //
 // Geometry the layout reads must be the paper's own, and a client rect
 // under the transform is the drawn one, scaled. `atPaperSize` sets the
@@ -72,10 +79,46 @@ let runsOn = false;
 /** A corner of the paper on the screen (style.css, --paper-radius). */
 let radius = 12;
 let edgeFrame = 0;
+/** The zoom: a factor on the scale that fits the panel's width. */
+let zoom = 1;
+/** The panel's width and its scroll range across, drawn px, as fitPaper
+ *  last measured them, and the drawn paper's width. */
+let viewWidth = 0;
+let drawnWidth = 0;
+
+/** The zoom's steps: Chromium's own, from half size to three times. */
+const ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+const ZOOM_KEY = 'plass-paper-zoom';
+
+function readZoom(): number {
+  try {
+    const stored = Number(localStorage.getItem(ZOOM_KEY));
+    return ZOOMS.includes(stored) ? stored : 1;
+  } catch {
+    return 1;
+  }
+}
 
 /** The drawn page's width over its laid-out width (1 before attachPaper). */
 export function paperScale(): number {
   return scale;
+}
+
+/** One step of the View menu's zoom: 1 in, -1 out, 0 back to the panel's
+ *  width. Answers the zoom it is at now, the same one at either end of
+ *  the steps. Remembered for the next window. */
+export function zoomPaper(step: 1 | -1 | 0): number {
+  const at = ZOOMS.indexOf(zoom);
+  const next = step === 0 ? 1 : ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, at + step))];
+  if (next === zoom) return zoom;
+  zoom = next;
+  try {
+    localStorage.setItem(ZOOM_KEY, String(zoom));
+  } catch {
+    // A page without storage zooms all the same, for this window.
+  }
+  fitPaper();
+  return zoom;
 }
 
 /** Run a synchronous geometry read on the paper at its own size. Nested
@@ -94,8 +137,8 @@ export function atPaperSize<T>(read: () => T): T {
   }
 }
 
-/** Fit the stack to the panel's width and the clip box to the drawn
- *  stack, now. The stack's height is its own (the pages', which each
+/** Fit the stack to the panel's width times the zoom and the clip box to
+ *  the drawn stack, now. The stack's height is its own (the pages', which each
  *  settled pass sets) or, while the editor runs past the last page — a
  *  burst of typing at the end, before the pass that adds the page — the
  *  editor's, so the caret's line is never clipped out of reach.
@@ -119,7 +162,7 @@ export function fitPaper(): void {
   runsOn = overflow > sheetHeight + 1;
   const height = runsOn ? overflow : sheetHeight;
   const before = scale;
-  scale = panelWidth / sheetWidth;
+  scale = (panelWidth / sheetWidth) * zoom;
   // Written only when they change: this runs before every scroll to the
   // caret, almost always with nothing new to say.
   const transform = `scale(${scale})`;
@@ -132,14 +175,25 @@ export function fitPaper(): void {
   const drawnHeight = height * scale;
   const clipPx = `${drawnHeight}px`;
   if (clip.style.height !== clipPx) clip.style.height = clipPx;
+  // The clip box's width is the drawn paper's: the panel's at 100%, wider
+  // zoomed in (the panel pans across it: .pan), narrower zoomed out, where
+  // its auto margins centre it (style.css).
+  drawnWidth = sheetWidth * scale;
+  const widthPx = `${drawnWidth}px`;
+  if (clip.style.width !== widthPx) clip.style.width = widthPx;
+  const pan = drawnWidth > panelWidth + 0.5;
+  if (panel.classList.contains('pan') !== pan) panel.classList.toggle('pan', pan);
   // The same line at the panel's top: the drawn pages grew or shrank
-  // about the stack's top edge.
+  // about the stack's top edge. Across, the same point of the paper at
+  // the panel's middle.
   if (before !== scale && panel.scrollTop > 0) panel.scrollTop = (panel.scrollTop * scale) / before;
+  if (before !== scale && pan) panel.scrollLeft = ((panel.scrollLeft + panelWidth / 2) * scale) / before - panelWidth / 2;
   // The shadow round the paper in view: at once for a new scale, in this
   // frame (a resize's), else in the next if a height moved.
-  const moved = drawnHeight !== clipHeight || view.height !== viewHeight;
+  const moved = drawnHeight !== clipHeight || view.height !== viewHeight || panelWidth !== viewWidth;
   clipHeight = drawnHeight;
   viewHeight = view.height;
+  viewWidth = panelWidth;
   if (before !== scale) edgePaper();
   else if (moved) scheduleEdge();
 }
@@ -234,7 +288,17 @@ function edgePaper(): void {
     const inBottom = bottom - sheetTop(last);
     if (inBottom < radius) end = mix(end, endAt(last - 1), inBottom / radius);
   }
+  // Across: the paper centred on the panel when it is narrower (zoomed
+  // out), its sides then inside the panel with their corners; panned
+  // across when it is wider (zoomed in), a side cut straight while it is
+  // past the panel's edge.
+  const left = Math.max(0, (viewWidth - drawnWidth) / 2) - panel.scrollLeft;
+  const right = viewWidth - (left + drawnWidth);
   const px = (v: number) => `${Math.round(v * 100) / 100}px`;
+  writeEdge(shadow, '--paper-left', px(Math.max(0, left)));
+  writeEdge(shadow, '--paper-right', px(Math.max(0, right)));
+  writeEdge(shadow, '--paper-left-side', px(cornerLeft(-left)));
+  writeEdge(shadow, '--paper-right-side', px(cornerLeft(-right)));
   writeEdge(shadow, '--paper-top', px(start.inset));
   writeEdge(shadow, '--paper-bottom', px(end.inset));
   writeEdge(shadow, '--paper-top-corner', px(start.corner));
@@ -265,7 +329,7 @@ export function paperPass<T>(pass: () => T, caret: () => { top: number; bottom: 
   return result;
 }
 
-/** Fit the stack to the panel's width now and on every resize of the
+/** Fit the stack to the panel's width (times the zoom) now and on every resize of the
  *  panel (the window), of the stack's own box (a page added, the page size
  *  changed, the plain-text sheet growing) and of what it holds (the editor
  *  running past the last page); and draw the shadow round the paper in
@@ -283,6 +347,7 @@ export function attachPaper(paper: {
   pagesEl = paper.pages;
   shadowEl = paper.shadow;
   radius = parseFloat(getComputedStyle(paper.shadow).getPropertyValue('--paper-radius')) || radius;
+  zoom = readZoom();
   const observer = new ResizeObserver(() => fitPaper());
   observer.observe(paper.panel);
   observer.observe(paper.stack);
