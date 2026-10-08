@@ -323,16 +323,6 @@ test('the History tile beside the name asks Plass.app for the History page in th
 
 test('the History tile toggles the History page in the room: pressed by the shell’s word alone, open with the room’s box, bounds as it changes, close, and View › History…’s toggle', async ({ page }) => {
   await inPlassApp(page);
-  await page.addInitScript(() => {
-    const w = window as any;
-    const matchMedia = window.matchMedia.bind(window);
-    w.__resolutions = [];
-    w.matchMedia = (query: string) => {
-      const list = matchMedia(query);
-      if (query.includes('resolution')) w.__resolutions.push(list);
-      return list;
-    };
-  });
   await openRewind(page, '= Rewind\n\nThe first version.\n');
   const tile = page.locator('#history-tile');
   const editor = page.locator('.ProseMirror[contenteditable="true"]');
@@ -403,18 +393,6 @@ test('the History tile toggles the History page in the room: pressed by the shel
   await page.waitForTimeout(300);
   expect(await historyAsks(page)).toHaveLength(2);
 
-  // A zoom step, which under followZoom (the shell scales the window with
-  // it) may leave the CSS box as it was: the box goes again, for the shell
-  // to multiply by the new zoom. The step is the device pixel ratio's
-  // change, heard on a resolution query (kept by the init script below:
-  // headless Chromium's emulated scale does not fire it), which the page
-  // asks again for the next step.
-  const queries = await page.evaluate(() => (window as any).__resolutions.length);
-  expect(queries).toBeGreaterThan(0);
-  await page.evaluate(() => (window as any).__resolutions.at(-1).dispatchEvent(new Event('change')));
-  await expect.poll(() => historyAsks(page)).toHaveLength(3);
-  expect((await historyAsks(page))[2]).toEqual({ type: 'history', action: 'bounds', inline: grown });
-  expect(await page.evaluate(() => (window as any).__resolutions.length)).toBe(queries + 1);
   await page.setViewportSize({ width: 880, height: 720 });
   await expect.poll(async () => (await historyAsks(page)).at(-1)).toEqual({ type: 'history', action: 'bounds', inline: roomAtRest });
   const settled = (await historyAsks(page)).length;

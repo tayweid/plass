@@ -62,6 +62,11 @@
 //   asking the page to do what its tile does (`toggle`). The document
 //   stays loaded under it, so a rewind's save and reload above reach it
 //   as they reach any window on the project. toolbar.ts drives it.
+// - The View menu's zoom (shell 0.2.11, `window.zoom: "page"` in
+//   app/plass.json): the shell holds Chromium's zoom at 1, so the bar and
+//   the rail never scale, and tells the page `zoom {step}`; the page asks
+//   for the window that draws its paper at the next size (`resize`,
+//   paper-scale.ts zoomedWindow), the paper always the panel's width.
 // - Nothing else. `command` events (menu items acting in the page) are
 //   the shell's when a menu item needs one; the shell this replaced had no
 //   menu item that acted in the page.
@@ -95,6 +100,35 @@ export function focusThisWindow(): Promise<boolean> {
   return shell.request({ type: 'focus' }).then(
     (reply) => (reply as { focused?: unknown } | null)?.focused === true,
     () => false,
+  );
+}
+
+/** The View menu's Zoom In (1), Zoom Out (-1) and Actual Size (0), as the
+ *  shell tells them; returns the unsubscribe; nothing outside the app, and
+ *  nothing under a shell older than 0.2.11 (it zoomed the window itself). */
+export function onShellZoom(listener: (step: 1 | -1 | 0) => void): () => void {
+  const shell = bridge();
+  if (!shell) return () => {};
+  return shell.on('zoom', (detail) => {
+    const step = (detail as { step?: unknown } | null)?.step;
+    if (step === 1 || step === -1 || step === 0) listener(step);
+  });
+}
+
+/** The shell's answer to `resize`: the window's content size it got, or
+ *  why it left the window alone (`fullscreen`). */
+export type Resized = { resized: true; width: number; height: number } | { resized: false; reason: string };
+
+/** Ask for this window's content to be `width` × `height` CSS px (DIP:
+ *  the shell holds the page's zoom at 1). Held to the display by the
+ *  shell. Null in a browser tab or under a shell without `resize` (older
+ *  than 0.2.11). Never rejects. */
+export function resizeWindow(width: number, height: number): Promise<Resized | null> {
+  const shell = bridge();
+  if (!shell) return Promise.resolve(null);
+  return shell.request({ type: 'resize', width, height }).then(
+    (reply) => (reply && typeof reply === 'object' && 'resized' in reply ? (reply as Resized) : null),
+    () => null,
   );
 }
 

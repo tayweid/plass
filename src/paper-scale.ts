@@ -6,7 +6,13 @@
 // the clip box round the stack, so the panel scrolls exactly the drawn
 // pages, and the scroll offset, so the same line stays at the top) and
 // nothing else: no layout of the editor, no pagination pass, no zoom. The
-// window is the zoom.
+// window is the zoom: the paper is always the panel's full width, so
+// View › Zoom In / Zoom Out (Plass.app; the shell holds Chromium's zoom at
+// 1 and tells the page, claerbout.ts onShellZoom) ask the shell for the
+// window that draws the paper at the next size (zoomedWindow), and the
+// resize does the rest, as a drag of the window's edge would. The sizes
+// are the paper's own scale: Actual Size is the page at its printed size
+// (816 CSS px for Letter), and the bar and the rail never change.
 //
 // Geometry the layout reads must be the paper's own, and a client rect
 // under the transform is the drawn one, scaled. `atPaperSize` sets the
@@ -76,6 +82,31 @@ let edgeFrame = 0;
 /** The drawn page's width over its laid-out width (1 before attachPaper). */
 export function paperScale(): number {
   return scale;
+}
+
+/** The zoom's sizes of paper, as its scale: Chromium's own steps. */
+const ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+
+/** The window's content size that draws the paper at the next size of the
+ *  zoom (1 larger, -1 smaller, 0 its printed size), and that scale: the
+ *  panel grows or shrinks by what the paper does across, and down by the
+ *  same ratio, so the same stretch of the page stays in view; the frame
+ *  round the panel is as it was. Null past the last size, or before the
+ *  paper is attached. The shell holds the window to its display, so the
+ *  paper may land short of the scale asked. */
+export function zoomedWindow(step: 1 | -1 | 0): { width: number; height: number; scale: number } | null {
+  const panel = panelEl;
+  const sheet = stack;
+  if (!panel || !sheet || !(scale > 0)) return null;
+  const target = step === 0 ? 1 : step > 0 ? ZOOMS.find((z) => z > scale * 1.001) : [...ZOOMS].reverse().find((z) => z < scale * 0.999);
+  if (target === undefined) return null;
+  const view = panel.getBoundingClientRect();
+  const sheetWidth = parseFloat(getComputedStyle(sheet).width);
+  return {
+    width: Math.round(innerWidth - view.width + sheetWidth * target),
+    height: Math.round(innerHeight - view.height + (view.height * target) / scale),
+    scale: target,
+  };
 }
 
 /** Run a synchronous geometry read on the paper at its own size. Nested

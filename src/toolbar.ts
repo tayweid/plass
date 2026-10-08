@@ -797,8 +797,8 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   // the tile is pressed exactly while it is up, from that word alone,
   // never from the click. While it is up the room is measured again
   // whenever its box changes — a resize of the window, the scroll rail's
-  // gutter coming or going (the panel's right edge, 8 px or 20 px), a zoom
-  // step — and the shell moves the page to it. The document stays loaded
+  // gutter coming or going (the panel's right edge, 8 px or 20 px) — and
+  // the shell moves the page to it. The document stays loaded
   // underneath, hidden (style.css, .history-inline: the page's rounded
   // corners show the frame, not the paper), so a rewind's save and reload
   // reach it as ever. A document with no record gets the page saying why;
@@ -858,17 +858,6 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
       });
     };
     new ResizeObserver(follow).observe(room);
-    // A zoom step changes the CSS px → DIP the shell multiplies the box
-    // by; under followZoom (app/plass.json) the window scales with it, so
-    // the box in CSS px may not change at all. A change of the device
-    // pixel ratio is the step.
-    const zoomStep = () => {
-      matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => {
-        follow();
-        zoomStep();
-      }, { once: true });
-    };
-    zoomStep();
     // The page is the shell's, above everything this one draws in the
     // room, so whatever opens or acts there puts it away first, as Knuth's
     // bar does: the File and Export tiles (their menus drop over the room)

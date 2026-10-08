@@ -51,8 +51,8 @@
   --pill: #232326;
   --tile: #2e2e32;
   /* The bar's height is the traffic lights' band, which the shell
-     publishes as the Window Controls Overlay (in CSS px, so a zoom step
-     keeps the bar's row on the lights); 44 px in a tab and the PWA. */
+     publishes as the Window Controls Overlay; 44 px in a tab and the
+     PWA. */
   --topbar: env(titlebar-area-height, 44px);
   /* The frame's edge round the panel, at the window's right and bottom. */
   --edge: 8px;
@@ -1043,8 +1043,9 @@ body {
    Letter), and paper-scale.ts draws it at the panel's width with a
    transform on #stack, so a wider window is a larger page, a narrower
    one a smaller page, and nothing is laid out again — the window is the
-   zoom (a View menu zoom, which the shell answers by scaling the window,
-   app/plass.json followZoom, is the same thing again). The pages run
+   zoom: View › Zoom In / Out (Plass.app) sizes the window to the next
+   size of paper (paper-scale.ts zoomedWindow), and the bar and the rail
+   keep their size (the shell holds Chromium's zoom at 1). The pages run
    down the panel with a thin gap of the frame between them (#pages);
    the panel clips them and scrolls, with no scrollbar drawn (the scroll
    rail beside it maps the paper, and the HUD counts the pages). The page once centred in a grey room as a
