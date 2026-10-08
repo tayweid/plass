@@ -404,11 +404,12 @@ prompted.
   panel's by a transform (`src/paper-scale.ts`), so a wider window draws
   the page larger, with no layout. The bar's height is the overlay's
   (`env(titlebar-area-height)`). Since shell 0.2.11 (`zoom: "page"` in
-  `app/plass.json`, which replaced `followZoom`) the View menu's zoom
-  scales the paper alone: the shell holds Chromium's zoom at 1, so the
-  bar and the rail never change size, and sends the page `zoom {step}`;
-  `zoomPaper` sets a factor on the paper's scale (wider than the panel
-  pans across it, narrower is centred), remembered for the app. The app's `minWidth` stays 740. Plass.app from the deploy
+  `app/plass.json`, which replaced `followZoom`) the shell holds
+  Chromium's zoom at 1, so the bar and the rail never change size, and
+  sends the page `zoom {step}`; the paper is always the panel's full
+  width, so the page asks for the window that draws it at the next size
+  (`resize`, `zoomedWindow` in `src/paper-scale.ts`; Actual Size is the
+  page at its printed size). The app's `minWidth` stays 740. Plass.app from the deploy
   is built on tag v0.2.0: the frame and the end of the window-fitting
   ship with the next Plass deploy, the bar beside the lights with the
   next shell tag.

@@ -1042,12 +1042,10 @@ body {
    by re-flowing: the layout is the page's own width in CSS px (816 for
    Letter), and paper-scale.ts draws it at the panel's width with a
    transform on #stack, so a wider window is a larger page, a narrower
-   one a smaller page, and nothing is laid out again. The View menu's
-   zoom (Plass.app) is a factor on that scale and touches nothing else:
-   zoomed in, the paper is wider than the panel and the panel pans
-   across it (.pan); zoomed out, it is narrower, centred on the frame
-   (#paper's auto margins); the bar and the rail keep their size (the
-   shell holds Chromium's zoom at 1). The pages run
+   one a smaller page, and nothing is laid out again — the window is the
+   zoom: View › Zoom In / Out (Plass.app) sizes the window to the next
+   size of paper (paper-scale.ts zoomedWindow), and the bar and the rail
+   keep their size (the shell holds Chromium's zoom at 1). The pages run
    down the panel with a thin gap of the frame between them (#pages);
    the panel clips them and scrolls, with no scrollbar drawn (the scroll
    rail beside it maps the paper, and the HUD counts the pages). The page once centred in a grey room as a
@@ -1073,13 +1071,6 @@ body {
      a beat after typing. The pages hold their own content still, and a
      pass holds a followed caret (paperPass). */
   overflow-anchor: none;
-}
-
-/* Zoomed in past the panel's width (paper-scale.ts): the panel pans
-   across the paper too. Only then, so a paper the panel's width to the
-   subpixel never scrolls sideways by a rounding. */
-#scroll.pan {
-  overflow-x: auto;
 }
 
 /* Nothing on the paper but the text can be selected: the editors' text
@@ -1111,9 +1102,6 @@ body {
    in the plain-text view, where it is the sheet, never shorter than the
    panel. */
 #paper {
-  /* Its width is the drawn paper's (paper-scale.ts): narrower than the
-     panel when zoomed out, and then centred. */
-  margin-inline: auto;
   overflow: clip;
   clip-path: inset(0 round var(--paper-radius));
   background: var(--sheet);
@@ -1153,16 +1141,14 @@ body {
 #paper-shadow {
   position: fixed;
   z-index: -1;
-  /* Across, the paper's sides: inside the panel when it is zoomed out,
-     a side cut square while it is panned past the panel's edge. */
-  left: calc(var(--rail) + var(--paper-left, 0px));
-  right: calc(var(--edge-right) + var(--paper-right, 0px));
+  left: var(--rail);
+  right: var(--edge-right);
   top: calc(var(--topbar) + var(--paper-top, 0px));
   bottom: calc(var(--edge) + var(--paper-bottom, 0px));
-  border-top-left-radius: var(--paper-left-corner, min(var(--paper-top-corner, var(--paper-radius)), var(--paper-left-side, var(--paper-radius))));
-  border-top-right-radius: min(var(--paper-top-corner, var(--paper-radius)), var(--paper-right-side, var(--paper-radius)));
-  border-bottom-left-radius: var(--paper-left-corner, min(var(--paper-bottom-corner, var(--paper-radius)), var(--paper-left-side, var(--paper-radius))));
-  border-bottom-right-radius: min(var(--paper-bottom-corner, var(--paper-radius)), var(--paper-right-side, var(--paper-radius)));
+  border-top-left-radius: var(--paper-left-corner, var(--paper-top-corner, var(--paper-radius)));
+  border-top-right-radius: var(--paper-top-corner, var(--paper-radius));
+  border-bottom-left-radius: var(--paper-left-corner, var(--paper-bottom-corner, var(--paper-radius)));
+  border-bottom-right-radius: var(--paper-bottom-corner, var(--paper-radius));
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.05),
     0 2px 6px rgba(0, 0, 0, 0.35),
@@ -3335,10 +3321,8 @@ body {
     box-shadow: none;
   }
 
-  /* The paper at its own size: no clip, no scale, no zoom, no corners. */
+  /* The paper at its own size: no clip, no scale, no corners. */
   #paper {
-    width: auto !important;
-    margin: 0;
     height: auto !important;
     min-height: 0;
     overflow: visible;

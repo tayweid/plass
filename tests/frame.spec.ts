@@ -6,9 +6,10 @@ import { settleLocal } from './settle';
 // width by scaling (src/paper-scale.ts), never by re-flowing: a resize
 // draws the same layout larger or smaller — the editor's width in CSS px
 // stays, no pagination pass runs — and a page laid out in a window of any
-// width is the same page. Plass.app's View menu zoom scales the paper
-// alone (the shell sends `zoom {step}`), driven here through a stand-in
-// shell and in the real one by app/smoke.mjs. The bar is Knuth's (knuth/src/main.ts and styles.css). A
+// width is the same page. Plass.app's View menu zoom sizes the window to
+// the paper (the shell sends `zoom {step}`, the page asks `resize`),
+// driven here through a stand-in shell and in the real one by
+// app/smoke.mjs. The bar is Knuth's (knuth/src/main.ts and styles.css). A
 // paper that runs past the panel (any Letter page here, one sheet or
 // many) has the scroll rail's 20 px gutter at the window's right
 // (src/scroll-rail.ts, tests/rail.spec.ts), so the panel is the window
@@ -1004,16 +1005,26 @@ test('in Plass.app the History page’s room is the panel: the box sent is the p
   }
 });
 
-test('in Plass.app the View menu’s zoom draws the paper larger or smaller and nothing else: wider pans, narrower centres, the bar and rail stay, no pass, remembered', async ({ page }) => {
+test('in Plass.app the View menu’s zoom sizes the window to the paper’s next size: the paper always the panel’s full width, the bar and rail as they were, no pass', async ({ page }) => {
   test.setTimeout(90_000);
-  // The stand-in shell: the shell (0.2.11) holds Chromium's zoom at 1 and
-  // sends `zoom {step}` for Zoom In (1), Zoom Out (-1) and Actual Size (0).
+  // The stand-in shell (0.2.11): `zoom {step}` from the View menu, and
+  // `resize` answered as the shell does, here by the viewport; full screen
+  // on demand.
   await page.addInitScript(() => {
     const w = window as any;
     w.__listeners = {} as Record<string, Array<(detail: unknown) => void>>;
     w.__fire = (event: string, detail: unknown) => (w.__listeners[event] ?? []).forEach((listener: (d: unknown) => void) => listener(detail));
+    w.__resizes = [];
+    w.__fullscreen = false;
     w.claerbout = {
-      request: async (message: { type: string }) => (message.type === 'document' ? { path: null } : null),
+      request: async (message: { type: string; width?: number; height?: number }) => {
+        if (message.type === 'document') return { path: null };
+        if (message.type !== 'resize') return null;
+        w.__resizes.push({ width: message.width, height: message.height });
+        if (w.__fullscreen) return { resized: false, reason: 'fullscreen' };
+        await w.__resizeTo(message.width, message.height);
+        return { resized: true, width: message.width, height: message.height };
+      },
       on: (event: string, listener: (detail: unknown) => void) => {
         (w.__listeners[event] ??= []).push(listener);
         return () => {};
@@ -1021,85 +1032,59 @@ test('in Plass.app the View menu’s zoom draws the paper larger or smaller and 
       pathOf: () => '',
     };
   });
+  await page.exposeFunction('__resizeTo', (width: number, height: number) => page.setViewportSize({ width, height }));
   await page.setViewportSize({ width: 1100, height: 800 });
   await openTyp(page, Array.from({ length: 18 }, () => FILLER.repeat(3).trimEnd()).join('\n\n') + '\n', 'zoom.typ');
-  await page.evaluate(() => localStorage.removeItem('plass-paper-zoom'));
   const zoom = (step: number) => page.evaluate((step) => (window as any).__fire('zoom', { step }), step);
-  const chrome = () =>
-    page.evaluate(() => {
-      const box = (id: string) => {
-        const r = document.getElementById(id)!.getBoundingClientRect();
-        return { x: r.x, y: r.y, width: r.width, height: r.height };
-      };
-      return { bar: box('toolbar'), rail: box('rail'), panel: box('scroll') };
-    });
-  const shadow = () =>
-    page.evaluate(() => {
-      const r = document.getElementById('paper-shadow')!.getBoundingClientRect();
-      return { left: r.left, right: r.right };
-    });
+  const resizes = () => page.evaluate(() => (window as any).__resizes);
+  const bars = () =>
+    page.evaluate(() => ['toolbar', 'rail'].map((id) => {
+      const r = document.getElementById(id)!.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: id === 'toolbar' ? null : r.width, height: id === 'rail' ? null : r.height };
+    }));
   const before = await drawing(page);
   expectFilled(before);
-  const frameBefore = await chrome();
-  const fit = before.panel.width / PAGE_W;
+  const barsBefore = await bars();
+  // 1100 px: the panel 1036, the paper at 1.27 of its printed size.
+  expect(before.panel.width / PAGE_W).toBeCloseTo(1.2696, 3);
 
-  // In two steps: 1.25 of the panel's width, the panel panning across it
-  // and opened at the paper's middle.
+  // In: the next size is 1.5, so the window is the frame's 64 px and a
+  // 1224 px panel, and as much taller as the page drawn is.
   await zoom(1);
-  await expect(page.locator('#toast')).toContainText('Zoom 110%');
-  await zoom(1);
-  await expect(page.locator('#toast')).toContainText('Zoom 125%');
-  const zin = await drawing(page);
-  expect(zin.stack.width).toBeCloseTo(PAGE_W * fit * 1.25, 3);
-  expect(Math.abs(zin.clip.width - zin.stack.width)).toBeLessThan(1 / 64 + 0.001);
-  expect(zin.panel.scrollWidth).toBeGreaterThan(zin.panel.clientWidth);
-  const panned = await page.evaluate(() => document.getElementById('scroll')!.scrollLeft);
-  expect(Math.abs(panned - (zin.stack.width - zin.panel.width) / 2)).toBeLessThan(2);
-  // The shadow is the panel's across: the paper runs past both sides.
-  const sIn = await shadow();
-  expect(sIn.left).toBeCloseTo(zin.panel.left, 1);
-  expect(sIn.right).toBeCloseTo(zin.panel.right, 1);
-  // A click lands on the word drawn under it, panned and zoomed.
-  const hit = await page.evaluate(() => {
-    const view = (window as any).view;
-    const pos = 40;
-    const c = view.coordsAtPos(pos);
-    return { pos, x: c.left + 1, y: (c.top + c.bottom) / 2 };
-  });
-  await page.mouse.click(hit.x, hit.y);
-  await expect.poll(() => page.evaluate(() => (window as any).view.state.selection.head)).toBe(hit.pos);
+  await expect(page.locator('#toast')).toContainText('Zoom 150%');
+  expect((await resizes())[0]).toEqual({ width: 64 + 1224, height: 52 + Math.round(((800 - 52) * 1.5) / (1036 / 816)) });
+  const bigger = await drawing(page);
+  expectFilled(bigger);
+  expect(bigger.panel.width).toBe(1224);
 
-  // Out three steps from there to 0.9: narrower than the panel, centred,
-  // never panning, the shadow round the paper's sides.
-  for (let i = 0; i < 3; i++) await zoom(-1);
+  // Actual Size: the page at its printed size, 816 px across.
+  await zoom(0);
+  await expect(page.locator('#toast')).toContainText('Zoom 100%');
+  const actual = await drawing(page);
+  expectFilled(actual);
+  expect(actual.panel.width).toBe(PAGE_W);
+  expect(actual.window.width).toBe(PAGE_W + 64);
+
+  // Out: 90%, a window narrower still.
+  await zoom(-1);
   await expect(page.locator('#toast')).toContainText('Zoom 90%');
-  const zout = await drawing(page);
-  expect(zout.stack.width).toBeCloseTo(PAGE_W * fit * 0.9, 3);
-  expect(zout.panel.scrollWidth).toBe(zout.panel.clientWidth);
-  const margin = (zout.panel.width - zout.stack.width) / 2;
-  expect(zout.stack.left - zout.panel.left).toBeCloseTo(margin, 1);
-  expect(zout.panel.right - zout.stack.right).toBeCloseTo(margin, 1);
-  const sOut = await shadow();
-  expect(sOut.left).toBeCloseTo(zout.stack.left, 0);
-  expect(sOut.right).toBeCloseTo(zout.stack.right, 0);
+  const smaller = await drawing(page);
+  expectFilled(smaller);
+  expect(Math.abs(smaller.panel.width - PAGE_W * 0.9)).toBeLessThan(1);
 
-  // Nothing but the paper moved, and nothing was laid out again.
-  for (const d of [zin, zout]) {
+  // Nothing laid out again, the bar and the rail where they were.
+  for (const d of [bigger, actual, smaller]) {
     expect(d.passes).toBe(before.passes);
     expect(d.breaks).toBe(before.breaks);
     expect(d.editorWidth).toBe(before.editorWidth);
-    expect(d.stack.laidWidth).toBe(PAGE_W);
   }
-  expect(await chrome()).toEqual(frameBefore);
+  expect(await bars()).toEqual(barsBefore);
 
-  // Remembered: a reload opens at 90%; Actual Size is the panel's width.
-  await page.reload();
-  await page.waitForFunction(() => Boolean((window as any).__fm && (window as any).view));
-  await expect.poll(async () => (await drawing(page)).stack.width).toBeCloseTo(PAGE_W * fit * 0.9, 3);
-  await zoom(0);
-  await expect(page.locator('#toast')).toContainText('Zoom 100%');
+  // Full screen: the shell leaves the window, and the toast says why.
+  await page.evaluate(() => ((window as any).__fullscreen = true));
+  await zoom(1);
+  await expect(page.locator('#toast')).toContainText('Full screen');
   expectFilled(await drawing(page));
-  expect(await page.evaluate(() => localStorage.getItem('plass-paper-zoom'))).toBe('1');
 });
 
 test('clicks, selections, the caret and the toolbars land where the page is drawn', async ({ page }) => {
