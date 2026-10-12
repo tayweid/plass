@@ -1307,6 +1307,78 @@ test('a pass holds the caret where it is on the screen: Enters mid-page, across 
   expect(Math.abs(settled.top - typed.top)).toBeLessThan(1);
 });
 
+test('typing across line wraps moves the caret on a page that holds still: the panel never scrolls while the caret is mid-panel', async ({ page }) => {
+  test.setTimeout(120_000);
+  // Each keystroke's live pass held the caret against the browser's own
+  // wrap of the line being typed, a layout nobody saw: a word the browser
+  // wrapped and the port kept on the line read as the pass moving the
+  // caret up a line, and the panel scrolled up a line to hold it (then
+  // ProseMirror scrolled the caret back into view a few keys later). A
+  // pass holds the caret only against the page structure (src/paper-scale.ts).
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await openTyp(
+    page,
+    Array.from({ length: 6 }, (_, i) => `P${i} ` + FILLER.trimEnd()).join('\n\n') +
+      '\n\nTyping here.\n\n' +
+      Array.from({ length: 14 }, (_, i) => `Q${i} ` + FILLER.trimEnd()).join('\n\n') +
+      '\n',
+  );
+  // The caret at the end of "Typing here.", that line in the middle of the
+  // panel and of the first page, with room for the lines typed below it:
+  // a line carried over a page break is held on purpose (the test above).
+  await page.evaluate(() => {
+    const { view } = window as unknown as Hooks;
+    let pos = 0;
+    view.state.doc.descendants((node, at) => {
+      if (node.isText && node.text!.startsWith('Typing here')) pos = at + node.nodeSize;
+    });
+    const Selection = view.state.selection.constructor as typeof import('prosemirror-state').Selection;
+    view.focus();
+    view.dispatch(view.state.tr.setSelection(Selection.near(view.state.doc.resolve(pos))).scrollIntoView());
+    const panel = document.getElementById('scroll')!;
+    const box = panel.getBoundingClientRect();
+    panel.scrollTop += view.coordsAtPos(pos).top - (box.top + box.height / 2);
+  });
+  const scrollTop = () => page.evaluate(() => document.getElementById('scroll')!.scrollTop);
+  const sheet = () =>
+    page.evaluate(() => {
+      const { view } = window as unknown as Hooks;
+      const c = view.coordsAtPos(view.state.selection.head);
+      return [...document.querySelectorAll('.page-box')].findIndex((el) => {
+        const r = el.getBoundingClientRect();
+        return c.top >= r.top && c.top < r.bottom;
+      });
+    });
+  const start = await scrollTop();
+  const onSheet = await sheet();
+  expect(onSheet).toBe(0);
+  const before = await page.evaluate(() => (window as unknown as Hooks).__pagCount());
+  // Four lines' worth, one key at a time, with the live pass after each:
+  // the caret ends well inside the panel, never scrolled into view.
+  const text = (FILLER + 'Rivers bend around the old mill where nobody has lived for years. ').repeat(2);
+  const drift: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    await page.keyboard.type(text[i]);
+    const now = await scrollTop();
+    if (Math.abs(now - start) > 0.5) drift.push(`key ${i} ${JSON.stringify(text[i])}: ${start} -> ${now}`);
+    if (drift.length > 3) break;
+  }
+  expect(drift, drift.join('\n')).toEqual([]);
+  await settleLocal(page, before);
+  expect(await sheet()).toBe(onSheet);
+  expect(Math.abs((await scrollTop()) - start)).toBeLessThan(0.5);
+  // The caret stayed in the panel's view, lower than it began (four lines
+  // of typing), never scrolled: the lines moved under a still page.
+  const caret = await page.evaluate(() => {
+    const { view } = window as unknown as Hooks;
+    const panel = document.getElementById('scroll')!.getBoundingClientRect();
+    const c = view.coordsAtPos(view.state.selection.head);
+    return { inView: c.top >= panel.top && c.bottom <= panel.bottom, top: c.top - panel.top, panel: panel.height };
+  });
+  expect(caret.inView).toBe(true);
+  expect(caret.top).toBeGreaterThan(caret.panel / 2 + 60);
+});
+
 test('the rail and the panels it opens keep off the bar; a short window says the tools go on and keeps settings and the switch', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
   await page.goto('/?new=1');

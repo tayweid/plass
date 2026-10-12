@@ -41,7 +41,7 @@ import { buildSpec, type AtomResolver, type SpecKind } from './layout/typst-orac
 import { portBreaks, shapedWidthPt } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
 import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdict } from './environment-check';
-import { atPaperSize, fitPaper, paperPass } from './paper-scale';
+import { atPaperSize, fitPaper, paperPass, paperScale, type PaperCaret } from './paper-scale';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import { escapeTyp, expandMacrosWith, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
 import {
@@ -508,6 +508,13 @@ export function typesetPlugin(
   });
 }
 
+/** A page-gap spacer's spec: the whole of a page break's height in the
+ *  editor's flow, between lines, blocks, or a table's rows. */
+function isPageGapSpec(spec: unknown): boolean {
+  const kind = (spec as Partial<TypesetDecorationSpec> | null)?.tsKind;
+  return kind === 'line-page-gap' || kind === 'block-page-gap' || kind === 'row-page-gap';
+}
+
 class TypesetView {
   /** Whether the caret is being followed: ProseMirror scrolled it into
    *  view since it last moved (a keystroke, an arrow, a command), not a
@@ -857,11 +864,40 @@ class TypesetView {
     this.caretFollowed = true;
   }
 
-  /** The followed caret's drawn box, for paperPass to hold. */
-  private followedCaret = (): { top: number; bottom: number } | null => {
+  /** The followed caret's drawn box and anchor, for paperPass to hold. The
+   *  anchor is the drawn top of the caret's block (its top-level node)
+   *  plus the page gaps inside that block above the caret, so a pass moves
+   *  it by a page gap opened, closed or crossed and by nothing else. The
+   *  caret's own box is not the anchor: before a live pass the line being
+   *  typed is wrapped by the browser, and where that wrap disagrees with
+   *  the port's break by a line, the box moves a line that the page does
+   *  not (paper-scale.ts, the view holding still through a pass). */
+  private followedCaret = (): PaperCaret | null => {
     if (!this.caretFollowed) return null;
     try {
-      return this.view.coordsAtPos(this.view.state.selection.head);
+      const { state } = this.view;
+      const $head = state.selection.$head;
+      const box = this.view.coordsAtPos($head.pos);
+      let anchor = box.top;
+      if ($head.depth >= 1) {
+        const blockPos = $head.before(1);
+        const dom = this.view.nodeDOM(blockPos);
+        if (dom instanceof HTMLElement) {
+          anchor = dom.getBoundingClientRect().top;
+          // A gap at the block's own position stands before its box (side
+          // -1) and is already in that top; the ones inside it are from
+          // its first child on. A gap at the caret's position stands
+          // before the caret.
+          const decos = typesetKey.getState(state)?.decos;
+          if (decos) {
+            const scale = paperScale();
+            for (const d of decos.find(blockPos + 1, $head.pos, isPageGapSpec)) {
+              anchor += ((d.spec as { h?: number }).h ?? 0) * scale;
+            }
+          }
+        }
+      }
+      return { top: box.top, bottom: box.bottom, anchor };
     } catch {
       return null;
     }

@@ -33,8 +33,16 @@
 // the pages below moves), and what a pass does move in view is the lines
 // that cross a page break, the caret's among them. So `paperPass` holds
 // the caret: when it is being followed (scrolled into view since it last
-// moved) and is in the panel's view, it is at the same place on the
-// screen after the pass as before, whatever the pass moved.
+// moved) and is in the panel's view, the panel scrolls by what the pass
+// did to the page structure above it — a page gap opened above its block,
+// closed, or crossed by its line — and by nothing else. Not by where the
+// caret's own box went: before the pass the line being typed is wrapped
+// by the browser, a layout nobody sees (the pass runs in the keystroke's
+// microtask), and where that wrap disagrees with the port's break by a
+// line the caret's box moves a line that the page did not. Holding the
+// box scrolled the panel up a line at a word the browser wrapped and the
+// port kept, and down again a few keys later when ProseMirror brought
+// the caret back into view: the page crept under the typist's hands.
 //
 // The paper's corners (style.css, the paper's corners) are rounded only
 // where they are a sheet's own, and that is geometry: every sheet is
@@ -272,25 +280,35 @@ function edgePaper(): void {
   writeEdge(shadow, '--paper-bottom-corner', px(end.corner));
 }
 
+/** The followed caret as a pass holds it: its drawn box, and its anchor —
+ *  the drawn top of its block (the top-level node holding it) plus the
+ *  page gaps the pages have put inside that block above it. A pass moves
+ *  the anchor only by what it does to the page structure, never by the
+ *  block's own lines re-breaking. */
+export type PaperCaret = { readonly top: number; readonly bottom: number; readonly anchor: number };
+
 /** Run a layout pass on the paper at its own size, holding the caret still
- *  on the screen. `caret` gives the caret's drawn box, or null when it is
- *  not being followed. When that box is in the panel's view before the
- *  pass, the panel scrolls by however far the pass moved it (a line of it
- *  crossing a page break, a break opening above it), once, after the clip
- *  box has taken the pass's height, so a page added at the end does not
- *  cut the scroll short. */
-export function paperPass<T>(pass: () => T, caret: () => { top: number; bottom: number } | null): T {
+ *  on the screen. `caret` gives the caret's drawn box and anchor, or null
+ *  when it is not being followed. When that box is in the panel's view
+ *  before the pass, the panel scrolls by however far the pass moved the
+ *  anchor (a line of the caret's crossing a page break, a break opening
+ *  above its block, a page added under a burst of typing), once, after
+ *  the clip box has taken the pass's height, so a page added at the end
+ *  does not cut the scroll short. The caret's box itself may move a line
+ *  the anchor does not: that is the line being typed, laid by the port
+ *  where the browser had wrapped it, on a page that holds still. */
+export function paperPass<T>(pass: () => T, caret: () => PaperCaret | null): T {
   const panel = panelEl;
   let before: number | null = null;
   if (panel && depth === 0) {
     const box = caret();
     const view = panel.getBoundingClientRect();
-    if (box && box.bottom > view.top && box.top < view.bottom) before = box.top;
+    if (box && box.bottom > view.top && box.top < view.bottom) before = box.anchor;
   }
   const result = atPaperSize(pass);
   if (panel && before !== null) {
     fitPaper();
-    const after = caret()?.top;
+    const after = caret()?.anchor;
     if (after !== undefined && Math.abs(after - before) > 0.5) panel.scrollTop += after - before;
   }
   return result;
