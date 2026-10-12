@@ -586,10 +586,14 @@ if (restoredSessionDirty) fileManager.keepUnsaved();
 // guards the close at all).
 reportClose();
 
-/** Open a file-handler launch: the file arrives as a bare handle with no
- *  directory context, so documents with on-disk figures get a one-click
+/** Open a file-handler launch. Plass.app's shell hands over the file's
+ *  folder with it (`dir`); a browser launch arrives as a bare handle with
+ *  no directory context, so documents with on-disk figures get a one-click
  *  folder grant. */
-async function openLaunched(files: ReadonlyArray<FileSystemFileHandle>): Promise<void> {
+async function openLaunched(
+  files: ReadonlyArray<FileSystemFileHandle>,
+  dir: FileSystemDirectoryHandle | null = null,
+): Promise<void> {
   const [file] = files;
   // The manifest's launch_handler routes a launch to an existing window
   // (focus-existing): when that window already shows the launched file,
@@ -617,7 +621,7 @@ async function openLaunched(files: ReadonlyArray<FileSystemFileHandle>): Promise
       return;
     }
   }
-  await fileManager.loadHandle(file).then((opened) => {
+  await fileManager.loadHandle(file, dir).then((opened) => {
     if (!opened) return;
     if (files.length > 1) {
       showMessage(`Opened ${file.name} — Plass opens one document at a time`);
@@ -658,7 +662,7 @@ let launching = false;
 const nativeLaunch = takeLaunchFile();
 if (nativeLaunch) {
   launching = true;
-  nativeLaunch.then((handle) => openLaunched([handle])).catch((e: unknown) => {
+  nativeLaunch.then(({ handle, dir }) => openLaunched([handle], dir)).catch((e: unknown) => {
     console.warn('Launched file never arrived', e);
     showMessage('Could not open the file — try double-clicking it again');
   });

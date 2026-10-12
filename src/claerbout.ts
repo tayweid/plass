@@ -10,7 +10,9 @@
 // - A Finder open. The shell opens a window at `?open=<path>` and, once
 //   the page says it is ready, drops the file on it through the window's
 //   own debugger: the page receives a real FileSystemFileHandle, like one
-//   from a picker. There is no other way from a path to a handle.
+//   from a picker. There is no other way from a path to a handle. Since
+//   shell 0.2.12 the file's folder comes in the same drop, so the window
+//   holds its project folder (figures, bibliography) without asking.
 // - A window asking to come forward (`focus`, shell 0.2.1). Every Finder
 //   open lands in a new window, since the shell cannot know which window
 //   holds which file; when that file is already open in another window,
@@ -178,12 +180,22 @@ export function reportDocument(handle: FileSystemFileHandle | null): Promise<str
  *  does not know how (an older one), so the window does not hang launching. */
 const LAUNCH_DROP_MS = 10_000;
 
+/** A Finder open: the file's handle, and its folder's when the shell sent
+ *  it (0.2.12 drops the folder beside the file, so the project folder is
+ *  held without asking; an older shell drops the file alone). */
+export interface LaunchFile {
+  handle: FileSystemFileHandle;
+  dir: FileSystemDirectoryHandle | null;
+}
+
 /** The file this window was opened with from Finder, or null. The shell
  *  loads the page with ?open=<path>; the parameter is taken once (removed,
  *  so a reload restores the window's own session instead) and the handle
  *  arrives as a drop the shell makes after the page reports `ready`. The
- *  first dropped file of that name is the launch; nothing else is. */
-export function takeLaunchFile(): Promise<FileSystemFileHandle> | null {
+ *  first dropped file of that name is the launch; nothing else is. A
+ *  folder in the same drop is the launch's folder when the file sits at
+ *  its top level. */
+export function takeLaunchFile(): Promise<LaunchFile> | null {
   const shell = bridge();
   if (!shell) return null;
   const url = new URL(location.href);
@@ -192,7 +204,7 @@ export function takeLaunchFile(): Promise<FileSystemFileHandle> | null {
   url.searchParams.delete('open');
   window.history.replaceState(null, '', url.toString());
   const name = path.slice(path.lastIndexOf('/') + 1);
-  return new Promise<FileSystemFileHandle>((resolve, reject) => {
+  return new Promise<LaunchFile>((resolve, reject) => {
     const stop = () => {
       window.removeEventListener('dragover', onDragOver, true);
       window.removeEventListener('drop', onDrop, true);
@@ -203,17 +215,29 @@ export function takeLaunchFile(): Promise<FileSystemFileHandle> | null {
       e.stopImmediatePropagation();
     };
     const onDrop = (e: DragEvent) => {
-      const item = [...(e.dataTransfer?.items ?? [])].find((i) => i.kind === 'file');
-      if (!item) return;
+      const items = [...(e.dataTransfer?.items ?? [])].filter((i) => i.kind === 'file');
+      if (!items.length) return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      void (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> })
-        .getAsFileSystemHandle?.()
-        .then((handle) => {
-          if (!handle || handle.kind !== 'file' || handle.name !== name) return;
-          stop();
-          resolve(handle as FileSystemFileHandle);
-        });
+      // Every item's handle is asked for now: the drop's items are gone
+      // once this listener returns.
+      const handles = items.map((item) =>
+        (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> })
+          .getAsFileSystemHandle?.()
+          .catch(() => null) ?? Promise.resolve(null),
+      );
+      void Promise.all(handles).then(async (all) => {
+        const handle = all.find((h) => h?.kind === 'file' && h.name === name) as FileSystemFileHandle | undefined;
+        if (!handle) return;
+        stop();
+        let dir: FileSystemDirectoryHandle | null = null;
+        for (const h of all) {
+          if (h?.kind !== 'directory') continue;
+          const segs = await (h as FileSystemDirectoryHandle).resolve(handle).catch(() => null);
+          if (segs?.length === 1) dir = h as FileSystemDirectoryHandle;
+        }
+        resolve({ handle, dir });
+      });
     };
     const timer = window.setTimeout(() => {
       stop();
