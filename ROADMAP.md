@@ -53,7 +53,29 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      document needs it.
    - Citations: linking picker entries to local PDFs when keys match
      filenames.
-6. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
+6. **Tables and grids: a UI pass** (Taylor, 2026-10-12). Both work; both
+   look and feel unfinished. Seen on a grid in a mini-exam:
+   - The edit bar is a floating strip pinned over the top of the page,
+     covering the text it sits on, far from the grid being edited.
+     Controls belong near the grid (or in the side rail), not over the
+     prose.
+   - The controls do not match the rest of the UI: plain text buttons
+     (`+ Column`, `− Row`, `Unwrap`) beside the icon toolbar and rail,
+     raw fields (`Columns 1 : 1.174`, `Gutter (em) 1.2`), and a long
+     hint line under them.
+   - Cell boxes do not read as containing their content: dashed outlines
+     whose bottom edge runs through the last line of text, and the
+     selected cell's border cuts through its text. They are square;
+     softer, rounded boxes that clearly enclose the cell would look
+     better.
+   - Tables get the same review. A few more frictions to collect when
+     the pass starts.
+   Constraint: every change is paint-only. Cell chrome must not change
+   block heights (CLAUDE.md, vertical parity), so outlines enclose by
+   `box-shadow`/`outline`/an overlay, never by border or padding. Start
+   by scripting the current behavior in the browser and taking
+   screenshots, as the before.
+7. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
    for Plass and Knuth, Knuth's `docs/ROADMAP.md` carries the same
    entry, and `docs/COAUTHOR.md` there is the git-only design it
    replaces for live partners). The idea, from a chat of Taylor's: the
