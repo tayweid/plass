@@ -53,6 +53,31 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      document needs it.
    - Citations: linking picker entries to local PDFs when keys match
      filenames.
+6. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
+   for Plass and Knuth, Knuth's `docs/ROADMAP.md` carries the same
+   entry, and `docs/COAUTHOR.md` there is the git-only design it
+   replaces for live partners). The idea, from a chat of Taylor's: the
+   document shared live through a CRDT (Yjs; y-prosemirror binds to
+   the editor Plass already has), relayed and kept by a Cloudflare
+   Durable Object (one per document, WebSockets; y-partyserver is the
+   relay in a few dozen lines). The owner registers once and sets it up
+   at the front; a coauthor joins by link with a name and no account,
+   and sees the other's cursor and edits as they land. The shell's
+   autosave record stays underneath, untouched: the owner's shell
+   commits the owner's working tree as now. Plass goes first: a paper
+   is what two people write at once, and one ProseMirror document binds
+   as it is, with the `.typ` and `.md` serializers working from the
+   owner's side; the editorial comments
+   (`src/editor-comments-format.ts`) need a home in the shared document.
+   Knuth follows only if it makes sense there (Taylor is not sure it
+   does), and never shares kernel access: editing the file, nothing
+   else. The way to find out before any server account exists: two
+   shells on one Mac with their own state folders, a local relay
+   (`wrangler dev`), a morning of writing in both. Costs on record: a
+   hosted service is a new dependency for a local-first app; a coauthor
+   without the app needs a hosted edit-only page; per-line authorship in
+   the record blurs to the owner, with coauthors named in the commit
+   message.
 
 ## Done: Plass.app on the Claerbout shell (Electron, 2026-09-30)
 
