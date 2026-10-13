@@ -17,6 +17,11 @@ export interface ParityMetrics {
   typAsc: number;
   typDesc: number;
   extent: number;
+  /** Ink above the Typst frame's top (the cap height: ascenders, accents,
+   *  parentheses), body em. Paint only: the grid cell washes enclose it. */
+  inkAboveCapEm?: number;
+  /** Ink below the last baseline (descenders, parentheses), body em. */
+  inkBelowBaselineEm?: number;
 }
 
 export interface FontDefinition {
@@ -77,7 +82,7 @@ export const DEFAULT_FONT: FontDefinition = {
     'NewCM10-BoldItalic.woff2',
   ),
   portKeys: keys('new-computer-modern'),
-  parity: { cssA: 1.127, cssD: 0.29, typAsc: 0.6723, typDesc: 0.0123, extent: 0.6828 },
+  parity: { cssA: 1.127, cssD: 0.29, typAsc: 0.6723, typDesc: 0.0123, extent: 0.6828, inkAboveCapEm: 0.08, inkBelowBaselineEm: 0.25 },
   exact: true,
   selectable: true,
   compilerFallback: true,
@@ -196,6 +201,14 @@ export function effectiveFont(name: string): FontDefinition {
 
 export function parityMetrics(name: string): ParityMetrics {
   return effectiveFont(name).parity ?? DEFAULT_FONT.parity!;
+}
+
+/** How far a text line's ink reaches beyond its Typst frame (cap top to
+ *  baseline), body em: measured for the family when it carries values, a
+ *  conservative 0.12 / 0.28 otherwise. Editing chrome only (grid washes). */
+export function inkReachEm(name: string): { above: number; below: number } {
+  const m = parityMetrics(name);
+  return { above: m.inkAboveCapEm ?? 0.12, below: m.inkBelowBaselineEm ?? 0.28 };
 }
 
 export function selectableFonts(): readonly FontDefinition[] {

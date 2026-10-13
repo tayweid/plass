@@ -36,6 +36,7 @@ import { ROW_RULE_CYCLE, type RowRule } from './table-rules';
 import { CELL_FILL_CYCLE, type CellFill } from './table-fills';
 import { schema } from './schema';
 import { normalizeTableColumns, tableInsetPt } from './table-geometry';
+import { onPaperScale, paperScale } from './paper-scale';
 import {
   transactionChangesDerivedStructure,
   type DerivedStructureRules,
@@ -1103,6 +1104,57 @@ class NativeTableControls {
   }
 }
 
+/** Editing chrome for the table under the selection (paint only,
+ * style.css): `ts-table-editing` on the table and `ts-cell-active` on the
+ * cell under the caret, none while a cell selection draws its own overlay.
+ * Classes only, recomputed from the selection; nothing is measured. */
+function editingDecorations(state: EditorState): Decoration[] {
+  const context = tableContext(state);
+  if (!context) return [];
+  const out = [Decoration.node(context.pos, context.pos + context.node.nodeSize, { class: 'ts-table-editing' })];
+  if (state.selection instanceof CellSelection) return out;
+  const $head = state.selection.$head;
+  for (let depth = $head.depth; depth > 2; depth--) {
+    const role = $head.node(depth).type.spec.tableRole;
+    if (role !== 'cell' && role !== 'header_cell') continue;
+    if ($head.before(depth - 2) === context.pos) {
+      const cell = $head.before(depth);
+      out.push(Decoration.node(cell, cell + $head.node(depth).nodeSize, { class: 'ts-cell-active' }));
+    }
+    break;
+  }
+  return out;
+}
+
+/** The edited table carries the paper scale (`--ps`), so its ring stays one
+ * screen px under the stack's transform. TableView ignores attribute writes
+ * on its table element; only a changed value is written. */
+class TableEditingPaint {
+  private table: HTMLElement | null = null;
+  private readonly unlisten: () => void;
+
+  constructor(private readonly view: EditorView) {
+    this.unlisten = onPaperScale(() => this.write());
+    this.update();
+  }
+
+  update(): void {
+    const context = tableContext(this.view.state);
+    const dom = context ? this.view.nodeDOM(context.pos) : null;
+    this.table = dom instanceof HTMLElement && dom.tagName === 'TABLE' ? dom : null;
+    this.write();
+  }
+
+  private write(): void {
+    const value = String(paperScale());
+    if (this.table && this.table.style.getPropertyValue('--ps') !== value) this.table.style.setProperty('--ps', value);
+  }
+
+  destroy(): void {
+    this.unlisten();
+  }
+}
+
 /** Contextual controls, captions, and the lossless table-cell guard. */
 export function structuredTablePlugin(): Plugin {
   return new Plugin<NativeTablePluginState>({
@@ -1133,8 +1185,28 @@ export function structuredTablePlugin(): Plugin {
       if (!result.ok) announceTableConstraint(result.issue ?? 'That content');
       return result.ok;
     },
-    props: { decorations: (state) => tableControlsKey.getState(state)?.decorations ?? null },
-    view: (view) => new NativeTableControls(view),
+    props: {
+      decorations: (state) => {
+        const captions = tableControlsKey.getState(state)?.decorations ?? null;
+        const editing = editingDecorations(state);
+        if (!editing.length) return captions;
+        return (captions ?? DecorationSet.empty).add(state.doc, editing);
+      },
+    },
+    view: (view) => {
+      const controls = new NativeTableControls(view);
+      const paint = new TableEditingPaint(view);
+      return {
+        update: (next: EditorView) => {
+          controls.update(next);
+          paint.update();
+        },
+        destroy: () => {
+          controls.destroy();
+          paint.destroy();
+        },
+      };
+    },
   });
 }
 

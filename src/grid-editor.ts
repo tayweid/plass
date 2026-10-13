@@ -15,9 +15,10 @@ import { NodeSelection, Plugin, PluginKey, TextSelection, type Command, type Edi
 import { Decoration, DecorationSet, type EditorView, type NodeView, type ViewMutationRecord } from 'prosemirror-view';
 import { schema } from './schema';
 import { getSettings } from './settings';
-import { blockFrameSlackEm } from './typ-serializer';
+import { blockFrameSlackEm, headingScale } from './typ-serializer';
 import { pickAndInsertFigure } from './figures';
-import { atPaperSize } from './paper-scale';
+import { atPaperSize, onPaperScale, paperScale } from './paper-scale';
+import { inkReachEm } from './font-registry';
 import { onGeometryVarsPublished, scheduleTypeset } from './typeset-plugin';
 
 export const DEFAULT_GRID_GUTTER_EM = 1;
@@ -301,6 +302,8 @@ export class GridCellView implements NodeView {
   private node: PMNode;
   private pending = false;
   private fitted = false;
+  /** Where this cell's ink lies, for the grid's wash pass (cellWashPass). */
+  ink: CellInk | null = null;
 
   constructor(node: PMNode, private view: EditorView) {
     this.node = node;
@@ -383,9 +386,197 @@ export class GridCellView implements NodeView {
     // take a first/last block's extra spacing out of this cell's box.
     if (this.dom.style.getPropertyValue('--grid-cell-margin-top') !== top) this.dom.style.setProperty('--grid-cell-margin-top', top);
     if (this.dom.style.getPropertyValue('--grid-cell-margin-bottom') !== bottom) this.dom.style.setProperty('--grid-cell-margin-bottom', bottom);
+    // The wash's reach (paint only): where the ink sits inside this box,
+    // from the frames just measured and the family's ink beyond them, or a
+    // non-text block's own box, widened by any image or math in the edge
+    // leaves. Reads only the edge leaves' atoms; the grid pass runs only
+    // when this or the box's height moved (a keystroke that wraps no line
+    // costs nothing more).
+    const reach = inkReachEm(s.font);
+    const after = this.dom.getBoundingClientRect();
+    const frameTop = extraAbove + above * F;
+    const frameBottom = extraBelow + below * F;
+    const ink: CellInk = {
+      top: leafInk(first, after, 'top', frameTop - reach.above * F * scaleOf(first.node)),
+      bottom: leafInk(last, after, 'bottom', frameBottom - reach.below * F * scaleOf(last.node)),
+      frameTop: frameTop - reach.above * F,
+      frameBottom: frameBottom - reach.below * F,
+      height: after.height,
+      heading: first.node.type === schema.nodes.heading,
+      reachEm: reach.above + reach.below,
+    };
+    const prev = this.ink;
+    this.ink = ink;
+    if (!prev || moved || !sameInk(prev, ink)) scheduleWashPass(this.dom.parentElement?.parentElement ?? null);
     return moved;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Cell washes (editing chrome, paint only)
+//
+// While the caret is in a grid every cell paints a rounded wash on its
+// absolutely positioned ::after (style.css), as tall as its ROW's ink and
+// with air round it, so descenders and answer boxes sit inside. The cell
+// views measure their own ink (fit); one pass per grid row-equalizes it and
+// decides, per row boundary, between two rounded washes with air between
+// them and, when the rows' ink is too close for that (Q1's "Types:" line
+// over its answer boxes), one surface joined at the gap's midline with a
+// hairline seam. Everything written is a custom property on the cell:
+// nothing laid out reads them.
+
+/** A cell's ink, layout px inward from its border box (negative =
+ *  outside); `top`/`bottom` are null for a cell with no ink (an empty
+ *  paragraph), whose row's ink stands in, and `frameTop`/`frameBottom`
+ *  are a text line's ink at the cell's frame (an all-empty row). */
+interface CellInk {
+  top: number | null;
+  bottom: number | null;
+  frameTop: number;
+  frameBottom: number;
+  height: number;
+  heading: boolean;
+  /** The family's ink reach above the cap and below the baseline, em. */
+  reachEm: number;
+}
+
+const sameInk = (a: CellInk, b: CellInk) =>
+  a.top === b.top && a.bottom === b.bottom && a.frameTop === b.frameTop && a.frameBottom === b.frameBottom && a.height === b.height && a.heading === b.heading && a.reachEm === b.reachEm;
+
+/** Images, math and nested blocks whose own box is their ink. */
+const INK_ATOMS = 'img, .ts-inline-image, .math-inline, .math-display, figure, table';
+
+const isTextLeaf = (node: PMNode) => node.isTextblock && node.type !== schema.nodes.code_block;
+const scaleOf = (node: PMNode) => (node.type === schema.nodes.heading ? headingScale((node.attrs.level as number) || 1) : 1);
+
+/** The ink edge of a cell's first (`top`) or last (`bottom`) leaf, layout
+ *  px inward from the cell's box: a text leaf's line ink beyond its frame
+ *  (`textEdge`), a non-text leaf's own box, and every atom in it. */
+function leafInk(leaf: { node: PMNode; el: Element }, box: DOMRect, side: 'top' | 'bottom', textEdge: number): number | null {
+  let edge = Infinity;
+  const take = (r: DOMRect) => {
+    if (r.height <= 0.5) return;
+    edge = Math.min(edge, side === 'top' ? r.top - box.top : box.bottom - r.bottom);
+  };
+  if (!isTextLeaf(leaf.node)) take(leaf.el.getBoundingClientRect());
+  let atoms = 0;
+  for (const atom of leaf.el.querySelectorAll(INK_ATOMS)) {
+    atoms++;
+    take(atom.getBoundingClientRect());
+  }
+  if (isTextLeaf(leaf.node) && (leaf.node.textContent.trim() || (!atoms && leaf.node.content.size))) edge = Math.min(edge, textEdge);
+  return Number.isFinite(edge) ? edge : null;
+}
+
+/** Drawn px between two washes that do not join. */
+const WASH_MIN_GAP = 3;
+
+const pendingWash = new Set<Element>();
+function scheduleWashPass(grid: Element | null) {
+  if (!grid || pendingWash.has(grid)) return;
+  pendingWash.add(grid);
+  queueMicrotask(() => {
+    pendingWash.delete(grid);
+    if (grid.isConnected) atPaperSize(() => cellWashPass(grid as HTMLElement));
+  });
+}
+
+let placeholderMeasure: { font: string; width: number } | null = null;
+/** The full placeholder's width, layout px (style.css: 0.78em sans). */
+function placeholderWidth(F: number): number {
+  const sans = getComputedStyle(document.documentElement).getPropertyValue('--sans').trim() || 'sans-serif';
+  const font = `400 ${(0.78 * F).toFixed(3)}px ${sans}`;
+  if (placeholderMeasure?.font === font) return placeholderMeasure.width;
+  const ctx = document.createElement('canvas').getContext('2d');
+  if (!ctx) return 0;
+  ctx.font = font;
+  placeholderMeasure = { font, width: ctx.measureText(PLACEHOLDER).width };
+  return placeholderMeasure.width;
+}
+const PLACEHOLDER = 'Type, or add an image';
+
+function setVar(el: HTMLElement, name: string, value: string | null) {
+  if (value === null) {
+    if (el.style.getPropertyValue(name)) el.style.removeProperty(name);
+  } else if (el.style.getPropertyValue(name) !== value) el.style.setProperty(name, value);
+}
+
+const px = (v: number) => `${v.toFixed(3)}px`;
+
+/** Row-equalize the cells' ink and place every wash edge (layout px). */
+function cellWashPass(grid: HTMLElement) {
+  const F = parseFloat(getComputedStyle(grid).fontSize) || 16.67;
+  const g = (Number(grid.dataset.gutter) || 0) * F;
+  const joinedGrid = (Number(grid.dataset.gutter) || 0) < JOINED_GUTTER_EM;
+  const ps = paperScale() || 1;
+  // style.css's air-y / air-x, in px: air between the ink and the wash.
+  let reachEm = 0.33;
+  const airX = Math.min(0.3 * F, g / 3);
+  type Row = { el: HTMLElement; cells: Array<{ el: HTMLElement; box: DOMRect; ink: CellInk }>; T: number; B: number; airT: number; airB: number; joinT: boolean; joinB: boolean };
+  const rows: Row[] = [];
+  let heading = false;
+  for (const child of grid.children) {
+    if (!child.classList.contains('ts-grid-row')) continue;
+    const cells: Row['cells'] = [];
+    for (const cell of child.children) {
+      const view = observedCells.get(cell);
+      if (view?.ink) cells.push({ el: cell as HTMLElement, box: cell.getBoundingClientRect(), ink: view.ink });
+    }
+    if (!cells.length) continue;
+    if (!rows.length) {
+      heading = cells.some((c) => c.ink.heading);
+      reachEm = cells[0].ink.reachEm;
+    }
+    const inked = cells.filter((c) => c.ink.top !== null && c.ink.bottom !== null);
+    const T = inked.length ? Math.min(...inked.map((c) => c.box.top + c.ink.top!)) : Math.min(...cells.map((c) => c.box.top + c.ink.frameTop));
+    const B = inked.length ? Math.max(...inked.map((c) => c.box.bottom - c.ink.bottom!)) : Math.max(...cells.map((c) => c.box.bottom - c.ink.frameBottom));
+    rows.push({ el: child as HTMLElement, cells, T, B, airT: 0, airB: 0, joinT: false, joinB: false });
+  }
+  if (!rows.length) return;
+  const airY = Math.min(0.25 * F, Math.max(0, (g - reachEm * F) / 3));
+  // The grid's outer edges have no neighbour to keep clear of: at least
+  // 0.3em, 0.45em beside a heading (the tiles then read as holding it).
+  const airOut = Math.max(airY, airX, (heading ? 0.45 : 0.3) * F);
+  for (const row of rows) row.airT = row.airB = airY;
+  rows[0].airT = airOut;
+  rows[rows.length - 1].airB = airOut;
+  for (let i = 0; i + 1 < rows.length; i++) {
+    // A page break between the rows (a gap widget) is not part of their
+    // spacing; style.css un-joins the rows across it.
+    let pageGap = 0;
+    for (let el = rows[i].el.nextElementSibling; el && el !== rows[i + 1].el; el = el.nextElementSibling) pageGap += el.getBoundingClientRect().height;
+    const gap = rows[i + 1].T - rows[i].B - pageGap;
+    const air = Math.max(0, Math.min(airY, (gap - WASH_MIN_GAP / ps) / 2));
+    const join = joinedGrid || airY <= 0 || air < 0.75 * airY;
+    rows[i].airB = rows[i + 1].airT = join ? gap / 2 : air;
+    rows[i].joinB = rows[i + 1].joinT = join;
+  }
+  const full = placeholderWidth(F);
+  for (const row of rows) {
+    for (const { el, box } of row.cells) {
+      setVar(el, '--ps', String(ps));
+      setVar(el, '--cell-ink-top', px(row.T - box.top));
+      setVar(el, '--cell-ink-bottom', px(box.bottom - row.B));
+      setVar(el, '--air-t', px(row.airT));
+      setVar(el, '--air-b', px(row.airB));
+      setVar(el, '--air-out', px(airOut));
+      setVar(el, '--rt', row.joinT ? '0' : '1');
+      setVar(el, '--rb', row.joinB ? '0' : '1');
+      setVar(el, '--seam-b', row.joinB ? 'var(--cell-line)' : null);
+      // The placeholder (shown only in the active empty cell): the short
+      // form where the full one would run out of the cell.
+      setVar(el, '--ph', full > box.width - 0.6 * F ? '"Type\\2026"' : null);
+    }
+  }
+}
+
+/** Below this gutter (em) the washes tile into one surface (style.css). */
+export const JOINED_GUTTER_EM = 0.6;
+
+// A new paper scale: the strokes divide by it.
+onPaperScale((scale) => {
+  for (const cell of liveCells) setVar(cell.dom, '--ps', String(scale));
+});
 
 /** One re-typeset per view for a burst of cell re-fits. */
 const typesetPending = new WeakSet<EditorView>();
@@ -538,7 +729,10 @@ export function gridPlugin(): Plugin {
         const ctx = gridContext(state);
         if (!ctx) return null;
         const selected = selectedCell(state, ctx);
-        const decorations = [Decoration.node(ctx.pos, ctx.pos + ctx.node.nodeSize, { class: 'ts-grid-editing' })];
+        // Below JOINED_GUTTER_EM the washes tile into one surface split by
+        // hairlines (style.css): read from the attribute, no geometry.
+        const joined = (ctx.node.attrs.gutter as number) < JOINED_GUTTER_EM;
+        const decorations = [Decoration.node(ctx.pos, ctx.pos + ctx.node.nodeSize, { class: joined ? 'ts-grid-editing ts-grid-joined' : 'ts-grid-editing' })];
         ctx.node.forEach((row, rowOff, rowIndex) => {
           row.forEach((cell, cellOff, columnIndex) => {
             const attrs: Record<string, string> = {};

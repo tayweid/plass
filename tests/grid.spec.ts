@@ -112,22 +112,60 @@ test('adding a row focuses it and its cells accept figures and caption-following
   await expect(secondRow.locator('.ts-grid-cell').first()).toHaveClass(/ts-grid-cell-active/);
   await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 1 of 2');
   await settleLocal(page);
+  // Editing chrome (paint only): every cell washes as tall as its row's
+  // ink with air round it; the active cell adds an accent ring; an empty
+  // cell that is not active shows only a faint hairline; the placeholder
+  // is in the active empty cell alone.
   const cues = await grid.evaluate((element) => {
+    const stack = document.getElementById('stack')!;
+    const s = stack.getBoundingClientRect().width / stack.offsetWidth;
     const cells = [...element.querySelectorAll<HTMLElement>('.ts-grid-cell')];
-    const first = cells[0], active = cells[2];
-    const firstBorder = getComputedStyle(first, '::after'), activeBorder = getComputedStyle(active, '::after');
+    const wash = (cell: HTMLElement) => {
+      const a = getComputedStyle(cell, '::after');
+      const r = cell.getBoundingClientRect();
+      return { top: r.top + parseFloat(a.top) * s, bottom: r.bottom - parseFloat(a.bottom) * s, bg: a.backgroundColor, shadow: a.boxShadow, border: a.borderTopStyle };
+    };
+    // The text's real ink, from the font's glyph bounds on Chrome's own line box.
+    const ink = (cell: HTMLElement) => {
+      const p = cell.querySelector('p')!;
+      const cs = getComputedStyle(p);
+      const cv = document.createElement('canvas').getContext('2d')!;
+      cv.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      const m = cv.measureText(p.textContent!);
+      const range = document.createRange();
+      range.selectNodeContents(p);
+      const line = range.getClientRects()[0];
+      return { top: line.top + (m.fontBoundingBoxAscent - m.actualBoundingBoxAscent) * s, bottom: line.top + (m.fontBoundingBoxAscent + m.actualBoundingBoxDescent) * s };
+    };
     return {
-      firstStyle: firstBorder.borderTopStyle,
-      activeStyle: activeBorder.borderTopStyle,
-      firstBottom: first.getBoundingClientRect().bottom - parseFloat(firstBorder.bottom),
-      activeTop: active.getBoundingClientRect().top + parseFloat(activeBorder.top),
-      placeholder: getComputedStyle(active, '::before').content,
+      first: wash(cells[0]),
+      second: wash(cells[1]),
+      active: wash(cells[2]),
+      spacer: wash(cells[3]),
+      firstInk: ink(cells[0]),
+      placeholder: getComputedStyle(cells[2], '::before').content,
+      spacerPlaceholder: getComputedStyle(cells[3], '::before').content,
     };
   });
-  expect(cues.firstStyle).toBe('dashed');
-  expect(cues.activeStyle).toBe('solid');
-  expect(cues.firstBottom).toBeLessThanOrEqual(cues.activeTop);
-  expect(cues.placeholder).toContain('Type here or insert a figure');
+  const transparent = 'rgba(0, 0, 0, 0)';
+  expect(cues.first.border).toBe('none');
+  expect(cues.first.bg).not.toBe(transparent);
+  expect(cues.first.shadow).not.toMatch(/0px 0px 0px [\d.]+px inset/);
+  expect(cues.active.bg).not.toBe(transparent);
+  expect(cues.active.bg).not.toBe(cues.first.bg);
+  expect(cues.active.shadow).toMatch(/0px 0px 0px [\d.]+px inset/);
+  expect(cues.spacer.bg).toBe(transparent);
+  expect(cues.spacer.shadow).toMatch(/0px 0px 0px [\d.]+px inset/);
+  // The wash holds the ink: air above the cap and below the descenders.
+  expect(cues.first.top).toBeLessThan(cues.firstInk.top - 1);
+  expect(cues.first.bottom).toBeGreaterThan(cues.firstInk.bottom + 1);
+  // A row's washes end level; rows never overlap.
+  expect(Math.abs(cues.first.top - cues.second.top)).toBeLessThan(0.5);
+  expect(Math.abs(cues.first.bottom - cues.second.bottom)).toBeLessThan(0.5);
+  expect(Math.abs(cues.active.bottom - cues.spacer.bottom)).toBeLessThan(0.5);
+  expect(cues.first.bottom).toBeLessThanOrEqual(cues.active.top + 0.01);
+  expect(cues.placeholder).toContain('Type, or add an image');
+  expect(cues.spacerPlaceholder).toBe('none');
   await page.emulateMedia({ media: 'print' });
   expect(await secondRow.locator('.ts-grid-cell').first().evaluate((cell) => ['::before', '::after'].map((pseudo) => getComputedStyle(cell, pseudo).display))).toEqual(['none', 'none']);
   await page.emulateMedia({ media: 'screen' });

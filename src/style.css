@@ -100,6 +100,22 @@
   --serif: 'STIX Two Text', 'Charter', 'Iowan Old Style', 'Palatino', 'Georgia', serif;
   --mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+  /* On-paper editing chrome (grid washes, table rings, block selection).
+     The sheet is white in both OS appearances (Plass has no dark paper),
+     so these are deliberately scheme-independent: no prefers-color-scheme
+     override. They are the seam for a future dark sheet. */
+  --cell-wash: color-mix(in srgb, var(--ink) 3.5%, transparent);
+  --cell-wash-active: color-mix(in srgb, var(--accent) 6%, transparent);
+  --cell-ring: color-mix(in srgb, var(--accent) 65%, transparent);
+  --cell-line: color-mix(in srgb, var(--ink) 12%, transparent);
+  --cell-line-faint: color-mix(in srgb, var(--ink) 8%, transparent);
+  --block-select: color-mix(in srgb, var(--accent) 55%, transparent);
+  /* On the screen; divided by --ps under the paper's scale. */
+  --cell-radius: 6px;
+  /* CSS fallbacks only: the exact reach comes from GridCellView's fit()
+     (font-registry.ts inkReachEm). */
+  --ink-above: 0.08em;
+  --ink-below: 0.25em;
 }
 
 :root.has-rail {
@@ -1802,32 +1818,127 @@ body {
   position: relative;
 }
 
-/* The editor owns focus, so its selection decorations identify the grid
-   being edited. Paint every cell edge to make empty later rows visible. */
+/* Editing chrome on the paper (design/spec.md §3): paint only. The editor
+   owns focus, so its selection decorations identify the grid being edited
+   (ts-grid-editing, ts-grid-cell-active, data-grid-empty, ts-grid-joined).
+   Every cell gets a rounded wash on its absolutely positioned ::after,
+   under the glyphs (z-index -1 lands in #editor's stacking context, over
+   the white sheet), spanning its ROW's ink with air round it. The edges
+   come from GridCellView's wash pass (grid-editor.ts), layout px inward
+   from the cell's box: --cell-ink-top/-bottom (row-equalized ink),
+   --air-t/-b (the air beyond it; half the gap where two rows join),
+   --rt/--rb (0 = square at a joined boundary), --seam-b (the hairline
+   under a joined row), --air-out (the grid's outer edges). The fallbacks
+   are the CSS-only estimate for a cell the pass has not reached. Strokes
+   divide by --ps (the paper scale) to stay one screen px. */
+.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell {
+  --g: var(--grid-gutter, 1em);
+  --air-y: clamp(0px, calc((var(--g) - var(--ink-above) - var(--ink-below)) / 3), 0.25em);
+  --air-x: clamp(0px, calc(var(--g) / 3), 0.3em);
+  --wash-r: calc(var(--cell-radius) / var(--ps, 1));
+}
+
 .ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell::after {
   content: '';
   position: absolute;
-  top: calc(var(--half-leading, 0.42em) - var(--grid-cell-margin-top, 0px));
-  bottom: calc(var(--half-leading, 0.42em) - var(--grid-cell-margin-bottom, 0px));
-  inset-inline: -3px;
-  border: 1px dashed rgba(140, 140, 150, 0.45);
+  z-index: -1;
+  top: calc(var(--cell-ink-top, calc(var(--half-leading, 0.42em) - var(--grid-cell-margin-top, 0px))) - var(--air-t, var(--air-y)));
+  bottom: calc(var(--cell-ink-bottom, calc(var(--half-leading, 0.42em) - var(--grid-cell-margin-bottom, 0px) - var(--ink-above) - var(--ink-below))) - var(--air-b, var(--air-y)));
+  left: calc(-1 * var(--air-x));
+  right: calc(-1 * var(--air-x));
+  border-radius: calc(var(--rt, 1) * var(--wash-r)) calc(var(--rt, 1) * var(--wash-r)) calc(var(--rb, 1) * var(--wash-r)) calc(var(--rb, 1) * var(--wash-r));
+  background: var(--cell-wash);
+  box-shadow: inset 0 calc(-1px / var(--ps, 1)) 0 var(--seam-b, transparent);
   pointer-events: none;
+  transition: background-color 0.12s, box-shadow 0.12s;
 }
 
+/* The cell being edited: an accent wash and a one-px ring (half-radius
+   corners where its row joins the next). */
 .ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell-active::after {
-  border: 1px solid var(--accent);
+  border-radius: calc(max(var(--rt, 1), 0.5) * var(--wash-r)) calc(max(var(--rt, 1), 0.5) * var(--wash-r)) calc(max(var(--rb, 1), 0.5) * var(--wash-r)) calc(max(var(--rb, 1), 0.5) * var(--wash-r));
+  background: var(--cell-wash-active);
+  box-shadow: inset 0 0 0 calc(1px / var(--ps, 1)) var(--cell-ring);
 }
 
-.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell[data-grid-empty='true']::before {
-  content: 'Type here or insert a figure';
+/* An empty cell that is not the one being edited (a spacer column): no
+   wash, a faint hairline only, so it reads as structure. */
+.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell[data-grid-empty='true']:not(.ts-grid-cell-active)::after {
+  background: transparent;
+  box-shadow: inset 0 0 0 calc(1px / var(--ps, 1)) var(--cell-line-faint);
+}
+
+/* One ring per selected thing: a node-selected image or figure in the
+   cell rings itself, and the cell drops back to the quiet wash; a table
+   being edited in the cell rings its own cell, and the grid cell keeps
+   only its accent wash. */
+.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell-active:has(.ProseMirror-selectednode, .figure-selected)::after {
+  border-radius: calc(var(--rt, 1) * var(--wash-r)) calc(var(--rt, 1) * var(--wash-r)) calc(var(--rb, 1) * var(--wash-r)) calc(var(--rb, 1) * var(--wash-r));
+  background: var(--cell-wash);
+  box-shadow: inset 0 calc(-1px / var(--ps, 1)) 0 var(--seam-b, transparent);
+}
+
+.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell-active:has(table.ts-table-editing)::after {
+  box-shadow: inset 0 calc(-1px / var(--ps, 1)) 0 var(--seam-b, transparent);
+}
+
+/* A page break between two rows (the gap widget) parts a joined pair:
+   each keeps its own rounded edge and air there. */
+.ProseMirror .ts-grid-editing > .ts-grid-row:has(+ .ts-pagegap) > .ts-grid-cell {
+  --air-b: var(--air-y) !important;
+  --rb: 1 !important;
+  --seam-b: transparent !important;
+}
+
+.ProseMirror .ts-grid-editing > .ts-pagegap + .ts-grid-row > .ts-grid-cell {
+  --air-t: var(--air-y) !important;
+  --rt: 1 !important;
+}
+
+/* Small gutters (< 0.6em): the washes tile into one surface split by
+   hairlines at the gutter midlines, rounded only at the grid's outer
+   corners. Rows always join (the wash pass); the columns meet here. */
+.ProseMirror .ts-grid-editing.ts-grid-joined > .ts-grid-row > .ts-grid-cell::after {
+  left: calc(-0.5 * var(--g));
+  right: calc(-0.5 * var(--g));
+  border-radius: 0;
+  box-shadow:
+    inset calc(-1px * var(--div-r, 1) / var(--ps, 1)) 0 0 var(--cell-line),
+    inset 0 calc(-1px / var(--ps, 1)) 0 var(--seam-b, transparent);
+}
+
+.ProseMirror .ts-grid-editing.ts-grid-joined > .ts-grid-row > .ts-grid-cell:first-child::after {
+  left: calc(-1 * var(--air-out, 0.3em));
+  border-top-left-radius: calc(var(--rt, 1) * var(--wash-r));
+  border-bottom-left-radius: calc(var(--rb, 1) * var(--wash-r));
+}
+
+.ProseMirror .ts-grid-editing.ts-grid-joined > .ts-grid-row > .ts-grid-cell:last-child {
+  --div-r: 0;
+}
+
+.ProseMirror .ts-grid-editing.ts-grid-joined > .ts-grid-row > .ts-grid-cell:last-child::after {
+  right: calc(-1 * var(--air-out, 0.3em));
+  border-top-right-radius: calc(var(--rt, 1) * var(--wash-r));
+  border-bottom-right-radius: calc(var(--rb, 1) * var(--wash-r));
+}
+
+.ProseMirror .ts-grid-editing.ts-grid-joined > .ts-grid-row > .ts-grid-cell-active::after {
+  border-radius: calc(var(--wash-r) / 2);
+  box-shadow: inset 0 0 0 calc(1.5px / var(--ps, 1)) var(--cell-ring);
+}
+
+/* The placeholder: only in the empty cell being edited, on the caret's
+   line, starting clear of the caret (the short form in a narrow cell,
+   --ph from the wash pass). */
+.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell-active[data-grid-empty='true']::before {
+  content: var(--ph, 'Type, or add an image');
   position: absolute;
-  inset: 0;
-  color: color-mix(in srgb, var(--ink) 40%, transparent);
-  font: 400 11px var(--sans);
-  line-height: inherit;
-  overflow: hidden;
+  left: 0.3em;
+  top: calc(var(--half-leading, 0.42em) + 0.18em);
+  font: 400 0.78em/1.2 var(--sans);
+  color: color-mix(in srgb, var(--ink) 34%, transparent);
   white-space: nowrap;
-  text-overflow: ellipsis;
   pointer-events: none;
 }
 
@@ -2112,6 +2223,14 @@ body {
   display: inline-block;
   max-width: 100%;
   vertical-align: middle;
+}
+
+/* A node-selected inline image rings itself (its cell's ring steps aside,
+   grid washes above). Outline: paint only. */
+.ProseMirror .ts-inline-image.ProseMirror-selectednode {
+  outline: calc(1.5px / var(--ps, 1)) solid var(--cell-ring);
+  outline-offset: calc(2px / var(--ps, 1));
+  border-radius: calc(3px / var(--ps, 1));
 }
 
 .inline-image-action {
@@ -2441,11 +2560,6 @@ body {
   margin-top: var(--table-par-gap, 0.9em);
 }
 
-.ProseMirror th:hover,
-.ProseMirror td:hover {
-  background-color: color-mix(in srgb, var(--accent) 4%, transparent);
-}
-
 /* A page break inside a table (PAGE-PORT.md Phase 7): a widget row between
    two real rows. Its cells stack an exact-height gap and a copy of the
    repeating header sized to the real header row; nothing else here may add
@@ -2528,22 +2642,61 @@ body {
   box-shadow: 0 0 0 0.5pt var(--ink);
 }
 
-/* The header copy is presentation: no cell hover/selection affordances. */
-.ProseMirror table tr.ts-table-break > td:hover {
-  background-color: transparent;
-}
-
-/* prosemirror-tables cell-selection highlight */
+/* prosemirror-tables cell-selection highlight: square, so adjacent cells
+   join into one block. */
 .ProseMirror .selectedCell::after {
   content: '';
   position: absolute;
   inset: 0;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   pointer-events: none;
 }
 
 .ProseMirror .selectedCell {
   caret-color: var(--accent);
+}
+
+/* prosemirror-view's own rule (Plass never imported its stylesheet): while
+   a cell selection draws the overlay, the native text highlight is hidden
+   instead of doubling it. */
+.ProseMirror-hideselection *::selection {
+  background: transparent;
+}
+
+.ProseMirror-hideselection *::-moz-selection {
+  background: transparent;
+}
+
+.ProseMirror-hideselection {
+  caret-color: transparent;
+}
+
+/* The cell being edited (table-editor.ts decorations: ts-table-editing on
+   the table, ts-cell-active on the cell under the caret): a one-px ring
+   inset to clear the style's rules. On ::before: the cell's background and
+   box-shadow belong to fills and rules, ::after to .selectedCell. No wash,
+   so a fill reads true. */
+.ProseMirror table.ts-table-editing :is(td, th).ts-cell-active::before {
+  content: '';
+  position: absolute;
+  inset: calc(0.1em + 0.5px / var(--ps, 1));
+  border-radius: calc(4px / var(--ps, 1));
+  box-shadow: inset 0 0 0 calc(1px / var(--ps, 1)) var(--cell-ring);
+  pointer-events: none;
+}
+
+/* A Plain table has no rules: while it is edited, ghost cell edges show
+   its structure (outline is paint only). */
+.ProseMirror table.ts-table-editing.ts-table-plain :is(td, th) {
+  outline: calc(0.5px / var(--ps, 1)) solid var(--cell-line);
+  outline-offset: calc(-0.25px / var(--ps, 1));
+}
+
+/* A table or grid selected as a block (a NodeSelection). */
+.ProseMirror :is(table, .ts-grid).ProseMirror-selectednode {
+  outline: calc(2px / var(--ps, 1)) solid var(--block-select);
+  outline-offset: calc(4px / var(--ps, 1));
+  border-radius: calc(6px / var(--ps, 1));
 }
 
 .native-table-caption {
@@ -3387,9 +3540,18 @@ body {
     display: none !important;
   }
 
-  .ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell::after,
-  .ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell[data-grid-empty='true']::before {
+  /* Editing chrome never prints. */
+  .ProseMirror .ts-grid-cell::before,
+  .ProseMirror .ts-grid-cell::after,
+  .ProseMirror :is(td, th).ts-cell-active::before,
+  .ProseMirror .selectedCell::after {
     display: none;
+  }
+
+  .ProseMirror .ts-inline-image.ProseMirror-selectednode,
+  .ProseMirror :is(table, .ts-grid).ProseMirror-selectednode,
+  .ProseMirror table.ts-table-editing.ts-table-plain :is(td, th) {
+    outline: none;
   }
 
   /* Screen footnote positions are meaningless in print flow; show bodies as
