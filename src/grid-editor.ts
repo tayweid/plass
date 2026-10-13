@@ -18,6 +18,7 @@ import { getSettings } from './settings';
 import { blockFrameSlackEm } from './typ-serializer';
 import { pickAndInsertFigure } from './figures';
 import { atPaperSize } from './paper-scale';
+import { onGeometryVarsPublished, scheduleTypeset } from './typeset-plugin';
 
 export const DEFAULT_GRID_GUTTER_EM = 1;
 
@@ -235,6 +236,50 @@ function leafOf(node: PMNode, el: Element | null, last: boolean): { node: PMNode
   return n && e ? { node: n, el: e } : null;
 }
 
+/** Every mounted cell, for the re-fits nothing in the cell's own node
+ *  announces (geometry variables, late fonts). */
+const liveCells = new Set<GridCellView>();
+
+/** One observer for every cell's content box. A cell's margins are the
+ *  only thing fit() writes, and margins never resize the content box, so
+ *  the observer cannot loop; what does resize it — a nested table's column
+ *  pass or its block margin changing, a late font — re-fits the cell. */
+let cellObserver: ResizeObserver | null = null;
+const observedCells = new WeakMap<Element, GridCellView>();
+function observeCell(cell: GridCellView, el: HTMLElement) {
+  if (typeof ResizeObserver === 'undefined') return;
+  cellObserver ??= new ResizeObserver((entries) => {
+    for (const entry of entries) observedCells.get(entry.target)?.refitSoon();
+  });
+  observedCells.set(el, cell);
+  cellObserver.observe(el);
+}
+
+/** Re-fit every mounted cell now, in one paper-size measure. Returns true
+ *  when any cell's margins moved. */
+export function refitGridCells(): boolean {
+  if (!liveCells.size) return false;
+  return atPaperSize(() => {
+    let moved = false;
+    for (const cell of liveCells) moved = cell.fitNow() || moved;
+    return moved;
+  });
+}
+
+// Published geometry variables change what a cell's first/last block
+// measures (a table's --table-mb): re-fit inside that pass, before it
+// measures the page.
+onGeometryVarsPublished(refitGridCells);
+
+// A late font can move a leaf without resizing the cell's box.
+if (typeof document !== 'undefined' && document.fonts) {
+  const refitAll = () => {
+    for (const cell of liveCells) cell.refitSoon();
+  };
+  void document.fonts.ready.then(refitAll);
+  document.fonts.addEventListener('loadingdone', refitAll);
+}
+
 /**
  * A grid cell. Its box is normalized so that, whatever block starts or
  * ends it, the box begins one paragraph slack above the content's Typst
@@ -244,19 +289,26 @@ function leafOf(node: PMNode, el: Element | null, last: boolean): { node: PMNode
  * cell in a row shares frame top and the tallest frame sets the row (as
  * Typst's grid aligns cells), and the paginator can fit a row with the
  * paragraph's adjust and inset. The margins are re-measured whenever the
- * cell's content changes; reading two rects is the whole cost.
+ * cell's content changes, its box resizes, the document's geometry
+ * variables change, or a font arrives; reading two rects is the whole
+ * cost. fit() is a function of the settled DOM, so a re-fit with nothing
+ * changed writes nothing: entering a cell (a decoration change) never
+ * moves layout.
  */
 export class GridCellView implements NodeView {
   dom: HTMLElement;
   contentDOM: HTMLElement;
   private node: PMNode;
   private pending = false;
+  private fitted = false;
 
   constructor(node: PMNode, private view: EditorView) {
     this.node = node;
     this.dom = document.createElement('div');
     this.dom.className = 'ts-grid-cell';
     this.contentDOM = this.dom;
+    liveCells.add(this);
+    observeCell(this, this.dom);
     this.schedule();
   }
 
@@ -271,24 +323,44 @@ export class GridCellView implements NodeView {
     return m.type === 'attributes' && m.target === this.dom;
   }
 
+  destroy(): void {
+    liveCells.delete(this);
+    cellObserver?.unobserve(this.dom);
+  }
+
+  /** Re-fit after something outside the document moved (observer, fonts). */
+  refitSoon(): void {
+    this.schedule();
+  }
+
   private schedule() {
     if (this.pending) return;
     this.pending = true;
     queueMicrotask(() => {
       this.pending = false;
-      // Measured on the paper at its own size (paper-scale.ts).
-      atPaperSize(() => this.fit());
+      // Measured on the paper at its own size (paper-scale.ts). A change
+      // to a cell that was already fitted moves the rows below after a
+      // pass may have measured them: re-paginate. (A new cell's first fit
+      // precedes the pass its own transaction scheduled.)
+      const first = !this.fitted;
+      this.fitted = true;
+      if (atPaperSize(() => this.fit()) && !first) scheduleTypesetSoon(this.view);
     });
   }
 
-  private fit() {
-    if (!this.dom.isConnected) return;
+  /** Fit now (the caller holds the paper at its own size). */
+  fitNow(): boolean {
+    return this.fit();
+  }
+
+  private fit(): boolean {
+    if (!this.dom.isConnected) return false;
     const s = getSettings(this.view.state);
     const F = parseFloat(getComputedStyle(this.view.dom).fontSize) || 16.67;
     const box = this.dom.getBoundingClientRect();
     const first = leafOf(this.node, this.contentDOM, false);
     const last = leafOf(this.node, this.contentDOM, true);
-    if (!first || !last || box.height === 0) return;
+    if (!first || !last || box.height === 0) return false;
     const ref = blockFrameSlackEm(schema.nodes.paragraph.create(), s);
     const above = blockFrameSlackEm(first.node, s).above;
     const below = blockFrameSlackEm(last.node, s).below;
@@ -298,13 +370,32 @@ export class GridCellView implements NodeView {
     const marginBottom = ref.below * F - (extraBelow + below * F);
     const top = `${marginTop.toFixed(3)}px`;
     const bottom = `${marginBottom.toFixed(3)}px`;
-    if (this.dom.style.marginTop !== top) this.dom.style.marginTop = top;
-    if (this.dom.style.marginBottom !== bottom) this.dom.style.marginBottom = bottom;
+    let moved = false;
+    if (this.dom.style.marginTop !== top) {
+      this.dom.style.marginTop = top;
+      moved = true;
+    }
+    if (this.dom.style.marginBottom !== bottom) {
+      this.dom.style.marginBottom = bottom;
+      moved = true;
+    }
     // Editing guides use the normalized frame, including margins that
     // take a first/last block's extra spacing out of this cell's box.
     if (this.dom.style.getPropertyValue('--grid-cell-margin-top') !== top) this.dom.style.setProperty('--grid-cell-margin-top', top);
     if (this.dom.style.getPropertyValue('--grid-cell-margin-bottom') !== bottom) this.dom.style.setProperty('--grid-cell-margin-bottom', bottom);
+    return moved;
   }
+}
+
+/** One re-typeset per view for a burst of cell re-fits. */
+const typesetPending = new WeakSet<EditorView>();
+function scheduleTypesetSoon(view: EditorView) {
+  if (typesetPending.has(view)) return;
+  typesetPending.add(view);
+  queueMicrotask(() => {
+    typesetPending.delete(view);
+    scheduleTypeset(view);
+  });
 }
 
 // ---------------------------------------------------------------------------

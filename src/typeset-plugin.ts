@@ -373,6 +373,17 @@ interface SuffixVerificationTicket {
 
 const viewRegistry = new WeakMap<EditorView, TypesetView>();
 
+/** Called synchronously after the settled pass publishes new geometry
+ *  variables (`--table-mt/mb`, list indents), before it measures the page.
+ *  A listener re-fits boxes whose normalization read the old values (grid
+ *  cells, grid-editor.ts) and returns true when it moved anything. */
+type GeometryVarsListener = () => boolean;
+const geometryVarsListeners = new Set<GeometryVarsListener>();
+export function onGeometryVarsPublished(listener: GeometryVarsListener): () => void {
+  geometryVarsListeners.add(listener);
+  return () => geometryVarsListeners.delete(listener);
+}
+
 /** Request a re-typeset without a document change (e.g. an image loaded). */
 export function scheduleTypeset(view: EditorView) {
   const tv = viewRegistry.get(view);
@@ -1976,6 +1987,12 @@ class TypesetView {
     const table = tableMarginsEm(s);
     root.setProperty('--table-mt', `${(table.top * F).toFixed(4)}px`);
     root.setProperty('--table-mb', `${(table.bottom * F).toFixed(4)}px`);
+    // Boxes normalized against the old values re-fit now, so this pass
+    // measures them settled (a grid cell ending in a table read the
+    // previous document's --table-mb and grew on the first click).
+    let moved = false;
+    for (const listener of geometryVarsListeners) moved = listener() || moved;
+    if (moved) this.invalidateDomGeometry();
   }
 
   private run() {
