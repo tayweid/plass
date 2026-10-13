@@ -547,22 +547,6 @@ body {
   display: none;
 }
 
-.native-table-notice {
-  position: fixed;
-  z-index: 240;
-  left: 50%;
-  bottom: 28px;
-  max-width: min(560px, calc(100vw - 32px));
-  transform: translateX(-50%);
-  padding: 9px 13px;
-  font: 11.5px/1.35 var(--sans);
-  color: var(--ink);
-  background: color-mix(in srgb, var(--chrome) 96%, transparent);
-  border: 1px solid var(--chrome-border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(20, 18, 14, 0.18);
-}
-
 /* corner HUD + transient toast */
 #hud {
   position: fixed;
@@ -2709,6 +2693,25 @@ body {
   color: inherit;
 }
 
+/* The caption is the way into Table settings (block-chrome.ts): a click
+   opens it with Caption focused. Paint only: a cursor and, on hover, a
+   dotted underline. */
+.native-table-caption {
+  cursor: pointer;
+}
+
+.native-table-caption:hover {
+  text-decoration: underline dotted color-mix(in srgb, var(--accent) 40%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+@media print {
+  .native-table-caption:hover {
+    text-decoration: none;
+  }
+}
+
 /* ---------- citations & bibliography ---------- */
 
 .ts-cite {
@@ -3458,7 +3461,6 @@ body {
   #scrollrail,
   #sr-label,
   .native-table-toolbar,
-  .native-table-notice,
   #paper-shadow,
   #pages {
     display: none;

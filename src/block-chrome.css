@@ -560,7 +560,10 @@
 }
 
 /* Settings panels (Table settings, Grid layout): .block-panel, one
-   geometry: 284 wide, a 60 px label column. */
+   geometry: 284 wide, a 60 px label column, every heading at the shared
+   18 px inset (border 1 + padding 7 + section padding 10). Checked: a
+   visual choice (thumbnail) wears the #9db8d6 ring, a text choice
+   (segment, a Custom field in force) the .13 white fill. */
 .tb-menu.block-panel {
   width: 284px;
   box-sizing: border-box;
@@ -574,8 +577,12 @@
   display: grid;
   grid-template-columns: 60px minmax(0, 1fr);
   gap: 8px;
-  align-items: start;
+  align-items: center;
   padding: 10px 11px 10px 10px;
+}
+
+.block-panel .bp-sec.top {
+  align-items: start;
 }
 
 .block-panel .bp-sec + .bp-sec {
@@ -583,16 +590,324 @@
 }
 
 .block-panel .bp-head {
-  padding-top: 2px;
+  padding: 0;
   font: 500 10px/1.3 var(--sans);
   letter-spacing: 0.045em;
   text-transform: uppercase;
   color: var(--bar-ink-soft);
 }
 
+/* Level with a 32 px control's text, and with a thumbnail row's middle. */
+.block-panel .bp-sec.top .bp-head {
+  padding-top: 9px;
+}
+
+.block-panel .bp-sec.thumbsec .bp-head {
+  padding-top: 14px;
+}
+
+.block-panel .bp-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.block-panel .bp-cols {
+  gap: 2px;
+}
+
+.block-panel .bp-cols .v {
+  font: 12px var(--sans);
+  color: var(--bar-ink);
+}
+
 .block-panel .bp-note {
   font: 11px/1.4 var(--sans);
   color: var(--bar-ink-soft);
+}
+
+.block-panel .bp-note[hidden],
+.block-panel .bp-link[hidden],
+.block-panel .bp-advanced[hidden] {
+  display: none;
+}
+
+.block-panel .bp-link {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: 11px var(--sans);
+  color: #9db8d6;
+  cursor: pointer;
+}
+
+.block-panel .bp-link:hover {
+  text-decoration: underline;
+}
+
+/* The file's own styling Plass does not show: one soft line above the foot. */
+.block-panel .bp-advanced {
+  display: block;
+  padding: 8px 11px 8px 10px;
+  border-top: 1px solid var(--bar-hairline);
+  font: 11px/1.4 var(--sans);
+  color: var(--bar-ink-soft);
+}
+
+/* Segmented: text choices in one track. */
+.block-panel .seg {
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--bar-hairline);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.block-panel .seg button {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(240, 238, 233, 0.7);
+  font: 11.5px var(--sans);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.block-panel .seg button:hover:not(:disabled):not([aria-checked='true']) {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--bar-ink);
+}
+
+.block-panel .seg button[aria-checked='true'] {
+  background: rgba(255, 255, 255, 0.13);
+  color: #fff;
+}
+
+.block-panel .seg button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.block-panel .seg-unit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.block-panel .seg-unit .seg {
+  flex: 1;
+}
+
+.block-panel .unit {
+  font: 11px var(--sans);
+  color: var(--bar-ink-soft);
+}
+
+/* Thumbnails: Style fills the value column in three equal tiles; Split
+   tiles are 54 wide and wrap. */
+.block-panel .thumbs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.block-panel .thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgba(240, 238, 233, 0.7);
+  font: 11px var(--sans);
+  cursor: pointer;
+}
+
+.block-panel .thumb .tframe {
+  box-sizing: border-box;
+  width: 100%;
+  height: 40px;
+  border-radius: 8px;
+  border: 1px solid var(--bar-hairline);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.block-panel .thumb .tframe.paper {
+  background: #fff;
+}
+
+.block-panel .thumb .tframe svg {
+  width: 40px;
+  height: 22px;
+  overflow: visible;
+}
+
+.block-panel .thumb .thumb-cap {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-panel .thumb:hover:not([aria-checked='true']) .tframe {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.block-panel .thumb[aria-checked='true'] {
+  color: #fff;
+}
+
+.block-panel .thumb[aria-checked='true'] .tframe {
+  box-shadow: 0 0 0 1px var(--bar-glass), 0 0 0 2.5px #9db8d6;
+}
+
+.block-panel .thumbs.split {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.block-panel .thumbs.split .thumb {
+  width: 54px;
+}
+
+.block-panel .thumbs.split .tframe {
+  height: 28px;
+  color: var(--bar-ink-soft);
+}
+
+.block-panel .thumbs.split .tframe svg {
+  width: 42px;
+  height: 28px;
+}
+
+.block-panel .thumbs.split .thumb[aria-checked='true'] .tframe {
+  color: #9db8d6;
+}
+
+/* Pill fields: a leading word, the field, a unit. In force: the fill. */
+.block-panel .pfield {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+  font: 11px var(--sans);
+  color: var(--bar-ink-soft);
+}
+
+.block-panel .pfield .lead {
+  flex: none;
+}
+
+.block-panel .pfield input {
+  width: 44px;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 4px;
+  font: 11px var(--sans);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--bar-ink);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 6px;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.block-panel .pfield input::placeholder {
+  color: rgba(240, 238, 233, 0.32);
+}
+
+.block-panel .pfield.wide {
+  display: flex;
+}
+
+.block-panel .pfield.wide input {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 0 8px;
+  font: 11.5px var(--sans);
+  letter-spacing: 0.02em;
+}
+
+.block-panel .pfield.checked {
+  color: #fff;
+}
+
+.block-panel .pfield.checked input {
+  background: rgba(255, 255, 255, 0.13);
+  color: #fff;
+  border-color: transparent;
+}
+
+.block-panel .pfield .unit {
+  color: var(--bar-ink-soft);
+}
+
+.block-panel .pfield.is-disabled {
+  opacity: 0.4;
+}
+
+.block-panel :is(.pfield input, .tfield):focus {
+  border-color: #9db8d6;
+}
+
+/* Text fields (Caption, Label). */
+.block-panel .tfield {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  font: 12px/1.4 var(--sans);
+  color: var(--bar-ink);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 6px;
+  padding: 6px 8px;
+  outline: none;
+  resize: none;
+}
+
+.block-panel textarea.tfield {
+  overflow: hidden;
+}
+
+.block-panel .tfield.mono {
+  font: 11.5px var(--mono);
+}
+
+.block-panel .tfield::placeholder {
+  color: rgba(240, 238, 233, 0.32);
+}
+
+.block-panel :is(.seg button, .thumb, .bp-link):focus-visible {
+  outline: 2px solid #9db8d6;
+  outline-offset: 1px;
+}
+
+.block-panel .thumb:focus-visible {
+  outline: none;
+}
+
+.block-panel .thumb:focus-visible .tframe {
+  outline: 2px solid #9db8d6;
+  outline-offset: 2px;
 }
 
 .block-panel .bp-foot {
@@ -602,6 +917,7 @@
   flex-direction: column;
 }
 
+/* Foot actions read as menu items: text at the shared 18 px inset. */
 .block-panel :is(.bp-danger, .bp-item) {
   display: flex;
   align-items: center;

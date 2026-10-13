@@ -39,9 +39,10 @@ import { CellSelection, addRowBefore, deleteTable, isInTable, mergeCells, select
 import { schema } from './schema';
 import { icon } from './toolbar';
 import { placeFlyout } from './flyout';
+import { notify } from './notify';
 import { onPaperScale, paperScale } from './paper-scale';
 import { pickAndInsertFigure } from './figures';
-import { normalizeTableColumns } from './table-geometry';
+import { normalizeTableColumns, tableInsetPt } from './table-geometry';
 import {
   addBodyRowAfter,
   addColumnAfter,
@@ -49,6 +50,8 @@ import {
   alignSelectedTableCells,
   deleteSelectedColumns,
   deleteSelectedRows,
+  focusTable,
+  normalizeTableLabel,
   resetTableColumnWidths,
   selectTableLine,
   selectedCellsAttr,
@@ -57,16 +60,23 @@ import {
   selectedTableRows,
   setRowRule,
   setSelectedColumnWidth,
+  setTableAttrsAt,
+  setTableStyle,
   tableControlsRevision,
 } from './table-editor';
 import {
+  DEFAULT_GRID_GUTTER_EM,
   deleteGridColumnAt,
   deleteGridRowAt,
   gridCaretPlace,
+  gridContext,
   insertGridColumnAt,
   insertGridRowAt,
+  setGridColumns,
+  setGridGutter,
   unwrapGrid,
 } from './grid-editor';
+import { canonicalShares, displayColumnShares, parseColumnShares, sameSplit, splitPresets } from './grid-split';
 import type { RowRule } from './table-rules';
 
 // ---------------------------------------------------------------------------
@@ -168,6 +178,19 @@ const MARGIN_FULL = 60;
 /** Quiet time after a keystroke before a stepped-back pill hugs again. */
 const TYPING_PAUSE = 450;
 const MARGIN_COMPACT = 46;
+/** Quiet time after a keystroke in Caption or Label before it is written. */
+const CAPTION_PAUSE = 250;
+
+/** The grid gutter presets (em). */
+const GUTTER_PRESETS: ReadonlyArray<readonly [string, string]> = [['0', 'None'], ['0.5', 'Tight'], ['1', 'Normal'], ['1.5', 'Wide']];
+
+/** Table style thumbnails: white paper tiles with each style's rules. */
+const CELLS = (rows: number[]) => `<g fill="#c4c4c4">${rows.map((y) => `<rect x="2" y="${y}" width="14" height="2.6" rx="1"/><rect x="24" y="${y}" width="14" height="2.6" rx="1"/>`).join('')}</g>`;
+const TABLE_STYLE_THUMBS: ReadonlyArray<readonly ['booktabs' | 'grid' | 'plain', string, string]> = [
+  ['booktabs', 'Booktabs', `<svg viewBox="0 0 40 22" aria-hidden="true"><line x1="0" y1=".8" x2="40" y2=".8" stroke="#1a1a1a" stroke-width="1.4"/><line x1="0" y1="7.5" x2="40" y2="7.5" stroke="#1a1a1a" stroke-width=".7"/>${CELLS([10.5, 15.5])}<line x1="0" y1="21.2" x2="40" y2="21.2" stroke="#1a1a1a" stroke-width="1.4"/></svg>`],
+  ['grid', 'Grid', `<svg viewBox="0 0 40 22" aria-hidden="true"><rect x=".4" y=".4" width="39.2" height="21.2" fill="none" stroke="#1a1a1a" stroke-width=".7"/><line x1="0" y1="7.5" x2="40" y2="7.5" stroke="#1a1a1a" stroke-width=".7"/><line x1="0" y1="14.6" x2="40" y2="14.6" stroke="#1a1a1a" stroke-width=".7"/><line x1="20" y1="0" x2="20" y2="22" stroke="#1a1a1a" stroke-width=".7"/><g fill="#c4c4c4"><rect x="3" y="9.8" width="12" height="2.6" rx="1"/><rect x="23" y="9.8" width="12" height="2.6" rx="1"/><rect x="3" y="16.9" width="12" height="2.6" rx="1"/><rect x="23" y="16.9" width="12" height="2.6" rx="1"/></g></svg>`],
+  ['plain', 'Plain', `<svg viewBox="0 0 40 22" aria-hidden="true">${CELLS([2.6, 9.7, 16.8])}</svg>`],
+];
 
 // ---------------------------------------------------------------------------
 // Flyouts
@@ -177,6 +200,7 @@ interface OpenFlyout {
   el: HTMLElement;
   tile: HTMLButtonElement;
   sync: () => void;
+  cleanup: () => void;
   parent?: FlyoutId;
   side: 'end' | 'start';
 }
@@ -186,6 +210,8 @@ interface OpenFlyout {
 interface Builder {
   el: HTMLElement;
   syncs: Array<() => void>;
+  /** Run when the flyout closes (a pending caption write). */
+  cleanups: Array<() => void>;
 }
 
 let current: BlockChrome | null = null;
@@ -229,6 +255,9 @@ class BlockChrome {
   private tiles = new Map<string, HTMLButtonElement>();
   private flyout: OpenFlyout | null = null;
   private refly = 0;
+  /** A click on a table's caption: open Table settings with Caption
+   *  focused once the pill is placed beside that table. */
+  private pendingCaption = false;
   private readonly unlisten: Array<() => void> = [];
 
   constructor(private readonly view: EditorView) {
@@ -361,6 +390,7 @@ class BlockChrome {
 
   private hide(): void {
     this.ctx = null;
+    this.pendingCaption = false;
     this.endRun();
     this.structure = '';
     this.signature = '';
@@ -540,6 +570,18 @@ class BlockChrome {
     return el.getBoundingClientRect().top;
   }
 
+  /** A table's on-page caption and its text's box (not the element's: that
+   *  is the column's width). Read only where the pill is placed. */
+  private captionText(outer: HTMLElement): { el: HTMLElement; rect: DOMRect } | null {
+    const captionId = outer.getAttribute('aria-describedby');
+    const el = captionId ? document.getElementById(captionId) : null;
+    if (!el?.classList.contains('native-table-caption')) return null;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const rect = range.getBoundingClientRect();
+    return rect.height > 0 ? { el, rect } : null;
+  }
+
   private measure(): void {
     const ctx = this.ctx;
     if (!ctx) return;
@@ -580,20 +622,14 @@ class BlockChrome {
     const outerRect = outer.getBoundingClientRect();
     let edge = outerRect.left;
     let extent = outerRect.bottom;
-    const captionId = outer.getAttribute('aria-describedby');
-    const caption = captionId ? document.getElementById(captionId) : null;
-    if (caption?.classList.contains('native-table-caption')) {
-      // The caption's text, not its box: the box is the column's width.
-      const range = document.createRange();
-      range.selectNodeContents(caption);
-      const r = range.getBoundingClientRect();
-      if (r.height > 0) {
-        // Its line box starts above its ink by about a fifth of an em: a
-        // pill ending in that band ends above the caption's letters.
-        const air = (parseFloat(getComputedStyle(caption).fontSize) || 13) * s * 0.2;
-        if (r.top + air < top + pillHeight) edge = Math.min(edge, r.left);
-        extent = Math.max(extent, r.bottom);
-      }
+    const caption = this.captionText(outer);
+    if (caption) {
+      const r = caption.rect;
+      // Its line box starts above its ink by about a fifth of an em: a
+      // pill ending in that band ends above the caption's letters.
+      const air = (parseFloat(getComputedStyle(caption.el).fontSize) || 13) * s * 0.2;
+      if (r.top + air < top + pillHeight) edge = Math.min(edge, r.left);
+      extent = Math.max(extent, r.bottom);
     }
     // Collapsed, the ⋯ tile keeps to the paper's edge (spec §4.1): its
     // menu then covers only the block's left part.
@@ -619,6 +655,37 @@ class BlockChrome {
     if (style.getPropertyValue('--bc-rest-left') !== restLeft) style.setProperty('--bc-rest-left', restLeft);
     this.placed = true;
     if (this.flyout) this.placeOpen();
+    if (this.pendingCaption) this.openPendingCaption();
+  }
+
+  /** The on-page caption was clicked (spec §5.1): the caret goes into the
+   *  table's first cell if it is elsewhere, and Table settings opens beside
+   *  the pill with Caption focused. */
+  openCaption(caption: HTMLElement): void {
+    if (!caption.id) return;
+    const owner = document.querySelector<HTMLElement>(`[aria-describedby="${CSS.escape(caption.id)}"]`);
+    const table = owner?.matches('table') ? owner : owner?.querySelector<HTMLElement>('table') ?? null;
+    const pos = this.tablePos(table);
+    if (pos === null) return;
+    this.pendingCaption = true;
+    if (this.ctx?.kind === 'table' && this.ctx.pos === pos) {
+      if (this.placed && !this.frame && !this.track.hidden) this.openPendingCaption();
+      else this.schedule();
+      return;
+    }
+    focusTable(this.view, pos);
+  }
+
+  private openPendingCaption(): void {
+    this.pendingCaption = false;
+    if (this.ctx?.kind !== 'table') return;
+    const tile = this.tiles.get('table') ?? this.tiles.get('more');
+    if (!tile) return;
+    if (this.flyout?.id !== 'table') this.openFlyout('table', tile, false, tile.dataset.tile === 'more' ? 'more' : undefined);
+    const field = this.flyout?.el.querySelector<HTMLTextAreaElement>('textarea[aria-label="Caption"]');
+    if (!field) return;
+    field.focus({ preventScroll: true });
+    field.setSelectionRange(field.value.length, field.value.length);
   }
 
   private resize = () => {
@@ -689,7 +756,8 @@ class BlockChrome {
     document.body.append(el);
     const sync = () => built.syncs.forEach((f) => f());
     sync();
-    this.flyout = { id, el, tile, sync, parent, side: 'end' };
+    const cleanup = () => built.cleanups.forEach((f) => f());
+    this.flyout = { id, el, tile, sync, cleanup, parent, side: 'end' };
     tile.setAttribute('aria-expanded', 'true');
     tile.setAttribute('aria-controls', el.id);
     this.pill.classList.add('is-open');
@@ -701,7 +769,12 @@ class BlockChrome {
   private placeOpen(): void {
     const open = this.flyout;
     if (!open) return;
-    open.side = placeFlyout(open.el, open.tile, { side: this.hug ? 'start' : 'end' });
+    // A hugging pill's flyout opens into the margin; a centred caption wider
+    // than its table reaches into that margin, and the flyout keeps clear
+    // of its text where there is room (the caption the writer just clicked).
+    const outer = this.hug && this.ctx ? this.blockElement(this.ctx.outerPos) : null;
+    const avoid = outer ? this.captionText(outer)?.rect : undefined;
+    open.side = placeFlyout(open.el, open.tile, { side: this.hug ? 'start' : 'end', avoid });
     open.el.classList.toggle('bc-start', open.side === 'start');
   }
 
@@ -709,6 +782,7 @@ class BlockChrome {
     const open = this.flyout;
     if (!open) return;
     this.flyout = null;
+    open.cleanup();
     open.el.remove();
     open.tile.setAttribute('aria-expanded', 'false');
     open.tile.removeAttribute('aria-controls');
@@ -740,6 +814,26 @@ class BlockChrome {
       .filter((el) => !el.closest('[hidden]'));
   }
 
+  /** A panel's Tab order: every control, a choice group (a radiogroup of
+   *  thumbnails or segments) counted once at its checked choice (its first
+   *  when none is). */
+  private tabStops(): HTMLElement[] {
+    const stops: HTMLElement[] = [];
+    const groups = new Set<Element>();
+    for (const el of this.focusables()) {
+      const group = el.closest('[role="radiogroup"]');
+      if (!group) {
+        stops.push(el);
+        continue;
+      }
+      if (groups.has(group)) continue;
+      groups.add(group);
+      const choices = [...group.querySelectorAll<HTMLElement>('button:not(:disabled)')];
+      stops.push(choices.find((c) => c.getAttribute('aria-checked') === 'true') ?? el);
+    }
+    return stops;
+  }
+
   private flyoutKey(e: KeyboardEvent): void {
     const open = this.flyout;
     if (!open) return;
@@ -755,6 +849,22 @@ class BlockChrome {
     }
     if (e.key === 'Tab') {
       e.preventDefault();
+      // A settings panel is a dialog (spec §6): Tab and Shift-Tab walk its
+      // controls, fields included, one stop per choice group; past the last
+      // the page gets the caret, before the first the tile gets the focus.
+      if (open.el.classList.contains('block-panel')) {
+        const stops = this.tabStops();
+        const here = stops.findIndex((el) => el === target || (el.closest('[role="radiogroup"]')?.contains(target) ?? false));
+        const next = here < 0 ? 0 : here + (e.shiftKey ? -1 : 1);
+        if (next >= 0 && next < stops.length) {
+          stops[next].focus();
+          return;
+        }
+        if (next < 0) {
+          this.closeFlyout(true);
+          return;
+        }
+      }
       this.closeFlyout();
       this.view.focus();
       return;
@@ -810,7 +920,7 @@ class BlockChrome {
       el.className = cls;
       el.setAttribute('role', role);
       el.setAttribute('aria-label', label);
-      return { el, syncs: [] };
+      return { el, syncs: [], cleanups: [] };
     };
     const ctx = this.ctx;
     if (!ctx) return null;
@@ -819,9 +929,9 @@ class BlockChrome {
       case 'cols': return this.colsMenu(b('tb-menu bc-menu bc-colsmenu', 'menu', 'Columns'), parent);
       case 'align': return this.alignPanel(b('tb-menu tb-menu-extras bc-panel bc-alignpanel', 'dialog', 'Align'), parent);
       case 'cell': return this.cellPanel(b('tb-menu tb-menu-extras bc-panel bc-cellpanel', 'dialog', 'Cell fill and rules'), parent);
-      case 'table': return this.tableStub(b('tb-menu block-panel', 'dialog', 'Table settings'), parent);
+      case 'table': return this.tableSettings(b('tb-menu block-panel bc-tablesettings', 'dialog', 'Table settings'), parent);
       case 'grid':
-      case 'gridlayout': return this.gridStub(b('tb-menu block-panel', 'dialog', 'Grid layout'), parent);
+      case 'gridlayout': return this.gridLayout(b('tb-menu block-panel bc-gridlayout', 'dialog', 'Grid layout'), parent);
       case 'gridrows': return this.gridRowsMenu(b('tb-menu bc-menu', 'menu', ctx.kind === 'grid' ? 'Rows' : 'Grid rows'), parent);
       case 'gridcols': return this.gridColsMenu(b('tb-menu bc-menu', 'menu', ctx.kind === 'grid' ? 'Columns' : 'Grid columns'), parent);
       case 'gridparent': return this.gridParentMenu(b('tb-menu bc-menu bc-gridmenu', 'menu', 'Grid'));
@@ -1252,19 +1362,374 @@ class BlockChrome {
     return builder;
   }
 
-  /** Table settings: the full panel is the next step (spec §5.1); until
-   *  then the bar above the page holds style, size, padding, caption and
-   *  label, and this says so. */
-  private tableStub(builder: Builder, parent?: FlyoutId): Builder {
+  // -- settings panels (spec §5): Table settings, Grid layout ----------------
+  //
+  // One geometry for both (.block-panel: 284 wide, a 60 px label column,
+  // every heading at the flyout's shared inset). Presets first, a Custom
+  // field one step deeper; a checked visual choice wears the blue ring, a
+  // checked text choice a fill. Pointer commits hand the editor the focus;
+  // a field keeps it while the writer types (Enter applies, Escape reverts
+  // and returns to the page, ⌘Z / ⇧⌘Z / ⌃Y are the document's history).
+
+  /** A section: its heading in the label column, its controls beside it.
+   *  `top`: the heading sits level with the first control's text (the
+   *  section is taller than one row); `thumbs`: level with a thumbnail row. */
+  private panelSection(builder: Builder, heading: string, options: { top?: boolean; thumbs?: boolean; column?: boolean } = {}): HTMLElement {
+    const section = document.createElement('div');
+    section.className = `bp-sec${options.top || options.thumbs ? ' top' : ''}${options.thumbs ? ' thumbsec' : ''}`;
+    const head = document.createElement('span');
+    head.className = 'bp-head';
+    head.textContent = heading;
+    const value = document.createElement('div');
+    if (options.column) value.className = 'bp-col';
+    section.append(head, value);
+    builder.el.append(section);
+    return value;
+  }
+
+  /** Text choices in a segmented track (checked: the fill). */
+  private segmented(
+    builder: Builder,
+    parent: HTMLElement,
+    label: string,
+    options: ReadonlyArray<readonly [string, string]>,
+    checked: () => string | null,
+    pick: (value: string) => void,
+    disabled: () => boolean = () => false,
+  ): HTMLElement {
+    const track = document.createElement('div');
+    track.className = 'seg';
+    track.setAttribute('role', 'radiogroup');
+    track.setAttribute('aria-label', label);
+    for (const [value, text] of options) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.tabIndex = -1;
+      button.setAttribute('role', 'radio');
+      button.dataset.value = value;
+      button.textContent = text;
+      button.addEventListener('mousedown', (e) => e.preventDefault());
+      button.addEventListener('click', () => {
+        pick(value);
+        this.view.focus();
+      });
+      builder.syncs.push(() => {
+        setAttr(button, 'aria-checked', String(checked() === value));
+        const off = disabled();
+        if (button.disabled !== off) button.disabled = off;
+      });
+      track.append(button);
+    }
+    parent.append(track);
+    return track;
+  }
+
+  /** A thumbnail choice (checked: the blue ring on its frame). */
+  private thumb(value: string, label: string, art: string, caption: string, paper = false): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.tabIndex = -1;
+    button.className = 'thumb';
+    button.setAttribute('role', 'radio');
+    button.setAttribute('aria-label', label);
+    button.dataset.value = value;
+    button.innerHTML = `<span class="tframe${paper ? ' paper' : ''}">${art}</span><span class="thumb-cap">${caption}</span>`;
+    button.addEventListener('mousedown', (e) => e.preventDefault());
+    return button;
+  }
+
+  /** A small pill field with a leading word and a trailing unit. The field
+   *  shows `value()` when it is the one in force (then `.checked`, a fill)
+   *  and otherwise the value in force as a dim placeholder. */
+  private pillField(
+    builder: Builder,
+    parent: HTMLElement,
+    options: {
+      name: string;
+      lead: string;
+      unit?: string;
+      wide?: boolean;
+      number?: { min: number; max: number; step: string };
+      value: () => string;
+      placeholder?: () => string;
+      checked?: () => boolean;
+      disabled?: () => boolean;
+      commit: (text: string) => boolean;
+    },
+  ): HTMLInputElement {
+    const wrap = document.createElement('label');
+    wrap.className = `pfield${options.wide ? ' wide' : ''}`;
+    const lead = document.createElement('span');
+    lead.className = 'lead';
+    lead.textContent = options.lead;
+    const input = document.createElement('input');
+    input.type = options.number ? 'number' : 'text';
+    if (options.number) {
+      input.min = String(options.number.min);
+      input.max = String(options.number.max);
+      input.step = options.number.step;
+      input.inputMode = 'decimal';
+    }
+    input.spellcheck = false;
+    input.autocomplete = 'off';
+    input.setAttribute('aria-label', options.name);
+    wrap.append(lead, input);
+    if (options.unit) {
+      const unit = document.createElement('span');
+      unit.className = 'unit';
+      unit.textContent = options.unit;
+      wrap.append(unit);
+    }
+    parent.append(wrap);
+    this.bindField(builder, input, {
+      revert: () => {
+        input.value = options.value();
+        if (options.placeholder) input.placeholder = options.placeholder();
+      },
+      commit: () => options.commit(input.value.trim()),
+    });
+    builder.syncs.push(() => {
+      const on = !!options.checked?.();
+      wrap.classList.toggle('checked', on);
+      const off = !!options.disabled?.();
+      if (input.disabled !== off) input.disabled = off;
+      wrap.classList.toggle('is-disabled', off);
+    });
+    return input;
+  }
+
+  /** Field keys and syncing: Enter applies and keeps the focus; Escape
+   *  reverts and hands the page the caret; ⌘Z / ⇧⌘Z / ⌃Y go to the
+   *  document's history; a change (blur) applies; an open panel's sync
+   *  leaves a field alone while it has the focus. */
+  private bindField(
+    builder: Builder,
+    input: HTMLInputElement | HTMLTextAreaElement,
+    options: { revert: () => void; commit: () => boolean; flush?: () => void; enterCommits?: boolean },
+  ): void {
+    // What the field showed after its last commit or revert: a `change`
+    // (blur) with nothing new typed since applies nothing (a preset clicked
+    // after an Enter must not be undone by the field's stale value).
+    let shown = input.value;
+    const revert = () => {
+      options.revert();
+      shown = input.value;
+    };
+    const apply = () => {
+      if (input.value === shown) return;
+      if (options.commit()) shown = input.value;
+      else revert();
+    };
+    input.addEventListener('mousedown', (e) => e.stopPropagation());
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('change', apply);
+    input.addEventListener('keydown', (e) => {
+      const event = e as KeyboardEvent;
+      const mod = event.metaKey || event.ctrlKey;
+      const key = event.key.toLowerCase();
+      if (event.key === 'Enter' && !event.isComposing) {
+        event.preventDefault();
+        apply();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        // A pending caption or label write is kept (it was typed); a
+        // number field drops what is not applied.
+        options.flush?.();
+        revert();
+        this.closeFlyout();
+        this.view.focus();
+      } else if (mod && (key === 'z' || key === 'y') && !event.altKey) {
+        event.preventDefault();
+        options.flush?.();
+        this.run(key === 'y' || event.shiftKey ? redo : undo, false);
+        revert();
+      }
+    });
+    builder.syncs.push(() => {
+      if (document.activeElement !== input) revert();
+    });
+  }
+
+  /** The table the panel edits, found again from its element (its position
+   *  moves with edits above it; the TableView keeps the element). */
+  private tablePos(table: HTMLElement | null): number | null {
+    if (!table?.isConnected) return null;
+    const cell = table.querySelector('td, th');
+    if (!cell) return null;
+    try {
+      const $p = this.view.state.doc.resolve(this.view.posAtDOM(cell, 0));
+      for (let depth = $p.depth; depth > 0; depth--) {
+        if ($p.node(depth).type.spec.tableRole === 'table') return $p.before(depth);
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  private tableSettings(builder: Builder, parent?: FlyoutId): Builder {
     this.back(builder, parent, 'Table controls');
-    const note = document.createElement('div');
-    note.className = 'bp-sec';
-    note.innerHTML = '<span class="bp-head">Table</span><span class="bp-note">Style, text size, padding, caption and label are in the table bar above the page for now.</span>';
-    builder.el.append(note);
+    const tableEl = this.ctx ? this.blockElement(this.ctx.pos) : null;
+    const pos = () => this.tablePos(tableEl) ?? (this.ctx?.kind === 'table' ? this.ctx.pos : null);
+    const attrs = (): Record<string, unknown> => {
+      const at = pos();
+      const node = at === null ? null : this.view.state.doc.nodeAt(at);
+      return node?.type.spec.tableRole === 'table' ? node.attrs : {};
+    };
+    const write = (values: Record<string, unknown>, separate = false) => {
+      const at = pos();
+      return at !== null && setTableAttrsAt(this.view, at, values, separate);
+    };
+    const params = () => String(attrs().params ?? '').trim();
+    const insetLocked = () => /(?:^|,)\s*inset\s*:/.test(params());
+
+    // STYLE: three paper thumbnails drawing each style's rules.
+    const style = this.panelSection(builder, 'Style', { thumbs: true });
+    style.className = 'thumbs';
+    style.setAttribute('role', 'radiogroup');
+    style.setAttribute('aria-label', 'Table rule style');
+    for (const [value, name, art] of TABLE_STYLE_THUMBS) {
+      const button = this.thumb(value, name, art, name, true);
+      button.addEventListener('click', () => this.run(setTableStyle(value)));
+      builder.syncs.push(() => setAttr(button, 'aria-checked', String((attrs().style || 'booktabs') === value)));
+      style.append(button);
+    }
+
+    // TEXT SIZE: 100 … 75 %.
+    const size = this.panelSection(builder, 'Text size');
+    size.className = 'seg-unit';
+    this.segmented(builder, size, 'Table text size', [['', '100'], ['0.9em', '90'], ['0.85em', '85'], ['0.8em', '80'], ['0.75em', '75']],
+      () => String(attrs().fontSize ?? ''), (value) => write({ fontSize: value }));
+    const percent = document.createElement('span');
+    percent.className = 'unit';
+    percent.textContent = '%';
+    size.append(percent);
+
+    // PADDING: the three densities, and a Custom pt field (the inset in
+    // force, dim, until one is typed).
+    const padding = this.panelSection(builder, 'Padding', { top: true, column: true });
+    const custom = () => typeof attrs().insetPt === 'number';
+    this.segmented(builder, padding, 'Table cell density', [['compact', 'Compact'], ['', 'Normal'], ['roomy', 'Roomy']],
+      () => (custom() || insetLocked() ? null : String(attrs().density ?? '')),
+      (value) => write({ density: value, insetPt: null }), insetLocked);
+    this.pillField(builder, padding, {
+      name: 'Cell padding in points',
+      lead: 'Custom',
+      unit: 'pt',
+      number: { min: 0, max: 72, step: 'any' },
+      value: () => (custom() ? String(attrs().insetPt) : ''),
+      placeholder: () => String(tableInsetPt(attrs())),
+      checked: () => custom() && !insetLocked(),
+      disabled: insetLocked,
+      commit: (text) => {
+        if (!text) return !custom() || write({ insetPt: null }, true);
+        const n = Number(text);
+        if (Number.isFinite(n) && n >= 0 && n <= 72) write({ insetPt: n }, true);
+        return false; // revert: the field shows the inset in force
+      },
+    });
+    const locked = document.createElement('span');
+    locked.className = 'bp-note';
+    locked.textContent = 'Set by custom styling in the file';
+    padding.append(locked);
+    builder.syncs.push(() => { locked.hidden = !insetLocked(); });
+
+    // COLUMNS: what the widths are; the way back to automatic.
+    const columns = this.panelSection(builder, 'Columns', { column: true });
+    columns.classList.add('bp-cols');
+    const state = document.createElement('span');
+    state.className = 'v';
+    const how = document.createElement('span');
+    how.className = 'bp-note';
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.tabIndex = -1;
+    reset.className = 'bp-link';
+    reset.textContent = 'Reset to automatic';
+    reset.addEventListener('mousedown', (e) => e.preventDefault());
+    reset.addEventListener('click', () => this.run(resetTableColumnWidths));
+    columns.append(state, how, reset);
+    builder.syncs.push(() => {
+      const widths = attrs().columnWidths;
+      const set = Array.isArray(widths) && widths.length > 0;
+      setText(state, set ? 'Custom widths' : 'Automatic widths');
+      setText(how, set ? 'Set per column in Columns ›' : 'Set a column’s width in Columns ›');
+      reset.hidden = !set;
+    });
+
+    // CAPTION and LABEL: written after a pause in the typing (or on Enter,
+    // blur, the panel closing), never per keystroke, and with no scroll.
+    const caption = document.createElement('textarea');
+    caption.className = 'tfield';
+    caption.rows = 1;
+    caption.spellcheck = true;
+    caption.placeholder = 'Optional table caption';
+    caption.setAttribute('aria-label', 'Caption');
+    this.panelSection(builder, 'Caption', { top: true }).append(caption);
+    const label = document.createElement('input');
+    label.type = 'text';
+    label.className = 'tfield mono';
+    label.spellcheck = false;
+    label.autocomplete = 'off';
+    label.maxLength = 128;
+    label.placeholder = 'tbl:results';
+    label.setAttribute('aria-label', 'Label');
+    this.panelSection(builder, 'Label').append(label);
+    const grow = () => {
+      caption.style.height = 'auto';
+      caption.style.height = `${caption.scrollHeight + 2}px`;
+    };
+    for (const [field, name] of [[caption, 'caption'], [label, 'label']] as const) {
+      let timer = 0;
+      const value = () => (name === 'label' ? normalizeTableLabel(field.value) : field.value.replace(/[\r\n]+/g, ' '));
+      const flush = () => {
+        if (timer) clearTimeout(timer);
+        timer = 0;
+        const at = pos();
+        if (at === null) return;
+        const next = value();
+        if (String(attrs()[name] ?? '') !== next) setTableAttrsAt(this.view, at, { [name]: next });
+      };
+      const revert = () => {
+        if (timer) return; // a write is pending: the field is ahead of the model
+        const now = String(attrs()[name] ?? '');
+        if (field.value !== now) {
+          field.value = now;
+          if (field === caption) grow();
+        }
+      };
+      this.bindField(builder, field, { revert, commit: () => (flush(), true), flush });
+      field.addEventListener('input', () => {
+        if (name === 'label') {
+          const normalized = normalizeTableLabel(field.value);
+          if (normalized !== field.value) field.value = normalized;
+        } else grow();
+        if (timer) clearTimeout(timer);
+        timer = window.setTimeout(flush, CAPTION_PAUSE);
+      });
+      field.addEventListener('blur', flush);
+      // Closing the panel (a click on the page, a tile, the selection
+      // leaving) writes what was typed, after the view's update is done.
+      builder.cleanups.push(() => {
+        if (timer) queueMicrotask(flush);
+      });
+    }
+    // Sized once it is in the panel (a caption may wrap to two lines).
+    builder.syncs.push(() => { if (caption.isConnected && !caption.style.height) grow(); });
+
+    // The file's own styling Plass does not show (params): kept, said once.
+    const advanced = document.createElement('div');
+    advanced.className = 'native-table-advanced bp-advanced';
+    advanced.textContent = 'Custom table styling is kept in the file and the PDF, but not shown here.';
+    builder.el.append(advanced);
+    builder.syncs.push(() => { advanced.hidden = !params(); });
+
     const foot = document.createElement('div');
     foot.className = 'bp-foot';
     const del = document.createElement('button');
     del.type = 'button';
+    del.tabIndex = -1;
     del.className = 'bp-danger';
     del.setAttribute('aria-label', 'Delete table');
     del.innerHTML = `${icon('trash')}Delete table`;
@@ -1278,19 +1743,94 @@ class BlockChrome {
     return builder;
   }
 
-  /** Grid layout: the split and gutter panel is the next step (spec §5.2). */
-  private gridStub(builder: Builder, parent?: FlyoutId): Builder {
+  private gridLayout(builder: Builder, parent?: FlyoutId): Builder {
     this.back(builder, parent, parent === 'gridparent' ? 'Grid' : 'Grid controls');
-    const note = document.createElement('div');
-    note.className = 'bp-sec';
-    note.innerHTML = '<span class="bp-head">Grid</span><span class="bp-note">The split and the gutter are in the grid bar above the page for now.</span>';
-    builder.el.append(note);
+    const grid = () => gridContext(this.view.state)?.node ?? null;
+    const shares = () => (grid()?.attrs.columns as number[] | undefined) ?? [];
+
+    // SPLIT: the presets for the current column count (never a different
+    // count, nor does the field take one), the current split as its own
+    // tile when it is none of them, and a Custom field showing it the way
+    // it was likely written.
+    const split = this.panelSection(builder, 'Split', { top: true, column: true });
+    const thumbs = document.createElement('div');
+    thumbs.className = 'thumbs split';
+    thumbs.setAttribute('role', 'radiogroup');
+    thumbs.setAttribute('aria-label', 'Column split');
+    split.append(thumbs);
+    let drawn = '';
+    builder.syncs.push(() => {
+      const now = shares();
+      const presets = splitPresets(now.length);
+      const offPreset = now.length > 0 && !presets.some((p) => sameSplit(p, now));
+      const key = `${now.join(',')}`;
+      if (key !== drawn) {
+        drawn = key;
+        const tiles = presets.map((p) => {
+          const caption = now.length >= 4 ? 'Equal' : p.join(':');
+          return this.splitThumb(p, caption);
+        });
+        if (offPreset) {
+          const compact = displayColumnShares(now, true);
+          tiles.push(this.splitThumb(now, compact.length <= 9 ? compact : 'Current'));
+        }
+        thumbs.replaceChildren(...tiles);
+      }
+      for (const tile of thumbs.querySelectorAll<HTMLButtonElement>('.thumb')) {
+        setAttr(tile, 'aria-checked', String(sameSplit(JSON.parse(tile.dataset.shares ?? '[]') as number[], now)));
+      }
+    });
+    this.pillField(builder, split, {
+      name: 'Custom split',
+      lead: 'Custom',
+      wide: true,
+      value: () => displayColumnShares(shares()),
+      commit: (text) => {
+        const next = parseColumnShares(text);
+        if (!next) return false;
+        const now = shares();
+        // A split never changes the column count (a dropped column would
+        // take its text with it): Columns adds and deletes them.
+        if (next.length !== now.length) {
+          notify(`Not applied: the split needs ${now.length} shares, one per column`);
+          return false;
+        }
+        if (next.some((v, i) => v !== now[i])) setGridColumns(this.view, next, false);
+        return false; // revert: the field shows the split as it reads (`2 : 1`, `46% : 54%`)
+      },
+    });
+
+    // GUTTER: four presets and a Custom em field (checked when the gutter
+    // is none of them).
+    const gutterValue = () => Number(grid()?.attrs.gutter ?? DEFAULT_GRID_GUTTER_EM);
+    const presetGutter = () => GUTTER_PRESETS.find(([value]) => Math.abs(Number(value) - gutterValue()) < 1e-6)?.[0] ?? null;
+    const gutter = this.panelSection(builder, 'Gutter', { top: true, column: true });
+    this.segmented(builder, gutter, 'Space between cells', GUTTER_PRESETS, presetGutter, (value) => setGridGutter(this.view, Number(value), false));
+    this.pillField(builder, gutter, {
+      name: 'Gutter in em',
+      lead: 'Custom',
+      unit: 'em',
+      number: { min: 0, max: 10, step: '0.01' },
+      value: () => (presetGutter() === null ? String(gutterValue()) : ''),
+      placeholder: () => String(gutterValue()),
+      checked: () => presetGutter() === null,
+      commit: (text) => {
+        if (!text) return false;
+        const n = Number(text);
+        if (!Number.isFinite(n) || n < 0 || n > 10) return false;
+        setGridGutter(this.view, Math.round(n * 100) / 100, false);
+        return false; // revert: the field shows the model's value (or the preset's dim one)
+      },
+    });
+
     const foot = document.createElement('div');
     foot.className = 'bp-foot';
     const unwrap = document.createElement('button');
     unwrap.type = 'button';
+    unwrap.tabIndex = -1;
     unwrap.className = 'bp-item';
-    unwrap.innerHTML = 'Unwrap grid<span class="bp-sub">Remove the grid, keep its contents in reading order</span>';
+    unwrap.setAttribute('aria-label', 'Unwrap grid');
+    unwrap.innerHTML = 'Unwrap grid<span class="bp-sub">Keeps its contents, in reading order</span>';
     unwrap.addEventListener('mousedown', (e) => e.preventDefault());
     unwrap.addEventListener('click', () => {
       this.closeFlyout();
@@ -1299,6 +1839,28 @@ class BlockChrome {
     foot.append(unwrap);
     builder.el.append(foot);
     return builder;
+  }
+
+  /** A split thumbnail: rounded bars as wide as their shares. */
+  private splitThumb(shares: number[], caption: string): HTMLButtonElement {
+    const gap = 2.5;
+    const total = shares.reduce((a, b) => a + b, 0);
+    let x = 0;
+    const bars = shares.map((v) => {
+      const w = ((48 - gap * (shares.length - 1)) * v) / total;
+      const bar = `<rect x="${x.toFixed(2)}" y="7" width="${w.toFixed(2)}" height="14" rx="${Math.min(2.5, w / 2).toFixed(2)}" fill="currentColor" opacity=".7"/>`;
+      x += w + gap;
+      return bar;
+    }).join('');
+    const name = displayColumnShares(shares);
+    const button = this.thumb(name, `Split ${name}`, `<svg viewBox="0 0 48 28" aria-hidden="true">${bars}</svg>`, caption);
+    button.dataset.shares = JSON.stringify(shares);
+    button.addEventListener('click', () => {
+      const now = (gridContext(this.view.state)?.node.attrs.columns as number[] | undefined) ?? [];
+      if (!sameSplit(shares, now)) setGridColumns(this.view, canonicalShares(shares));
+      else this.view.focus();
+    });
+    return button;
   }
 
   private gridRowsMenu(builder: Builder, parent?: FlyoutId): Builder {
@@ -1368,10 +1930,33 @@ class BlockChrome {
 
 const blockChromeKey = new PluginKey('block-chrome');
 
-/** The pill's plugin: a view only (it holds no state of its own). */
+const captionOf = (event: Event): HTMLElement | null => {
+  const target = event.target;
+  return target instanceof Element ? target.closest<HTMLElement>('.native-table-caption') : null;
+};
+
+/** The pill's plugin: a view (it holds no state of its own), and the
+ *  on-page table caption as the way into Table settings. */
 export function blockChromePlugin(): Plugin {
   return new Plugin({
     key: blockChromeKey,
+    props: {
+      handleDOMEvents: {
+        // The caption is not text: a press there places no caret.
+        mousedown: (_view, event) => {
+          if (event.button !== 0 || !captionOf(event)) return false;
+          event.preventDefault();
+          return true;
+        },
+        click: (_view, event) => {
+          const caption = captionOf(event);
+          if (!caption || event.button !== 0) return false;
+          event.preventDefault();
+          current?.openCaption(caption);
+          return true;
+        },
+      },
+    },
     view: (view) => {
       const chrome = new BlockChrome(view);
       return {

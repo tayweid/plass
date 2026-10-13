@@ -40,6 +40,7 @@ import { attachPaper, paperScale, paperSheets, zoomedWindow } from './paper-scal
 import { attachScrollRail, type ScrollRail } from './scroll-rail';
 import { attachPaperCaret } from './paper-caret';
 import { FROM_DISK, reloadTransaction } from './reload-in-place';
+import { setNotifySink } from './notify';
 
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
@@ -182,6 +183,8 @@ const scrollEl = document.getElementById('scroll')!;
 
 const hudEl = document.getElementById('hud')!;
 const toastEl = document.getElementById('toast')!;
+// Every module's notices (a refused table edit, …) share this one toast.
+setNotifySink((text) => showMessage(text));
 const stackEl = document.getElementById('stack')!;
 const pagesEl = document.getElementById('pages')!;
 

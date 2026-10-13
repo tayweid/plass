@@ -10,7 +10,11 @@
 // (the flyout's top 7 px above it, its padding), or, for a pill hugging a
 // narrow block (`side: 'start'`), to its left when they fit there, into
 // the empty margin rather than over the block. Returns the side taken.
-export function placeFlyout(element: HTMLElement, anchor: HTMLElement, options: { side?: 'end' | 'start' } = {}): 'end' | 'start' {
+//
+// `avoid` (a start-side flyout only): a box of text beside the column, such
+// as a centred caption wider than its block; the flyout moves further left
+// to clear it where the margin has room, and otherwise as far as it can.
+export function placeFlyout(element: HTMLElement, anchor: HTMLElement, options: { side?: 'end' | 'start'; avoid?: DOMRect } = {}): 'end' | 'start' {
   const tile = anchor.getBoundingClientRect();
   const columnEl = anchor.closest<HTMLElement>('#rail, .block-pill') ?? anchor;
   const column = columnEl.getBoundingClientRect();
@@ -28,7 +32,14 @@ export function placeFlyout(element: HTMLElement, anchor: HTMLElement, options: 
   const gap = pill ? 6 : 4;
   const floor = panel ? panel.left + 4 : edge;
   if (options.side === 'start' && column.left - gap - width >= floor) {
-    style.left = `${column.left - gap - width}px`;
+    let left = column.left - gap - width;
+    const avoid = options.avoid;
+    if (avoid) {
+      const flyTop = parseFloat(style.top);
+      const crosses = left + width > avoid.left && flyTop < avoid.bottom && flyTop + element.offsetHeight > avoid.top;
+      if (crosses) left = Math.max(floor, Math.min(left, avoid.left - gap - width));
+    }
+    style.left = `${left}px`;
     return 'start';
   }
   style.left = `${Math.max(edge, Math.min(column.right + gap, window.innerWidth - width - edge))}px`;

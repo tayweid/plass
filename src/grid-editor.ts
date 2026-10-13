@@ -20,25 +20,12 @@ import { pickAndInsertFigure } from './figures';
 import { atPaperSize, onPaperScale, paperScale } from './paper-scale';
 import { inkReachEm } from './font-registry';
 import { onGeometryVarsPublished, scheduleTypeset } from './typeset-plugin';
+import { formatColumnShares, parseColumnShares } from './grid-split';
 
 export const DEFAULT_GRID_GUTTER_EM = 1;
 
-/** "2 : 1", "2 1", "2,1", "60/40" → [2, 1] / [1.5, 1]; null when unusable.
- *  Shares are canonical: each divided by the smallest and rounded to 3
- *  decimals (ratio-equivalent shares lay out identically, and the
- *  Markdown file writes them as percents that read back the same). */
-export function parseColumnShares(text: string): number[] | null {
-  const parts = text
-    .split(/[\s:,/]+/)
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .map((p) => Number(p.replace(/fr$/i, '')));
-  if (!parts.length || parts.length > 12 || parts.some((n) => !Number.isFinite(n) || n <= 0)) return null;
-  const min = Math.min(...parts);
-  return parts.map((n) => Math.round((n / min) * 1000) / 1000);
-}
-
-export const formatColumnShares = (columns: number[]): string => columns.map((c) => String(c)).join(' : ');
+// The split's grammar and display live in grid-split.ts (pure, unit-tested).
+export { formatColumnShares, parseColumnShares };
 
 /** The nearest grid around the selection, with its position. */
 export function gridContext(state: EditorState): { pos: number; node: PMNode; depth: number } | null {
@@ -118,7 +105,7 @@ const cellMatrix = (grid: PMNode): PMNode[][] => {
 
 /** Set the column shares; a different count adds empty cells on the right
  *  or drops the rightmost columns (their content is lost — the bar says so). */
-export function setGridColumns(view: EditorView, columns: number[]): boolean {
+export function setGridColumns(view: EditorView, columns: number[], focus = true): boolean {
   const ctx = gridContext(view.state);
   if (!ctx) return false;
   const rows = cellMatrix(ctx.node).map((cells) => {
@@ -127,15 +114,17 @@ export function setGridColumns(view: EditorView, columns: number[]): boolean {
     return out;
   });
   view.dispatch(replaceGrid(view.state, ctx.pos, { ...ctx.node.attrs, columns }, rows));
-  view.focus();
+  if (focus) view.focus();
   return true;
 }
 
-export function setGridGutter(view: EditorView, gutter: number): boolean {
+/** `focus`: hand the editor the focus (a click does; a field the writer
+ *  is typing in keeps it). */
+export function setGridGutter(view: EditorView, gutter: number, focus = true): boolean {
   const ctx = gridContext(view.state);
   if (!ctx) return false;
-  view.dispatch(view.state.tr.setNodeMarkup(ctx.pos, undefined, { ...ctx.node.attrs, gutter }));
-  view.focus();
+  if (ctx.node.attrs.gutter !== gutter) view.dispatch(view.state.tr.setNodeMarkup(ctx.pos, undefined, { ...ctx.node.attrs, gutter }));
+  if (focus) view.focus();
   return true;
 }
 

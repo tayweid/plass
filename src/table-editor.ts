@@ -37,6 +37,7 @@ import { CELL_FILL_CYCLE, type CellFill } from './table-fills';
 import { schema } from './schema';
 import { normalizeTableColumns, tableInsetPt } from './table-geometry';
 import { onPaperScale, paperScale } from './paper-scale';
+import { notify } from './notify';
 import {
   transactionChangesDerivedStructure,
   type DerivedStructureRules,
@@ -60,6 +61,24 @@ function dispatchTableAttrs(view: EditorView, attrs: Record<string, unknown>, se
   const tr = view.state.tr;
   view.dispatch((separateHistory ? closeHistory(tr) : tr).setNodeMarkup(context.pos, undefined, { ...context.node.attrs, ...attrs }).scrollIntoView());
   return true;
+}
+
+/** Set attributes on the table at `pos` (the panel's writes: no scroll,
+ *  the panel sits beside the table). `separateHistory`: an undo step of
+ *  its own. False when no table is there any more. */
+export function setTableAttrsAt(view: EditorView, pos: number, attrs: Record<string, unknown>, separateHistory = false): boolean {
+  const node = view.state.doc.nodeAt(pos);
+  if (!node || node.type.spec.tableRole !== 'table') return false;
+  if (Object.entries(attrs).every(([name, value]) => JSON.stringify(node.attrs[name]) === JSON.stringify(value))) return true;
+  const tr = view.state.tr;
+  view.dispatch((separateHistory ? closeHistory(tr) : tr).setNodeMarkup(pos, undefined, { ...node.attrs, ...attrs }));
+  return true;
+}
+
+/** A label as Typst accepts it: letters, digits, `:._-`, starting with a
+ *  letter or digit, at most 128 characters. */
+export function normalizeTableLabel(text: string): string {
+  return text.replace(/[^A-Za-z0-9:._-]/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 128);
 }
 
 export function setTableStyle(style: 'booktabs' | 'grid' | 'plain'): Command {
@@ -499,6 +518,10 @@ const TABLE_CELL_INLINE = new Set(['text', 'hard_break', 'math_inline', 'eq_ref'
 
 const tableIssueCache = new WeakMap<PMNode, string | null>();
 
+/** A node or mark name as a writer reads it (`code_block` → `code block`).
+ *  The refusals are short: the toast is one line at the narrowest window. */
+const spoken = (name: string) => name.replace(/_/g, ' ');
+
 function tableCellIssue(table: PMNode): string | null {
   const cached = tableIssueCache.get(table);
   if (cached !== undefined || tableIssueCache.has(table)) return cached ?? null;
@@ -509,42 +532,42 @@ function tableCellIssue(table: PMNode): string | null {
     node.forEach((block) => {
       if (issue) return;
       if (block.type.name !== 'paragraph') {
-        issue = `${block.type.name} blocks are not losslessly supported in table cells`;
+        issue = `${spoken(block.type.name)}s can’t go in a table cell`;
         return;
       }
       if (block.attrs.keep || block.attrs.align) {
-        issue = 'paragraph layout attributes are not losslessly supported in table cells';
+        issue = 'paragraph alignment can’t go in a table cell';
         return;
       }
       block.descendants((inline) => {
         if (issue) return false;
         if (!TABLE_CELL_INLINE.has(inline.type.name)) {
-          issue = `${inline.type.name} is not losslessly supported inside table cells`;
+          issue = `${spoken(inline.type.name)}s can’t go in a table cell`;
           return false;
         }
         const marks = inline.marks.map((mark) => mark.type.name);
         const unsupported = marks.find((mark) => !TABLE_CELL_MARKS.has(mark));
         if (unsupported) {
-          issue = `${unsupported} marks are not losslessly supported inside table cells`;
+          issue = `${spoken(unsupported)} marks can’t go in a table cell`;
           return false;
         }
         if (!inline.isText && marks.length) {
-          issue = `marks on ${inline.type.name} are not losslessly supported inside table cells`;
+          issue = `formatted ${spoken(inline.type.name)}s can’t go in a table cell`;
           return false;
         }
         if (marks.includes('code') && marks.length > 1) {
-          issue = 'code combined with another mark is not losslessly supported inside table cells';
+          issue = 'code with another mark can’t go in a table cell';
           return false;
         }
         const source = inline.isText ? inline.text ?? '' : inline.type.name === 'math_inline' ? String(inline.attrs.src ?? '') : '';
         if (/[\r\n]/.test(source)) {
-          issue = 'multiline inline content is not losslessly supported inside table cells';
+          issue = 'a line break inside inline content can’t go in a table cell';
           return false;
         }
         if (inline.type.name === 'citation') {
           const key = String(inline.attrs.key ?? '');
           if (!isPortableCitationKey(key)) {
-            issue = `citation ${JSON.stringify(key)} is not portable Typst syntax`;
+            issue = `citation ${JSON.stringify(key)} isn’t portable Typst`;
             return false;
           }
         }
@@ -557,17 +580,9 @@ function tableCellIssue(table: PMNode): string | null {
   return issue;
 }
 
-let noticeTimer = 0;
+/** A refused edit is said in the app's one toast (notify.ts → #toast). */
 function announceTableConstraint(issue: string): void {
-  if (typeof document === 'undefined') return;
-  document.querySelector('.native-table-notice')?.remove();
-  const notice = document.createElement('div');
-  notice.className = 'native-table-notice';
-  notice.setAttribute('role', 'status');
-  notice.textContent = `${issue}. The edit was not applied, so table export remains lossless.`;
-  document.body.appendChild(notice);
-  window.clearTimeout(noticeTimer);
-  noticeTimer = window.setTimeout(() => notice.remove(), 4200);
+  notify(`Not applied: ${issue}`);
 }
 
 function tablesTouchedBy(transaction: Transaction): Map<PMNode, number> {
@@ -1073,10 +1088,7 @@ class NativeTableControls {
     this.labelInput.title = 'Letters and numbers, followed by letters, numbers, colon, dot, underscore, or hyphen';
     this.captionInput.addEventListener('input', () => dispatchTableAttrs(this.view, { caption: this.captionInput.value }));
     this.labelInput.addEventListener('input', () => {
-      const normalized = this.labelInput.value
-        .replace(/[^A-Za-z0-9:._-]/g, '-')
-        .replace(/^[^A-Za-z0-9]+/, '')
-        .slice(0, 128);
+      const normalized = normalizeTableLabel(this.labelInput.value);
       if (normalized !== this.labelInput.value) this.labelInput.value = normalized;
       dispatchTableAttrs(this.view, { label: normalized });
     });
@@ -1300,7 +1312,7 @@ export function structuredTablePlugin(): Plugin {
     filterTransaction(transaction, state) {
       if (!transaction.docChanged) return true;
       const result = keepsUnsupportedTablesVerbatim(state.doc, transaction);
-      if (!result.ok) announceTableConstraint(result.issue ?? 'That content');
+      if (!result.ok) announceTableConstraint(result.issue ?? 'that content can’t go in a table cell');
       return result.ok;
     },
     props: {
