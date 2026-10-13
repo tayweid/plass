@@ -308,8 +308,15 @@ jobs:
           else
             echo "::warning::Plass.app did not build and the previous app is not all there ($kept of 3 zips); plass.tayweid.io/install fails until it does."
           fi
+      # One Pages artifact per attempt: an artifact outlives its attempt, so
+      # re-running a failed app job re-runs this one beside the first
+      # attempt's upload, and deploy-pages refuses a run holding two
+      # artifacts of one name.
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
+          name: github-pages-${{ github.run_attempt }}
           path: site
       - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
         id: deployment
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
