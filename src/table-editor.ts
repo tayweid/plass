@@ -99,11 +99,11 @@ function insertColumnWithWidth(side: 'before' | 'after'): Command {
   };
 }
 
-const addColumnBefore = insertColumnWithWidth('before');
+export const addColumnBefore = insertColumnWithWidth('before');
 export const addColumnAfter = insertColumnWithWidth('after');
 
 /** Set every selected logical column; a caret in a merged cell selects its span. */
-function setSelectedColumnWidth(width: string): Command {
+export function setSelectedColumnWidth(width: string): Command {
   return (state, dispatch) => {
     if (!isInTable(state) || !normalizeTableColumns([width])) return false;
     const rect = selectedRect(state);
@@ -192,6 +192,117 @@ export const cycleCellFill: Command = (state, dispatch, view) => {
   const next = CELL_FILL_CYCLE[(CELL_FILL_CYCLE.indexOf(current) + 1) % CELL_FILL_CYCLE.length];
   return setCellAttr('fill', next)(state, dispatch, view);
 };
+
+/** Set the rule under every selected row to one preset (the block pill's
+ *  Cell panel; cycleRowRule is the old bar's cycle). Grid tables draw cell
+ *  strokes instead and have no row rules. */
+export function setRowRule(rule: RowRule): Command {
+  return (state, dispatch) => {
+    if (!isInTable(state)) return false;
+    let rect: ReturnType<typeof selectedRect>;
+    try {
+      rect = selectedRect(state);
+    } catch {
+      return false;
+    }
+    if (rect.table.attrs.style === 'grid') return false;
+    if (!dispatch) return true;
+    const tr = state.tr;
+    rect.table.forEach((row, offset, i) => {
+      if (i >= rect.top && i < rect.bottom && (row.attrs.rule || '') !== rule) tr.setNodeMarkup(rect.tableStart + offset, undefined, { ...row.attrs, rule });
+    });
+    if (tr.docChanged) dispatch(tr);
+    return true;
+  };
+}
+
+/** Every column back to automatic width (columnWidths = null). */
+export const resetTableColumnWidths: Command = (state, dispatch) => {
+  const context = tableContext(state);
+  if (!context || context.node.attrs.columnWidths == null) return false;
+  if (dispatch) dispatch(closeHistory(state.tr).setNodeMarkup(context.pos, undefined, { ...context.node.attrs, columnWidths: null }));
+  return true;
+};
+
+/** One attribute of every selected cell (each merged cell once): the
+ *  shared value, or 'mixed'; null outside a table. */
+export function selectedCellsAttr(state: EditorState, name: 'align' | 'valign' | 'fill'): string | null {
+  if (!isInTable(state)) return null;
+  try {
+    const rect = selectedRect(state);
+    const cells = new Set<number>();
+    for (let row = rect.top; row < rect.bottom; row++) {
+      for (let column = rect.left; column < rect.right; column++) cells.add(rect.map.map[row * rect.map.width + column]);
+    }
+    const values = [...cells].map((offset) => String(rect.table.nodeAt(offset)?.attrs[name] ?? ''));
+    return values.every((value) => value === values[0]) ? values[0] ?? '' : 'mixed';
+  } catch {
+    return null;
+  }
+}
+
+/** The selected columns' shared width ('auto', '2fr', '72pt') or 'mixed',
+ *  and whether any column of the table takes a share. */
+export function selectedColumnWidth(state: EditorState): { width: string; columns: number; anyShare: boolean; custom: boolean } | null {
+  if (!isInTable(state)) return null;
+  try {
+    const rect = selectedRect(state);
+    const stored = explicitColumnWidths(rect.table, rect.map.width);
+    const widths = stored ?? Array(rect.map.width).fill('auto');
+    const selected = widths.slice(rect.left, rect.right);
+    return {
+      width: selected.every((value) => value === selected[0]) ? selected[0] : 'mixed',
+      columns: rect.right - rect.left,
+      anyShare: widths.some((value) => value.endsWith('fr')),
+      custom: stored !== null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** The caret's cell as a resolved position (the anchor cell of a cell
+ *  selection), for Select row / Select column. */
+function anchorCell(state: EditorState) {
+  const rect = selectedRect(state);
+  return state.doc.resolve(rect.tableStart + rect.map.map[rect.top * rect.map.width + rect.left]);
+}
+
+/** Select the caret's whole row / column as a cell selection. */
+export function selectTableLine(axis: 'row' | 'col'): Command {
+  return (state, dispatch) => {
+    if (!isInTable(state)) return false;
+    let $cell: ResolvedPos;
+    try {
+      $cell = anchorCell(state);
+    } catch {
+      return false;
+    }
+    if (dispatch) dispatch(state.tr.setSelection(axis === 'row' ? CellSelection.rowSelection($cell) : CellSelection.colSelection($cell)));
+    return true;
+  };
+}
+
+/** Whether the selection's first row is a header row. */
+export function selectedRowIsHeader(state: EditorState): boolean {
+  if (!isInTable(state)) return false;
+  try {
+    const rect = selectedRect(state);
+    return rowIsHeader(rect.map, rect.table, rect.top);
+  } catch {
+    return false;
+  }
+}
+
+/** Rows in the selection's table (0 outside one). */
+export function selectedTableRows(state: EditorState): number {
+  if (!isInTable(state)) return 0;
+  try {
+    return selectedRect(state).map.height;
+  } catch {
+    return 0;
+  }
+}
 
 /** The fill preset of the anchor cell, for the control's label. */
 export function selectedCellFill(state: EditorState): CellFill | null {
@@ -524,6 +635,13 @@ interface NativeTablePluginState {
 }
 
 const tableControlsKey = new PluginKey<NativeTablePluginState>('native-table-controls');
+
+/** The tables' structure revision: bumps only when a table's attributes,
+ *  rows, columns or cell attributes change, never for text typed in a cell
+ *  (the block pill re-measures and refreshes on it). */
+export function tableControlsRevision(state: EditorState): number {
+  return tableControlsKey.getState(state)?.controlsRevision ?? 0;
+}
 
 // Table text is intentionally absent. A character edit leaves every command,
 // select, and metadata field unchanged, so the plugin view can retain its

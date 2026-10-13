@@ -1,0 +1,655 @@
+/* The block pill (block-chrome.ts) and its menus and panels: the rail's
+   tiles and dark glass, beside the table or grid being edited. Ported from
+   the approved mockups' harness (scratchpad mock.css): every number here
+   was tuned by eye there. Nothing in this file touches a laid-out box on
+   the paper: the layer lives in #scroll outside #paper, and the flyouts
+   are fixed to the window. */
+
+/* The layer: scroll-content coordinates of the panel (#scroll is its
+   containing block), never scaled with the paper. */
+#block-chrome {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+/* No pill while the plain-text view is the truth. */
+#paper:has(> #stack.source-mode) ~ #block-chrome {
+  display: none;
+}
+
+.block-track {
+  position: absolute;
+  pointer-events: none;
+}
+
+.block-track[hidden] {
+  display: none;
+}
+
+/* Typing in a hugged table whose columns follow their text: back in the
+   margin until typing pauses (block-chrome.ts typing()), so a table
+   spreading left never runs under the pill. */
+.block-track.is-typing {
+  left: var(--bc-rest-left) !important;
+}
+
+@keyframes block-pill-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.block-pill {
+  position: sticky;
+  top: 8px;
+  pointer-events: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 40px;
+  padding: 3px;
+  border: 1px solid var(--bar-hairline);
+  border-radius: 12px;
+  background: var(--bar-glass);
+  color: var(--bar-ink);
+  /* Unprefixed only (toolbar.css, .tb-menu: the minifier adds -webkit-). */
+  backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 16px 40px rgba(0, 0, 0, 0.28);
+  -webkit-app-region: no-drag;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: opacity 0.14s ease;
+  animation: block-pill-in 0.14s ease;
+}
+
+/* Calm while typing: the first keystroke dims it; a hover, the focus, an
+   open flyout, or the caret in another cell bring it back. */
+.block-pill.is-dim:not(:hover):not(:focus-within):not(.is-open) {
+  opacity: 0.45;
+}
+
+/* Tiles: the rail's. min-width 0 and padding 0, or the app's global
+   .tb-btn (min-width 40, padding 0 8) would make every tile 40 wide. */
+.block-pill .tb-btn {
+  position: relative;
+  flex: none;
+  min-width: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(240, 238, 233, 0.64);
+  cursor: default;
+}
+
+.block-pill .tb-btn .ico {
+  width: 18px;
+  height: 18px;
+}
+
+.block-pill .tb-btn .tico {
+  font: 600 15px/18px var(--sans);
+  min-width: 18px;
+}
+
+.block-pill .tb-btn:hover:not(:disabled),
+.block-pill .tb-btn:focus-visible {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.block-pill .tb-btn[aria-expanded='true'] {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.block-pill .tb-btn:focus-visible {
+  outline: 2px solid #9db8d6;
+  outline-offset: 2px;
+}
+
+.block-pill .tb-btn:disabled {
+  opacity: 0.25;
+}
+
+.block-pill .tb-btn:disabled .ico {
+  transform: none;
+}
+
+.block-pill .tb-rule {
+  width: 20px;
+  height: 1px;
+  margin: 3px auto;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Captions: to the tile's right; a pill hugging a narrow centred block
+   opens them to the LEFT, into the empty margin, instead of over it. */
+.block-pill .tb-btn .lbl {
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.block-pill .tb-btn .lbl kbd {
+  margin-left: 8px;
+  font: 11px var(--sans);
+  color: var(--bar-ink-soft);
+}
+
+.block-pill.is-hug .tb-btn .lbl {
+  left: auto;
+  right: calc(100% + 10px);
+}
+
+.block-pill .tb-btn:disabled .lbl {
+  visibility: hidden;
+}
+
+/* Compact (a 46–60 px margin): 34 wide, 28 px tiles. */
+.block-pill.is-compact {
+  width: 34px;
+  padding: 2px;
+  border-radius: 11px;
+}
+
+.block-pill.is-compact .tb-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.block-pill.is-compact .tb-btn .ico {
+  width: 16px;
+  height: 16px;
+}
+
+/* Collapsed (a margin under 46 px): one ⋯ tile. */
+.block-pill.is-collapsed {
+  width: 28px;
+  padding: 0;
+  border-radius: 9px;
+}
+
+.block-pill.is-collapsed .tb-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+}
+
+/* For assistive tech only: the caret's place, the image hint. */
+.bc-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .block-pill .tb-btn:active {
+    transform: none;
+  }
+
+  .block-pill .tb-btn:hover .ico {
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Flyouts. .tb-menu supplies the glass, radius 13 and shadow. ONE text
+   inset everywhere: 18 px from the flyout's outer edge (border 1 + padding
+   7 + item padding 10), so menu items, headings and section labels start
+   on one x. */
+.tb-menu.bc-flyout {
+  box-sizing: border-box;
+  padding-inline: 7px;
+}
+
+.bc-flyout .tb-menu-heading {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.bc-flyout .tb-menu-divider {
+  margin: 6px 8px;
+}
+
+.bc-flyout .tb-menu-divider[hidden],
+.bc-flyout .tb-menu-hint[hidden],
+.bc-flyout .bc-note[hidden],
+.bc-flyout [role='menuitemradio'][hidden] {
+  display: none;
+}
+
+/* A hovered choice is lighter than the checked one (toolbar.css gives
+   both the same disc), so hovering Center beside a checked Right does not
+   read as two selections. */
+.tb-menu-extras.bc-flyout .tb-btn:hover:not(:disabled):not(:focus-visible):not([aria-checked='true']) {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.tb-menu.bc-menu {
+  width: 248px;
+}
+
+.tb-menu.bc-gridmenu {
+  width: 208px;
+}
+
+.bc-flyout .mi-chev {
+  margin-left: auto;
+  color: var(--bar-ink-soft);
+  font: 13px var(--sans);
+}
+
+.bc-flyout .mi-kbd {
+  flex: none;
+  color: var(--bar-ink-soft);
+  font: 11px var(--sans);
+}
+
+.bc-flyout .mi-sub {
+  display: block;
+  font: 11px var(--sans);
+  color: var(--bar-ink-soft);
+  margin-top: 4px;
+}
+
+.bc-flyout .mi-sub[hidden] {
+  display: none;
+}
+
+.bc-flyout .tb-menu-label {
+  white-space: normal;
+}
+
+/* The Columns menu: radio rows with their fields. */
+.bc-colsmenu .mi-radio {
+  padding-block: 9px;
+}
+
+.bc-colsmenu .tb-menu-heading {
+  padding-top: 11px;
+}
+
+.bc-colsmenu .tb-menu-divider {
+  margin-block: 7px;
+}
+
+/* A drawn radio (14 px ring, 6 px dot), not unicode circles that sit off
+   the sans x-height; a checked radio row keeps the plain item look (the
+   checked tint and trailing ✓ are for checkbox items). */
+.bc-flyout .mi-radio {
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 0;
+}
+
+.bc-flyout .mi-radio::before {
+  content: '';
+  flex: none;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  margin: 1.5px 10px 0 0;
+  border-radius: 50%;
+  border: 1.3px solid rgba(240, 238, 233, 0.38);
+  background: transparent;
+}
+
+.bc-flyout .mi-radio[aria-checked='true'] {
+  color: inherit;
+  background: transparent;
+}
+
+.bc-flyout .mi-radio[aria-checked='true']:hover,
+.bc-flyout .mi-radio:focus-visible {
+  background: var(--bar-press);
+}
+
+.bc-flyout .mi-radio[aria-checked='true'] .tb-menu-label::after {
+  content: none;
+}
+
+.bc-flyout .mi-radio[aria-checked='true']::before {
+  border-color: #9db8d6;
+  background: radial-gradient(circle, #9db8d6 0 3px, transparent 3.4px);
+}
+
+.bc-flyout .mi-radio[aria-checked='true'] .tb-menu-label {
+  color: #fff;
+}
+
+.bc-flyout .mi-radio .tb-menu-label {
+  flex: 1;
+}
+
+.bc-flyout .mi-radio[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* The inline fields share one right edge, so 1 part and 72 pt line up;
+   an unchecked row's field is quiet. */
+.bc-flyout .pfield {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  margin-top: -3px;
+  min-width: 70px;
+  font: 11px var(--sans);
+  color: var(--bar-ink-soft);
+}
+
+.bc-flyout .mi-radio.is-unchecked .pfield {
+  opacity: 0.45;
+}
+
+.bc-flyout .pfield input {
+  width: 40px;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 4px;
+  font: 11px var(--sans);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--bar-ink);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 6px;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.bc-flyout .pfield input:focus-visible {
+  border-color: #9db8d6;
+}
+
+.bc-flyout .pfield input::-webkit-outer-spin-button,
+.bc-flyout .pfield input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Glyph panels (Align, Cell): .tb-menu-extras. */
+.tb-menu-extras.bc-flyout {
+  padding: 8px 7px 7px;
+}
+
+.bc-flyout .tb-extra-section {
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 34px;
+}
+
+.bc-flyout .tb-extra-heading {
+  padding-left: 10px;
+}
+
+.tb-menu-extras.bc-flyout .tb-menu-divider {
+  margin: 6px 0 4px;
+}
+
+.tb-menu-extras.bc-cellpanel {
+  width: 260px;
+}
+
+.tb-menu-extras.bc-alignpanel {
+  width: 236px;
+}
+
+.bc-alignpanel .tb-extra-row {
+  gap: 4px;
+}
+
+.bc-flyout .tb-btn[hidden] {
+  display: none;
+}
+
+.bc-flyout .bc-decimal .tico {
+  font: 600 12px/18px var(--sans);
+}
+
+.bc-flyout .bc-decimal:disabled {
+  opacity: 1;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.bc-flyout .bc-note {
+  margin-left: 4px;
+  font: 11px var(--sans);
+  color: var(--bar-ink-soft);
+  white-space: nowrap;
+}
+
+.bc-flyout .bc-rules {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bc-flyout .bc-rules .bc-note {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+}
+
+.bc-flyout .bc-howto {
+  padding: 0 10px 6px;
+  margin-top: -4px;
+  font-size: 11px;
+}
+
+/* Fill swatches: 5 x 22 + 4 x 9 = 146 = the rule row (4 x 32 + 3 x 6),
+   so both rows end level, and the checked ring keeps clear of its
+   neighbour. Checked = a blue ring (a visual choice). */
+.bc-flyout .swatches {
+  gap: 9px;
+}
+
+.bc-flyout .swatch {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
+  cursor: pointer;
+}
+
+.bc-flyout .swatch[aria-checked='true'] {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22), 0 0 0 3px var(--bar-glass), 0 0 0 4.5px #9db8d6;
+}
+
+/* None: a slash across an empty circle (a gradient, so the swatch stays
+   static and its caption's containing block is the panel). */
+.bc-flyout .swatch.none {
+  background: linear-gradient(135deg, transparent calc(50% - 0.8px), rgba(240, 238, 233, 0.55) calc(50% - 0.8px), rgba(240, 238, 233, 0.55) calc(50% + 0.8px), transparent calc(50% + 0.8px)) center / 16px 16px no-repeat;
+}
+
+.bc-flyout .swatch:disabled,
+.bc-flyout .ruletile:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.bc-flyout .ruletile {
+  flex: none;
+  box-sizing: border-box;
+  width: 32px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--bar-hairline);
+  background: rgba(255, 255, 255, 0.045);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.bc-flyout .ruletile i {
+  display: block;
+  width: 100%;
+  background: rgba(240, 238, 233, 0.85);
+}
+
+.bc-flyout .ruletile i.dashed {
+  height: 0;
+  border-top: 1px dashed rgba(240, 238, 233, 0.85);
+  background: none;
+}
+
+/* None: a slash, as the None swatch. */
+.bc-flyout .ruletile[data-value='none'] {
+  background: linear-gradient(135deg, transparent calc(50% - 0.7px), rgba(240, 238, 233, 0.55) calc(50% - 0.7px), rgba(240, 238, 233, 0.55) calc(50% + 0.7px), transparent calc(50% + 0.7px)) center / 12px 12px no-repeat, rgba(255, 255, 255, 0.045);
+}
+
+.bc-flyout .ruletile[aria-checked='true'] {
+  box-shadow: 0 0 0 1.5px #9db8d6;
+}
+
+.bc-flyout :is(.swatch, .ruletile):focus-visible {
+  outline: 2px solid #9db8d6;
+  outline-offset: 3px;
+}
+
+/* A panel glyph's caption, beside the panel (block-chrome.ts places it),
+   the same glass label as the rail's. */
+.bc-flyout .bc-cap {
+  position: absolute;
+  z-index: 40;
+  width: max-content;
+  font: 11px var(--sans);
+  color: var(--bar-ink);
+  background: var(--bar-glass);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 5px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+
+.bc-flyout .bc-cap-on > .bc-cap {
+  opacity: 1;
+}
+
+.bc-flyout.tb-menu-extras .tb-btn {
+  position: static;
+}
+
+.bc-flyout .swatch,
+.bc-flyout .ruletile {
+  position: static;
+}
+
+/* Settings panels (Table settings, Grid layout): .block-panel, one
+   geometry: 284 wide, a 60 px label column. */
+.tb-menu.block-panel {
+  width: 284px;
+  box-sizing: border-box;
+  padding: 4px 7px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.block-panel .bp-sec {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 10px 11px 10px 10px;
+}
+
+.block-panel .bp-sec + .bp-sec {
+  border-top: 1px solid var(--bar-hairline);
+}
+
+.block-panel .bp-head {
+  padding-top: 2px;
+  font: 500 10px/1.3 var(--sans);
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  color: var(--bar-ink-soft);
+}
+
+.block-panel .bp-note {
+  font: 11px/1.4 var(--sans);
+  color: var(--bar-ink-soft);
+}
+
+.block-panel .bp-foot {
+  border-top: 1px solid var(--bar-hairline);
+  padding-top: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.block-panel :is(.bp-danger, .bp-item) {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 32px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: 13px/1.3 var(--sans);
+  text-align: left;
+  color: var(--bar-ink);
+  cursor: pointer;
+}
+
+.block-panel .bp-item {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.block-panel :is(.bp-danger, .bp-item):hover,
+.block-panel :is(.bp-danger, .bp-item):focus-visible {
+  background: var(--bar-press);
+  outline: none;
+}
+
+.block-panel .bp-danger {
+  color: #e8877c;
+}
+
+.block-panel .bp-danger .ico {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.block-panel .bp-sub {
+  display: block;
+  font: 11px var(--sans);
+  color: var(--bar-ink-soft);
+}
+
+@media print {
+  #block-chrome,
+  .block-panel,
+  .bc-flyout {
+    display: none;
+  }
+}

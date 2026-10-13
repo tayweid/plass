@@ -174,6 +174,97 @@ export function removeGridRow(view: EditorView): boolean {
   return true;
 }
 
+/** The caret's grid and cell (row, column), for the commands that act at
+ *  the caret: in a cell of a nested block, the grid cell holding it. */
+function caretCell(state: EditorState) {
+  const ctx = gridContext(state);
+  if (!ctx) return null;
+  const selected = selectedCell(state, ctx);
+  return selected ? { ctx, ...selected } : null;
+}
+
+/** Put the caret at the start of a cell of the rebuilt grid. */
+function caretTo(tr: Transaction, pos: number, row: number, column: number): Transaction {
+  const grid = tr.doc.nodeAt(pos)!;
+  return tr.setSelection(TextSelection.near(tr.doc.resolve(cellPosition(grid, pos, row, column) + 1)));
+}
+
+/** Shares divided by the smallest, to three decimals (parseColumnShares's
+ *  canonical form). */
+const canonical = (shares: number[]) => {
+  const min = Math.min(...shares);
+  return shares.map((n) => Math.round((n / min) * 1000) / 1000);
+};
+
+/** A row of empty cells above or below the caret's row; the caret lands in
+ *  the new row, in its column. */
+export function insertGridRowAt(view: EditorView, side: 'above' | 'below'): boolean {
+  const at = caretCell(view.state);
+  if (!at) return false;
+  const columns = at.ctx.node.attrs.columns as number[];
+  const rows = cellMatrix(at.ctx.node);
+  const index = side === 'above' ? at.row : at.row + 1;
+  rows.splice(index, 0, columns.map(() => emptyCell()));
+  const tr = caretTo(replaceGrid(view.state, at.ctx.pos, at.ctx.node.attrs, rows), at.ctx.pos, index, Math.min(at.column, columns.length - 1));
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+  return true;
+}
+
+/** Remove the caret's row (its content goes with it); never the last. */
+export function deleteGridRowAt(view: EditorView): boolean {
+  const at = caretCell(view.state);
+  if (!at || at.ctx.node.childCount < 2) return false;
+  const rows = cellMatrix(at.ctx.node);
+  rows.splice(at.row, 1);
+  const row = Math.min(at.row, rows.length - 1);
+  const tr = caretTo(replaceGrid(view.state, at.ctx.pos, at.ctx.node.attrs, rows), at.ctx.pos, row, Math.min(at.column, rows[row].length - 1));
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+  return true;
+}
+
+/** An empty column left or right of the caret's, one share wide (the
+ *  smallest share); the caret lands in it, in its row. */
+export function insertGridColumnAt(view: EditorView, side: 'left' | 'right'): boolean {
+  const at = caretCell(view.state);
+  if (!at) return false;
+  const columns = [...(at.ctx.node.attrs.columns as number[])];
+  if (columns.length >= 12) return false;
+  const index = side === 'left' ? at.column : at.column + 1;
+  columns.splice(index, 0, Math.min(...columns));
+  const rows = cellMatrix(at.ctx.node).map((cells) => {
+    const out = [...cells];
+    out.splice(Math.min(index, out.length), 0, emptyCell());
+    return out;
+  });
+  const tr = caretTo(replaceGrid(view.state, at.ctx.pos, { ...at.ctx.node.attrs, columns: canonical(columns) }, rows), at.ctx.pos, at.row, index);
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+  return true;
+}
+
+/** Remove the caret's column (its content goes with it); never the last. */
+export function deleteGridColumnAt(view: EditorView): boolean {
+  const at = caretCell(view.state);
+  const columns = [...((at?.ctx.node.attrs.columns as number[]) ?? [])];
+  if (!at || columns.length < 2) return false;
+  columns.splice(at.column, 1);
+  const rows = cellMatrix(at.ctx.node).map((cells) => cells.filter((_cell, i) => i !== at.column));
+  const column = Math.min(at.column, columns.length - 1);
+  const tr = caretTo(replaceGrid(view.state, at.ctx.pos, { ...at.ctx.node.attrs, columns: canonical(columns) }, rows), at.ctx.pos, at.row, column);
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+  return true;
+}
+
+/** The caret's place in its grid, for the pill's live readout. */
+export function gridCaretPlace(state: EditorState): { row: number; rows: number; column: number; columns: number } | null {
+  const at = caretCell(state);
+  if (!at) return null;
+  return { row: at.row, rows: at.ctx.node.childCount, column: at.column, columns: (at.ctx.node.attrs.columns as number[]).length };
+}
+
 /** Replace the grid by its cells' blocks in reading order. */
 export function unwrapGrid(view: EditorView): boolean {
   const ctx = gridContext(view.state);

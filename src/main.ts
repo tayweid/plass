@@ -19,6 +19,7 @@ import { MathView } from './math';
 import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
 import { structuredTablePlugin } from './table-editor';
+import { blockChromePagesChanged, blockChromePlugin, blockChromeSourceMode } from './block-chrome';
 import { TableView } from './table-view';
 import './table-controls.css';
 import './editor-comments.css';
@@ -168,6 +169,8 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       // after more specific editor behavior has had a chance.
       structuredTablePlugin(),
       tableEditing(),
+      // The pill beside the table or grid the caret is in: a view only.
+      blockChromePlugin(),
     ],
   });
 }
@@ -324,6 +327,9 @@ function renderPages(info: PageInfo, settled: boolean) {
     paperSheets(info.pages);
   }
   if (settled) scrollRail?.pages(info);
+  // A page start may have moved the edited table or grid: the block pill
+  // follows it (block-chrome.ts; read in the next frame, written if moved).
+  blockChromePagesChanged();
   updateStatus();
 }
 
@@ -471,6 +477,7 @@ const sourceView = createSourceView({
   },
   onMode(active) {
     toolbar?.setSourceMode(active);
+    blockChromeSourceMode(active);
     scrollRail?.mode(active);
     updateStatus();
   },

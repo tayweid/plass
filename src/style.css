@@ -1087,6 +1087,9 @@ body {
      a beat after typing. The pages hold their own content still, and a
      pass holds a followed caret (paperPass). */
   overflow-anchor: none;
+  /* The block pill's layer (#block-chrome, block-chrome.ts) is placed in
+     the panel's scroll content: the panel is its containing block. */
+  position: relative;
 }
 
 /* Nothing on the paper but the text can be selected: the editors' text
@@ -3188,9 +3191,11 @@ body {
 /* ---------- settings panel ---------- */
 
 /* Every floating panel is the pills' dark glass: the dropdowns (File,
-   Headings, Text style, Lists, Extras and its submenus) and Settings. */
+   Headings, Text style, Lists, Extras and its submenus), Settings, and
+   the block pill beside a table or grid (block-chrome.css). */
 .tb-menu,
-.settings-panel {
+.settings-panel,
+.block-pill {
   --bar-glass: rgba(27, 26, 30, 0.94);
   --bar-ink: rgba(240, 238, 233, 0.9);
   --bar-ink-soft: rgba(240, 238, 233, 0.5);

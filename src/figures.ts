@@ -891,7 +891,44 @@ export const exitFigure: Command = (state, dispatch) => {
   return true;
 };
 
-function insertFigureNode(view: EditorView, src: string, name: string) {
+/** How a picked image lands: a numbered, captioned figure (Insert figure),
+ *  or a plain inline image at the full width of its cell or text column (a
+ *  grid cell's Image tile: the way an exam writes its answer boxes). */
+export type ImageInsertKind = 'figure' | 'inline';
+
+/** A plain image, 100 % wide, on a line of its own: in the caret's line
+ *  when that line is empty, else in a new paragraph after it (a selected
+ *  image's paragraph counts as the line). The image ends selected. */
+function insertInlineImageNode(view: EditorView, src: string) {
+  const { state } = view;
+  const image = schema.nodes.image.create({ src, alt: '', widthPct: 100 });
+  const { $from } = state.selection;
+  let depth = $from.depth;
+  while (depth > 0 && !$from.node(depth).isTextblock) depth--;
+  let tr = state.tr;
+  let imagePos: number;
+  if (depth > 0 && $from.node(depth).type === schema.nodes.paragraph && $from.node(depth).content.size === 0) {
+    imagePos = $from.start(depth);
+    tr = tr.insert(imagePos, image);
+  } else if (depth > 0) {
+    const after = $from.after(depth);
+    tr = tr.insert(after, schema.nodes.paragraph.create(null, image));
+    imagePos = after + 1;
+  } else {
+    tr = tr.replaceSelectionWith(schema.nodes.paragraph.create(null, image));
+    imagePos = tr.mapping.map(state.selection.from, -1) + 1;
+  }
+  const placed = tr.doc.nodeAt(imagePos);
+  if (placed?.type === schema.nodes.image) tr = tr.setSelection(NodeSelection.create(tr.doc, imagePos));
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+}
+
+function insertFigureNode(view: EditorView, src: string, name: string, kind: ImageInsertKind = 'figure') {
+  if (kind === 'inline') {
+    insertInlineImageNode(view, src);
+    return;
+  }
   const node = schema.nodes.figure.create({ src, name });
   let tr = view.state.tr.replaceSelectionWith(node);
   // Put the caret in the (empty) caption.
@@ -935,10 +972,10 @@ async function ensureProjectFolder(): Promise<FolderStatus> {
 
 /** Files waiting for a project folder (a drop or a file input arrives
  *  without the click the folder picker needs). */
-const pendingImports: File[] = [];
+const pendingImports: Array<{ file: File; kind: ImageInsertKind }> = [];
 
-function deferImport(view: EditorView, file: File) {
-  pendingImports.push(file);
+function deferImport(view: EditorView, file: File, kind: ImageInsertKind) {
+  pendingImports.push({ file, kind });
   const what = pendingImports.length === 1 ? file.name : `${pendingImports.length} images`;
   fmRef?.notifyAction(`Choose a project folder to import ${what}`, {
     label: 'Choose folder',
@@ -950,21 +987,21 @@ function deferImport(view: EditorView, file: File) {
         return;
       }
       if (status !== 'ok') return;
-      for (const pending of pendingImports.splice(0)) await insertFigureFromFile(view, pending);
+      for (const pending of pendingImports.splice(0)) await insertFigureFromFile(view, pending.file, pending.kind);
     })(),
   });
 }
 
 /** Insert one image file as a figure, importing it into figures/ first.
  *  Callers with several files await each in turn: one folder question. */
-export async function insertFigureFromFile(view: EditorView, file: File): Promise<void> {
+export async function insertFigureFromFile(view: EditorView, file: File, kind: ImageInsertKind = 'figure'): Promise<void> {
   if (file.size > COMPILER_LIMITS.assetBytes) {
     fmRef?.notify(`${file.name} is larger than Plass's 20 MiB image limit`);
     return;
   }
   const status = await ensureProjectFolder();
   if (status === 'needs-gesture') {
-    deferImport(view, file);
+    deferImport(view, file, kind);
     return;
   }
   if (status === 'declined') {
@@ -974,15 +1011,15 @@ export async function insertFigureFromFile(view: EditorView, file: File): Promis
   if (status === 'unsupported' || !fmRef) {
     // No File System Access API (Safari, Firefox): the bytes have nowhere
     // to live but the document itself.
-    insertFigureNode(view, await fileDataUrl(file), file.name);
+    insertFigureNode(view, await fileDataUrl(file), file.name, kind);
     return;
   }
   const path = projectImagePath(file.name);
-  if (await fmRef.writeAsset(path, file)) insertFigureNode(view, path, file.name);
+  if (await fmRef.writeAsset(path, file)) insertFigureNode(view, path, file.name, kind);
   else fmRef.notify('Could not write the image into the project folder');
 }
 
-export function pickAndInsertFigure(view: EditorView) {
+export function pickAndInsertFigure(view: EditorView, kind: ImageInsertKind = 'figure') {
   // In a project, prefer the FSA picker: a file already inside the folder is
   // referenced in place (no copy).
   if (fmRef?.inFolder && typeof window.showOpenFilePicker === 'function') {
@@ -998,9 +1035,9 @@ export function pickAndInsertFigure(view: EditorView) {
           return;
         }
         if (rel) {
-          insertFigureNode(view, rel, handle.name);
+          insertFigureNode(view, rel, handle.name, kind);
         } else {
-          await insertFigureFromFile(view, file);
+          await insertFigureFromFile(view, file, kind);
         }
       } catch (e) {
         if ((e as DOMException)?.name !== 'AbortError') console.warn(e);
@@ -1013,7 +1050,7 @@ export function pickAndInsertFigure(view: EditorView) {
   input.accept = 'image/*';
   input.addEventListener('change', () => {
     const file = input.files?.[0];
-    if (file) void insertFigureFromFile(view, file);
+    if (file) void insertFigureFromFile(view, file, kind);
   });
   input.click();
 }
