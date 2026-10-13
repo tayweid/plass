@@ -215,7 +215,9 @@ plain Typst file.
   Custom field: `2 : 1`, `60/40`, `46% : 54%`), the gutter (None / Tight /
   Normal / Wide, or Custom em) and **Unwrap grid**, which puts the blocks
   back in the flow. Tab moves between cells and Tab from the last cell
-  adds a row; a numbered figure in a cell comes from Insert. Each cell
+  adds a row; ⌘⏎ / ⇧⌘⏎ add a row below / above the caret's;
+  ArrowDown from the last row (ArrowUp from the first) leaves the grid;
+  a numbered figure in a cell comes from Insert. Each cell
   shows a soft wash while you edit, the caret's cell a thin ring — paint
   only, never printed. Click an existing image to show its replacement
   and size controls. Typst's `#grid(columns:
@@ -287,8 +289,12 @@ plain Typst file.
   placeholder is selected so typing replaces it, Tab/Shift-Tab move between
   cells (Tab from the last cell adds a row), Enter moves down a row (and
   adds one from the last row; Shift-Enter is a line break inside a cell),
-  ArrowUp/ArrowDown leave the table at its edges, and shift-click/drag
-  selects a range. Cells hold ordinary rich text (marks,
+  ArrowUp/ArrowDown leave the table at its edges, ⌘⏎ / ⇧⌘⏎ add a row
+  below / above (the page break elsewhere), and shift-click/drag selects a
+  range. In a table or a grid, Escape selects the whole block (outlined;
+  ⌫ deletes it, Escape or Enter goes back to the cell, Tab moves to its
+  pill, whose controls then act at that cell). New rows and columns take
+  the caret. Cells hold ordinary rich text (marks,
   inline math, citations, `@` references); an edit that would leave that
   lossless subset is refused with a notice rather than flattened. While the
   caret is in a table, the block pill sits in the page's left margin beside

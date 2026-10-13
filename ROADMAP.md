@@ -88,9 +88,9 @@ menus and the Table settings / Grid layout panels, and rounded cell
 washes with an active ring, all paint only (the audit and
 `tests/block-chrome.spec.ts` hold the layout still). The old docked bars
 are gone. The design, its rules and where the code lives:
-[`docs/BLOCK-CHROME.md`](./docs/BLOCK-CHROME.md). Still open from the
-same design: its keyboard additions (Escape selects the block, ⌘⏎ / ⇧⌘⏎
-add rows in a cell, ↑/↓ leave a grid, Tab into the pill) and an optional
+[`docs/BLOCK-CHROME.md`](./docs/BLOCK-CHROME.md), keyboard included
+(Escape selects the block, ⌘⏎ / ⇧⌘⏎ add rows in a cell, ↑/↓ leave a
+grid, Tab into the pill). Still open from the same design: an optional
 dark-glass image bar.
 
 ## Done: Plass.app on the Claerbout shell (Electron, 2026-09-30)

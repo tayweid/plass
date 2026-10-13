@@ -12,7 +12,8 @@
 // scrolls, and stops at the block's bottom. There is no scroll handler.
 //
 // Place. In the margin, its right edge 14 px left of the text column
-// (compact: 8 px, 34 px wide, for a 46–60 px margin; under 46 px one ⋯
+// (compact: 8 px, or further to clear a grid's selection outline, 34
+// px wide, for a 46–60 px margin; under 46 px one ⋯
 // tile at the paper's edge); a narrow centred block pulls it in to hug the
 // block's left edge, and then its captions and flyouts open to the left,
 // into the empty margin (decision 3). A table in a grid cell owns the pill
@@ -36,22 +37,22 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { NodeSelection, Plugin, PluginKey, type Command, type EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { redo, undo } from 'prosemirror-history';
-import { CellSelection, addRowBefore, deleteTable, isInTable, mergeCells, selectedRect, setCellAttr, splitCell, toggleHeaderRow } from 'prosemirror-tables';
+import { CellSelection, deleteTable, isInTable, mergeCells, selectedRect, setCellAttr, splitCell, toggleHeaderRow } from 'prosemirror-tables';
 import { schema } from './schema';
 import { icon } from './toolbar';
 import { placeFlyout } from './flyout';
 import { notify } from './notify';
 import { onPaperScale, paperScale } from './paper-scale';
 import { pickAndInsertFigure } from './figures';
+import { cellSelectionFor, restoreCell, setPillFocuser } from './block-keys';
 import { normalizeTableColumns, tableInsetPt } from './table-geometry';
 import {
-  addBodyRowAfter,
-  addColumnAfter,
-  addColumnBefore,
   alignSelectedTableCells,
   deleteSelectedColumns,
   deleteSelectedRows,
   focusTable,
+  insertTableColumn,
+  insertTableRow,
   normalizeTableLabel,
   resetTableColumnWidths,
   selectTableLine,
@@ -179,6 +180,14 @@ const MARGIN_FULL = 60;
 /** Quiet time after a keystroke before a stepped-back pill hugs again. */
 const TYPING_PAUSE = 450;
 const MARGIN_COMPACT = 46;
+/** Screen px between the pill and a grid's selection outline, which
+ *  reaches 0.45em + 2 px past its box (style.css: round its washes), so
+ *  with a large font or scale the compact pill, 8 px from the text, would
+ *  touch it. A table's outline is in screen px (4 + 2) and fits inside
+ *  both gaps as they are. The pill keeps this place whether or not the
+ *  block is selected, so Escape never moves it. */
+const OUTLINE_CLEAR = 4;
+const GRID_OUTLINE_OFFSET_EM = 0.45;
 /** Quiet time after a keystroke in Caption or Label before it is written. */
 const CAPTION_PAUSE = 250;
 
@@ -260,6 +269,7 @@ class BlockChrome {
    *  focused once the pill is placed beside that table. */
   private pendingCaption = false;
   private readonly unlisten: Array<() => void> = [];
+  private cellCache: { from: EditorState; state: EditorState } | null = null;
 
   constructor(private readonly view: EditorView) {
     this.scroll = document.getElementById('scroll') ?? document.body;
@@ -298,6 +308,7 @@ class BlockChrome {
     this.scroll.addEventListener('scroll', this.scrolled, { passive: true });
     this.unlisten.push(onPaperScale(() => this.schedule()));
     current = this;
+    setPillFocuser(() => this.focusPill());
     this.update(view, null);
   }
 
@@ -511,7 +522,7 @@ class BlockChrome {
   private syncTiles(): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    const state = this.view.state;
+    const state = this.cellState();
     const inTable = isInTable(state);
     const place = gridCaretPlace(state);
     const align = this.tiles.get('align');
@@ -609,8 +620,12 @@ class BlockChrome {
       this.syncTiles();
     }
     const width = mode === 'full' ? 40 : mode === 'compact' ? 34 : 28;
-    const gap = mode === 'full' ? 14 : 8;
-    const rest = mode === 'collapsed' ? paperLeft + 4 : textLeft - gap - width;
+    const base = mode === 'full' ? 14 : 8;
+    // A grid's selection outline, past its left edge.
+    const blockLeft = block.getBoundingClientRect().left;
+    const reach = ctx.kind === 'grid' ? GRID_OUTLINE_OFFSET_EM * (parseFloat(getComputedStyle(block).fontSize) || 16) * s + 2 + OUTLINE_CLEAR : 0;
+    const gapFrom = (x: number) => Math.max(base, reach - (blockLeft - x));
+    const rest = mode === 'collapsed' ? paperLeft + 4 : Math.max(paperLeft + 2, textLeft - gapFrom(textLeft) - width);
     const top = this.blockTop(block);
     const bottom = block.getBoundingClientRect().bottom;
     const toScroll = (y: number) => y - panel.top + this.scroll.scrollTop;
@@ -638,7 +653,7 @@ class BlockChrome {
     // Collapsed, the ⋯ tile keeps to the paper's edge (spec §4.1): its
     // menu then covers only the block's left part.
     const fits = mode !== 'collapsed' && top + pillHeight <= extent + 2;
-    const left = fits ? Math.max(rest, edge - gap - width) : rest;
+    const left = fits ? Math.max(rest, edge - gapFrom(edge) - width) : rest;
     const hug = left > rest + 1;
     const trackTop = toScroll(top);
     const height = Math.max(pillHeight, Math.min(bottom - top, contentBottom - trackTop));
@@ -906,14 +921,58 @@ class BlockChrome {
   /** Run a command on the editor, then hand it the focus (every pointer
    *  commit does: nothing stays focused in a flyout that clicks closed). */
   private run(command: Command, focus = true): boolean {
+    // A block selected (Escape from a cell): a command that needs a cell
+    // runs at the cell it was selected from; one that takes the block as it
+    // is (a style, an undo) keeps it selected, and so does one that could
+    // not run at the cell either.
+    if (!command(this.view.state) && cellSelectionFor(this.view.state) && command(this.cellState())) restoreCell(this.view);
     const done = command(this.view.state, this.view.dispatch, this.view);
     if (focus) this.view.focus();
     return done;
   }
 
+  /** A grid command at the caret's cell (the remembered one while the
+   *  block is selected). */
+  private atCell(action: () => unknown): void {
+    restoreCell(this.view);
+    action();
+  }
+
+  /** The state the tiles and menus read: the editor's, or, while a table
+   *  or grid is selected as a block, the same with the remembered cell's
+   *  selection, so they show and enable what a command will act on. */
+  private cellState(): EditorState {
+    const state = this.view.state;
+    if (this.cellCache?.from === state) return this.cellCache.state;
+    const cell = cellSelectionFor(state);
+    const out = cell ? state.apply(state.tr.setSelection(cell)) : state;
+    this.cellCache = { from: state, state: out };
+    return out;
+  }
+
   private insertImage(): void {
     this.closeFlyout();
+    restoreCell(this.view);
     pickAndInsertFigure(this.view, 'inline');
+  }
+
+  /** Tab on a selected block (block-keys.ts): the focus to the pill's
+   *  first tile it can take, placing the pill first if it is not yet. */
+  focusPill(): boolean {
+    if (!this.ctx) return false;
+    if (this.track.hidden || !this.placed) {
+      if (this.frame) cancelAnimationFrame(this.frame);
+      this.frame = 0;
+      this.measure();
+    }
+    if (this.track.hidden) return false;
+    const tiles = [...this.tiles.values()].filter((t) => !t.disabled);
+    if (!tiles.length) return false;
+    for (const t of this.tiles.values()) t.tabIndex = -1;
+    tiles[0].tabIndex = 0;
+    this.pill.classList.remove('is-dim');
+    tiles[0].focus({ preventScroll: true });
+    return true;
   }
 
   // -- flyout content -------------------------------------------------------
@@ -1028,10 +1087,10 @@ class BlockChrome {
   }
 
   private rowsMenu(builder: Builder, parent?: FlyoutId): Builder {
-    const state = () => this.view.state;
+    const state = () => this.cellState();
     this.back(builder, parent, parent === 'more' ? 'Table controls' : 'Grid');
-    this.item(builder, 'Add row above', () => this.run(addRowBefore), { name: 'Add row above', enabled: () => addRowBefore(state()) });
-    this.item(builder, 'Add row below', () => this.run(addBodyRowAfter), { name: 'Add row below', enabled: () => addBodyRowAfter(state()) });
+    this.item(builder, 'Add row above', () => this.run(insertTableRow('above')), { name: 'Add row above', enabled: () => insertTableRow('above')(state()), kbd: '⇧⌘⏎' });
+    this.item(builder, 'Add row below', () => this.run(insertTableRow('below')), { name: 'Add row below', enabled: () => insertTableRow('below')(state()), kbd: '⌘⏎' });
     this.item(builder, 'Select row', () => this.run(selectTableLine('row')), { enabled: () => selectTableLine('row')(state()) });
     this.divider(builder);
     this.item(builder, 'Header row', () => this.run(toggleHeaderRow), {
@@ -1046,10 +1105,10 @@ class BlockChrome {
   }
 
   private colsMenu(builder: Builder, parent?: FlyoutId): Builder {
-    const state = () => this.view.state;
+    const state = () => this.cellState();
     this.back(builder, parent, parent === 'more' ? 'Table controls' : 'Grid');
-    this.item(builder, 'Add column left', () => this.run(addColumnBefore), { name: 'Add column before', enabled: () => addColumnBefore(state()) });
-    this.item(builder, 'Add column right', () => this.run(addColumnAfter), { name: 'Add column after', enabled: () => addColumnAfter(state()) });
+    this.item(builder, 'Add column left', () => this.run(insertTableColumn('left')), { name: 'Add column before', enabled: () => insertTableColumn('left')(state()) });
+    this.item(builder, 'Add column right', () => this.run(insertTableColumn('right')), { name: 'Add column after', enabled: () => insertTableColumn('right')(state()) });
     this.item(builder, 'Select column', () => this.run(selectTableLine('col')), { enabled: () => selectTableLine('col')(state()) });
     this.divider(builder);
     this.heading(builder, 'Width');
@@ -1235,7 +1294,7 @@ class BlockChrome {
   }
 
   private alignPanel(builder: Builder, parent?: FlyoutId): Builder {
-    const state = () => this.view.state;
+    const state = () => this.cellState();
     this.back(builder, parent, 'Table controls');
     const across = this.section(builder, 'Across', 'Selected cells horizontal alignment');
     for (const value of ['left', 'center', 'right'] as const) {
@@ -1296,7 +1355,7 @@ class BlockChrome {
   }
 
   private cellPanel(builder: Builder, parent?: FlyoutId): Builder {
-    const state = () => this.view.state;
+    const state = () => this.cellState();
     this.back(builder, parent, 'Table controls');
     const fills = this.section(builder, 'Fill', 'Selected cells fill');
     fills.classList.add('swatches');
@@ -1875,22 +1934,22 @@ class BlockChrome {
   }
 
   private gridRowsMenu(builder: Builder, parent?: FlyoutId): Builder {
-    const place = () => gridCaretPlace(this.view.state);
+    const place = () => gridCaretPlace(this.cellState());
     this.back(builder, parent, parent === 'gridparent' ? 'Grid' : 'Grid controls');
-    this.item(builder, 'Add row above', () => insertGridRowAt(this.view, 'above'), { name: 'Add row above', enabled: () => !!place() });
-    this.item(builder, 'Add row below', () => insertGridRowAt(this.view, 'below'), { name: 'Add row below', enabled: () => !!place() });
+    this.item(builder, 'Add row above', () => this.atCell(() => insertGridRowAt(this.view, 'above')), { name: 'Add row above', enabled: () => !!place(), kbd: '⇧⌘⏎' });
+    this.item(builder, 'Add row below', () => this.atCell(() => insertGridRowAt(this.view, 'below')), { name: 'Add row below', enabled: () => !!place(), kbd: '⌘⏎' });
     this.divider(builder);
-    this.item(builder, 'Delete row', () => deleteGridRowAt(this.view), { name: 'Delete selected row', enabled: () => (place()?.rows ?? 0) > 1 });
+    this.item(builder, 'Delete row', () => this.atCell(() => deleteGridRowAt(this.view)), { name: 'Delete selected row', enabled: () => (place()?.rows ?? 0) > 1 });
     return builder;
   }
 
   private gridColsMenu(builder: Builder, parent?: FlyoutId): Builder {
-    const place = () => gridCaretPlace(this.view.state);
+    const place = () => gridCaretPlace(this.cellState());
     this.back(builder, parent, parent === 'gridparent' ? 'Grid' : 'Grid controls');
-    this.item(builder, 'Add column left', () => insertGridColumnAt(this.view, 'left'), { name: 'Add column before', enabled: () => (place()?.columns ?? 12) < 12 });
-    this.item(builder, 'Add column right', () => insertGridColumnAt(this.view, 'right'), { name: 'Add column after', enabled: () => (place()?.columns ?? 12) < 12 });
+    this.item(builder, 'Add column left', () => this.atCell(() => insertGridColumnAt(this.view, 'left')), { name: 'Add column before', enabled: () => (place()?.columns ?? 12) < 12 });
+    this.item(builder, 'Add column right', () => this.atCell(() => insertGridColumnAt(this.view, 'right')), { name: 'Add column after', enabled: () => (place()?.columns ?? 12) < 12 });
     this.divider(builder);
-    this.item(builder, 'Delete column', () => deleteGridColumnAt(this.view), { name: 'Delete selected column', enabled: () => (place()?.columns ?? 0) > 1 });
+    this.item(builder, 'Delete column', () => this.atCell(() => deleteGridColumnAt(this.view)), { name: 'Delete selected column', enabled: () => (place()?.columns ?? 0) > 1 });
     return builder;
   }
 
@@ -1909,7 +1968,7 @@ class BlockChrome {
     if (ctx.kind === 'grid') {
       this.item(builder, 'Rows', () => this.reopen('gridrows', 'more'), { submenu: true });
       this.item(builder, 'Columns', () => this.reopen('gridcols', 'more'), { submenu: true });
-      this.item(builder, 'Image in cell', () => this.insertImage(), { enabled: () => !!gridCaretPlace(this.view.state) });
+      this.item(builder, 'Image in cell', () => this.insertImage(), { enabled: () => !!gridCaretPlace(this.cellState()) });
       this.divider(builder);
       this.item(builder, 'Grid layout…', () => this.reopen('gridlayout', 'more'), { dialog: true });
       return builder;
@@ -1935,7 +1994,10 @@ class BlockChrome {
     this.scroll.removeEventListener('scroll', this.scrolled);
     for (const off of this.unlisten) off();
     this.layer.remove();
-    if (current === this) current = null;
+    if (current === this) {
+      current = null;
+      setPillFocuser(null);
+    }
   }
 }
 

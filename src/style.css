@@ -2545,11 +2545,21 @@ body {
   box-shadow: none;
 }
 
-/* A table or grid selected as a block (a NodeSelection). */
+/* A table or grid selected as a block (a NodeSelection: Escape from a
+   cell, block-keys.ts). */
 .ProseMirror :is(table, .ts-grid).ProseMirror-selectednode {
   outline: calc(2px / var(--ps, 1)) solid var(--block-select);
   outline-offset: calc(4px / var(--ps, 1));
   border-radius: calc(6px / var(--ps, 1));
+}
+
+/* A grid's cell washes reach 0.3em past its box (0.45em beside a heading
+   or joined): its outline goes round them, not along their edges. Its
+   stroke and corner are the table's (the selected grid carries --ps,
+   grid-editor.ts); the pill keeps clear of its reach (block-chrome.ts,
+   OUTLINE_CLEAR). */
+.ProseMirror .ts-grid.ProseMirror-selectednode {
+  outline-offset: 0.45em;
 }
 
 .native-table-caption {

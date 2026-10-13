@@ -11,7 +11,7 @@
 // call (md-parser recognizes it).
 
 import { Fragment, type Node as PMNode } from 'prosemirror-model';
-import { Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
+import { NodeSelection, Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView, type NodeView, type ViewMutationRecord } from 'prosemirror-view';
 import { schema } from './schema';
 import { getSettings } from './settings';
@@ -26,9 +26,15 @@ export const DEFAULT_GRID_GUTTER_EM = 1;
 // The split's grammar and display live in grid-split.ts (pure, unit-tested).
 export { formatColumnShares, parseColumnShares };
 
-/** The nearest grid around the selection, with its position. */
+/** The nearest grid around the selection, with its position, or the grid
+ *  it node-selects (Escape from a cell selects the block; the pill, its
+ *  panels and the washes stay). `depth` is the grid's own depth. */
 export function gridContext(state: EditorState): { pos: number; node: PMNode; depth: number } | null {
-  const { $from } = state.selection;
+  const selection = state.selection;
+  if (selection instanceof NodeSelection && selection.node.type === schema.nodes.grid) {
+    return { pos: selection.from, node: selection.node, depth: selection.$from.depth + 1 };
+  }
+  const { $from } = selection;
   for (let d = $from.depth; d > 0; d--) {
     const node = $from.node(d);
     if (node.type === schema.nodes.grid) return { pos: $from.before(d), node, depth: d };
@@ -88,7 +94,9 @@ function replaceGrid(state: EditorState, pos: number, attrs: Record<string, unkn
     const cell = node.child(row).child(column);
     target = cellPosition(node, pos, row, column) + 1 + Math.min(selected.offset, cell.content.size);
   }
-  tr.setSelection(TextSelection.near(tr.doc.resolve(Math.max(pos + 3, target))));
+  // A grid selected as a block stays selected (its Grid layout panel).
+  if (state.selection instanceof NodeSelection && state.selection.from === pos) tr.setSelection(NodeSelection.create(tr.doc, pos));
+  else tr.setSelection(TextSelection.near(tr.doc.resolve(Math.max(pos + 3, target))));
   return tr;
 }
 
@@ -301,6 +309,36 @@ export const tabInGrid = (dir: 1 | -1): Command => (state, dispatch, view) => {
   }
   return true;
 };
+
+/** ArrowDown from a grid's last row (ArrowUp from its first) with nowhere
+ *  to go: step out of the grid into the block after (before) it, creating
+ *  a paragraph when the grid ends (opens) the document or its cell — the
+ *  table's exitTableVertically, for grids. Runs after the geometric caret
+ *  motion has found no line to land on. */
+export function exitGridVertically(dir: -1 | 1): Command {
+  return (state, dispatch) => {
+    // A caret only: a range or a selected image keeps the default motion.
+    if (!(state.selection instanceof TextSelection) || !state.selection.empty) return false;
+    const at = caretCell(state);
+    if (!at) return false;
+    if (dir > 0 ? at.row < at.ctx.node.childCount - 1 : at.row > 0) return false;
+    // In a table inside the cell, the table's own exit leads (into the cell).
+    const { $from } = state.selection;
+    for (let d = $from.depth; d > at.ctx.depth; d--) if ($from.node(d).type.spec.tableRole === 'table') return false;
+    if (!dispatch) return true;
+    const edge = dir > 0 ? at.ctx.pos + at.ctx.node.nodeSize : at.ctx.pos;
+    const $edge = state.doc.resolve(edge);
+    const neighbour = dir > 0 ? $edge.nodeAfter : $edge.nodeBefore;
+    if (neighbour?.isTextblock) {
+      const pos = dir > 0 ? edge + 1 : edge - 1;
+      dispatch(state.tr.setSelection(TextSelection.near(state.doc.resolve(pos), dir)).scrollIntoView());
+      return true;
+    }
+    const tr = state.tr.insert(edge, schema.nodes.paragraph.create());
+    dispatch(tr.setSelection(TextSelection.create(tr.doc, edge + 1)).scrollIntoView());
+    return true;
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Cell frames
@@ -678,6 +716,24 @@ const gridEditingKey = new PluginKey('grid-editing');
 export function gridPlugin(): Plugin {
   return new Plugin({
     key: gridEditingKey,
+    // A new paper scale while a grid is selected: its decoration redraws
+    // with the scale (a selection-free transaction, after the pass).
+    view(view) {
+      let frame = 0;
+      const off = onPaperScale(() => {
+        if (frame || !(view.state.selection instanceof NodeSelection) || view.state.selection.node.type !== schema.nodes.grid) return;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (!view.isDestroyed) view.dispatch(view.state.tr.setMeta(gridEditingKey, 'scale'));
+        });
+      });
+      return {
+        destroy() {
+          off();
+          if (frame) cancelAnimationFrame(frame);
+        },
+      };
+    },
     props: {
       decorations(state) {
         const ctx = gridContext(state);
@@ -686,7 +742,11 @@ export function gridPlugin(): Plugin {
         // Below JOINED_GUTTER_EM the washes tile into one surface split by
         // hairlines (style.css): read from the attribute, no geometry.
         const joined = (ctx.node.attrs.gutter as number) < JOINED_GUTTER_EM;
-        const decorations = [Decoration.node(ctx.pos, ctx.pos + ctx.node.nodeSize, { class: joined ? 'ts-grid-editing ts-grid-joined' : 'ts-grid-editing' })];
+        const attrs: Record<string, string> = { class: joined ? 'ts-grid-editing ts-grid-joined' : 'ts-grid-editing' };
+        // Selected as a block, its outline is drawn in screen px like a
+        // table's: the grid carries the paper scale (its cells do already).
+        if (state.selection instanceof NodeSelection && state.selection.from === ctx.pos) attrs.style = `--ps: ${paperScale() || 1}`;
+        const decorations = [Decoration.node(ctx.pos, ctx.pos + ctx.node.nodeSize, attrs)];
         ctx.node.forEach((row, rowOff, rowIndex) => {
           row.forEach((cell, cellOff, columnIndex) => {
             const attrs: Record<string, string> = {};

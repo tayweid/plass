@@ -6,7 +6,7 @@
 // made ordinary typing modal and could flatten rich cell content on save.
 
 import type { Node as PMNode, ResolvedPos } from 'prosemirror-model';
-import { Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
+import { NodeSelection, Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import {
   CellSelection,
@@ -14,6 +14,7 @@ import {
   addColumnAfter as addColumnAfterNative,
   addColumnBefore as addColumnBeforeNative,
   addRowAfter,
+  addRowBefore,
   deleteColumn as deleteColumnNative,
   deleteRow,
   deleteTable,
@@ -44,8 +45,12 @@ import {
 
 interface TableContext { pos: number; node: PMNode }
 
+/** The table around the selection, or the table it node-selects (Escape
+ *  from a cell selects the block; the pill and its panels stay). */
 function tableContext(state: Pick<EditorState, 'selection'>): TableContext | null {
-  const $pos = state.selection.$anchor;
+  const selection = state.selection;
+  if (selection instanceof NodeSelection && selection.node.type.spec.tableRole === 'table') return { pos: selection.from, node: selection.node };
+  const $pos = selection.$anchor;
   for (let depth = $pos.depth; depth > 0; depth--) {
     const node = $pos.node(depth);
     if (node.type.spec.tableRole === 'table') return { pos: $pos.before(depth), node };
@@ -427,6 +432,64 @@ export const addBodyRowAfter: Command = (state, dispatch) => {
   dispatch(tr.scrollIntoView());
   return true;
 };
+
+/** Run a command that dispatches through a callback and hand back its
+ *  transaction (null when it did not apply). */
+function captured(command: Command, state: EditorState): Transaction | null {
+  let out: Transaction | null = null;
+  return command(state, (tr) => { out = tr; }) ? out : null;
+}
+
+/** The caret at the start of the cell covering (row, column) of the table
+ *  that starts at `tableStart` in `tr`'s document. */
+function caretToCell(tr: Transaction, tableStart: number, row: number, column: number): Transaction {
+  const table = tr.doc.nodeAt(tableStart - 1);
+  if (!table) return tr;
+  const map = TableMap.get(table);
+  const offset = map.map[Math.min(row, map.height - 1) * map.width + Math.min(column, map.width - 1)];
+  return offset === undefined ? tr : tr.setSelection(TextSelection.near(tr.doc.resolve(tableStart + offset + 1)));
+}
+
+/** A row above or below the selection (below a header row, a body row);
+ *  the caret lands in the new row, in the selection's first column, as it
+ *  does in a grid (the pill's Rows menu, ⌘⏎ / ⇧⌘⏎). */
+export function insertTableRow(side: 'above' | 'below'): Command {
+  const command = side === 'above' ? addRowBefore : addBodyRowAfter;
+  return (state, dispatch) => {
+    if (!isInTable(state)) return false;
+    if (!dispatch) return command(state);
+    let rect: ReturnType<typeof selectedRect>;
+    try {
+      rect = selectedRect(state);
+    } catch {
+      return false;
+    }
+    const tr = captured(command, state);
+    if (!tr) return false;
+    dispatch(caretToCell(tr, rect.tableStart, side === 'above' ? rect.top : rect.bottom, rect.left).scrollIntoView());
+    return true;
+  };
+}
+
+/** A column left or right of the selection (column widths kept); the
+ *  caret lands in the new column, in the selection's first row. */
+export function insertTableColumn(side: 'left' | 'right'): Command {
+  const command = side === 'left' ? addColumnBefore : addColumnAfter;
+  return (state, dispatch) => {
+    if (!isInTable(state)) return false;
+    if (!dispatch) return command(state);
+    let rect: ReturnType<typeof selectedRect>;
+    try {
+      rect = selectedRect(state);
+    } catch {
+      return false;
+    }
+    const tr = captured(command, state);
+    if (!tr) return false;
+    dispatch(caretToCell(tr, rect.tableStart, rect.top, side === 'left' ? rect.left : rect.right).scrollIntoView());
+    return true;
+  };
+}
 
 /** Select a cell's whole content, as Tab does when it lands in one. */
 function selectCell(tr: Transaction, cellPos: number): Transaction {

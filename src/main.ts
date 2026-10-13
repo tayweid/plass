@@ -28,6 +28,7 @@ import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { TypstInlineView } from './inline-raw';
 import { GridCellView, gridPlugin } from './grid-editor';
+import { blockKeys } from './block-keys';
 import { EditorCommentView, editorCommentKeymap, editorCommentPaste } from './editor-comments';
 import { refAutocomplete } from './ref-autocomplete';
 import { applySettings, formatPageNumber, getSettings, runningPageFormat, runningText, type DocSettings } from './settings';
@@ -151,6 +152,9 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       // Before the editing keymap: its Mod-Enter is the page break.
       editorCommentKeymap(),
       editorCommentPaste(),
+      // Before the editing keymap too: ⌘⏎ in a table or grid cell adds a
+      // row (the page break cannot live there); Escape selects the block.
+      ...blockKeys(),
       buildKeymap(),
       baseKeys,
       history(),
@@ -168,7 +172,9 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       // invariants. Keep this last so its broad arrow/mouse handlers only run
       // after more specific editor behavior has had a chance.
       structuredTablePlugin(),
-      tableEditing(),
+      // Escape selects a table as a block (block-keys.ts), outlined, with
+      // its pill: the library's default turns that into a cell selection.
+      tableEditing({ allowTableNodeSelection: true }),
       // The pill beside the table or grid the caret is in: a view only.
       blockChromePlugin(),
     ],

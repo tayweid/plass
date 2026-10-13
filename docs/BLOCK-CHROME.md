@@ -82,7 +82,10 @@ Nothing here may move a line break, a block height or a page start.
   and stops at the block's end. There is no scroll handler.
 - **Place**: in the left margin beside the block, never over text. Full
   (margin ≥ 60 px): 40 px wide, 32 px tiles, 14 px from the text. Compact
-  (46–60 px): 34 px, 28 px tiles, 8 px. Collapsed (< 46 px): one ⋯ tile
+  (46–60 px): 34 px, 28 px tiles, 8 px, or further when a grid's
+  selection outline (0.45em + 2 px past its box) would reach within 4 px
+  of it; the pill takes that place whether or not the grid is selected,
+  so Escape never moves it. Collapsed (< 46 px): one ⋯ tile
   opening the same items as a menu.
 - **Tiles**: table: Rows · Columns · Align (its glyph shows the caret
   cell's value) · Cell │ Table settings; grid: Rows · Columns · Image │
@@ -116,5 +119,45 @@ Nothing here may move a line break, a block height or a page start.
 | `src/flyout.ts`, `src/notify.ts`, `src/paper-scale.ts` | flyout placement, toasts, scale hook |
 | `tests/block-chrome.spec.ts`, `cell-chrome.spec.ts` | layout stays put; paint vocabulary |
 | `tests/block-pill.spec.ts`, `block-panels.spec.ts` | pill, menus, panels, hot path |
+| `src/block-keys.ts`, `tests/block-keys.spec.ts` | Escape / Tab / ⌘⏎ keyboard, the remembered cell |
 
-Still open: keyboard additions (Escape selects the block, ⌘⏎ / ⇧⌘⏎ add rows, ↑/↓ leave a grid, Tab into the pill); a dark-glass image bar.
+## Keyboard (`src/block-keys.ts`, spec §6)
+
+- **Escape** in a cell selects the innermost table or grid as a block (a
+  NodeSelection, outlined; tables need `tableEditing({
+  allowTableNodeSelection: true })`, or the library turns it into a cell
+  selection). The cell it left is remembered in plugin state, mapped
+  through edits, forgotten when the selection moves. The pill stays: the
+  contexts (`blockContext`, `gridContext`, `tableContext`) accept the
+  block's NodeSelection, and the grid keeps its washes.
+- **Escape / Enter** on a selected block: back to that cell. **⌫ /
+  Delete**: deletes the block (undoable). **Tab**: the pill's first
+  tile; ↑ ↓ Home End rove, → / Enter / Space open; **Shift-Tab / Escape**
+  in the pill: back to the editor with the block still selected.
+- While a block is selected the pill acts at the remembered cell: its
+  tiles and menus read the state with that cell selected (`cellState`),
+  and a command that needs a cell puts the cell's selection back first
+  (`restoreCell`), unless it could not run there either; one that takes
+  the block as it is (a style, undo) leaves it selected. An attribute
+  change to the selected block (`setNodeMarkup`: rule style, Text size,
+  density, gutter) rewrites the block's own token, which PM maps as
+  deleting the NodeSelection; the memory follows the block through it and
+  `appendTransaction` selects the block again, so Escape / Enter still
+  land in the remembered cell.
+- The outline is the same on tables and grids: 2 screen px, a 6 px
+  corner (`/ var(--ps)`; a selected grid carries `--ps` through its
+  decoration, refreshed on a new paper scale). A grid's is offset 0.45em,
+  round its washes.
+- **⌘⏎ / ⇧⌘⏎** in a table or grid cell (innermost: a table in a grid gets
+  a table row) add a row below / above. The keymap is registered before
+  the editing keymap, whose ⌘⏎ is the page break; outside cells ⌘⏎ is
+  unchanged. Rows menus show the chords.
+- **↓** from a grid's last row / **↑** from its first, when the caret
+  motion finds no line: `exitGridVertically` steps out, making a
+  paragraph when the grid ends the document (the table's
+  `exitTableVertically`, for grids).
+- Add row / column (menus and chords) put the caret in the new row or
+  column, at the caret's column / row, for tables (`insertTableRow`,
+  `insertTableColumn`) as for grids.
+
+Still open: a dark-glass image bar.
