@@ -77,9 +77,21 @@ const ICONS: Record<string, string> = {
   code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
   comment: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/>',
   plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  // The block pill's (block-chrome.ts): a row or a column with a plus; a
+  // cell as a 2 x 2 grid with one cell filled (not a square in a square,
+  // which reads as a stop button); vertical alignment as a box against a
+  // line; a bin.
+  rows: '<rect x="3" y="4.5" width="18" height="6.5" rx="1.5"/><line x1="12" y1="14.5" x2="12" y2="20.5"/><line x1="9" y1="17.5" x2="15" y2="17.5"/>',
+  cols: '<rect x="4.5" y="3" width="6.5" height="18" rx="1.5"/><line x1="14.5" y1="12" x2="20.5" y2="12"/><line x1="17.5" y1="9" x2="17.5" y2="15"/>',
+  cell: '<path d="M12 12V3.5H5.5a2 2 0 0 0-2 2V12z" fill="currentColor" fill-opacity=".45" stroke="none"/><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><line x1="12" y1="3.5" x2="12" y2="20.5"/><line x1="3.5" y1="12" x2="20.5" y2="12"/>',
+  valigntop: '<line x1="4" y1="4" x2="20" y2="4"/><rect x="8" y="7" width="8" height="10" rx="1.5"/>',
+  valignmid: '<line x1="4" y1="12" x2="7" y2="12"/><line x1="17" y1="12" x2="20" y2="12"/><rect x="8" y="7" width="8" height="10" rx="1.5"/>',
+  valignbot: '<line x1="4" y1="20" x2="20" y2="20"/><rect x="8" y="7" width="8" height="10" rx="1.5"/>',
+  trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
 };
 
-function icon(name: string): string {
+/** A glyph from ICONS: 24 viewBox, stroke 1.7, round caps and joins. */
+export function icon(name: string): string {
   return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 }
 
@@ -731,7 +743,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   directCommand(mathBtn, insertMath(false), 'Inline math (⌘M) — or type $x^2$; ⌘⇧M for display');
   directCommand(noteBtn, insertFootnote, 'Footnote (⌘⌥F) — or type ^[');
   item(insertRow, 'Table', () => insertStructuredTable(view), { title: 'Insert table (⌘⌥T)', shortcut: '⌘⌥T', editing: true, glyph: icon('table') });
-  item(insertRow, 'Grid', () => insertGrid(view), { title: 'Side-by-side grid — any blocks in columns; the grid bar sets the split', editing: true, glyph: icon('grid') });
+  item(insertRow, 'Grid', () => insertGrid(view), { title: 'Side-by-side grid — any blocks in columns; Grid layout sets the split', editing: true, glyph: icon('grid') });
   commandItem(insertRow, 'Display equation', insertMath(true), { title: 'Display equation (⌘⇧M)', shortcut: '⌘⇧M', glyph: '<span class="ico tico">∑</span>' });
   item(insertRow, 'Title block', () => {
     const { state, dispatch } = view;

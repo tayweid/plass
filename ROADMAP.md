@@ -53,29 +53,7 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      document needs it.
    - Citations: linking picker entries to local PDFs when keys match
      filenames.
-6. **Tables and grids: a UI pass** (Taylor, 2026-10-12). Both work; both
-   look and feel unfinished. Seen on a grid in a mini-exam:
-   - The edit bar is a floating strip pinned over the top of the page,
-     covering the text it sits on, far from the grid being edited.
-     Controls belong near the grid (or in the side rail), not over the
-     prose.
-   - The controls do not match the rest of the UI: plain text buttons
-     (`+ Column`, `− Row`, `Unwrap`) beside the icon toolbar and rail,
-     raw fields (`Columns 1 : 1.174`, `Gutter (em) 1.2`), and a long
-     hint line under them.
-   - Cell boxes do not read as containing their content: dashed outlines
-     whose bottom edge runs through the last line of text, and the
-     selected cell's border cuts through its text. They are square;
-     softer, rounded boxes that clearly enclose the cell would look
-     better.
-   - Tables get the same review. A few more frictions to collect when
-     the pass starts.
-   Constraint: every change is paint-only. Cell chrome must not change
-   block heights (CLAUDE.md, vertical parity), so outlines enclose by
-   `box-shadow`/`outline`/an overlay, never by border or padding. Start
-   by scripting the current behavior in the browser and taking
-   screenshots, as the before.
-7. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
+6. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
    for Plass and Knuth, Knuth's `docs/ROADMAP.md` carries the same
    entry, and `docs/COAUTHOR.md` there is the git-only design it
    replaces for live partners). The idea, from a chat of Taylor's: the
@@ -100,6 +78,20 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
    without the app needs a hosted edit-only page; per-line authorship in
    the record blurs to the owner, with coauthors named in the commit
    message.
+
+## Done: Tables and grids, a UI pass (2026-10-13)
+
+The 2026-10-12 review (a floating text-button bar over the page, dashed
+cell boxes cutting through text) is answered by the block chrome: a pill
+of rail icons in the page's left margin beside the table or grid, its
+menus and the Table settings / Grid layout panels, and rounded cell
+washes with an active ring, all paint only (the audit and
+`tests/block-chrome.spec.ts` hold the layout still). The old docked bars
+are gone. The design, its rules and where the code lives:
+[`docs/BLOCK-CHROME.md`](./docs/BLOCK-CHROME.md), keyboard included
+(Escape selects the block, ⌘⏎ / ⇧⌘⏎ add rows in a cell, ↑/↓ leave a
+grid, Tab into the pill). Still open from the same design: an optional
+dark-glass image bar.
 
 ## Done: Plass.app on the Claerbout shell (Electron, 2026-09-30)
 

@@ -18,7 +18,7 @@ import { liftListItem, sinkListItem, wrapInList } from 'prosemirror-schema-list'
 import { goToNextCell } from 'prosemirror-tables';
 import { enterInTable, exitTableVertically, tabInTable } from './table-editor';
 import { enterInList } from './list-enter';
-import { tabInGrid } from './grid-editor';
+import { exitGridVertically, tabInGrid } from './grid-editor';
 import { Slice, type MarkType } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
 import { schema } from './schema';
@@ -286,8 +286,8 @@ export function buildKeymap(): Plugin {
     },
     'ArrowRight': skipFootnote(1),
     'ArrowLeft': skipFootnote(-1),
-    'ArrowUp': chainCommands(verticalCaret(-1), exitTableVertically(-1)),
-    'ArrowDown': chainCommands(verticalCaret(1), exitTableVertically(1)),
+    'ArrowUp': chainCommands(verticalCaret(-1), exitTableVertically(-1), exitGridVertically(-1)),
+    'ArrowDown': chainCommands(verticalCaret(1), exitTableVertically(1), exitGridVertically(1)),
     'Mod-Alt-t': (_state, dispatch, view) => {
       if (dispatch && view) {
         void import('./table-editor').then(({ insertStructuredTable }) => insertStructuredTable(view));

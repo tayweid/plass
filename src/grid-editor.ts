@@ -15,32 +15,22 @@ import { NodeSelection, Plugin, PluginKey, TextSelection, type Command, type Edi
 import { Decoration, DecorationSet, type EditorView, type NodeView, type ViewMutationRecord } from 'prosemirror-view';
 import { schema } from './schema';
 import { getSettings } from './settings';
-import { blockFrameSlackEm } from './typ-serializer';
-import { pickAndInsertFigure } from './figures';
-import { atPaperSize } from './paper-scale';
+import { blockFrameSlackEm, headingScale } from './typ-serializer';
+import { atPaperSize, onPaperScale, paperScale } from './paper-scale';
+import { inkReachEm } from './font-registry';
+import { onGeometryVarsPublished, scheduleTypeset } from './typeset-plugin';
 
 export const DEFAULT_GRID_GUTTER_EM = 1;
 
-/** "2 : 1", "2 1", "2,1", "60/40" → [2, 1] / [1.5, 1]; null when unusable.
- *  Shares are canonical: each divided by the smallest and rounded to 3
- *  decimals (ratio-equivalent shares lay out identically, and the
- *  Markdown file writes them as percents that read back the same). */
-export function parseColumnShares(text: string): number[] | null {
-  const parts = text
-    .split(/[\s:,/]+/)
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .map((p) => Number(p.replace(/fr$/i, '')));
-  if (!parts.length || parts.length > 12 || parts.some((n) => !Number.isFinite(n) || n <= 0)) return null;
-  const min = Math.min(...parts);
-  return parts.map((n) => Math.round((n / min) * 1000) / 1000);
-}
-
-export const formatColumnShares = (columns: number[]): string => columns.map((c) => String(c)).join(' : ');
-
-/** The nearest grid around the selection, with its position. */
+/** The nearest grid around the selection, with its position, or the grid
+ *  it node-selects (Escape from a cell selects the block; the pill, its
+ *  panels and the washes stay). `depth` is the grid's own depth. */
 export function gridContext(state: EditorState): { pos: number; node: PMNode; depth: number } | null {
-  const { $from } = state.selection;
+  const selection = state.selection;
+  if (selection instanceof NodeSelection && selection.node.type === schema.nodes.grid) {
+    return { pos: selection.from, node: selection.node, depth: selection.$from.depth + 1 };
+  }
+  const { $from } = selection;
   for (let d = $from.depth; d > 0; d--) {
     const node = $from.node(d);
     if (node.type === schema.nodes.grid) return { pos: $from.before(d), node, depth: d };
@@ -100,7 +90,9 @@ function replaceGrid(state: EditorState, pos: number, attrs: Record<string, unkn
     const cell = node.child(row).child(column);
     target = cellPosition(node, pos, row, column) + 1 + Math.min(selected.offset, cell.content.size);
   }
-  tr.setSelection(TextSelection.near(tr.doc.resolve(Math.max(pos + 3, target))));
+  // A grid selected as a block stays selected (its Grid layout panel).
+  if (state.selection instanceof NodeSelection && state.selection.from === pos) tr.setSelection(NodeSelection.create(tr.doc, pos));
+  else tr.setSelection(TextSelection.near(tr.doc.resolve(Math.max(pos + 3, target))));
   return tr;
 }
 
@@ -115,8 +107,9 @@ const cellMatrix = (grid: PMNode): PMNode[][] => {
 };
 
 /** Set the column shares; a different count adds empty cells on the right
- *  or drops the rightmost columns (their content is lost — the bar says so). */
-export function setGridColumns(view: EditorView, columns: number[]): boolean {
+ *  or drops the rightmost columns (their content is lost; Grid layout never
+ *  changes the count, Columns › add/delete act at the caret instead). */
+export function setGridColumns(view: EditorView, columns: number[], focus = true): boolean {
   const ctx = gridContext(view.state);
   if (!ctx) return false;
   const rows = cellMatrix(ctx.node).map((cells) => {
@@ -125,30 +118,22 @@ export function setGridColumns(view: EditorView, columns: number[]): boolean {
     return out;
   });
   view.dispatch(replaceGrid(view.state, ctx.pos, { ...ctx.node.attrs, columns }, rows));
-  view.focus();
+  if (focus) view.focus();
   return true;
 }
 
-export function setGridGutter(view: EditorView, gutter: number): boolean {
+/** `focus`: hand the editor the focus (a click does; a field the writer
+ *  is typing in keeps it). */
+export function setGridGutter(view: EditorView, gutter: number, focus = true): boolean {
   const ctx = gridContext(view.state);
   if (!ctx) return false;
-  view.dispatch(view.state.tr.setNodeMarkup(ctx.pos, undefined, { ...ctx.node.attrs, gutter }));
-  view.focus();
+  if (ctx.node.attrs.gutter !== gutter) view.dispatch(view.state.tr.setNodeMarkup(ctx.pos, undefined, { ...ctx.node.attrs, gutter }));
+  if (focus) view.focus();
   return true;
 }
 
-export function addGridColumn(view: EditorView): boolean {
-  const ctx = gridContext(view.state);
-  if (!ctx) return false;
-  return setGridColumns(view, [...(ctx.node.attrs.columns as number[]), 1]);
-}
-
-export function removeGridColumn(view: EditorView): boolean {
-  const ctx = gridContext(view.state);
-  if (!ctx || (ctx.node.attrs.columns as number[]).length < 2) return false;
-  return setGridColumns(view, (ctx.node.attrs.columns as number[]).slice(0, -1));
-}
-
+// Append a row at the bottom (the pill's row commands act at the caret:
+// insertGridRowAt and the rest below).
 export function addGridRow(view: EditorView): boolean {
   const ctx = gridContext(view.state);
   if (!ctx) return false;
@@ -164,12 +149,95 @@ export function addGridRow(view: EditorView): boolean {
   return true;
 }
 
-export function removeGridRow(view: EditorView): boolean {
-  const ctx = gridContext(view.state);
-  if (!ctx || ctx.node.childCount < 2) return false;
-  view.dispatch(replaceGrid(view.state, ctx.pos, ctx.node.attrs, cellMatrix(ctx.node).slice(0, -1)));
+/** The caret's grid and cell (row, column), for the commands that act at
+ *  the caret: in a cell of a nested block, the grid cell holding it. */
+function caretCell(state: EditorState) {
+  const ctx = gridContext(state);
+  if (!ctx) return null;
+  const selected = selectedCell(state, ctx);
+  return selected ? { ctx, ...selected } : null;
+}
+
+/** Put the caret at the start of a cell of the rebuilt grid. */
+function caretTo(tr: Transaction, pos: number, row: number, column: number): Transaction {
+  const grid = tr.doc.nodeAt(pos)!;
+  return tr.setSelection(TextSelection.near(tr.doc.resolve(cellPosition(grid, pos, row, column) + 1)));
+}
+
+/** Shares divided by the smallest, to three decimals (parseColumnShares's
+ *  canonical form). */
+const canonical = (shares: number[]) => {
+  const min = Math.min(...shares);
+  return shares.map((n) => Math.round((n / min) * 1000) / 1000);
+};
+
+/** A row of empty cells above or below the caret's row; the caret lands in
+ *  the new row, in its column. */
+export function insertGridRowAt(view: EditorView, side: 'above' | 'below'): boolean {
+  const at = caretCell(view.state);
+  if (!at) return false;
+  const columns = at.ctx.node.attrs.columns as number[];
+  const rows = cellMatrix(at.ctx.node);
+  const index = side === 'above' ? at.row : at.row + 1;
+  rows.splice(index, 0, columns.map(() => emptyCell()));
+  const tr = caretTo(replaceGrid(view.state, at.ctx.pos, at.ctx.node.attrs, rows), at.ctx.pos, index, Math.min(at.column, columns.length - 1));
+  view.dispatch(tr.scrollIntoView());
   view.focus();
   return true;
+}
+
+/** Remove the caret's row (its content goes with it); never the last. */
+export function deleteGridRowAt(view: EditorView): boolean {
+  const at = caretCell(view.state);
+  if (!at || at.ctx.node.childCount < 2) return false;
+  const rows = cellMatrix(at.ctx.node);
+  rows.splice(at.row, 1);
+  const row = Math.min(at.row, rows.length - 1);
+  const tr = caretTo(replaceGrid(view.state, at.ctx.pos, at.ctx.node.attrs, rows), at.ctx.pos, row, Math.min(at.column, rows[row].length - 1));
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+  return true;
+}
+
+/** An empty column left or right of the caret's, one share wide (the
+ *  smallest share); the caret lands in it, in its row. */
+export function insertGridColumnAt(view: EditorView, side: 'left' | 'right'): boolean {
+  const at = caretCell(view.state);
+  if (!at) return false;
+  const columns = [...(at.ctx.node.attrs.columns as number[])];
+  if (columns.length >= 12) return false;
+  const index = side === 'left' ? at.column : at.column + 1;
+  columns.splice(index, 0, Math.min(...columns));
+  const rows = cellMatrix(at.ctx.node).map((cells) => {
+    const out = [...cells];
+    out.splice(Math.min(index, out.length), 0, emptyCell());
+    return out;
+  });
+  const tr = caretTo(replaceGrid(view.state, at.ctx.pos, { ...at.ctx.node.attrs, columns: canonical(columns) }, rows), at.ctx.pos, at.row, index);
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+  return true;
+}
+
+/** Remove the caret's column (its content goes with it); never the last. */
+export function deleteGridColumnAt(view: EditorView): boolean {
+  const at = caretCell(view.state);
+  const columns = [...((at?.ctx.node.attrs.columns as number[]) ?? [])];
+  if (!at || columns.length < 2) return false;
+  columns.splice(at.column, 1);
+  const rows = cellMatrix(at.ctx.node).map((cells) => cells.filter((_cell, i) => i !== at.column));
+  const column = Math.min(at.column, columns.length - 1);
+  const tr = caretTo(replaceGrid(view.state, at.ctx.pos, { ...at.ctx.node.attrs, columns: canonical(columns) }, rows), at.ctx.pos, at.row, column);
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+  return true;
+}
+
+/** The caret's place in its grid, for the pill's live readout. */
+export function gridCaretPlace(state: EditorState): { row: number; rows: number; column: number; columns: number } | null {
+  const at = caretCell(state);
+  if (!at) return null;
+  return { row: at.row, rows: at.ctx.node.childCount, column: at.column, columns: (at.ctx.node.attrs.columns as number[]).length };
 }
 
 /** Replace the grid by its cells' blocks in reading order. */
@@ -218,6 +286,36 @@ export const tabInGrid = (dir: 1 | -1): Command => (state, dispatch, view) => {
   return true;
 };
 
+/** ArrowDown from a grid's last row (ArrowUp from its first) with nowhere
+ *  to go: step out of the grid into the block after (before) it, creating
+ *  a paragraph when the grid ends (opens) the document or its cell — the
+ *  table's exitTableVertically, for grids. Runs after the geometric caret
+ *  motion has found no line to land on. */
+export function exitGridVertically(dir: -1 | 1): Command {
+  return (state, dispatch) => {
+    // A caret only: a range or a selected image keeps the default motion.
+    if (!(state.selection instanceof TextSelection) || !state.selection.empty) return false;
+    const at = caretCell(state);
+    if (!at) return false;
+    if (dir > 0 ? at.row < at.ctx.node.childCount - 1 : at.row > 0) return false;
+    // In a table inside the cell, the table's own exit leads (into the cell).
+    const { $from } = state.selection;
+    for (let d = $from.depth; d > at.ctx.depth; d--) if ($from.node(d).type.spec.tableRole === 'table') return false;
+    if (!dispatch) return true;
+    const edge = dir > 0 ? at.ctx.pos + at.ctx.node.nodeSize : at.ctx.pos;
+    const $edge = state.doc.resolve(edge);
+    const neighbour = dir > 0 ? $edge.nodeAfter : $edge.nodeBefore;
+    if (neighbour?.isTextblock) {
+      const pos = dir > 0 ? edge + 1 : edge - 1;
+      dispatch(state.tr.setSelection(TextSelection.near(state.doc.resolve(pos), dir)).scrollIntoView());
+      return true;
+    }
+    const tr = state.tr.insert(edge, schema.nodes.paragraph.create());
+    dispatch(tr.setSelection(TextSelection.create(tr.doc, edge + 1)).scrollIntoView());
+    return true;
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Cell frames
 
@@ -235,6 +333,50 @@ function leafOf(node: PMNode, el: Element | null, last: boolean): { node: PMNode
   return n && e ? { node: n, el: e } : null;
 }
 
+/** Every mounted cell, for the re-fits nothing in the cell's own node
+ *  announces (geometry variables, late fonts). */
+const liveCells = new Set<GridCellView>();
+
+/** One observer for every cell's content box. A cell's margins are the
+ *  only thing fit() writes, and margins never resize the content box, so
+ *  the observer cannot loop; what does resize it — a nested table's column
+ *  pass or its block margin changing, a late font — re-fits the cell. */
+let cellObserver: ResizeObserver | null = null;
+const observedCells = new WeakMap<Element, GridCellView>();
+function observeCell(cell: GridCellView, el: HTMLElement) {
+  if (typeof ResizeObserver === 'undefined') return;
+  cellObserver ??= new ResizeObserver((entries) => {
+    for (const entry of entries) observedCells.get(entry.target)?.refitSoon();
+  });
+  observedCells.set(el, cell);
+  cellObserver.observe(el);
+}
+
+/** Re-fit every mounted cell now, in one paper-size measure. Returns true
+ *  when any cell's margins moved. */
+export function refitGridCells(): boolean {
+  if (!liveCells.size) return false;
+  return atPaperSize(() => {
+    let moved = false;
+    for (const cell of liveCells) moved = cell.fitNow() || moved;
+    return moved;
+  });
+}
+
+// Published geometry variables change what a cell's first/last block
+// measures (a table's --table-mb): re-fit inside that pass, before it
+// measures the page.
+onGeometryVarsPublished(refitGridCells);
+
+// A late font can move a leaf without resizing the cell's box.
+if (typeof document !== 'undefined' && document.fonts) {
+  const refitAll = () => {
+    for (const cell of liveCells) cell.refitSoon();
+  };
+  void document.fonts.ready.then(refitAll);
+  document.fonts.addEventListener('loadingdone', refitAll);
+}
+
 /**
  * A grid cell. Its box is normalized so that, whatever block starts or
  * ends it, the box begins one paragraph slack above the content's Typst
@@ -244,19 +386,28 @@ function leafOf(node: PMNode, el: Element | null, last: boolean): { node: PMNode
  * cell in a row shares frame top and the tallest frame sets the row (as
  * Typst's grid aligns cells), and the paginator can fit a row with the
  * paragraph's adjust and inset. The margins are re-measured whenever the
- * cell's content changes; reading two rects is the whole cost.
+ * cell's content changes, its box resizes, the document's geometry
+ * variables change, or a font arrives; reading two rects is the whole
+ * cost. fit() is a function of the settled DOM, so a re-fit with nothing
+ * changed writes nothing: entering a cell (a decoration change) never
+ * moves layout.
  */
 export class GridCellView implements NodeView {
   dom: HTMLElement;
   contentDOM: HTMLElement;
   private node: PMNode;
   private pending = false;
+  private fitted = false;
+  /** Where this cell's ink lies, for the grid's wash pass (cellWashPass). */
+  ink: CellInk | null = null;
 
   constructor(node: PMNode, private view: EditorView) {
     this.node = node;
     this.dom = document.createElement('div');
     this.dom.className = 'ts-grid-cell';
     this.contentDOM = this.dom;
+    liveCells.add(this);
+    observeCell(this, this.dom);
     this.schedule();
   }
 
@@ -271,24 +422,44 @@ export class GridCellView implements NodeView {
     return m.type === 'attributes' && m.target === this.dom;
   }
 
+  destroy(): void {
+    liveCells.delete(this);
+    cellObserver?.unobserve(this.dom);
+  }
+
+  /** Re-fit after something outside the document moved (observer, fonts). */
+  refitSoon(): void {
+    this.schedule();
+  }
+
   private schedule() {
     if (this.pending) return;
     this.pending = true;
     queueMicrotask(() => {
       this.pending = false;
-      // Measured on the paper at its own size (paper-scale.ts).
-      atPaperSize(() => this.fit());
+      // Measured on the paper at its own size (paper-scale.ts). A change
+      // to a cell that was already fitted moves the rows below after a
+      // pass may have measured them: re-paginate. (A new cell's first fit
+      // precedes the pass its own transaction scheduled.)
+      const first = !this.fitted;
+      this.fitted = true;
+      if (atPaperSize(() => this.fit()) && !first) scheduleTypesetSoon(this.view);
     });
   }
 
-  private fit() {
-    if (!this.dom.isConnected) return;
+  /** Fit now (the caller holds the paper at its own size). */
+  fitNow(): boolean {
+    return this.fit();
+  }
+
+  private fit(): boolean {
+    if (!this.dom.isConnected) return false;
     const s = getSettings(this.view.state);
     const F = parseFloat(getComputedStyle(this.view.dom).fontSize) || 16.67;
     const box = this.dom.getBoundingClientRect();
     const first = leafOf(this.node, this.contentDOM, false);
     const last = leafOf(this.node, this.contentDOM, true);
-    if (!first || !last || box.height === 0) return;
+    if (!first || !last || box.height === 0) return false;
     const ref = blockFrameSlackEm(schema.nodes.paragraph.create(), s);
     const above = blockFrameSlackEm(first.node, s).above;
     const below = blockFrameSlackEm(last.node, s).below;
@@ -298,156 +469,260 @@ export class GridCellView implements NodeView {
     const marginBottom = ref.below * F - (extraBelow + below * F);
     const top = `${marginTop.toFixed(3)}px`;
     const bottom = `${marginBottom.toFixed(3)}px`;
-    if (this.dom.style.marginTop !== top) this.dom.style.marginTop = top;
-    if (this.dom.style.marginBottom !== bottom) this.dom.style.marginBottom = bottom;
+    let moved = false;
+    if (this.dom.style.marginTop !== top) {
+      this.dom.style.marginTop = top;
+      moved = true;
+    }
+    if (this.dom.style.marginBottom !== bottom) {
+      this.dom.style.marginBottom = bottom;
+      moved = true;
+    }
     // Editing guides use the normalized frame, including margins that
     // take a first/last block's extra spacing out of this cell's box.
     if (this.dom.style.getPropertyValue('--grid-cell-margin-top') !== top) this.dom.style.setProperty('--grid-cell-margin-top', top);
     if (this.dom.style.getPropertyValue('--grid-cell-margin-bottom') !== bottom) this.dom.style.setProperty('--grid-cell-margin-bottom', bottom);
+    // The wash's reach (paint only): where the ink sits inside this box,
+    // from the frames just measured and the family's ink beyond them, or a
+    // non-text block's own box, widened by any image or math in the edge
+    // leaves. Reads only the edge leaves' atoms; the grid pass runs only
+    // when this or the box's height moved (a keystroke that wraps no line
+    // costs nothing more).
+    const reach = inkReachEm(s.font);
+    const after = this.dom.getBoundingClientRect();
+    const frameTop = extraAbove + above * F;
+    const frameBottom = extraBelow + below * F;
+    const ink: CellInk = {
+      top: leafInk(first, after, 'top', frameTop - reach.above * F * scaleOf(first.node)),
+      bottom: leafInk(last, after, 'bottom', frameBottom - reach.below * F * scaleOf(last.node)),
+      frameTop: frameTop - reach.above * F,
+      frameBottom: frameBottom - reach.below * F,
+      height: after.height,
+      heading: first.node.type === schema.nodes.heading,
+      reachEm: reach.above + reach.below,
+    };
+    const prev = this.ink;
+    this.ink = ink;
+    if (!prev || moved || !sameInk(prev, ink)) scheduleWashPass(this.dom.parentElement?.parentElement ?? null);
+    return moved;
   }
 }
 
 // ---------------------------------------------------------------------------
-// The grid bar: docked under the toolbar while the caret is in a grid.
+// Cell washes (editing chrome, paint only)
+//
+// While the caret is in a grid every cell paints a rounded wash on its
+// absolutely positioned ::after (style.css), as tall as its ROW's ink and
+// with air round it, so descenders and answer boxes sit inside. The cell
+// views measure their own ink (fit); one pass per grid row-equalizes it and
+// decides, per row boundary, between two rounded washes with air between
+// them and, when the rows' ink is too close for that (Q1's "Types:" line
+// over its answer boxes), one surface joined at the gap's midline with a
+// hairline seam. Everything written is a custom property on the cell:
+// nothing laid out reads them.
 
-const gridBarKey = new PluginKey('grid-bar');
+/** A cell's ink, layout px inward from its border box (negative =
+ *  outside); `top`/`bottom` are null for a cell with no ink (an empty
+ *  paragraph), whose row's ink stands in, and `frameTop`/`frameBottom`
+ *  are a text line's ink at the cell's frame (an all-empty row). */
+interface CellInk {
+  top: number | null;
+  bottom: number | null;
+  frameTop: number;
+  frameBottom: number;
+  height: number;
+  heading: boolean;
+  /** The family's ink reach above the cap and below the baseline, em. */
+  reachEm: number;
+}
 
-class GridBar {
-  private root: HTMLElement;
-  private columnsInput: HTMLInputElement;
-  private gutterInput: HTMLInputElement;
-  private removeColumn: HTMLButtonElement;
-  private removeRow: HTMLButtonElement;
-  private position: HTMLElement;
-  private hint: HTMLElement;
-  private signature = '';
+const sameInk = (a: CellInk, b: CellInk) =>
+  a.top === b.top && a.bottom === b.bottom && a.frameTop === b.frameTop && a.frameBottom === b.frameBottom && a.height === b.height && a.heading === b.heading && a.reachEm === b.reachEm;
 
-  constructor(private view: EditorView) {
-    this.root = document.createElement('div');
-    this.root.className = 'native-table-toolbar grid-toolbar';
-    this.root.setAttribute('role', 'toolbar');
-    this.root.setAttribute('aria-label', 'Grid controls');
-    this.root.hidden = true;
-    const main = document.createElement('div');
-    main.className = 'native-table-toolbar-main';
-    this.root.appendChild(main);
-    const group = () => {
-      const g = document.createElement('div');
-      g.className = 'native-table-toolbar-group';
-      main.appendChild(g);
-      return g;
-    };
-    const button = (parent: HTMLElement, label: string, title: string, run: () => void) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = label;
-      b.title = title;
-      b.addEventListener('mousedown', (e) => e.preventDefault());
-      b.addEventListener('click', run);
-      parent.appendChild(b);
-      return b;
-    };
-    const field = (parent: HTMLElement, label: string, title: string, width: string) => {
-      const wrap = document.createElement('label');
-      wrap.className = 'grid-toolbar-field';
-      wrap.title = title;
-      const span = document.createElement('span');
-      span.textContent = label;
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.style.width = width;
-      wrap.append(span, input);
-      parent.appendChild(wrap);
-      return input;
-    };
-    const g1 = group();
-    const name = document.createElement('span');
-    name.className = 'grid-toolbar-name';
-    name.textContent = 'Grid';
-    g1.appendChild(name);
-    this.columnsInput = field(g1, 'Columns', 'Column shares, e.g. 2 : 1 or 1 : 1 : 1 (Typst fr units) — Enter applies', '72px');
-    this.columnsInput.addEventListener('change', () => {
-      const shares = parseColumnShares(this.columnsInput.value);
-      if (shares) setGridColumns(this.view, shares);
-      else this.columnsInput.value = formatColumnShares((gridContext(this.view.state)?.node.attrs.columns as number[]) ?? [1, 1]);
-    });
-    this.columnsInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        this.columnsInput.blur();
-      }
-    });
-    this.gutterInput = field(g1, 'Gutter (em)', 'Space between columns and rows, in em', '40px');
-    this.gutterInput.addEventListener('change', () => {
-      const v = parseFloat(this.gutterInput.value);
-      if (Number.isFinite(v) && v >= 0 && v <= 10) setGridGutter(this.view, Math.round(v * 100) / 100);
-      else this.gutterInput.value = String(gridContext(this.view.state)?.node.attrs.gutter ?? DEFAULT_GRID_GUTTER_EM);
-    });
-    this.gutterInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        this.gutterInput.blur();
-      }
-    });
-    const g2 = group();
-    button(g2, '+ Column', 'Add a column on the right', () => addGridColumn(this.view));
-    this.removeColumn = button(g2, '− Column', 'Remove the rightmost column (its content is dropped)', () => removeGridColumn(this.view));
-    button(g2, '+ Row', 'Add a row at the bottom', () => addGridRow(this.view));
-    this.removeRow = button(g2, '− Row', 'Remove the bottom row (its content is dropped)', () => removeGridRow(this.view));
-    const g3 = group();
-    button(g3, 'Figure in cell', 'Choose an image for the current cell; Enter in its caption adds text below it', () => pickAndInsertFigure(this.view));
-    button(g3, 'Unwrap', 'Replace the grid by its blocks, in reading order', () => unwrapGrid(this.view));
-    const help = document.createElement('div');
-    help.className = 'grid-toolbar-help';
-    this.position = document.createElement('span');
-    this.position.className = 'grid-toolbar-position';
-    this.hint = document.createElement('span');
-    this.hint.className = 'grid-toolbar-hint';
-    help.append(this.position, this.hint);
-    this.root.appendChild(help);
-    document.body.appendChild(this.root);
-    this.update(view);
+/** Images, math and nested blocks whose own box is their ink. */
+const INK_ATOMS = 'img, .ts-inline-image, .math-inline, .math-display, figure, table';
+
+const isTextLeaf = (node: PMNode) => node.isTextblock && node.type !== schema.nodes.code_block;
+const scaleOf = (node: PMNode) => (node.type === schema.nodes.heading ? headingScale((node.attrs.level as number) || 1) : 1);
+
+/** The ink edge of a cell's first (`top`) or last (`bottom`) leaf, layout
+ *  px inward from the cell's box: a text leaf's line ink beyond its frame
+ *  (`textEdge`), a non-text leaf's own box, and every atom in it. */
+function leafInk(leaf: { node: PMNode; el: Element }, box: DOMRect, side: 'top' | 'bottom', textEdge: number): number | null {
+  let edge = Infinity;
+  const take = (r: DOMRect) => {
+    if (r.height <= 0.5) return;
+    edge = Math.min(edge, side === 'top' ? r.top - box.top : box.bottom - r.bottom);
+  };
+  if (!isTextLeaf(leaf.node)) take(leaf.el.getBoundingClientRect());
+  let atoms = 0;
+  for (const atom of leaf.el.querySelectorAll(INK_ATOMS)) {
+    atoms++;
+    take(atom.getBoundingClientRect());
   }
+  if (isTextLeaf(leaf.node) && (leaf.node.textContent.trim() || (!atoms && leaf.node.content.size))) edge = Math.min(edge, textEdge);
+  return Number.isFinite(edge) ? edge : null;
+}
 
-  update(view: EditorView): void {
-    const ctx = gridContext(view.state);
-    if (!ctx) {
-      this.root.hidden = true;
-      this.signature = '';
-      return;
+/** Drawn px between two washes that do not join. */
+const WASH_MIN_GAP = 3;
+
+const pendingWash = new Set<Element>();
+function scheduleWashPass(grid: Element | null) {
+  if (!grid || pendingWash.has(grid)) return;
+  pendingWash.add(grid);
+  queueMicrotask(() => {
+    pendingWash.delete(grid);
+    if (grid.isConnected) atPaperSize(() => cellWashPass(grid as HTMLElement));
+  });
+}
+
+let placeholderMeasure: { font: string; width: number } | null = null;
+/** The full placeholder's width, layout px (style.css: 0.78em sans). */
+function placeholderWidth(F: number): number {
+  const sans = getComputedStyle(document.documentElement).getPropertyValue('--sans').trim() || 'sans-serif';
+  const font = `400 ${(0.78 * F).toFixed(3)}px ${sans}`;
+  if (placeholderMeasure?.font === font) return placeholderMeasure.width;
+  const ctx = document.createElement('canvas').getContext('2d');
+  if (!ctx) return 0;
+  ctx.font = font;
+  placeholderMeasure = { font, width: ctx.measureText(PLACEHOLDER).width };
+  return placeholderMeasure.width;
+}
+const PLACEHOLDER = 'Type, or add an image';
+
+function setVar(el: HTMLElement, name: string, value: string | null) {
+  if (value === null) {
+    if (el.style.getPropertyValue(name)) el.style.removeProperty(name);
+  } else if (el.style.getPropertyValue(name) !== value) el.style.setProperty(name, value);
+}
+
+const px = (v: number) => `${v.toFixed(3)}px`;
+
+/** Row-equalize the cells' ink and place every wash edge (layout px). */
+function cellWashPass(grid: HTMLElement) {
+  const F = parseFloat(getComputedStyle(grid).fontSize) || 16.67;
+  const g = (Number(grid.dataset.gutter) || 0) * F;
+  const joinedGrid = (Number(grid.dataset.gutter) || 0) < JOINED_GUTTER_EM;
+  const ps = paperScale() || 1;
+  // style.css's air-y / air-x, in px: air between the ink and the wash.
+  let reachEm = 0.33;
+  const airX = Math.min(0.3 * F, g / 3);
+  type Row = { el: HTMLElement; cells: Array<{ el: HTMLElement; box: DOMRect; ink: CellInk }>; T: number; B: number; airT: number; airB: number; joinT: boolean; joinB: boolean };
+  const rows: Row[] = [];
+  let heading = false;
+  for (const child of grid.children) {
+    if (!child.classList.contains('ts-grid-row')) continue;
+    const cells: Row['cells'] = [];
+    for (const cell of child.children) {
+      const view = observedCells.get(cell);
+      if (view?.ink) cells.push({ el: cell as HTMLElement, box: cell.getBoundingClientRect(), ink: view.ink });
     }
-    const columns = ctx.node.attrs.columns as number[];
-    const gutter = ctx.node.attrs.gutter as number;
-    const selected = selectedCell(view.state, ctx);
-    this.position.textContent = selected ? `Row ${selected.row + 1} of ${ctx.node.childCount} · Column ${selected.column + 1} of ${columns.length}` : '';
-    const imageSelected = view.state.selection instanceof NodeSelection && view.state.selection.node.type === schema.nodes.image;
-    this.hint.textContent = imageSelected
-      ? 'Image selected · → then Enter adds text below · Tab / Shift-Tab move between cells'
-      : 'Click a cell to edit · Tab / Shift-Tab move between cells · Enter adds text below a figure';
-    const signature = `${ctx.pos}:${columns.join(',')}:${gutter}:${ctx.node.childCount}`;
-    this.root.hidden = false;
-    if (signature === this.signature) return;
-    this.signature = signature;
-    if (document.activeElement !== this.columnsInput) this.columnsInput.value = formatColumnShares(columns);
-    if (document.activeElement !== this.gutterInput) this.gutterInput.value = String(gutter);
-    this.removeColumn.disabled = columns.length < 2;
-    this.removeRow.disabled = ctx.node.childCount < 2;
+    if (!cells.length) continue;
+    if (!rows.length) {
+      heading = cells.some((c) => c.ink.heading);
+      reachEm = cells[0].ink.reachEm;
+    }
+    const inked = cells.filter((c) => c.ink.top !== null && c.ink.bottom !== null);
+    const T = inked.length ? Math.min(...inked.map((c) => c.box.top + c.ink.top!)) : Math.min(...cells.map((c) => c.box.top + c.ink.frameTop));
+    const B = inked.length ? Math.max(...inked.map((c) => c.box.bottom - c.ink.bottom!)) : Math.max(...cells.map((c) => c.box.bottom - c.ink.frameBottom));
+    rows.push({ el: child as HTMLElement, cells, T, B, airT: 0, airB: 0, joinT: false, joinB: false });
   }
-
-  destroy(): void {
-    this.root.remove();
+  if (!rows.length) return;
+  const airY = Math.min(0.25 * F, Math.max(0, (g - reachEm * F) / 3));
+  // The grid's outer edges have no neighbour to keep clear of: at least
+  // 0.3em, 0.45em beside a heading (the tiles then read as holding it).
+  const airOut = Math.max(airY, airX, (heading ? 0.45 : 0.3) * F);
+  for (const row of rows) row.airT = row.airB = airY;
+  rows[0].airT = airOut;
+  rows[rows.length - 1].airB = airOut;
+  for (let i = 0; i + 1 < rows.length; i++) {
+    // A page break between the rows (a gap widget) is not part of their
+    // spacing; style.css un-joins the rows across it.
+    let pageGap = 0;
+    for (let el = rows[i].el.nextElementSibling; el && el !== rows[i + 1].el; el = el.nextElementSibling) pageGap += el.getBoundingClientRect().height;
+    const gap = rows[i + 1].T - rows[i].B - pageGap;
+    const air = Math.max(0, Math.min(airY, (gap - WASH_MIN_GAP / ps) / 2));
+    const join = joinedGrid || airY <= 0 || air < 0.75 * airY;
+    rows[i].airB = rows[i + 1].airT = join ? gap / 2 : air;
+    rows[i].joinB = rows[i + 1].joinT = join;
+  }
+  const full = placeholderWidth(F);
+  for (const row of rows) {
+    for (const { el, box } of row.cells) {
+      setVar(el, '--ps', String(ps));
+      setVar(el, '--cell-ink-top', px(row.T - box.top));
+      setVar(el, '--cell-ink-bottom', px(box.bottom - row.B));
+      setVar(el, '--air-t', px(row.airT));
+      setVar(el, '--air-b', px(row.airB));
+      setVar(el, '--air-out', px(airOut));
+      setVar(el, '--rt', row.joinT ? '0' : '1');
+      setVar(el, '--rb', row.joinB ? '0' : '1');
+      setVar(el, '--seam-b', row.joinB ? 'var(--cell-line)' : null);
+      // The placeholder (shown only in the active empty cell): the short
+      // form where the full one would run out of the cell.
+      setVar(el, '--ph', full > box.width - 0.6 * F ? '"Type\\2026"' : null);
+    }
   }
 }
 
+/** Below this gutter (em) the washes tile into one surface (style.css). */
+export const JOINED_GUTTER_EM = 0.6;
+
+// A new paper scale: the strokes divide by it.
+onPaperScale((scale) => {
+  for (const cell of liveCells) setVar(cell.dom, '--ps', String(scale));
+});
+
+/** One re-typeset per view for a burst of cell re-fits. */
+const typesetPending = new WeakSet<EditorView>();
+function scheduleTypesetSoon(view: EditorView) {
+  if (typesetPending.has(view)) return;
+  typesetPending.add(view);
+  queueMicrotask(() => {
+    typesetPending.delete(view);
+    scheduleTypeset(view);
+  });
+}
+
+/** The grid's editing decorations (classes only; the controls live in the
+ *  block pill, block-chrome.ts). */
+const gridEditingKey = new PluginKey('grid-editing');
+
 export function gridPlugin(): Plugin {
   return new Plugin({
-    key: gridBarKey,
+    key: gridEditingKey,
+    // A new paper scale while a grid is selected: its decoration redraws
+    // with the scale (a selection-free transaction, after the pass).
+    view(view) {
+      let frame = 0;
+      const off = onPaperScale(() => {
+        if (frame || !(view.state.selection instanceof NodeSelection) || view.state.selection.node.type !== schema.nodes.grid) return;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (!view.isDestroyed) view.dispatch(view.state.tr.setMeta(gridEditingKey, 'scale'));
+        });
+      });
+      return {
+        destroy() {
+          off();
+          if (frame) cancelAnimationFrame(frame);
+        },
+      };
+    },
     props: {
       decorations(state) {
         const ctx = gridContext(state);
         if (!ctx) return null;
         const selected = selectedCell(state, ctx);
-        const decorations = [Decoration.node(ctx.pos, ctx.pos + ctx.node.nodeSize, { class: 'ts-grid-editing' })];
+        // Below JOINED_GUTTER_EM the washes tile into one surface split by
+        // hairlines (style.css): read from the attribute, no geometry.
+        const joined = (ctx.node.attrs.gutter as number) < JOINED_GUTTER_EM;
+        const attrs: Record<string, string> = { class: joined ? 'ts-grid-editing ts-grid-joined' : 'ts-grid-editing' };
+        // Selected as a block, its outline is drawn in screen px like a
+        // table's: the grid carries the paper scale (its cells do already).
+        if (state.selection instanceof NodeSelection && state.selection.from === ctx.pos) attrs.style = `--ps: ${paperScale() || 1}`;
+        const decorations = [Decoration.node(ctx.pos, ctx.pos + ctx.node.nodeSize, attrs)];
         ctx.node.forEach((row, rowOff, rowIndex) => {
           row.forEach((cell, cellOff, columnIndex) => {
             const attrs: Record<string, string> = {};
@@ -460,10 +735,6 @@ export function gridPlugin(): Plugin {
         });
         return DecorationSet.create(state.doc, decorations);
       },
-    },
-    view(view) {
-      const bar = new GridBar(view);
-      return { update: (v) => bar.update(v), destroy: () => bar.destroy() };
     },
   });
 }

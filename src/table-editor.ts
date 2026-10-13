@@ -6,7 +6,7 @@
 // made ordinary typing modal and could flatten rich cell content on save.
 
 import type { Node as PMNode, ResolvedPos } from 'prosemirror-model';
-import { Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
+import { NodeSelection, Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import {
   CellSelection,
@@ -30,12 +30,14 @@ import {
   splitCell,
   toggleHeaderRow,
 } from 'prosemirror-tables';
-import { closeHistory, isHistoryTransaction, redo, undo } from 'prosemirror-history';
+import { closeHistory, isHistoryTransaction } from 'prosemirror-history';
 import { isPortableCitationKey } from './bibtex';
 import { ROW_RULE_CYCLE, type RowRule } from './table-rules';
 import { CELL_FILL_CYCLE, type CellFill } from './table-fills';
 import { schema } from './schema';
-import { normalizeTableColumns, tableInsetPt } from './table-geometry';
+import { normalizeTableColumns } from './table-geometry';
+import { onPaperScale, paperScale } from './paper-scale';
+import { notify } from './notify';
 import {
   transactionChangesDerivedStructure,
   type DerivedStructureRules,
@@ -43,8 +45,12 @@ import {
 
 interface TableContext { pos: number; node: PMNode }
 
+/** The table around the selection, or the table it node-selects (Escape
+ *  from a cell selects the block; the pill and its panels stay). */
 function tableContext(state: Pick<EditorState, 'selection'>): TableContext | null {
-  const $pos = state.selection.$anchor;
+  const selection = state.selection;
+  if (selection instanceof NodeSelection && selection.node.type.spec.tableRole === 'table') return { pos: selection.from, node: selection.node };
+  const $pos = selection.$anchor;
   for (let depth = $pos.depth; depth > 0; depth--) {
     const node = $pos.node(depth);
     if (node.type.spec.tableRole === 'table') return { pos: $pos.before(depth), node };
@@ -52,13 +58,22 @@ function tableContext(state: Pick<EditorState, 'selection'>): TableContext | nul
   return null;
 }
 
-function dispatchTableAttrs(view: EditorView, attrs: Record<string, unknown>, separateHistory = false): boolean {
-  const context = tableContext(view.state);
-  if (!context) return false;
-  if (Object.entries(attrs).every(([name, value]) => JSON.stringify(context.node.attrs[name]) === JSON.stringify(value))) return true;
+/** Set attributes on the table at `pos` (the panel's writes: no scroll,
+ *  the panel sits beside the table). `separateHistory`: an undo step of
+ *  its own. False when no table is there any more. */
+export function setTableAttrsAt(view: EditorView, pos: number, attrs: Record<string, unknown>, separateHistory = false): boolean {
+  const node = view.state.doc.nodeAt(pos);
+  if (!node || node.type.spec.tableRole !== 'table') return false;
+  if (Object.entries(attrs).every(([name, value]) => JSON.stringify(node.attrs[name]) === JSON.stringify(value))) return true;
   const tr = view.state.tr;
-  view.dispatch((separateHistory ? closeHistory(tr) : tr).setNodeMarkup(context.pos, undefined, { ...context.node.attrs, ...attrs }).scrollIntoView());
+  view.dispatch((separateHistory ? closeHistory(tr) : tr).setNodeMarkup(pos, undefined, { ...node.attrs, ...attrs }));
   return true;
+}
+
+/** A label as Typst accepts it: letters, digits, `:._-`, starting with a
+ *  letter or digit, at most 128 characters. */
+export function normalizeTableLabel(text: string): string {
+  return text.replace(/[^A-Za-z0-9:._-]/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 128);
 }
 
 export function setTableStyle(style: 'booktabs' | 'grid' | 'plain'): Command {
@@ -98,11 +113,11 @@ function insertColumnWithWidth(side: 'before' | 'after'): Command {
   };
 }
 
-const addColumnBefore = insertColumnWithWidth('before');
+export const addColumnBefore = insertColumnWithWidth('before');
 export const addColumnAfter = insertColumnWithWidth('after');
 
 /** Set every selected logical column; a caret in a merged cell selects its span. */
-function setSelectedColumnWidth(width: string): Command {
+export function setSelectedColumnWidth(width: string): Command {
   return (state, dispatch) => {
     if (!isInTable(state) || !normalizeTableColumns([width])) return false;
     const rect = selectedRect(state);
@@ -191,6 +206,117 @@ export const cycleCellFill: Command = (state, dispatch, view) => {
   const next = CELL_FILL_CYCLE[(CELL_FILL_CYCLE.indexOf(current) + 1) % CELL_FILL_CYCLE.length];
   return setCellAttr('fill', next)(state, dispatch, view);
 };
+
+/** Set the rule under every selected row to one preset (the block pill's
+ *  Cell panel; cycleRowRule, the retired bar's cycle, is kept as an export). Grid tables draw cell
+ *  strokes instead and have no row rules. */
+export function setRowRule(rule: RowRule): Command {
+  return (state, dispatch) => {
+    if (!isInTable(state)) return false;
+    let rect: ReturnType<typeof selectedRect>;
+    try {
+      rect = selectedRect(state);
+    } catch {
+      return false;
+    }
+    if (rect.table.attrs.style === 'grid') return false;
+    if (!dispatch) return true;
+    const tr = state.tr;
+    rect.table.forEach((row, offset, i) => {
+      if (i >= rect.top && i < rect.bottom && (row.attrs.rule || '') !== rule) tr.setNodeMarkup(rect.tableStart + offset, undefined, { ...row.attrs, rule });
+    });
+    if (tr.docChanged) dispatch(tr);
+    return true;
+  };
+}
+
+/** Every column back to automatic width (columnWidths = null). */
+export const resetTableColumnWidths: Command = (state, dispatch) => {
+  const context = tableContext(state);
+  if (!context || context.node.attrs.columnWidths == null) return false;
+  if (dispatch) dispatch(closeHistory(state.tr).setNodeMarkup(context.pos, undefined, { ...context.node.attrs, columnWidths: null }));
+  return true;
+};
+
+/** One attribute of every selected cell (each merged cell once): the
+ *  shared value, or 'mixed'; null outside a table. */
+export function selectedCellsAttr(state: EditorState, name: 'align' | 'valign' | 'fill'): string | null {
+  if (!isInTable(state)) return null;
+  try {
+    const rect = selectedRect(state);
+    const cells = new Set<number>();
+    for (let row = rect.top; row < rect.bottom; row++) {
+      for (let column = rect.left; column < rect.right; column++) cells.add(rect.map.map[row * rect.map.width + column]);
+    }
+    const values = [...cells].map((offset) => String(rect.table.nodeAt(offset)?.attrs[name] ?? ''));
+    return values.every((value) => value === values[0]) ? values[0] ?? '' : 'mixed';
+  } catch {
+    return null;
+  }
+}
+
+/** The selected columns' shared width ('auto', '2fr', '72pt') or 'mixed',
+ *  and whether any column of the table takes a share. */
+export function selectedColumnWidth(state: EditorState): { width: string; columns: number; anyShare: boolean; custom: boolean } | null {
+  if (!isInTable(state)) return null;
+  try {
+    const rect = selectedRect(state);
+    const stored = explicitColumnWidths(rect.table, rect.map.width);
+    const widths = stored ?? Array(rect.map.width).fill('auto');
+    const selected = widths.slice(rect.left, rect.right);
+    return {
+      width: selected.every((value) => value === selected[0]) ? selected[0] : 'mixed',
+      columns: rect.right - rect.left,
+      anyShare: widths.some((value) => value.endsWith('fr')),
+      custom: stored !== null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** The caret's cell as a resolved position (the anchor cell of a cell
+ *  selection), for Select row / Select column. */
+function anchorCell(state: EditorState) {
+  const rect = selectedRect(state);
+  return state.doc.resolve(rect.tableStart + rect.map.map[rect.top * rect.map.width + rect.left]);
+}
+
+/** Select the caret's whole row / column as a cell selection. */
+export function selectTableLine(axis: 'row' | 'col'): Command {
+  return (state, dispatch) => {
+    if (!isInTable(state)) return false;
+    let $cell: ResolvedPos;
+    try {
+      $cell = anchorCell(state);
+    } catch {
+      return false;
+    }
+    if (dispatch) dispatch(state.tr.setSelection(axis === 'row' ? CellSelection.rowSelection($cell) : CellSelection.colSelection($cell)));
+    return true;
+  };
+}
+
+/** Whether the selection's first row is a header row. */
+export function selectedRowIsHeader(state: EditorState): boolean {
+  if (!isInTable(state)) return false;
+  try {
+    const rect = selectedRect(state);
+    return rowIsHeader(rect.map, rect.table, rect.top);
+  } catch {
+    return false;
+  }
+}
+
+/** Rows in the selection's table (0 outside one). */
+export function selectedTableRows(state: EditorState): number {
+  if (!isInTable(state)) return 0;
+  try {
+    return selectedRect(state).map.height;
+  } catch {
+    return 0;
+  }
+}
 
 /** The fill preset of the anchor cell, for the control's label. */
 export function selectedCellFill(state: EditorState): CellFill | null {
@@ -307,6 +433,64 @@ export const addBodyRowAfter: Command = (state, dispatch) => {
   return true;
 };
 
+/** Run a command that dispatches through a callback and hand back its
+ *  transaction (null when it did not apply). */
+function captured(command: Command, state: EditorState): Transaction | null {
+  let out: Transaction | null = null;
+  return command(state, (tr) => { out = tr; }) ? out : null;
+}
+
+/** The caret at the start of the cell covering (row, column) of the table
+ *  that starts at `tableStart` in `tr`'s document. */
+function caretToCell(tr: Transaction, tableStart: number, row: number, column: number): Transaction {
+  const table = tr.doc.nodeAt(tableStart - 1);
+  if (!table) return tr;
+  const map = TableMap.get(table);
+  const offset = map.map[Math.min(row, map.height - 1) * map.width + Math.min(column, map.width - 1)];
+  return offset === undefined ? tr : tr.setSelection(TextSelection.near(tr.doc.resolve(tableStart + offset + 1)));
+}
+
+/** A row above or below the selection (below a header row, a body row);
+ *  the caret lands in the new row, in the selection's first column, as it
+ *  does in a grid (the pill's Rows menu, ⌘⏎ / ⇧⌘⏎). */
+export function insertTableRow(side: 'above' | 'below'): Command {
+  const command = side === 'above' ? addRowBefore : addBodyRowAfter;
+  return (state, dispatch) => {
+    if (!isInTable(state)) return false;
+    if (!dispatch) return command(state);
+    let rect: ReturnType<typeof selectedRect>;
+    try {
+      rect = selectedRect(state);
+    } catch {
+      return false;
+    }
+    const tr = captured(command, state);
+    if (!tr) return false;
+    dispatch(caretToCell(tr, rect.tableStart, side === 'above' ? rect.top : rect.bottom, rect.left).scrollIntoView());
+    return true;
+  };
+}
+
+/** A column left or right of the selection (column widths kept); the
+ *  caret lands in the new column, in the selection's first row. */
+export function insertTableColumn(side: 'left' | 'right'): Command {
+  const command = side === 'left' ? addColumnBefore : addColumnAfter;
+  return (state, dispatch) => {
+    if (!isInTable(state)) return false;
+    if (!dispatch) return command(state);
+    let rect: ReturnType<typeof selectedRect>;
+    try {
+      rect = selectedRect(state);
+    } catch {
+      return false;
+    }
+    const tr = captured(command, state);
+    if (!tr) return false;
+    dispatch(caretToCell(tr, rect.tableStart, rect.top, side === 'left' ? rect.left : rect.right).scrollIntoView());
+    return true;
+  };
+}
+
 /** Select a cell's whole content, as Tab does when it lands in one. */
 function selectCell(tr: Transaction, cellPos: number): Transaction {
   const cell = tr.doc.nodeAt(cellPos);
@@ -387,6 +571,10 @@ const TABLE_CELL_INLINE = new Set(['text', 'hard_break', 'math_inline', 'eq_ref'
 
 const tableIssueCache = new WeakMap<PMNode, string | null>();
 
+/** A node or mark name as a writer reads it (`code_block` → `code block`).
+ *  The refusals are short: the toast is one line at the narrowest window. */
+const spoken = (name: string) => name.replace(/_/g, ' ');
+
 function tableCellIssue(table: PMNode): string | null {
   const cached = tableIssueCache.get(table);
   if (cached !== undefined || tableIssueCache.has(table)) return cached ?? null;
@@ -397,42 +585,42 @@ function tableCellIssue(table: PMNode): string | null {
     node.forEach((block) => {
       if (issue) return;
       if (block.type.name !== 'paragraph') {
-        issue = `${block.type.name} blocks are not losslessly supported in table cells`;
+        issue = `${spoken(block.type.name)}s can’t go in a table cell`;
         return;
       }
       if (block.attrs.keep || block.attrs.align) {
-        issue = 'paragraph layout attributes are not losslessly supported in table cells';
+        issue = 'paragraph alignment can’t go in a table cell';
         return;
       }
       block.descendants((inline) => {
         if (issue) return false;
         if (!TABLE_CELL_INLINE.has(inline.type.name)) {
-          issue = `${inline.type.name} is not losslessly supported inside table cells`;
+          issue = `${spoken(inline.type.name)}s can’t go in a table cell`;
           return false;
         }
         const marks = inline.marks.map((mark) => mark.type.name);
         const unsupported = marks.find((mark) => !TABLE_CELL_MARKS.has(mark));
         if (unsupported) {
-          issue = `${unsupported} marks are not losslessly supported inside table cells`;
+          issue = `${spoken(unsupported)} marks can’t go in a table cell`;
           return false;
         }
         if (!inline.isText && marks.length) {
-          issue = `marks on ${inline.type.name} are not losslessly supported inside table cells`;
+          issue = `formatted ${spoken(inline.type.name)}s can’t go in a table cell`;
           return false;
         }
         if (marks.includes('code') && marks.length > 1) {
-          issue = 'code combined with another mark is not losslessly supported inside table cells';
+          issue = 'code with another mark can’t go in a table cell';
           return false;
         }
         const source = inline.isText ? inline.text ?? '' : inline.type.name === 'math_inline' ? String(inline.attrs.src ?? '') : '';
         if (/[\r\n]/.test(source)) {
-          issue = 'multiline inline content is not losslessly supported inside table cells';
+          issue = 'a line break inside inline content can’t go in a table cell';
           return false;
         }
         if (inline.type.name === 'citation') {
           const key = String(inline.attrs.key ?? '');
           if (!isPortableCitationKey(key)) {
-            issue = `citation ${JSON.stringify(key)} is not portable Typst syntax`;
+            issue = `citation ${JSON.stringify(key)} isn’t portable Typst`;
             return false;
           }
         }
@@ -445,17 +633,9 @@ function tableCellIssue(table: PMNode): string | null {
   return issue;
 }
 
-let noticeTimer = 0;
+/** A refused edit is said in the app's one toast (notify.ts → #toast). */
 function announceTableConstraint(issue: string): void {
-  if (typeof document === 'undefined') return;
-  document.querySelector('.native-table-notice')?.remove();
-  const notice = document.createElement('div');
-  notice.className = 'native-table-notice';
-  notice.setAttribute('role', 'status');
-  notice.textContent = `${issue}. The edit was not applied, so table export remains lossless.`;
-  document.body.appendChild(notice);
-  window.clearTimeout(noticeTimer);
-  noticeTimer = window.setTimeout(() => notice.remove(), 4200);
+  notify(`Not applied: ${issue}`);
 }
 
 function tablesTouchedBy(transaction: Transaction): Map<PMNode, number> {
@@ -523,6 +703,13 @@ interface NativeTablePluginState {
 }
 
 const tableControlsKey = new PluginKey<NativeTablePluginState>('native-table-controls');
+
+/** The tables' structure revision: bumps only when a table's attributes,
+ *  rows, columns or cell attributes change, never for text typed in a cell
+ *  (the block pill re-measures and refreshes on it). */
+export function tableControlsRevision(state: EditorState): number {
+  return tableControlsKey.getState(state)?.controlsRevision ?? 0;
+}
 
 // Table text is intentionally absent. A character edit leaves every command,
 // select, and metadata field unchanged, so the plugin view can retain its
@@ -664,446 +851,74 @@ function updateCaptionDecorations(
   return mapped;
 }
 
-function cellPosition($pos: ResolvedPos): number {
-  for (let depth = $pos.depth; depth > 0; depth--) {
-    const role = $pos.node(depth).type.spec.tableRole;
-    if (role === 'cell' || role === 'header_cell') return $pos.before(depth);
+/** Editing chrome for the table under the selection (paint only,
+ * style.css): `ts-table-editing` on the table, `ts-cell-active` on the
+ * cell under the caret (none while a cell selection draws its own overlay)
+ * and, in a Plain table, `ts-cell-col0` on the cells in its first column,
+ * which draw the ghost's left edge (a row's first DOM cell is not one when
+ * a rowspan above covers column 0). Classes only, recomputed from the
+ * selection (the map is cached per table node); nothing is measured. */
+function editingDecorations(state: EditorState): Decoration[] {
+  const context = tableContext(state);
+  if (!context) return [];
+  const out = [Decoration.node(context.pos, context.pos + context.node.nodeSize, { class: 'ts-table-editing' })];
+  if (context.node.attrs.style === 'plain') {
+    const map = TableMap.get(context.node);
+    const start = context.pos + 1;
+    let previous = -1;
+    for (let row = 0; row < map.height; row++) {
+      const offset = map.map[row * map.width];
+      if (offset === previous) continue;
+      previous = offset;
+      const cell = context.node.nodeAt(offset);
+      if (cell) out.push(Decoration.node(start + offset, start + offset + cell.nodeSize, { class: 'ts-cell-col0' }));
+    }
   }
-  return -1;
+  if (state.selection instanceof CellSelection) return out;
+  const $head = state.selection.$head;
+  for (let depth = $head.depth; depth > 2; depth--) {
+    const role = $head.node(depth).type.spec.tableRole;
+    if (role !== 'cell' && role !== 'header_cell') continue;
+    if ($head.before(depth - 2) === context.pos) {
+      const cell = $head.before(depth);
+      out.push(Decoration.node(cell, cell + $head.node(depth).nodeSize, { class: 'ts-cell-active' }));
+    }
+    break;
+  }
+  return out;
 }
 
-/** Selection identity at the granularity which changes table commands. A
- * caret moving while text is inserted in one cell keeps this signature; a
- * cell selection, row/column move, or table transition does not. */
-function tableControlSelectionSignature(state: EditorState, context: TableContext): string {
-  const selection = state.selection;
-  if (selection instanceof CellSelection) {
-    return `${context.pos}:cells:${selection.$anchorCell.pos}:${selection.$headCell.pos}`;
-  }
-  return `${context.pos}:text:${cellPosition(selection.$anchor)}:${cellPosition(selection.$head)}`;
-}
-
-type ButtonSpec = { button: HTMLButtonElement; command: Command };
-
-class NativeTableControls {
-  private readonly root: HTMLDivElement;
-  private readonly styleSelect: HTMLSelectElement;
-  private readonly fontSelect: HTMLSelectElement;
-  private readonly densitySelect: HTMLSelectElement;
-  private readonly customDensity: HTMLOptionElement;
-  private readonly ruleButton: HTMLButtonElement;
-  private readonly fillButton: HTMLButtonElement;
-  private readonly columnMode: HTMLSelectElement;
-  private readonly columnValue: HTMLInputElement;
-  private readonly columnValueLabel: HTMLSpanElement;
-  private readonly columnLabel: HTMLSpanElement;
-  private readonly paddingInput: HTMLInputElement;
-  private readonly verticalSelect: HTMLSelectElement;
-  private readonly fillSelect: HTMLSelectElement;
-  private readonly captionInput: HTMLInputElement;
-  private readonly labelInput: HTMLInputElement;
-  private readonly advanced: HTMLSpanElement;
-  private readonly commandButtons: ButtonSpec[] = [];
-  private readonly alignButtons = new Map<string, HTMLButtonElement>();
-  private currentTable: HTMLElement | null = null;
-  private detailsOpen = false;
-  private layoutOpen = false;
-  private controlsRevision = -1;
-  private selectionSignature = '';
+/** The edited table carries the paper scale (`--ps`), so its ring stays one
+ * screen px under the stack's transform. TableView ignores attribute writes
+ * on its table element; only a changed value is written. */
+class TableEditingPaint {
+  private table: HTMLElement | null = null;
+  private readonly unlisten: () => void;
 
   constructor(private readonly view: EditorView) {
-    this.root = document.createElement('div');
-    this.root.className = 'native-table-toolbar';
-    this.root.hidden = true;
-    this.root.setAttribute('role', 'toolbar');
-    this.root.setAttribute('aria-label', 'Table controls');
-    const main = document.createElement('div');
-    main.className = 'native-table-toolbar-main';
-    this.root.appendChild(main);
-
-    const group = (label: string) => {
-      const element = document.createElement('div');
-      element.className = 'native-table-toolbar-group';
-      element.setAttribute('role', 'group');
-      element.setAttribute('aria-label', label);
-      main.appendChild(element);
-      return element;
-    };
-    const commandButton = (parent: HTMLElement, label: string, title: string, command: Command, danger = false) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = label;
-      button.title = title;
-      button.setAttribute('aria-label', title);
-      if (danger) button.classList.add('is-danger');
-      button.addEventListener('mousedown', (event) => event.preventDefault());
-      button.addEventListener('click', () => this.run(command));
-      parent.appendChild(button);
-      this.commandButtons.push({ button, command });
-      return button;
-    };
-
-    const structure = group('Rows and columns');
-    commandButton(structure, '↑ Row', 'Add row above', addRowBefore);
-    commandButton(structure, '↓ Row', 'Add row below', addBodyRowAfter);
-    commandButton(structure, '− Row', 'Delete selected row', deleteSelectedRows);
-    commandButton(structure, '← Col', 'Add column before', addColumnBefore);
-    commandButton(structure, 'Col →', 'Add column after', addColumnAfter);
-    commandButton(structure, '− Col', 'Delete selected column', deleteSelectedColumns);
-    const cells = group('Cells');
-    commandButton(cells, 'Merge', 'Merge selected cells', mergeCells);
-    commandButton(cells, 'Split', 'Split merged cell', splitCell);
-    commandButton(cells, 'Header', 'Toggle selected row as header', toggleHeaderRow);
-    this.ruleButton = commandButton(cells, 'Rule', 'Rule under the selected rows: preset, light, heavy, none', cycleRowRule);
-    this.fillButton = commandButton(cells, 'Fill', 'Fill behind the selected cells: none, gray, yellow, blue', cycleCellFill);
-    const alignment = group('Cell alignment');
-    for (const [value, label] of [['left', 'L'], ['center', 'C'], ['right', 'R']] as const) {
-      const button = commandButton(alignment, label, `Align selected cells ${value}`, alignSelectedTableCells(value));
-      button.classList.add('native-table-align');
-      this.alignButtons.set(value, button);
-    }
-
-    const appearance = group('Table appearance');
-    this.styleSelect = document.createElement('select');
-    this.styleSelect.className = 'native-table-style';
-    this.styleSelect.title = 'Table rule style';
-    this.styleSelect.setAttribute('aria-label', 'Table rule style');
-    for (const [value, label] of [['booktabs', 'Booktabs'], ['grid', 'Grid'], ['plain', 'Plain']]) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = label;
-      this.styleSelect.appendChild(option);
-    }
-    this.styleSelect.addEventListener('change', () => this.run(setTableStyle(this.styleSelect.value as 'booktabs' | 'grid' | 'plain'), false));
-    appearance.appendChild(this.styleSelect);
-
-    this.fontSelect = document.createElement('select');
-    this.fontSelect.className = 'native-table-size';
-    this.fontSelect.title = 'Table text size';
-    this.fontSelect.setAttribute('aria-label', 'Table text size');
-    for (const [value, label] of [['', '100%'], ['0.9em', '90%'], ['0.85em', '85%'], ['0.8em', '80%'], ['0.75em', '75%']]) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = label;
-      this.fontSelect.appendChild(option);
-    }
-    this.fontSelect.addEventListener('change', () => {
-      dispatchTableAttrs(this.view, { fontSize: this.fontSelect.value });
-    });
-    appearance.appendChild(this.fontSelect);
-
-    this.densitySelect = document.createElement('select');
-    this.densitySelect.className = 'native-table-density';
-    this.densitySelect.title = 'Cell density (Typst inset: compact 3pt, normal 5pt, roomy 8pt)';
-    this.densitySelect.setAttribute('aria-label', 'Table cell density');
-    for (const [value, label] of [['compact', 'Compact'], ['', 'Normal'], ['roomy', 'Roomy']]) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = label;
-      this.densitySelect.appendChild(option);
-    }
-    this.customDensity = document.createElement('option');
-    this.customDensity.value = 'custom';
-    this.customDensity.textContent = 'Custom';
-    this.customDensity.disabled = true;
-    this.customDensity.hidden = true;
-    this.densitySelect.appendChild(this.customDensity);
-    this.densitySelect.addEventListener('change', () => {
-      dispatchTableAttrs(this.view, { density: this.densitySelect.value, insetPt: null });
-      this.syncLayoutInputs(true);
-    });
-    appearance.appendChild(this.densitySelect);
-
-    const layoutButton = document.createElement('button');
-    layoutButton.type = 'button';
-    layoutButton.textContent = 'Layout';
-    layoutButton.title = 'Column widths, cell padding, vertical alignment, and fill';
-    layoutButton.setAttribute('aria-expanded', 'false');
-    layoutButton.addEventListener('mousedown', (event) => event.preventDefault());
-    layoutButton.addEventListener('click', () => {
-      this.layoutOpen = !this.layoutOpen;
-      this.root.classList.toggle('show-layout', this.layoutOpen);
-      layoutButton.setAttribute('aria-expanded', String(this.layoutOpen));
-    });
-    appearance.appendChild(layoutButton);
-
-    const detailsButton = document.createElement('button');
-    detailsButton.type = 'button';
-    detailsButton.textContent = 'Details';
-    detailsButton.title = 'Caption and reference label';
-    detailsButton.setAttribute('aria-expanded', 'false');
-    detailsButton.addEventListener('mousedown', (event) => event.preventDefault());
-    detailsButton.addEventListener('click', () => {
-      this.detailsOpen = !this.detailsOpen;
-      this.root.classList.toggle('show-details', this.detailsOpen);
-      detailsButton.setAttribute('aria-expanded', String(this.detailsOpen));
-    });
-    appearance.appendChild(detailsButton);
-    commandButton(appearance, 'Delete', 'Delete table', deleteTable, true);
-
-    const layout = document.createElement('div');
-    layout.className = 'native-table-toolbar-layout';
-    this.root.appendChild(layout);
-    const layoutField = (label: string) => {
-      const wrapper = document.createElement('label');
-      const text = document.createElement('span');
-      text.textContent = label;
-      wrapper.appendChild(text);
-      layout.appendChild(wrapper);
-      return { wrapper, text };
-    };
-    const select = (label: string, values: readonly (readonly [string, string])[]) => {
-      const element = document.createElement('select');
-      element.setAttribute('aria-label', label);
-      for (const [value, text] of values) element.add(new Option(text, value));
-      return element;
-    };
-    const numericInput = (label: string, min: string, step: string) => {
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.setAttribute('aria-label', label);
-      input.min = min;
-      input.step = step;
-      return input;
-    };
-    const columnField = layoutField('Selected column');
-    this.columnLabel = columnField.text;
-    this.columnMode = select('Selected column sizing', [
-      ['auto', 'Fit content'], ['fr', 'Share remaining space'], ['pt', 'Fixed width'], ['mixed', 'Mixed widths'],
-    ]);
-    this.columnMode.options[3].disabled = true;
-    columnField.wrapper.appendChild(this.columnMode);
-    const columnValueField = layoutField('Weight');
-    this.columnValueLabel = columnValueField.text;
-    this.columnValue = numericInput('Column width value', '0', 'any');
-    this.columnValue.max = '1440';
-    columnValueField.wrapper.appendChild(this.columnValue);
-    const paddingField = layoutField('Padding (pt)');
-    this.paddingInput = numericInput('Cell padding in points', '0', 'any');
-    this.paddingInput.max = '72';
-    paddingField.wrapper.appendChild(this.paddingInput);
-    const verticalField = layoutField('Vertical align');
-    this.verticalSelect = select('Selected cells vertical alignment', [
-      ['', 'Default (top)'], ['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom'], ['mixed', 'Mixed'],
-    ]);
-    this.verticalSelect.options[4].disabled = true;
-    verticalField.wrapper.appendChild(this.verticalSelect);
-    const fillField = layoutField('Cell fill');
-    this.fillSelect = select('Selected cells fill', [
-      ['', 'None'], ['gray', 'Light gray'], ['gray-dark', 'Gray'], ['yellow', 'Yellow'], ['blue', 'Blue'], ['mixed', 'Mixed'],
-    ]);
-    this.fillSelect.options[5].disabled = true;
-    fillField.wrapper.appendChild(this.fillSelect);
-    this.columnMode.addEventListener('change', () => {
-      const mode = this.columnMode.value;
-      this.run(setSelectedColumnWidth(mode === 'auto' ? 'auto' : mode === 'fr' ? '1fr' : '72pt'), false);
-      this.syncLayoutInputs(true);
-    });
-    const commitColumnValue = () => {
-      const mode = this.columnMode.value;
-      const number = this.columnValue.valueAsNumber;
-      if ((mode !== 'fr' && mode !== 'pt') || !this.columnValue.validity.valid || !Number.isFinite(number) || (mode === 'fr' && number <= 0)) {
-        this.syncLayoutInputs(true);
-        return;
-      }
-      if (!this.run(setSelectedColumnWidth(`${number}${mode}`), false)) this.syncLayoutInputs(true);
-    };
-    const commitPadding = () => {
-      const number = this.paddingInput.valueAsNumber;
-      if (!this.paddingInput.validity.valid || !Number.isFinite(number)) {
-        this.syncLayoutInputs(true);
-        return;
-      }
-      dispatchTableAttrs(this.view, { insetPt: number }, true);
-    };
-    for (const [input, commit] of [[this.columnValue, commitColumnValue], [this.paddingInput, commitPadding]] as const) {
-      input.addEventListener('change', commit);
-      input.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          commit();
-        } else if (event.key === 'Escape') {
-          event.preventDefault();
-          this.syncLayoutInputs(true);
-          this.view.focus();
-        }
-      });
-    }
-    this.verticalSelect.addEventListener('change', () => this.run(setCellAttr('valign', this.verticalSelect.value || null), false));
-    this.fillSelect.addEventListener('change', () => this.run(setCellAttr('fill', this.fillSelect.value), false));
-
-    const details = document.createElement('div');
-    details.className = 'native-table-toolbar-details';
-    this.root.appendChild(details);
-    const field = (label: string, placeholder: string) => {
-      const wrapper = document.createElement('label');
-      const text = document.createElement('span');
-      text.textContent = label;
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.placeholder = placeholder;
-      input.spellcheck = label === 'Caption';
-      wrapper.append(text, input);
-      details.appendChild(wrapper);
-      return input;
-    };
-    this.captionInput = field('Caption', 'Optional table caption');
-    this.labelInput = field('Label', 'tab:results');
-    this.labelInput.maxLength = 128;
-    this.labelInput.pattern = '[A-Za-z0-9][A-Za-z0-9:._-]{0,127}';
-    this.labelInput.title = 'Letters and numbers, followed by letters, numbers, colon, dot, underscore, or hyphen';
-    this.captionInput.addEventListener('input', () => dispatchTableAttrs(this.view, { caption: this.captionInput.value }));
-    this.labelInput.addEventListener('input', () => {
-      const normalized = this.labelInput.value
-        .replace(/[^A-Za-z0-9:._-]/g, '-')
-        .replace(/^[^A-Za-z0-9]+/, '')
-        .slice(0, 128);
-      if (normalized !== this.labelInput.value) this.labelInput.value = normalized;
-      dispatchTableAttrs(this.view, { label: normalized });
-    });
-    for (const input of [this.captionInput, this.labelInput, this.columnValue, this.paddingInput]) input.addEventListener('keydown', (event) => {
-      const mod = event.metaKey || event.ctrlKey;
-      const key = event.key.toLowerCase();
-      const isUndo = mod && key === 'z' && !event.shiftKey;
-      const isRedo = mod && ((key === 'z' && event.shiftKey) || key === 'y');
-      if (!isUndo && !isRedo) return;
-      event.preventDefault();
-      if (!this.run(isRedo ? redo : undo, false)) return;
-      const context = tableContext(this.view.state);
-      if (context) {
-        this.syncMetadataInputs(context, true);
-        this.syncLayoutInputs(true);
-      }
-    });
-    this.advanced = document.createElement('span');
-    this.advanced.className = 'native-table-advanced';
-    this.advanced.textContent = 'Custom table styling is preserved in the file and PDF, but is not shown here.';
-    this.root.appendChild(this.advanced);
-
-    // Docked under the main toolbar (CSS), never over the document: a bar
-    // floating beside the table covered the paragraph above it, and moved
-    // on every keystroke.
-    document.body.appendChild(this.root);
-    this.update(view);
+    this.unlisten = onPaperScale(() => this.write());
+    this.update();
   }
 
-  update = (view: EditorView): void => {
-    const context = tableContext(view.state);
-    if (!context) {
-      this.currentTable = null;
-      this.selectionSignature = '';
-      this.controlsRevision = -1;
-      this.root.hidden = true;
-      return;
-    }
-    const pluginState = tableControlsKey.getState(view.state);
-    const revision = pluginState?.controlsRevision ?? 0;
-    const selectionSignature = tableControlSelectionSignature(view.state, context);
-    const refreshControls =
-      !this.currentTable ||
-      revision !== this.controlsRevision ||
-      selectionSignature !== this.selectionSignature;
-
-    // An ordinary text transaction can change the table's rendered height,
-    // but it cannot change any control semantics. Retain every control DOM
-    // value and move the optional geometry read past the first text paint.
-    // The rule label follows the selected row's attribute, which changes
-    // without the selection moving.
-    const rule = selectedRowRule(view.state);
-    this.ruleButton.textContent = rule ? `Rule: ${rule}` : 'Rule';
-    this.ruleButton.disabled = !cycleRowRule(view.state);
-    const fill = selectedCellFill(view.state);
-    this.fillButton.textContent = fill ? `Fill: ${fill === 'gray-dark' ? 'dark gray' : fill}` : 'Fill';
-    this.fillButton.disabled = fill === null;
-    if (!refreshControls) return;
-    const dom = view.nodeDOM(context.pos);
-    const element = dom instanceof HTMLElement
-      ? dom.matches('table') ? dom : dom.querySelector<HTMLElement>('table')
-      : dom?.parentElement?.closest<HTMLElement>('table') ?? null;
-    if (!element) {
-      this.root.hidden = true;
-      return;
-    }
-    this.currentTable = element;
-    this.controlsRevision = revision;
-    this.selectionSignature = selectionSignature;
-    this.root.hidden = false;
-    this.styleSelect.value = String(context.node.attrs.style || 'booktabs');
-    this.fontSelect.value = String(context.node.attrs.fontSize || '');
-    const customParams = String(context.node.attrs.params ?? '').trim();
-    const customInset = /(?:^|,)\s*inset\s*:/.test(customParams);
-    const numericInset = typeof context.node.attrs.insetPt === 'number';
-    this.customDensity.hidden = !customInset && !numericInset;
-    this.densitySelect.disabled = customInset;
-    this.densitySelect.value = customInset || numericInset ? 'custom' : String(context.node.attrs.density || '');
-    this.paddingInput.disabled = customInset;
-    this.syncLayoutInputs();
-    this.syncMetadataInputs(context);
-    this.advanced.hidden = !customParams;
-    for (const { button, command } of this.commandButtons) button.disabled = !command(view.state);
-
-    let alignment: string | null = null;
-    try {
-      const rect = selectedRect(view.state);
-      const offset = rect.map.map[rect.top * rect.map.width + rect.left];
-      alignment = (rect.table.nodeAt(offset)?.attrs.align as string | null) ?? null;
-    } catch { alignment = null; }
-    for (const [value, button] of this.alignButtons) {
-      button.disabled = false;
-      button.classList.toggle('is-active', alignment === value);
-      button.setAttribute('aria-pressed', String(alignment === value));
-    }
-  };
-
-  private syncLayoutInputs(force = false): void {
-    if (!isInTable(this.view.state)) return;
-    const rect = selectedRect(this.view.state);
-    const widths = explicitColumnWidths(rect.table, rect.map.width) ?? Array(rect.map.width).fill('auto');
-    const selectedWidths = widths.slice(rect.left, rect.right);
-    const width = selectedWidths.every((value) => value === selectedWidths[0]) ? selectedWidths[0] : 'mixed';
-    const mode = width === 'auto' || width === 'mixed' ? width : width.endsWith('fr') ? 'fr' : 'pt';
-    this.columnMode.value = mode;
-    this.columnLabel.textContent = rect.right - rect.left === 1 ? `Column ${rect.left + 1}` : `Columns ${rect.left + 1}–${rect.right}`;
-    this.columnValue.parentElement!.hidden = mode === 'auto' || mode === 'mixed';
-    this.columnValueLabel.textContent = mode === 'pt' ? 'Width (pt)' : 'Weight';
-    this.columnValue.min = '0';
-    this.columnValue.setAttribute('aria-label', mode === 'pt' ? 'Column width in points' : 'Column share weight');
-    if (force || document.activeElement !== this.columnValue) this.columnValue.value = mode === 'fr' || mode === 'pt' ? String(Number.parseFloat(width)) : '';
-    if (force || document.activeElement !== this.paddingInput) {
-      const attrs = rect.table.attrs;
-      this.paddingInput.value = String(tableInsetPt(attrs));
-    }
-    const cells = new Set<number>();
-    for (let row = rect.top; row < rect.bottom; row++) {
-      for (let column = rect.left; column < rect.right; column++) cells.add(rect.map.map[row * rect.map.width + column]);
-    }
-    for (const [name, select] of [['valign', this.verticalSelect], ['fill', this.fillSelect]] as const) {
-      const values = [...cells].map((offset) => String(rect.table.nodeAt(offset)?.attrs[name] ?? ''));
-      select.value = values.every((value) => value === values[0]) ? values[0] : 'mixed';
-    }
+  update(): void {
+    const context = tableContext(this.view.state);
+    const dom = context ? this.view.nodeDOM(context.pos) : null;
+    this.table = dom instanceof HTMLElement && dom.tagName === 'TABLE' ? dom : null;
+    this.write();
   }
 
-  private syncMetadataInputs(context: TableContext, force = false): void {
-    if (force || document.activeElement !== this.captionInput) {
-      this.captionInput.value = String(context.node.attrs.caption ?? '');
-    }
-    if (force || document.activeElement !== this.labelInput) {
-      this.labelInput.value = String(context.node.attrs.label ?? '');
-    }
-  }
-
-  private run(command: Command, focus = true): boolean {
-    const handled = command(this.view.state, this.view.dispatch, this.view);
-    if (focus) this.view.focus();
-    return handled;
+  private write(): void {
+    const value = String(paperScale());
+    if (this.table && this.table.style.getPropertyValue('--ps') !== value) this.table.style.setProperty('--ps', value);
   }
 
   destroy(): void {
-    this.root.remove();
+    this.unlisten();
   }
 }
 
-/** Contextual controls, captions, and the lossless table-cell guard. */
+/** Captions, the editing-chrome classes, and the lossless table-cell guard.
+ *  The controls live in the block pill (block-chrome.ts). */
 export function structuredTablePlugin(): Plugin {
   return new Plugin<NativeTablePluginState>({
     key: tableControlsKey,
@@ -1130,11 +945,24 @@ export function structuredTablePlugin(): Plugin {
     filterTransaction(transaction, state) {
       if (!transaction.docChanged) return true;
       const result = keepsUnsupportedTablesVerbatim(state.doc, transaction);
-      if (!result.ok) announceTableConstraint(result.issue ?? 'That content');
+      if (!result.ok) announceTableConstraint(result.issue ?? 'that content can’t go in a table cell');
       return result.ok;
     },
-    props: { decorations: (state) => tableControlsKey.getState(state)?.decorations ?? null },
-    view: (view) => new NativeTableControls(view),
+    props: {
+      decorations: (state) => {
+        const captions = tableControlsKey.getState(state)?.decorations ?? null;
+        const editing = editingDecorations(state);
+        if (!editing.length) return captions;
+        return (captions ?? DecorationSet.empty).add(state.doc, editing);
+      },
+    },
+    view: (view) => {
+      const paint = new TableEditingPaint(view);
+      return {
+        update: () => paint.update(),
+        destroy: () => paint.destroy(),
+      };
+    },
   });
 }
 

@@ -19,8 +19,8 @@ import { MathView } from './math';
 import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
 import { structuredTablePlugin } from './table-editor';
+import { blockChromePagesChanged, blockChromePlugin, blockChromeSourceMode } from './block-chrome';
 import { TableView } from './table-view';
-import './table-controls.css';
 import './editor-comments.css';
 import { equationsPlugin } from './equations';
 import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
@@ -28,6 +28,7 @@ import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
 import { TypstInlineView } from './inline-raw';
 import { GridCellView, gridPlugin } from './grid-editor';
+import { blockKeys } from './block-keys';
 import { EditorCommentView, editorCommentKeymap, editorCommentPaste } from './editor-comments';
 import { refAutocomplete } from './ref-autocomplete';
 import { applySettings, formatPageNumber, getSettings, runningPageFormat, runningText, type DocSettings } from './settings';
@@ -39,6 +40,7 @@ import { attachPaper, paperScale, paperSheets, zoomedWindow } from './paper-scal
 import { attachScrollRail, type ScrollRail } from './scroll-rail';
 import { attachPaperCaret } from './paper-caret';
 import { FROM_DISK, reloadTransaction } from './reload-in-place';
+import { setNotifySink } from './notify';
 
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
@@ -150,6 +152,9 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       // Before the editing keymap: its Mod-Enter is the page break.
       editorCommentKeymap(),
       editorCommentPaste(),
+      // Before the editing keymap too: ⌘⏎ in a table or grid cell adds a
+      // row (the page break cannot live there); Escape selects the block.
+      ...blockKeys(),
       buildKeymap(),
       baseKeys,
       history(),
@@ -167,7 +172,11 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       // invariants. Keep this last so its broad arrow/mouse handlers only run
       // after more specific editor behavior has had a chance.
       structuredTablePlugin(),
-      tableEditing(),
+      // Escape selects a table as a block (block-keys.ts), outlined, with
+      // its pill: the library's default turns that into a cell selection.
+      tableEditing({ allowTableNodeSelection: true }),
+      // The pill beside the table or grid the caret is in: a view only.
+      blockChromePlugin(),
     ],
   });
 }
@@ -179,6 +188,8 @@ const scrollEl = document.getElementById('scroll')!;
 
 const hudEl = document.getElementById('hud')!;
 const toastEl = document.getElementById('toast')!;
+// Every module's notices (a refused table edit, …) share this one toast.
+setNotifySink((text) => showMessage(text));
 const stackEl = document.getElementById('stack')!;
 const pagesEl = document.getElementById('pages')!;
 
@@ -324,6 +335,9 @@ function renderPages(info: PageInfo, settled: boolean) {
     paperSheets(info.pages);
   }
   if (settled) scrollRail?.pages(info);
+  // A page start may have moved the edited table or grid: the block pill
+  // follows it (block-chrome.ts; read in the next frame, written if moved).
+  blockChromePagesChanged();
   updateStatus();
 }
 
@@ -471,6 +485,7 @@ const sourceView = createSourceView({
   },
   onMode(active) {
     toolbar?.setSourceMode(active);
+    blockChromeSourceMode(active);
     scrollRail?.mode(active);
     updateStatus();
   },

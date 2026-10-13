@@ -92,6 +92,15 @@ export function paperScale(): number {
   return scale;
 }
 
+/** Called after the paper's scale changes (a resize, a zoom): editing
+ *  chrome drawn under the stack's transform keeps its strokes one screen
+ *  px by dividing by the scale (`--ps` on the edited block's elements). */
+const scaleListeners = new Set<(scale: number) => void>();
+export function onPaperScale(listener: (scale: number) => void): () => void {
+  scaleListeners.add(listener);
+  return () => scaleListeners.delete(listener);
+}
+
 /** The zoom's sizes of paper, as its scale: Chromium's own steps. */
 const ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
@@ -168,6 +177,7 @@ export function fitPaper(): void {
   // the whole editor's style recomputed (24 ms on a 32-page paper, against
   // 0.2 on the page boxes alone).
   if (before !== scale) pagesEl?.style.setProperty('--paper-scale', String(scale));
+  if (before !== scale) for (const listener of scaleListeners) listener(scale);
   const drawnHeight = height * scale;
   const clipPx = `${drawnHeight}px`;
   if (clip.style.height !== clipPx) clip.style.height = clipPx;

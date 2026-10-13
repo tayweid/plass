@@ -33,13 +33,23 @@ async function paragraphGeometry(page: Page, row: number) {
   });
 }
 
+/** The Align panel from the block pill (src/block-chrome.ts): Across is
+ *  L/C/R as radios; it stays open while one is picked. */
+async function alignPanel(page: Page) {
+  await page.locator('.block-pill [data-tile="align"]').click();
+  const panel = page.getByRole('dialog', { name: /^Align/ });
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
 test('table L/C/R controls visibly align both header and body text', async ({ page }) => {
   await installTable(page);
-  const toolbar = page.getByRole('toolbar', { name: 'Table controls' });
   for (const row of [0, 1]) {
     await page.locator('.ProseMirror table > tbody > tr').nth(row).locator('th, td').first().locator('p').click();
+    const panel = await alignPanel(page);
     for (const alignment of ['left', 'center', 'right'] as const) {
-      await toolbar.getByRole('button', { name: `Align selected cells ${alignment}`, exact: true }).click();
+      await panel.getByRole('radio', { name: `Align selected cells ${alignment}`, exact: true }).click();
+      await expect(panel.getByRole('radio', { name: `Align selected cells ${alignment}`, exact: true })).toHaveAttribute('aria-checked', 'true');
       const geometry = await paragraphGeometry(page, row);
       expect(geometry.lines).toHaveLength(1);
       const line = geometry.lines[0];
@@ -50,6 +60,8 @@ test('table L/C/R controls visibly align both header and body text', async ({ pa
           : (line.left + line.right - geometry.left - geometry.right) / 2;
       expect(Math.abs(offset), `row ${row}, ${alignment}: ${JSON.stringify(geometry)}`).toBeLessThan(0.5);
     }
+    await page.keyboard.press('Escape');
+    await expect(panel).toBeHidden();
   }
 });
 
@@ -58,9 +70,10 @@ test('cell alignment retains justified wrapping and aligns the final line withou
   await page.locator('.ProseMirror table > tbody > tr').nth(1).locator('td').first().locator('p').click();
   const before = await paragraphGeometry(page, 1);
   expect(before.lines.length).toBeGreaterThan(2);
-  const toolbar = page.getByRole('toolbar', { name: 'Table controls' });
+  const panel = await alignPanel(page);
   for (const alignment of ['center', 'right'] as const) {
-    await toolbar.getByRole('button', { name: `Align selected cells ${alignment}`, exact: true }).click();
+    await panel.getByRole('radio', { name: `Align selected cells ${alignment}`, exact: true }).click();
+    await expect(panel.getByRole('radio', { name: `Align selected cells ${alignment}`, exact: true })).toHaveAttribute('aria-checked', 'true');
     const after = await paragraphGeometry(page, 1);
     expect(Math.abs(after.height - before.height)).toBeLessThan(0.5);
     const first = after.lines[0];
