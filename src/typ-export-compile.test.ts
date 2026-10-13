@@ -16,7 +16,9 @@
 // the starter document does not hold: a raw-Typst island and an inline
 // Typst span that would stop the compile (`#panic`) if they ran, a Markdown
 // island, an editorial comment that must not be printed, a plain code
-// block, a grid and a page break.
+// block, prose whose slashes Typst would read as comments (one beside a
+// strong run, one in a footnote: both stopped the compile), a grid and a
+// page break.
 //
 // Self-skipping: typst comes from $TYPST or PATH; absent, or a version other
 // than 0.14.x (exact) or 0.15.x (compiles), it prints why and passes.
@@ -103,6 +105,14 @@ function exportedDoc(): PMNode {
     ),
     n.code_block.create({ params: 'md-raw' }, schema.text('<div class="note">\n<!-- a remark kept as code -->\n</div>')),
     n.code_block.create({ params: 'python' }, schema.text('print("a plain code block")')),
+    para(
+      schema.text('Either', [schema.marks.strong.create()]),
+      schema.text('/'),
+      schema.text('or', [schema.marks.strong.create()]),
+      schema.text(': slashes Typst would read as comments, a note'),
+      n.footnote.create(null, schema.text('See a // b.')),
+      schema.text(', https://typst.app/docs/ and a // b.'),
+    ),
     n.grid.create({ columns: [1, 2], gutter: 1 }, [
       n.grid_row.create(null, [
         n.grid_cell.create(null, [para(schema.text('Left cell.'))]),
@@ -130,6 +140,10 @@ check('the raw-Typst island prints as code', /\n(`{3,})\n#let width = 3cm\n#pani
 check('the inline Typst span prints as inline raw', source.includes('#raw("#panic(\\"an inline Typst span ran\\")")'));
 check('the Markdown island prints as code', source.includes('```\n<div class="note">\n<!-- a remark kept as code -->\n</div>\n```'));
 check('the grid and the page break are in the export', source.includes('#grid(') && source.includes('#pagebreak()'));
+check(
+  'a slash that would open or close a comment is escaped; a URL keeps its own',
+  source.includes('*Either*\\/*or*: slashes Typst would read as comments, a note#footnote[See a \\/\\/ b.], https://typst.app/docs/ and a \\/\\/ b.'),
+);
 check(
   'the math is native Typst: no package import, no #mi/#mitex call',
   !source.includes('#import') && !/#mi(?:tex)?\(/.test(source) && /\$e \^\(i pi \) \+  1  =  0 \$/.test(source),

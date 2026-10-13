@@ -3,6 +3,7 @@ import { demoDoc } from './demo-doc.ts';
 import { docToTyp } from './typ-serializer.ts';
 import { migrateLegacyTableGeometry, typToDoc } from './typ-parser.ts';
 import { schema } from './schema.ts';
+import { DEFAULT_SETTINGS } from './settings.ts';
 import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config.ts';
 import * as F from './typ-fixtures.ts';
 
@@ -478,6 +479,30 @@ function firstDiff(a: string, b: string): string {
   const t = (src: string) => typToDoc(src).doc.textContent;
   check('mixed nbsp run collapses', t('a~ ~b') === 'a b', JSON.stringify(t('a~ ~b')));
   check('pure nbsp run survives', t('a~~b') === 'a\u00a0\u00a0b', JSON.stringify(t('a~~b')));
+}
+
+// --- 17b. a slash never opens or closes a Typst comment; a URL keeps its own ---
+{
+  const { doc: D, paragraph: P, heading: H, footnote: FN } = schema.nodes;
+  const plain = (t: string) => schema.text(t);
+  const bold = (t: string) => schema.text(t, [schema.marks.strong.create()]);
+  const doc = D.create({ settings: { ...DEFAULT_SETTINGS, headerText: 'Notes // Week 3/' } }, [
+    P.create(null, plain('Keep this // and this too: ftp://host/x, HTTP://EXAMPLE.COM/x, a///b.')),
+    P.create(null, [bold('and'), plain('/'), bold('or'), plain(' km/'), bold('h'), plain(' '), bold('x/'), plain('/y')]),
+    H.create({ level: 2 }, plain('Heading // tail')),
+    P.create(null, [plain('A note.'), FN.create(null, plain('See a // b.')), plain(' /etc/hosts and a/b.')]),
+    P.create(null, plain('See https://example.com/a//b, http://x.org/ and (https://example.com/p)//q.')),
+  ]);
+  const out = docToTyp(doc);
+  check('a // in prose escapes, a scheme Typst does not link included', out.includes('Keep this \\/\\/ and this too: ftp:\\/\\/host/x, HTTP:\\/\\/EXAMPLE.COM/x, a\\/\\/\\/b.'), out);
+  check('a slash beside a strong run escapes: no /* or */ with its stars', out.includes('*and*\\/*or* km\\/*h* *x\\/*\\/y'), out);
+  check('a heading, a footnote and the running header escape theirs', out.includes('== Heading \\/\\/ tail') && out.includes('#footnote[See a \\/\\/ b.]') && out.includes('[Notes \\/\\/ Week 3\\/]'), out);
+  check('a lone slash inside the text is left alone', out.includes('] /etc/hosts and a/b.'), out);
+  check('a URL Typst links keeps its slashes; a // after it escapes', out.includes('See https://example.com/a//b, http://x.org/ and (https://example.com/p)\\/\\/q.'), out);
+  const back = typToDoc(out).doc;
+  check('the escaped slashes read back as written', back.textContent === doc.textContent && back.attrs.settings.headerText === 'Notes // Week 3/', JSON.stringify([back.textContent, back.attrs.settings.headerText]));
+  const again = docToTyp(back);
+  check('slash escaping round-trips byte-identically', again === out, firstDiff(out, again));
 }
 
 // --- 18. solution block: the #block(stroke: (left: …)) preset round-trips as kind 'solution' ---

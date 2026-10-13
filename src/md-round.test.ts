@@ -2038,6 +2038,21 @@ function emptyParagraphsDoc(): PMNode {
   check("a tag-only first front-matter line converges", docToMd(mdToDoc(md1).doc) === md1);
 }
 
+// Typst reads `//` and `/*` as comments anywhere in markup, mid-word too.
+// The Markdown keeps a slash as written; the print escapes one wherever it
+// could open or close a comment, and leaves the slashes of a URL Typst
+// links (escaping one would end the link there).
+{
+  const md = 'Keep this // and this too.\n\n**and**/**or**, see https://example.com/a//b.\n\nA note.[^1]\n\n[^1]: See a // b.\n';
+  const r = trip(md);
+  const typ = docToTyp(r.doc, { islands: 'print' });
+  check('a // in Markdown prose prints whole', typ.includes('\nKeep this \\/\\/ and this too.\n'), typ);
+  check('a slash between strong runs forms no comment with their stars', typ.includes('*and*\\/*or*'), typ);
+  check('a URL keeps its slashes in print, so Typst still links it', typ.includes('see https://example.com/a//b.'), typ);
+  check('a // in a footnote prints whole, its bracket closed', typ.includes('#footnote[See a \\/\\/ b.]'), typ);
+  check('the Markdown keeps the slashes as written', r.md1 === md && r.converges, JSON.stringify(r.md1));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

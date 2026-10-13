@@ -196,6 +196,31 @@ FIXTURES.push({
     '',
   ].join('\n'),
 });
+
+FIXTURES.push({
+  // Slashes Typst would read as comments anywhere in markup: `//` in prose
+  // and in a footnote, a slash beside a strong run's stars (`/*`, `*/`), a
+  // scheme Typst does not link. The print must hold every word the page
+  // shows; a URL Typst links keeps its slashes.
+  name: 'slashes.md',
+  text: [
+    '# Slashes',
+    '',
+    ...Array.from(
+      { length: 6 },
+      (_, i) =>
+        FILLER.repeat(2).trimEnd() +
+        ' Keep this // and this too: **either**/**or**, km/**h**, ftp://host/x and HTTP://EXAMPLE.COM/x as plain text. ' +
+        FILLER.repeat(1).trimEnd() +
+        ` A remark.[^${i + 1}] ` +
+        FILLER.repeat(2).trimEnd() +
+        '\n',
+    ),
+    'See https://typst.app/docs/reference//model for the rest. ' + FILLER.repeat(3).trimEnd(),
+    '',
+    ...Array.from({ length: 6 }, (_, i) => `[^${i + 1}]: See a // b. ` + FILLER.repeat(1).trimEnd()),
+  ].join('\n'),
+});
 const TYP_HEAD = (page: string, extra = '') =>
   `#set page(${page})\n#set par(justify: true, leading: 10.215pt, spacing: 21.465pt)\n#set list(spacing: 13.34pt)\n#set enum(spacing: 13.34pt)\n${extra}#set text(font: "New Computer Modern", size: 12.5pt)\n\n`;
 const NOTES = Array.from({ length: 8 }, (_, i) => FILLER.repeat(3).trimEnd() + ` A remark.#footnote[Note ${i + 1}. ${FILLER.repeat(i % 2 ? 2 : 1).trimEnd()}] ` + FILLER.repeat(2).trimEnd()).join('\n\n');

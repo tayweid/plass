@@ -21,6 +21,7 @@ import { commentToTyp } from './editor-comments-format';
 import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config';
 import { convertMath, displayEquation, inlineEquation, mathConverterReady } from './math-convert';
 import { mathPrelude } from './typst-math-prelude';
+import { linkPrefix } from './layout/port/linebreak';
 
 export interface TypExportOptions {
   /** When given, receives the text offset at which each top-level block's
@@ -346,12 +347,44 @@ export function escapeTyp(text: string): string {
   // A straight quote escapes too: unescaped, Typst would print it curly,
   // and the document already holds the curly glyph wherever that is
   // wanted (smart-quotes.ts) — document text equals printed text.
-  return text.replace(/[\\#$*_`@<>[\]~"']/g, (c) => '\\' + c).replace(/\u00a0/g, '~');
+  return escapeSlashes(text.replace(/[\\#$*_`@<>[\]~"']/g, (c) => '\\' + c).replace(/\u00a0/g, '~'));
 }
 
-/** Table cells are serialized through a deliberately narrower path. A Typst
- * comment opener is executable even inside a content block, so keep it inert
- * without changing the established encoding of ordinary document prose. */
+/** Typst reads `//` and `/*` as comment openers anywhere in markup,
+ * mid-word too, and a stray comment closer as an error: `a // b` prints
+ * "a", and a comment inside `*…*` or `#footnote[…]` swallows the closing
+ * delimiter, so the compile fails. A `*` in the text is escaped already;
+ * a slash beside another slash, or at either end of the text (where it
+ * meets a `*` delimiter or the next text node), prints through its
+ * escape. A URL Typst links on its own (`http://`, `https://`) keeps its
+ * slashes: they are the link's, and escaping one would end the link. */
+function escapeSlashes(s: string): string {
+  if (!s.includes('/')) return s;
+  let out = '';
+  for (let i = 0; i < s.length; ) {
+    const keep = s[i] === '\\' ? 2 : autoLinkLength(s, i);
+    if (keep) {
+      out += s.slice(i, i + keep);
+      i += keep;
+      continue;
+    }
+    const lone = i > 0 && i < s.length - 1 && s[i - 1] !== '/' && s[i + 1] !== '/';
+    out += s[i] === '/' && !lone ? '\\/' : s[i];
+    i++;
+  }
+  return out;
+}
+
+/** Length of the link Typst's markup lexer reads at `i`, else 0: it links
+ * `http://` and `https://` wherever they stand, mid-word too, and runs the
+ * link as far as its `link_prefix` (the port's mirror) reaches. */
+function autoLinkLength(s: string, i: number): number {
+  const scheme = s.startsWith('http://', i) ? 7 : s.startsWith('https://', i) ? 8 : 0;
+  return scheme && scheme + linkPrefix(s.slice(i + scheme)).length;
+}
+
+/** Table cells keep their established, narrower encoding: a URL's `//`
+ * escapes too, so a URL in a cell prints as text, not a link. */
 function escapeTableCellText(text: string): string {
   return escapeTyp(text).replace(/\/\//g, '\\/\\/');
 }
