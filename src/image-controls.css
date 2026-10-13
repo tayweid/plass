@@ -1,5 +1,15 @@
-/* Image controls stay out of document flow, including inside a grid. */
+/* Image controls stay out of document flow, including inside a grid.
+   The bar wears the block pill's dark glass (block-chrome.css; the tokens
+   match style.css's `.tb-menu, .settings-panel, .block-pill` list): the
+   sheet is white in both OS appearances, so the glass is dark in both. */
 .image-toolbar {
+  --bar-glass: rgba(27, 26, 30, 0.94);
+  --bar-ink: rgba(240, 238, 233, 0.9);
+  --bar-ink-soft: rgba(240, 238, 233, 0.5);
+  --bar-hairline: rgba(255, 255, 255, 0.1);
+  --bar-press: rgba(255, 255, 255, 0.09);
+  --accent: #9db8d6;
+  color-scheme: dark;
   position: fixed;
   z-index: 185;
   /* On the paper's axis (style.css, --axis), in the HUD's row. */
@@ -8,50 +18,94 @@
   transform: translateX(-50%);
   max-width: calc(100vw - 24px);
   width: max-content;
-  padding: 7px;
-  color: var(--ink);
-  background: color-mix(in srgb, var(--chrome) 96%, transparent);
-  border: 1px solid var(--chrome-border);
-  border-radius: 11px;
-  box-shadow: 0 6px 26px #0002;
-  backdrop-filter: blur(14px);
-  font: 12px var(--ui-font, sans-serif);
+  box-sizing: border-box;
+  padding: 4px;
+  color: var(--bar-ink);
+  background: var(--bar-glass);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 13px;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 16px 40px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px) saturate(140%);
+  font: 12.5px var(--sans);
 }
 
 .image-toolbar[hidden],
 .image-toolbar [hidden] { display: none; }
 
-.image-toolbar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.image-toolbar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
 .image-toolbar button {
+  height: 30px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 9px;
   background: transparent;
-  color: inherit;
-  padding: 7px 9px;
+  color: rgba(240, 238, 233, 0.78);
+  padding: 0 11px;
   font: inherit;
-  cursor: pointer;
+  letter-spacing: 0.005em;
+  cursor: default;
 }
-.image-toolbar button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.image-toolbar label { display: flex; align-items: center; gap: 6px; padding: 0 6px; }
+.image-toolbar button:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+.image-toolbar button:active { background: var(--bar-press); transform: scale(0.97); }
+
+/* Hairline rules between the three groups: replace | size | storage.
+   Fix image and Save to project never show together (figures.ts update),
+   so the storage rule rides on whichever of the two is visible. */
+.image-toolbar-actions > button:first-child { margin-right: 5px; }
+.image-toolbar-actions > button:nth-child(2),
+.image-toolbar-actions > label + button + button,
+.image-toolbar-actions > label + button + button[hidden] + button { position: relative; }
+.image-toolbar-actions > button:nth-child(2) { margin-left: 5px; }
+.image-toolbar-actions > label + button + button:not([hidden]),
+.image-toolbar-actions > label + button + button[hidden] + button { margin-left: 10px; }
+.image-toolbar-actions > button:nth-child(2)::before,
+.image-toolbar-actions > label + button + button:not([hidden])::before,
+.image-toolbar-actions > label + button + button[hidden] + button::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--bar-hairline);
+}
+
+.image-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 6px 0 9px;
+  color: rgba(240, 238, 233, 0.78);
+}
 .image-toolbar input {
-  width: 54px;
-  border: 1px solid var(--chrome-border);
-  border-radius: 4px;
-  padding: 4px;
-  color: inherit;
-  background: var(--chrome);
-  font: inherit;
+  width: 46px;
+  height: 24px;
+  box-sizing: border-box;
+  border: 1px solid var(--bar-hairline);
+  border-radius: 7px;
+  padding: 0 6px;
+  color: var(--bar-ink);
+  background: rgba(255, 255, 255, 0.045);
+  font: 11.5px var(--sans);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+  appearance: textfield;
 }
-.image-toolbar :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.image-toolbar input::-webkit-outer-spin-button,
+.image-toolbar input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.image-toolbar input::placeholder { color: var(--bar-ink-soft); }
+.image-toolbar :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .image-toolbar-source {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: min(620px, calc(100vw - 50px));
-  padding: 3px 9px 1px;
-  color: var(--ink-soft);
-  font-size: 11px;
+  margin: 3px 4px 0;
+  padding: 5px 7px 3px;
+  border-top: 1px solid var(--bar-hairline);
+  color: var(--bar-ink-soft);
+  font: 11px var(--sans);
 }
 
 @media print { .image-toolbar { display: none; } }
