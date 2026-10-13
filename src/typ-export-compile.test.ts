@@ -16,14 +16,18 @@
 // the starter document does not hold: a raw-Typst island and an inline
 // Typst span that would stop the compile (`#panic`) if they ran, a Markdown
 // island, an editorial comment that must not be printed, a plain code
-// block, a grid and a page break.
+// block, prose whose slashes Typst would read as comments (one beside a
+// strong run, one in a footnote: both stopped the compile), URLs that touch
+// markup (a strong run, a footnote, a citation, a no-break space: Typst's
+// own link ran on into each, and stopped the compile or printed wrong;
+// the PDF must link each whole URL), a grid and a page break.
 //
 // Self-skipping: typst comes from $TYPST or PATH; absent, or a version other
 // than 0.14.x (exact) or 0.15.x (compiles), it prints why and passes.
 // pdf.ts and figures.ts do not load under node (a ?worker import,
 // a .css import), so the image is decoded here by its own few lines.
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
@@ -103,6 +107,25 @@ function exportedDoc(): PMNode {
     ),
     n.code_block.create({ params: 'md-raw' }, schema.text('<div class="note">\n<!-- a remark kept as code -->\n</div>')),
     n.code_block.create({ params: 'python' }, schema.text('print("a plain code block")')),
+    para(
+      schema.text('Either', [schema.marks.strong.create()]),
+      schema.text('/'),
+      schema.text('or', [schema.marks.strong.create()]),
+      schema.text(': slashes Typst would read as comments, a note'),
+      n.footnote.create(null, schema.text('See a // b.')),
+      schema.text(', https://typst.app/docs/ and a // b.'),
+    ),
+    para(
+      schema.text('Links touching markup: '),
+      schema.text('https://typst.app/docs/', [schema.marks.strong.create()]),
+      schema.text(', a note after https://typst.app/a'),
+      n.footnote.create(null, schema.text('See https://typst.app/docs/reference/model/link/ for more.')),
+      schema.text(', a citation after https://typst.app/b'),
+      n.citation.create({ key: 'knuth86' }),
+      schema.text(', https://typst.app/c\u00a0glued, https://en.wikipedia.org/wiki/Knuth_Plass#Line_breaking, https://typst.app/d'),
+      schema.text('/bold', [schema.marks.strong.create()]),
+      schema.text(' and https://typst.app/e(f.'),
+    ),
     n.grid.create({ columns: [1, 2], gutter: 1 }, [
       n.grid_row.create(null, [
         n.grid_cell.create(null, [para(schema.text('Left cell.'))]),
@@ -130,6 +153,28 @@ check('the raw-Typst island prints as code', /\n(`{3,})\n#let width = 3cm\n#pani
 check('the inline Typst span prints as inline raw', source.includes('#raw("#panic(\\"an inline Typst span ran\\")")'));
 check('the Markdown island prints as code', source.includes('```\n<div class="note">\n<!-- a remark kept as code -->\n</div>\n```'));
 check('the grid and the page break are in the export', source.includes('#grid(') && source.includes('#pagebreak()'));
+check(
+  'a slash that would open or close a comment is escaped; a URL keeps its own',
+  source.includes('*Either*\\/*or*: slashes Typst would read as comments, a note#footnote[See a \\/\\/ b.], https://typst.app/docs/ and a \\/\\/ b.'),
+);
+check(
+  'a URL is written so that Typst links exactly it: bare, else #link',
+  source.includes(
+    'Links touching markup: *#link("https://typst.app/docs/")*, a note after #link("https://typst.app/a")#footnote[See https://typst.app/docs/reference/model/link/ for more.], ' +
+      'a citation after #link("https://typst.app/b")@knuth86, #link("https://typst.app/c")~glued, https://en.wikipedia.org/wiki/Knuth_Plass#Line_breaking, ' +
+      '#link("https://typst.app/d")*\\/bold* and #link("https://typst.app/e(f");.',
+  ),
+);
+const LINKED = [
+  'https://typst.app/docs/',
+  'https://typst.app/a',
+  'https://typst.app/docs/reference/model/link/',
+  'https://typst.app/b',
+  'https://typst.app/c',
+  'https://en.wikipedia.org/wiki/Knuth_Plass#Line_breaking',
+  'https://typst.app/d',
+  'https://typst.app/e(f',
+];
 check(
   'the math is native Typst: no package import, no #mi/#mitex call',
   !source.includes('#import') && !/#mi(?:tex)?\(/.test(source) && /\$e \^\(i pi \) \+  1  =  0 \$/.test(source),
@@ -159,6 +204,11 @@ const compile = (label: string, extra: string[]) => {
     /* reported below */
   }
   check(`${label}: a PDF is written`, size > 0);
+  if (!size) return;
+  // The link annotations' targets, as the PDF's literal strings hold them.
+  const targets = [...readFileSync(join(work, pdf), 'latin1').matchAll(/\/URI\s*\(((?:\\.|[^\\)])*)\)/g)].map((m) => m[1].replace(/\\(.)/g, '$1'));
+  const missing = LINKED.filter((url) => !targets.includes(url));
+  check(`${label}: each URL links to the whole URL`, missing.length === 0, `missing ${missing.join(', ')}; the PDF links ${targets.join(', ')}`);
 };
 
 compile('bundled-fonts', []);

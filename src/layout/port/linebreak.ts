@@ -1025,6 +1025,12 @@ function langAt(p: Preparation, _offset: number): string | null {
 
 /** link_prefix (typst-syntax lexer.rs) — ASCII scanning. */
 export function linkPrefix(text: string): string {
+  return linkPrefixScan(text).link;
+}
+
+/** link_prefix whole: the link and whether its brackets balance (the
+ *  lexer refuses an automatic link whose brackets do not). */
+export function linkPrefixScan(text: string): { link: string; balanced: boolean } {
   const brackets: string[] = [];
   let i = 0;
   scan: while (i < text.length) {
@@ -1060,7 +1066,7 @@ export function linkPrefix(text: string): string {
   }
   // Don't include trailing characters likely to be part of text.
   while (i > 0 && /[!,.:;?']/.test(text[i - 1])) i--;
-  return text.slice(0, i);
+  return { link: text.slice(0, i), balanced: brackets.length === 0 };
 }
 
 /** linebreak_link: break opportunities within a link. */

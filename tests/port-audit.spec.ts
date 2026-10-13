@@ -196,6 +196,59 @@ FIXTURES.push({
     '',
   ].join('\n'),
 });
+
+FIXTURES.push({
+  // Slashes Typst would read as comments anywhere in markup: `//` in prose
+  // and in a footnote, a slash beside a strong run's stars (`/*`, `*/`), a
+  // scheme Typst does not link. The print must hold every word the page
+  // shows; a URL Typst links keeps its slashes.
+  name: 'slashes.md',
+  text: [
+    '# Slashes',
+    '',
+    ...Array.from(
+      { length: 6 },
+      (_, i) =>
+        FILLER.repeat(2).trimEnd() +
+        ' Keep this // and this too: **either**/**or**, km/**h**, ftp://host/x and HTTP://EXAMPLE.COM/x as plain text. ' +
+        FILLER.repeat(1).trimEnd() +
+        ` A remark.[^${i + 1}] ` +
+        FILLER.repeat(2).trimEnd() +
+        '\n',
+    ),
+    'See https://typst.app/docs/reference//model for the rest. ' + FILLER.repeat(3).trimEnd(),
+    '',
+    ...Array.from({ length: 6 }, (_, i) => `[^${i + 1}]: See a // b. ` + FILLER.repeat(1).trimEnd()),
+  ].join('\n'),
+});
+
+FIXTURES.push({
+  // URLs Typst links on its own, touching markup: a strong and an emph URL,
+  // a footnote, a citation and a no-break space right after a URL, a URL
+  // holding `_`, `#` and `~`, one whose formatting changes partway, one
+  // with an unbalanced bracket. Typst's link ran on into each: the print
+  // failed to compile or printed what the page does not show.
+  name: 'urls.md',
+  text: [
+    '# URLs',
+    '',
+    ...Array.from(
+      { length: 6 },
+      (_, i) =>
+        FILLER.repeat(2).trimEnd() +
+        ' See **https://example.com/strong** and *https://example.com/em*, a note at https://example.com/n' +
+        `[^${i + 1}], a source at https://example.com/c[@knuth86], https://example.com/glued\u00a0here, ` +
+        'https://en.wikipedia.org/wiki/Knuth_Plass#Line~breaking, https://x.com**/path** and https://example.com/a(b too. ' +
+        FILLER.repeat(2).trimEnd() +
+        '\n',
+    ),
+    ...Array.from({ length: 6 }, (_, i) => `[^${i + 1}]: See https://example.com/foo_bar for more. ` + FILLER.repeat(1).trimEnd() + '\n'),
+    '```{=bibtex}',
+    '@book{knuth86, author = {Knuth, Donald E.}, title = {The TeXbook}, publisher = {Addison-Wesley}, year = {1986}}',
+    '```',
+    '',
+  ].join('\n'),
+});
 const TYP_HEAD = (page: string, extra = '') =>
   `#set page(${page})\n#set par(justify: true, leading: 10.215pt, spacing: 21.465pt)\n#set list(spacing: 13.34pt)\n#set enum(spacing: 13.34pt)\n${extra}#set text(font: "New Computer Modern", size: 12.5pt)\n\n`;
 const NOTES = Array.from({ length: 8 }, (_, i) => FILLER.repeat(3).trimEnd() + ` A remark.#footnote[Note ${i + 1}. ${FILLER.repeat(i % 2 ? 2 : 1).trimEnd()}] ` + FILLER.repeat(2).trimEnd()).join('\n\n');

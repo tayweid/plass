@@ -21,6 +21,7 @@ import { commentToTyp } from './editor-comments-format';
 import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config';
 import { convertMath, displayEquation, inlineEquation, mathConverterReady } from './math-convert';
 import { mathPrelude } from './typst-math-prelude';
+import { linkPrefixScan } from './layout/port/linebreak';
 
 export interface TypExportOptions {
   /** When given, receives the text offset at which each top-level block's
@@ -340,20 +341,100 @@ function imageWidthArg(node: PMNode): string {
 }
 
 export function escapeTyp(text: string): string {
-  // A literal ~ must escape — Typst reads a bare ~ as a non-breaking
-  // space, silently gluing the words around it. A real U+00A0 in the text
-  // emits AS Typst's ~, so the printed glue matches the editor's.
-  // A straight quote escapes too: unescaped, Typst would print it curly,
-  // and the document already holds the curly glyph wherever that is
-  // wanted (smart-quotes.ts) — document text equals printed text.
-  return text.replace(/[\\#$*_`@<>[\]~"']/g, (c) => '\\' + c).replace(/\u00a0/g, '~');
+  return writeLinks(escapePieces(text, true));
 }
 
-/** Table cells are serialized through a deliberately narrower path. A Typst
- * comment opener is executable even inside a content block, so keep it inert
- * without changing the established encoding of ordinary document prose. */
+/** A URL Typst links on its own, held until what follows it is known. */
+interface HeldLink {
+  url: string;
+}
+type Piece = string | HeldLink;
+
+/**
+ * Prose text as markup: escaped text, and each URL Typst links on its own
+ * (it links `http://` and `https://` wherever they stand, mid-word too, as
+ * far as its `link_prefix` reaches: the port's mirror) held as it is.
+ *
+ * A literal ~ must escape — Typst reads a bare ~ as a non-breaking
+ * space, silently gluing the words around it. A real U+00A0 in the text
+ * emits AS Typst's ~, so the printed glue matches the editor's.
+ * A straight quote escapes too: unescaped, Typst would print it curly,
+ * and the document already holds the curly glyph wherever that is
+ * wanted (smart-quotes.ts) — document text equals printed text.
+ *
+ * Typst reads `//` and `/*` as comment openers anywhere in markup,
+ * mid-word too, and a stray comment closer as an error: `a // b` prints
+ * "a", and a comment inside `*…*` or `#footnote[…]` swallows the closing
+ * delimiter, so the compile fails. A `*` in the text is escaped already;
+ * a slash beside another slash, or at either end of the text (where it
+ * meets a `*` delimiter or the next text node), prints through its
+ * escape. A URL is not escaped at all: inside the link its slashes, `_`,
+ * `#` and `~` are the link's, not markup, and an escape would end the
+ * link there. Without `links` (table cells) no URL is held, so a URL
+ * prints as text.
+ */
+function escapePieces(text: string, links: boolean): Piece[] {
+  const pieces: Piece[] = [];
+  const special = links ? /[\\#$*_`@<>[\]~"'/\u00a0]|https?:\/\//g : /[\\#$*_`@<>[\]~"'/\u00a0]/g;
+  let prose = '';
+  let from = 0;
+  for (let m = special.exec(text); m; m = special.exec(text)) {
+    const i = m.index;
+    prose += text.slice(from, i);
+    const c = m[0];
+    if (c.length > 1) {
+      const url = c + linkPrefixScan(text.slice(i + c.length)).link;
+      if (prose) pieces.push(prose);
+      prose = '';
+      pieces.push({ url });
+      from = special.lastIndex = i + url.length;
+      continue;
+    }
+    if (c === '/') {
+      const lone = i > 0 && i < text.length - 1 && text[i - 1] !== '/' && text[i + 1] !== '/';
+      prose += lone ? '/' : '\\/';
+    } else {
+      prose += c === '\u00a0' ? '~' : '\\' + c;
+    }
+    from = i + 1;
+  }
+  prose += text.slice(from);
+  if (prose) pieces.push(prose);
+  return pieces;
+}
+
+/**
+ * The markup the pieces make, each held URL written as Typst will read
+ * it, last to first so what follows each is final: bare where Typst's
+ * lexer, reading on past it, links exactly that URL; else through its
+ * link function, which prints the same. A bare URL would run on into the
+ * `*` or `_` closing a strong or emph run, a footnote, a formula, a
+ * citation or the `~` of a no-break space right after it, and one whose
+ * brackets do not balance does not compile.
+ */
+function writeLinks(pieces: Piece[]): string {
+  let after = '';
+  for (let k = pieces.length - 1; k >= 0; k--) {
+    const piece = pieces[k];
+    after = (typeof piece === 'string' ? piece : linkMarkup(piece.url, after)) + after;
+  }
+  return after;
+}
+
+function linkMarkup(url: string, after: string): string {
+  const rest = url.slice(url.indexOf('//') + 2);
+  const read = linkPrefixScan(rest + after);
+  if (read.balanced && read.link.length === rest.length) return url;
+  // A `;` ends the call where the next character would continue it (`(`,
+  // `[`, a `.` field) or be taken as its end (`;`); Typst drops it.
+  return `#link("${url}")` + (/^[;([.]/.test(after) ? ';' : '');
+}
+
+/** Table cells keep their established, narrower encoding: a URL's
+ * slashes escape like any other, so a URL in a cell prints as text, not a
+ * link. */
 function escapeTableCellText(text: string): string {
-  return escapeTyp(text).replace(/\/\//g, '\\/\\/');
+  return writeLinks(escapePieces(text, false));
 }
 
 function portableTableLabel(label: unknown): string {
@@ -373,10 +454,10 @@ function runSignature(child: PMNode): string {
   return RUN_MARKS.filter((n) => names.has(n)).join(',');
 }
 
-function wrapRun(t: string, sig: string): string {
-  if (sig.includes('strong')) t = `*${t}*`;
-  if (sig.includes('em')) t = `_${t}_`;
-  if (sig.includes('strike')) t = `#strike[${t}]`;
+function wrapRun(t: Piece[], sig: string): Piece[] {
+  if (sig.includes('strong')) t = ['*', ...t, '*'];
+  if (sig.includes('em')) t = ['_', ...t, '_'];
+  if (sig.includes('strike')) t = ['#strike[', ...t, ']'];
   return t;
 }
 
@@ -389,12 +470,12 @@ function wrapRun(t: string, sig: string): string {
  * is emitted bare — their print does not follow the surrounding marks.
  */
 function inlineToTyp(node: PMNode, tableCell = false): string {
-  let out = '';
-  let run = '';
+  const out: Piece[] = [];
+  let run: Piece[] = [];
   let sig = '';
   const flush = () => {
-    if (run) out += wrapRun(run, sig);
-    run = '';
+    if (run.length) out.push(...wrapRun(run, sig));
+    run = [];
   };
   node.forEach((child) => {
     if (child.isText && child.text) {
@@ -406,11 +487,11 @@ function inlineToTyp(node: PMNode, tableCell = false): string {
       if (child.marks.some((m) => m.type.name === 'code')) {
         // Typst has no variable-length inline raw fence. Use its string form
         // for certified table cells when a literal backtick would close `...`.
-        run += tableCell && child.text.includes('`')
+        run.push(tableCell && child.text.includes('`')
           ? `#raw(${JSON.stringify(child.text)}, block: false)`
-          : '`' + child.text + '`';
+          : '`' + child.text + '`');
       } else {
-        run += tableCell ? escapeTableCellText(child.text) : escapeTyp(child.text);
+        run.push(...escapePieces(child.text, !tableCell));
       }
       return;
     }
@@ -421,8 +502,8 @@ function inlineToTyp(node: PMNode, tableCell = false): string {
         sig = s;
       }
       const source = inlineLatex(child);
-      if (exportOpts.islands === 'print') run += inlineEquation(convertMath(source));
-      else run += tableCell ? `#mi(raw(${JSON.stringify(source)}, block: false))` : `#mi(\`${source}\`)`;
+      if (exportOpts.islands === 'print') run.push(inlineEquation(convertMath(source)));
+      else run.push(tableCell ? `#mi(raw(${JSON.stringify(source)}, block: false))` : `#mi(\`${source}\`)`);
       return;
     }
     flush();
@@ -431,30 +512,30 @@ function inlineToTyp(node: PMNode, tableCell = false): string {
       // Raw Typst: verbatim in the file; printed as inline raw, never run.
       // Inline HTML has no Typst form and is inline raw in the file too.
       const raw = exportOpts.islands === 'print' || child.attrs.lang === 'html';
-      out += raw ? `#raw(${JSON.stringify(child.attrs.src as string)})` : child.attrs.src;
+      out.push(raw ? `#raw(${JSON.stringify(child.attrs.src as string)})` : (child.attrs.src as string));
     } else if (child.type.name === 'eq_ref') {
       // Equation refs render as "(1)" to match the editor (Typst's default
       // would be "Equation 1"); figure refs keep "Figure 1".
-      out += unnumberedEqLabels.has(child.attrs.label as string)
+      out.push(unnumberedEqLabels.has(child.attrs.label as string)
         ? escapeTyp(`@${child.attrs.label}`)
         : eqLabels.has(child.attrs.label)
           ? `(#ref(<${child.attrs.label}>, supplement: none))`
-          : `@${child.attrs.label}`;
+          : `@${child.attrs.label}`);
     } else if (child.type.name === 'citation') {
       const key = child.attrs.key as string;
       // Invalid keys may exist in an old/local JSON snapshot. Keep their
       // visible text without letting them become executable Typst syntax.
-      out += isPortableCitationKey(key) ? `@${key}` : escapeTyp(`@${key}`);
+      out.push(isPortableCitationKey(key) ? `@${key}` : escapeTyp(`@${key}`));
     } else if (child.type.name === 'footnote') {
-      out += `#footnote[${inlineToTyp(child)}]`;
+      out.push(`#footnote[${inlineToTyp(child)}]`);
     } else if (child.type.name === 'hard_break') {
-      out += ' \\\n';
+      out.push(' \\\n');
     } else if (child.type.name === 'image') {
-      out += `#image("${imageSrc(child.attrs.src)}"${imageWidthArg(child)})`;
+      out.push(`#image("${imageSrc(child.attrs.src)}"${imageWidthArg(child)})`);
     }
   });
   flush();
-  return out;
+  return writeLinks(out);
 }
 
 const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code']);
@@ -1008,9 +1089,15 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
       ['footer', s.footerText, s.footerAlign, s.footerFirstPage],
     ] as Array<[string, string, string, boolean]>) {
       if (!text) continue;
-      const inner = escapeTyp(text)
-        .replace(/\\\{page\\\}|\{page\}/g, RUNNING_PAGE_TYP)
-        .replace(/\\\{section\\\}|\{section\}/g, RUNNING_SECTION_TYP);
+      // The placeholders become code before the links are written, so a
+      // URL right before one ends where it should.
+      const inner = writeLinks(
+        escapePieces(text, true).map((piece) =>
+          typeof piece === 'string'
+            ? piece.replace(/\\\{page\\\}|\{page\}/g, RUNNING_PAGE_TYP).replace(/\\\{section\\\}|\{section\}/g, RUNNING_SECTION_TYP)
+            : piece,
+        ),
+      );
       const body = `align(${align})[${inner}]`;
       pageArgs.push(first ? `${key}: ${body}` : `${key}: context if(counter(page).get().first() > 1) { ${body} }`);
     }
