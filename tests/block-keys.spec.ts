@@ -207,6 +207,10 @@ test.describe('the block keyboard', () => {
     await expect(grid).toHaveClass(/ts-grid-editing/);
     await expect(grid.locator('.ts-grid-cell-active')).toHaveCount(0);
     await expect(page.getByRole('toolbar', { name: 'Grid controls' })).toBeVisible();
+    // A stray letter on the selected grid leaves it whole and selected.
+    await page.keyboard.type('q');
+    await expect(page.locator('.ProseMirror .ts-grid')).toHaveCount(3);
+    expect((await where(page)).node).toBe('grid');
     await page.keyboard.press('Delete');
     await expect(page.locator('.ProseMirror .ts-grid')).toHaveCount(2);
   });

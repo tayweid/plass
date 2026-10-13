@@ -108,6 +108,13 @@ function memoryPlugin(): Plugin<Memory | null> {
       if (!node || !isBlock(node)) return null;
       return state.tr.setSelection(NodeSelection.create(state.doc, memory.block));
     },
+    props: {
+      // A letter typed on a selected table or grid would replace the whole
+      // block with that letter (PM's default for a NodeSelection): one stray
+      // key after Escape loses a table. Typing does nothing there; ⌫ / Delete
+      // still delete the block on purpose.
+      handleTextInput: (view) => !!selectedBlock(view.state),
+    },
   });
 }
 
