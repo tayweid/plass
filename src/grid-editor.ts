@@ -19,12 +19,8 @@ import { blockFrameSlackEm, headingScale } from './typ-serializer';
 import { atPaperSize, onPaperScale, paperScale } from './paper-scale';
 import { inkReachEm } from './font-registry';
 import { onGeometryVarsPublished, scheduleTypeset } from './typeset-plugin';
-import { formatColumnShares, parseColumnShares } from './grid-split';
 
 export const DEFAULT_GRID_GUTTER_EM = 1;
-
-// The split's grammar and display live in grid-split.ts (pure, unit-tested).
-export { formatColumnShares, parseColumnShares };
 
 /** The nearest grid around the selection, with its position, or the grid
  *  it node-selects (Escape from a cell selects the block; the pill, its
@@ -136,20 +132,8 @@ export function setGridGutter(view: EditorView, gutter: number, focus = true): b
   return true;
 }
 
-// The old bar's commands (append or drop at the right / bottom), kept as
-// exports; the pill acts at the caret (insertGridRowAt and the rest below).
-export function addGridColumn(view: EditorView): boolean {
-  const ctx = gridContext(view.state);
-  if (!ctx) return false;
-  return setGridColumns(view, [...(ctx.node.attrs.columns as number[]), 1]);
-}
-
-export function removeGridColumn(view: EditorView): boolean {
-  const ctx = gridContext(view.state);
-  if (!ctx || (ctx.node.attrs.columns as number[]).length < 2) return false;
-  return setGridColumns(view, (ctx.node.attrs.columns as number[]).slice(0, -1));
-}
-
+// Append a row at the bottom (the pill's row commands act at the caret:
+// insertGridRowAt and the rest below).
 export function addGridRow(view: EditorView): boolean {
   const ctx = gridContext(view.state);
   if (!ctx) return false;
@@ -161,14 +145,6 @@ export function addGridRow(view: EditorView): boolean {
   const firstCell = cellPosition(grid, ctx.pos, grid.childCount - 1, 0);
   tr.setSelection(TextSelection.near(tr.doc.resolve(firstCell + 1)));
   view.dispatch(tr.scrollIntoView());
-  view.focus();
-  return true;
-}
-
-export function removeGridRow(view: EditorView): boolean {
-  const ctx = gridContext(view.state);
-  if (!ctx || ctx.node.childCount < 2) return false;
-  view.dispatch(replaceGrid(view.state, ctx.pos, ctx.node.attrs, cellMatrix(ctx.node).slice(0, -1)));
   view.focus();
   return true;
 }

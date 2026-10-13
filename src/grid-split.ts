@@ -17,8 +17,6 @@ export function parseColumnShares(text: string): number[] | null {
   return parts.map((n) => Math.round((n / min) * 1000) / 1000);
 }
 
-export const formatColumnShares = (columns: number[]): string => columns.map((c) => String(c)).join(' : ');
-
 /** The smallest whole-number ratio the shares are (k·share within 0.01 of
  *  an integer ≤ 12 for some k in 1…6), or null. */
 export function splitRatio(columns: number[]): number[] | null {
