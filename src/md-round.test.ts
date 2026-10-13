@@ -514,6 +514,33 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('a loose list exports with Typst blank lines and its own item pitch', /#set list\(spacing: [\d.]+pt\)\n- one\n\n- two\n\n- three\n#set list\(spacing: [\d.]+pt\)\n/.test(typ), typ);
 }
 
+{
+  // A numbered list keeps its start: the save writes it back, and the
+  // print numbers from it as the page does (Typst: the start on the first
+  // item, `+` after it). A start of 0 is a start (markdown-it hands it
+  // over as the number 0, pandoc reads it so).
+  for (const md of ['3. a\n4. b\n', '0. zero\n1. one\n', '9. nine\n10. ten\n', '2026. year\n']) {
+    const t = trip(md);
+    const list = t.doc.firstChild!;
+    check(`a list from ${parseInt(md, 10)} keeps its start through a save`, list.type.name === 'ordered_list' && list.attrs.order === parseInt(md, 10) && t.md1 === md && t.converges, JSON.stringify([list.attrs, t.md1]));
+    const typ = docToTyp(t.doc, { islands: 'print' });
+    check(`a list from ${parseInt(md, 10)} prints from its start`, typ.includes(`\n${md.split('\n')[0]}\n${md.split('\n')[1] ? '+ ' + md.split('\n')[1].replace(/^\d+\. /, '') + '\n' : ''}`), typ.slice(typ.lastIndexOf('#set')));
+    const back = typToDoc(docToTyp(t.doc)).doc.firstChild!;
+    check(`a list from ${parseInt(md, 10)} comes back from the .typ with its start`, back.attrs.order === list.attrs.order && back.childCount === list.childCount, JSON.stringify(back.attrs));
+  }
+  check('a list from 1 still prints as + items', docToTyp(mdToDoc('1. a\n2. b\n').doc, { islands: 'print' }).includes('\n+ a\n+ b\n'));
+  // A sublist that does not start at 1 cannot interrupt its item's
+  // paragraph (CommonMark, pandoc): the item is set apart with a blank
+  // line, the list saved loose — a start of 0 as much as 5.
+  const { doc: D, paragraph: P, ordered_list: OL, bullet_list: BL, list_item: LI } = schema.nodes;
+  for (const order of [0, 5]) {
+    const nested = D.create(null, BL.create(null, LI.create(null, [P.create(null, schema.text('item')), OL.create({ order }, LI.create(null, P.create(null, schema.text('sub'))))])));
+    const md = docToMd(nested);
+    const sub = mdToDoc(md).doc.firstChild!.firstChild!.child(1);
+    check(`a sublist from ${order} stays a list from ${order}`, sub?.type.name === 'ordered_list' && sub.attrs.order === order, JSON.stringify(md));
+  }
+}
+
 // Grids: one `.columns` div per row, `.column` cells, later rows
 // `.continued`; shares canonical (each over the smallest).
 {

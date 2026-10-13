@@ -2326,8 +2326,9 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
       }
       case 'ordered_list_open': {
         const items = parseListItems(i + 1, 'ordered_list_close');
+        // markdown-it sets `start` (a number) when it is not 1 — 0 included.
         const start = t.attrGet('start');
-        return { nodes: [schema.nodes.ordered_list.create({ order: start ? +start : 1, tight: items.tight }, items.nodes)], next: items.next };
+        return { nodes: [schema.nodes.ordered_list.create({ order: start == null ? 1 : +start, tight: items.tight }, items.nodes)], next: items.next };
       }
       case 'hr':
         H.seen = true;

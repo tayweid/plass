@@ -688,6 +688,83 @@ function firstDiff(a: string, b: string): string {
 }
 
 {
+  // A numbered list's start: Typst's explicit enum marker. The export
+  // writes the start on the first item and `+` after it (Typst counts on);
+  // the reader takes the first item's number as the start, and items
+  // numbered on in sequence read the same. Plass holds one start per list,
+  // so a list whose items skip numbers is kept as a raw island, printed as
+  // written, with a warning.
+  const { doc } = typToDoc('Intro.\n\n3. a\n+ b\n');
+  const list = doc.child(1);
+  check('a numbered first item sets the start', list.type.name === 'ordered_list' && list.attrs.order === 3 && list.childCount === 2, JSON.stringify(doc.toJSON()));
+  const out = docToTyp(doc);
+  check('the export opens with the start, the items after it count on', out.includes('\n3. a\n+ b\n'), out);
+  check('a list from 3 round-trips byte for byte', out === docToTyp(typToDoc(out).doc), firstDiff(out, docToTyp(typToDoc(out).doc)));
+  const seq = typToDoc('7. a\n8. b\n9. c\n').doc;
+  check('items numbered in sequence are one list from the first', seq.childCount === 1 && seq.firstChild!.attrs.order === 7 && seq.firstChild!.childCount === 3, JSON.stringify(seq.toJSON()));
+  const zero = typToDoc('0. a\n+ b\n').doc;
+  check('a list may start at 0', zero.firstChild!.attrs.order === 0 && docToTyp(zero).includes('\n0. a\n+ b\n'), docToTyp(zero));
+  check('a list from 1 exports as + items, as before', docToTyp(typToDoc('1. a\n2. b\n').doc).includes('\n+ a\n+ b\n'));
+  const nested = typToDoc('+ outer\n  4. inner\n  + inner two\n+ outer two\n').doc;
+  const inner = nested.firstChild!.child(0).child(1);
+  check('a nested list keeps its own start', nested.firstChild!.attrs.order === 1 && inner.type.name === 'ordered_list' && inner.attrs.order === 4 && inner.childCount === 2, JSON.stringify(nested.toJSON()));
+  const nOut = docToTyp(nested);
+  check('a nested start exports on its own first item', nOut.includes('\n+ outer\n  \n  4. inner\n  + inner two\n+ outer two\n'), nOut);
+  check('a nested start round-trips byte for byte', nOut === docToTyp(typToDoc(nOut).doc), firstDiff(nOut, docToTyp(typToDoc(nOut).doc)));
+  const loose = typToDoc('12. a\n\n+ b\n').doc;
+  check('a loose list keeps its start', loose.firstChild!.attrs.order === 12 && loose.firstChild!.attrs.tight === false && docToTyp(loose).includes('\n12. a\n\n+ b\n'), docToTyp(loose));
+  const after = typToDoc('Intro.\n3. a\n').doc;
+  check('a numbered line ends the paragraph above it, as in Typst', after.childCount === 2 && after.child(1).attrs.order === 3, JSON.stringify(after.toJSON()));
+
+  const gap = typToDoc('Intro.\n\n1. a\n5. b\n+ c\n\nAfter.\n');
+  const gapKinds: string[] = [];
+  gap.doc.forEach((n) => gapKinds.push(n.type.name + (n.attrs.params ? `:${n.attrs.params as string}` : '')));
+  check('a list whose items skip numbers is a raw island', JSON.stringify(gapKinds) === JSON.stringify(['paragraph', 'code_block:typst-raw', 'paragraph']) && gap.doc.child(1).textContent === '1. a\n5. b\n+ c', JSON.stringify([gapKinds, gap.doc.child(1).textContent]));
+  check('the skipped numbers are named in a warning', gap.warnings.some((w) => /skip numbers/.test(w)), gap.warnings.join('; '));
+  check('the island is written back as it was', docToTyp(gap.doc).includes('\n1. a\n5. b\n+ c\n'), docToTyp(gap.doc));
+  const ones = typToDoc('1. a\n1. b\n');
+  check('items all numbered 1 are no list Plass can hold (Typst prints 1, 1)', ones.doc.firstChild!.type.name === 'code_block' && ones.warnings.length === 1, JSON.stringify(ones.doc.toJSON()));
+  // A marker indented at the top level is not read as a list (the reader
+  // takes markers at a line's start); it is text, and the read moves on —
+  // it once stood on such a line forever.
+  const indented = typToDoc('Intro.\n  - a\n  3. b\n\nAfter.\n').doc;
+  const texts: string[] = [];
+  indented.forEach((node) => texts.push(node.textContent));
+  check('an indented marker line is read as text and the read moves on', JSON.stringify(texts) === JSON.stringify(['Intro.', '- a', '3. b', 'After.']), JSON.stringify(texts));
+}
+
+{
+  // A line's head: text that Typst would read there as markup — a heading,
+  // list, enum or term marker — is escaped wherever a line starts (a
+  // paragraph, a list item's text, a footnote, a caption, a running
+  // header, after a hard break), so the print shows the text, and the
+  // reader hands the same text back. A heading's text starts no line.
+  const { paragraph, heading, hard_break, footnote, ordered_list, list_item, figure } = schema.nodes;
+  const text = (t: string) => schema.text(t);
+  for (const t of ['3. Not a list.', '2026. A year', '3.', '/ Term: x', '- dash', '+ plus', '= equals']) {
+    const out = docToTyp(schema.nodes.doc.create(null, paragraph.create(null, text(t))));
+    const back = typToDoc(out).doc;
+    check(`a paragraph opening ${JSON.stringify(t)} stays one`, back.childCount === 1 && back.firstChild!.type.name === 'paragraph' && back.firstChild!.textContent === t, out.split('\n\n').slice(-2).join(' | '));
+  }
+  const breaks = schema.nodes.doc.create(null, paragraph.create(null, [text('First'), hard_break.create(), text('3. b'), hard_break.create(), text('- c'), hard_break.create(), text('/ d')]));
+  const bOut = docToTyp(breaks);
+  check('the lines after hard breaks are escaped', bOut.includes('First \\\n3\\. b \\\n\\- c \\\n\\/ d\n'), bOut);
+  check('and read back as the same paragraph', JSON.stringify(typToDoc(bOut).doc.toJSON()) === JSON.stringify(breaks.toJSON()), JSON.stringify(typToDoc(bOut).doc.toJSON()));
+  const h = schema.nodes.doc.create(null, heading.create({ level: 1 }, text('1. Introduction')));
+  check('a heading\'s text is not escaped', docToTyp(h).includes('\n= 1. Introduction\n') && typToDoc(docToTyp(h)).doc.firstChild!.textContent === '1. Introduction', docToTyp(h));
+  const item = schema.nodes.doc.create(null, ordered_list.create(null, list_item.create(null, paragraph.create(null, text('- x')))));
+  check('a list item\'s text starts a line', docToTyp(item).includes('\n+ \\- x\n') && typToDoc(docToTyp(item)).doc.firstChild!.firstChild!.textContent === '- x', docToTyp(item));
+  const note = schema.nodes.doc.create(null, paragraph.create(null, [text('a'), footnote.create(null, text('3. b'))]));
+  check('a footnote\'s text starts a line', docToTyp(note).includes('a#footnote[3\\. b]') && JSON.stringify(typToDoc(docToTyp(note)).doc.toJSON()) === JSON.stringify(note.toJSON()), docToTyp(note));
+  const fig = schema.nodes.doc.create(null, figure.create({ src: 'a.png' }, text('- c')));
+  check('a caption starts a line', docToTyp(fig).includes('caption: [\\- c]') && typToDoc(docToTyp(fig)).doc.firstChild!.textContent === '- c', docToTyp(fig));
+  const footer = schema.nodes.doc.create({ settings: { ...(schema.nodes.doc.create().attrs.settings as object), footerText: '- {page} -' } }, paragraph.create(null, text('Body.')));
+  const fOut = docToTyp(footer);
+  check('a running footer starts a line', fOut.includes('footer: align(center)[\\- #context counter(page).display() -]'), fOut.split('\n')[1]);
+  check('and reads back as written', (typToDoc(fOut).doc.attrs.settings as Record<string, unknown>).footerText === '- {page} -', JSON.stringify(typToDoc(fOut).doc.attrs.settings));
+}
+
+{
   // Page chrome: a running header and footer with {page}/{section}, the
   // number at the top of the page, and the first-page flags round-trip
   // through the page line.

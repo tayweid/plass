@@ -1543,9 +1543,11 @@ body {
    marker (the widest label, for enums), then a 0.5em body-indent. The
    typeset plugin publishes the indents from shaped widths (--list-indent-N
    by nesting depth — Typst cycles •, ‣, – — and --enum-indent-N by the
-   item count's digits, set on <ol data-digits>); the fallbacks are New
-   Computer Modern's values. Markers are painted at the column's left edge,
-   out of flow, so the body measure is exactly Typst's. */
+   last label's digits, set on <ol data-digits> by list-indent.ts with the
+   counter-reset that starts the labels at the list's start); the fallbacks
+   are New Computer Modern's values. Markers are painted out of flow, so the
+   body measure is exactly Typst's: a bullet at the column's left edge, an
+   enum label at its right (Typst's number-align: end), "9." under "10.". */
 .ProseMirror ul,
 .ProseMirror ol {
   padding-left: var(--list-indent-1, 1.278em);
@@ -1574,6 +1576,30 @@ body {
 
 .ProseMirror ol[data-digits='3'] {
   padding-left: var(--enum-indent-3, 2.278em);
+}
+
+.ProseMirror ol[data-digits='4'] {
+  padding-left: var(--enum-indent-4, 2.778em);
+}
+
+.ProseMirror ol[data-digits='5'] {
+  padding-left: var(--enum-indent-5, 3.278em);
+}
+
+.ProseMirror ol[data-digits='6'] {
+  padding-left: var(--enum-indent-6, 3.778em);
+}
+
+.ProseMirror ol[data-digits='7'] {
+  padding-left: var(--enum-indent-7, 4.278em);
+}
+
+.ProseMirror ol[data-digits='8'] {
+  padding-left: var(--enum-indent-8, 4.778em);
+}
+
+.ProseMirror ol[data-digits='9'] {
+  padding-left: var(--enum-indent-9, 5.278em);
 }
 
 .ProseMirror li {
@@ -1607,17 +1633,11 @@ body {
   counter-increment: plass-enum;
 }
 
+/* The label ends the body-indent short of the body, whatever its width. */
 .ProseMirror ol > li::before {
   content: counter(plass-enum) '.';
-  left: calc(-1 * var(--enum-indent-1, 1.278em));
-}
-
-.ProseMirror ol[data-digits='2'] > li::before {
-  left: calc(-1 * var(--enum-indent-2, 1.778em));
-}
-
-.ProseMirror ol[data-digits='3'] > li::before {
-  left: calc(-1 * var(--enum-indent-3, 2.278em));
+  right: calc(100% + 0.5em);
+  white-space: nowrap;
 }
 
 .ProseMirror li > p {

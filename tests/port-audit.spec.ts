@@ -176,6 +176,68 @@ FIXTURES.push({
 });
 
 FIXTURES.push({
+  // Numbered lists that start past 1: each prints from its start, its label
+  // column as wide as its last label (9 to 10, 98 to 100, 2026), a list
+  // from 0, a nested list with its own start, one long enough to cross a
+  // page. Paragraphs that only look like list or term items, opening the
+  // paragraph or a line after a hard break, and a running footer opening
+  // with a dash print as the text they are.
+  name: 'lists-start.md',
+  text: [
+    '---',
+    'plass:',
+    '  footer: {text: "- {page} -", align: center}',
+    '---',
+    '',
+    '# Numbering',
+    '',
+    FILLER.repeat(2).trimEnd(),
+    '',
+    '3. ' + FILLER.repeat(2).trimEnd(),
+    '4. ' + FILLER.repeat(1).trimEnd(),
+    '',
+    FILLER.repeat(1).trimEnd(),
+    '',
+    '9. Nine: ' + FILLER.repeat(2).trimEnd(),
+    '10. Ten: ' + FILLER.repeat(2).trimEnd(),
+    '',
+    FILLER.repeat(2).trimEnd(),
+    '',
+    '98. ' + FILLER.repeat(1).trimEnd(),
+    '99. ' + FILLER.repeat(2).trimEnd(),
+    '100. ' + FILLER.repeat(1).trimEnd(),
+    '',
+    FILLER.repeat(1).trimEnd(),
+    '',
+    '0. Zero: ' + FILLER.repeat(1).trimEnd(),
+    '1. One: ' + FILLER.repeat(1).trimEnd(),
+    '',
+    FILLER.repeat(1).trimEnd(),
+    '',
+    '2026. ' + FILLER.repeat(2).trimEnd(),
+    '',
+    '- ' + FILLER.repeat(1).trimEnd(),
+    '',
+    '  5. Nested from five: ' + FILLER.repeat(1).trimEnd(),
+    '  6. ' + FILLER.repeat(1).trimEnd(),
+    '',
+    '- ' + FILLER.repeat(1).trimEnd(),
+    '',
+    '3\\. Only looks like a list item: ' + FILLER.repeat(2).trimEnd(),
+    '',
+    '/ Only looks like a term: ' + FILLER.repeat(2).trimEnd(),
+    '',
+    'A line ends here.\\',
+    '\\- And this one only looks like a bullet: ' + FILLER.repeat(2).trimEnd(),
+    '',
+    ...Array.from({ length: 5 }, () => FILLER.repeat(4).trimEnd() + '\n'),
+    ...Array.from({ length: 6 }, (_, i) => `${i + 12}. ` + FILLER.repeat(2 + (i % 2)).trimEnd()),
+    '',
+    ...Array.from({ length: 3 }, () => FILLER.repeat(4).trimEnd() + '\n'),
+  ].join('\n'),
+});
+
+FIXTURES.push({
   name: 'headings.md',
   text: [
     '# A first-level heading long enough to wrap onto a second line of the page at the default size',

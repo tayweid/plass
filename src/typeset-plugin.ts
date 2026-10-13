@@ -1948,9 +1948,10 @@ class TypesetView {
    * cannot know: list body indents (the marker column — the marker's shaped
    * width — plus Typst's 0.5em body-indent; "‣" is not in the body fonts,
    * so its width is the compiler's fallback face's, a constant), enum
-   * indents by label digit count, and the table's block spacing (Typst's
-   * Auto spacing = paragraph spacing, measured frame to frame; the editor's
-   * box has the paragraph's descent below and cap slack above to absorb).
+   * indents by the digit count of a list's last label (list-indent.ts),
+   * and the table's block spacing (Typst's Auto spacing = paragraph
+   * spacing, measured frame to frame; the editor's box has the paragraph's
+   * descent below and cap slack above to absorb).
    * Idempotent per (font, size, spacing) key; the CSS carries fallbacks
    * until the port is up.
    */
@@ -1968,7 +1969,8 @@ class TypesetView {
       root.setProperty('--list-indent-1', px(bullet + bodyIndent));
       root.setProperty('--list-indent-2', px(LIST_TRIANGLE_EM * s.sizePt + bodyIndent));
       root.setProperty('--list-indent-3', px((shapedWidthPt('–', font.portKeys.regular, s.sizePt) ?? 0.5 * s.sizePt) + bodyIndent));
-      for (const digits of [1, 2, 3]) {
+      // Labels of up to nine digits, Markdown's bound on a start number.
+      for (let digits = 1; digits <= 9; digits++) {
         const label = '1'.padEnd(digits, '0') + '.';
         root.setProperty(`--enum-indent-${digits}`, px((shapedWidthPt(label, font.portKeys.regular, s.sizePt) ?? 0) + bodyIndent));
       }

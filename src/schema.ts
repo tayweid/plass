@@ -278,6 +278,12 @@ const tables = tableNodes({
 });
 
 const listNodes = addListNodes(base.spec.nodes, 'paragraph block*', 'block');
+/** A numbered list's start from an `<ol start>`: a whole number Markdown
+ *  can write back (nine digits at most, CommonMark's bound), else 1. */
+const listStart = (el: HTMLElement) => {
+  const raw = el.getAttribute('start')?.trim() ?? '';
+  return /^\d{1,9}$/.test(raw) ? Number(raw) : 1;
+};
 /** Item pitch. Typst spaces a tight list's items by leading (Plass: leading +
  *  0.25em, the calibrated `list.spacing`) and a loose one's by paragraph
  *  spacing; Markdown reads looseness from blank lines between items, Typst
@@ -294,7 +300,7 @@ const withTight = (name: 'bullet_list' | 'ordered_list') => {
         getAttrs: (el: HTMLElement | string) => {
           if (typeof el === 'string') return { tight: true };
           const attrs: Record<string, unknown> = { tight: el.getAttribute('data-tight') !== '0' };
-          if (name === 'ordered_list') attrs.order = el.hasAttribute('start') ? +el.getAttribute('start')! : 1;
+          if (name === 'ordered_list') attrs.order = listStart(el);
           return attrs;
         },
       },

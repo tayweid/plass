@@ -62,9 +62,10 @@ export function buildInputRules(): Plugin {
     wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote),
     // - or * bullet list
     wrappingInputRule(/^\s*([-*])\s$/, schema.nodes.bullet_list),
-    // 1. ordered list
+    // 1. ordered list, from the number typed (nine digits at most, as in
+    // Markdown)
     wrappingInputRule(
-      /^(\d+)\.\s$/,
+      /^(\d{1,9})\.\s$/,
       schema.nodes.ordered_list,
       (m) => ({ order: +m[1] }),
       (m, node) => node.childCount + node.attrs.order === +m[1],

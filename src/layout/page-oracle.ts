@@ -131,21 +131,20 @@ export function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
       units.push({ kind: 'opaque', pos, type: 'abstract-label' });
       node.forEach((child, off) => push(child, pos + 1 + off, false, target));
     } else if (node.type.name === 'bullet_list' || node.type.name === 'ordered_list' || node.type.name === 'blockquote') {
-      // Ordered markers are deterministic per item: Typst's default enum
-      // numbering ("1.", "2.", …) restarts at 1 for every list (including a
-      // nested one), regardless of the export's own item-`order` attr — the
-      // exporter (typ-serializer's `+` items) never emits a start override,
-      // so this counts along with what actually gets compiled. Only the
-      // item's FIRST block carries the marker; a second paragraph or a
-      // nested list inside the same list_item has none.
+      // Ordered markers are deterministic per item: every list (a nested
+      // one included) counts on from its own start, its `order` attr, which
+      // the exporter writes on the first item (`3.`, then `+` items), so the
+      // markers Typst prints are known exactly. Only the item's FIRST block
+      // carries the marker; a second paragraph or a nested list inside the
+      // same list_item has none.
       const ordered = node.type.name === 'ordered_list';
-      let itemIndex = 0;
+      let itemNumber = ordered ? (node.attrs.order as number) - 1 : 0;
       node.forEach((child, off) => {
         const childPos = pos + 1 + off;
         if (child.type.name === 'list_item') {
-          itemIndex++;
+          itemNumber++;
           const itemMarker: boolean | string = ordered
-            ? `${itemIndex}.`
+            ? `${itemNumber}.`
             : node.type.name === 'bullet_list';
           child.forEach((g, goff) => push(g, childPos + 1 + goff, goff === 0 ? itemMarker : false, target));
         } else {
