@@ -2053,6 +2053,29 @@ function emptyParagraphsDoc(): PMNode {
   check('the Markdown keeps the slashes as written', r.md1 === md && r.converges, JSON.stringify(r.md1));
 }
 
+// Typst links a URL on its own, as far as the link's characters run: on
+// past the `*` closing a strong run, a footnote's `#`, the `~` of a
+// no-break space. The print writes a URL bare where Typst links exactly
+// it, else as #link("…"), which prints the same; the Markdown keeps every
+// URL as written.
+{
+  const md =
+    'See **https://example.com** and *https://example.com/b*.\n\n' +
+    'A note at https://example.com[^1] then.\n\n' +
+    'Glue https://example.com\u00a0here, https://example.com/foo_bar#c~d, and https://example.com/a(b too.\n\n' +
+    'Path https://x.com**/path**, word https://example.com**bold**.\n\n' +
+    '**See https://example.com.** After.\n\n' +
+    '[^1]: See https://example.com/foo_bar for more.\n';
+  const r = trip(md);
+  const typ = docToTyp(r.doc, { islands: 'print' });
+  check('a strong or emph URL prints through #link, its delimiters closed', typ.includes('\nSee *#link("https://example.com")* and _#link("https://example.com/b")_.\n'), typ);
+  check('a URL before a footnote ends there; one in the footnote stays bare', typ.includes('\nA note at #link("https://example.com")#footnote[See https://example.com/foo_bar for more.] then.\n'), typ);
+  check('a URL before a no-break space ends there; a URL keeps its _ # ~', typ.includes('\nGlue #link("https://example.com")~here, https://example.com/foo_bar#c~d, and #link("https://example.com/a(b") too.\n'), typ);
+  check('a URL ends where the formatting changes', typ.includes('\nPath #link("https://x.com")*\\/path*, word #link("https://example.com")*bold*.\n'), typ);
+  check('the period after a link in a strong run prints', typ.includes('\n*See #link("https://example.com");.* After.\n'), typ);
+  check('the Markdown keeps every URL as written', r.md1 === md && r.converges, JSON.stringify(r.md1));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

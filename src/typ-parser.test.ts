@@ -505,6 +505,48 @@ function firstDiff(a: string, b: string): string {
   check('slash escaping round-trips byte-identically', again === out, firstDiff(out, again));
 }
 
+// --- 17c. a URL Typst links ends where the URL does ---
+// Typst links `http://` and `https://` on its own, as far as the link's
+// characters run: on past a `*` or `_` delimiter, a footnote's `#`, the `~`
+// of a no-break space. A URL is written bare where Typst links exactly it
+// (its `_`, `#` and `~` unescaped: inside the link they are the link's),
+// else as #link("…"), which prints the same.
+{
+  const { doc: D, paragraph: P, footnote: FN, math_inline: M, table: T, table_row: R, table_cell: C } = schema.nodes;
+  const plain = (t: string) => schema.text(t);
+  const bold = (t: string) => schema.text(t, [schema.marks.strong.create()]);
+  const em = (t: string) => schema.text(t, [schema.marks.em.create()]);
+  const doc = D.create({ settings: { ...DEFAULT_SETTINGS, headerText: 'Notes at https://example.com/n_1{page}' } }, [
+    P.create(null, [plain('See '), bold('https://example.com'), plain(' and '), em('https://example.com/b'), plain('.')]),
+    P.create(null, [plain('A note at https://example.com'), FN.create(null, plain('See https://example.com/foo_bar for more.')), plain(' then.')]),
+    P.create(null, plain('Glue https://example.com\u00a0here, https://example.com/a_b#c~d*e@f$g, and https://example.com/a(b too.')),
+    P.create(null, [plain('Path https://x.com'), bold('/path'), plain(', word https://example.com'), bold('bold'), plain('.')]),
+    P.create(null, [bold('See https://example.com.'), plain(' After https://example.com; then a formula https://example.com'), M.create({ src: 'x^2' }), plain(' now.')]),
+    T.create(null, [R.create(null, [C.create(null, P.create(null, [plain('https://x.com/'), bold('b')]))])]),
+  ]);
+  const out = docToTyp(doc);
+  check('a URL in a strong or emph run ends before its delimiter', out.includes('\nSee *#link("https://example.com")* and _#link("https://example.com/b")_.\n'), out);
+  check('a URL ends before a footnote; one inside a footnote stays bare', out.includes('\nA note at #link("https://example.com")#footnote[See https://example.com/foo_bar for more.] then.\n'), out);
+  check('a URL ends before a no-break space; its own _ # ~ * @ $ are the link\'s; unbalanced brackets take the link function', out.includes('\nGlue #link("https://example.com")~here, https://example.com/a_b#c~d*e@f$g, and #link("https://example.com/a(b") too.\n'), out);
+  check('a URL ends where the formatting changes', out.includes('\nPath #link("https://x.com")*\\/path*, word #link("https://example.com")*bold*.\n'), out);
+  check('a ; keeps the period after a link in a strong run; a ; or a formula after a URL', out.includes('\n*See #link("https://example.com");.* After https://example.com; then a formula #link("https://example.com")#mi(`x^2`) now.\n'), out);
+  check('a URL in a table cell stays text, its slashes all escaped', out.includes('[https:\\/\\/x.com\\/*b*]'), out);
+  check('a URL right before {page} in the running header ends before it', out.includes('[Notes at #link("https://example.com/n_1")#context counter(page).display()]'), out);
+  const back = typToDoc(out).doc;
+  check('every URL reads back as written', JSON.stringify(back.content.toJSON()) === JSON.stringify(doc.content.toJSON()), firstDiff(JSON.stringify(back.content.toJSON(), null, 1), JSON.stringify(doc.content.toJSON(), null, 1)));
+  check('the running header\'s URL reads back as written', back.attrs.settings.headerText === 'Notes at https://example.com/n_1{page}', back.attrs.settings.headerText);
+  const again = docToTyp(back);
+  check('URLs round-trip byte-identically', again === out, firstDiff(out, again));
+  // Typst prints a bare link as written, so the reader keeps its `~`,
+  // `--` and quotes; an older file whose URL ran into the closing `*`
+  // (Typst refused it) still reads as a strong URL.
+  const typed = typToDoc('Read https://example.com/a--b~c\'d and *https://example.com*.\n').doc;
+  check('a bare link reads as Typst prints it', typed.textContent === 'Read https://example.com/a--b~c\'d and https://example.com.', typed.textContent);
+  check('an older strong URL still reads as strong', typed.firstChild!.child(1).marks.some((m) => m.type.name === 'strong'), JSON.stringify(typed.firstChild!.toJSON()));
+  const footnoted = typToDoc('A note.#footnote[See https://example.com/a for more.] After.\n').doc;
+  check('a URL\'s // inside a footnote is no comment', footnoted.firstChild!.childCount === 3 && footnoted.firstChild!.child(1).type.name === 'footnote', JSON.stringify(footnoted.firstChild!.toJSON()));
+}
+
 // --- 18. solution block: the #block(stroke: (left: …)) preset round-trips as kind 'solution' ---
 {
   const doc = F.solutionDoc();

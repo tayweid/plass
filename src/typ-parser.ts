@@ -24,6 +24,7 @@ import { normalizeTableColumns } from './table-geometry';
 import { parseBibTeX } from './bibtex';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 import { RUNNING_PAGE_TYP, RUNNING_SECTION_TYP } from './typ-serializer';
+import { linkPrefixScan } from './layout/port/linebreak';
 
 export interface TypImport {
   doc: PMNode;
@@ -199,7 +200,12 @@ export function typToDoc(src: string): TypImport {
         ).exec(m[1]);
         if (!run) continue;
         const text = unescapeTypText(
-          run[3].split(RUNNING_SECTION_TYP).join('{section}').split(RUNNING_PAGE_TYP).join('{page}'),
+          run[3]
+            .split(RUNNING_SECTION_TYP)
+            .join('{section}')
+            .split(RUNNING_PAGE_TYP)
+            .join('{page}')
+            .replace(LINK_CALL_GLOBAL, '$1'),
         );
         if (key === 'header') {
           settings.headerFirstPage = !run[1];
@@ -1433,6 +1439,11 @@ function matchBracket(src: string, open: number): number {
       j++;
       continue;
     }
+    const link = c === 'h' ? autoLinkEnd(src, j) : 0;
+    if (link) {
+      j = link - 1;
+      continue;
+    }
     if (c === '"' || c === '`') {
       j = quotedEnd(src, j);
       continue;
@@ -1452,8 +1463,23 @@ function matchBracket(src: string, open: number): number {
   return -1;
 }
 
-/** Find the next unescaped occurrence of `ch` at or after `from`. */
+/** Find the next unescaped occurrence of `ch` at or after `from`, past
+ * the links Typst reads (a URL's `_` or `*` is the link's). An older file
+ * whose URL runs into its own closing delimiter, which Typst refused,
+ * reads as it always has: the first unescaped one. */
 function findClose(src: string, from: number, ch: string): number {
+  for (let j = from; j < src.length; j++) {
+    if (src[j] === '\\') {
+      j++;
+      continue;
+    }
+    const link = src[j] === 'h' ? autoLinkEnd(src, j) : src[j] === '#' ? (linkCallAt(src, j)?.end ?? 0) : 0;
+    if (link) {
+      j = link - 1;
+      continue;
+    }
+    if (src[j] === ch) return j;
+  }
   for (let j = from; j < src.length; j++) {
     if (src[j] === '\\') {
       j++;
@@ -1462,6 +1488,30 @@ function findClose(src: string, from: number, ch: string): number {
     if (src[j] === ch) return j;
   }
   return -1;
+}
+
+/** End of the link Typst's markup lexer reads at `i`, else 0. It links
+ * `http://` and `https://` wherever they stand, mid-word too, as far as
+ * its link_prefix reaches, and prints the link as written: its `~`, `--`,
+ * quotes, `_` and `*` are the link's, not markup. One whose brackets do
+ * not balance Typst refuses; it is read as the text it stands as. */
+function autoLinkEnd(src: string, i: number): number {
+  const scheme = src.startsWith('http://', i) ? 7 : src.startsWith('https://', i) ? 8 : 0;
+  if (!scheme) return 0;
+  const { link, balanced } = linkPrefixScan(src.slice(i + scheme));
+  return balanced ? i + scheme + link.length : 0;
+}
+
+/** The serializer's explicit link, `#link("https://…")` with no body,
+ * which prints its URL (and the `;` Typst drops after it); one with a
+ * body or more arguments is raw Typst. */
+const LINK_CALL = /#link\("(https?:\/\/[^"\\\n]*)"\)(?:;|(?![([]|\.[\p{ID_Start}_]))/uy;
+const LINK_CALL_GLOBAL = new RegExp(LINK_CALL.source, 'gu');
+
+function linkCallAt(src: string, i: number): { url: string; end: number } | null {
+  LINK_CALL.lastIndex = i;
+  const m = LINK_CALL.exec(src);
+  return m ? { url: m[1], end: i + m[0].length } : null;
 }
 
 /**
@@ -1527,6 +1577,19 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
 
   while (i < src.length) {
     const ch = src[i];
+
+    const linkEnd = ch === 'h' ? autoLinkEnd(src, i) : 0;
+    if (linkEnd) {
+      buf += src.slice(i, linkEnd);
+      i = linkEnd;
+      continue;
+    }
+    const linkCall = ch === '#' ? linkCallAt(src, i) : null;
+    if (linkCall) {
+      buf += linkCall.url;
+      i = linkCall.end;
+      continue;
+    }
 
     // Typst's ~ is a non-breaking space.
     if (ch === '~') {
