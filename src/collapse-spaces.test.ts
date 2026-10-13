@@ -2,10 +2,12 @@
 // exactly as if the whole document were rescanned, while actually visiting
 // only the blocks an edit touched.
 // Run: npx tsx src/collapse-spaces.test.ts
-import { EditorState } from 'prosemirror-state';
-import { Fragment } from 'prosemirror-model';
+import { EditorState, TextSelection } from 'prosemirror-state';
+import { Fragment, Slice } from 'prosemirror-model';
+import { history, undo } from 'prosemirror-history';
 import { schema } from './schema';
 import { collapseSpaces } from './collapse-spaces';
+import { FROM_DISK } from './reload-in-place';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = '') {
@@ -174,6 +176,54 @@ console.log('collapse-spaces:');
   const s3 = EditorState.create({ doc: schema.nodes.doc.create(null, [glue]), plugins: [collapseSpaces()] });
   const after3 = s3.apply(s3.tr.insertText('!', 1));
   check('a pure nbsp run after a formula stays', after3.doc.firstChild!.child(2).text === '\u00a0\u00a0b', JSON.stringify(after3.doc.firstChild!.child(2).text));
+}
+
+{
+  // A paragraph holding only a no-break space is a blank line (how the
+  // Markdown writer saves an empty paragraph): what is typed, pasted or
+  // inserted into it replaces the space, wherever the caret was, instead
+  // of following it as a one-space indent. Not a reload from disk, a
+  // composition in progress, or a space with company.
+  const NB = '\u00a0';
+  const texts = (s: EditorState) => {
+    const out: string[] = [];
+    s.doc.forEach((n) => out.push(n.textContent));
+    return JSON.stringify(out);
+  };
+  const blank = state(p('Q1.'), p(NB), p('Q2.'));
+  // The blank line's space is 6..7 (Q1. is 0..5, the blank line 5..8).
+  const after = blank.apply(blank.tr.insertText('A', 7));
+  check('typed after a blank line\'s space, the text replaces it', texts(after) === '["Q1.","A","Q2."]', texts(after));
+  const before = blank.apply(blank.tr.insertText('A', 6));
+  check('typed before it, too', texts(before) === '["Q1.","A","Q2."]', texts(before));
+  const math = blank.apply(blank.tr.insert(7, schema.nodes.math_inline.create({ src: 'x' })));
+  check('an inserted formula replaces it', math.doc.child(1).childCount === 1 && math.doc.child(1).firstChild!.type.name === 'math_inline', JSON.stringify(math.doc.child(1).toJSON()));
+  const pasted = blank.apply(blank.tr.setSelection(TextSelection.create(blank.doc, 7)).replaceSelection(new Slice(Fragment.fromArray([p('c'), p('d')]), 1, 1)).setMeta('uiEvent', 'paste'));
+  check('pasted paragraphs replace it', texts(pasted) === '["Q1.","c","d","Q2."]', texts(pasted));
+  const split = blank.apply(blank.tr.split(7));
+  check('Enter on a blank line leaves it blank', texts(split) === `["Q1.","${NB}","","Q2."]`, texts(split));
+  const over = blank.apply(blank.tr.insertText('A', 6, 7));
+  check('typing over the space is an ordinary replacement', texts(over) === '["Q1.","A","Q2."]', texts(over));
+  const undone = (() => {
+    const s = EditorState.create({ doc: blank.doc, plugins: [history(), collapseSpaces()] });
+    const typed = s.apply(s.tr.insertText('A', 7));
+    let back = typed;
+    undo(typed, (tr) => {
+      back = typed.apply(tr);
+    });
+    return [typed, back];
+  })();
+  check('one undo puts the blank line back', texts(undone[0]) === '["Q1.","A","Q2."]' && texts(undone[1]) === texts(blank), texts(undone[1]));
+  const disk = blank.apply(blank.tr.insertText('A', 7).setMeta(FROM_DISK, true));
+  check('a reload from disk is left as the file has it', texts(disk) === `["Q1.","${NB}A","Q2."]`, texts(disk));
+  const composing = blank.apply(blank.tr.insertText('A', 7).setMeta('composition', 1));
+  check('a composition in progress is left alone', texts(composing) === `["Q1.","${NB}A","Q2."]`, texts(composing));
+  const glue = state(p(`5${NB}cakes`));
+  const typedGlue = glue.apply(glue.tr.insertText('!', 8));
+  check('a no-break space between words is glue and stays', texts(typedGlue) === `["5${NB}cakes!"]`, texts(typedGlue));
+  const code = EditorState.create({ doc: schema.nodes.doc.create(null, [schema.nodes.paragraph.create(null, schema.text(NB, [schema.marks.code.create()]))]), plugins: [collapseSpaces()] });
+  const typedCode = code.apply(code.tr.insertText('x', 2));
+  check('a code no-break space is no blank line', typedCode.doc.firstChild!.textContent === `${NB}x`, JSON.stringify(typedCode.doc.firstChild!.textContent));
 }
 
 if (failures) {

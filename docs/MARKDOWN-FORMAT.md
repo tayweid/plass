@@ -550,9 +550,10 @@ content.
     Plass read it as a paragraph holding that space, which prints as an
     empty line. Most editors show the character as a space, so the line
     looks blank. Plass writes every empty paragraph this way, and reads
-    the line back as a paragraph holding the space, not as an empty one:
-    text typed into that line later keeps the space beside it, which
-    prints as a small indent when it comes first.
+    the line back as a paragraph holding the space; text typed into that
+    line in Plass replaces the space. In a text editor, delete the space
+    when you write on such a line: text after it prints with a small
+    indent.
 
 ## What the first save rewrites
 

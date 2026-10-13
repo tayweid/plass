@@ -172,7 +172,10 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   normalizer recognizes that artifact by how it arrives (a typing
   transaction inserting exactly one nbsp, tracked in plugin state) and
   turns it into a space once a character follows it. An nbsp that came
-  from a `~` in the file, or was pasted, is glue and stays. The importers and the
+  from a `~` in the file, or was pasted, is glue and stays, unless it is
+  a paragraph's only character: that is a blank line (the `.md` writer's
+  empty paragraph), and what is typed into it replaces the nbsp
+  (`blankLineSpaces`; never in a reload from disk). The importers and the
   edit-time normalizer (`src/collapse-spaces.ts`) keep the document in
   printed form. Any new Typst text shorthand must be handled the same way or the
   browser presentation and the compiled snapshot fight (visible as jitter).

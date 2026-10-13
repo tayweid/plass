@@ -42,7 +42,9 @@ const KEY_CONTINUES = /^(?:[\p{L}\p{N}_]|[:.#$%&\-+?<>~/][\p{L}\p{N}_])/u;
  *  which pandoc and the reader read as a paragraph holding that space.
  *  Typst prints the two alike, as one blank line (`~`): the writing room
  *  a handout leaves, a gap the writer typed. (A blank line in Markdown
- *  only separates blocks.) */
+ *  only separates blocks.) The editor takes that paragraph for a blank
+ *  line too: what is typed into it replaces the space (collapse-spaces.ts,
+ *  blankLineSpaces). */
 const BLANK = '\u00a0';
 
 /** A paragraph that prints as one blank line: nothing in it, or nothing but

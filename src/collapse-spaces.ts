@@ -6,6 +6,7 @@ import { Plugin, PluginKey, type Transaction } from 'prosemirror-state';
 import { ReplaceStep } from 'prosemirror-transform';
 import type { Mark, Node as PMNode } from 'prosemirror-model';
 import { beforeAfterNode, createQuoteState, smartenText } from './smart-quotes';
+import { FROM_DISK } from './reload-in-place';
 
 /**
  * Typst collapses runs of ordinary spaces to a single space, so a document
@@ -13,7 +14,8 @@ import { beforeAfterNode, createQuoteState, smartenText } from './smart-quotes';
  * oracle would forever disagree about the paragraph's text. Keep the
  * document in printed form: after any edit, collapse space runs in plain
  * text (code blocks and code-marked text keep their spaces — raw preserves
- * them in Typst too). Non-breaking spaces are meaningful and untouched.
+ * them in Typst too). Non-breaking spaces are meaningful and untouched,
+ * but for a blank line's (blankLineSpaces).
  */
 /**
  * The trailing space run a footnote marker swallows. Typst's footnote show
@@ -85,6 +87,47 @@ function typedNbspInsertions(tr: Transaction): number[] {
   return found;
 }
 
+/** A paragraph whose one character is a no-break space: a blank line. */
+function blankLine(node: PMNode): boolean {
+  const only = node.childCount === 1 ? node.firstChild! : null;
+  return node.type.name === 'paragraph' && !!only?.isText && only.text === '\u00a0' && !only.marks.some((m) => m.type.name === 'code');
+}
+
+/**
+ * The no-break spaces of blank lines that took content in `trs`, as
+ * positions in `doc` (the document after them). A paragraph holding only
+ * one no-break space is a blank line: the Markdown writer's form of an
+ * empty paragraph (md-serializer's BLANK), read back as a paragraph
+ * holding that space. To the writer the line is empty, so what is typed,
+ * pasted or inserted into it replaces the space instead of following it
+ * as a one-space indent. A no-break space typed alone on a line is the
+ * same blank line once saved, so it is not told apart. Edits only: never
+ * a reload from disk (the document must stay what the file says), a
+ * composition in progress, or a change kept out of the history.
+ */
+function blankLineSpaces(trs: readonly Transaction[], doc: PMNode): number[] {
+  const found = new Set<number>();
+  trs.forEach((tr, t) => {
+    if (tr.getMeta(FROM_DISK) || tr.getMeta('composition') !== undefined || tr.getMeta('addToHistory') === false) return;
+    tr.steps.forEach((step, i) => {
+      if (!(step instanceof ReplaceStep) || !step.slice.size) return;
+      const $from = tr.docs[i].resolve(step.from);
+      const start = $from.start();
+      // Content lands beside the space, in its paragraph, and not over it.
+      if (!blankLine($from.parent) || step.to > $from.end() || (step.from === start && step.to > start)) return;
+      let { pos, deleted } = tr.mapping.slice(i).mapResult(start, 1);
+      for (const later of trs.slice(t + 1)) {
+        const r = later.mapping.mapResult(pos, 1);
+        pos = r.pos;
+        deleted ||= r.deleted;
+      }
+      if (!deleted) found.add(pos);
+    });
+  });
+  // Still that space, with something else in its paragraph now.
+  return [...found].filter((pos) => pos < doc.content.size && doc.textBetween(pos, pos + 1) === '\u00a0' && doc.resolve(pos).parent.content.size > 1);
+}
+
 /** Typst text shorthands (--- em, -- en — including the "–-" state
  * mid-way through typing an em dash — a whitespace-preceded hyphen before
  * a digit, and ...) and the glyphs Typst prints for them. The document
@@ -111,12 +154,20 @@ export function collapseSpaces(): Plugin {
       },
     },
     appendTransaction(trs, _old, state) {
+      // A blank line that took content gives up its space first; what
+      // follows reads the document without it (`doc`), its positions
+      // mapped through that deletion.
+      const tr = state.tr;
+      for (const pos of blankLineSpaces(trs, state.doc).sort((a, b) => b - a)) tr.delete(pos, pos + 1);
+      const doc = tr.doc;
       // Browser-written non-breaking spaces become plain spaces once a
       // character follows them (see typedNbspKey).
       const nbspSwaps: Array<[number, number, string, readonly Mark[]]> = [];
-      for (const p of typedNbspKey.getState(state) ?? []) {
-        const $p = state.doc.resolve(p);
-        const next = state.doc.textBetween(p + 1, Math.min(p + 2, $p.end()));
+      for (const typed of typedNbspKey.getState(state) ?? []) {
+        const { pos: p, deleted } = tr.mapping.mapResult(typed, 1);
+        if (deleted) continue;
+        const $p = doc.resolve(p);
+        const next = doc.textBetween(p + 1, Math.min(p + 2, $p.end()));
         if (next && !/[\s\u00a0]/.test(next)) nbspSwaps.push([p, p + 1, ' ', $p.marks()]);
       }
       // Only the edited textblocks can hold new collapsible runs — every
@@ -127,19 +178,21 @@ export function collapseSpaces(): Plugin {
       // block is always rescanned in full (the regexes are context-sensitive
       // only within a block).
       let ranges: Array<[number, number]> = [];
-      for (const tr of trs) {
-        if (!tr.docChanged) continue;
+      for (const edit of [...trs, tr]) {
+        if (!edit.docChanged) continue;
         if (ranges.length) {
-          ranges = ranges.map(([from, to]) => [tr.mapping.map(from, -1), tr.mapping.map(to, 1)]);
+          ranges = ranges.map(([from, to]) => [edit.mapping.map(from, -1), edit.mapping.map(to, 1)]);
         }
-        tr.mapping.maps.forEach((stepMap, i) => {
-          const rest = tr.mapping.slice(i + 1);
+        // The blank lines' deletions only move the edits' ranges.
+        if (edit === tr) continue;
+        edit.mapping.maps.forEach((stepMap, i) => {
+          const rest = edit.mapping.slice(i + 1);
           stepMap.forEach((_oldStart, _oldEnd, newStart, newEnd) => {
             ranges.push([rest.map(newStart, -1), rest.map(newEnd, 1)]);
           });
         });
       }
-      if (!ranges.length && !nbspSwaps.length) return null;
+      if (!ranges.length && !nbspSwaps.length) return tr.docChanged ? tr : null;
       const swaps: Array<[number, number, string, readonly Mark[]]> = [...nbspSwaps];
       const scanBlock = (node: PMNode, pos: number) => {
         // Smart quotes are decided per paragraph, looking back over every
@@ -194,11 +247,11 @@ export function collapseSpaces(): Plugin {
         });
       };
       const scanned = new Set<number>();
-      const size = state.doc.content.size;
+      const size = doc.content.size;
       for (const [rawFrom, rawTo] of ranges) {
         const from = Math.max(0, Math.min(rawFrom, size));
         const to = Math.min(Math.max(rawTo, from), size);
-        state.doc.nodesBetween(from, to, (node, pos) => {
+        doc.nodesBetween(from, to, (node, pos) => {
           // Code keeps its spaces (raw preserves them in Typst too); an
           // editorial comment is never printed and holds what was typed.
           if (node.type.name === 'code_block' || node.type.name === 'editor_comment') return false;
@@ -210,8 +263,7 @@ export function collapseSpaces(): Plugin {
           return false;
         });
       }
-      if (!swaps.length) return null;
-      const tr = state.tr;
+      if (!swaps.length) return tr.docChanged ? tr : null;
       // Descending order keeps earlier positions valid; marks carry over so
       // a normalized character inside bold/italic text stays styled.
       for (const [from, to, text, marks] of swaps.sort((a, b) => b[0] - a[0])) {
