@@ -207,12 +207,18 @@ plain Typst file.
   join the second half.
 - **Grids** (⊟ in the toolbar): rows × columns of any blocks — a paragraph
   beside a figure or table, three columns of notes, a two-row layout.
-  Column widths are fraction shares typed into the grid bar (`2 : 1`),
-  the gutter is em; Tab moves between cells, Tab from the last cell adds
-  a row, Unwrap puts the blocks back in the flow. Click a cell and choose
-  **Figure in cell** to insert an image; **+ Row** adds a row and focuses
-  its first cell. Click an existing image to show its replacement and size
-  controls. Typst's `#grid(columns:
+  While the caret is in a grid, a small dark pill of icons sits in the
+  page's left margin beside it (never over text): **Rows** and
+  **Columns** add and delete at the caret's row or column, **Image in
+  cell** puts a plain full-width image in the caret's cell, and
+  **Grid layout** sets the split (presets for the column count, or a
+  Custom field: `2 : 1`, `60/40`, `46% : 54%`), the gutter (None / Tight /
+  Normal / Wide, or Custom em) and **Unwrap grid**, which puts the blocks
+  back in the flow. Tab moves between cells and Tab from the last cell
+  adds a row; a numbered figure in a cell comes from Insert. Each cell
+  shows a soft wash while you edit, the caret's cell a thin ring — paint
+  only, never printed. Click an existing image to show its replacement
+  and size controls. Typst's `#grid(columns:
   (2fr, 1fr), gutter: 1em, [...], [...])`, cells unbreakable, the grid
   breaking between rows; a `.md` file carries it as one `::: columns` div
   per row of `::: column` cells, later rows marked `.continued`. Cells
@@ -282,34 +288,34 @@ plain Typst file.
   cells (Tab from the last cell adds a row), Enter moves down a row (and
   adds one from the last row; Shift-Enter is a line break inside a cell),
   ArrowUp/ArrowDown leave the table at its edges, and shift-click/drag
-  selects a range. The table controls dock under the toolbar while the
-  caret is in a table, never over the text. Cells hold ordinary rich text (marks,
+  selects a range. Cells hold ordinary rich text (marks,
   inline math, citations, `@` references); an edit that would leave that
   lossless subset is refused with a notice rather than flattened. While the
-  caret is inside a table a control bar docks under the toolbar: add/delete
-  rows and columns (span-aware: deleting from inside a merged cell removes
-  one row or column and shrinks the merge), merge/split, toggle the header
-  row, **L/C/R alignment for
-  the selected cells** (right-align regression numbers), a **style preset
-  (booktabs — the academic default, horizontal rules only — grid, plain)**,
-  a text-size menu (100–75%), a **density** menu (compact / normal / roomy
-  — Typst's cell `inset` at 3, 5, or 8pt, exact in the page), a **Rule**
-  control that cycles the rule under the selected rows (preset → light →
-  heavy → none; exported as `table.hline(y: N, stroke: …)` at that
-  boundary, where the style's own rule yields to it), a **Fill** control
-  that cycles a preset colour behind the selected cells (gray / yellow /
-  blue, exported as `table.cell(fill: …)`), and **Details** for a caption
-  and a reference label.
-  **Click a cell → Layout** to change its column sizing: **Fit content**,
-  **Share remaining space** (a weight of 2 gets twice the space of 1), or
-  **Fixed width** in points. Shift-click to apply a width to several
-  columns; a merged cell covers all columns in its span. **Padding (pt)**
-  sets uniform padding for the whole table (0–72pt); choosing a density
-  preset resets that override. Press Enter or leave a numeric field to
-  apply it; Escape restores its current value. The same panel sets
-  **Vertical align** and **Cell fill** for the selected cells, including
-  gray for a shaded header. For a skillsheet, set Code and Practice to
-  Fit content, Skill to Share remaining space, and Padding to 9pt.
+  caret is in a table, the block pill sits in the page's left margin beside
+  it, and every control is one click behind an icon:
+  **Rows** (add above / below, select, header row,
+  delete; span-aware: deleting from inside a merged cell removes one row
+  and shrinks the merge), **Columns** (add left / right, select, delete,
+  and the column's width: **Fit to content**, **Share of the rest** — a
+  weight of 2 gets twice the space of 1 — or **Fixed** in points;
+  shift-click to size several columns, a merged cell covers its span),
+  **Align** (its icon shows the caret cell's value: left / center / right
+  across, top / middle / bottom down), **Cell** (fill swatches — light
+  gray, gray, yellow, blue, exported as `table.cell(fill: …)` — and the
+  rule under the selected rows: style default, light, heavy, none,
+  exported as `table.hline(y: N, stroke: …)` at that boundary, where the
+  style's own rule yields to it; merge and split), and **Table settings**:
+  the **style preset (booktabs — the academic default, horizontal rules
+  only — grid, plain)**, text size (100–75%), **padding** (Compact /
+  Normal / Roomy — Typst's cell `inset` at 3, 5, or 8pt, exact in the page
+  — or a Custom 0–72pt that a preset resets), the column widths' state and
+  a reset, the **caption** and reference **label**, and Delete table.
+  Number fields apply on Enter and keep the focus; Escape restores the
+  value; ⌘Z inside them is the document's undo. Clicking the table's
+  caption on the page opens Table settings at the caption. For a
+  skillsheet, set Code and Practice to Fit to content, Skill to Share of
+  the rest, and Padding to Custom 9pt. The caret's cell shows a thin ring
+  and a Plain table faint cell edges while you edit — paint only.
   A captioned or labelled table gets a painted "Table N:" caption
   that renumbers live and is listed in the `@` picker. The editor table
   defaults to Typst's intrinsic centered box with 5pt insets, so it
@@ -323,7 +329,7 @@ plain Typst file.
   `#figure(table(…), caption: [...]) <label>` — and all of it round-trips.
   Supported imported column widths, uniform point insets, alignment, and
   header shading become the same editable settings. Remaining custom
-  table options are preserved and flagged in the control bar when the
+  table options are preserved and said in Table settings when the
   page cannot show them; rule layouts that no preset can reconstruct
   stay raw-Typst islands rather than being simplified.
 - **Citations & bibliography** (hover the References block → Edit, or

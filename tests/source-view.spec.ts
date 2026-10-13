@@ -227,7 +227,7 @@ test('the visible view switch and the shortcut toggle from either view', async (
   await expect(page.getByRole('button', { name: 'Document settings', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Extras', exact: true }).click();
   await expect(page.getByTitle('Insert table (⌘⌥T)', { exact: true })).toBeDisabled();
-  await expect(page.getByTitle('Side-by-side grid — any blocks in columns; the grid bar sets the split', { exact: true })).toBeDisabled();
+  await expect(page.getByTitle('Side-by-side grid — any blocks in columns; Grid layout sets the split', { exact: true })).toBeDisabled();
   await expect(page.getByTitle('Edit bibliography', { exact: true })).toBeDisabled();
   await expect(page.getByTitle('Markdown & shortcuts', { exact: true })).toBeEnabled();
   await expect(page.getByTitle('Export — PDF, .md, .typ, .tex', { exact: true })).toBeEnabled();

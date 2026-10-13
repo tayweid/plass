@@ -272,7 +272,7 @@ test('a press in the margin beside a narrow table goes in its row, never in the 
   ]);
 });
 
-test('a right-click on the paper and a press on a table toolbar\'s background keep the caret', async ({ page }) => {
+test('a right-click on the paper and a press on the table pill\'s background keep the caret', async ({ page }) => {
   await blank(page);
   await page.evaluate(() => {
     const { state } = window.view;
@@ -284,7 +284,7 @@ test('a right-click on the paper and a press on a table toolbar\'s background ke
   await page.keyboard.press('End');
   const toolbar = page.getByRole('toolbar', { name: 'Table controls' });
   await expect(toolbar).toBeVisible();
-  // A point of the toolbar between its controls.
+  // A point of the pill between its tiles (its padding).
   const free = await toolbar.evaluate((root) => {
     const r = root.getBoundingClientRect();
     for (let y = r.top + 1; y < r.bottom; y += 2)

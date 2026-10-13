@@ -1,6 +1,7 @@
 // The block pill: the controls of the table or grid the caret is in, a
 // small dark column of rail tiles in the page's left margin, level with
-// the block (design: scratchpad spec §4; Taylor's decisions 3–6).
+// the block. The design and its rules: docs/BLOCK-CHROME.md ("spec §n"
+// below names a section of the approved design spec it records).
 //
 // Layer. One #block-chrome inside #scroll, after #paper, in the panel's
 // scroll-content coordinates: it scrolls with the page natively, is
@@ -454,8 +455,11 @@ class BlockChrome {
   private build(): void {
     if (!this.ctx) return;
     const layout = this.layoutFor(this.ctx);
-    const label = this.ctx.kind === 'grid' ? 'Grid block controls' : 'Table block controls';
-    setAttr(this.pill, 'aria-label', label);
+    const kind = this.ctx.kind === 'grid' ? 'grid' : 'table';
+    setAttr(this.pill, 'aria-label', kind === 'grid' ? 'Grid controls' : 'Table controls');
+    // The hidden readouts keep the old bars' class names (spec §6).
+    setAttr(this.position, 'class', `bc-position ${kind}-toolbar-position bc-hidden`);
+    setAttr(this.hint, 'class', `bc-hint ${kind}-toolbar-hint bc-hidden`);
     if (layout === this.layout && this.pill.childElementCount) {
       // Collapsed is one layout for both kinds: the ⋯ tile names the kind.
       const more = this.tiles.get('more');
@@ -1091,18 +1095,22 @@ class BlockChrome {
           const w = width();
           return w && modeOf(w.width) === mode ? Number.parseFloat(w.width) : field.fallback;
         };
-        const revert = () => { input!.value = String(value()); };
+        // What the field showed after its last commit or revert: the blur
+        // a click on another row causes applies nothing stale (as bindField).
+        let shown = '';
+        const revert = () => { input!.value = shown = String(value()); };
         const commit = () => {
           const n = input!.valueAsNumber;
           if (!input!.validity.valid || !Number.isFinite(n) || (mode === 'fr' && n <= 0) || n < 0) {
             revert();
             return;
           }
-          if (!this.run(setSelectedColumnWidth(`${n}${mode}`), false)) revert();
+          if (this.run(setSelectedColumnWidth(`${n}${mode}`), false)) shown = input!.value;
+          else revert();
         };
         input.addEventListener('mousedown', (e) => e.stopPropagation());
         input.addEventListener('click', (e) => e.stopPropagation());
-        input.addEventListener('change', commit);
+        input.addEventListener('change', () => { if (input!.value !== shown) commit(); });
         input.addEventListener('keydown', (e) => {
           const mod = e.metaKey || e.ctrlKey;
           const key = e.key.toLowerCase();
@@ -1523,6 +1531,9 @@ class BlockChrome {
     input.addEventListener('mousedown', (e) => e.stopPropagation());
     input.addEventListener('click', (e) => e.stopPropagation());
     input.addEventListener('change', apply);
+    // A preset picked while the field had the focus changed the model under
+    // it (the sync skips a focused field): show the model once it leaves.
+    input.addEventListener('blur', () => { if (input.value === shown) revert(); });
     input.addEventListener('keydown', (e) => {
       const event = e as KeyboardEvent;
       const mod = event.metaKey || event.ctrlKey;

@@ -111,7 +111,7 @@ test.describe('the block pill', () => {
   test('appears beside a table, hugs it, never covers text, and leaves with the caret', async ({ page }) => {
     await openSheet(page);
     await caretIn(page, { table: 0, row: 2, col: 1 });
-    await expect(page.getByRole('toolbar', { name: 'Table block controls' })).toBeVisible();
+    await expect(page.getByRole('toolbar', { name: 'Table controls' })).toBeVisible();
     await expect(page.locator('.block-pill .tb-btn')).toHaveCount(5);
     const geometry = () => page.evaluate(() => {
       const r = (e: Element) => e.getBoundingClientRect();
@@ -153,7 +153,7 @@ test.describe('the block pill', () => {
     expect(geo.hit).toEqual([]);
     // A grid spans the text column: the pill sits in the margin.
     await caretIn(page, { grid: 0, cell: 1 });
-    await expect(page.getByRole('toolbar', { name: 'Grid block controls' })).toBeVisible();
+    await expect(page.getByRole('toolbar', { name: 'Grid controls' })).toBeVisible();
     await expect(page.locator('.block-pill .tb-btn')).toHaveCount(4);
     await expect(pill(page)).not.toHaveClass(/is-hug/);
     // Out of the block: gone.
@@ -476,7 +476,7 @@ test.describe('the block pill', () => {
     // The one ⋯ tile serves both kinds: it names the block it is beside.
     await expect(tile(page, 'more')).toHaveAttribute('aria-label', 'Grid controls');
     await caretIn(page, { table: 0, row: 1, col: 1 });
-    await expect(page.getByRole('toolbar', { name: 'Table block controls' })).toBeVisible();
+    await expect(page.getByRole('toolbar', { name: 'Table controls' })).toBeVisible();
     // Collapsed, the ⋯ tile keeps to the paper's edge beside a centred table.
     await expect(pill(page)).not.toHaveClass(/is-hug/);
     const edge = await page.evaluate(() => document.querySelector('.block-pill')!.getBoundingClientRect().left - document.getElementById('paper')!.getBoundingClientRect().left);

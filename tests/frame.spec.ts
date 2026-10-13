@@ -1155,8 +1155,8 @@ test('clicks, selections, the caret and the toolbars land where the page is draw
   expect(to.top - from.top).toBeGreaterThan(pitch * scale * 0.8);
   expect(to.top - from.top).toBeLessThan(pitch * scale * 1.6);
 
-  // A click in a table cell opens the table's toolbar, docked under the
-  // bar on the panel's axis.
+  // A click in a table cell brings the table's pill up in the page's left
+  // margin, clear of the text column, level with the table.
   const cell = await page.evaluate(() => {
     const p = document.querySelector('.ProseMirror table td p')!;
     p.scrollIntoView({ block: 'center' });
@@ -1167,8 +1167,19 @@ test('clicks, selections, the caret and the toolbars land where the page is draw
   await expect.poll(() => page.evaluate(() => (window as unknown as Hooks).view.state.selection.$head.node(-1).type.name)).toBe('table_cell');
   const tableBar = page.getByRole('toolbar', { name: 'Table controls', exact: true });
   await expect(tableBar).toBeVisible();
-  const tb = (await tableBar.boundingBox())!;
-  expect(Math.abs(tb.x + tb.width / 2 - (RAIL + 1500 - GUTTER) / 2)).toBeLessThan(1);
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const placed = await page.evaluate(() => {
+    const pill = document.querySelector('.block-pill')!.getBoundingClientRect();
+    const table = document.querySelector('.ProseMirror table')!.getBoundingClientRect();
+    const editor = document.getElementById('editor')!;
+    const stack = document.getElementById('stack')!;
+    const s = stack.getBoundingClientRect().width / stack.offsetWidth;
+    const textLeft = editor.getBoundingClientRect().left + parseFloat(getComputedStyle(editor).paddingLeft) * s;
+    return { right: pill.right, top: pill.top, textLeft, tableTop: table.top, tableBottom: table.bottom };
+  });
+  expect(placed.right).toBeLessThanOrEqual(placed.textLeft - 8);
+  expect(placed.top).toBeGreaterThanOrEqual(placed.tableTop - 1);
+  expect(placed.top).toBeLessThan(placed.tableBottom);
 
   // A click on the figure selects it and brings its toolbar up.
   const figure = await page.evaluate(() => {

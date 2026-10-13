@@ -67,10 +67,10 @@ import type { SourceView } from './source-view';
 const CONTROL = 'button, input, textarea, select, a[href], label, [contenteditable], [role="button"], [role="menuitem"]';
 /** CodeMirror's own: its text, its search panel, its tooltips. */
 const SOURCE_OWN = '.cm-content, .cm-panels, .cm-tooltip';
-/** The toolbars floated over the page for a selected image or table (or
- *  grid), and the block pill in its margin: their background between
+/** The bar floated over the page for a selected image, and the block
+ *  pill in the margin beside a table or grid: their background between
  *  buttons is not the paper. */
-const FLOATING_TOOLBAR = '.image-toolbar, .native-table-toolbar, #block-chrome';
+const FLOATING_TOOLBAR = '.image-toolbar, #block-chrome';
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 /** How far `v` is outside [lo, hi] (0 inside). */

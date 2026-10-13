@@ -743,7 +743,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   directCommand(mathBtn, insertMath(false), 'Inline math (⌘M) — or type $x^2$; ⌘⇧M for display');
   directCommand(noteBtn, insertFootnote, 'Footnote (⌘⌥F) — or type ^[');
   item(insertRow, 'Table', () => insertStructuredTable(view), { title: 'Insert table (⌘⌥T)', shortcut: '⌘⌥T', editing: true, glyph: icon('table') });
-  item(insertRow, 'Grid', () => insertGrid(view), { title: 'Side-by-side grid — any blocks in columns; the grid bar sets the split', editing: true, glyph: icon('grid') });
+  item(insertRow, 'Grid', () => insertGrid(view), { title: 'Side-by-side grid — any blocks in columns; Grid layout sets the split', editing: true, glyph: icon('grid') });
   commandItem(insertRow, 'Display equation', insertMath(true), { title: 'Display equation (⌘⇧M)', shortcut: '⌘⇧M', glyph: '<span class="ico tico">∑</span>' });
   item(insertRow, 'Title block', () => {
     const { state, dispatch } = view;

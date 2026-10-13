@@ -89,6 +89,12 @@ async function installPaginationTable(
   }, rowCount);
 }
 
+/** The block pill beside the table (src/block-chrome.ts) and the menu or
+ *  panel one of its tiles opens: Rows, Columns, Align, Cell, Table settings. */
+const pillTile = (page: import('playwright/test').Page, id: string) => page.locator(`.block-pill [data-tile="${id}"]`);
+const tableSettings = (page: import('playwright/test').Page) => page.getByRole('dialog', { name: 'Table settings' });
+const cellPanel = (page: import('playwright/test').Page) => page.getByRole('dialog', { name: 'Cell fill and rules' });
+
 test('rich table cells edit directly, navigate with Tab, and undo without flattening', async ({ page }) => {
   await installRichTable(page);
   const nativeTable = page.locator('.ProseMirror table');
@@ -137,7 +143,7 @@ test('rich table cells edit directly, navigate with Tab, and undo without flatte
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).child(0).textContent)).toContain('!');
 });
 
-test('unsupported table styling is visible without opening Details and custom insets cannot masquerade as a preset', async ({ page }) => {
+test('unsupported table styling is said in Table settings and custom insets cannot masquerade as a preset', async ({ page }) => {
   await installRichTable(page);
   const params = 'columns: (auto, 1fr),\ninset: 9pt,\nfill: (x, y) => if y == 0 { luma(220) }';
   await page.evaluate((params) => {
@@ -145,13 +151,21 @@ test('unsupported table styling is visible without opening Details and custom in
     const table = state.doc.firstChild!;
     window.view.dispatch(state.tr.setNodeMarkup(0, undefined, { ...table.attrs, params }));
   }, params);
-  await page.locator('.ProseMirror td').first().locator('p').first().click();
-  const controls = page.getByRole('toolbar', { name: 'Table controls' });
-  await expect(controls.locator('.native-table-toolbar-details')).toBeHidden();
-  await expect(controls.locator('.native-table-advanced')).toBeVisible();
-  await expect(controls.locator('.native-table-advanced')).toContainText('not shown here');
-  await expect(controls.getByRole('combobox', { name: 'Table cell density' })).toHaveValue('custom');
-  await expect(controls.getByRole('combobox', { name: 'Table cell density' })).toBeDisabled();
+  const cellText = page.locator('.ProseMirror td').first().locator('p').first();
+  await cellText.click();
+  await pillTile(page, 'table').click();
+  const panel = tableSettings(page);
+  await expect(panel.locator('.native-table-advanced')).toBeVisible();
+  await expect(panel.locator('.native-table-advanced')).toContainText('not shown here');
+  // No density preset reads as in force, none can be picked, and the
+  // padding field is locked with the reason.
+  const density = panel.getByRole('radiogroup', { name: 'Table cell density' });
+  await expect(density.locator('[aria-checked="true"]')).toHaveCount(0);
+  for (const radio of await density.getByRole('radio').all()) await expect(radio).toBeDisabled();
+  await expect(panel.getByLabel('Cell padding in points')).toBeDisabled();
+  await expect(panel.getByText('Set by custom styling in the file')).toBeVisible();
+  await cellText.click();
+  await expect(panel).toBeHidden();
   await page.keyboard.press('End');
   await page.keyboard.type(' edited');
   expect(await page.evaluate(() => window.view.state.doc.firstChild!.attrs.params)).toBe(params);
@@ -179,7 +193,7 @@ test('native table keystrokes map numbering and read no contextual geometry', as
     let phase = 'idle';
 
     const relevant = (element: Element): string | null => {
-      if (element.matches('.native-table-toolbar') || element.closest('.native-table-toolbar')) {
+      if (element.matches('#block-chrome, [aria-label="Table controls"]') || element.closest('#block-chrome')) {
         return 'native-controls';
       }
       if (element.matches('#toolbar, #rail') || element.closest('#toolbar, #rail')) return 'main-toolbar';
@@ -222,7 +236,7 @@ test('native table keystrokes map numbering and read no contextual geometry', as
         }
       }
     });
-    const nativeControls = document.querySelector('.native-table-toolbar');
+    const nativeControls = document.querySelector('#block-chrome');
     const mainToolbar = document.querySelector('#toolbar');
     const rail = document.querySelector('#rail');
     if (nativeControls) observer.observe(nativeControls, { attributes: true, subtree: true });
@@ -288,9 +302,9 @@ test('native table keystrokes map numbering and read no contextual geometry', as
   const snapshot = await page.evaluate(() => window.__tableHotPathProbe!.finish());
 
   expect(snapshot.labelsReused).toBe(true);
-  // The contextual controls are docked chrome: a keystroke in a cell reads
-  // no geometry for them or the main toolbar, before or after the paint,
-  // and publishes no position. (ProseMirror may still read the table to
+  // The block pill (and the main toolbar) are placed off the typing path:
+  // a keystroke in a cell reads no geometry for them, before or after the
+  // paint, and publishes no position. (ProseMirror may still read the table to
   // keep the caret scrolled into view.)
   const chrome = (entries: string[]) => entries.filter((entry) => entry.startsWith('native-controls:') || entry.startsWith('main-toolbar:'));
   expect(chrome(snapshot.geometryBeforePaint)).toEqual([]);
@@ -324,6 +338,25 @@ test('a table grows under the keyboard and lets the caret out at its edges', asy
   await page.keyboard.type('z');
   await page.keyboard.press('Tab');
   await page.keyboard.type('new row');
+  // The pill beside the table covers no text: not the table's, not the
+  // paragraph's above it.
+  await expect(page.getByRole('toolbar', { name: 'Table controls' })).toBeVisible();
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const covered = await page.evaluate(() => {
+    const pill = document.querySelector('.block-pill')!.getBoundingClientRect();
+    const hits: string[] = [];
+    const walker = document.createTreeWalker(document.getElementById('editor')!, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    for (let t: Node | null; (t = walker.nextNode());) {
+      if (!t.textContent?.trim()) continue;
+      range.selectNodeContents(t);
+      for (const r of range.getClientRects()) {
+        if (r.right > pill.left && r.left < pill.right && r.bottom > pill.top && r.top < pill.bottom) hits.push(t.textContent);
+      }
+    }
+    return hits;
+  });
+  expect(covered).toEqual([]);
   const shape = await page.evaluate(() => {
     const table = window.view.state.doc.child(1);
     const rows: string[][] = [];
@@ -365,16 +398,6 @@ test('a table grows under the keyboard and lets the caret out at its edges', asy
     const { $from } = window.view.state.selection;
     return $from.depth === 1 && $from.index(0) === 0 && $from.parent.type.name === 'paragraph';
   })).toBe(true);
-  // The docked controls never cover the document: the fixed bar ends above
-  // where the page starts when unscrolled (the document scrolls inside
-  // #scroll, and the test has scrolled it).
-  const covers = await page.evaluate(() => {
-    const bar = document.querySelector('.native-table-toolbar')!.getBoundingClientRect();
-    const page1 = document.querySelector('.ProseMirror')!.getBoundingClientRect();
-    const scrolled = (document.getElementById('scroll')?.scrollTop ?? 0) + window.scrollY;
-    return bar.bottom > page1.top + scrolled + 1;
-  });
-  expect(covers).toBe(false);
 });
 
 test('cell density presets match Typst row heights exactly', async ({ page }) => {
@@ -419,7 +442,7 @@ test('cell density presets match Typst row heights exactly', async ({ page }) =>
   for (const r of results) expect(Math.abs(r.nativePt - r.compiledPt), JSON.stringify(results)).toBeLessThan(0.5);
 });
 
-test('the Rule control cycles a row rule that paints in the page and exports at its boundary', async ({ page }) => {
+test('the Rule tiles set a row rule that paints in the page and exports at its boundary', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const { state } = window.view;
@@ -432,32 +455,38 @@ test('the Rule control cycles a row rule that paints in the page and exports at 
   await page.keyboard.type('H');
   await page.keyboard.press('Enter'); // row 2
   await page.keyboard.type('body');
-  const rule = page.getByRole('toolbar', { name: 'Table controls' }).getByRole('button', { name: /^Rule under/ });
-  await expect(rule).toHaveText('Rule');
+  await pillTile(page, 'cell').click();
+  const rules = cellPanel(page).getByRole('radiogroup', { name: 'Rule under the selected rows' });
+  const rule = (value: string) => rules.locator(`[data-value="${value}"]`);
+  await expect(rule('')).toHaveAttribute('aria-checked', 'true');
   const shadow = () => page.evaluate(() => getComputedStyle(document.querySelectorAll('.ProseMirror tr')[1].querySelector('td')!).boxShadow);
   expect(await shadow()).toBe('none');
-  await rule.click();
-  await expect(rule).toHaveText('Rule: light');
+  await rule('light').click();
+  await expect(rule('light')).toHaveAttribute('aria-checked', 'true');
   expect(await page.evaluate(() => document.querySelectorAll('.ProseMirror tr')[1].getAttribute('data-rule'))).toBe('light');
   expect(await shadow()).not.toBe('none');
-  await rule.click();
-  await expect(rule).toHaveText('Rule: heavy');
-  await rule.click();
-  await expect(rule).toHaveText('Rule: none');
-  await rule.click();
-  await expect(rule).toHaveText('Rule');
-  await rule.click(); // light again, for the export
+  await rule('heavy').click();
+  expect(await page.evaluate(() => document.querySelectorAll('.ProseMirror tr')[1].getAttribute('data-rule'))).toBe('heavy');
+  await rule('none').click();
+  await expect(rule('none')).toHaveAttribute('aria-checked', 'true');
+  await rule('').click();
+  await expect(rule('')).toHaveAttribute('aria-checked', 'true');
+  expect(await shadow()).toBe('none');
+  await rule('light').click(); // light again, for the export
   const typ = await page.evaluate(async () => {
     const { docToTyp } = await import('/src/typ-serializer.ts');
     return docToTyp(window.view.state.doc);
   });
   expect(typ).toContain('table.hline(y: 2, stroke: 0.05em)');
-  // Grid tables draw cell strokes; the control is disabled there.
-  await page.getByRole('toolbar', { name: 'Table controls' }).getByRole('combobox', { name: 'Table rule style' }).selectOption('grid');
-  await expect(rule).toBeDisabled();
+  // Grid tables draw cell strokes; the rule tiles are off there, and say why.
+  await pillTile(page, 'table').click();
+  await tableSettings(page).getByRole('radiogroup', { name: 'Table rule style' }).locator('[data-value="grid"]').click();
+  await pillTile(page, 'cell').click();
+  await expect(rule('light')).toBeDisabled();
+  await expect(cellPanel(page).getByText('Grid style rules every cell')).toBeVisible();
 });
 
-test('the Fill control cycles a preset that paints the cell and exports', async ({ page }) => {
+test('the Fill swatches paint the cell and export', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const { state } = window.view;
@@ -469,23 +498,24 @@ test('the Fill control cycles a preset that paints the cell and exports', async 
   await expect(page.locator('.ProseMirror table')).toHaveCount(1);
   await page.keyboard.press('Enter');
   await page.keyboard.type('shaded');
-  const fill = page.getByRole('toolbar', { name: 'Table controls' }).getByRole('button', { name: /^Fill behind/ });
-  await expect(fill).toHaveText('Fill');
+  await pillTile(page, 'cell').click();
+  const fills = cellPanel(page).getByRole('radiogroup', { name: 'Selected cells fill' });
+  const fill = (value: string) => fills.locator(`[data-value="${value}"]`);
+  await expect(fill('')).toHaveAttribute('aria-checked', 'true');
   const bg = () => page.evaluate(() => getComputedStyle(document.querySelectorAll('.ProseMirror tr')[1].querySelector('td')!).backgroundColor);
-  await fill.click();
-  await expect(fill).toHaveText('Fill: gray');
+  await fill('gray').click();
+  await expect(fill('gray')).toHaveAttribute('aria-checked', 'true');
   expect(await bg()).toBe('rgb(240, 240, 240)');
-  await fill.click();
-  await expect(fill).toHaveText('Fill: yellow');
+  await fill('yellow').click();
+  await expect(fill('yellow')).toHaveAttribute('aria-checked', 'true');
   expect(await bg()).toBe('rgb(255, 243, 176)');
   const typ = await page.evaluate(async () => {
     const { docToTyp } = await import('/src/typ-serializer.ts');
     return docToTyp(window.view.state.doc);
   });
   expect(typ).toContain('table.cell(fill: rgb("#fff3b0"))[shaded]');
-  await fill.click();
-  await fill.click();
-  await expect(fill).toHaveText('Fill');
+  await fill('').click();
+  await expect(fill('')).toHaveAttribute('aria-checked', 'true');
   expect(await bg()).toBe('rgba(0, 0, 0, 0)');
 });
 
@@ -640,15 +670,19 @@ test('contextual controls mutate native structure and retain rich content', asyn
   await page.locator('.ProseMirror td').first().click();
   const controls = page.getByRole('toolbar', { name: 'Table controls' });
   await expect(controls).toBeVisible();
+  const rows = page.getByRole('menu', { name: 'Rows' });
+  const cols = page.getByRole('menu', { name: 'Columns' });
 
-  await page.getByRole('button', { name: 'Add row below' }).click();
+  await pillTile(page, 'rows').click();
+  await rows.getByRole('menuitem', { name: 'Add row below' }).click();
   await expect(page.locator('.ProseMirror table tr')).toHaveCount(3);
   await page.keyboard.press('ControlOrMeta+z');
   await expect(page.locator('.ProseMirror table tr')).toHaveCount(2);
   await page.keyboard.press('ControlOrMeta+Shift+z');
   await expect(page.locator('.ProseMirror table tr')).toHaveCount(3);
 
-  await page.getByRole('button', { name: 'Add column after' }).click();
+  await pillTile(page, 'cols').click();
+  await cols.getByRole('menuitem', { name: 'Add column after' }).click();
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).childCount)).toBe(3);
   await page.keyboard.press('ControlOrMeta+z');
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).childCount)).toBe(2);
@@ -658,7 +692,8 @@ test('contextual controls mutate native structure and retain rich content', asyn
   await firstCell.click();
   await secondCell.click({ modifiers: ['Shift'] });
   await expect.poll(() => page.evaluate(() => window.view.state.selection.constructor.name)).toBe('CellSelection');
-  await page.getByRole('button', { name: 'Merge selected cells' }).click();
+  await pillTile(page, 'cell').click();
+  await cellPanel(page).getByRole('menuitem', { name: 'Merge selected cells' }).click();
   const mergedShape = await page.evaluate(() => {
     const cell = window.view.state.doc.child(0).child(0).child(0);
     const types: string[] = [];
@@ -672,25 +707,28 @@ test('contextual controls mutate native structure and retain rich content', asyn
   expect(mergedShape.paragraphs).toBeGreaterThanOrEqual(3);
   expect(mergedShape.types).toEqual(expect.arrayContaining(['math_inline', 'citation']));
 
-  await page.getByRole('button', { name: 'Split merged cell' }).click();
+  await cellPanel(page).getByRole('menuitem', { name: 'Split merged cell' }).click();
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).child(0).attrs.colspan)).toBe(1);
 
   await page.locator('.ProseMirror table tr').nth(1).locator('td').first().click();
-  await page.getByRole('button', { name: 'Toggle selected row as header' }).click();
+  await pillTile(page, 'rows').click();
+  await rows.getByRole('menuitemcheckbox', { name: 'Toggle selected row as header' }).click();
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(1).child(0).type.name)).toBe('table_header');
 
-  await controls.locator('select[aria-label="Table rule style"]').selectOption('grid');
+  await pillTile(page, 'table').click();
+  const settings = tableSettings(page);
+  await settings.getByRole('radiogroup', { name: 'Table rule style' }).locator('[data-value="grid"]').click();
   await expect(page.locator('.ProseMirror table')).toHaveClass(/ts-table-grid/);
-  await controls.locator('select[aria-label="Table text size"]').selectOption('0.85em');
-  await page.getByRole('button', { name: 'Details' }).click();
-  await controls.getByLabel('Caption').fill('Native results');
-  await controls.getByLabel('Label').fill('tab:native');
+  await settings.getByRole('radiogroup', { name: 'Table text size' }).locator('[data-value="0.85em"]').click();
+  await settings.getByLabel('Caption').fill('Native results');
+  await settings.getByLabel('Label').fill('tab:native');
   const nativeCaption = page.locator('.native-table-caption');
   await expect(nativeCaption).toHaveText('Table 1: Native results');
   const captionId = await nativeCaption.getAttribute('id');
   expect(captionId).toBeTruthy();
   await expect(page.locator('.ProseMirror table')).toHaveAttribute('aria-describedby', captionId!);
   await expect(nativeCaption).toHaveAttribute('role', 'note');
+  await expect.poll(() => page.evaluate(() => window.view.state.doc.child(0).attrs.label)).toBe('tab:native');
 
   const finalShape = await page.evaluate(() => {
     const table = window.view.state.doc.child(0);
@@ -722,32 +760,34 @@ test('contextual controls mutate native structure and retain rich content', asyn
 test('focused caption and label fields stay synchronized through undo and redo', async ({ page }) => {
   await installRichTable(page);
   await page.locator('.ProseMirror td').first().click();
-  const controls = page.getByRole('toolbar', { name: 'Table controls' });
-  await page.getByRole('button', { name: 'Details' }).click();
+  await pillTile(page, 'table').click();
+  const settings = tableSettings(page);
+  const attr = (name: string) => page.evaluate((name) => window.view.state.doc.child(0).attrs[name], name);
 
-  const caption = controls.getByLabel('Caption');
+  // The panel writes after a pause in the typing (spec §5.1).
+  const caption = settings.getByLabel('Caption');
   await caption.fill('Undoable caption');
-  expect(await page.evaluate(() => window.view.state.doc.child(0).attrs.caption)).toBe('Undoable caption');
+  await expect.poll(() => attr('caption')).toBe('Undoable caption');
   await caption.press('ControlOrMeta+z');
   await expect(caption).toHaveValue('');
-  expect(await page.evaluate(() => window.view.state.doc.child(0).attrs.caption)).toBe('');
+  expect(await attr('caption')).toBe('');
   await caption.press('ControlOrMeta+Shift+z');
   await expect(caption).toHaveValue('Undoable caption');
-  expect(await page.evaluate(() => window.view.state.doc.child(0).attrs.caption)).toBe('Undoable caption');
+  expect(await attr('caption')).toBe('Undoable caption');
 
   // Keep the next metadata edit in its own history event, then exercise the
   // Windows/Linux redo chord that a focused native input would otherwise
   // consume without updating the ProseMirror document.
   await page.waitForTimeout(550);
-  const label = controls.getByLabel('Label');
+  const label = settings.getByLabel('Label');
   await label.fill('tab:undoable');
-  expect(await page.evaluate(() => window.view.state.doc.child(0).attrs.label)).toBe('tab:undoable');
+  await expect.poll(() => attr('label')).toBe('tab:undoable');
   await label.press('Control+z');
   await expect(label).toHaveValue('');
-  expect(await page.evaluate(() => window.view.state.doc.child(0).attrs.label)).toBe('');
+  expect(await attr('label')).toBe('');
   await label.press('Control+y');
   await expect(label).toHaveValue('tab:undoable');
-  expect(await page.evaluate(() => window.view.state.doc.child(0).attrs.label)).toBe('tab:undoable');
+  expect(await attr('label')).toBe('tab:undoable');
 });
 
 test('tables stay whole when they fit and break between rows when they cross a page', async ({ page }) => {

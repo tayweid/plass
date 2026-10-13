@@ -51,7 +51,20 @@ async function chooseFolderIfAsked(page: Page) {
   await page.locator('.toast-action', { hasText: 'Choose folder' }).click({ timeout: 1500 }).catch(() => {});
 }
 
-test('insert a grid from the toolbar, tab between cells, set the split from the bar', async ({ page }) => {
+/** The block pill's tiles and the menus / panel they open (src/block-chrome.ts). */
+const tile = (page: Page, id: string) => page.locator(`.block-pill [data-tile="${id}"]`);
+async function menuItem(page: Page, tileId: 'rows' | 'cols', name: string) {
+  await tile(page, tileId).click();
+  await page.getByRole('menu', { name: tileId === 'rows' ? 'Rows' : 'Columns' }).getByRole('menuitem', { name, exact: true }).click();
+}
+async function gridLayout(page: Page) {
+  await tile(page, 'grid').click();
+  const panel = page.getByRole('dialog', { name: 'Grid layout' });
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
+test('insert a grid from the toolbar, tab between cells, set the split from Grid layout', async ({ page }) => {
   await page.goto('/?new=1');
   await page.waitForFunction(() => Boolean(window.view));
   await page.evaluate(() => {
@@ -63,7 +76,7 @@ test('insert a grid from the toolbar, tab between cells, set the split from the 
   await page.getByRole('button', { name: 'Insert', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Grid', exact: true }).click();
   await expect(page.locator('.ProseMirror .ts-grid')).toHaveCount(1);
-  await expect(page.locator('.grid-toolbar')).toBeVisible();
+  await expect(page.getByRole('toolbar', { name: 'Grid controls' })).toBeVisible();
   await page.keyboard.type('Left cell');
   await page.keyboard.press('Tab');
   await page.keyboard.type('Right cell');
@@ -78,17 +91,21 @@ test('insert a grid from the toolbar, tab between cells, set the split from the 
   await page.keyboard.press('Tab');
   await page.keyboard.press('Tab');
   await expect(page.locator('.ProseMirror .ts-grid-row')).toHaveCount(2);
-  // The split: typed into the bar, applied as fr shares.
-  const columns = page.locator('.grid-toolbar .grid-toolbar-field input').first();
+  // The split: typed into Grid layout's Custom field, applied as fr shares.
+  const columns = (await gridLayout(page)).getByLabel('Custom split');
   await columns.fill('2 : 1');
   await columns.press('Enter');
+  await columns.press('Escape');
   await expect(page.locator('.ProseMirror .ts-grid')).toHaveAttribute('data-columns', '2 1');
   const style = await page.locator('.ProseMirror .ts-grid').getAttribute('style');
   expect(style).toContain('--grid-cols: 2fr 1fr');
-  await page.click('.grid-toolbar button:has-text("+ Column")');
+  // Columns and rows are added and deleted at the caret's.
+  await cells.nth(1).click();
+  await menuItem(page, 'cols', 'Add column after');
   await expect(page.locator('.ProseMirror .ts-grid')).toHaveAttribute('data-columns', '2 1 1');
   await expect(page.locator('.ProseMirror .ts-grid-row').first().locator('.ts-grid-cell')).toHaveCount(3);
-  await page.click('.grid-toolbar button:has-text("− Row")');
+  await page.locator('.ProseMirror .ts-grid-row').nth(1).locator('.ts-grid-cell').first().click();
+  await menuItem(page, 'rows', 'Delete selected row');
   await expect(page.locator('.ProseMirror .ts-grid-row')).toHaveCount(1);
   const typ = await page.evaluate(async () => {
     const { docToTyp } = await import('/src/typ-serializer.ts');
@@ -97,17 +114,19 @@ test('insert a grid from the toolbar, tab between cells, set the split from the 
   expect(typ).toContain('#grid(\n  columns: (2fr, 1fr, 1fr),\n  gutter: 1em,\n  [\n    Left cell again\n  ],\n  [\n    Right cell\n  ],\n  [],\n)');
   expect(typ).toContain('#set grid.cell(breakable: false)');
   // Unwrap puts the blocks back in the flow.
-  await page.click('.grid-toolbar button:has-text("Unwrap")');
+  await (await gridLayout(page)).getByRole('button', { name: 'Unwrap grid' }).click();
   await expect(page.locator('.ProseMirror .ts-grid')).toHaveCount(0);
   const texts = await page.locator('.ProseMirror p').allTextContents();
   expect(texts.slice(0, 3)).toEqual(['Before the grid.', 'Left cell again', 'Right cell']);
 });
 
 test('adding a row focuses it and its cells accept figures and caption-following text', async ({ page }) => {
-  await openTyp(page, HEAD('paper: "us-letter", margin: 1.25in') + '#grid(columns: (1fr, 1fr), [First row], [])');
+  // gutter: 1em keeps the grid apart (the default gutter joins it), so the
+  // empty-cell check below sees separate washes and the hairline-only look.
+  await openTyp(page, HEAD('paper: "us-letter", margin: 1.25in') + '#grid(columns: (1fr, 1fr), gutter: 1em, [First row], [])');
   const grid = page.locator('.ProseMirror .ts-grid');
   await grid.locator('.ts-grid-cell').first().locator('p').click();
-  await page.getByRole('button', { name: '+ Row', exact: true }).click();
+  await menuItem(page, 'rows', 'Add row below');
   const secondRow = grid.locator('.ts-grid-row').nth(1);
   await expect(secondRow.locator('.ts-grid-cell').first()).toHaveClass(/ts-grid-cell-active/);
   await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 1 of 2');
@@ -176,8 +195,10 @@ test('adding a row focuses it and its cells accept figures and caption-following
   const rightCell = secondRow.locator('.ts-grid-cell').nth(1);
   await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 2 of 2');
   await expect(rightCell).toHaveAttribute('data-grid-empty', 'true');
+  // A numbered figure comes from Insert (the pill's Image tile puts a
+  // plain image in the cell).
   const chooser = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: 'Figure in cell', exact: true }).click();
+  await page.getByRole('button', { name: 'Insert figure', exact: true }).click();
   await (await chooser).setFiles({
     name: 'grid-figure.svg',
     mimeType: 'image/svg+xml',
@@ -191,9 +212,12 @@ test('adding a row focuses it and its cells accept figures and caption-following
   await page.keyboard.type('Below the figure');
   await expect(rightCell.locator('figcaption')).toContainText('A caption');
   await expect(rightCell.locator('p')).toHaveText('Below the figure');
-  // Adding a column must retain the logical cell and its cursor, even
-  // though earlier rows gain nodes and shift this cell's document position.
-  await page.getByRole('button', { name: '+ Column', exact: true }).click();
+  // Adding a column at the caret moves the caret into it; the cells keep
+  // their content and logical places, though earlier rows gain nodes and
+  // shift this cell's document position.
+  await menuItem(page, 'cols', 'Add column after');
+  await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 3 of 3');
+  await page.keyboard.press('Shift+Tab');
   await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 2 of 3');
   await page.keyboard.type(' here');
   await expect(rightCell.locator('p')).toHaveText('Below the figure here');
@@ -217,11 +241,11 @@ test('an imported inline image explains how to add text below it in the same gri
   await expect(rightCell.locator('p')).toHaveCount(2);
   await expect(rightCell.locator('p').last()).toHaveText('Notes below the graph.');
   await expect(cells.first()).toHaveText('Questions');
-  // Selecting the old image and choosing a replacement uses the existing
-  // figure controls, preserving the rest of the cell's text.
+  // Selecting the old image and inserting a figure replaces it, preserving
+  // the rest of the cell's text.
   await rightCell.locator('.ts-inline-image img').click();
   const chooser = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: 'Figure in cell', exact: true }).click();
+  await page.getByRole('button', { name: 'Insert figure', exact: true }).click();
   await (await chooser).setFiles({ name: 'replacement.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(svg, 'base64') });
   await chooseFolderIfAsked(page);
   await expect(rightCell.locator('.ts-figure')).toHaveCount(1);

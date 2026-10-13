@@ -128,8 +128,7 @@ async function placeCaret(page: Page, pos: number) {
   await page.waitForTimeout(120);
 }
 
-test('the caret in a grid or a table moves no block, cell box, or cell margin', async ({ page }) => {
-  test.setTimeout(120_000);
+async function caretMovesNothing(page: Page) {
   await openSheet(page);
   // Caret outside every grid and table: the first paragraph.
   const outside = await page.evaluate(() => {
@@ -156,6 +155,31 @@ test('the caret in a grid or a table moves no block, cell box, or cell margin', 
   await page.waitForTimeout(1200);
   expect(await page.evaluate(() => window.__pagCount())).toBe(count);
   expect(differences(rest, await snapshot(page))).toEqual([]);
+}
+
+test('the caret in a grid or a table moves no block, cell box, or cell margin', async ({ page }) => {
+  test.setTimeout(120_000);
+  await caretMovesNothing(page);
+});
+
+test.describe('in a 740 px window (the compact pill, a smaller paper scale)', () => {
+  test.use({ viewport: { width: 740, height: 860 } });
+  test('the caret in a grid or a table moves no block, cell box, or cell margin', async ({ page }) => {
+    test.setTimeout(120_000);
+    await caretMovesNothing(page);
+    // The pill really is the compact one here.
+    await page.evaluate(() => {
+      let pos = -1;
+      window.view.state.doc.descendants((n, p) => {
+        if (pos < 0 && n.type.name === 'table') pos = p + 3;
+        return pos < 0;
+      });
+      const { state } = window.view;
+      const Selection = state.selection.constructor as unknown as { near: (p: ReturnType<typeof state.doc.resolve>) => typeof state.selection };
+      window.view.dispatch(state.tr.setSelection(Selection.near(state.doc.resolve(pos))));
+    });
+    await expect(page.locator('.block-pill')).toHaveClass(/is-compact/);
+  });
 });
 
 /** The data-sheet grid: the one whose cells end in tables. */

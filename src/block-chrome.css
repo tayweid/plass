@@ -1,7 +1,7 @@
 /* The block pill (block-chrome.ts) and its menus and panels: the rail's
-   tiles and dark glass, beside the table or grid being edited. Ported from
-   the approved mockups' harness (scratchpad mock.css): every number here
-   was tuned by eye there. Nothing in this file touches a laid-out box on
+   tiles and dark glass, beside the table or grid being edited. Every number
+   here was tuned by eye in the approved mockups; the design and its rules
+   are in docs/BLOCK-CHROME.md. Nothing in this file touches a laid-out box on
    the paper: the layer lives in #scroll outside #paper, and the flyouts
    are fixed to the window. */
 

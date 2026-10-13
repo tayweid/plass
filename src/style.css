@@ -391,162 +391,6 @@ body {
   visibility: hidden;
 }
 
-/* Native table controls. Cells remain the actual ProseMirror content; this
-   compact chrome only dispatches structural commands against that document. */
-.native-table-toolbar {
-  -webkit-app-region: no-drag; /* inside the bar's drag band: a click must reach it, not move the window */
-  /* Docked under the bar on the paper's axis (--axis), over the panel's
-     top edge: a second row of chrome while the caret is in a table. It
-     never covers the document and never moves with the table, so a
-     keystroke reads no geometry for it. */
-  position: fixed;
-  top: calc(var(--topbar) - 2px);
-  left: var(--axis);
-  transform: translateX(-50%);
-  z-index: 180;
-  width: max-content;
-  max-width: calc(100vw - 24px);
-  overflow: hidden;
-  color: var(--ink);
-  background: color-mix(in srgb, var(--chrome) 94%, transparent);
-  backdrop-filter: blur(14px) saturate(1.25);
-  border: 1px solid var(--chrome-border);
-  border-radius: 11px;
-  padding: 4px;
-  box-shadow: 0 10px 34px rgba(20, 18, 14, 0.16), 0 2px 7px rgba(20, 18, 14, 0.08);
-}
-
-.native-table-toolbar[hidden] {
-  display: none;
-}
-
-.native-table-toolbar-main {
-  display: flex;
-  align-items: stretch;
-  gap: 3px;
-  max-width: calc(100vw - 34px);
-  overflow-x: auto;
-  overscroll-behavior-inline: contain;
-  scrollbar-width: thin;
-}
-
-.native-table-toolbar-group {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  padding: 0 3px;
-  border-right: 1px solid color-mix(in srgb, var(--chrome-border) 72%, transparent);
-}
-
-.native-table-toolbar-group:first-child {
-  padding-left: 0;
-}
-
-.native-table-toolbar-group:last-child {
-  padding-right: 0;
-  border-right: 0;
-}
-
-.native-table-toolbar button,
-.native-table-toolbar select {
-  min-height: 27px;
-  font: 600 10.5px/1 var(--sans);
-  color: var(--ink);
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
-  padding: 5px 7px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.native-table-toolbar select {
-  max-width: 86px;
-  padding-right: 3px;
-  font-weight: 500;
-}
-
-.native-table-toolbar .native-table-size {
-  width: 58px;
-}
-
-.native-table-toolbar button:hover:not(:disabled),
-.native-table-toolbar select:hover,
-.native-table-toolbar button.is-active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 11%, transparent);
-}
-
-.native-table-toolbar button:focus-visible,
-.native-table-toolbar select:focus-visible,
-.native-table-toolbar input:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 56%, transparent);
-  outline-offset: -1px;
-}
-
-.native-table-toolbar button:disabled {
-  opacity: 0.28;
-  cursor: default;
-}
-
-.native-table-toolbar .native-table-align {
-  min-width: 25px;
-  padding-inline: 6px;
-  font-family: var(--serif);
-}
-
-.native-table-toolbar button.is-danger:hover:not(:disabled) {
-  color: #a4322f;
-  background: rgba(164, 50, 47, 0.1);
-}
-
-.native-table-toolbar-details {
-  display: none;
-  grid-template-columns: minmax(180px, 1fr) minmax(110px, 0.55fr) auto;
-  align-items: end;
-  gap: 8px;
-  margin-top: 4px;
-  padding: 7px 5px 3px;
-  border-top: 1px solid color-mix(in srgb, var(--chrome-border) 72%, transparent);
-}
-
-.native-table-toolbar.show-details .native-table-toolbar-details {
-  display: grid;
-}
-
-.native-table-toolbar-details label {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-  font: 600 9px/1 var(--sans);
-  letter-spacing: 0.04em;
-  color: var(--ink-soft);
-  text-transform: uppercase;
-}
-
-.native-table-toolbar-details input {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  font: 12px/1.2 var(--sans);
-  color: var(--ink);
-  background: color-mix(in srgb, var(--sheet) 72%, transparent);
-  border: 1px solid var(--chrome-border);
-  border-radius: 6px;
-  padding: 6px 7px;
-}
-
-.native-table-advanced {
-  display: block;
-  padding: 4px 8px 2px;
-  font: 11px/1.4 var(--sans);
-  color: var(--ink-soft);
-}
-
-.native-table-advanced[hidden] {
-  display: none;
-}
-
 /* corner HUD + transient toast */
 #hud {
   position: fixed;
@@ -1805,7 +1649,7 @@ body {
   position: relative;
 }
 
-/* Editing chrome on the paper (design/spec.md §3): paint only. The editor
+/* Editing chrome on the paper (docs/BLOCK-CHROME.md): paint only. The editor
    owns focus, so its selection decorations identify the grid being edited
    (ts-grid-editing, ts-grid-cell-active, data-grid-empty, ts-grid-joined).
    Every cell gets a rounded wash on its absolutely positioned ::after,
@@ -1915,6 +1759,15 @@ body {
   box-shadow: inset 0 0 0 calc(1.5px / var(--ps, 1)) var(--cell-ring);
 }
 
+/* In the joined surface an empty cell keeps the wash and its dividers (the
+   outline-only spacer look would punch a hole in it). */
+.ProseMirror .ts-grid-editing.ts-grid-joined > .ts-grid-row > .ts-grid-cell[data-grid-empty='true']:not(.ts-grid-cell-active)::after {
+  background: var(--cell-wash);
+  box-shadow:
+    inset calc(-1px * var(--div-r, 1) / var(--ps, 1)) 0 0 var(--cell-line),
+    inset 0 calc(-1px / var(--ps, 1)) 0 var(--seam-b, transparent);
+}
+
 /* The placeholder: only in the empty cell being edited, on the caret's
    line, starting clear of the caret (the short form in a narrow cell,
    --ph from the wash pass). */
@@ -1927,42 +1780,6 @@ body {
   color: color-mix(in srgb, var(--ink) 34%, transparent);
   white-space: nowrap;
   pointer-events: none;
-}
-
-.grid-toolbar-position {
-  padding: 0 6px;
-  font: 600 10.5px/1 var(--sans);
-  white-space: nowrap;
-}
-
-.grid-toolbar-help {
-  padding: 4px 8px 2px;
-  font: 400 11px/1.4 var(--sans);
-  opacity: 0.7;
-}
-
-.grid-toolbar .grid-toolbar-name {
-  font: 600 10.5px/1 var(--sans);
-  padding: 0 6px 0 4px;
-  opacity: 0.7;
-}
-
-.grid-toolbar .grid-toolbar-field {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font: 500 10.5px/1 var(--sans);
-  padding: 0 4px;
-}
-
-.grid-toolbar .grid-toolbar-field input {
-  min-height: 23px;
-  font: 500 11px/1 var(--sans);
-  color: var(--ink);
-  background: color-mix(in srgb, var(--ink) 6%, transparent);
-  border: 1px solid var(--chrome-border);
-  border-radius: 5px;
-  padding: 2px 5px;
 }
 
 /* ---------- figures ---------- */
@@ -2673,10 +2490,59 @@ body {
 }
 
 /* A Plain table has no rules: while it is edited, ghost cell edges show
-   its structure (outline is paint only). */
-.ProseMirror table.ts-table-editing.ts-table-plain :is(td, th) {
-  outline: calc(0.5px / var(--ps, 1)) solid var(--cell-line);
-  outline-offset: calc(-0.25px / var(--ps, 1));
+   its structure. Paint only (inset shadows, composed from four slots so a
+   rule row swaps just its bottom): every cell draws its right and bottom
+   edge, a row's first cell its left, the first row and the row after a page
+   break their top, so a shared edge is drawn once and no edge is widened by
+   rounding. The outer edges live on the edge cells, not the table box, so a
+   fill on an edge cell keeps its edge and nothing runs through a page break:
+   the filler row draws nothing but its repeated header copy (top, right,
+   left on the first column; its bottom is the next row's top). A row rule
+   (table-rules.ts) replaces the ghost under its row; the `tr >` lifts these
+   rules to the row-rule presets' specificity, and source order lets them
+   win, so a rule row keeps its other three edges. The first column is
+   `ts-cell-col0` (table-editor.ts), not :first-child: under a rowspan in
+   column 0, a row's first cell sits in column 1 and must not draw a left. */
+.ProseMirror table.ts-table-editing.ts-table-plain {
+  --ghost: calc(0.5px / var(--ps, 1));
+}
+
+.ProseMirror table.ts-table-editing.ts-table-plain tr > :is(td, th),
+.ProseMirror table.ts-table-editing.ts-table-plain .ts-table-hdr {
+  --g-t: 0 0 transparent;
+  --g-r: inset calc(-1 * var(--ghost)) 0 0 var(--cell-line);
+  --g-b: inset 0 calc(-1 * var(--ghost)) 0 var(--cell-line);
+  --g-l: 0 0 transparent;
+  box-shadow: var(--g-t), var(--g-r), var(--g-b), var(--g-l);
+}
+
+.ProseMirror table.ts-table-editing.ts-table-plain tr > :is(td, th).ts-cell-col0,
+.ProseMirror table.ts-table-editing.ts-table-plain tr > td:first-child > .ts-table-hdr {
+  --g-l: inset var(--ghost) 0 0 var(--cell-line);
+}
+
+.ProseMirror table.ts-table-editing.ts-table-plain tr:first-child > :is(td, th),
+.ProseMirror table.ts-table-editing.ts-table-plain tr.ts-table-break + tr > :is(td, th),
+.ProseMirror table.ts-table-editing.ts-table-plain .ts-table-hdr {
+  --g-t: inset 0 var(--ghost) 0 var(--cell-line);
+}
+
+.ProseMirror table.ts-table-editing.ts-table-plain .ts-table-hdr {
+  --g-b: 0 0 transparent;
+}
+
+.ProseMirror table.ts-table-editing.ts-table-plain tr[data-rule='light'] > :is(td, th) {
+  --g-b: inset 0 -0.05em 0 var(--ink);
+}
+
+.ProseMirror table.ts-table-editing.ts-table-plain tr[data-rule='heavy'] > :is(td, th) {
+  --g-b: inset 0 -0.08em 0 var(--ink);
+}
+
+/* The page-break filler row spans the bottom margin, the page number and
+   the next page's top margin: no ghost edge may cross it. */
+.ProseMirror table.ts-table-editing.ts-table-plain tr.ts-table-break > td {
+  box-shadow: none;
 }
 
 /* A table or grid selected as a block (a NodeSelection). */
@@ -3460,7 +3326,6 @@ body {
   #toast,
   #scrollrail,
   #sr-label,
-  .native-table-toolbar,
   #paper-shadow,
   #pages {
     display: none;
@@ -3556,9 +3421,22 @@ body {
   }
 
   .ProseMirror .ts-inline-image.ProseMirror-selectednode,
-  .ProseMirror :is(table, .ts-grid).ProseMirror-selectednode,
-  .ProseMirror table.ts-table-editing.ts-table-plain :is(td, th) {
+  .ProseMirror :is(table, .ts-grid).ProseMirror-selectednode {
     outline: none;
+  }
+
+  /* Plain-table ghost edges (rule rows keep their printed rule). */
+  .ProseMirror table.ts-table-editing.ts-table-plain .ts-table-hdr,
+  .ProseMirror table.ts-table-editing.ts-table-plain tr:not([data-rule='light'], [data-rule='heavy']) > :is(td, th) {
+    box-shadow: none;
+  }
+
+  .ProseMirror table.ts-table-editing.ts-table-plain tr[data-rule='light'] > :is(td, th) {
+    box-shadow: inset 0 -0.05em 0 var(--ink);
+  }
+
+  .ProseMirror table.ts-table-editing.ts-table-plain tr[data-rule='heavy'] > :is(td, th) {
+    box-shadow: inset 0 -0.08em 0 var(--ink);
   }
 
   /* Screen footnote positions are meaningless in print flow; show bodies as

@@ -21,7 +21,6 @@ import { buildToolbar, type Toolbar } from './toolbar';
 import { structuredTablePlugin } from './table-editor';
 import { blockChromePagesChanged, blockChromePlugin, blockChromeSourceMode } from './block-chrome';
 import { TableView } from './table-view';
-import './table-controls.css';
 import './editor-comments.css';
 import { equationsPlugin } from './equations';
 import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';

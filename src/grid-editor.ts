@@ -11,12 +11,11 @@
 // call (md-parser recognizes it).
 
 import { Fragment, type Node as PMNode } from 'prosemirror-model';
-import { NodeSelection, Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
+import { Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView, type NodeView, type ViewMutationRecord } from 'prosemirror-view';
 import { schema } from './schema';
 import { getSettings } from './settings';
 import { blockFrameSlackEm, headingScale } from './typ-serializer';
-import { pickAndInsertFigure } from './figures';
 import { atPaperSize, onPaperScale, paperScale } from './paper-scale';
 import { inkReachEm } from './font-registry';
 import { onGeometryVarsPublished, scheduleTypeset } from './typeset-plugin';
@@ -104,7 +103,8 @@ const cellMatrix = (grid: PMNode): PMNode[][] => {
 };
 
 /** Set the column shares; a different count adds empty cells on the right
- *  or drops the rightmost columns (their content is lost — the bar says so). */
+ *  or drops the rightmost columns (their content is lost; Grid layout never
+ *  changes the count, Columns › add/delete act at the caret instead). */
 export function setGridColumns(view: EditorView, columns: number[], focus = true): boolean {
   const ctx = gridContext(view.state);
   if (!ctx) return false;
@@ -128,6 +128,8 @@ export function setGridGutter(view: EditorView, gutter: number, focus = true): b
   return true;
 }
 
+// The old bar's commands (append or drop at the right / bottom), kept as
+// exports; the pill acts at the caret (insertGridRowAt and the rest below).
 export function addGridColumn(view: EditorView): boolean {
   const ctx = gridContext(view.state);
   if (!ctx) return false;
@@ -669,141 +671,13 @@ function scheduleTypesetSoon(view: EditorView) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// The grid bar: docked under the toolbar while the caret is in a grid.
-
-const gridBarKey = new PluginKey('grid-bar');
-
-class GridBar {
-  private root: HTMLElement;
-  private columnsInput: HTMLInputElement;
-  private gutterInput: HTMLInputElement;
-  private removeColumn: HTMLButtonElement;
-  private removeRow: HTMLButtonElement;
-  private position: HTMLElement;
-  private hint: HTMLElement;
-  private signature = '';
-
-  constructor(private view: EditorView) {
-    this.root = document.createElement('div');
-    this.root.className = 'native-table-toolbar grid-toolbar';
-    this.root.setAttribute('role', 'toolbar');
-    this.root.setAttribute('aria-label', 'Grid controls');
-    this.root.hidden = true;
-    const main = document.createElement('div');
-    main.className = 'native-table-toolbar-main';
-    this.root.appendChild(main);
-    const group = () => {
-      const g = document.createElement('div');
-      g.className = 'native-table-toolbar-group';
-      main.appendChild(g);
-      return g;
-    };
-    const button = (parent: HTMLElement, label: string, title: string, run: () => void) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = label;
-      b.title = title;
-      b.addEventListener('mousedown', (e) => e.preventDefault());
-      b.addEventListener('click', run);
-      parent.appendChild(b);
-      return b;
-    };
-    const field = (parent: HTMLElement, label: string, title: string, width: string) => {
-      const wrap = document.createElement('label');
-      wrap.className = 'grid-toolbar-field';
-      wrap.title = title;
-      const span = document.createElement('span');
-      span.textContent = label;
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.style.width = width;
-      wrap.append(span, input);
-      parent.appendChild(wrap);
-      return input;
-    };
-    const g1 = group();
-    const name = document.createElement('span');
-    name.className = 'grid-toolbar-name';
-    name.textContent = 'Grid';
-    g1.appendChild(name);
-    this.columnsInput = field(g1, 'Columns', 'Column shares, e.g. 2 : 1 or 1 : 1 : 1 (Typst fr units) — Enter applies', '72px');
-    this.columnsInput.addEventListener('change', () => {
-      const shares = parseColumnShares(this.columnsInput.value);
-      if (shares) setGridColumns(this.view, shares);
-      else this.columnsInput.value = formatColumnShares((gridContext(this.view.state)?.node.attrs.columns as number[]) ?? [1, 1]);
-    });
-    this.columnsInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        this.columnsInput.blur();
-      }
-    });
-    this.gutterInput = field(g1, 'Gutter (em)', 'Space between columns and rows, in em', '40px');
-    this.gutterInput.addEventListener('change', () => {
-      const v = parseFloat(this.gutterInput.value);
-      if (Number.isFinite(v) && v >= 0 && v <= 10) setGridGutter(this.view, Math.round(v * 100) / 100);
-      else this.gutterInput.value = String(gridContext(this.view.state)?.node.attrs.gutter ?? DEFAULT_GRID_GUTTER_EM);
-    });
-    this.gutterInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        this.gutterInput.blur();
-      }
-    });
-    const g2 = group();
-    button(g2, '+ Column', 'Add a column on the right', () => addGridColumn(this.view));
-    this.removeColumn = button(g2, '− Column', 'Remove the rightmost column (its content is dropped)', () => removeGridColumn(this.view));
-    button(g2, '+ Row', 'Add a row at the bottom', () => addGridRow(this.view));
-    this.removeRow = button(g2, '− Row', 'Remove the bottom row (its content is dropped)', () => removeGridRow(this.view));
-    const g3 = group();
-    button(g3, 'Figure in cell', 'Choose an image for the current cell; Enter in its caption adds text below it', () => pickAndInsertFigure(this.view));
-    button(g3, 'Unwrap', 'Replace the grid by its blocks, in reading order', () => unwrapGrid(this.view));
-    const help = document.createElement('div');
-    help.className = 'grid-toolbar-help';
-    this.position = document.createElement('span');
-    this.position.className = 'grid-toolbar-position';
-    this.hint = document.createElement('span');
-    this.hint.className = 'grid-toolbar-hint';
-    help.append(this.position, this.hint);
-    this.root.appendChild(help);
-    document.body.appendChild(this.root);
-    this.update(view);
-  }
-
-  update(view: EditorView): void {
-    const ctx = gridContext(view.state);
-    if (!ctx) {
-      this.root.hidden = true;
-      this.signature = '';
-      return;
-    }
-    const columns = ctx.node.attrs.columns as number[];
-    const gutter = ctx.node.attrs.gutter as number;
-    const selected = selectedCell(view.state, ctx);
-    this.position.textContent = selected ? `Row ${selected.row + 1} of ${ctx.node.childCount} · Column ${selected.column + 1} of ${columns.length}` : '';
-    const imageSelected = view.state.selection instanceof NodeSelection && view.state.selection.node.type === schema.nodes.image;
-    this.hint.textContent = imageSelected
-      ? 'Image selected · → then Enter adds text below · Tab / Shift-Tab move between cells'
-      : 'Click a cell to edit · Tab / Shift-Tab move between cells · Enter adds text below a figure';
-    const signature = `${ctx.pos}:${columns.join(',')}:${gutter}:${ctx.node.childCount}`;
-    this.root.hidden = false;
-    if (signature === this.signature) return;
-    this.signature = signature;
-    if (document.activeElement !== this.columnsInput) this.columnsInput.value = formatColumnShares(columns);
-    if (document.activeElement !== this.gutterInput) this.gutterInput.value = String(gutter);
-    this.removeColumn.disabled = columns.length < 2;
-    this.removeRow.disabled = ctx.node.childCount < 2;
-  }
-
-  destroy(): void {
-    this.root.remove();
-  }
-}
+/** The grid's editing decorations (classes only; the controls live in the
+ *  block pill, block-chrome.ts). */
+const gridEditingKey = new PluginKey('grid-editing');
 
 export function gridPlugin(): Plugin {
   return new Plugin({
-    key: gridBarKey,
+    key: gridEditingKey,
     props: {
       decorations(state) {
         const ctx = gridContext(state);
@@ -825,10 +699,6 @@ export function gridPlugin(): Plugin {
         });
         return DecorationSet.create(state.doc, decorations);
       },
-    },
-    view(view) {
-      const bar = new GridBar(view);
-      return { update: (v) => bar.update(v), destroy: () => bar.destroy() };
     },
   });
 }
