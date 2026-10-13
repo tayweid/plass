@@ -140,12 +140,13 @@ plass:
 | a footnote | `a claim.[^1]` and, below, `[^1]: The note.`; or `a claim.^[The note.]` | one paragraph per footnote |
 | a bullet list | `- item` | |
 | a numbered list | `3. item` | keeps its starting number |
-| a loose list | a blank line between items | spaced like paragraphs. With no blank lines, the list is tight. A tight list cannot hold an item whose blocks need a blank line between them (a second paragraph, a quote, a div, a table): Plass saves such a list loose, with a warning |
+| a loose list | a blank line between items | spaced like paragraphs. With no blank lines, the list is tight. A tight list cannot hold an item whose blocks need a blank line between them (a second paragraph, an empty one too, a quote, a div, a table): Plass saves such a list loose, with a warning. Empty paragraphs at the end of a tight list's last item are saved after the list instead, where they print the same |
 | a quote | `> text`, with a bare `>` line between paragraphs | |
 | a code listing | ```` ```python ```` … ```` ``` ```` | printed as a monospace block |
 | a horizontal rule | `---`, with a blank line above and below it | without them, pandoc can read `---` as the start of a metadata block and drop the text up to the next `---` |
 | a page break | `\newpage` on its own line, with blank lines around it | `\pagebreak` also works |
 | a nonbreaking space | `Fig.\ 3`, or the U+00A0 character | |
+| an empty line on the page (writing room) | a line holding only a nonbreaking space (U+00A0), with a blank line before and after it | one line high, printed as Typst's `~`. A blank line in the file only separates blocks. Plass writes an empty paragraph this way (see Pitfall 24) |
 | dashes and an ellipsis | `--`, `---`, `...` | stored as –, —, … |
 | a fill-in blank | `\_\_\_\_\_\_` | prints `______` |
 | a proposed-edit mark | `{++ added ++}` | plain text, printed exactly as typed |
@@ -542,6 +543,16 @@ content.
 23. Write a raw LaTeX block as ```` ```{=latex} ````, not
     ```` ```{=tex} ````, which pandoc reads differently. Either one, and any
     raw block but `{=typst}` and `{=bibtex}`, is a code listing to Plass.
+24. Extra blank lines in the file do not add space on the page: Markdown
+    reads any number of them as one separator. For an empty line on the
+    page (room to write an answer), put a line holding only a nonbreaking
+    space (U+00A0) between blank lines, one per printed line. Pandoc and
+    Plass read it as a paragraph holding that space, which prints as an
+    empty line. Most editors show the character as a space, so the line
+    looks blank. Plass writes every empty paragraph this way, and reads
+    the line back as a paragraph holding the space, not as an empty one:
+    text typed into that line later keeps the space beside it, which
+    prints as a small indent when it comes first.
 
 ## What the first save rewrites
 
@@ -566,6 +577,13 @@ an image or a formula (`[$x$](url)`) is dropped without one.
   dropped, with a warning.
 - **Blocks.** A blank line is added around every `:::` line and every
   comment, and between paragraph text and a list, quote or table under it.
+  An empty paragraph (an empty line on the page: one left blank in Plass,
+  or a `.typ` line holding only `~`) is written as a line holding one
+  nonbreaking space (U+00A0), with no `::: center` or `::: keep` around it
+  (Pitfall 24). It is left out only where the reader makes it back: an
+  empty document, list item, quote, solution or column. Empty paragraphs
+  at the end of a tight list's last item are written after the list;
+  anywhere else in a tight list, one makes the list loose, with a warning.
   A div left open gets its closing `:::`. `\pagebreak` becomes `\newpage`.
   `::: {.solution}` becomes `::: solution`. A `: Caption` line moves into
   the table div's `caption=`.

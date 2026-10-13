@@ -211,17 +211,16 @@ const depth = (state: EditorState) => state.selection.$from.depth;
   check('typed paragraph: Typst reopens as two lists', outline(typToDoc(typ).doc) === outline(typed), outline(typToDoc(typ).doc));
 
   // Saved before anything is typed: Typst keeps the empty paragraph (a
-  // bare ~), so the halves stay two lists. Markdown has no empty
-  // paragraph; the file holds two adjacent lists, which CommonMark reads
-  // as ONE loose list — the known cost of saving an untouched gap as .md,
-  // pinned here so a change to the serializer shows.
+  // bare ~), and Markdown writes it as a line of one no-break space (a
+  // paragraph holding that space, printed as the same ~), so the halves
+  // stay two lists in both formats.
   const empty = s.doc;
   const typEmpty = docToTyp(empty);
   check('empty paragraph: Typst writes a ~ between the halves', typEmpty.includes('- a\n\n~\n\n- x\n- y\n- b\n'), JSON.stringify(typEmpty));
   check('empty paragraph: Typst reopens as list, paragraph, list', outline(typToDoc(typEmpty).doc) === 'ul("a") "" ul("x","y","b")', outline(typToDoc(typEmpty).doc));
   const mdEmpty = docToMd(empty);
-  check('empty paragraph: Markdown drops it, the halves are adjacent', mdEmpty === '- a\n\n- x\n- y\n- b\n', JSON.stringify(mdEmpty));
-  check('empty paragraph: Markdown reopens as one loose list (CommonMark)', outline(mdToDoc(mdEmpty).doc) === 'ul~("a","x","y","b")', outline(mdToDoc(mdEmpty).doc));
+  check('empty paragraph: Markdown writes a no-break space line between the halves', mdEmpty === '- a\n\n\u00a0\n\n- x\n- y\n- b\n', JSON.stringify(mdEmpty));
+  check('empty paragraph: Markdown reopens as list, paragraph, list', outline(mdToDoc(mdEmpty).doc) === 'ul("a") "\u00a0" ul("x","y","b")', outline(mdToDoc(mdEmpty).doc));
 }
 
 if (failures) {

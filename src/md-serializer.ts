@@ -21,7 +21,8 @@
 //     abstract written as body text is
 //
 // What Markdown cannot say is reported through `warn`, never dropped
-// silently.
+// silently. An empty paragraph, which Markdown has no syntax for, is
+// written as a line of one no-break space (BLANK).
 
 import MarkdownIt from 'markdown-it';
 import type { Node as PMNode, Mark } from 'prosemirror-model';
@@ -36,6 +37,26 @@ const NAMESPACE = /^(?:eq|fig|sec|tbl):/;
 // A character a citation key may continue with (pandoc: letters, digits,
 // `_`, or internal punctuation before one of those).
 const KEY_CONTINUES = /^(?:[\p{L}\p{N}_]|[:.#$%&\-+?<>~/][\p{L}\p{N}_])/u;
+
+/** An empty paragraph as Markdown writes it: a line of one no-break space,
+ *  which pandoc and the reader read as a paragraph holding that space.
+ *  Typst prints the two alike, as one blank line (`~`): the writing room
+ *  a handout leaves, a gap the writer typed. (A blank line in Markdown
+ *  only separates blocks.) */
+const BLANK = '\u00a0';
+
+/** A paragraph that prints as one blank line: nothing in it, or nothing but
+ *  spaces (typ-serializer prints both as `~`). */
+function blank(node: PMNode): boolean {
+  if (node.type.name !== 'paragraph') return false;
+  let empty = true;
+  node.forEach((c) => {
+    if (!c.isText || !/^[ \t\n]*$/.test(c.text ?? '') || c.marks.some((m) => m.type.name === 'code')) empty = false;
+  });
+  return empty;
+}
+
+const isList = (node: PMNode) => node.type.name === 'bullet_list' || node.type.name === 'ordered_list';
 
 /** The longest run of `ch` in `text`. */
 function longestRun(text: string, ch: string): number {
@@ -511,7 +532,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     });
     switch (node.type.name) {
       case 'paragraph':
-        return node.attrs.align || node.attrs.keep ? 1 : 0;
+        return (node.attrs.align || node.attrs.keep) && !blank(node) ? 1 : 0;
       case 'table':
         return tableDivAttrs(node) ? 1 : 0;
       case 'blockquote':
@@ -533,8 +554,9 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
    *  only from 1), a fenced listing — and display math, which the reader
    *  splits out of the paragraph it is in, so the paragraph it splits off
    *  follows the formula directly too. (A pipe table may not: pandoc reads
-   *  its lines as the paragraph's text.) */
-  const plainParagraph = (n: PMNode) => n.type.name === 'paragraph' && !n.attrs.align && !n.attrs.keep;
+   *  its lines as the paragraph's text.) An empty paragraph is a plain one
+   *  (BLANK, never in a div). */
+  const plainParagraph = (n: PMNode) => n.type.name === 'paragraph' && (blank(n) || (!n.attrs.align && !n.attrs.keep));
   const tightAfter = (prev: PMNode, next: PMNode) =>
     (plainParagraph(prev) || prev.type.name === 'math_display') &&
     (next.type.name === 'bullet_list' ||
@@ -543,26 +565,67 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       next.type.name === 'math_display' ||
       (prev.type.name === 'math_display' && plainParagraph(next)));
 
-  /** A block that writes nothing (an empty paragraph). */
-  const silent = (n: PMNode) => n.type.name === 'paragraph' && n.childCount === 0;
+  /** Whether a list item's blocks (as written) need a blank line between
+   *  them, which makes its whole list loose. */
+  const needsBlank = (kids: PMNode[]): boolean => kids.some((c, k) => k > 0 && !tightAfter(kids[k - 1], c));
 
-  /** Whether a list item's blocks need a blank line between them, which
-   *  makes its whole list loose. */
-  const needsBlank = (item: PMNode): boolean => {
+  interface ListLayout {
+    /** Each item's blocks as written. */
+    items: PMNode[][];
+    /** Whether the list is written tight. */
+    tight: boolean;
+    /** The empty paragraphs its last item ended with, written after it. */
+    after: PMNode[];
+  }
+  const layouts = new Map<PMNode, ListLayout>();
+  /** A list as Markdown writes it. An empty paragraph after an item's first
+   *  block needs a blank line before it (BLANK is paragraph text), which
+   *  would make a tight list loose; so a tight list gives the ones its last
+   *  item ends with to its container, right after it, where they print the
+   *  same blank lines (Typst spaces a paragraph after a list as it spaces
+   *  one after a paragraph). Any other one makes the list loose. */
+  const listLayout = (list: PMNode): ListLayout => {
+    const known = layouts.get(list);
+    if (known) return known;
+    const items: PMNode[][] = [];
+    list.forEach((item) => items.push(sequence(item)));
+    let tight = list.attrs.tight !== false;
+    let after: PMNode[] = [];
+    if (tight) {
+      const last = items[items.length - 1];
+      let end = last.length;
+      while (end > 1 && blank(last[end - 1])) end--;
+      const kept = [...items.slice(0, -1), last.slice(0, end)];
+      if (kept.some(needsBlank)) tight = false;
+      else {
+        after = last.slice(end);
+        items[items.length - 1] = last.slice(0, end);
+      }
+    }
+    const layout = { items, tight, after };
+    layouts.set(list, layout);
+    return layout;
+  };
+
+  /** A container's blocks as Markdown writes them: each list followed by
+   *  the empty paragraphs it gives up (listLayout). */
+  const sequence = (parent: PMNode): PMNode[] => {
     const kids: PMNode[] = [];
-    item.forEach((c) => {
-      if (!silent(c)) kids.push(c);
+    parent.forEach((c) => {
+      kids.push(c);
+      if (isList(c)) kids.push(...listLayout(c).after);
     });
-    return kids.some((c, k) => k > 0 && !tightAfter(kids[k - 1], c));
+    return kids;
   };
 
   /** Blocks in a container, joined by a blank line (in a tight list item,
    *  by a line break where Markdown allows); a paragraph next to a table
-   *  keeps a leading `:` from reading as the table's caption. */
-  const blocks = (parent: PMNode, tight = false): string => {
+   *  keeps a leading `:` from reading as the table's caption. An empty
+   *  paragraph that is the container's only block writes nothing: the
+   *  reader makes that one back (an empty item, quote, solution or cell). */
+  const blocks = (kids: PMNode[], tight = false): string => {
+    if (kids.length === 1 && blank(kids[0])) return '';
     let md = '';
-    const kids: PMNode[] = [];
-    parent.forEach((c) => kids.push(c));
     let prev: PMNode | null = null;
     kids.forEach((child, k) => {
       const nearTable = kids[k - 1]?.type.name === 'table' || kids[k + 1]?.type.name === 'table';
@@ -583,6 +646,9 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
   const block = (node: PMNode, nearTable = false): string => {
     switch (node.type.name) {
       case 'paragraph': {
+        // An empty paragraph prints a blank line whatever its alignment or
+        // keep, which it is written without.
+        if (blank(node)) return BLANK;
         // Spaces at a paragraph's edges never print, and Markdown drops
         // them on read (four leading ones would make it code).
         let text = escLines(inline(node).replace(/^[ \t]+|[ \t]+$/g, ''));
@@ -659,8 +725,8 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         return `${ticks}${info}\n${node.textContent}\n${ticks}`;
       }
       case 'blockquote': {
-        if (node.attrs.kind === 'solution') return div(divDepth(node), 'solution', blocks(node));
-        return quote(blocks(node));
+        if (node.attrs.kind === 'solution') return div(divDepth(node), 'solution', blocks(sequence(node)));
+        return quote(blocks(sequence(node)));
       }
       case 'bullet_list':
       case 'ordered_list': {
@@ -668,14 +734,14 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         const start = (node.attrs.order as number) || 1;
         // An item whose blocks Markdown must set apart with a blank line (a
         // second paragraph, a quote, a div, a table) makes the list loose:
-        // a tight list cannot hold it.
-        let tight = node.attrs.tight !== false;
-        if (tight && node.content.content.some(needsBlank)) {
-          tight = false;
-          warn('a tight list whose item has blocks Markdown must set apart with a blank line (a second paragraph, a quote, a div, a table) is saved loose — its items take paragraph spacing');
+        // a tight list cannot hold it. Its container writes the empty
+        // paragraphs the list gives up (listLayout).
+        const { items: kids, tight } = listLayout(node);
+        if (node.attrs.tight !== false && !tight) {
+          warn('a tight list whose item has blocks Markdown must set apart with a blank line (a second paragraph, an empty one too, a quote, a div, a table) is saved loose — its items take paragraph spacing');
         }
         const items: string[] = [];
-        node.forEach((item, _o, i) => {
+        kids.forEach((item, i) => {
           const marker = ordered ? `${start + i}. ` : '- ';
           const hang = ' '.repeat(marker.length);
           // Every line after the first hangs under the marker; the blank
@@ -723,7 +789,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           const cells: string[] = [];
           row.forEach((cell, _c, c) => {
             const kvs: Array<[string, string]> = equal ? [] : [['width', widths[c] ?? widths[widths.length - 1]]];
-            cells.push(div(depth - 1, writeFenceAttrs({ id: '', classes: ['column'], kvs }), blocks(cell)));
+            cells.push(div(depth - 1, writeFenceAttrs({ id: '', classes: ['column'], kvs }), blocks(sequence(cell))));
           });
           const head = writeAttrBlock({ id: '', classes: r ? ['columns', 'continued'] : ['columns'], kvs: [['gutter', `${num(node.attrs.gutter as number)}em`]] });
           rows.push(div(depth, head, cells.join('\n\n')));
@@ -788,6 +854,12 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       const paras: string[] = [];
       for (const a of of.abstract) {
         a.forEach((p) => {
+          // An empty paragraph is BLANK, as in the body, unless it is the
+          // whole abstract (the empty string).
+          if (blank(p)) {
+            if (a.childCount > 1) paras.push(BLANK);
+            return;
+          }
           if (p.attrs.align || p.attrs.keep) warn('alignment and keep on a paragraph of the abstract have no Markdown form — dropped');
           const text = escLines(line(p));
           if (text) paras.push(text);
@@ -850,7 +922,11 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
   doc.forEach((node) => top.push(node));
   top.forEach((node, k) => {
     const nearTable = top[k - 1]?.type.name === 'table' || top[k + 1]?.type.name === 'table';
-    let text = block(node, nearTable);
+    // An empty document writes nothing (the reader makes its one empty
+    // paragraph back); a list's chunk ends with the empty paragraphs it
+    // gives up (listLayout).
+    let text = top.length === 1 && blank(node) ? '' : block(node, nearTable);
+    if (isList(node)) text += `\n\n${BLANK}`.repeat(listLayout(node).after.length);
     // A `%` that opens the file (no front matter before it) starts pandoc's
     // title block.
     if (!out.length && !blockChunks.some((c) => c.text) && node.type.name === 'paragraph') text = text.replace(/^%/, '\\%');

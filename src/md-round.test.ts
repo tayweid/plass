@@ -267,6 +267,115 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   }
 }
 
+// An empty paragraph prints one blank line (Typst's `~`: the writing room a
+// handout leaves) and has no Markdown syntax. It is written as a line of
+// one no-break space, which pandoc and the reader read as a paragraph
+// holding that space, printed the same; the course files' writing room
+// (lone U+00A0 lines) reads as it always did. Where the reader makes the
+// empty paragraph itself (an empty document, item, quote, solution or
+// cell) nothing is written. A tight list's last item gives the ones it
+// ends with to the list's container, after the list (the page is the
+// same: Typst spaces a paragraph after a list as after a paragraph); any
+// other one in a tight list makes the list loose, with a warning.
+{
+  const { doc: D, paragraph: P, bullet_list: BL, ordered_list: OL, list_item: LI, blockquote: BQ, grid: G, grid_row: GR, grid_cell: GC, abstract: AB } = schema.nodes;
+  const p = (text = '') => P.create(null, text ? schema.text(text) : null);
+  const print = (d: PMNode) => docToTyp(d, { islands: 'print' });
+  const blanks = (typ: string) => (typ.match(/^[ \t]*~$/gm) ?? []).length;
+  /** Save, reopen, save: the text, the warnings, the reopened document,
+   *  and whether the compiler sees the same document. */
+  const saves = (d: PMNode) => {
+    const written: string[] = [];
+    const md = docToMd(d, (w) => written.push(w));
+    const back = mdToDoc(md).doc;
+    return { md, written, back, md2: docToMd(back), printed: print(back) === print(d) };
+  };
+  const NB = '\u00a0';
+
+  // The reported case: a .typ's bare `~` through Export → Markdown.
+  const typ = saves(typToDoc('A\n\n~\n\nB\n').doc);
+  check('an empty paragraph is written as a line of one no-break space', typ.md === `A\n\n${NB}\n\nB\n` && !typ.written.length, JSON.stringify(typ.md));
+  check('… which reads back as a paragraph holding that space, printed as the same ~', kinds(typ.back).join() === 'paragraph,paragraph,paragraph' && typ.back.child(1).textContent === NB && typ.printed && blanks(print(typ.back)) === 1, JSON.stringify(typ.back.toJSON()));
+  check('… and the save converges', typ.md2 === typ.md);
+
+  // The course files' form: read and written exactly as before.
+  const course = `Plot the supply curve below.\n\n${NB}\n\n${NB}\n\n${NB}\n\na\\) Find the quantity supplied.\n`;
+  const read = mdToDoc(course).doc;
+  check('a lone no-break-space line reads as a paragraph holding it, and writes back unchanged', read.childCount === 5 && read.child(2).textContent === NB && read.child(2).childCount === 1 && docToMd(read) === course, docToMd(read));
+
+  // Writing room: a run of empty paragraphs, at the top and the end too.
+  const room = saves(D.create(null, [p(), p('Q1.'), p(), p(), p(), p('Q2.'), p(), p()]));
+  check('writing room: every empty paragraph is a line, the first and last too', room.md === `${NB}\n\nQ1.\n\n${NB}\n\n${NB}\n\n${NB}\n\nQ2.\n\n${NB}\n\n${NB}\n` && room.printed && room.md2 === room.md, JSON.stringify(room.md));
+
+  // Empty in every sense the print knows: spaces only, and alignment or
+  // keep (which Typst does not print for an empty paragraph).
+  const quiet = saves(D.create(null, [p('a'), p(' '), P.create({ align: 'center' }), P.create({ keep: true }), p('b')]));
+  check('a paragraph of spaces, and an aligned or kept empty one, is the same plain line', quiet.md === `a\n\n${NB}\n\n${NB}\n\n${NB}\n\nb\n` && quiet.printed && !quiet.written.length && quiet.md2 === quiet.md, JSON.stringify(quiet.md));
+
+  // Where the reader makes the empty paragraph itself, nothing is written,
+  // and the document comes back exactly: an empty document, item, quote,
+  // solution, grid cell (Typst's `[]`, never `~`).
+  const cell = (...kids: PMNode[]) => GC.create(null, kids);
+  for (const [name, d, want] of [
+    ['an empty document', D.create(null, [p()]), '\n'],
+    ['an empty item', D.create(null, [BL.create({ tight: true }, [LI.create(null, [p('a')]), LI.create(null, [p()]), LI.create(null, [p('b')])])]), '- a\n- \n- b\n'],
+    ['an empty quote', D.create(null, [p('a'), BQ.create(null, [p()]), p('b')]), 'a\n\n>\n\nb\n'],
+    ['an empty solution', D.create(null, [p('a'), BQ.create({ kind: 'solution' }, [p()]), p('b')]), 'a\n\n::: solution\n\n:::\n\nb\n'],
+    ['an empty grid cell', D.create(null, [G.create({ columns: [1, 1], gutter: 1 }, [GR.create(null, [cell(p('x')), cell(p())])])]), ':::: {.columns gutter=1em}\n\n::: column\n\nx\n\n:::\n\n::: column\n\n:::\n\n::::\n'],
+  ] as const) {
+    const s = saves(d);
+    check(`${name} writes no line and reopens exactly`, s.md === want && s.back.eq(d) && s.printed, JSON.stringify([s.md, s.back.toJSON()]));
+  }
+  check('an empty grid cell prints [], not ~', /\[\],/.test(print(D.create(null, [G.create({ columns: [1, 1], gutter: 1 }, [GR.create(null, [cell(p('x')), cell(p())])])]))));
+
+  // Among other blocks, in a container, it is a line like any other.
+  const held = saves(
+    D.create(null, [
+      BQ.create({ kind: 'solution' }, [p('Work:'), p(), p()]),
+      BQ.create(null, [p(), p('q')]),
+      G.create({ columns: [1, 1], gutter: 1 }, [GR.create(null, [cell(p('x'), p()), cell(p('y'))])]),
+    ]),
+  );
+  check(
+    'in a solution, a quote and a grid cell, an empty paragraph among blocks is a line',
+    held.md.includes(`::: solution\n\nWork:\n\n${NB}\n\n${NB}\n\n:::`) && held.md.includes(`> ${NB}\n>\n> q`) && held.md.includes(`x\n\n${NB}\n\n:::`) && held.printed && held.md2 === held.md,
+    JSON.stringify(held.md),
+  );
+
+  // Tight lists. The last item's empty paragraphs follow the list (nested
+  // lists that end it give theirs up the same way); the list stays tight.
+  const item = (...kids: PMNode[]) => LI.create(null, kids);
+  const quiz = saves(D.create(null, [OL.create({ tight: true }, [item(p('Pick one.')), item(p('Select all.'), p())]), p('After.')]));
+  check('a tight list\'s last item: its empty paragraph follows the list, which stays tight, unsaid', quiz.md === `1. Pick one.\n2. Select all.\n\n${NB}\n\nAfter.\n` && !quiz.written.length && quiz.back.firstChild!.attrs.tight === true && quiz.md2 === quiz.md, JSON.stringify([quiz.md, quiz.written]));
+  check('… and prints the one blank line', blanks(print(quiz.back)) === 1);
+  const nested = saves(D.create(null, [BL.create({ tight: true }, [item(p('a')), item(p('b'), BL.create({ tight: true }, [item(p('x')), item(p('y'), p())]), p())]), p('After.')]));
+  check('nested: the empty paragraphs ending a nested list and its item follow the outer list', nested.md === `- a\n- b\n  - x\n  - y\n\n${NB}\n\n${NB}\n\nAfter.\n` && !nested.written.length && nested.md2 === nested.md && blanks(print(nested.back)) === 2, JSON.stringify(nested.md));
+  const inSolution = saves(D.create(null, [BQ.create({ kind: 'solution' }, [p('Q'), BL.create({ tight: true }, [item(p('a')), item(p('b'), p())])])]));
+  check('… inside a solution they follow the list inside it', inSolution.md === `::: solution\n\nQ\n\n- a\n- b\n\n${NB}\n\n:::\n` && inSolution.md2 === inSolution.md, JSON.stringify(inSolution.md));
+  // The .typ form the course's quiz had: the room inside the last item.
+  const typQuiz = saves(typToDoc('+ Pick one.\n+ Select all.\n\n  ~\n\nAfter.\n').doc);
+  check('… as the .typ export of a quiz holds it', typQuiz.md === `1. Pick one.\n2. Select all.\n\n${NB}\n\nAfter.\n`, JSON.stringify(typQuiz.md));
+  // Anywhere else in a tight list it needs a blank line before it: the
+  // list is saved loose, with the warning, and the line is kept.
+  const middle = saves(D.create(null, [BL.create({ tight: true }, [item(p('a'), p()), item(p('b'))])]));
+  check('an empty paragraph in an item before the last: the list is saved loose, with a warning', middle.md === `- a\n\n  ${NB}\n\n- b\n` && middle.written.some((w) => /saved loose/.test(w)) && middle.back.firstChild!.attrs.tight === false && blanks(print(middle.back)) === 1 && middle.md2 === middle.md, JSON.stringify([middle.md, middle.written]));
+  // An item's first paragraph, empty, before a sub-list: on the marker line.
+  const lead = saves(D.create(null, [BL.create({ tight: true }, [item(p('a')), item(p(), BL.create({ tight: true }, [item(p('x')), item(p('y'))])), item(p('b'))])]));
+  check('an empty first paragraph before a sub-list is the marker line\'s, and the list stays tight', lead.md === `- a\n- ${NB}\n  - x\n  - y\n- b\n` && !lead.written.length && lead.printed && lead.md2 === lead.md, JSON.stringify(lead.md));
+  // A loose list holds them where they are.
+  const loose = saves(D.create(null, [BL.create({ tight: false }, [item(p('a')), item(p('b'), p())]), p('After.')]));
+  check('a loose list keeps its last item\'s empty paragraph in the item', loose.md === `- a\n\n- b\n\n  ${NB}\n\nAfter.\n` && loose.printed && loose.md2 === loose.md, JSON.stringify(loose.md));
+
+  // The abstract's paragraphs too.
+  const abs = saves(D.create(null, [AB.create(null, [p('First.'), p(), p('Second.')]), p('Body.')]));
+  check('an empty paragraph in the abstract is a line of the abstract', abs.md === `---\nabstract: |\n  First.\n\n  ${NB}\n\n  Second.\n---\n\nBody.\n` && abs.printed && abs.md2 === abs.md, JSON.stringify(abs.md));
+
+  // The source view's block offsets: an empty paragraph's is its line.
+  const offsets: number[] = [];
+  const at = docToMd(D.create(null, [p('A'), p(), p('B')]), () => {}, offsets);
+  check('an empty paragraph\'s block offset lands on its line', at.slice(offsets[1], offsets[1] + 1) === NB && at.slice(offsets[2], offsets[2] + 1) === 'B', JSON.stringify([at, offsets]));
+}
+
 // A code span or a raw `{=typst}` span with spaces at its edges reads back
 // as written (the reader takes one space off each end only when both ends
 // have one and the span is not all spaces), so a save never grows or
@@ -1791,6 +1900,36 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('… merged into an existing bibliography too', !mergeSidecarBib({ name: 'references.bib', content: '@book{own, title = {Own}}' }, crlf).bib.content.includes('\r'));
 }
 
+/** Empty paragraphs wherever one prints a blank line and keeps its place
+ *  in the Typst source (a tight list's last item gives its own up: its
+ *  source moves, not its page): around the body, in a run, aligned, in the
+ *  abstract, a solution, a quote, a grid cell and a loose list, and as an
+ *  item's first paragraph before a sub-list; and alone where the reader
+ *  makes it back (an empty item, quote, solution, cell). */
+function emptyParagraphsDoc(): PMNode {
+  const { doc: D, paragraph: P, bullet_list: BL, list_item: LI, blockquote: BQ, grid: G, grid_row: GR, grid_cell: GC, abstract: AB } = schema.nodes;
+  const p = (text = '') => P.create(null, text ? schema.text(text) : null);
+  const item = (...kids: PMNode[]) => LI.create(null, kids);
+  return D.create(null, [
+    AB.create(null, [p('First.'), p(), p('Second.')]),
+    p(),
+    p('Question one.'),
+    p(),
+    p(),
+    P.create({ align: 'center' }),
+    p('Question two.'),
+    BQ.create({ kind: 'solution' }, [p('Work:'), p(), p()]),
+    BQ.create({ kind: 'solution' }, [p()]),
+    BQ.create(null, [p(), p('Quoted.')]),
+    BQ.create(null, [p()]),
+    G.create({ columns: [1, 1], gutter: 1 }, [GR.create(null, [GC.create(null, [p('Cell.'), p()]), GC.create(null, [p()])])]),
+    BL.create({ tight: false }, [item(p('a'), p()), item(p('b'))]),
+    p('Between the lists.'),
+    BL.create({ tight: true }, [item(p()), item(p(), BL.create({ tight: true }, [item(p('x'))])), item(p('c'))]),
+    p(),
+  ]);
+}
+
 // The cross-format check: a Markdown trip changes nothing the compiler
 // sees — the whole Typst source, the page setup and every other setting
 // included — except what a document declares it drops: `params` (verbatim
@@ -1854,6 +1993,7 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
     ['lone image with alt', schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, schema.nodes.image.create({ src: 'a.svg', alt: 'An icon' }))), false],
     ['lone image with alt and a space', schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.nodes.image.create({ src: 'a.svg', alt: 'An icon' }), schema.text(' ')])), false],
     ['uncaptioned figure', schema.nodes.doc.create(null, [schema.nodes.paragraph.create(null, schema.text('Before.')), schema.nodes.figure.create({ src: 'a.svg' })]), false],
+    ['empty paragraphs', emptyParagraphsDoc(), false],
   ];
   // Declared differences beyond `params`: an uncaptioned, unlabeled figure
   // is written with a made-up label (its only Markdown form as a figure),

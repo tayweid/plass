@@ -2557,7 +2557,9 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
     if (fields.abstract !== null) {
       const paras: PMNode[] = [];
       for (const chunk of fields.abstract.split(/\n[ \t]*\n/)) {
-        if (!chunk.trim()) continue;
+        // A line of one no-break space is a paragraph, as in the body (an
+        // empty paragraph as md-serializer writes it): trim() takes it.
+        if (/^[ \t\n]*$/.test(chunk)) continue;
         const kind = blockKind(chunk);
         if (kind) warn(`abstract: ${kind} there is read as paragraph text — the abstract holds paragraphs`);
         const p = paragraph.create(null, field('abstract', chunk));

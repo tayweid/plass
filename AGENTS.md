@@ -212,8 +212,10 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   paragraph and whatever blocks follow it in the item leave the list one
   level up, cutting it in half, and a lifted sub-list of the second
   half's type joins it. Two adjacent lists reopen as ONE loose list in
-  both formats, and a `.md` save drops an empty paragraph between them
-  (an untouched gap reopens as one loose list; `.typ` keeps it as `~`).
+  both formats; an untouched gap between them is an empty paragraph,
+  which `.typ` keeps as `~` and `.md` as a line of one U+00A0 (the
+  writer's form for every empty paragraph, read back as a paragraph
+  holding that space), so the halves reopen as two lists in both.
   Code blocks (islands included) mirror Typst's raw block through
   `codeBlockMetricsEm` (`font-registry.ts`): DejaVu Sans Mono at 0.8em,
   line pitch = leading + raw top edge, padding/margin derived from the
