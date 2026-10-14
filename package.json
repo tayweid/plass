@@ -42,7 +42,7 @@
     "sidecar": "node --import tsx scripts/build-sidecar.ts"
   },
   "dependencies": {
-    "@codemirror/commands": "^6.11.0",
+    "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.13.1",
     "@codemirror/search": "^6.7.2",
