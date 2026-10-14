@@ -33,5 +33,13 @@ export const test = base.extend({
     await use(context.pages()[0] ?? (await context.newPage()));
   },
 });
+
+/** The key that puts the caret at the end of its line. On a Mac,
+ *  Playwright sends End as the Mac's scrollToEndOfDocument: Chrome moves
+ *  the caret as well, but it also smooth-scrolls the panel to the bottom
+ *  of the paper, and a test that reads geometry in the next 100 ms or so
+ *  (a pill, a click point) finds it mid-scroll. Cmd+Right is the Mac's
+ *  line end, and moves only the caret. */
+export const LINE_END = process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End';
 export { expect } from 'playwright/test';
 export type { Page } from 'playwright/test';

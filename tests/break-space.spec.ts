@@ -1,4 +1,4 @@
-import { expect, test, type Page } from './fixture';
+import { expect, LINE_END, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // The space a line breaks at (src/break-space.ts). The layout draws a
@@ -15,8 +15,6 @@ type Hooks = {
   view: import('prosemirror-view').EditorView;
   __loadDemo: () => void;
 };
-
-const LINE_END = process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End';
 
 async function demo(page: Page) {
   await page.goto('/?new=1');

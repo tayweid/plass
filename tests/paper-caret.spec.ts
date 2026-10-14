@@ -6,7 +6,7 @@
 // else on the sheet (a margin, the white below the line, the frame under
 // a short paper) took the focus off the editor and left the keys going
 // nowhere. Real mouse presses at screen points, then real keys.
-import { expect, test, type Page } from './fixture';
+import { expect, LINE_END, test, type Page } from './fixture';
 
 declare global {
   interface Window {
@@ -281,7 +281,7 @@ test('a right-click on the paper and a press on the table pill\'s background kee
     window.view.dispatch(state.tr.insert(state.doc.content.size, table.create(null, [table_row.create(null, [cell('A'), cell('B')])])));
   });
   await page.locator('.ProseMirror td').first().click();
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   const toolbar = page.getByRole('toolbar', { name: 'Table controls' });
   await expect(toolbar).toBeVisible();
   // A point of the pill between its tiles (its padding).

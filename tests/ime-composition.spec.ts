@@ -1,4 +1,4 @@
-import { expect, test, type Page } from './fixture';
+import { expect, LINE_END, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // An IME's composition while the layout would re-break its paragraph
@@ -15,8 +15,6 @@ type Hooks = {
   __loadDemo: () => void;
   __pagCount: () => number;
 };
-
-const LINE_END = process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End';
 
 async function demo(page: Page) {
   await page.goto('/?new=1');
