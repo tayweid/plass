@@ -1,4 +1,4 @@
-import { expect, test } from './fixture';
+import { expect, LINE_END, test } from './fixture';
 import { settleLocal } from './settle';
 
 declare global {
@@ -103,7 +103,7 @@ test('rich table cells edit directly, navigate with Tab, and undo without flatte
 
   const firstParagraph = nativeTable.locator('td').first().locator('p').first();
   await firstParagraph.click();
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.keyboard.type('!');
 
   const richShape = await page.evaluate(() => {
@@ -166,7 +166,7 @@ test('unsupported table styling is said in Table settings and custom insets cann
   await expect(panel.getByText('Set by custom styling in the file')).toBeVisible();
   await cellText.click();
   await expect(panel).toBeHidden();
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.keyboard.type(' edited');
   expect(await page.evaluate(() => window.view.state.doc.firstChild!.attrs.params)).toBe(params);
 });
@@ -175,7 +175,7 @@ test('native table keystrokes map numbering and read no contextual geometry', as
   await installRichTable(page);
   const paragraph = page.locator('.ProseMirror td').first().locator('p').first();
   await paragraph.click();
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await expect(page.getByRole('toolbar', { name: 'Table controls' })).toBeVisible();
   // Let the selection-triggered initial placement finish. The probe below is
   // scoped to the subsequent real contenteditable input transaction.
@@ -320,7 +320,7 @@ test('a table grows under the keyboard and lets the caret out at its edges', asy
     window.view.dispatch(state.tr.insertText('Before the table.', 1));
     window.view.focus();
   });
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.keyboard.press('ControlOrMeta+Alt+t');
   await expect(page.locator('.ProseMirror table')).toHaveCount(1);
   // The caret is in the first (empty) header cell.
@@ -449,7 +449,7 @@ test('the Rule tiles set a row rule that paints in the page and exports at its b
     window.view.dispatch(state.tr.insertText('Before.', 1));
     window.view.focus();
   });
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.keyboard.press('ControlOrMeta+Alt+t');
   await expect(page.locator('.ProseMirror table')).toHaveCount(1);
   await page.keyboard.type('H');
@@ -493,7 +493,7 @@ test('the Fill swatches paint the cell and export', async ({ page }) => {
     window.view.dispatch(state.tr.insertText('Before.', 1));
     window.view.focus();
   });
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.keyboard.press('ControlOrMeta+Alt+t');
   await expect(page.locator('.ProseMirror table')).toHaveCount(1);
   await page.keyboard.press('Enter');
@@ -526,7 +526,7 @@ test('math is written and edited inside cells like anywhere else', async ({ page
     window.view.dispatch(state.tr.insertText('Before.', 1));
     window.view.focus();
   });
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.keyboard.press('ControlOrMeta+Alt+t');
   await expect(page.locator('.ProseMirror table')).toHaveCount(1);
   await page.keyboard.press('Enter'); // first body row, column 1

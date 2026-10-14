@@ -13,7 +13,7 @@
 // send an event (`__fire`), and every `beforeunload` registration counted.
 // The disk watcher (the file manager's 1.5 s poll) is held still, so a
 // file changed under the document is met by the next write.
-import { expect, test, type Page } from './fixture';
+import { expect, LINE_END, test, type Page } from './fixture';
 
 const PATH = '/Users/someone/papers/Close.typ';
 const EDITOR = '.ProseMirror[contenteditable="true"]';
@@ -110,7 +110,7 @@ const fresh = async (page: Page) => {
 };
 const typeAtEnd = async (page: Page, text: string) => {
   await page.locator('.ProseMirror p').first().click();
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.keyboard.type(text);
 };
 const reports = (page: Page) => page.evaluate(() => (window as any).__shell.filter((m: { type: string }) => m.type === 'unsaved'));

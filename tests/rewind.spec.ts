@@ -13,7 +13,7 @@
 // as the shell answers it with the file it matched. The disk watcher (the
 // file manager's 1.5 s poll) is held still, so a file changed under the
 // document is read by the reload or by nothing.
-import { expect, test, type Page } from './fixture';
+import { expect, LINE_END, test, type Page } from './fixture';
 
 const PATH = '/Users/someone/papers/Rewind.typ';
 const SHA = 'f00dfeed'.repeat(5);
@@ -103,7 +103,7 @@ test('in Plass.app a rewind’s save writes the open document through ⌘S’s w
   // Typed, not yet autosaved (that waits 1.2 s): the save writes it before
   // it answers.
   await page.locator('.ProseMirror p').first().click();
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.keyboard.type(' Typed.');
   const asked = Date.now();
   await fire(page, 'save', { id: 's1', reason: 'rewind' });
@@ -155,7 +155,7 @@ test('in Plass.app a rewind’s reload reads the file again in place, and only w
   const twenty = page.locator('.ProseMirror p', { hasText: 'Paragraph 20 holds' });
   await twenty.scrollIntoViewIfNeeded();
   await twenty.click();
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.waitForTimeout(500);
   const at = await state(page);
   expect(at.block).toContain('Paragraph 20 holds');
@@ -195,7 +195,7 @@ test('in Plass.app a rewind under edits typed since its save keeps them, and one
   await inPlassApp(page);
   await openRewind(page, '= Rewind\n\nThe saved version.\n');
   await page.locator('.ProseMirror p').first().click();
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.keyboard.type(' Typed after the save.');
   await page.evaluate(() => (window as any).__write('= Rewind\n\nThe version rewound to.\n'));
   await fire(page, 'reload', { id: 'u1', paths: [PATH], reason: 'rewind', to: SHA });
@@ -533,7 +533,7 @@ test('with the History page in the room the document under it still answers a re
   await inPlassApp(page);
   await openRewind(page, '= Rewind\n\nThe first version.\n');
   await page.locator('.ProseMirror p').first().click();
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.keyboard.type(' Typed.');
   await page.locator('#history-tile').click();
   await fire(page, 'history', { kind: 'inline', state: 'open' });

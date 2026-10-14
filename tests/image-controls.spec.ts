@@ -1,4 +1,4 @@
-import { expect, test, type Page } from './fixture';
+import { expect, LINE_END, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // The embedded axes from Checkpoint_A_1, reduced to its containing grid.
@@ -226,7 +226,7 @@ test('Fix image copies the file into the document; Save to project writes it bac
 test('a pasted image into a folderless document is imported once a folder is chosen', async ({ page }) => {
   await openImages(page);
   await page.locator('figcaption').click();
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.keyboard.press('Enter');
   await page.evaluate((replacement) => {
     const data = new DataTransfer();

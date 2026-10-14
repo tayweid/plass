@@ -1,4 +1,4 @@
-import { expect, test } from './fixture';
+import { expect, LINE_END, test } from './fixture';
 
 declare global {
   interface Window {
@@ -57,7 +57,7 @@ test('an imported non-breaking space after a formula survives loading and editin
   });
   expect(text).toBe('Glue \u00a0here and more.'.replace('Glue \u00a0', 'Glue \u00a0'));
   expect(text.includes('\u00a0here')).toBe(true);
-  await page.keyboard.press('End');
+  await page.keyboard.press(LINE_END);
   await page.keyboard.type(' Edited.');
   const after = await page.evaluate(async () => {
     const { docToTyp } = await import('/src/typ-serializer.ts');
