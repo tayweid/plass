@@ -1768,18 +1768,25 @@ body {
     inset 0 calc(-1px / var(--ps, 1)) 0 var(--seam-b, transparent);
 }
 
-/* The placeholder: only in the empty cell being edited, on the caret's
-   line, starting clear of the caret (the short form in a narrow cell,
-   --ph from the wash pass). */
-.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell-active[data-grid-empty='true']::before {
+/* The placeholder: only in the empty cell being edited, sitting on the
+   baseline typed text would sit on, starting clear of the caret (the short
+   form in a narrow cell, --ph from the wash pass). It is an inline box in
+   the empty paragraph's one line, so the browser aligns it to that line's
+   baseline; zero wide and zero tall, it moves neither the caret nor the
+   line (its text overflows to the right, shifted by text-indent), and its
+   whole box sits above the baseline inside the line's strut. */
+.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell-active[data-grid-empty='true'] > p:first-child::before {
   content: var(--ph, 'Type, or add an image');
-  position: absolute;
-  left: 0.3em;
-  top: calc(var(--half-leading, 0.42em) + 0.18em);
-  font: 400 0.78em/1.2 var(--sans);
+  display: inline-block;
+  width: 0;
+  height: 0;
+  vertical-align: baseline;
+  text-indent: 0.3em;
+  font: 400 0.78em/1 var(--sans);
   color: color-mix(in srgb, var(--ink) 34%, transparent);
   white-space: nowrap;
   pointer-events: none;
+  user-select: none;
 }
 
 /* ---------- figures ---------- */
@@ -3442,6 +3449,7 @@ body {
   /* Editing chrome never prints. */
   .ProseMirror .ts-grid-cell::before,
   .ProseMirror .ts-grid-cell::after,
+  .ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell-active[data-grid-empty='true'] > p:first-child::before,
   .ProseMirror :is(td, th).ts-cell-active::before,
   .ProseMirror .selectedCell::after {
     display: none;

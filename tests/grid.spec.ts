@@ -162,8 +162,11 @@ test('adding a row focuses it and its cells accept figures and caption-following
       active: wash(cells[2]),
       spacer: wash(cells[3]),
       firstInk: ink(cells[0]),
-      placeholder: getComputedStyle(cells[2], '::before').content,
-      spacerPlaceholder: getComputedStyle(cells[3], '::before').content,
+      // The line box the caret fills.
+      firstLine: (() => { const r = cells[0].querySelector('p')!.getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; })(),
+      placeholder: getComputedStyle(cells[2].querySelector('p')!, '::before').content,
+      placeholderBox: (() => { const b = getComputedStyle(cells[2].querySelector('p')!, '::before'); return { display: b.display, width: b.width, height: b.height, align: b.verticalAlign }; })(),
+      spacerPlaceholder: getComputedStyle(cells[3].querySelector('p')!, '::before').content,
     };
   });
   const transparent = 'rgba(0, 0, 0, 0)';
@@ -178,15 +181,24 @@ test('adding a row focuses it and its cells accept figures and caption-following
   // The wash holds the ink: air above the cap and below the descenders.
   expect(cues.first.top).toBeLessThan(cues.firstInk.top - 1);
   expect(cues.first.bottom).toBeGreaterThan(cues.firstInk.bottom + 1);
+  // It holds the whole line box the caret fills, with the same air above
+  // and below, so a line sits centred in its tile (Taylor, 2026-10-13: the
+  // caret poked out of the top and a word sat high).
+  expect(cues.first.top).toBeLessThan(cues.firstLine.top);
+  expect(cues.first.bottom).toBeGreaterThan(cues.firstLine.bottom);
+  expect(Math.abs((cues.firstLine.top - cues.first.top) - (cues.first.bottom - cues.firstLine.bottom))).toBeLessThan(0.5);
   // A row's washes end level; rows never overlap.
   expect(Math.abs(cues.first.top - cues.second.top)).toBeLessThan(0.5);
   expect(Math.abs(cues.first.bottom - cues.second.bottom)).toBeLessThan(0.5);
   expect(Math.abs(cues.active.bottom - cues.spacer.bottom)).toBeLessThan(0.5);
   expect(cues.first.bottom).toBeLessThanOrEqual(cues.active.top + 0.01);
   expect(cues.placeholder).toContain('Type, or add an image');
+  // On the line's baseline, as typed text would be, taking no room.
+  expect(cues.placeholderBox).toEqual({ display: 'inline-block', width: '0px', height: '0px', align: 'baseline' });
   expect(cues.spacerPlaceholder).toBe('none');
   await page.emulateMedia({ media: 'print' });
   expect(await secondRow.locator('.ts-grid-cell').first().evaluate((cell) => ['::before', '::after'].map((pseudo) => getComputedStyle(cell, pseudo).display))).toEqual(['none', 'none']);
+  expect(await secondRow.locator('.ts-grid-cell p').first().evaluate((p) => getComputedStyle(p, '::before').display)).toBe('none');
   await page.emulateMedia({ media: 'screen' });
   await page.keyboard.type('Second row');
   await expect(secondRow.locator('.ts-grid-cell').first()).toHaveText('Second row');

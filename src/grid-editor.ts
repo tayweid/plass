@@ -492,14 +492,23 @@ export class GridCellView implements NodeView {
     const after = this.dom.getBoundingClientRect();
     const frameTop = extraAbove + above * F;
     const frameBottom = extraBelow + below * F;
+    // A text edge reaches to its line box, not just its glyphs: the caret
+    // fills the line box, and a wash that stopped at the glyphs let it poke
+    // out and sat a word without descenders high in its tile.
+    const lineTop = lineEdge(first, after, 'top');
+    const lineBottom = lineEdge(last, after, 'bottom');
+    const inkTop = leafInk(first, after, 'top', lineTop ?? frameTop - reach.above * F * scaleOf(first.node));
+    const inkBottom = leafInk(last, after, 'bottom', lineBottom ?? frameBottom - reach.below * F * scaleOf(last.node));
     const ink: CellInk = {
-      top: leafInk(first, after, 'top', frameTop - reach.above * F * scaleOf(first.node)),
-      bottom: leafInk(last, after, 'bottom', frameBottom - reach.below * F * scaleOf(last.node)),
-      frameTop: frameTop - reach.above * F,
-      frameBottom: frameBottom - reach.below * F,
+      top: inkTop,
+      bottom: inkBottom,
+      topText: lineTop !== null && inkTop !== null && Math.abs(inkTop - lineTop) < 0.01,
+      bottomText: lineBottom !== null && inkBottom !== null && Math.abs(inkBottom - lineBottom) < 0.01,
+      frameTop: lineTop ?? frameTop - reach.above * F,
+      frameBottom: lineBottom ?? frameBottom - reach.below * F,
       height: after.height,
       heading: first.node.type === schema.nodes.heading,
-      reachEm: reach.above + reach.below,
+      reachEm: lineTop !== null && lineBottom !== null ? (frameTop - lineTop + frameBottom - lineBottom) / F : reach.above + reach.below,
     };
     const prev = this.ink;
     this.ink = ink;
@@ -528,6 +537,9 @@ export class GridCellView implements NodeView {
 interface CellInk {
   top: number | null;
   bottom: number | null;
+  /** The top / bottom edge is a line box (text), not an image or block. */
+  topText: boolean;
+  bottomText: boolean;
   frameTop: number;
   frameBottom: number;
   height: number;
@@ -537,7 +549,7 @@ interface CellInk {
 }
 
 const sameInk = (a: CellInk, b: CellInk) =>
-  a.top === b.top && a.bottom === b.bottom && a.frameTop === b.frameTop && a.frameBottom === b.frameBottom && a.height === b.height && a.heading === b.heading && a.reachEm === b.reachEm;
+  a.top === b.top && a.bottom === b.bottom && a.topText === b.topText && a.bottomText === b.bottomText && a.frameTop === b.frameTop && a.frameBottom === b.frameBottom && a.height === b.height && a.heading === b.heading && a.reachEm === b.reachEm;
 
 /** Images, math and nested blocks whose own box is their ink. */
 const INK_ATOMS = 'img, .ts-inline-image, .math-inline, .math-display, figure, table';
@@ -545,9 +557,19 @@ const INK_ATOMS = 'img, .ts-inline-image, .math-inline, .math-display, figure, t
 const isTextLeaf = (node: PMNode) => node.isTextblock && node.type !== schema.nodes.code_block;
 const scaleOf = (node: PMNode) => (node.type === schema.nodes.heading ? headingScale((node.attrs.level as number) || 1) : 1);
 
+/** A text leaf's outer line-box edge, layout px inward from the cell's box:
+ *  the band the caret fills, which holds the line's ascenders and
+ *  descenders and sits evenly round its text. Null for a non-text leaf. */
+function lineEdge(leaf: { node: PMNode; el: Element }, box: DOMRect, side: 'top' | 'bottom'): number | null {
+  if (!isTextLeaf(leaf.node)) return null;
+  const r = leaf.el.getBoundingClientRect();
+  if (r.height <= 0.5) return null;
+  return side === 'top' ? r.top - box.top : box.bottom - r.bottom;
+}
+
 /** The ink edge of a cell's first (`top`) or last (`bottom`) leaf, layout
- *  px inward from the cell's box: a text leaf's line ink beyond its frame
- *  (`textEdge`), a non-text leaf's own box, and every atom in it. */
+ *  px inward from the cell's box: a text leaf's line box (`textEdge`), a
+ *  non-text leaf's own box, and every atom in it. */
 function leafInk(leaf: { node: PMNode; el: Element }, box: DOMRect, side: 'top' | 'bottom', textEdge: number): number | null {
   let edge = Infinity;
   const take = (r: DOMRect) => {
@@ -608,7 +630,7 @@ function cellWashPass(grid: HTMLElement) {
   // style.css's air-y / air-x, in px: air between the ink and the wash.
   let reachEm = 0.33;
   const airX = Math.min(0.3 * F, g / 3);
-  type Row = { el: HTMLElement; cells: Array<{ el: HTMLElement; box: DOMRect; ink: CellInk }>; T: number; B: number; airT: number; airB: number; joinT: boolean; joinB: boolean };
+  type Row = { el: HTMLElement; cells: Array<{ el: HTMLElement; box: DOMRect; ink: CellInk }>; T: number; B: number; textT: boolean; textB: boolean; airT: number; airB: number; joinT: boolean; joinB: boolean };
   const rows: Row[] = [];
   let heading = false;
   for (const child of grid.children) {
@@ -626,7 +648,10 @@ function cellWashPass(grid: HTMLElement) {
     const inked = cells.filter((c) => c.ink.top !== null && c.ink.bottom !== null);
     const T = inked.length ? Math.min(...inked.map((c) => c.box.top + c.ink.top!)) : Math.min(...cells.map((c) => c.box.top + c.ink.frameTop));
     const B = inked.length ? Math.max(...inked.map((c) => c.box.bottom - c.ink.bottom!)) : Math.max(...cells.map((c) => c.box.bottom - c.ink.frameBottom));
-    rows.push({ el: child as HTMLElement, cells, T, B, airT: 0, airB: 0, joinT: false, joinB: false });
+    // Whether the row's outermost ink, at that edge, is a line of text.
+    const textT = inked.length > 0 && inked.every((c) => c.box.top + c.ink.top! > T + 0.01 || c.ink.topText);
+    const textB = inked.length > 0 && inked.every((c) => c.box.bottom - c.ink.bottom! < B - 0.01 || c.ink.bottomText);
+    rows.push({ el: child as HTMLElement, cells, T, B, textT, textB, airT: 0, airB: 0, joinT: false, joinB: false });
   }
   if (!rows.length) return;
   const airY = Math.min(0.25 * F, Math.max(0, (g - reachEm * F) / 3));
@@ -647,6 +672,17 @@ function cellWashPass(grid: HTMLElement) {
     rows[i].airB = rows[i + 1].airT = join ? gap / 2 : air;
     rows[i].joinB = rows[i + 1].joinT = join;
   }
+  // A grid edge that is a line of text takes the air its row has on the
+  // other side, so the line sits centred in its tile: a line box already
+  // holds its leading above the capitals and below the descenders, and the
+  // larger outer air (for an image or a table edge, which have none) sat a
+  // first or last line visibly off centre. A one-row grid of text: a small
+  // fixed air, never less than a screen pixel.
+  const textAir = Math.max(TEXT_AIR_EM * F, 1 / ps);
+  const first = rows[0];
+  const last = rows[rows.length - 1];
+  if (first.textT) first.airT = rows.length > 1 && first.textB ? Math.max(first.airB, 1 / ps) : textAir;
+  if (last.textB) last.airB = rows.length > 1 && last.textT ? Math.max(last.airT, 1 / ps) : textAir;
   const full = placeholderWidth(F);
   for (const row of rows) {
     for (const { el, box } of row.cells) {
@@ -665,6 +701,10 @@ function cellWashPass(grid: HTMLElement) {
     }
   }
 }
+
+/** Air between a line box and its wash where nothing sets it (em): the
+ *  line box already holds the line's leading. */
+const TEXT_AIR_EM = 0.12;
 
 /** Below this gutter (em) the washes tile into one surface (style.css). */
 export const JOINED_GUTTER_EM = 0.6;
