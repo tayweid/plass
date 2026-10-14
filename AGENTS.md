@@ -158,7 +158,7 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   formula the converter rejects fails by name (outlined on the page,
   refused by the export).
 - The 2026-08-27 "single Typst publication" rebuild was reverted (fe94326);
-  it lives on `codex/archive-proof-architecture`. Native editable tables were
+  it lives on the tag `archive/proof-architecture`. Native editable tables were
   ported from it (merged 2026-09-02); executable Typst code cells still are
   to be.
 - **Doctrine: document text must equal printed text.** Typst collapses
