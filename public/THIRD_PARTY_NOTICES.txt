@@ -8,15 +8,16 @@ Bundled font licenses are kept separately under fonts/licenses/.
 ==============================================================================
 Packages:
 - @codemirror/autocomplete@6.20.3 (MIT)
-- @codemirror/commands@6.11.0 (MIT)
+- @codemirror/commands@6.11.1 (MIT)
 - @codemirror/lang-css@6.3.1 (MIT)
 - @codemirror/lang-html@6.4.12 (MIT)
 - @codemirror/lang-javascript@6.2.5 (MIT)
 - @codemirror/lang-markdown@6.5.2 (MIT)
-- @codemirror/language@6.12.4 (MIT)
+- @codemirror/language@6.13.1 (MIT)
 - @codemirror/lint@6.9.7 (MIT)
 - @codemirror/search@6.7.2 (MIT)
-- @codemirror/state@6.7.2 (MIT)
+- @codemirror/state@6.7.6 (MIT)
+- @codemirror/streamparser@6.0.0 (MIT)
 - @codemirror/view@6.43.11 (MIT)
 License text source: LICENSE
 
@@ -74,7 +75,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ==============================================================================
 Packages:
-- @lezer/markdown@1.7.2 (MIT)
+- @lezer/markdown@1.8.0 (MIT)
 License text source: LICENSE
 
 MIT License
@@ -593,7 +594,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
 OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ==============================================================================
 Packages:
-- commander@8.3.0 (MIT)
+- commander@15.0.0 (MIT)
 License text source: LICENSE
 
 (The MIT License)
@@ -934,7 +935,7 @@ Permission to use, copy, modify, and/or distribute this software for any purpose
 THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ==============================================================================
 Packages:
-- katex@0.16.47 (MIT)
+- katex@0.19.0 (MIT)
 License text source: LICENSE
 
 The MIT License (MIT)
@@ -1117,15 +1118,15 @@ THE SOFTWARE.
 ==============================================================================
 Packages:
 - prosemirror-commands@1.7.1 (MIT)
-- prosemirror-history@1.5.0 (MIT)
+- prosemirror-history@1.5.1 (MIT)
 - prosemirror-inputrules@1.5.1 (MIT)
 - prosemirror-keymap@1.2.3 (MIT)
-- prosemirror-model@1.25.10 (MIT)
-- prosemirror-schema-basic@1.2.4 (MIT)
+- prosemirror-model@1.25.12 (MIT)
+- prosemirror-schema-basic@1.2.5 (MIT)
 - prosemirror-schema-list@1.5.1 (MIT)
 - prosemirror-state@1.4.4 (MIT)
 - prosemirror-transform@1.12.0 (MIT)
-- prosemirror-view@1.42.3 (MIT)
+- prosemirror-view@1.42.6 (MIT)
 License text source: LICENSE
 
 Copyright (C) 2015-2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
