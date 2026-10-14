@@ -3,6 +3,30 @@
 Plan, 2026-10-13. Not approved; nothing built. Taylor's decisions come
 first, then the phases.
 
+## Decided
+
+- **No helper files (Taylor, 2026-10-13).** Plass stands on its own. A
+  diagram's code can use only what Plass ships, never a file from the
+  document's folder.
+- **The first real use is the econ-0100 solution guides.**
+  - There are 34 `*_sols.md` guides with 68 graphs.
+  - Today the graphs are drawn with a course helper file,
+    `_Assets/sols.typ` (`graph`, `seg`, `pt`, `shade`, `lbl`).
+  - The drawing code lives in a hidden comment at the end of each guide.
+  - `scripts/render-sols-figures` pastes each graph into its guide as an
+    SVG data-URL image.
+- **What moving them over takes.** Under the no-helper rule, a one-time
+  converter rewrites those calls into what Plass ships.
+  - **Simplest:** Plass builds that small graph vocabulary in (axes,
+    segment, point, shaded region, label). The converter is then nearly a
+    straight copy, and CeTZ covers everything else.
+  - **Other option:** translate the calls to CeTZ.
+  - Decide when the work starts.
+- **Option for print: embed the SVG the page already shows,** as the
+  script does today. The writer's code then never runs inside the
+  document's compile. The cost is that text inside graphs is not
+  selectable in the PDF.
+
 ## What it is
 
 A diagram block. You write CeTZ drawing code, the page shows the picture
