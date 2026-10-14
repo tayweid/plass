@@ -1,0 +1,45 @@
+/* Optional layout controls keep the document and the compact command row clear. */
+.native-table-toolbar-layout {
+  display: none;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  padding: 8px 5px 4px;
+  margin-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--chrome-border) 72%, transparent);
+}
+
+.native-table-toolbar.show-layout .native-table-toolbar-layout {
+  display: flex;
+}
+
+.native-table-toolbar-layout label {
+  display: grid;
+  gap: 4px;
+  font: 600 10px/1.2 var(--sans);
+  color: var(--ink-soft);
+}
+
+.native-table-toolbar-layout label[hidden] {
+  display: none;
+}
+
+.native-table-toolbar-layout select,
+.native-table-toolbar-layout input {
+  box-sizing: border-box;
+  min-height: 29px;
+  color: var(--ink);
+  border: 1px solid var(--chrome-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sheet) 72%, transparent);
+  font: 12px/1.2 var(--sans);
+  padding: 5px 7px;
+}
+
+.native-table-toolbar-layout select {
+  max-width: 220px;
+}
+
+.native-table-toolbar-layout input {
+  width: 82px;
+}

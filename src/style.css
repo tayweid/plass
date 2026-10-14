@@ -40,15 +40,58 @@
 /* ---------- app chrome ---------- */
 
 :root {
-  /* The reading room: a warm graphite canvas; the page is the only light. */
-  --bg: #2b2a2d;
+  /* Zen's shape (knuth/docs/mockups/rail-layout.html, Zen itself): a
+     dark frame — the bar across the top, the rail down the left, and an
+     edge of it all round — holds one elevated panel, rounded, and the
+     panel is the paper: the pages fill it edge to edge, the only light.
+     The frame is Zen's (#131313–#141414 measured in Zen's own window) a
+     step up, so it reads as a dark grey edge rather than black; it also
+     shows as the thin gap between pages. */
+  --frame: #18181a;
+  --pill: #232326;
+  --tile: #2e2e32;
+  /* The bar's height is the traffic lights' band, which the shell
+     publishes as the Window Controls Overlay; 44 px in a tab and the
+     PWA. */
+  --topbar: env(titlebar-area-height, 44px);
+  /* The frame's edge round the panel, at the window's right and bottom. */
+  --edge: 8px;
+  /* The frame at the panel's right: the edge, or, while the paper runs
+     past the panel, the gutter the scroll rail lives in (scroll-rail.ts
+     puts .has-rail on this element, so --axis below follows it). One
+     variable, so the panel, its shadow, the HUD and everything on the
+     paper's axis read the same right margin; the window's bottom edge
+     stays --edge and the rail's side 6 px beside its tiles. */
+  --gutter: 20px;
+  --edge-right: var(--edge);
+  /* A corner of the paper, on the screen at any scale: Knuth's room's
+     (the paper's corners, below). */
+  --paper-radius: 12px;
+  /* The panel's two left corners stay rounded whatever the paper does
+     under them; the right corners follow the paper (Taylor, 2026-10-02,
+     seeing the rule in the app: "fix the left upper and lower to
+     rounded", and "leave it easy to undo if it looks strange"). This line
+     is the switch: remove it and all four corners follow the paper, as
+     the rule was first built (#scroll's clip path and #paper-shadow's
+     left radii fall back to the paper's). */
+  --paper-left-corner: var(--paper-radius);
+  /* The rail: a tile with 6 px either side, 44 px, the bar's height too
+     (Taylor, 2026-10-02: the bar as tall as the rail is wide; Knuth's
+     numbers, knuth c6875a4). */
+  --rail-tile: 32px;
+  --rail-gap: 6px;
+  --rail: calc(var(--rail-tile) + 2 * var(--rail-gap));
+  /* The paper's axis: the middle of the panel, right of the rail, left
+     of the panel's right edge (the scroll rail is outside it, in the
+     gutter). The toast and the table and image toolbars sit on it. */
+  --axis: calc((var(--rail) + 100vw - var(--edge-right)) / 2);
   --chrome: #fcfcfb;
   --chrome-border: #e3e1dc;
   --ink: #1a1a1a;
   --ink-soft: #6b6b6b;
   --accent: #305c8a;
   --sheet: #ffffff;
-  /* Chrome floating over the room: light frosted glass, dark ink. */
+  /* Chrome floating over the paper: light frosted glass, dark ink. */
   --bar-ink: #2c2b29;
   --bar-ink-soft: #85837e;
   --bar-glass: rgba(251, 250, 248, 0.92);
@@ -57,6 +100,10 @@
   --serif: 'STIX Two Text', 'Charter', 'Iowan Old Style', 'Palatino', 'Georgia', serif;
   --mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+}
+
+:root.has-rail {
+  --edge-right: var(--gutter);
 }
 
 * {
@@ -70,126 +117,79 @@ body {
 }
 
 body {
-  background: var(--bg);
+  background: var(--frame);
   font-family: var(--sans);
   color: var(--ink);
   display: flex;
   flex-direction: column;
 }
 
-/* Floating capsule clusters over the paper (iOS toolbar language): each
-   group is its own stadium-shaped glass pod. Pods stay solid; their
-   CONTENTS sleep at rest and wake when the mouse approaches the cluster. */
-/* One plain bar: the room's own black, a straight line across the top.
-   The document's name sits on the left, the tools to its right. */
+/* One plain bar on the frame, a straight line across the top of the
+   window, the rail and the panel below it. The paper's way in and out
+   sits on the left beside the traffic lights — File, the name with its
+   save dot, History (Plass.app), Export — and the tools are on the rail
+   (toolbar.css). In Plass.app the bar is the window's title bar (the
+   shell hides its own and leaves the traffic lights over the page,
+   docs/CLAERBOUT-SHELL.md): its empty part drags the window, which is
+   the shell's to handle, so the tiles, the name, the menus and the panel
+   that may open into the bar's band and the view switch are marked the
+   page's. A browser ignores the property; toolbar.css reserves the
+   lights' room. The rail is no drag region: it scrolls, and a drag
+   region takes the wheel. */
 #toolbar {
   display: flex;
   flex-direction: row;
   align-items: center;
-  justify-content: center;
-  gap: 5px;
+  justify-content: flex-start;
+  gap: 6px;
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  height: 60px;
-  padding: 0 14px;
+  height: var(--topbar);
   z-index: 10;
+  -webkit-app-region: drag;
+  container: bar / inline-size;
 }
 
-/* The tools pill: dark glass, floating on the persistent line. */
-.tb-pod {
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 2px;
-  height: 42px;
-  padding: 0 6px;
-  background: color-mix(in srgb, #17161a 80%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  /* Pressed seam: facing sides keep a flat contact patch and turn away
-     through small CIRCULAR corners. Interior pills are flat-faced on
-     both sides; the run's last pill rounds back out to a stadium end.
-     (Explicit 21px, not 999px — an overflowing radius makes CSS scale
-     every corner down by one global factor.) */
-  border-radius: 12px;
-}
-
-#toolbar > .tb-pod:last-child {
-  border-radius: 12px 21px 21px 12px;
-}
-
-/* Sleep/wake tiers: soft at rest, everything wakes near the bar, the
-   hovered group at full ink. */
-.tb-btn {
-  opacity: 0.4;
-  transition: opacity 0.25s ease;
+#toolbar > *,
+.tb-menu,
+.settings-panel,
+.view-switch {
+  -webkit-app-region: no-drag;
 }
 
 .tb-btn[hidden] {
   display: none;
 }
 
-#toolbar:hover .tb-btn {
-  opacity: 1;
-}
+/* ---------- the name pill ---------- */
 
-.tb-group:hover .tb-btn,
-.tb-group:focus-within .tb-btn {
-  color: rgba(240, 238, 233, 0.95);
-}
-
-.tb-group {
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 2px;
-}
-
-/* ---------- the document slug ---------- */
-
-/* The name floats fixed over the room, centered above the page: small
-   serif, letterspaced, quiet — the galley slug for the manuscript below.
-   A faint dark glass keeps it legible when pages scroll beneath it. */
-/* The title pill: the same dark glass. */
-.doc-title {
+/* Knuth's (knuth/src/styles.css): the two apps' bars are one bar. Zen's
+   address pill, a shade up from the frame, after the File tile and before
+   the History tile (Plass.app) and Export, holding the document's name
+   (click to rename), its save dot and the folder it lives in. It is the
+   one thing in the bar that gives way (at most half the window, and it
+   alone shrinks), so the tiles keep their 32 px however short the bar.
+   When the pill is short only the folder gives way, from its start, so
+   the nearest folder stays; the name and the dot never do — the name
+   takes an ellipsis only if it alone overfills the pill. */
+.doc-pod {
+  --pod-gap: 9px;
   display: flex;
   align-items: center;
-  gap: 9px;
-  height: 42px;
-  padding: 0 8px 0 16px;
-  flex: none;
-  background: color-mix(in srgb, #17161a 80%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 21px 12px 12px 21px;
-}
-
-/* The lifecycle triggers ride quietly at the pill's end. */
-.doc-title .tb-btn {
+  gap: var(--pod-gap);
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(560px, 50vw);
   height: 30px;
-  min-width: 30px;
-  padding: 0 5px;
+  padding: 0 10px;
+  background: var(--pill);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
 }
 
-.doc-title .tb-btn .ico {
-  width: 17px;
-  height: 17px;
-}
-
-/* Hover flyouts: a pill of the group's icons, laid over its trigger so
-   the cursor never crosses a gap. */
-.tb-flyout-wrap {
-  position: relative;
-  display: inline-flex;
-}
-
-/* Both pills carry backdrop-filter (a stacking context), so a flyout's
-   z-index is trapped inside its own pill and a LATER sibling pill paints
-   over it. Lift whichever pill the cursor is in above its neighbors. */
+/* Keep the active toolbar group above its neighbors. */
 #toolbar > * {
   position: relative;
 }
@@ -199,93 +199,73 @@ body {
   z-index: 20;
 }
 
-.tb-flyout {
-  position: absolute;
-  /* Centered on the trigger; the items are ordered so the
-     representative icon is the MIDDLE one, landing on the trigger. */
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 2px;
-  padding: 5px 8px;
-  /* A step bigger and a shade lighter than the pill it covers: the
-     flyout reads as a card sitting ON TOP of the bar. */
-  background: color-mix(in srgb, #3a3840 94%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 999px;
-  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.45);
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.14s ease;
-  z-index: 30;
-}
-
-/* Dynamic flyouts position via measured inline left (the centered option
-   changes); only the vertical transform applies. */
-.tb-flyout-dyn {
-  transform: translateY(-50%);
-}
-
-/* The caret block's CURRENT format in the cycler flyout. */
-.tb-flyout .tb-flyout-cur .tico {
-  color: var(--accent);
-}
-
-/* Flyout buttons at full rail size, even when the trigger is one of the
-   compact title-pill buttons — the open state is the bigger object. */
-.tb-flyout .tb-btn {
-  height: 40px;
-  min-width: 40px;
-  padding: 0 8px;
-}
-
-.tb-flyout .tb-btn .ico {
-  width: 22px;
-  height: 22px;
-}
-
-.tb-flyout-wrap:hover .tb-flyout,
-.tb-flyout-wrap:focus-within .tb-flyout {
-  opacity: 1;
-  visibility: visible;
-}
-
-
-
-.doc-title .tb-file {
-  font: 15px/1.5 'New Computer Modern', var(--serif);
+/* The document slug: small serif, letterspaced, quiet. (Its max-width
+   leaves the dot and its gap their room: the pill sizes itself to the
+   name, the gap and the 6 px dot, so a cap on any other gap than the
+   pill's own cut every name short by the difference.) */
+#toolbar .name {
+  flex: none;
+  max-width: min(40ch, calc(100% - var(--pod-gap) - 6px));
+  font: 15px/1.5 var(--serif);
   letter-spacing: 0.09em;
   color: rgba(252, 252, 251, 0.8);
-  max-width: 56ch;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
   cursor: text;
   padding: 1px 4px;
   border-radius: 5px;
 }
 
-.doc-title .tb-file:hover {
+#toolbar .name:hover {
   color: #fff;
 }
 
-/* The save state: a small honest dot beside the name. */
-.doc-title-dot {
+/* The save state: a small honest dot beside the name — green when the
+   file on disk holds the document, red when it does not (unsaved
+   changes, or no file yet). */
+.doc-mark {
+  flex: none;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: rgba(205, 100, 82, 0.95);
-  flex: none;
   transition: background 0.3s ease;
 }
 
-.doc-saved .doc-title-dot {
+.doc-saved .doc-mark {
   background: rgba(110, 165, 118, 0.9);
+}
+
+/* The folder: the file's, home as ~ (the whole path in its title). It
+   alone shrinks, and it ellipsizes from its start: right-to-left in the
+   pill, the path itself left-to-right inside (its span's dir), so the
+   cut and the ellipsis fall at the path's head. */
+#doc-folder {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font: 12px/1.5 var(--sans);
+  color: rgba(240, 238, 233, 0.55);
+}
+
+#doc-folder[hidden] {
+  display: none;
+}
+
+/* A narrow bar drops the folder (Knuth's rule, at the same 760 px). A
+   container query on the bar rather than a media query on the window: a
+   media query that flips re-reads the stylesheet holding the @font-face
+   rules, the faces load again, and the layout runs a pass for them —
+   on a resize, which must lay nothing out. */
+@container bar (max-width: 759px) {
+  #doc-folder {
+    display: none;
+  }
 }
 
 .tb-btn .ico,
@@ -298,7 +278,9 @@ body {
   transform: scale(1.12);
 }
 
-.tb-file-editing {
+/* Renaming, in place in the slug (toolbar.ts): the name itself turns
+   editable. */
+#toolbar .name.tb-file-editing {
   background: rgba(255, 255, 255, 0.09);
   color: rgba(252, 252, 251, 0.95);
   outline: none;
@@ -309,31 +291,13 @@ body {
   max-width: none;
 }
 
-.tb-file-editing::selection {
+#toolbar .name.tb-file-editing::selection {
   background: rgba(157, 184, 214, 0.35);
 }
 
-
-
-.tb-menu-btn {
-  font: 18px/1 var(--sans);
-  color: var(--ink-soft);
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  width: 30px;
-  height: 26px;
-  cursor: pointer;
-  letter-spacing: 1px;
-}
-
-.tb-menu-btn:hover {
-  background: color-mix(in srgb, var(--chrome-border) 60%, transparent);
-  color: var(--ink);
-}
-
-/* Bar buttons: quiet icons; the name fades in as a caption below the icon —
-   absolutely positioned, so nothing in the bar ever moves. */
+/* Bar and rail buttons: quiet icons; the name fades in as a caption —
+   below a bar tile, beside a rail tile (toolbar.css) — absolutely
+   positioned, so nothing ever moves. */
 .tb-btn {
   position: relative;
   display: inline-flex;
@@ -390,7 +354,6 @@ body {
   color: var(--bar-ink);
   background: var(--bar-glass);
   backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--bar-hairline);
   border-radius: 5px;
   padding: 2px 8px;
@@ -407,68 +370,205 @@ body {
   opacity: 1;
 }
 
-.tb-div {
-  width: 1px;
-  height: 16px;
-  background: rgba(255, 255, 255, 0.13);
-  margin: 0 6px;
-  flex: none;
+/* An open menu takes the caption's place. */
+.tb-btn[aria-expanded='true'] .lbl {
+  visibility: hidden;
 }
 
-/* Floating table controls — appear beside the table while the caret is in it. */
-.table-pill {
+/* Native table controls. Cells remain the actual ProseMirror content; this
+   compact chrome only dispatches structural commands against that document. */
+.native-table-toolbar {
+  -webkit-app-region: no-drag; /* inside the bar's drag band: a click must reach it, not move the window */
+  /* Docked under the bar on the paper's axis (--axis), over the panel's
+     top edge: a second row of chrome while the caret is in a table. It
+     never covers the document and never moves with the table, so a
+     keystroke reads no geometry for it. */
   position: fixed;
-  z-index: 90;
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  background: color-mix(in srgb, var(--chrome) 92%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  top: calc(var(--topbar) - 2px);
+  left: var(--axis);
+  transform: translateX(-50%);
+  z-index: 180;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  overflow: hidden;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--chrome) 94%, transparent);
+  backdrop-filter: blur(14px) saturate(1.25);
   border: 1px solid var(--chrome-border);
-  border-radius: 8px;
-  padding: 3px 4px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.1);
+  border-radius: 11px;
+  padding: 4px;
+  box-shadow: 0 10px 34px rgba(20, 18, 14, 0.16), 0 2px 7px rgba(20, 18, 14, 0.08);
 }
 
-.table-pill[hidden] {
+.native-table-toolbar[hidden] {
   display: none;
 }
 
-.table-pill button {
-  font: 11.5px/1 var(--sans);
+.native-table-toolbar-main {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  max-width: calc(100vw - 34px);
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.native-table-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 3px;
+  border-right: 1px solid color-mix(in srgb, var(--chrome-border) 72%, transparent);
+}
+
+.native-table-toolbar-group:first-child {
+  padding-left: 0;
+}
+
+.native-table-toolbar-group:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+
+.native-table-toolbar button,
+.native-table-toolbar select {
+  min-height: 27px;
+  font: 600 10.5px/1 var(--sans);
   color: var(--ink);
   background: transparent;
-  border: none;
-  border-radius: 5px;
-  padding: 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 7px;
   cursor: pointer;
   white-space: nowrap;
 }
 
-.table-pill button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+.native-table-toolbar select {
+  max-width: 86px;
+  padding-right: 3px;
+  font-weight: 500;
 }
 
-.table-pill button:disabled {
-  opacity: 0.35;
+.native-table-toolbar .native-table-size {
+  width: 58px;
+}
+
+.native-table-toolbar button:hover:not(:disabled),
+.native-table-toolbar select:hover,
+.native-table-toolbar button.is-active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+}
+
+.native-table-toolbar button:focus-visible,
+.native-table-toolbar select:focus-visible,
+.native-table-toolbar input:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 56%, transparent);
+  outline-offset: -1px;
+}
+
+.native-table-toolbar button:disabled {
+  opacity: 0.28;
   cursor: default;
+}
+
+.native-table-toolbar .native-table-align {
+  min-width: 25px;
+  padding-inline: 6px;
+  font-family: var(--serif);
+}
+
+.native-table-toolbar button.is-danger:hover:not(:disabled) {
+  color: #a4322f;
+  background: rgba(164, 50, 47, 0.1);
+}
+
+.native-table-toolbar-details {
+  display: none;
+  grid-template-columns: minmax(180px, 1fr) minmax(110px, 0.55fr) auto;
+  align-items: end;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 7px 5px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--chrome-border) 72%, transparent);
+}
+
+.native-table-toolbar.show-details .native-table-toolbar-details {
+  display: grid;
+}
+
+.native-table-toolbar-details label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  font: 600 9px/1 var(--sans);
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+}
+
+.native-table-toolbar-details input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font: 12px/1.2 var(--sans);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--sheet) 72%, transparent);
+  border: 1px solid var(--chrome-border);
+  border-radius: 6px;
+  padding: 6px 7px;
+}
+
+.native-table-advanced {
+  display: block;
+  padding: 4px 8px 2px;
+  font: 11px/1.4 var(--sans);
+  color: var(--ink-soft);
+}
+
+.native-table-advanced[hidden] {
+  display: none;
+}
+
+.native-table-notice {
+  position: fixed;
+  z-index: 240;
+  left: 50%;
+  bottom: 28px;
+  max-width: min(560px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  padding: 9px 13px;
+  font: 11.5px/1.35 var(--sans);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--chrome) 96%, transparent);
+  border: 1px solid var(--chrome-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(20, 18, 14, 0.18);
 }
 
 /* corner HUD + transient toast */
 #hud {
   position: fixed;
-  /* Sit just inside the PAGE's right edge (pages are centered at
-     var(--page-w)); fall back to a viewport inset when the window is
-     narrower than the paper. */
-  right: max(14px, calc(50vw - var(--page-w, 816px) / 2 + 18px));
-  bottom: 16px;
+  /* Inside the panel's bottom-right corner, over the paper: a quiet
+     frosted chip, legible over a line of text or a page gap alike. */
+  right: calc(var(--edge-right) + 10px);
+  bottom: calc(var(--edge) + 10px);
   z-index: 50;
+  padding: 2px 8px;
   font: 11px var(--sans);
-  color: #97958f;
-  opacity: 0.55;
+  color: #6f6d68;
+  background: rgba(252, 252, 251, 0.82);
+  backdrop-filter: blur(8px);
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+  opacity: 0.7;
   transition: opacity 0.35s;
   user-select: none;
+}
+
+#hud:empty {
+  display: none;
 }
 
 #hud:hover {
@@ -477,8 +577,9 @@ body {
 
 #toast {
   position: fixed;
-  left: 50%;
-  bottom: 22px;
+  /* On the paper's axis, in the HUD's row. */
+  left: var(--axis);
+  bottom: calc(var(--edge) + 10px);
   transform: translateX(-50%) translateY(6px);
   z-index: 120;
   font: 12.5px var(--sans);
@@ -504,332 +605,330 @@ body {
   pointer-events: auto;
 }
 
-/* ---------- tables: compiled block + editing card ---------- */
-
-.ts-table-block {
-  margin: 0 0 0.9em;
-  cursor: pointer;
-  border-radius: 3px;
-}
-
-.ts-table-block:hover {
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
-}
-
-.ts-table-block.ts-table-selected {
-  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  outline-offset: 2px;
-}
-
-.ts-table-render {
-  overflow-x: auto;
-}
-
-.ts-table-loading {
-  font: 12px var(--sans);
-  color: var(--ink-soft);
-}
-
-.table-card {
-  width: min(760px, calc(100vw - 48px));
-}
-
-.table-card-style {
-  font: 11px var(--mono);
-  color: var(--ink-soft);
-}
-
-.table-card-tools {
+#toast.actionable:not([hidden]) {
   display: flex;
   align-items: center;
-  gap: 3px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
 }
 
-.table-card-tools > button {
-  font: 12px var(--sans);
-  color: var(--ink);
-  background: transparent;
-  border: 1px solid var(--chrome-border);
-  border-radius: 5px;
-  padding: 4px 8px;
-  cursor: pointer;
+#toast .toast-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.table-card-tools > button:hover {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+#toast .toast-action {
+  flex: none;
 }
 
-.table-card-size,
-.table-card-fill {
-  font: 12px var(--sans);
-  color: var(--ink);
-  background: transparent;
-  border: 1px solid var(--chrome-border);
-  border-radius: 5px;
-  padding: 4px 6px;
-  cursor: pointer;
+/* The scroll rail (scroll-rail.ts): the whole paper, top to bottom, in a
+   20 px gutter between the panel's right edge and the window's, on the
+   frame and outside the paper, as the history view's strip lives beside
+   its river (docs/mockups/scroll-rail.md, the gutter mockup, which Taylor
+   chose). Its track is exactly the panel's height (the bar's bottom to
+   the frame's edge above the window's bottom), so at the top of the paper
+   the band's top is level with the panel's top and at the end its bottom
+   with the panel's bottom. Everything on it is placed by a fraction of
+   the paper's height: --f on a mark (written when a layout pass settles);
+   the band, the visible span, is moved by a transform on its own layer
+   (written in a frame after a scroll, on the band alone: a variable on
+   the rail would be inherited by every mark and restyle them all on every
+   frame of a scroll). There only while the paper runs past the panel. */
+#scrollrail {
+  position: fixed;
+  top: var(--topbar);
+  bottom: var(--edge);
+  right: 0;
+  width: var(--gutter);
+  z-index: 12;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
 }
 
-.table-card-sep {
-  width: 1px;
-  height: 16px;
-  background: var(--chrome-border);
-  margin: 0 5px;
+:root:not(.has-rail) #scrollrail,
+:root:not(.has-rail) #sr-label {
+  display: none;
 }
 
-.table-card-grid {
-  max-height: 300px;
-  overflow: auto;
-  margin-bottom: 10px;
-  position: relative; /* anchors the boundary segments and handles */
-  padding: 14px 20px 16px; /* room for the whole-line handles */
+.sr-track {
+  position: absolute;
+  inset: 0;
 }
 
-.table-card-grid table {
-  /* Separate borders with a horizontal gap: the gap is the click target
-     for the vertical boundary strips (the columns' twin of the 7px
-     boundary rows). */
-  border-collapse: separate;
-  border-spacing: 9px 0;
-  width: 100%;
+/* The visible span: the history strip's band (white 5 % over a 16 %
+   edge, rounded), as wide as the gutter less 3 px a side, never under
+   10 px tall and never past the track (its height and offset written by
+   scroll-rail.ts). Faint at rest: the rail's first job is where you are,
+   and the panel draws no other scrollbar. */
+.sr-band {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 0;
+  height: 100%;
+  will-change: transform;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  transition: background 0.3s, box-shadow 0.3s;
+  pointer-events: none;
 }
 
-.table-card-grid td,
-.table-card-grid th {
-  border: 1px solid var(--chrome-border);
+/* Lit while the paper moves (a wheel, a jump: 0.9 s) and while the
+   pointer is in the gutter; lighter still while it is being dragged. */
+#scrollrail.moving .sr-band,
+#scrollrail.awake .sr-band {
+  background: rgba(255, 255, 255, 0.075);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.17);
+}
+
+#scrollrail.dragging .sr-band {
+  background: rgba(255, 255, 255, 0.11);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+  transition: none;
+}
+
+/* Placed by their fraction of the paper. A mark or a page gap inside the
+   band carries .in (scroll-rail.ts sets it on those that cross the band's
+   edges, usually none in a frame). */
+.sr-break,
+.sr-mark {
+  top: calc(var(--f) * 100%);
+}
+
+/* Page breaks: a hairline across the rail at the middle of each gap
+   between sheets, and the page's number faint just under it. A gap that
+   is on screen (inside the band) draws a longer, stronger tick, after the
+   edge mockup's: the gap you are looking at. A long paper thins its
+   numbers and, under 4 px a page, its unnumbered hairlines; a number
+   with a mark in its place moves off it, and an unnumbered hairline
+   over the moved number, or between it and its own, gives way under it
+   (scroll-rail.ts) until hovered. */
+.sr-break {
+  --inset: 4px;
+  position: absolute;
+  left: var(--inset);
+  right: var(--inset);
+  height: 1px;
+  margin-top: -0.5px;
+  background: rgba(255, 255, 255, 0.17);
+  pointer-events: none;
+}
+
+.sr-break.thin {
+  --inset: 7px;
+}
+
+.sr-break.in {
+  left: calc(var(--inset) - 2px);
+  right: calc(var(--inset) - 2px);
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.sr-break.first,
+.sr-break.under:not(.hot) {
+  background: none;
+}
+
+.sr-break.hot {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.sr-num {
+  position: absolute;
+  top: 3px;
+  left: -4px;
+  right: -4px;
+  text-align: center;
+  font: 500 8px/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: rgba(240, 238, 233, 0.4);
+}
+
+.sr-break.hot .sr-num {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.sr-num[hidden] {
+  display: none;
+}
+
+/* The marks: real buttons (one tab stop, arrows between them, Return
+   jumps), shown at rest, a step quieter outside the band so it reads as a
+   window onto them. The rail does its own hit-testing by the nearest mark,
+   so a 3 px dot has the gutter's full width and 7 px either side. */
+.sr-mark {
+  position: absolute;
+  left: 50%;
   padding: 0;
+  border: 0;
+  transform: translate(-50%, -50%);
+  opacity: 0.6;
+  pointer-events: none;
+  /* The hover's grow and whiten. The band passing a mark or a gap changes
+     it at once: an opacity or a colour eased there, on the few that cross
+     in a frame, cost frames of the scroll (the main thread's paint). */
+  transition: transform 0.12s, background 0.12s, box-shadow 0.12s;
 }
 
-.table-card-grid input {
-  width: 100%;
-  min-width: 70px;
-  border: none;
-  background: transparent;
-  color: var(--ink);
-  font: 13px var(--sans);
-  padding: 6px 8px;
+.sr-mark.in {
+  opacity: 1;
+}
+
+.sr-mark:focus {
   outline: none;
 }
 
-.table-card-grid th input {
-  font-weight: 600;
-}
-
-.table-card-grid input:focus {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-.tc-widths td {
-  border: none !important;
-  padding: 0 0 4px !important;
-  text-align: center;
-  position: relative;
-}
-
-/* Boundary segments: one click target per cell edge, overlaid on the
-   boundary rows and column gaps. Adjacent segments meet at the gap
-   midpoints, so a uniform rule reads as one continuous line. */
-.tc-hseg {
-  position: absolute;
+/* Headings: dots sized by level, the title, a section, a subsection. */
+.sr-title {
+  width: 7px;
   height: 7px;
-  z-index: 2;
-  cursor: pointer;
+  border-radius: 50%;
+  background: rgba(240, 238, 233, 0.86);
 }
 
-.tc-hseg::after {
-  content: '';
+.sr-section {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(240, 238, 233, 0.72);
+}
+
+.sr-subsection {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(240, 238, 233, 0.56);
+}
+
+/* Figures and tables: tiny squares, a figure filled, a table open (the
+   history strip's square for your own commits). */
+.sr-figure {
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+  background: rgba(216, 214, 209, 0.6);
+}
+
+.sr-table {
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+  background: none;
+  box-shadow: inset 0 0 0 1.2px rgba(216, 214, 209, 0.7);
+}
+
+/* The caret: a short bar in the frame's focus blue, the one coloured
+   mark: where you were writing. */
+.sr-caret {
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: #9db8d6;
+}
+
+.sr-mark.hot {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.45);
+  background: #fff;
+}
+
+.sr-table.hot {
+  background: none;
+  box-shadow: inset 0 0 0 1.2px #fff;
+}
+
+.sr-caret.hot {
+  background: #c4d7ec;
+}
+
+.sr-mark:focus-visible {
+  box-shadow: 0 0 0 1.5px var(--frame), 0 0 0 3px #9db8d6;
+}
+
+/* Where a click on empty track would land: a faint line across it. */
+.sr-ghost {
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 3px;
+  left: 3px;
+  right: 3px;
   height: 1px;
-  background: transparent;
+  margin-top: -0.5px;
+  background: rgba(255, 255, 255, 0.4);
+  opacity: 0;
+  pointer-events: none;
 }
 
-.tc-vseg {
-  position: absolute;
-  width: 9px;
-  z-index: 2;
-  cursor: pointer;
+.sr-ghost.show {
+  opacity: 1;
 }
 
-.tc-vseg::after {
-  content: '';
-  position: absolute;
+/* The label: the menus' dark glass (toolbar.css), a size up for a
+   heading's own words, which are set in the bar's serif. It hangs to the
+   rail's left over the paper's right margin, level with the mark, fixed to
+   the window (scroll-rail.ts keeps it inside the window's top and bottom;
+   at 50vw wide at most it never reaches the left). */
+#sr-label {
+  position: fixed;
+  right: calc(var(--gutter) + 7px);
   top: 0;
-  bottom: 0;
-  left: 4px;
-  width: 1px;
-  background: transparent;
-}
-
-.tc-hseg:hover::after,
-.tc-vseg:hover::after {
-  background: color-mix(in srgb, var(--accent) 55%, transparent);
-}
-
-.tc-seg-on::after {
-  background: var(--ink);
-}
-
-.tc-hseg.tc-seg-heavy::after {
-  height: 2.5px;
-  background: rgba(30, 30, 40, 0.85);
-}
-
-.tc-vseg.tc-seg-heavy::after {
-  width: 2.5px;
-  left: 3.25px;
-  background: rgba(30, 30, 40, 0.85);
-}
-
-/* Whole-line handles: little rule-shaped pills — horizontal to the left
-   of each row boundary, vertical above each column boundary — so the
-   shape reads as "this whole line". */
-.tc-handle-h,
-.tc-handle-v {
-  position: absolute;
-  padding: 0;
-  border: 1px solid var(--ink-soft);
-  border-radius: 999px;
-  background: transparent;
-  cursor: pointer;
-  z-index: 2;
-}
-
-.tc-handle-h {
-  width: 14px;
-  height: 4px;
-}
-
-.tc-handle-v {
-  width: 4px;
-  height: 14px;
-}
-
-.tc-handle-h:hover,
-.tc-handle-v:hover {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.tc-handle-on {
-  background: var(--ink-soft);
-}
-
-.tc-handle-on:hover {
-  background: color-mix(in srgb, var(--accent) 70%, var(--ink-soft));
-}
-
-.tc-widths select {
-  font: 10px var(--mono);
-  color: var(--ink-soft);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  padding: 1px 2px;
-  cursor: pointer;
-  max-width: 100%;
-}
-
-.tc-widths select:hover {
-  border-color: var(--chrome-border);
-  color: var(--ink);
-}
-
-.tc-boundary td {
-  height: 7px;
-  padding: 0;
-  border: none !important;
-}
-
-.tc-sel {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-.table-card-tools > button:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.table-card-typst {
-  margin-bottom: 10px;
-}
-
-.table-card-typst summary {
-  font: 11px var(--sans);
-  color: var(--ink-soft);
-  cursor: pointer;
-  user-select: none;
-  margin-bottom: 6px;
-}
-
-.table-card-typst-hint {
-  opacity: 0.75;
-}
-
-.table-card-typst-text {
-  width: 100%;
-  font: 12px var(--mono);
-  color: var(--ink);
-  background: var(--sheet);
-  border: 1px solid var(--chrome-border);
-  border-radius: 6px;
-  padding: 8px 10px;
-  resize: vertical;
-}
-
-.table-card-typst-text.tc-typst-bad {
-  border-color: #b3452f;
-  outline: 1px solid #b3452f;
-}
-
-.table-card-meta {
+  z-index: 60;
   display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.table-card-caption {
-  flex: 1;
-}
-
-.table-card-label {
-  width: 150px;
-  font-family: var(--mono) !important;
-}
-
-.table-card-meta input {
-  font: 12.5px var(--sans);
-  color: var(--ink);
-  background: var(--sheet);
-  border: 1px solid var(--chrome-border);
-  border-radius: 5px;
-  padding: 5px 8px;
-}
-
-.table-card-preview {
-  border: 1px solid var(--chrome-border);
+  align-items: baseline;
+  gap: 7px;
+  max-width: min(360px, 50vw);
+  padding: 3px 9px 4px;
   border-radius: 6px;
-  padding: 8px 10px 12px;
-  margin-bottom: 10px;
-  background: var(--sheet);
-  max-height: 240px;
-  overflow: auto;
+  background: rgba(27, 26, 30, 0.94);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  color: rgba(240, 238, 233, 0.92);
+  font: 13px/1.35 var(--serif);
+  white-space: nowrap;
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity 0.12s;
+  pointer-events: none;
 }
 
-.table-card-preview-label {
-  font: 10px var(--sans);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--ink-soft);
-  margin-bottom: 6px;
+#sr-label.show {
+  opacity: 1;
 }
 
-.table-card-preview-body {
-  text-align: center;
+#sr-label .k {
+  flex: none;
+  font: 11px/1 var(--sans);
+  color: rgba(240, 238, 233, 0.5);
+  font-variant-numeric: tabular-nums;
+}
+
+#sr-label .t {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#sr-label .p {
+  flex: none;
+  font: 10.5px/1 var(--sans);
+  color: rgba(240, 238, 233, 0.42);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A page, or a place on empty track: the caption's own size. */
+#sr-label.quiet {
+  font: 11px/1.35 var(--sans);
+  padding: 2px 8px;
+  border-radius: 5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-band,
+  .sr-mark,
+  #sr-label {
+    transition: none;
+  }
 }
 
 /* ---------- file menu ---------- */
@@ -839,7 +938,6 @@ body {
   z-index: 100;
   background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
   border-radius: 16px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 18px 50px rgba(0, 0, 0, 0.45);
@@ -931,61 +1029,181 @@ body {
   white-space: nowrap;
 }
 
+/* The panel: Zen's inset panel, and the paper itself. One elevated panel
+   under the bar and right of the rail, the frame showing round it as a
+   thin edge (the bar's band below its name pill, 7 px; the rail's beside
+   its tiles, 6 px; --edge, 8 px, at the window's right and bottom:
+   Knuth's room's box, widened at the right to a 20 px gutter for the
+   scroll rail while the paper runs past the panel), its shadow falling
+   on the frame and its corners rounded only where they are the paper's
+   (below, the paper's corners: the panel itself is a square clip, with
+   no white or shadow of its own). The pages fill its width edge to edge
+   by scaling, never
+   by re-flowing: the layout is the page's own width in CSS px (816 for
+   Letter), and paper-scale.ts draws it at the panel's width with a
+   transform on #stack, so a wider window is a larger page, a narrower
+   one a smaller page, and nothing is laid out again — the window is the
+   zoom: View › Zoom In / Out (Plass.app) sizes the window to the next
+   size of paper (paper-scale.ts zoomedWindow), and the bar and the rail
+   keep their size (the shell holds Chromium's zoom at 1). The pages run
+   down the panel with a thin gap of the frame between them (#pages);
+   the panel clips them and scrolls, with no scrollbar drawn (the scroll
+   rail beside it maps the paper, and the HUD counts the pages). The page once centred in a grey room as a
+   fixed-width column; before that it sized the window to the paper with
+   resizeTo 180 ms after every resize, which snapped a dragged window
+   back and, under a zoom, walked it there in four steps over a
+   second. */
 #scroll {
   flex: 1;
-  overflow: auto;
-  /* The top band clears the fixed bar. */
-  padding: 96px 16px 56px;
+  min-height: 0;
+  margin: var(--topbar) var(--edge-right) var(--edge) var(--rail);
+  overflow: hidden auto;
+  scrollbar-width: none;
+  /* The panel's clip is square, so the paper is cut straight where it
+     runs on past an edge — except at its two left corners, kept rounded
+     by --paper-left-corner (the switch, at the top of this file). A clip
+     path rather than a border radius, as on #paper: it cuts hit testing
+     too. */
+  clip-path: inset(0 round var(--paper-left-corner, 0px) 0 0 var(--paper-left-corner, 0px));
+  /* No scroll anchoring: a layout pass takes the paper's transform off
+     and puts it back (paper-scale.ts), and at any scale but 1 Chromium's
+     anchoring answered by scrolling the panel a few hundred px by itself
+     a beat after typing. The pages hold their own content still, and a
+     pass holds a followed caret (paperPass). */
+  overflow-anchor: none;
 }
 
-#scroll::-webkit-scrollbar {
-  width: 11px;
+/* Nothing on the paper but the text can be selected: the editors' text
+   stays selectable (an editable element's text always is), and the rest
+   (the page chrome, the margins) cannot be. A Mac's context menu selects
+   the word nearest a right-click, and off the text that was a page
+   number, where the keys after the menu went nowhere (paper-caret.ts). */
+#scroll {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-#scroll::-webkit-scrollbar-track {
-  background: transparent;
+/* The clip box round the stack: the drawn pages' size, or the editor's
+   while a burst of typing runs it past the last page (paper-scale.ts
+   writes its height), so the panel scrolls exactly them; the stack's own
+   laid-out box, which is larger or smaller than its drawing, is clipped
+   to it. It clips rather than lets the drawing overflow: a pass takes
+   the transform off, and an overflowing drawing would shrink the
+   panel's scroll range under it and clamp the scroll. Its corners are
+   the stack's outer four, the first page's top and the last page's
+   bottom (the paper's corners, below), cut by a clip path rather than a
+   border radius: Chromium clips a rounded overflow's descendants in
+   paint but not in hit testing, so a click in a cut corner would still
+   reach the editor. Its white shows only where nothing covers it: under
+   a burst of typing run past the last page, before the pass that adds
+   the page, where it is paper run on from the last sheet, rounded at its
+   bottom by the clip path, and the shadow is drawn round it as round a
+   sheet (the pages' #pages covers the rest in the frame's colour); and
+   in the plain-text view, where it is the sheet, never shorter than the
+   panel. */
+#paper {
+  overflow: clip;
+  clip-path: inset(0 round var(--paper-radius));
+  background: var(--sheet);
 }
 
-#scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
-  border-radius: 6px;
-  border: 3px solid transparent;
-  background-clip: content-box;
+#paper:has(> #stack.source-mode) {
+  min-height: 100%;
 }
 
-#scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.28);
-  border: 3px solid transparent;
-  background-clip: content-box;
+/* The paper's corners. Taylor, 2026-10-02: "in plass i think it's a
+   little hard to tell what's the top and bottom of the page. so i wonder
+   if we can round the edges of the page when they're visible but if the
+   edge of the paper isn't visible then the corners of the elevated
+   platform on that side are squared off ... i basically want to show the
+   PAPER and it's rounded corners". A corner is rounded only where it is a
+   sheet's own, and that is geometry, not a rule per scroll position:
+   every sheet is rounded at its four corners (.page-box; the clip box
+   above rounds the stack's outer four), 12 px on the screen whatever the
+   scale, and the panel's clip is square. So the first page's top corners
+   show while its top edge is in view, each sheet's show at every page
+   gap, the last page's bottom ones at the end, and where the paper runs
+   on past the panel's edge it is cut straight: nothing there suggests an
+   edge it does not have. Zen's shadow (it was the panel's) is a box
+   behind the panel round the paper in view: from the first sheet in view
+   to the last, inside the panel, its corners the visible part of those
+   sheets' corners (its end handed across a page gap over a corner's
+   length as the gap crosses the panel's edge, so it never jumps by the
+   gap), so it ends with a short document's last page, keeps
+   the frame's 8 px edge shaded under paper that runs on, and is square
+   where the paper is cut. paper-scale.ts writes its four variables, in
+   the frame after a scroll and only when they change; the box sits under
+   everything (z-index -1) on the frame, and an outer shadow draws
+   nothing inside its own box, so the gaps between the sheets stay the
+   frame's colour. Its right side is the panel's (--edge-right): with the
+   scroll rail's gutter there its shadow falls on the gutter, under the
+   rail, which is drawn over it. */
+#paper-shadow {
+  position: fixed;
+  z-index: -1;
+  left: var(--rail);
+  right: var(--edge-right);
+  top: calc(var(--topbar) + var(--paper-top, 0px));
+  bottom: calc(var(--edge) + var(--paper-bottom, 0px));
+  border-top-left-radius: var(--paper-left-corner, var(--paper-top-corner, var(--paper-radius)));
+  border-top-right-radius: var(--paper-top-corner, var(--paper-radius));
+  border-bottom-left-radius: var(--paper-left-corner, var(--paper-bottom-corner, var(--paper-radius)));
+  border-bottom-right-radius: var(--paper-bottom-corner, var(--paper-radius));
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 2px 6px rgba(0, 0, 0, 0.35),
+    0 12px 32px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+/* The History page in the room (Plass.app; toolbar.ts, the History
+   tile): the shell lays its page over #scroll's box, rounded 12 px on a
+   transparent ground, so what shows at its corners is what lies under
+   it. While it is up the paper and everything drawn for it — the shadow
+   round it, the HUD in its corner, the scroll rail's marks in the gutter
+   — are hidden, not removed: the corners show the frame, a click in the
+   gutter scrolls no paper one cannot see, and the document stays laid
+   out underneath at the same box, so a rewind's save and reload work on
+   it as ever and nothing moves (the gutter keeps its width). */
+:root.history-inline #scroll,
+:root.history-inline #paper-shadow,
+:root.history-inline #hud,
+:root.history-inline #scrollrail,
+:root.history-inline #sr-label {
+  visibility: hidden;
 }
 
 /* ---------- the page stack ---------- */
 
-/* One continuous editable flow (#editor) over painted page boxes (#pages).
+/* One continuous editable flow (#editor) over painted page boxes (#pages),
+   at the page's own size and scaled to the panel's width from its top
+   left corner (paper-scale.ts; the transform is inline).
    Exact-height .ts-pagegap spacers push content past each page boundary. */
 #stack {
   position: relative;
   width: var(--page-w, 8.5in);
-  margin: 0 auto;
+  transform-origin: 0 0;
 }
 
+/* The page gaps: the frame's colour between the sheets. */
 #pages {
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  background: var(--frame);
 }
 
+/* A sheet is a piece of paper, rounded at its four corners: 12 px on the
+   screen, the radius divided by the scale the stack is drawn at
+   (paper-scale.ts writes it on #pages). Paint only: no layout reads it. */
 .page-box {
   position: absolute;
   left: 0;
   width: var(--page-w, 8.5in);
   height: var(--page-h, 11in);
   background: var(--sheet);
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.45),
-    0 18px 50px rgba(0, 0, 0, 0.4);
-  border-radius: 4px;
+  border-radius: calc(var(--paper-radius) / var(--paper-scale, 1));
 }
 
 .page-num {
@@ -995,7 +1213,7 @@ body {
   text-align: center;
   /* Same face, size, and ink as the PDF's folio. */
   font: var(--doc-size, 12.5pt) / 1 var(--doc-font, serif);
-  color: #1a1a1a;
+  color: var(--ink);
 }
 
 #editor {
@@ -1003,6 +1221,176 @@ body {
   z-index: 1;
   padding: var(--page-margin-top, 1.25in) var(--page-margin-right, 1.25in) 0 var(--page-margin-left, 1.25in);
 }
+
+/* ---------- source view (SOURCE-VIEW.md) ---------- */
+
+/* The text is the truth: the editor and its page boxes hide behind the
+   sheet (the layout plugin sleeps meanwhile — a hidden editor measures
+   nothing). Page-view rules above are untouched. */
+#stack.source-mode > #editor,
+#stack.source-mode > #pages {
+  display: none;
+}
+
+/* One quiet sheet the width of the page column: no page boxes, no
+   numbers. The text column sits at a fixed measure under generous air. */
+#source {
+  --source-raw: color-mix(in srgb, var(--ink) 78%, var(--accent));
+  --source-tint: color-mix(in srgb, var(--accent) 7%, transparent);
+  position: relative;
+  z-index: 1;
+  /* No white of its own: the sheet is the clip box round the stack
+     (#paper), which is white, rounded at its corners and never shorter
+     than the panel, so the text needs no height of its own to fill it. */
+  color: var(--ink);
+}
+
+#source .cm-editor {
+  font: 15.5px/1.6 var(--mono);
+  color: var(--ink);
+  padding: 88px 0 45vh;
+}
+
+#source .cm-editor.cm-focused {
+  outline: none;
+}
+
+/* The page column scrolls; the editor grows with its text. */
+#source .cm-scroller {
+  font-family: inherit;
+  line-height: inherit;
+  overflow: visible;
+}
+
+#source .cm-content {
+  max-width: 68ch;
+  margin: 0 auto;
+  padding: 0 28px;
+  caret-color: var(--ink);
+}
+
+#source .cm-line {
+  padding: 0;
+}
+
+#source .cm-cursor,
+#source .cm-dropCursor {
+  border-left: 1.5px solid var(--ink);
+}
+
+#source .cm-selectionBackground,
+#source .cm-content ::selection {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+#source .cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+#source .cm-selectionMatch {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* Focus mode: the paragraph you are in stays; the rest recedes. */
+#source .cm-line.cm-dim {
+  opacity: 0.3;
+  transition: opacity 160ms ease;
+}
+
+#source .source-focus {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  z-index: 2;
+  font: 11px var(--sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+  opacity: 0.45;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--ink) 25%, transparent);
+  border-radius: 999px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+#source .source-focus:hover,
+#source .source-focus[aria-pressed='true'] {
+  opacity: 0.9;
+}
+
+#source .source-focus[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+#source .cm-searchMatch {
+  background: color-mix(in srgb, #d9a441 35%, transparent);
+}
+
+#source .cm-searchMatch.cm-searchMatch-selected {
+  background: color-mix(in srgb, #d9a441 65%, transparent);
+}
+
+/* The generated settings block, folded behind one quiet line; unfolded,
+   a small "fold" affordance sits above it. */
+#source .source-preamble-fold {
+  color: var(--ink-soft);
+  cursor: pointer;
+  user-select: none;
+}
+
+#source .source-preamble-fold:hover {
+  color: var(--ink);
+}
+
+#source .source-preamble-hint {
+  margin-left: 1.2em;
+  font-size: 0.8em;
+  opacity: 0.7;
+}
+
+#source .source-preamble-bar {
+  padding-bottom: 0.4em;
+}
+
+#source .source-preamble-fold-btn {
+  font: inherit;
+  color: var(--ink-soft);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+#source .source-preamble-fold-btn:hover {
+  color: var(--ink);
+}
+
+/* Find/replace rides the top of the sheet in the chrome's own voice. */
+#source .cm-panels {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--chrome);
+  color: var(--ink);
+  border-bottom: 1px solid var(--chrome-border);
+  font: 12px var(--sans);
+  border-radius: 4px 4px 0 0;
+}
+
+#source .cm-panel.cm-search {
+  padding: 8px 12px;
+}
+
+#source .cm-panel input,
+#source .cm-panel button {
+  font: 12px var(--sans);
+}
+
+/* The formatting tiles rest while the text is the truth (toolbar.ts
+   disables them; toolbar.css draws a disabled tile): they act on the
+   ProseMirror document, which is not being edited. */
 
 /* ---------- document typography (driven by document settings) ---------- */
 
@@ -1017,7 +1405,7 @@ body {
   font-family: var(--doc-font, var(--serif));
   font-size: var(--doc-size, 12.5pt);
   line-height: var(--doc-line, 1.5);
-  color: #1a1a1a;
+  color: var(--ink);
   /* The oracle owns layout: no browser justification, no browser hyphens. */
   text-align: left;
   hyphens: none;
@@ -1066,7 +1454,10 @@ body {
    collapse: page-gap spacers then insert exactly their own height. */
 .ProseMirror h1,
 .ProseMirror h2,
-.ProseMirror h3 {
+.ProseMirror h3,
+.ProseMirror h4,
+.ProseMirror h5,
+.ProseMirror h6 {
   font-weight: 600;
   line-height: 1.25;
   margin: 0 0 0.5em;
@@ -1081,7 +1472,10 @@ body {
 /* Section numbers, painted by the numbering plugin. */
 .ProseMirror h1[data-secnum]::before,
 .ProseMirror h2[data-secnum]::before,
-.ProseMirror h3[data-secnum]::before {
+.ProseMirror h3[data-secnum]::before,
+.ProseMirror h4[data-secnum]::before,
+.ProseMirror h5[data-secnum]::before,
+.ProseMirror h6[data-secnum]::before {
   content: attr(data-secnum) '\2002';
   user-select: none;
   -webkit-user-select: none;
@@ -1091,7 +1485,12 @@ body {
   font-size: 1.4em;
 }
 
-.ProseMirror h3 {
+/* Levels 4–6 are level 3's box, in the page and in the print (the export
+   gives them level 3's show rules); only the level number differs. */
+.ProseMirror h3,
+.ProseMirror h4,
+.ProseMirror h5,
+.ProseMirror h6 {
   font-size: 1.15em;
 }
 
@@ -1103,14 +1502,151 @@ body {
   padding: 0.66em 1em 0;
 }
 
+/* Solution block — the export's #block(stroke: (left: 2pt + red), inset:
+   (left: 1em)) with red text. Vertical box = a plain paragraph run: Auto
+   block spacing above/below (par spacing, so margin-bottom tracks
+   --par-margin like a paragraph) and no vertical inset. The rule is
+   paint-only and lives OUTSIDE the block's box: never a border (a border
+   plus a compensating negative margin leaves a fractional clientWidth
+   that rounds, and the breaker's measure — clientWidth minus padding —
+   would drift a third of a pixel from Typst's inset). On screen the
+   plugin's .ts-solution-rules layer paints one segment per page so the
+   rule stops at each page's last line like Typst's split frames; print
+   uses the ::before below. Typst centers the 2pt stroke on the block
+   edge; the bar sits 1pt either side of it. */
+.ProseMirror blockquote[data-kind='solution'] {
+  --solution-red: #c00000;
+  position: relative;
+  margin: 0 0 var(--par-margin, 0.9em);
+  padding: 0 0 0 1em;
+  color: var(--solution-red);
+}
+
+.ts-solution-rules {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.ts-solution-rules > div {
+  position: absolute;
+  width: 2pt;
+  margin-left: -1pt;
+  background: #c00000;
+}
+
+.ProseMirror blockquote[data-kind='solution'] > :last-child {
+  margin-bottom: 0;
+}
+
+/* Lists mirror Typst's list/enum grid: a marker column as wide as the
+   marker (the widest label, for enums), then a 0.5em body-indent. The
+   typeset plugin publishes the indents from shaped widths (--list-indent-N
+   by nesting depth — Typst cycles •, ‣, – — and --enum-indent-N by the
+   item count's digits, set on <ol data-digits>); the fallbacks are New
+   Computer Modern's values. Markers are painted at the column's left edge,
+   out of flow, so the body measure is exactly Typst's. */
 .ProseMirror ul,
 .ProseMirror ol {
-  padding-left: 1.6em;
+  padding-left: var(--list-indent-1, 1.278em);
   margin: 0 0 0.9em;
+  list-style: none;
+}
+
+.ProseMirror ul ul,
+.ProseMirror ul ul ul ul {
+  padding-left: var(--list-indent-2, 0.875em);
+}
+
+.ProseMirror ul ul ul,
+.ProseMirror ul ul ul ul ul {
+  padding-left: var(--list-indent-3, 1em);
+}
+
+.ProseMirror ol {
+  padding-left: var(--enum-indent-1, 1.278em);
+  counter-reset: plass-enum;
+}
+
+.ProseMirror ol[data-digits='2'] {
+  padding-left: var(--enum-indent-2, 1.778em);
+}
+
+.ProseMirror ol[data-digits='3'] {
+  padding-left: var(--enum-indent-3, 2.278em);
+}
+
+.ProseMirror li {
+  position: relative;
+}
+
+.ProseMirror li::before {
+  position: absolute;
+  top: 0;
+  pointer-events: none;
+}
+
+.ProseMirror ul > li::before {
+  content: '•';
+  left: calc(-1 * var(--list-indent-1, 1.278em));
+}
+
+.ProseMirror ul ul > li::before,
+.ProseMirror ul ul ul ul > li::before {
+  content: '‣';
+  left: calc(-1 * var(--list-indent-2, 0.875em));
+}
+
+.ProseMirror ul ul ul > li::before,
+.ProseMirror ul ul ul ul ul > li::before {
+  content: '–';
+  left: calc(-1 * var(--list-indent-3, 1em));
+}
+
+.ProseMirror ol > li {
+  counter-increment: plass-enum;
+}
+
+.ProseMirror ol > li::before {
+  content: counter(plass-enum) '.';
+  left: calc(-1 * var(--enum-indent-1, 1.278em));
+}
+
+.ProseMirror ol[data-digits='2'] > li::before {
+  left: calc(-1 * var(--enum-indent-2, 1.778em));
+}
+
+.ProseMirror ol[data-digits='3'] > li::before {
+  left: calc(-1 * var(--enum-indent-3, 2.278em));
 }
 
 .ProseMirror li > p {
   margin-bottom: 0.25em;
+}
+
+/* Inside an item, a paragraph followed by another block is spaced from it
+   by paragraph spacing, as anywhere else (Typst: the larger of the two
+   blocks' weak spacings — measured 30pt line to line at the default size). */
+.ProseMirror li > p:not(:last-child) {
+  margin-bottom: var(--par-margin, 0.9em);
+}
+
+/* A loose list (blank lines between its items in the file): Typst spaces
+   the items by paragraph spacing instead of the list's item pitch. The
+   last item keeps the tight margin so the spacing after the list is the
+   same either way. */
+.ProseMirror ul[data-tight='0'] > li:not(:last-child) > p:last-child,
+.ProseMirror ol[data-tight='0'] > li:not(:last-child) > p:last-child {
+  margin-bottom: var(--par-margin, 0.9em);
+}
+
+/* A nested list inside an item: Typst separates the item's text from it by
+   the full block spacing (paragraph spacing — measured: 30pt line to line
+   at the default size, not the 21.9pt item spacing), and nothing extra
+   after it — the next outer item follows at the item spacing. */
+.ProseMirror li > ul,
+.ProseMirror li > ol {
+  margin: 0.9em 0 0;
 }
 
 .ProseMirror code {
@@ -1126,25 +1662,38 @@ body {
   border-radius: 3px;
 }
 
+/* Code blocks — plain fences and islands alike — mirror Typst's raw block:
+   DejaVu Sans Mono at 0.8em (the same font file feeds the compiler, so
+   wrapping agrees), a line pitch of leading + raw top edge, no horizontal
+   inset (Typst wraps raw at the full measure), tab = 2 spaces. Vertical
+   parity: --code-line/--code-pad/--code-mb come from settings.ts
+   (`codeBlockMetricsEm`) so the baselines into and out of the block equal
+   Typst's for the document's body font and line height. The chip is paint
+   only (a spread shadow), never layout. */
 .ProseMirror pre {
-  font-family: var(--mono);
-  font-size: 0.82em;
+  font-family: 'DejaVu Sans Mono', var(--mono);
+  font-size: 0.8em;
+  line-height: var(--code-line, 1.425em);
+  tab-size: 2;
   background: rgba(0, 0, 0, 0.045);
-  padding: 0.8em 1em;
-  border-radius: 5px;
+  box-shadow: 0 0 0 0.6em rgba(0, 0, 0, 0.045);
+  border-radius: 3px;
+  padding: var(--code-pad, 0.13em) 0 0;
   white-space: pre-wrap;
-  margin: 0 0 0.9em;
+  margin: 0 0 var(--code-mb, 0.99em);
 }
 
-/* Inline raw Typst: the compiled fragment sits in the text line. Fixed
-   fragments size themselves; flexible (fr) ones get their width from the
-   paginator, which is why this must not shrink-wrap. */
+/* Inline raw Typst: an island shown as inline code — the same DejaVu Sans
+   Mono at 0.8em the code mark uses, which is how it prints (`#raw`). */
 .ts-inline-raw {
+  font-family: 'DejaVu Sans Mono', var(--mono);
+  font-size: 0.8em;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 0.1em 0.2em;
+  margin: 0 -0.2em;
+  border-radius: 3px;
   cursor: pointer;
-}
-
-.ts-inline-raw svg {
-  vertical-align: baseline;
+  white-space: pre-wrap;
 }
 
 .ProseMirror .ts-inline-raw.ProseMirror-selectednode {
@@ -1153,38 +1702,48 @@ body {
   border-radius: 2px;
 }
 
-.inline-raw-editor .inline-raw-preview {
-  min-height: 1.6em;
-  overflow: hidden;
+/* Islands — raw Typst from a .typ file, a {=typst} block or the source
+   view; raw Markdown (an HTML block, an unknown div) from a .md file — are
+   code blocks with a tag in the margin. They print as the same code block,
+   never run. The tag is out of flow: no block height depends on it. */
+.ProseMirror pre[data-params='typst-raw'],
+.ProseMirror pre[data-params='md-raw'] {
+  position: relative;
 }
 
-/* Raw-Typst islands: the compiled render IS the block; the source chip
-   shows while editing (click the render) or when the island paints
-   nothing (set rules, counters). Margins mirror paragraph rhythm. */
-.ts-raw {
-  margin: 0 0 0.9em;
+.ProseMirror pre[data-params='typst-raw']::before,
+.ProseMirror pre[data-params='md-raw']::before {
+  position: absolute;
+  right: 100%;
+  margin-right: 1.4em;
+  top: 0.15em;
+  font: 9.5px var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--bar-ink-soft);
+  white-space: nowrap;
+  opacity: 0.75;
+  pointer-events: none;
 }
 
-.ts-raw .ts-raw-render {
-  display: none;
-  cursor: pointer;
+.ProseMirror pre[data-params='typst-raw']::before {
+  content: 'typst · not run';
 }
 
-.ts-raw.ts-raw-visual:not(.ts-raw-editing) .ts-raw-render {
-  display: block;
-}
-
-.ts-raw.ts-raw-visual:not(.ts-raw-editing) > pre {
-  display: none;
-}
-
-.ts-raw > pre {
-  margin: 0;
+.ProseMirror pre[data-params='md-raw']::before {
+  content: 'markdown ·\A printed as code';
+  /* Two lines, so the tag is no wider than the margin it sits in. */
+  white-space: pre;
+  text-align: right;
+  line-height: 1.35;
 }
 
 .ProseMirror pre code {
+  font-size: 1em;
+  line-height: inherit;
   background: none;
   padding: 0;
+  margin: 0;
 }
 
 .ProseMirror hr {
@@ -1215,6 +1774,99 @@ body {
   -webkit-user-select: none;
 }
 
+/* ---------- grid (grid-editor.ts) ---------- */
+
+/* Typst's #grid: rows of cells at fraction widths, gutter between columns
+   and rows. The grid's block spacing after is paragraph spacing (the
+   cells' boxes end one paragraph inset below their frames, like a
+   paragraph's); the row gap is the gutter less the slack the two cell
+   boxes carry (frame to frame = gutter). Rows are separate boxes so the
+   paginator can move one whole. */
+.ProseMirror .ts-grid {
+  margin: 0 0 var(--par-margin, 0.9em);
+}
+
+.ProseMirror .ts-grid-row {
+  display: grid;
+  grid-template-columns: var(--grid-cols, 1fr 1fr);
+  column-gap: var(--grid-gutter, 1em);
+  align-items: start;
+}
+
+.ProseMirror .ts-grid-row + .ts-grid-row {
+  margin-top: calc(var(--grid-gutter, 1em) - 2 * var(--half-leading, 0.42em));
+}
+
+.ProseMirror .ts-grid-cell {
+  min-width: 0;
+  position: relative;
+}
+
+/* The editor owns focus, so its selection decorations identify the grid
+   being edited. Paint every cell edge to make empty later rows visible. */
+.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell::after {
+  content: '';
+  position: absolute;
+  top: calc(var(--half-leading, 0.42em) - var(--grid-cell-margin-top, 0px));
+  bottom: calc(var(--half-leading, 0.42em) - var(--grid-cell-margin-bottom, 0px));
+  inset-inline: -3px;
+  border: 1px dashed rgba(140, 140, 150, 0.45);
+  pointer-events: none;
+}
+
+.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell-active::after {
+  border: 1px solid var(--accent);
+}
+
+.ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell[data-grid-empty='true']::before {
+  content: 'Type here or insert a figure';
+  position: absolute;
+  inset: 0;
+  color: color-mix(in srgb, var(--ink) 40%, transparent);
+  font: 400 11px var(--sans);
+  line-height: inherit;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.grid-toolbar-position {
+  padding: 0 6px;
+  font: 600 10.5px/1 var(--sans);
+  white-space: nowrap;
+}
+
+.grid-toolbar-help {
+  padding: 4px 8px 2px;
+  font: 400 11px/1.4 var(--sans);
+  opacity: 0.7;
+}
+
+.grid-toolbar .grid-toolbar-name {
+  font: 600 10.5px/1 var(--sans);
+  padding: 0 6px 0 4px;
+  opacity: 0.7;
+}
+
+.grid-toolbar .grid-toolbar-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: 500 10.5px/1 var(--sans);
+  padding: 0 4px;
+}
+
+.grid-toolbar .grid-toolbar-field input {
+  min-height: 23px;
+  font: 500 11px/1 var(--sans);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  border: 1px solid var(--chrome-border);
+  border-radius: 5px;
+  padding: 2px 5px;
+}
+
 /* ---------- figures ---------- */
 
 .ts-figure {
@@ -1236,7 +1888,7 @@ body {
   /* Typst renders captions at full body size and ink, justified with a
      centered last line. Oracle-laid lines end in <br> (exempt from CSS
      justify); while being edited, CSS takes over with the same shape. */
-  color: #1a1a1a;
+  color: var(--ink);
   text-align: justify;
   text-align-last: center;
 }
@@ -1285,8 +1937,8 @@ body {
   border: 1px solid var(--accent);
   border-radius: 10px;
   padding: 2px 8px;
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--sheet);
+  color: var(--ink);
 }
 
 .fig-label-input:focus {
@@ -1324,8 +1976,10 @@ body {
      indent, full ink. These constants are mirrored in typeset-plugin's
      fnIndent()/FN_SCALE — keep them in sync. */
   font-size: 0.85em;
-  line-height: 1.2;
-  color: #1a1a1a;
+  /* Typst's entry line pitch: cap height plus a 0.5em leading of the entry
+     size (measured 12.57pt at the default size), published by settings. */
+  line-height: var(--fn-line, 1.183);
+  color: var(--ink);
   /* Oracle-laid lines end in <br> (CSS justify skips them; word-spacing
      decos do the work); while being edited, decos are stripped and CSS
      justification takes over. */
@@ -1333,14 +1987,23 @@ body {
   text-indent: 0.9em;
 }
 
-/* Separator rule above the first footnote of a page. */
+/* Separator rule above the first footnote of a page: positioned exactly
+   `gap + separator-thickness` above the entry, both resolved against the
+   BODY text size (--doc-size, not this rule's own 0.85em) via pure CSS
+   arithmetic — the same values src/layout/flow-rules.ts uses for
+   reservation, so paint and reservation cannot drift. Typst defaults
+   (model/footnote.rs): gap = 0.5em, separator = an absolute 0.5pt line
+   spanning 30% of the entry's width. */
 .fn-body.fn-first::before {
   content: '';
   position: absolute;
-  top: -9px;
+  /* The entry's FRAME (its cap top) sits --fn-top-inset below the box
+     top; the separator's bottom is the gap above that frame. */
+  top: calc(-0.5pt - var(--doc-size) * 0.5 + var(--fn-top-inset, 0px));
   left: 0;
-  width: 30%;
-  border-top: 0.5px solid #1a1a1a;
+  width: var(--fn-sep-width, 30%);
+  display: var(--fn-sep-display, block);
+  border-top: 0.5pt solid var(--ink);
 }
 
 .fn-num {
@@ -1598,137 +2261,276 @@ body {
   }
 }
 
-/* ---------- tables ---------- */
-
-/* Custom-styled tables show a Typst-compiled preview; the DOM table is the
-   editing mode, revealed while the caret is inside (data-editing). */
-.ts-table-wrap {
-  margin: 0 0 0.9em;
-}
-
-.ts-table-wrap table {
-  margin: 0 auto;
-}
-
-.ts-table-wrap.has-preview:not([data-editing]) > table {
-  display: none;
-}
-
-.ts-table-wrap:not(.has-preview) > .ts-table-preview {
-  display: none;
-}
-
-/* While editing, keep the compiled result visible below the editable table —
-   live feedback for style/opts changes instead of styling blind. */
-.ts-table-wrap.has-preview[data-editing] > .ts-table-preview {
-  margin-top: 10px;
-  padding-top: 14px;
-  border-top: 1px dashed #c9c5bc;
-  cursor: default;
-}
-
-.ts-table-wrap.has-preview[data-editing] > .ts-table-preview::before {
-  content: 'Typst result — updates as you edit';
-  position: absolute;
-  top: 2px;
-  left: 0;
-  font: 10px var(--sans);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-}
-
-.ts-table-wrap.has-preview[data-editing] > .ts-table-preview:hover {
-  outline: none;
-}
-
-.ts-table-preview {
-  cursor: pointer;
-  border-radius: 3px;
-  position: relative;
-}
-
-.ts-table-preview:hover {
-  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  outline-offset: 3px;
-}
-
-/* Per-cell hit regions over the compiled SVG: click to edit in place. */
-.ts-cell-hit {
-  position: absolute;
-  cursor: text;
-  border-radius: 3px;
-}
-
-.ts-cell-hit:hover {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-}
-
-/* Floating single-cell editor anchored to the compiled cell position. */
-.ts-cell-editor {
-  position: absolute;
-  z-index: 150;
-  font: inherit;
-  font-family: var(--doc-font, var(--serif));
-  font-size: 0.95em;
-  color: #1a1a1a;
-  background: #fff;
-  border: 1.5px solid var(--accent);
-  border-radius: 4px;
-  padding: 2px 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
-}
-
-.ts-cell-editor:focus {
-  outline: none;
-}
+/* ---------- native structured tables ---------- */
 
 .ProseMirror table {
   border-collapse: collapse;
-  margin: 0 0 0.9em;
-  width: 100%;
+  /* Typst's auto columns produce an intrinsic table centered by the
+     serializer's #align(center, ...). Keep the editable surface on that same
+     box model; max-width lets long technical cells wrap at the page edge. */
+  /* Typst's Auto block spacing (= paragraph spacing) measured frame to
+     frame: the neighbours' boxes carry a descent below and cap slack above,
+     which the typeset plugin subtracts when it publishes these. */
+  margin: var(--table-mt, 1.396em) auto var(--table-mb, 1.221em);
+  width: auto;
+  max-width: 100%;
   table-layout: auto;
-  font-size: 0.95em;
+  font-size: 1em;
+  line-height: inherit;
+}
+
+.ProseMirror table[data-font-size='0.9em'] { font-size: 0.9em; --table-scale: 0.9; }
+.ProseMirror table[data-font-size='0.85em'] { font-size: 0.85em; --table-scale: 0.85; }
+.ProseMirror table[data-font-size='0.8em'] { font-size: 0.8em; --table-scale: 0.8; }
+.ProseMirror table[data-font-size='0.75em'] { font-size: 0.75em; --table-scale: 0.75; }
+
+.ProseMirror th[style*='text-align: decimal'],
+.ProseMirror td[style*='text-align: decimal'] {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.ProseMirror table {
+  /* Typst's cell inset: 5pt by default, a density preset otherwise
+     (table-density.ts). */
+  --cell-inset: 5pt;
+  --table-scale: 1;
+  line-height: calc(var(--table-text-extent, 11.4px) * var(--table-scale) + 2 * var(--half-leading, 6.81px));
+}
+
+.ProseMirror table[data-density='compact'] {
+  --cell-inset: 3pt;
+}
+
+.ProseMirror table[data-density='roomy'] {
+  --cell-inset: 8pt;
+}
+
+.ProseMirror table.ts-table-sized {
+  table-layout: fixed;
+  max-width: none;
 }
 
 .ProseMirror th,
 .ProseMirror td {
-  padding: 0.3em 0.65em;
+  min-width: 0;
+  /* Horizontal inset as is. Vertically, Typst's one-line cell is inset +
+     top edge + inset; the editor's line box is line-height tall, which
+     exceeds the glyph's top-edge-to-baseline extent by the leading. So the
+     block inset is applied as a margin on the cell's first and last
+     paragraph of (inset − half-leading), negative under compact insets:
+     the row is then exactly Typst's for any line count. */
+  padding: 0 var(--cell-inset);
   vertical-align: top;
   position: relative;
+  transition: background-color 90ms ease, box-shadow 90ms ease;
 }
 
 .ProseMirror th {
-  font-weight: 600;
+  /* table.header controls repetition, not typography; authors can still use
+     a strong mark when a visually bold header is intended. */
+  font-weight: inherit;
   text-align: left;
 }
 
-/* grid preset: full borders, shaded header */
-.ProseMirror table.ts-table-grid th,
-.ProseMirror table.ts-table-grid td {
-  border: 1px solid #c9c5bc;
+/* Rules are paint only. Typst draws a stroke centered on the cell
+   boundary and charges the layout nothing for it; a CSS border would add
+   its width to every row and the table, and the page would drift from the
+   print by a rule's width per rule. */
+
+/* grid preset: Typst's default one-point black cell strokes — a half-point
+   ring outside each cell, so neighbours overlap to one point and the outer
+   edge gets the half Typst paints outside the table box. Collapsed-border
+   tables do not paint cell shadows, so the grid keeps separate borders
+   with no spacing: the same box, shadow-capable cells. */
+.ProseMirror table.ts-table-grid {
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
-.ProseMirror table.ts-table-grid th {
-  background: rgba(0, 0, 0, 0.04);
+.ProseMirror table.ts-table-grid th,
+.ProseMirror table.ts-table-grid td {
+  box-shadow: 0 0 0 0.5pt var(--ink);
 }
 
 /* booktabs preset: horizontal rules only — the academic look */
 .ProseMirror table.ts-table-booktabs {
-  border-top: 1.6px solid #2a2a2a;
-  border-bottom: 1.6px solid #2a2a2a;
+  box-shadow: inset 0 0.08em 0 var(--ink), inset 0 -0.08em 0 var(--ink);
 }
 
 .ProseMirror table.ts-table-booktabs tr:first-child th {
-  border-bottom: 0.9px solid #2a2a2a;
+  box-shadow: inset 0 -0.05em 0 var(--ink);
+}
+
+/* Cell fill presets (table-fills.ts): the same colours Typst prints. */
+.ProseMirror th[data-fill='gray-dark'],
+.ProseMirror td[data-fill='gray-dark'],
+.ProseMirror .ts-table-hdr[data-fill='gray-dark'] {
+  background-color: #dcdcdc;
+}
+.ProseMirror th[data-fill='gray'],
+.ProseMirror td[data-fill='gray'],
+.ProseMirror .ts-table-hdr[data-fill='gray'] {
+  background-color: #f0f0f0;
+}
+
+.ProseMirror th[data-fill='yellow'],
+.ProseMirror td[data-fill='yellow'],
+.ProseMirror .ts-table-hdr[data-fill='yellow'] {
+  background-color: #fff3b0;
+}
+
+.ProseMirror th[data-fill='blue'],
+.ProseMirror td[data-fill='blue'],
+.ProseMirror .ts-table-hdr[data-fill='blue'] {
+  background-color: #e6f0ff;
 }
 
 /* plain preset: no rules at all */
 
+/* Row rule presets (table-rules.ts): the rule under a row, replacing the
+   style preset's at that boundary. Grid tables keep their cell strokes. */
+.ProseMirror table:not(.ts-table-grid) tr[data-rule='light'] > th,
+.ProseMirror table:not(.ts-table-grid) tr[data-rule='light'] > td {
+  box-shadow: inset 0 -0.05em 0 var(--ink);
+}
+
+.ProseMirror table:not(.ts-table-grid) tr[data-rule='heavy'] > th,
+.ProseMirror table:not(.ts-table-grid) tr[data-rule='heavy'] > td {
+  box-shadow: inset 0 -0.08em 0 var(--ink);
+}
+
+.ProseMirror table:not(.ts-table-grid) tr[data-rule='none'] > th,
+.ProseMirror table:not(.ts-table-grid) tr[data-rule='none'] > td {
+  box-shadow: none;
+}
+
 .ProseMirror th p,
 .ProseMirror td p {
   margin: 0;
+}
+
+.ProseMirror th > p:first-child,
+.ProseMirror td > p:first-child {
+  margin-top: calc(var(--cell-inset) - var(--half-leading, 6.81px));
+}
+
+.ProseMirror th > p:last-child,
+.ProseMirror td > p:last-child {
+  margin-bottom: calc(var(--cell-inset) - var(--half-leading, 6.81px));
+}
+
+/* An empty cell has no glyph box: its height is the two insets alone. */
+.ProseMirror th:has(> p:only-child > br.ProseMirror-trailingBreak:only-child),
+.ProseMirror td:has(> p:only-child > br.ProseMirror-trailingBreak:only-child) {
+  padding-block: var(--cell-inset);
+}
+
+.ProseMirror th:has(> p:only-child > br.ProseMirror-trailingBreak:only-child) > p,
+.ProseMirror td:has(> p:only-child > br.ProseMirror-trailingBreak:only-child) > p {
+  margin: 0;
+}
+
+.ProseMirror th > p:only-child:has(> br.ProseMirror-trailingBreak:only-child),
+.ProseMirror td > p:only-child:has(> br.ProseMirror-trailingBreak:only-child) {
+  line-height: 0;
+}
+
+.ProseMirror th p + p,
+.ProseMirror td p + p {
+  margin-top: var(--table-par-gap, 0.9em);
+}
+
+.ProseMirror th:hover,
+.ProseMirror td:hover {
+  background-color: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
+/* A page break inside a table (PAGE-PORT.md Phase 7): a widget row between
+   two real rows. Its cells stack an exact-height gap and a copy of the
+   repeating header sized to the real header row; nothing else here may add
+   layout height — every rule below is an absolutely positioned
+   pseudo-element (paint only), mirroring what Typst's grid strokes at a
+   region boundary (grid/layouter.rs render_fills_strokes): the table's
+   bottom rule closes the interrupted page, and the continuation page opens
+   with the top rule, the repeated header, and the rule under it. */
+.ProseMirror table tr.ts-table-break > td {
+  padding: 0;
+  border: none;
+  box-shadow: none;
+  vertical-align: top;
+  position: relative;
+}
+
+.ts-table-gap,
+.ts-table-hdr {
+  display: block;
+  position: relative;
+}
+
+.ts-table-hdr {
+  box-sizing: border-box;
+  padding: 0 var(--cell-inset);
+  overflow: hidden;
+}
+
+.ProseMirror .ts-table-hdr p {
+  margin: 0;
+}
+
+.ProseMirror .ts-table-hdr > p:first-child {
+  margin-top: calc(var(--cell-inset) - var(--half-leading, 6.81px));
+}
+
+.ProseMirror .ts-table-hdr > p:last-child {
+  margin-bottom: calc(var(--cell-inset) - var(--half-leading, 6.81px));
+}
+
+.ProseMirror .ts-table-hdr p + p {
+  margin-top: var(--table-par-gap, 0.9em);
+}
+
+/* Rules span each cell's padding box (cells abut under border-collapse),
+   so they read as one continuous line across the table. */
+.ProseMirror table tr.ts-table-break > td::before,
+.ProseMirror table tr.ts-table-break > td::after,
+.ProseMirror table tr.ts-table-break .ts-table-gap::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+
+/* booktabs: the closing rule at the interrupted page's bottom (the table's
+   own bottom rule, 0.08em) and the opening rule at the top of the next page
+   (its top rule), then the header rule under the repeated header — only when
+   the repeated row is the row the exporter's midrule sits under. */
+.ProseMirror table.ts-table-booktabs tr.ts-table-break > td::before {
+  top: 0;
+  border-top: 0.08em solid var(--ink);
+}
+
+.ProseMirror table.ts-table-booktabs tr.ts-table-break .ts-table-gap::after {
+  bottom: 0;
+  border-bottom: 0.08em solid var(--ink);
+}
+
+.ProseMirror table.ts-table-booktabs tr.ts-table-break-midrule > td::after {
+  bottom: 0;
+  border-bottom: 0.05em solid var(--ink);
+}
+
+/* grid: only the header copy carries cell strokes. Its box spans the
+   full column width, and its ring matches the real cells. The spacer
+   cells themselves must never draw lines through the page margins. */
+.ProseMirror table.ts-table-grid tr.ts-table-break .ts-table-hdr {
+  box-shadow: 0 0 0 0.5pt var(--ink);
+}
+
+/* The header copy is presentation: no cell hover/selection affordances. */
+.ProseMirror table tr.ts-table-break > td:hover {
+  background-color: transparent;
 }
 
 /* prosemirror-tables cell-selection highlight */
@@ -1738,6 +2540,17 @@ body {
   inset: 0;
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   pointer-events: none;
+}
+
+.ProseMirror .selectedCell {
+  caret-color: var(--accent);
+}
+
+.native-table-caption {
+  margin: -0.35em 0 1em;
+  text-align: center;
+  font: inherit;
+  color: inherit;
 }
 
 /* ---------- citations & bibliography ---------- */
@@ -1832,6 +2645,7 @@ body {
 /* ---------- bibliography editor modal ---------- */
 
 .bib-editor-overlay {
+  -webkit-app-region: no-drag; /* inside the bar's drag band: a click must reach it, not move the window */
   position: fixed;
   inset: 0;
   z-index: 200;
@@ -1968,10 +2782,6 @@ body {
   transform: translateY(0.18em);
 }
 
-.ts-table-render svg {
-  transform: translateY(3px);
-}
-
 .math-display {
   display: block;
   position: relative;
@@ -2021,6 +2831,14 @@ body {
 
 .eq-ref:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* Typst never measured this formula (compile failed, or the compiler
+   could not run): it sits at KaTeX's width, and the lines around it may
+   break differently in print. Paint only — an outline moves nothing. */
+.math-unmeasured {
+  outline: 1px dashed color-mix(in srgb, #c77700 70%, transparent);
+  outline-offset: 1px;
 }
 
 .math-inline:hover,
@@ -2216,20 +3034,39 @@ body {
 
 /* ---------- settings panel ---------- */
 
+/* Every floating panel is the pills' dark glass: the dropdowns (File,
+   Headings, Text style, Lists, Extras and its submenus) and Settings. */
+.tb-menu,
 .settings-panel {
-  position: absolute;
+  --bar-glass: rgba(27, 26, 30, 0.94);
+  --bar-ink: rgba(240, 238, 233, 0.9);
+  --bar-ink-soft: rgba(240, 238, 233, 0.5);
+  --bar-hairline: rgba(255, 255, 255, 0.1);
+  --bar-press: rgba(255, 255, 255, 0.09);
+  --accent: #9db8d6;
+  color-scheme: dark;
+}
+
+.settings-panel {
+  position: fixed;
   z-index: 100;
   background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
-  border-radius: 20px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 18px 50px rgba(0, 0, 0, 0.45);
-  padding: 14px 16px;
-  width: 284px;
+  border-radius: 13px;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 16px 40px rgba(0, 0, 0, 0.28);
+  padding: 12px 14px;
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.settings-row[hidden] {
+  display: none;
 }
 
 .settings-row {
@@ -2240,6 +3077,30 @@ body {
   font: 12.5px var(--sans);
   color: var(--bar-ink);
   cursor: pointer;
+}
+
+.settings-row > span:first-child {
+  flex-shrink: 0;
+}
+
+.settings-row input[type='text'] {
+  width: 170px;
+  min-width: 0;
+  font: 12px var(--sans);
+  color: var(--bar-ink);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 6px;
+  padding: 5px 7px;
+}
+
+.settings-row input::placeholder {
+  color: var(--bar-ink-soft);
+}
+
+.settings-panel :is(button, input):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .settings-row select {
@@ -2286,16 +3147,20 @@ body {
 .ts-select-btn {
   font: 12px var(--sans);
   color: var(--bar-ink);
-  background: rgba(0, 0, 0, 0.045);
+  background: rgba(255, 255, 255, 0.045);
   border: 1px solid var(--bar-hairline);
-  border-radius: 8px;
-  padding: 3px 22px 3px 8px;
+  border-radius: 6px;
+  padding: 5px 22px 5px 8px;
   max-width: 170px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
   position: relative;
+}
+
+.ts-select-btn:hover {
+  background: var(--bar-press);
 }
 
 .ts-select-btn::after {
@@ -2318,13 +3183,14 @@ body {
   min-width: 100%;
   background: var(--bar-glass);
   backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--bar-hairline);
   border-radius: 10px;
   padding: 4px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .ts-select-item {
@@ -2391,7 +3257,7 @@ body {
   width: 34px;
   font: 11px var(--sans);
   color: var(--bar-ink);
-  background: rgba(0, 0, 0, 0.045);
+  background: rgba(255, 255, 255, 0.045);
   border: 1px solid var(--bar-hairline);
   border-radius: 6px;
   padding: 2px 3px;
@@ -2408,10 +3274,10 @@ body {
 
 .settings-macros-btn {
   font: 12.5px var(--sans);
-  color: #fff;
-  background: var(--accent);
-  border: none;
-  border-radius: 999px;
+  color: var(--bar-ink);
+  background: var(--bar-press);
+  border: 1px solid var(--bar-hairline);
+  border-radius: 6px;
   padding: 6px 12px;
   cursor: pointer;
   margin-top: 4px;
@@ -2428,9 +3294,14 @@ body {
 
 @media print {
   #toolbar,
+  #rail,
   #hud,
   #toast,
-  .table-pill,
+  #scrollrail,
+  #sr-label,
+  .native-table-toolbar,
+  .native-table-notice,
+  #paper-shadow,
   #pages {
     display: none;
   }
@@ -2442,12 +3313,27 @@ body {
 
   #scroll {
     overflow: visible;
+    margin: 0;
     padding: 0;
+    border-radius: 0;
+    clip-path: none;
+    background: none;
+    box-shadow: none;
+  }
+
+  /* The paper at its own size: no clip, no scale, no corners. */
+  #paper {
+    height: auto !important;
+    min-height: 0;
+    overflow: visible;
+    clip-path: none;
+    background: none;
   }
 
   #stack {
     width: auto;
     height: auto !important;
+    transform: none !important;
     background: none;
     box-shadow: none;
   }
@@ -2456,10 +3342,54 @@ body {
     padding: 0;
   }
 
+  /* Source mode prints the text column as-is (SOURCE-VIEW.md, "Look"). */
+  #source {
+    min-height: 0;
+    background: none;
+    box-shadow: none;
+    border-radius: 0;
+  }
+
+  #source .cm-editor {
+    padding: 0;
+  }
+
+  #source .cm-panels {
+    display: none;
+  }
+
   /* Keep the oracle's line breaks but drop the screen page gaps — the
      browser paginates via @page (from the dynamic #page-style element). */
   .ts-pagegap {
     height: 0 !important;
+  }
+
+  /* With the spacers gone the browser breaks pages itself; the screen
+     segments would be misplaced, so the rule prints as a pseudo-element
+     the browser cuts at its own page edges. */
+  .ts-solution-rules {
+    display: none;
+  }
+
+  .ProseMirror blockquote[data-kind='solution']::before {
+    content: '';
+    position: absolute;
+    left: -1pt;
+    top: 0;
+    bottom: 0;
+    width: 2pt;
+    background: var(--solution-red);
+  }
+
+  /* The browser paginates tables itself in print; the screen-only widget
+     row (gap + header copy) must not print. */
+  tr.ts-table-break {
+    display: none !important;
+  }
+
+  .ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell::after,
+  .ProseMirror .ts-grid-editing > .ts-grid-row > .ts-grid-cell[data-grid-empty='true']::before {
+    display: none;
   }
 
   /* Screen footnote positions are meaningless in print flow; show bodies as

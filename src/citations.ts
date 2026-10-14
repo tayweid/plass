@@ -3,11 +3,14 @@
 // list. The BibTeX source lives in a document attribute — autosaved,
 // undoable, and embedded in the .typ export so files stay self-contained.
 
-import { Plugin, PluginKey, type EditorState } from 'prosemirror-state';
+import { Plugin, PluginKey, type EditorState, type Transaction } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView, type NodeView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
 import { parseBibTeX, bibAuthors, bibVenue, isPortableCitationKey, type BibEntry } from './bibtex';
+import { citationLabels } from './citation-styles';
+import { getSettings } from './settings';
+import { chooseLibrary, forgetLibrary, libraryStatus, requestLibraryPermission } from './library-bib';
 import { INPUT_LIMITS, InputLimitError, readBoundedText, textSizeError } from './input-limits';
 import { mountTypstSvg } from './safe-svg';
 
@@ -29,6 +32,86 @@ export function getBib(state: EditorState): BibEntry[] {
   return entries;
 }
 
+// ---------- in-text strings: the formatter, checked against the compiler ----------
+
+/** Compiled in-text strings that DIFFER from the formatter's, per key —
+ *  the fallback the paint uses where the port drifts (logged). */
+const oracleOverrides = new Map<string, string>();
+
+export function citationOracleOverrides(): ReadonlyMap<string, string> {
+  return oracleOverrides;
+}
+
+let oracleRuns = 0;
+/** How many compiler checks have completed (tests wait on this). */
+export function citationOracleRuns(): number {
+  return oracleRuns;
+}
+
+/** Every cited key's painted string under the document's style. */
+export function citationLabelMap(state: EditorState): Map<string, string> {
+  const style = getSettings(state).citationStyle;
+  const labels = citationLabels(style, citeOrder(state.doc), getBib(state));
+  if (style !== 'ieee') for (const [key, text] of oracleOverrides) if (labels.has(key)) labels.set(key, text);
+  return labels;
+}
+
+/** Verify the formatter against the compiler for the cited set: each
+ *  citation rendered on its own marked line, the bibliography hidden. A
+ *  mismatch is logged and the compiled string takes over for that key. */
+async function verifyCitations(view: EditorView): Promise<void> {
+  const state = view.state;
+  const s = getSettings(state);
+  if (s.citationStyle === 'ieee') {
+    if (oracleOverrides.size) {
+      oracleOverrides.clear();
+      view.dispatch(view.state.tr.setMeta('citation-oracle', true));
+    }
+    return;
+  }
+  const bib = state.doc.attrs.bib as DocBib | null;
+  const order = citeOrder(state.doc);
+  const keys = [...order.keys()].filter(isPortableCitationKey);
+  if (!bib?.content || !keys.length) return;
+  const expected = citationLabels(s.citationStyle, order, getBib(state));
+  const [{ parityRules, textSetLine }, { compileSvg, FONT_FALLBACK }, { extractLines }] = await Promise.all([
+    import('./typ-serializer'),
+    import('./pdf'),
+    import('./layout/typst-oracle'),
+  ]);
+  const src =
+    `#set page(width: 720pt, height: auto, margin: 0pt)\n` +
+    parityRules(s) +
+    textSetLine(s, FONT_FALLBACK) +
+    '\n' +
+    keys.map((k, i) => `K${i}Q #cite(<${k}>) ZZ\n\n`).join('') +
+    `#place(hide[#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "${s.citationStyle}")])\n`;
+  const svg = await compileSvg(src);
+  // Only a document change (text, bibliography, style — all in the doc)
+  // makes the answer stale. Comparing whole states also threw it away for
+  // meta-only transactions (a layout measurement landing mid-compile), and
+  // nothing re-runs the check until the References source changes, so under
+  // WebKit's timing it never ran at all.
+  if (!svg || view.state.doc !== state.doc) return;
+  oracleRuns++;
+  let changed = false;
+  for (const line of extractLines(svg, 2)) {
+    const m = /^K(\d+)Q\s*(.*?)\s*ZZ$/.exec(line.text.trim());
+    if (!m) continue;
+    const key = keys[+m[1]];
+    const compiled = m[2];
+    const ours = expected.get(key);
+    if (compiled === ours) {
+      if (oracleOverrides.delete(key)) changed = true;
+    } else if (oracleOverrides.get(key) !== compiled) {
+      console.warn(`citation style port drift @${key}: formatter '${ours}' vs Typst '${compiled}' — using Typst's`);
+      oracleOverrides.set(key, compiled);
+      changed = true;
+    }
+  }
+  if (changed) view.dispatch(view.state.tr.setMeta('citation-oracle', true));
+}
+
 /** Citation keys in first-use order. */
 export function citeOrder(doc: PMNode): Map<string, number> {
   const order = new Map<string, number>();
@@ -47,12 +130,13 @@ export const citeKey = new PluginKey<DecorationSet>('citations');
 function build(state: EditorState): DecorationSet {
   const order = citeOrder(state.doc);
   const known = new Set(getBib(state).filter((e) => isPortableCitationKey(e.key)).map((e) => e.key));
+  const labels = citationLabelMap(state);
+  const placeholder = getSettings(state).citationStyle === 'ieee' ? '[?]' : '(?)';
   const decos: Decoration[] = [];
   state.doc.descendants((node, pos) => {
     if (node.type.name === 'citation') {
       const key = node.attrs.key as string;
-      const n = order.get(key);
-      const text = known.has(key) && n ? `[${n}]` : '[?]';
+      const text = known.has(key) ? (labels.get(key) ?? placeholder) : placeholder;
       decos.push(
         Decoration.node(pos, pos + node.nodeSize, {
           'data-cite-num': text,
@@ -73,12 +157,57 @@ function build(state: EditorState): DecorationSet {
   return DecorationSet.create(state.doc, decos);
 }
 
+/** Whether [from, to] holds a citation or the bibliography — a shallow
+ *  nodesBetween over one step's own range, not a document walk. */
+function rangeHasCitation(doc: PMNode, from: number, to: number): boolean {
+  let found = false;
+  doc.nodesBetween(Math.max(0, Math.min(from, doc.content.size)), Math.min(to, doc.content.size), (node) => {
+    if (found) return false;
+    if (node.type.name === 'citation' || node.type.name === 'bibliography') {
+      found = true;
+      return false;
+    }
+    return true;
+  });
+  return found;
+}
+
+/** True when a transaction could change the cited set or its first-use
+ *  numbering: some step replaced content holding a citation (or the
+ *  bibliography block), on either side of the replacement. */
+function touchesCitations(tr: Transaction): boolean {
+  for (let i = 0; i < tr.steps.length; i++) {
+    const before = tr.docs[i];
+    const after = tr.docs[i + 1] ?? tr.doc;
+    let hit = false;
+    tr.steps[i].getMap().forEach((oldStart, oldEnd, newStart, newEnd) => {
+      hit ||= rangeHasCitation(before, oldStart, oldEnd) || rangeHasCitation(after, newStart, newEnd);
+    });
+    if (hit) return true;
+  }
+  return false;
+}
+
 export function citationsPlugin() {
   return new Plugin<DecorationSet>({
     key: citeKey,
     state: {
       init: (_, state) => build(state),
-      apply: (tr, val, _old, newState) => (tr.docChanged ? build(newState) : val),
+      apply: (tr, val, oldState, newState) => {
+        if (tr.getMeta('citation-oracle')) return build(newState);
+        if (!tr.docChanged) return val;
+        // Rebuilding is O(document); an edit that touches no citation and
+        // leaves the bib attr alone cannot change any "[n]" or the
+        // reference-list signature, so the mapped set is already exact.
+        if (
+          oldState.doc.attrs.bib !== newState.doc.attrs.bib ||
+          getSettings(oldState).citationStyle !== getSettings(newState).citationStyle ||
+          touchesCitations(tr)
+        ) {
+          return build(newState);
+        }
+        return val.map(tr.mapping, tr.doc);
+      },
     },
     props: {
       decorations: (state) => citeKey.getState(state),
@@ -140,7 +269,6 @@ export class BibliographyView implements NodeView {
     // Measure the column from the editor root — the node view's own box
     // may not be laid out yet when this first runs.
     const widthPx = this.view.dom.clientWidth || 576;
-    const { getSettings } = await import('./settings');
     const { parityRules, textSetLine } = await import('./typ-serializer');
     const { compileSvg, FONT_FALLBACK } = await import('./pdf');
     const s = getSettings(state);
@@ -150,8 +278,9 @@ export class BibliographyView implements NodeView {
       textSetLine(s, FONT_FALLBACK) +
       '\n' +
       `#place(hide[${keys.map((k) => '@' + k).join(' ')}])\n` +
-      `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "ieee")\n`;
+      `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "${s.citationStyle}")\n`;
     if (src === this.inkKey) return;
+    void verifyCitations(this.view);
     const svg = await compileSvg(src);
     if (this.destroyed || !svg) return;
     this.inkKey = src;
@@ -198,12 +327,13 @@ export class BibliographyView implements NodeView {
         : 'No bibliography loaded — click Edit, then Import .bib…';
       fallback.appendChild(empty);
     } else {
+      const numeric = getSettings(state).citationStyle === 'ieee';
       for (const [key, n] of cited) {
         const item = document.createElement('div');
         item.className = 'bib-item';
         const number = document.createElement('span');
         number.className = 'bib-n';
-        number.textContent = `[${n}]`;
+        number.textContent = numeric ? `[${n}]` : '';
         const detail = document.createElement('span');
         const e = byKey.get(key);
         if (!e) {
@@ -301,6 +431,8 @@ export function editBibliography(view: EditorView, message: (m: string) => void 
       <div class="bib-editor-foot">
         <span class="bib-editor-hint">Stored inside the document · <kbd>⌘Enter</kbd> save · <kbd>Esc</kbd> cancel</span>
         <span class="bib-editor-actions">
+          <button type="button" class="bib-library" title="An app-level .bib whose entries the @ picker offers; citing one copies that entry into this document">Library…</button>
+          <button type="button" class="bib-library-forget" title="Stop offering the library's entries" hidden>Forget library</button>
           <button type="button" class="bib-import">Import .bib…</button>
           <button type="button" class="bib-dl">Download .bib</button>
           <button type="button" class="bib-cancel">Cancel</button>
@@ -332,6 +464,43 @@ export function editBibliography(view: EditorView, message: (m: string) => void 
     });
     input.click();
   });
+
+  // The library: a .bib outside any document, offered in the @ picker.
+  const libraryButton = overlay.querySelector('.bib-library') as HTMLButtonElement;
+  const forgetButton = overlay.querySelector('.bib-library-forget') as HTMLButtonElement;
+  const showLibrary = async () => {
+    const status = await libraryStatus();
+    if (!status) {
+      libraryButton.textContent = 'Library…';
+      forgetButton.hidden = true;
+      return;
+    }
+    libraryButton.textContent = status.needsPermission
+      ? `Library: ${status.name} — click to reconnect`
+      : `Library: ${status.name} (${status.count})`;
+    forgetButton.hidden = false;
+  };
+  libraryButton.addEventListener('click', async () => {
+    try {
+      const status = await libraryStatus();
+      if (status?.needsPermission) {
+        if (await requestLibraryPermission()) message(`Library reconnected — ${status.name}`);
+      } else {
+        const name = await chooseLibrary();
+        if (name) message(`Library set — ${name}; its entries appear in the @ picker`);
+      }
+    } catch (error) {
+      console.warn('Could not set the library', error);
+      message('Could not read that bibliography');
+    }
+    void showLibrary();
+  });
+  forgetButton.addEventListener('click', async () => {
+    await forgetLibrary();
+    message('Library forgotten');
+    void showLibrary();
+  });
+  void showLibrary();
 
   const updateCount = () => {
     if (textSizeError(text.value, INPUT_LIMITS.bibliographyBytes, 'Bibliography')) {

@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 
 test('upload/download fallback preserves a Typst document without filesystem APIs', async ({ page }) => {
   await page.addInitScript(() => {

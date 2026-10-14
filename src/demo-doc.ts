@@ -133,7 +133,7 @@ export function demoDoc(): PMNode {
       { text: '@eq:gauss', marks: ['code'] },
       ' — like this: equation ',
       { ref: 'eq:gauss' },
-      ' stays correct no matter where it moves, and clicking the reference jumps to it. Math is entered as LaTeX and rendered by KaTeX; the Typst export wraps it with mitex so exported files compile to camera-ready PDF.',
+      ' stays correct no matter where it moves, and clicking the reference jumps to it. Math is entered as LaTeX and rendered by KaTeX; the file keeps it as LaTeX between dollar signs, as pandoc reads it.',
     ),
     h(2, 'Figures'),
     schema.nodes.figure.create({ src: DEMO_CHART, label: 'fig:sd' }, inline([
@@ -178,7 +178,7 @@ export function demoDoc(): PMNode {
       ),
     ]),
     p(
-      'Everything is markdown-flavored: ',
+      'Typing is Markdown: ',
       { text: '#', marks: ['code'] },
       ' for headings, ',
       { text: '**bold**', marks: ['code'] },
@@ -188,11 +188,11 @@ export function demoDoc(): PMNode {
       { text: '>', marks: ['code'] },
       ' for quotes, ',
       { text: '-', marks: ['code'] },
-      ' for lists. Documents autosave locally. Export produces a clean ',
+      ' for lists — and so is the file: a document saves as plain Markdown (',
+      { text: '.md', marks: ['code'] },
+      '), human-readable, diffable, and open in any editor or in pandoc. Export writes a PDF, a ',
       { text: '.typ', marks: ['code'] },
-      ' file — human-readable, git-friendly, and one ',
-      { text: 'typst compile', marks: ['code'] },
-      ' away from publication-quality PDF with real page layout, floats, and microtypography.',
+      ' for the Typst command line, or LaTeX for a journal.',
     ),
     schema.nodes.bibliography.create(),
   ]);

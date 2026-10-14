@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 
 // Copying TEXT out of a block copies the text. Copying across blocks copies
 // the blocks. ProseMirror slices at the selection's own depth, which used to
@@ -65,16 +65,16 @@ async function pasteOnTheEmptyLine(page: import('playwright/test').Page) {
   await page.waitForTimeout(350);
 }
 
-test("a bullet's text pastes onto a new line without the bullet", async ({ page, context }) => {
-  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+test("a bullet's text pastes onto a new line without the bullet", async ({ page, context, browserName }) => {
+  if (browserName === 'chromium') await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await build(page);
   await copyText(page, 'Alpha beta');
   await pasteOnTheEmptyLine(page);
   expect((await shape(page)).at(-1)).toBe('paragraph:Alpha beta');
 });
 
-test('a selection spanning two bullets still pastes as a list', async ({ page, context }) => {
-  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+test('a selection spanning two bullets still pastes as a list', async ({ page, context, browserName }) => {
+  if (browserName === 'chromium') await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await build(page);
   await copyText(page, 'Alpha beta', 'Second item');
   await pasteOnTheEmptyLine(page);
@@ -83,8 +83,8 @@ test('a selection spanning two bullets still pastes as a list', async ({ page, c
   expect(after.at(-1)).toBe('bullet_list:Alpha betaSecond item');
 });
 
-test('a whole paragraph still pastes as a paragraph', async ({ page, context }) => {
-  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+test('a whole paragraph still pastes as a paragraph', async ({ page, context, browserName }) => {
+  if (browserName === 'chromium') await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await build(page);
   await copyText(page, 'Plain para');
   await pasteOnTheEmptyLine(page);

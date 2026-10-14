@@ -115,6 +115,12 @@ export class Line {
   endByte = 0;
   /** The breakpoint that ended this line (set by line()). */
   bp: Breakpoint = { kind: 'mandatory' };
+  // Lazy metric memos. A Line's items are never mutated after line()
+  // returns, so the first computed value is the value; memoizing lets a
+  // line served from the incremental cache skip the per-glyph sums.
+  private justMemo: number | null = null;
+  private stretchMemo: number | null = null;
+  private shrinkMemo: number | null = null;
 
   constructor(items: LineItem[], width: number, justify: boolean, dash: Dash | null) {
     this.items = items;
@@ -127,7 +133,20 @@ export class Line {
     return new Line([], 0, false, null);
   }
 
+  /** A copy for serving from the incremental cache: same immutable items
+   * and metric values, remapped end offset and breakpoint. */
+  cloneAt(endByte: number, bp: Breakpoint): Line {
+    const ln = new Line(this.items, this.width, this.justify, this.dash);
+    ln.endByte = endByte;
+    ln.bp = bp;
+    ln.justMemo = this.justMemo;
+    ln.stretchMemo = this.stretchMemo;
+    ln.shrinkMemo = this.shrinkMemo;
+    return ln;
+  }
+
   justifiables(): number {
+    if (this.justMemo !== null) return this.justMemo;
     let count = 0;
     for (const it of this.items) {
       if (it.kind === 'text') count += it.shaped.justifiables();
@@ -135,18 +154,23 @@ export class Line {
     // CJK character at line end should not be adjusted.
     const trailing = this.trailingText();
     if (trailing?.cjkJustifiableAtLast()) count -= 1;
+    this.justMemo = count;
     return count;
   }
 
   stretchability(): number {
+    if (this.stretchMemo !== null) return this.stretchMemo;
     let s = 0;
     for (const it of this.items) if (it.kind === 'text') s += it.shaped.stretchability();
+    this.stretchMemo = s;
     return s;
   }
 
   shrinkability(): number {
+    if (this.shrinkMemo !== null) return this.shrinkMemo;
     let s = 0;
     for (const it of this.items) if (it.kind === 'text') s += it.shaped.shrinkability();
+    this.shrinkMemo = s;
     return s;
   }
 
@@ -370,17 +394,32 @@ function leadingTextOf(items: LineItem[]): ShapedText | null {
   return null;
 }
 
+// The CJ line-boundary adjustments mutate glyphs that line-construction
+// items SHARE with the Preparation (Rust clones; the port aliases). That
+// makes line() order-dependent once a mutating branch fires. The
+// incremental cache's eligibility scan rejects any paragraph whose glyphs
+// could enter these branches; this counter is the belt-and-suspenders
+// runtime tripwire behind that scan (see incremental.ts).
+let cjMutations = 0;
+
+/** Number of CJ glyph mutations performed since module load. */
+export function cjMutationCount(): number {
+  return cjMutations;
+}
+
 function adjustCjAtLineStart(p: Preparation, items: LineItem[]): void {
   const shaped = leadingTextOf(items);
   const glyph = shaped?.glyphs.first();
   if (!shaped || !glyph) return;
   if (isCjkPunctuation(glyph) && glyph.adjustability.shrinkability[0] > 0 && !isCjScript(glyph.c)) {
     // is_cjk_right_aligned_punctuation → shrink_left by full left shrink.
+    cjMutations++;
     const shrink = glyph.adjustability.shrinkability[0];
     glyph.xOffset -= shrink;
     glyph.xAdvance -= shrink;
     glyph.adjustability.shrinkability[0] -= shrink;
   } else if (p.config.cjkLatinSpacing && isCjScript(glyph.c) && glyph.xOffset > 0) {
+    cjMutations++;
     const shrink = glyph.xOffset;
     glyph.xAdvance -= shrink;
     glyph.xOffset = 0;
@@ -394,10 +433,12 @@ function adjustCjAtLineEnd(p: Preparation, items: LineItem[]): void {
   if (!shaped || !glyph) return;
   if (isCjkPunctuation(glyph) && glyph.adjustability.shrinkability[1] > 0) {
     // is_cjk_left_aligned_punctuation → shrink_right by full right shrink.
+    cjMutations++;
     const shrink = glyph.adjustability.shrinkability[1];
     glyph.xAdvance -= shrink;
     glyph.adjustability.shrinkability[1] -= shrink;
   } else if (p.config.cjkLatinSpacing && isCjScript(glyph.c) && glyph.xAdvance - glyph.xOffset > 1.0) {
+    cjMutations++;
     const shrink = glyph.xAdvance - glyph.xOffset - 1.0;
     glyph.xAdvance -= shrink;
     glyph.adjustability.shrinkability[1] = 0;
@@ -424,10 +465,42 @@ function shouldRepeatHyphen(lang: string, followingText: string): boolean {
   }
 }
 
+/**
+ * A cross-run cache session for the optimized passes (see incremental.ts).
+ * `serve` may return a previously built Line ONLY when a from-scratch
+ * line() call over the same range would produce identical values; `record`
+ * captures every line this run built or served so the next run can reuse
+ * it. Both passes run the full DP either way — the session only replaces
+ * the pure line-construction step, so costs, pruning, the approximate
+ * bound, and tie-breaks are bit-identical to an uncached run.
+ */
+export interface LinebreakSession {
+  serve(start: number, end: number, breakpoint: Breakpoint): Line | null;
+  record(start: number, end: number, breakpoint: Breakpoint, line: Line): void;
+}
+
+/** line() through the session cache (identical values either way). */
+function buildLine(
+  session: LinebreakSession | null,
+  p: Preparation,
+  start: number,
+  end: number,
+  breakpoint: Breakpoint,
+  pred: Line | null,
+): Line {
+  if (session) {
+    const served = session.serve(start, end, breakpoint);
+    if (served) return served;
+  }
+  const ln = line(p, start, end, breakpoint, pred);
+  session?.record(start, end, breakpoint, ln);
+  return ln;
+}
+
 /** Breaks the text into lines (linebreak()). */
-export function linebreak(p: Preparation, width: number): Line[] {
+export function linebreak(p: Preparation, width: number, session?: LinebreakSession | null): Line[] {
   if (p.config.linebreaks === 'simple') return linebreakSimple(p, width);
-  return linebreakOptimized(p, width);
+  return linebreakOptimized(p, width, session ?? null);
 }
 
 /** linebreak_simple. */
@@ -459,11 +532,15 @@ function linebreakSimple(p: Preparation, width: number): Line[] {
   return lines;
 }
 
-/** linebreak_optimized: approximate pass for the bound, then exact. */
-function linebreakOptimized(p: Preparation, width: number): Line[] {
+/** linebreak_optimized: approximate pass for the bound, then exact. Both
+ * passes consume the same materialized breakpoint sequence — breakpoints()
+ * is deterministic, so this equals the previous generate-twice behavior. */
+function linebreakOptimized(p: Preparation, width: number, session: LinebreakSession | null): Line[] {
   const metrics = computeCostMetrics(p);
-  const upperBound = linebreakOptimizedApproximate(p, width, metrics);
-  return linebreakOptimizedBounded(p, width, metrics, upperBound);
+  const bps: Array<[number, Breakpoint]> = [];
+  breakpoints(p, (end, breakpoint) => bps.push([end, breakpoint]));
+  const upperBound = linebreakOptimizedApproximate(p, width, metrics, bps, session);
+  return linebreakOptimizedBounded(p, width, metrics, upperBound, bps, session);
 }
 
 interface BoundedEntry {
@@ -479,12 +556,14 @@ function linebreakOptimizedBounded(
   width: number,
   metrics: CostMetrics,
   upperBound: Cost,
+  bps: Array<[number, Breakpoint]>,
+  session: LinebreakSession | null,
 ): Line[] {
   const table: BoundedEntry[] = [{ pred: 0, total: 0.0, line: Line.empty(), end: 0 }];
   let active = 0;
   let prevEnd = 0;
 
-  breakpoints(p, (end, breakpoint) => {
+  for (const [end, breakpoint] of bps) {
     let best: BoundedEntry | null = null;
     let lineLowerBound: Cost | null = null;
 
@@ -497,7 +576,7 @@ function linebreakOptimizedBounded(
         continue;
       }
 
-      const attempt = line(p, start, end, breakpoint, pred.line);
+      const attempt = buildLine(session, p, start, end, breakpoint, pred.line);
       const [lineRatio, lineCost] = ratioAndCost(
         p,
         metrics,
@@ -533,7 +612,7 @@ function linebreakOptimizedBounded(
 
     if (best) table.push(best);
     prevEnd = end;
-  });
+  }
 
   // Retrace the best path.
   const lines: Line[] = [];
@@ -541,7 +620,7 @@ function linebreakOptimizedBounded(
 
   // Should only happen if the bound was faulty: retry unbounded.
   if (table[idx].end !== p.text.len) {
-    return linebreakOptimizedBounded(p, width, metrics, Infinity);
+    return linebreakOptimizedBounded(p, width, metrics, Infinity, bps, session);
   }
 
   while (idx !== 0) {
@@ -567,8 +646,26 @@ function linebreakOptimizedApproximate(
   p: Preparation,
   width: number,
   metrics: CostMetrics,
+  bps: Array<[number, Breakpoint]>,
+  session: LinebreakSession | null,
 ): Cost {
   const estimates = computeEstimates(p);
+
+  // Per-breakpoint whitespace back-scan: wsBack[i] is the byte offset of
+  // bps[i][0] scanned back over trailing White_Space chars. The original
+  // per-candidate `start + text[start..end].trim_end().len()` equals
+  // max(start, wsBack) — trimming stops at `start` only when the whole
+  // candidate slice is whitespace, in which case wsBack < start.
+  const wsBack = new Array<number>(bps.length);
+  for (let i = 0; i < bps.length; i++) {
+    let b = bps[i][0];
+    while (b > 0) {
+      const c = p.text.charBefore(b);
+      if (!/\p{White_Space}/u.test(c)) break;
+      b -= utf8Len(c);
+    }
+    wsBack[i] = b;
+  }
 
   const table: ApproxEntry[] = [
     { pred: 0, total: 0.0, end: 0, unbreakable: false, breakpoint: MANDATORY },
@@ -576,7 +673,8 @@ function linebreakOptimizedApproximate(
   let active = 0;
   let prevEnd = 0;
 
-  breakpoints(p, (end, breakpoint) => {
+  for (let bpIndex = 0; bpIndex < bps.length; bpIndex++) {
+    const [end, breakpoint] = bps[bpIndex];
     let best: ApproxEntry | null = null;
     for (let predIndex = active; predIndex < table.length; predIndex++) {
       const pred = table[predIndex];
@@ -587,8 +685,7 @@ function linebreakOptimizedApproximate(
       const consecutiveDash = isHyphen(pred.breakpoint) && isHyphen(breakpoint);
 
       // trimmed_end = start + text[start..end].trim_end().len()
-      const slice = p.text.slice(start, end);
-      const trimmedEnd = start + utf8Len(trimEndMatches(slice, (c) => /\p{White_Space}/u.test(c)));
+      const trimmedEnd = Math.max(start, wsBack[bpIndex]);
 
       const lineRatio = rawRatio(
         p,
@@ -619,7 +716,7 @@ function linebreakOptimizedApproximate(
 
     if (best) table.push(best);
     prevEnd = end;
-  });
+  }
 
   // Retrace the best path.
   const indices: number[] = [];
@@ -635,7 +732,7 @@ function linebreakOptimizedApproximate(
 
   for (let k = indices.length - 1; k >= 0; k--) {
     const entry = table[indices[k]];
-    const attempt = line(p, start, entry.end, entry.breakpoint, pred);
+    const attempt = buildLine(session, p, start, entry.end, entry.breakpoint, pred);
     const [ratio, lineCost] = ratioAndCost(
       p,
       metrics,
@@ -780,10 +877,15 @@ export function breakpoints(
   let iterIdx = 0;
 
   outer: while (true) {
-    // Special case for links.
-    const head = text.slice(0, last);
-    const tail = text.slice(last, text.len);
-    if (head.endsWith('://') || tail.startsWith('www.')) {
+    // Special case for links. head.endsWith('://') / tail.startsWith('www.')
+    // over full-text slices, done without allocating the O(n) head/tail
+    // strings: both probes are pure-ASCII, so a short byte-range slice
+    // matches exactly when the original predicate does.
+    if (
+      (last >= 3 && text.slice(last - 3, last) === '://') ||
+      text.slice(last, Math.min(text.len, last + 4)) === 'www.'
+    ) {
+      const tail = text.slice(last, text.len);
       const link = linkPrefix(tail);
       linebreakLink(link, (i) => f(last + i, NORMAL));
       last += utf8Len(link);

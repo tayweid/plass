@@ -53,6 +53,29 @@ for (const { path, entry, name } of productionPackages) {
   else groups.set(text, { source: licenseFile || basename(licensePath), packages: [label] });
 }
 
+// Code vendored into the app outside npm, each with the license file kept
+// beside it and what Plass took.
+const vendored = [
+  {
+    label:
+      'mitex@0.2.7 (Apache-2.0), vendored: src/mitex/mitex.wasm byte for byte (the LaTeX-to-Typst converter), and the ' +
+      'math handle definitions in src/typst-math-prelude.ts, modified from its specs/latex/standard.typ',
+    license: 'src/mitex/LICENSE',
+  },
+];
+for (const { label, license } of vendored) {
+  const text = readFileSync(join(root, license), 'utf8')
+    .replaceAll('\r\n', '\n')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .join('\n')
+    .trim();
+  assert(text.length > 100, `${license} is empty or implausibly short`);
+  const existing = groups.get(text);
+  if (existing) existing.packages.push(label);
+  else groups.set(text, { source: license, packages: [label] });
+}
+
 const divider = '='.repeat(78);
 const sections = [...groups.entries()].map(([license, group]) => [
   divider,
@@ -66,7 +89,8 @@ const output = [
   'PLASS THIRD-PARTY SOFTWARE NOTICES',
   '',
   'This generated file contains the license text shipped by every production',
-  'npm package in package-lock.json. Regenerate it with `npm run generate:notices`.',
+  'npm package in package-lock.json and by the code vendored outside npm',
+  '(src/mitex). Regenerate it with `npm run generate:notices`.',
   'Bundled font licenses are kept separately under fonts/licenses/.',
   '',
   ...sections,

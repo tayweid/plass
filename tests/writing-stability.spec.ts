@@ -1,4 +1,5 @@
-import { expect, test, type Page } from 'playwright/test';
+import { expect, test, type Page } from './fixture';
+import { settleLocal } from './settle';
 
 interface SuffixPaginationStats {
   attempts: number;
@@ -25,7 +26,7 @@ declare global {
   interface Window {
     view: import('prosemirror-view').EditorView;
     __pagLog: () => string[];
-    __pageOracle: unknown;
+    __pagCount: () => number;
     __suffixPaginationStats: (reset?: boolean) => SuffixPaginationStats;
   }
 }
@@ -37,19 +38,12 @@ function prefixSignature(signature: string, beforePos: number): string[] {
     .filter((entry) => Number(entry.slice(0, entry.indexOf('@'))) < beforePos);
 }
 
+/** `logStart` is a `__pagCount()` snapshot, NOT a `__pagLog().length` one:
+ * the log is a 40-entry ring, so length deltas freeze once it fills and a
+ * long soak would wait forever on entries that were pushed (and shifted)
+ * just fine. The monotone push counter says how many tail entries are new. */
 async function waitForTerminalPagination(page: Page, logStart: number) {
-  await expect
-    .poll(
-      () =>
-        page.evaluate((start) =>
-          window
-            .__pagLog()
-            .slice(start)
-            .some((entry) => entry.startsWith('exact[') || entry.includes('[entry=fail')),
-        logStart),
-      { timeout: 30_000, intervals: [200, 400, 800] },
-    )
-    .toBe(true);
+  await settleLocal(page, logStart);
 }
 
 async function latestPagination(page: Page) {
@@ -69,23 +63,8 @@ test('a late edit in a 40–50-page document recomputes only a stable suffix', a
   test.setTimeout(60_000);
   await page.goto('/?new=1');
 
-  // The suffix planner and comparator are FALLBACK-engine machinery: when the
-  // page oracle answers, a late edit paginates on the exact/held path and the
-  // shadow comparison never runs. Pin the oracle to fail so every pass runs
-  // the fallback engine deterministically.
-  await page.evaluate(() => {
-    const oracle = window.__pageOracle as unknown as {
-      clear: () => void;
-      request: (sig: string) => void;
-      results: Map<string, { status: string; reason: string }>;
-    };
-    oracle.clear();
-    oracle.request = (sig: string) => {
-      oracle.results.set(sig, { status: 'fail', reason: 'test: page oracle disabled' });
-    };
-  });
 
-  const initialLogLength = await page.evaluate(() => window.__pagLog().length);
+  const initialLogLength = await page.evaluate(() => window.__pagCount());
   await page.evaluate(
     (count) => {
       const { state } = window.view;
@@ -136,7 +115,7 @@ test('a late edit in a 40–50-page document recomputes only a stable suffix', a
   });
 
   await page.evaluate(() => window.__suffixPaginationStats(true));
-  const editLogLength = await page.evaluate(() => window.__pagLog().length);
+  const editLogLength = await page.evaluate(() => window.__pagCount());
   await page.keyboard.type('Z');
 
   await expect

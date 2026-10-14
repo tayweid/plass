@@ -74,8 +74,8 @@ assert(firstDecorations.some((decoration) => decoration.spec.sig === 'word-spaci
 assert(firstDecorations.some((decoration) => decoration.spec.sig === 'nospell'));
 assert(firstDecorations.some((decoration) => decoration.spec.key === 'br:12'));
 assert(firstDecorations.some((decoration) => decoration.spec.key === 'hy:14'));
-assert(firstDecorations.some((decoration) => decoration.spec.key === 'pg:5:20:h'));
-assert.equal(blockGap.spec.key, `pgb:${secondPos}:27`);
+assert(firstDecorations.some((decoration) => decoration.spec.key === 'pg:5:19.60:h'));
+assert.equal(blockGap.spec.key, `pgb:${secondPos}:27.20`);
 console.log('  ok  every emitted decoration has an explicit semantic kind without changing key/sig identity');
 
 const originalOrder = allDecorations.slice();
@@ -84,6 +84,22 @@ assert.deepEqual(allDecorations, originalOrder);
 const set = DecorationSet.create(doc, allDecorations.slice());
 assert.equal(decorationSetDigest(set), decorationSignature(allDecorations));
 console.log('  ok  decoration digests are canonical and do not consume caller arrays');
+
+// Identities that locale collation may rank equal (punctuation-only and
+// case-only differences) must still canonicalize order-independently under
+// binary comparison, and distinct identities must digest differently.
+const punctuated = Decoration.inline(1, 3, {}, { tsKind: 'word-spacing', sig: 'co-op:1.5px' });
+const plain = Decoration.inline(1, 3, {}, { tsKind: 'word-spacing', sig: 'coop:1.5px' });
+const cased = Decoration.inline(1, 3, {}, { tsKind: 'word-spacing', sig: 'Coop:1.5px' });
+assert.equal(
+  decorationSignature([punctuated, plain, cased]),
+  decorationSignature([cased, punctuated, plain]),
+);
+assert.notEqual(
+  decorationSignature([punctuated, plain]),
+  decorationSignature([punctuated, cased]),
+);
+console.log('  ok  binary-ordered digests stay canonical for collation-ambiguous identities');
 
 assert.equal(decorationsOwnedByBlock(set, firstScope).length, firstDecorations.length);
 assert.equal(decorationsOwnedByBlock(set, secondScope).length, secondDecorations.length);

@@ -1,4 +1,5 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
+import { settleLocal } from './settle';
 
 declare global {
   interface Window {
@@ -12,7 +13,7 @@ declare global {
 // document. The fallback paginator masked it for plain paragraphs (it splits
 // them at line boundaries) but moves list items whole — a long bullet
 // crossing a page boundary left a large gap instead of splitting mid-item.
-test('page oracle splits a long bullet across the page boundary', async ({ page }) => {
+test('a long bullet splits across the page boundary', async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto('/?new=1');
   await page.evaluate(() => {
@@ -34,13 +35,7 @@ test('page oracle splits a long bullet across the page boundary', async ({ page 
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
   });
 
-  // The compiled page oracle must take authority (not the local fallback).
-  await expect
-    .poll(
-      () => page.evaluate(() => window.__pagLog().at(-1)?.startsWith('exact[') ?? false),
-      { timeout: 30_000, intervals: [500, 1_000, 2_000] },
-    )
-    .toBe(true);
+  await settleLocal(page);
 
   // Typst splits the long bullets mid-item: every page spacer must sit
   // INSIDE a list-item paragraph, and the bullets stay on consecutive pages
@@ -61,24 +56,79 @@ test('page oracle splits a long bullet across the page boundary', async ({ page 
 });
 
 
-// The oracle is not always the one answering — a long document, a timeout, or
-// a compile failure puts the local fallback in charge. It used to move a list
-// item whole, which is the same large gap the test above guards against, so it
-// has to split inside the item too.
+// Regression: Typst renders an ordered item's marker ("1.", "2.", …) glued
+// directly onto its first word in the extracted text layer, with no
+// separating space. The oracle's marker-strip regex happened to work for
+// bullet glyphs but silently no-op'd on a leading digit, so every document
+// containing an ordered_list permanently lost exact pagination.
+test('an ordered list paginates', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const { schema } = state;
+    const p = schema.nodes.paragraph;
+    const li = schema.nodes.list_item;
+    const doc = schema.nodes.doc.create(state.doc.attrs, [
+      schema.nodes.heading.create({ level: 1 }, schema.text('Ordered list pagination')),
+      schema.nodes.ordered_list.create(null, [
+        li.create(null, p.create(null, schema.text('Ordered item one.'))),
+        li.create(null, p.create(null, schema.text('Ordered item two.'))),
+        li.create(null, p.create(null, schema.text('Ordered item three.'))),
+      ]),
+    ]);
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
+  });
+
+  await settleLocal(page);
+});
+
+// Regression: an opaque block (code_block, figure, table, …) resyncs past
+// itself by scanning SVG lines for the next exact unit's anchor text (its
+// first two words). When that next unit is a list item, Typst glues the
+// item's marker ("1.", "•", …) onto the anchor line with no separating
+// space — the un-stripped comparison could never match, so the opaque
+// block consumed every remaining line looking for an anchor that would
+// never appear, including lines that actually belonged to the list. Once a
+// page boundary fell inside that over-consumed span, the atomic-block guard
+// failed closed permanently ("page splits inside atomic block @… (code_block)"),
+// on every recompile thereafter (fail-closed, but for the wrong reason).
+test('a code block immediately followed by an ordered list paginates', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const { schema } = state;
+    const p = (t: string) => schema.nodes.paragraph.create(null, schema.text(t));
+    const li = schema.nodes.list_item;
+    const item = (t: string) => li.create(null, p(t));
+    const filler =
+      'The Knuth Plass algorithm evaluates a complete paragraph and preserves globally optimal line endings while editing without visible jitter. ';
+    const blocks = [
+      schema.nodes.heading.create({ level: 1 }, schema.text('Code block then ordered list')),
+      ...Array.from({ length: 6 }, (_, i) => p(`Filler ${i}. ${filler.repeat(3)}`)),
+      schema.nodes.code_block.create({ params: '' }, schema.text('const x = 1;\nconsole.log(x);')),
+      schema.nodes.ordered_list.create(null, [
+        item(`Ordered item one immediately after the code block. ${filler}`),
+        item(`Ordered item two. ${filler}`),
+        item(`Ordered item three. ${filler}`),
+      ]),
+      ...Array.from({ length: 10 }, (_, i) => p(`Tail filler ${i}. ${filler.repeat(3)}`)),
+    ];
+    const doc = schema.nodes.doc.create(state.doc.attrs, blocks);
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
+  });
+
+  await settleLocal(page);
+});
+
+// The local paginator used to move a list item whole, which is the same
+// large gap the test above guards against, so it has to split inside the
+// item too.
 async function fallbackOnly(page: import('playwright/test').Page) {
   await page.goto('/?new=1');
-  // Pin the page oracle to fail so the fallback engine is what runs.
-  await page.evaluate(() => {
-    const oracle = window.__pageOracle as unknown as {
-      clear: () => void;
-      request: (sig: string) => void;
-      results: Map<string, { status: string; reason: string }>;
-    };
-    oracle.clear();
-    oracle.request = (sig: string) => {
-      oracle.results.set(sig, { status: 'fail', reason: 'test: page oracle disabled' });
-    };
-  });
 }
 
 const SENTENCE =

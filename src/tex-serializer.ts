@@ -8,7 +8,7 @@
 // styling maps 1:1, including light/heavy rule weights.
 
 import type { Node as PMNode } from 'prosemirror-model';
-import { normalizeSettings, parseMathMacros, type DocSettings } from './settings';
+import { normalizeSettings, parseMathMacros, type DocSettings, paperInches } from './settings';
 
 let macros: Record<string, string> = {};
 let unnumberedEq = new Set<string>();
@@ -240,7 +240,9 @@ function blockToTex(node: PMNode, s: DocSettings): string {
       return t + '\n\n';
     }
     case 'heading': {
-      const cmd = ['\\section', '\\subsection', '\\subsubsection'][Math.min(3, node.attrs.level as number) - 1];
+      const cmd = ['\\section', '\\subsection', '\\subsubsection', '\\paragraph', '\\subparagraph', '\\subparagraph'][
+        Math.min(6, node.attrs.level as number) - 1
+      ];
       const star = s.numberSections ? '' : '*';
       const label = node.attrs.label ? `\\label{${node.attrs.label}}` : '';
       return `${cmd}${star}{${inlineToTex(node)}}${label}\n\n`;
@@ -281,10 +283,29 @@ function blockToTex(node: PMNode, s: DocSettings): string {
     }
     case 'blockquote':
       return `\\begin{quote}\n${blocksToTex(node, s).trim()}\n\\end{quote}\n\n`;
+    case 'grid': {
+      // Side-by-side minipages at the columns' shares of the line, less a
+      // small gap; rows one after another.
+      const columns = node.attrs.columns as number[];
+      const total = columns.reduce((a, b) => a + b, 0);
+      const gap = 0.03;
+      const width = (c: number) => ((1 - gap * (columns.length - 1)) * c) / total;
+      let out = '';
+      node.forEach((row) => {
+        const parts: string[] = [];
+        row.forEach((cell, _o, i) => {
+          parts.push(`\\begin{minipage}[t]{${width(columns[i] ?? 1).toFixed(3)}\\linewidth}\n${blocksToTex(cell, s).trim()}\n\\end{minipage}`);
+        });
+        out += '\\noindent\n' + parts.join('\\hfill\n') + '\n\n';
+      });
+      return out;
+    }
     case 'code_block': {
-      if ((node.attrs.params as string) === 'typst-raw') {
+      const params = node.attrs.params as string;
+      if (params === 'typst-raw' || params === 'md-raw') {
         const lines = node.textContent.split('\n').map((l) => '% ' + l);
-        return `% [Plass] raw Typst block with no LaTeX equivalent:\n${lines.join('\n')}\n\n`;
+        const what = params === 'typst-raw' ? 'raw Typst' : 'raw Markdown';
+        return `% [Plass] ${what} block with no LaTeX equivalent:\n${lines.join('\n')}\n\n`;
       }
       return `\\begin{verbatim}\n${node.textContent}\n\\end{verbatim}\n\n`;
     }
@@ -292,6 +313,9 @@ function blockToTex(node: PMNode, s: DocSettings): string {
       return tableToTex(node, s);
     case 'bibliography':
       return `\\bibliographystyle{unsrt}\n\\bibliography{refs}\n\n`;
+    case 'editor_comment':
+      // Editorial notes are not part of the manuscript.
+      return '';
     case 'page_break':
       return '\\clearpage\n\n';
     case 'numbering_restart':
@@ -312,7 +336,11 @@ export function docToTex(doc: PMNode): string {
   dataUrlNote = false;
 
   const classSize = s.sizePt <= 10.5 ? 10 : s.sizePt <= 11.5 ? 11 : 12;
-  const paper = { letter: 'letterpaper', a4: 'a4paper', legal: 'legalpaper', b5: 'b5paper' }[s.page] ?? 'letterpaper';
+  // Named papers as class options; half letter and a custom size through
+  // geometry's explicit dimensions.
+  const named: Partial<Record<DocSettings['page'], string>> = { letter: 'letterpaper', a4: 'a4paper', legal: 'legalpaper', b5: 'b5paper', a5: 'a5paper' };
+  const inches = paperInches(s);
+  const paper = named[s.page] ?? `paperwidth=${inches.w}in,paperheight=${inches.h}in`;
 
   // Front matter + structure scan.
   let title = '';

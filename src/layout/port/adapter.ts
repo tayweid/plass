@@ -14,6 +14,8 @@ import type { FontFaceKeys } from '../../font-registry';
 import { ByteText } from './bytes';
 import { defaultConfig, prepare, type InputSegment } from './prepare';
 import { linebreak } from './linebreak';
+import { linebreakIncremental } from './incremental';
+import { primitives } from '../primitives';
 
 const PT_PER_PX = 0.75;
 
@@ -36,14 +38,34 @@ export interface PortBreakOptions {
   /** Painted prefix width in px consumed at the start of line 1
    * (caption "Figure N: ", footnote marker). */
   firstLineIndentPx?: number;
-  /** Content em scale (0.85 for footnote bodies / captions). */
+  /** Content em scale (0.85 for footnote bodies / captions, a heading's
+   * size ratio). */
   scale?: number;
+  /** The face unmarked text takes: bold for headings (Typst's heading show
+   * rule sets the weight; marks compose on top of it). */
+  baseStyle?: 'regular' | 'bold';
   /** Typst-true atom width in pt (sidecar-shaped markers/citations);
    * null → fall back to the DOM px measurement. */
   atomWidthPt?: (offset: number, child: PMNode) => number | null;
   /** Painted prefix modeled as REAL TEXT ('Figure N: ' for captions — its
    * trailing space justifies with the line, unlike a fixed indent). */
   prefixText?: string;
+}
+
+/**
+ * The advance of a shaped run in pt — what Typst measures for the same
+ * text in the same face — or null before the primitives are loaded. Used
+ * for list marker columns (Typst sizes them to the marker's width).
+ */
+export function shapedWidthPt(text: string, styleKey: string, sizePt: number): number | null {
+  if (!primitives()) return null;
+  const prep = prepare([{ kind: 'text', text, styleKey, fontSize: sizePt }], defaultConfig(sizePt));
+  let width = 0;
+  for (const [, , item] of prep.items) {
+    if (item.kind === 'text') width += item.shaped.width();
+    else if (item.kind === 'absolute' || item.kind === 'frame') width += item.width;
+  }
+  return width;
 }
 
 /** One piece of the paragraph with its PM anchor. */
@@ -59,10 +81,11 @@ interface Piece {
   origIdx: Uint32Array | null;
 }
 
-function styleFor(marks: Set<string>): keyof FontFaceKeys | 'mono' {
+function styleFor(marks: Set<string>, base: 'regular' | 'bold' = 'regular'): keyof FontFaceKeys | 'mono' {
   if (marks.has('code')) return 'mono';
-  if (marks.has('strong') && marks.has('em')) return 'bolditalic';
-  if (marks.has('strong')) return 'bold';
+  const bold = base === 'bold' || marks.has('strong');
+  if (bold && marks.has('em')) return 'bolditalic';
+  if (bold) return 'bold';
   if (marks.has('em')) return 'italic';
   return 'regular';
 }
@@ -97,7 +120,7 @@ export function portBreaks(
     if (bad) return;
     if (child.isText && child.text) {
       const marks = new Set(child.marks.map((m) => m.type.name));
-      const style = styleFor(marks);
+      const style = styleFor(marks, opts.baseStyle);
       const styleKey = style === 'mono' ? opts.monoFontKey : opts.fontKeys[style];
       const fontSize = style === 'mono' ? 0.8 * baseSize : baseSize;
       // Collapse space runs to one space: Typst markup collapses them, so
@@ -185,8 +208,21 @@ export function portBreaks(
   };
 
   // --- run the breaker ---
+  // Incremental across keystrokes: identical result to a from-scratch
+  // linebreak() by construction (see incremental.ts). A null return is the
+  // CJ-mutation tripwire: the preparation's shared glyphs were mutated
+  // mid-run, so rebuild the preparation and run the plain breaker.
   const measurePt = measurePx * PT_PER_PX;
-  const lines = linebreak(p, measurePt);
+  let lines = linebreakIncremental(p, measurePt);
+  if (lines === null) {
+    lines = linebreak(
+      prepare(
+        pieces.map((pc) => pc.seg),
+        config,
+      ),
+      measurePt,
+    );
+  }
   if (!lines.length) return null;
 
   // --- lines → ForcedBreak[] ---
@@ -208,20 +244,32 @@ export function portBreaks(
     let b = ln.endByte;
     while (b > 0 && p.text.charAt(b - 1) === ' ') b--;
     if (b === ln.endByte) {
-      // No space before the break: a compound '-' (or dash) opportunity —
-      // the item stream models these as glyphless hyphen items at the
-      // split offset.
-      if (/[-–—]/.test(p.text.charBefore(b))) {
-        const at = pmAt(b);
-        if (at === null) {
-          lastBail = 'compound-unmapped@' + b;
-          return null;
-        }
-        out.push({ at, hyphen: true });
-        continue;
+      // No space before the break: an intra-token split. Typst renders a
+      // Normal breakpoint with NO added glyph (only bp 'hyphen' and lines
+      // ending in SHY gain one), so every punctuation-adjacent split — an
+      // existing dash, an em-dash carried to the next line, a '/' or '.'
+      // boundary inside a link — is a glyphless ForcedBreak. The forced
+      // translator re-derives glyphlessness from the same adjacency rule
+      // (a glyph only between two letters), so the two cases the contract
+      // cannot express bail to legacy: a letter|letter Normal break (deep
+      // inside a >=16-char link segment) would gain a spurious glyph, and
+      // a SHY break loses the glyph Typst paints.
+      const before = p.text.charBefore(b);
+      const after = p.text.charAt(b);
+      const letter = /^\p{L}$/u.test(before) && /^\p{L}$/u.test(after);
+      const shy = '\u00ad';
+      const obj = '\ufffc';
+      if (letter || before === shy || before === obj || after === obj) {
+        lastBail = 'nonspace-break@' + b + ':' + JSON.stringify(p.text.slice(Math.max(0, b - 12), Math.min(p.text.len, b + 6)));
+        return null; // unrepresentable opportunity → fallback
       }
-      lastBail = 'nonspace-break@' + b + ':' + JSON.stringify(p.text.slice(Math.max(0, b - 12), Math.min(p.text.len, b + 6)));
-      return null; // unmodeled opportunity (e.g. em-dash split) → fallback
+      const at = pmAt(b);
+      if (at === null) {
+        lastBail = 'split-unmapped@' + b;
+        return null;
+      }
+      out.push({ at, hyphen: true });
+      continue;
     }
     const at = pmAt(b);
     if (at === null) {

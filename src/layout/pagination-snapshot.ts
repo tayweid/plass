@@ -12,6 +12,10 @@ export interface PaginationHeightSample {
 export interface PaginationHeightSources {
   readonly spacers: Iterable<PaginationHeightSample>;
   readonly tableExtras: Iterable<PaginationHeightSample>;
+  /** Editorial comments' painted heights (editor-comments.ts), keyed at
+   * the note's END position: content after a note subtracts its whole
+   * height, the note's own top only the notes before it. */
+  readonly comments?: Iterable<PaginationHeightSample>;
 }
 
 /** Immutable geometry used throughout one pagination pass. The source lists
@@ -20,7 +24,12 @@ export interface PaginationHeightSources {
 export interface PaginationSnapshot {
   readonly spacers: readonly PaginationHeightSample[];
   readonly tableExtras: readonly PaginationHeightSample[];
+  readonly comments: readonly PaginationHeightSample[];
+  /** Everything painted that print does not have: page gaps, table split
+   * extras, and editorial comments. */
   readonly heights: HeightIndex;
+  /** The comments alone: painted coordinate → print-stack coordinate. */
+  readonly commentHeights: HeightIndex;
 }
 
 function finiteSample(sample: PaginationHeightSample): PaginationHeightSample | null {
@@ -96,6 +105,7 @@ export class HeightIndex {
 export function createPaginationSnapshot(sources: PaginationHeightSources): PaginationSnapshot {
   const spacers = snapshotSamples(sources.spacers, true);
   const tableExtras = snapshotSamples(sources.tableExtras, false);
-  const heights = new HeightIndex([...spacers, ...tableExtras]);
-  return Object.freeze({ spacers, tableExtras, heights });
+  const comments = snapshotSamples(sources.comments ?? [], true);
+  const heights = new HeightIndex([...spacers, ...tableExtras, ...comments]);
+  return Object.freeze({ spacers, tableExtras, comments, heights, commentHeights: new HeightIndex(comments) });
 }

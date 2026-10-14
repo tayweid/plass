@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 
 test('document CSP blocks inline code, eval, and direct remote images', async ({ page }) => {
   let remoteRequests = 0;
@@ -202,7 +202,7 @@ test('compiled bibliography SVG cannot restore a dangerous URL', async ({ page }
   expect(active.some((attr) => /^on/i.test(attr))).toBe(false);
 });
 
-test('raw Typst previews use the sanitized SVG boundary', async ({ page }) => {
+test('raw Typst islands are shown as code and never compiled or linked', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const app = window as typeof window & { view: import('prosemirror-view').EditorView };
@@ -214,45 +214,72 @@ test('raw Typst previews use the sanitized SVG boundary', async ({ page }) => {
     app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, raw));
   });
 
-  const render = page.locator('.ts-raw-render');
-  await expect(render.locator('svg')).toHaveCount(1, { timeout: 20_000 });
-  const active = await render.locator('*').evaluateAll((elements) =>
-    elements.flatMap((element) =>
-      element.getAttributeNames()
-        .filter((name) => name.startsWith('on') || /^(?:href|xlink:href)$/i.test(name))
-        .map((name) => `${name}=${element.getAttribute(name)}`),
-    ),
-  );
-  expect(active.some((attribute) => /javascript:/i.test(attribute))).toBe(false);
-  expect(active.some((attribute) => /^on/i.test(attribute))).toBe(false);
+  const island = page.locator('.ProseMirror pre[data-params="typst-raw"]');
+  await expect(island).toHaveCount(1);
+  await expect(island).toHaveText('#link("javascript:alert(1)")[danger]');
+  await page.waitForTimeout(1_500);
+  expect(await island.locator('svg, a, [href]').count()).toBe(0);
+  // The compile the audit and the PDF run prints the island as a raw block.
+  const typ = await page.evaluate(async () => {
+    const { docToTyp } = await import('/src/typ-serializer.ts');
+    return docToTyp((window as typeof window & { view: import('prosemirror-view').EditorView }).view.state.doc, { islands: 'print' });
+  });
+  expect(typ).toContain('```\n#link("javascript:alert(1)")[danger]\n```');
+  // Every occurrence sits inside a fence: nothing executable at line start.
+  expect((typ.match(/^#link/gm) ?? []).length).toBe((typ.match(/```\n#link/g) ?? []).length);
 });
 
-test('compiler package policy makes only one pinned integrity-checked request', async ({ page }) => {
+test('the compiler resolves no package and requests none, math included', async ({ page }) => {
   const packageRequests: string[] = [];
   await page.route('https://packages.typst.org/**', async (route) => {
     packageRequests.push(route.request().url());
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/gzip',
-      headers: { 'access-control-allow-origin': '*' },
-      body: Buffer.from('tampered package'),
-    });
+    await route.abort();
   });
   await page.goto('/?new=1');
 
-  const unsupported = await page.evaluate(async () => {
+  // No package resolves, the one Plass's math once used included.
+  const imports = await page.evaluate(async () => {
     const { compileSvg } = await import('/src/pdf.ts');
-    return compileSvg('#import "@preview/not-a-real-package:9.9.9": *\n[probe]');
+    return Promise.all([
+      compileSvg('#import "@preview/not-a-real-package:9.9.9": *\n[probe]'),
+      compileSvg('#import "@preview/mitex:0.2.7": mitex\n#mitex(`x`)'),
+    ]);
   });
-  expect(unsupported).toBeNull();
-  expect(packageRequests).toEqual([]);
+  expect(imports).toEqual([null, null]);
 
-  const tampered = await page.evaluate(async () => {
-    const { compileSvg } = await import('/src/pdf.ts');
-    return compileSvg('#import "@preview/mitex:0.2.5": mitex\n#mitex(`x`)');
+  // A document with inline, bold and display math, a table cell's formula
+  // and a numbered label prints (native Typst math, its handles defined in
+  // the header) and compiles, with the math converter loaded from the app.
+  const printed = await page.evaluate(async () => {
+    const app = window as typeof window & { view: import('prosemirror-view').EditorView };
+    const { schema } = app.view.state;
+    const n = schema.nodes;
+    const strong = schema.marks.strong.create();
+    const doc = n.doc.create(null, [
+      n.paragraph.create(null, [
+        schema.text('Area '),
+        n.math_inline.create({ src: '\\frac{1}{2} b h' }),
+        schema.text('; and '),
+        n.math_inline.create({ src: '\\sqrt[3]{x}' }, null, [strong]),
+        schema.text(' bold.', [strong]),
+      ]),
+      n.math_display.create({ src: 'a &= b \\\\\nc &= \\underbrace{d}_{e}', label: 'eq:sys' }),
+      n.table.create(null, n.table_row.create(null, [n.table_cell.create(null, n.paragraph.create(null, n.math_inline.create({ src: '\\mathbf{v}' })))])),
+    ]);
+    const { docToTyp } = await import('/src/typ-serializer.ts');
+    const { ensureMathConverter } = await import('/src/math-convert.ts');
+    await ensureMathConverter();
+    const { compileDocSvg } = await import('/src/pdf.ts');
+    const svg = await compileDocSvg(doc);
+    return { typ: docToTyp(doc, { islands: 'print' }), compiled: typeof svg === 'string' && svg.includes('<svg') };
   });
-  expect(tampered).toBeNull();
-  expect(packageRequests).toEqual(['https://packages.typst.org/preview/mitex-0.2.5.tar.gz']);
+  expect(printed.typ).not.toContain('#import');
+  expect(printed.typ).not.toMatch(/#mi(?:tex)?\(/);
+  expect(printed.typ).toContain('$frac(1 ,2 ) b  h $; and ');
+  expect(printed.typ).toContain('#let mitexsqrt = ');
+  expect(printed.typ).toContain('$ <eq:sys>');
+  expect(printed.compiled).toBe(true);
+  expect(packageRequests).toEqual([]);
 });
 
 test('compiler timeout circuit blocks automatic retries until a document edit resets it', async ({ page }) => {
@@ -409,11 +436,11 @@ test('an old compiler timeout preserves work from a newer document epoch', async
   });
 });
 
-test('table-card open and local edits authorize fresh compiler epochs', async ({ page }) => {
+test('native table focus is inert and a cell edit authorizes a fresh compiler epoch', async ({ page }) => {
   await page.goto('/?new=1');
-  const result = await page.evaluate(async () => {
+  await page.evaluate(() => {
     const app = window as typeof window & { view: import('prosemirror-view').EditorView };
-    const { schema } = await import('/src/schema.ts');
+    const { schema } = app.view.state;
     const cell = (text: string) => schema.nodes.table_cell.create(
       null,
       schema.nodes.paragraph.create(null, schema.text(text)),
@@ -424,16 +451,16 @@ test('table-card open and local edits authorize fresh compiler epochs', async ({
     );
     const state = app.view.state;
     app.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, table));
+  });
 
+  await expect(page.locator('.ProseMirror table')).toHaveCount(1);
+  await expect(page.locator('.table-card-overlay, .ts-table-preview')).toHaveCount(0);
+
+  const beforeFocus = await page.evaluate(async () => {
     const { testCompilerLifecycleStats, testCompilerTimeoutCircuitBreaker } =
       await import('/src/typst-worker-client.ts');
-    const { openTableEditor } = await import('/src/table-editor.ts');
-    const beforeOpen = testCompilerLifecycleStats();
-    openTableEditor(app.view, 0);
-    const afterOpen = testCompilerLifecycleStats();
-
-    // Let the document and card's legitimate initial previews settle before
-    // deterministically opening the circuit.
+    // Let the document's legitimate compile settle before deterministically
+    // opening the circuit. Native tables launch no private preview compile.
     await new Promise((resolve) => window.setTimeout(resolve, 50));
     for (let i = 0; i < 100; i++) {
       const stats = testCompilerLifecycleStats();
@@ -441,28 +468,24 @@ test('table-card open and local edits authorize fresh compiler epochs', async ({
       await new Promise((resolve) => window.setTimeout(resolve, 50));
     }
     await testCompilerTimeoutCircuitBreaker();
-    const beforeInput = testCompilerLifecycleStats();
-    const caption = document.querySelector<HTMLInputElement>('.table-card-caption');
-    if (!caption) throw new Error('Table-card caption input was not mounted');
-    caption.value = 'Fresh local input';
-    caption.dispatchEvent(new Event('input', { bubbles: true }));
-    const afterInput = testCompilerLifecycleStats();
-    document.querySelector<HTMLButtonElement>('.table-card-overlay .bib-cancel')?.click();
-
-    return {
-      openAdvanced: afterOpen.epoch === beforeOpen.epoch + 1,
-      circuitWasOpen: beforeInput.circuitOpen,
-      inputAdvanced: afterInput.epoch === beforeInput.epoch + 1,
-      inputReset: !afterInput.circuitOpen,
-    };
+    return testCompilerLifecycleStats();
   });
 
-  expect(result).toEqual({
-    openAdvanced: true,
-    circuitWasOpen: true,
-    inputAdvanced: true,
-    inputReset: true,
+  await page.locator('.ProseMirror td').first().click();
+  const afterFocus = await page.evaluate(async () => {
+    const { testCompilerLifecycleStats } = await import('/src/typst-worker-client.ts');
+    return testCompilerLifecycleStats();
   });
+  await page.keyboard.type('X');
+  const afterInput = await page.evaluate(async () => {
+    const { testCompilerLifecycleStats } = await import('/src/typst-worker-client.ts');
+    return testCompilerLifecycleStats();
+  });
+
+  expect(beforeFocus.circuitOpen).toBe(true);
+  expect(afterFocus).toMatchObject({ circuitOpen: true, epoch: beforeFocus.epoch });
+  expect(afterInput.epoch).toBe(beforeFocus.epoch + 1);
+  expect(afterInput.circuitOpen).toBe(false);
 });
 
 test('compiler circuit breaker leaves the successful queue path byte-stable', async ({ page }) => {

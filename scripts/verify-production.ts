@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { contentSecurityPolicy } from '../src/security-policy';
-import { TYPST_PACKAGE_POLICY } from '../src/typst-config';
+import { MITEX_WASM_SHA256 } from '../src/math-convert';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Production security verification failed: ${message}`);
@@ -71,9 +71,22 @@ const workerName = readdirSync(join(dist, 'assets')).find((name) => /^typst-comp
 assert(workerName, 'isolated Typst worker artifact is missing');
 const worker = readFileSync(join(dist, 'assets', workerName), 'utf8');
 assert(worker.includes('../fonts/'), 'worker font base does not escape the assets directory');
-assert(worker.includes(TYPST_PACKAGE_POLICY.url), 'worker does not contain the exact pinned package URL');
-assert(worker.includes(TYPST_PACKAGE_POLICY.sha256), 'worker does not contain the pinned package digest');
+assert(!/mitex-[\d.]+\.tar\.gz/.test(worker), 'worker must not name a Typst package archive: the compiler resolves none');
 assert(worker.includes('Dynamic JavaScript construction is disabled'), 'worker fail-closed Function shim is missing');
+
+// The math converter is the vendored mitex wasm, served from the build.
+const mitexName = readdirSync(join(dist, 'assets')).find((name) => /^mitex-.*\.wasm$/.test(name));
+assert(mitexName, 'math converter WASM artifact is missing');
+const mitexWasm = readFileSync(join(dist, 'assets', mitexName));
+assert(
+  createHash('sha256').update(mitexWasm).digest('hex') === MITEX_WASM_SHA256 &&
+    mitexWasm.equals(readFileSync(join(process.cwd(), 'src/mitex/mitex.wasm'))),
+  'built math converter WASM differs from the pinned vendored file',
+);
+assert(
+  readFileSync(join(dist, 'THIRD_PARTY_NOTICES.txt'), 'utf8').includes('mitex@0.2.7 (Apache-2.0), vendored'),
+  'the distributed notices do not list the vendored mitex converter',
+);
 
 const sidecarName = readdirSync(join(dist, 'assets')).find((name) => /^typeset_sidecar_bg-.*\.wasm$/.test(name));
 assert(sidecarName, 'line-breaking sidecar WASM artifact is missing');

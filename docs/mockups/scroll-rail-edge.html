@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scroll rail, edge</title>
+    <!--
+      Plass's scroll rail, from one angle: the rail on the paper's edge.
+
+      No gutter. A strip 4 px wide lies over the panel's right edge, 3 px in,
+      over the paper's right margin (154 px of it at 1100, 213 at 1500), so it
+      takes nothing from the paper's width, which fills the panel by rule. It
+      stands for the whole document top to bottom. It shows on scroll and on
+      hover and goes away a beat after both stop, like a macOS overlay
+      scroller; at rest the paper is bare. Thin, it carries page-break ticks,
+      heading dots, the caret and the visible span as a thumb: the frame's
+      colour with a light core, a small piece of the frame laid on the paper.
+      Hovered, it widens to 14 px and turns into the frame itself: a dark
+      strip with the document's sheets drawn down it, the visible ones lit,
+      headings, figures and tables marked, a label for whatever is under the
+      pointer, and a click jumps there.
+
+      Everything below the "the scroll rail" comments is the rail as it would
+      be built in Plass: a fixed sibling of #scroll (like #hud), its own DOM,
+      CSS and script, reading the geometry the layout already has (page breaks,
+      the scale, the panel's scroll). The rest reproduces Plass's Zen frame at
+      main eb4ea89 (src/style.css, src/toolbar.css): frame #18181a, bar 44,
+      pill 30, rail 44 with 32 px tiles, the 8 px edge, the panel rounded 12,
+      the pages laid out at 816 CSS px and drawn at the panel's width by a
+      transform, 6 px gaps of the frame between sheets, no scrollbar drawn.
+      The traffic lights are drawn here; in Plass.app they are the window's.
+    -->
+    <style>
+      /* ================= Plass's frame (style.css, toolbar.css) ================= */
+      :root {
+        --frame: #18181a;
+        --pill: #232326;
+        --tile: #2e2e32;
+        --topbar: 44px;
+        --edge: 8px;
+        --rail-tile: 32px;
+        --rail-gap: 6px;
+        --rail: calc(var(--rail-tile) + 2 * var(--rail-gap));
+        --ink: #1a1a1a;
+        --accent: #305c8a;
+        --sheet: #ffffff;
+        --serif: 'STIX Two Text', 'Charter', 'Iowan Old Style', 'Palatino', 'Georgia', serif;
+        --doc-font: 'New Computer Modern', 'NewCM10', 'CMU Serif', 'Latin Modern Roman', 'STIX Two Text', Georgia, serif;
+        --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+        --page-w: 816px;
+        --page-h: 1056px;
+        --page-margin: 120px;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: var(--frame);
+        font-family: var(--sans);
+        color: var(--ink);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* The traffic lights (the window's own in Plass.app: x 14, y 15). */
+      #lights { position: fixed; left: 14px; top: 16px; display: flex; gap: 8px; z-index: 11; }
+      #lights i { width: 12px; height: 12px; border-radius: 50%; display: block; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.25); }
+      #lights i:nth-child(1) { background: #ff5f57; }
+      #lights i:nth-child(2) { background: #febc2e; }
+      #lights i:nth-child(3) { background: #28c840; }
+
+      /* The bar: File, the name pill, Export, past the lights' 88 px room. */
+      #toolbar {
+        position: fixed; top: 0; left: 0; right: 0; height: var(--topbar); z-index: 10;
+        display: flex; align-items: center; gap: 6px;
+        padding-inline: calc(12px + 88px) var(--edge);
+      }
+      .tb-tile {
+        flex: none; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 9px;
+        display: inline-flex; align-items: center; justify-content: center;
+        background: transparent; color: rgba(240, 238, 233, 0.62); cursor: pointer;
+      }
+      .tb-tile:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+      .ico { width: 18px; height: 18px; flex: none; }
+      .doc-pod {
+        display: flex; align-items: center; gap: 9px; flex: 0 1 auto; min-width: 0;
+        max-width: min(560px, 50vw); height: 30px; padding: 0 10px;
+        background: var(--pill); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 9px;
+      }
+      .doc-pod .name {
+        font: 15px/1.5 var(--serif); letter-spacing: 0.09em; color: rgba(252, 252, 251, 0.8);
+        white-space: nowrap; padding: 1px 4px; border-radius: 5px;
+      }
+      .doc-mark { flex: none; width: 6px; height: 6px; border-radius: 50%; background: rgba(110, 165, 118, 0.9); }
+      #doc-folder {
+        flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        direction: rtl; text-align: left; font: 12px/1.5 var(--sans); color: rgba(240, 238, 233, 0.55);
+      }
+
+      /* The rail of tools down the left. */
+      #rail {
+        position: fixed; top: var(--topbar); left: 0; bottom: 0; width: var(--rail); z-index: 10;
+        display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0 0 var(--edge);
+      }
+      .tb-rail-groups, .tb-rail-group, .tb-rail-foot { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+      .tb-rail-groups { flex: 1 1 auto; min-height: 0; }
+      .tb-rule { flex: none; width: 18px; height: 1px; margin: 3px 0; background: rgba(255, 255, 255, 0.1); }
+      #rail button {
+        flex: none; width: var(--rail-tile); height: var(--rail-tile); padding: 0; border: 0; border-radius: 9px;
+        display: inline-flex; align-items: center; justify-content: center;
+        background: transparent; color: rgba(240, 238, 233, 0.64); cursor: pointer;
+      }
+      #rail button:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+      #rail button:disabled { opacity: 0.25; cursor: default; background: transparent; }
+      .tico { font: 600 14px/18px var(--sans); min-width: 18px; text-align: center; }
+
+      /* The panel, which is the paper. */
+      #scroll {
+        flex: 1; min-height: 0;
+        margin: var(--topbar) var(--edge) var(--edge) var(--rail);
+        border-radius: 12px;
+        background: var(--sheet);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 2px 6px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.45);
+        overflow: hidden auto;
+        scrollbar-width: none;
+        overflow-anchor: none;
+      }
+      #scroll::-webkit-scrollbar { display: none; }
+      #paper { overflow: clip; }
+      #stack { position: relative; width: var(--page-w); transform-origin: 0 0; }
+      #pages { position: absolute; inset: 0; background: var(--frame); }
+      .page-box { position: absolute; left: 0; width: var(--page-w); height: var(--page-h); background: var(--sheet); }
+      .page-body { position: absolute; top: var(--page-margin); left: var(--page-margin); right: var(--page-margin); height: calc(var(--page-h) - 2 * var(--page-margin)); }
+      .page-num { position: absolute; left: 0; right: 0; bottom: 64px; text-align: center; font: 16.6667px/1 var(--doc-font); color: var(--ink); }
+
+      /* The document's type: 12.5 pt, 1.5 leading (25 px lines), Typst's look. */
+      .page-body { font-family: var(--doc-font); font-size: 16.6667px; line-height: 25px; color: var(--ink); }
+      .page-body p { margin: 0 0 15px; text-align: justify; hyphens: auto; line-height: 25px; }
+      .page-body h1, .page-body h2, .page-body h3 { font-weight: 600; line-height: 1.25; margin: 0 0 0.5em; padding-top: 1.4em; }
+      .page-body h1 { font-size: 1.9em; padding-top: 0.2em; }
+      .page-body h2 { font-size: 1.4em; }
+      .page-body h3 { font-size: 1.15em; }
+      .page-body .lede { font-style: italic; }
+      .split { overflow: hidden; }
+      .split > p { margin-bottom: 0; }
+      .split-tail { margin-bottom: 15px; }
+      figure { margin: 0 0 15px; padding: 6.7px 0 3.3px; text-align: center; }
+      figure svg { display: block; margin: 0 auto; }
+      figcaption { margin-top: 0.55em; text-align: justify; text-align-last: center; }
+      .tab-wrap { margin: 23px 0 20px; }
+      .tab-wrap table { margin: 0 auto; border-collapse: collapse; }
+      .tab-wrap th, .tab-wrap td { padding: 0 6.7px; text-align: left; font-weight: inherit; line-height: 25px; }
+      .tab-wrap td.n, .tab-wrap th.n { text-align: right; font-variant-numeric: tabular-nums; }
+      .tab-wrap thead tr { box-shadow: inset 0 1.33px 0 var(--ink), inset 0 -0.67px 0 var(--ink); }
+      .tab-wrap tbody tr:last-child { box-shadow: inset 0 -1.33px 0 var(--ink); }
+      .tab-wrap tbody tr.total { box-shadow: inset 0 0.67px 0 var(--ink), inset 0 -1.33px 0 var(--ink); }
+      .tab-wrap caption { caption-side: top; margin-bottom: 0.55em; }
+      .refs p { padding-left: 2em; text-indent: -2em; text-align: left; }
+      .caret { display: inline-block; width: 0; height: 1.1em; vertical-align: -0.2em; border-left: 1.5px solid var(--ink); margin: 0 -0.75px; }
+
+      /* The page count, in the panel's corner. */
+      #hud {
+        position: fixed; right: calc(var(--edge) + 10px); bottom: calc(var(--edge) + 10px); z-index: 50;
+        padding: 2px 8px; font: 11px var(--sans); color: #6f6d68; background: rgba(252, 252, 251, 0.82);
+        backdrop-filter: blur(8px); border-radius: 7px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+        opacity: 0.7; user-select: none;
+      }
+
+      /* ================= the scroll rail ================= */
+
+      /* One fixed element over the panel's right edge, a sibling of #scroll
+         as #hud is, so it does not scroll with the paper and needs no room
+         of its own: the panel keeps its whole width and the paper fills it.
+         3 px in from the panel's edge (the classic overlay inset, and clear
+         of the panel's 12 px corners at the top), and it stops 36 px above
+         the panel's bottom, over the HUD's row, so the wide state never
+         covers the page count. The element is always the wide width: that
+         is the hover target, there even while the strip is hidden, so going
+         to the paper's edge finds it. What draws is .sr-track, right-aligned
+         inside it, 4 px thin and 14 px wide. */
+      #srail {
+        --sr-thin: 4px;
+        --sr-wide: 14px;
+        --sr-inset: 3px;
+        /* Thin: dark marks on the paper, ringed in the paper's white so a
+           mark under the thumb still reads (the history view rings its
+           nodes in the room's colour the same way). */
+        --sr-ink: rgba(24, 24, 26, 0.72);
+        --sr-ring: #fff;
+        --sr-ring-w: 1px;
+        position: fixed;
+        z-index: 40;
+        right: calc(var(--edge) + var(--sr-inset));
+        top: calc(var(--topbar) + 10px);
+        bottom: calc(var(--edge) + 36px);
+        width: var(--sr-wide);
+        touch-action: none;
+        user-select: none;
+        -webkit-app-region: no-drag;
+      }
+
+      .sr-track {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: 0;
+        width: var(--sr-thin);
+        border-radius: 2px;
+        /* The groove: the frame's colour at a breath, barely there on the
+           white, so the thumb and the ticks carry the strip. */
+        background: rgba(24, 24, 26, 0.07);
+        transition: width 140ms ease, border-radius 140ms ease, background-color 140ms ease, box-shadow 140ms ease, opacity 120ms ease;
+      }
+
+      /* The paper column: the document's sheets, drawn only when wide (the
+         ticks cut it into sheets). */
+      .sr-track::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 3px;
+        right: 3px;
+        border-radius: 2px;
+        background: rgba(255, 255, 255, 0.13);
+        opacity: 0;
+        transition: opacity 140ms ease;
+      }
+
+      /* At rest: gone, a beat after the last scroll or hover (script). */
+      #srail.is-idle .sr-track,
+      #srail.is-idle .sr-label {
+        opacity: 0;
+        transition-duration: 140ms, 140ms, 140ms, 140ms, 320ms;
+      }
+
+      /* The visible span. Thin: the frame's colour with a light core — a
+         small piece of the frame on the paper, its middle the paper's light.
+         Its top and height are the panel's scrollTop and height in the
+         document's proportion, never clamped at this length, so a page gap
+         in view crosses the thumb at the same fraction of it as the real gap
+         crosses the panel: the tick in the thumb is the gap you are looking
+         at. */
+      .sr-thumb {
+        position: absolute;
+        left: 0;
+        right: 0;
+        border-radius: 2px;
+        background: rgba(24, 24, 26, 0.8);
+        transition: left 140ms ease, right 140ms ease, border-radius 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+      }
+      .sr-thumb::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        bottom: 2px;
+        left: 1.5px;
+        right: 1.5px;
+        border-radius: 1px;
+        background: rgba(255, 255, 255, 0.62);
+        transition: left 140ms ease, right 140ms ease, background-color 140ms ease;
+      }
+
+      /* Page breaks: the frame's colour across the strip, as the real gaps
+         are the frame's colour across the paper. Thin, they reach 2 px past
+         the groove onto the paper to read as ticks; the one whose gap is in
+         view reaches 6 px and darkens. Over the thumb's light core a tick
+         is a cut in it: the visible paper, broken where the sheets break. */
+      .sr-tick {
+        position: absolute;
+        left: -2px;
+        right: 0;
+        height: 1.5px;
+        margin-top: -0.75px;
+        border-radius: 1px;
+        background: rgba(24, 24, 26, 0.5);
+        pointer-events: none;
+        transition: left 140ms ease, right 140ms ease, height 140ms ease, background-color 140ms ease;
+      }
+      .sr-tick.is-inview {
+        left: -6px;
+        background: rgba(24, 24, 26, 0.88);
+      }
+
+      /* Marks: headings by level, the title, figures, tables, the caret. */
+      .sr-mark {
+        position: absolute;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: var(--sr-ink);
+        box-shadow: 0 0 0 var(--sr-ring-w) var(--sr-ring);
+        pointer-events: none;
+        transition: width 140ms ease, height 140ms ease, background-color 140ms ease, box-shadow 140ms ease, transform 100ms ease, opacity 140ms ease;
+      }
+      .sr-mark.h2 { width: 4px; height: 4px; border-radius: 50%; }
+      .sr-mark.h3 { width: 2.5px; height: 2.5px; border-radius: 50%; }
+      .sr-mark.title { width: 4px; height: 2px; border-radius: 1px; }
+      /* Figures and tables only when wide: thin, the strip keeps to the
+         sheets, the headings and where you are. */
+      .sr-mark.fig,
+      .sr-mark.tab { width: 4px; height: 3px; border-radius: 1px; opacity: 0; }
+      .sr-mark.caret { width: 8px; height: 2px; border-radius: 1px; left: auto; right: 0; transform: translateY(-50%); background: var(--accent); box-shadow: 0 0 0 1px #fff; }
+
+      /* The pointer's place, when no mark is near it (wide only). */
+      .sr-hover {
+        position: absolute;
+        left: 1px;
+        right: 1px;
+        height: 1px;
+        background: rgba(255, 255, 255, 0.55);
+        pointer-events: none;
+        display: none;
+      }
+
+      /* ---------- wide: the frame itself, along the paper's edge ---------- */
+      #srail.is-wide {
+        --sr-ink: rgba(240, 238, 233, 0.92);
+        --sr-ring: var(--frame);
+        --sr-ring-w: 1.5px;
+      }
+      #srail.is-wide .sr-track {
+        width: var(--sr-wide);
+        border-radius: 7px;
+        background: rgba(24, 24, 26, 0.92);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 4px 14px rgba(0, 0, 0, 0.22);
+        backdrop-filter: blur(10px);
+        cursor: pointer;
+      }
+      #srail.is-wide .sr-track::before { opacity: 1; }
+      /* The visible span, wide: a window round the lit sheets. */
+      #srail.is-wide .sr-thumb {
+        left: 1.5px;
+        right: 1.5px;
+        border-radius: 4px;
+        background: transparent;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.42);
+      }
+      #srail.is-wide .sr-thumb::after {
+        left: 1.5px;
+        right: 1.5px;
+        background: rgba(255, 255, 255, 0.3);
+      }
+      #srail.is-wide .sr-tick,
+      #srail.is-wide .sr-tick.is-inview {
+        left: 3px;
+        right: 3px;
+        height: 2px;
+        margin-top: -1px;
+        border-radius: 0;
+        background: var(--frame);
+      }
+      #srail.is-wide .sr-mark.h2 { width: 6px; height: 6px; }
+      #srail.is-wide .sr-mark.h3 { width: 4px; height: 4px; }
+      #srail.is-wide .sr-mark.title { width: 8px; height: 2.5px; }
+      #srail.is-wide .sr-mark.fig,
+      #srail.is-wide .sr-mark.tab {
+        width: 8px;
+        height: 6px;
+        border-radius: 1.5px;
+        opacity: 1;
+        background: var(--frame);
+        box-shadow: inset 0 0 0 1.2px var(--sr-ink), 0 0 0 1px var(--frame);
+      }
+      #srail.is-wide .sr-mark.tab {
+        background: linear-gradient(var(--frame) 2.4px, var(--sr-ink) 2.4px, var(--sr-ink) 3.6px, var(--frame) 3.6px);
+      }
+      #srail.is-wide .sr-mark.caret { right: 2px; width: 10px; background: #9db8d6; box-shadow: 0 0 0 1px var(--frame); }
+      #srail.is-wide .sr-mark.is-hot { transform: translate(-50%, -50%) scale(1.45); background: #fff; }
+      #srail.is-wide .sr-mark.caret.is-hot { transform: translateY(-50%) scale(1.2); background: #b9cfe6; }
+      #srail.is-wide .sr-mark.fig.is-hot,
+      #srail.is-wide .sr-mark.tab.is-hot { --sr-ink: #fff; }
+      #srail.is-wide .sr-hover.on { display: block; }
+
+      /* The label: Plass's caption — the menus' dark glass, as every caption
+         in the frame is (toolbar.css) — to the strip's left, level with the
+         mark, so it covers the paper's margin and the line ends, briefly. */
+      .sr-label {
+        position: fixed;
+        right: calc(var(--edge) + var(--sr-inset) + var(--sr-wide) + 8px);
+        transform: translateY(-50%);
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        max-width: min(340px, 40vw);
+        padding: 3px 9px 4px;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(27, 26, 30, 0.94);
+        backdrop-filter: blur(12px);
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+        color: rgba(240, 238, 233, 0.9);
+        font: 11px/1.35 var(--sans);
+        white-space: nowrap;
+        pointer-events: none;
+        transition: opacity 120ms ease;
+      }
+      .sr-label[hidden] { display: none; }
+      .sr-label .k { color: rgba(240, 238, 233, 0.5); font-size: 10.5px; }
+      .sr-label .t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+      .sr-label .t.h2 { font: 13px/1.3 var(--serif); letter-spacing: 0.01em; color: #fff; }
+      .sr-label .t.h3 { font: 12.5px/1.3 var(--serif); color: rgba(240, 238, 233, 0.92); }
+      .sr-label .t.title { font: italic 13px/1.3 var(--serif); color: #fff; }
+      .sr-label .pg { color: rgba(240, 238, 233, 0.45); font-variant-numeric: tabular-nums; flex: none; }
+    </style>
+  </head>
+  <body>
+    <div id="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+
+    <header id="toolbar">
+      <button class="tb-tile" aria-label="File" type="button">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
+      </button>
+      <div class="doc-pod">
+        <span class="name">draft</span><span class="doc-mark"></span><span id="doc-folder"><span dir="ltr">~/Projects/week-3</span></span>
+      </div>
+      <button class="tb-tile" aria-label="Export" type="button">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+      </button>
+    </header>
+
+    <nav id="rail" aria-label="Tools">
+      <div class="tb-rail-groups">
+        <div class="tb-rail-group">
+          <button type="button" aria-label="Heading"><span class="tico">H1</span></button>
+          <button type="button" aria-label="Bold"><span class="tico">B</span></button>
+          <button type="button" aria-label="List"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="4" cy="6" r="1.2" fill="currentColor" /><circle cx="4" cy="12" r="1.2" fill="currentColor" /><circle cx="4" cy="18" r="1.2" fill="currentColor" /><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /></svg></button>
+        </div>
+        <div class="tb-rule"></div>
+        <div class="tb-rail-group">
+          <button type="button" aria-label="Image"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg></button>
+          <button type="button" aria-label="Math"><span class="tico">Σ</span></button>
+          <button type="button" aria-label="Footnote"><span class="tico">†</span></button>
+          <button type="button" aria-label="Insert"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg></button>
+        </div>
+        <div class="tb-rule"></div>
+        <div class="tb-rail-group">
+          <button type="button" aria-label="Block quote"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="7.5" cy="14.5" r="2.6" fill="currentColor" stroke="none" /><path d="M4.9 14.4C4.9 10.6 6.7 8.1 10.2 6.8" /><circle cx="16.5" cy="14.5" r="2.6" fill="currentColor" stroke="none" /><path d="M13.9 14.4C13.9 10.6 15.7 8.1 19.2 6.8" /></svg></button>
+          <button type="button" aria-label="Solution"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="5" y1="4" x2="5" y2="20" stroke="#d9433a" stroke-width="2.8" /><line x1="10" y1="8" x2="20" y2="8" /><line x1="10" y1="12" x2="20" y2="12" /><line x1="10" y1="16" x2="16" y2="16" /></svg></button>
+          <button type="button" aria-label="Comment"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /><line x1="8" y1="9" x2="16" y2="9" /><line x1="8" y1="13" x2="13" y2="13" /></svg></button>
+          <button type="button" aria-label="Paragraph" disabled><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="15" y2="18" /></svg></button>
+        </div>
+        <div class="tb-rule"></div>
+        <div class="tb-rail-group">
+          <button type="button" aria-label="More"><span class="tico">⋯</span></button>
+        </div>
+      </div>
+      <div class="tb-rail-foot">
+        <button type="button" aria-label="Document settings"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg></button>
+        <button type="button" aria-label="View source"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg></button>
+      </div>
+    </nav>
+
+    <main id="scroll">
+      <div id="paper"><div id="stack"><div id="pages"></div></div></div>
+    </main>
+
+    <!-- ================= the scroll rail ================= -->
+    <div id="srail" class="is-idle" role="navigation" aria-label="Document map">
+      <div class="sr-track">
+        <div class="sr-thumb"></div>
+        <div class="sr-ticks"></div>
+        <div class="sr-marks"></div>
+        <div class="sr-hover"></div>
+      </div>
+      <div class="sr-label" hidden></div>
+    </div>
+
+    <div id="hud"></div>
+
+    <!-- The document, as blocks; the script below lays them into Letter pages. -->
+    <template id="doc">
+      <h1>A Record That Only Grows</h1>
+      <p class="lede">A draft for the week-3 seminar. It describes how a notebook, the paper written from it and the record of every run are kept in one folder, and what three weeks of that record look like when they are read back.</p>
+
+      <h2>Introduction</h2>
+      <p>Most of the work behind a paper never reaches it. A figure is drawn, redrawn after a cleaning step, drawn again when a reviewer asks for a different window, and the paper keeps only the last of these. The notebook that drew it keeps a little more, but a notebook is edited in place too: cells are rewritten, reordered and deleted, and what the code was on the afternoon a number was copied into the text is, a week later, a matter of memory. This draft is about a different arrangement, in which the folder that holds the notebook and the paper also holds a record of both, written as the work happens and never rewritten.</p>
+      <p>The arrangement is not new in spirit. Claerbout&rsquo;s argument for reproducible research was that a figure in a paper should come with the means to make it again, and the record described here is one way of keeping that promise without asking anyone to do anything they were not already doing. The notebook runs, the paper is saved, and the record notices. What follows describes how it notices, what it keeps, and what three weeks of it look like for one small project.</p>
+
+      <h2>How the record is kept</h2>
+      <p>The record is a git repository in the project&rsquo;s folder, kept by the shell rather than by hand. Nothing in it is written by the person working: there is no staging, no message to compose and no branch to choose. Three things write to it, each in its own voice, and each commit says which of them made it and why.</p>
+      <h3>Commits on a timer</h3>
+      <p>The first writer is a timer. Every few minutes, if anything in the folder has changed, the shell commits it with a message that names the files and, for the notebook, the cells whose code or output differs from the last commit. A quiet hour produces nothing; a busy one produces a commit every interval. The timer is the record&rsquo;s floor: whatever else happens, nothing that sat on disk for more than a few minutes is lost.</p>
+      <p>Timer commits are the bulk of the record and the least interesting part of it, so the history view folds them. Three or more in a row become a single line that says what they caught, and opening the line shows each one. The fold is a reading aid only; every commit is still in the repository with its own files.</p>
+      <h3>Rewinds that never reset</h3>
+      <p>The second writer is a rewind. Choosing an earlier commit and asking to go back to it does not move the repository&rsquo;s head backwards, as a reset would. Instead the shell commits the folder as it is now, writes the earlier commit&rsquo;s files into the folder, and commits again. The record therefore only grows: the state before the rewind, the rewind itself and everything after it all remain, and a rewind can be undone by rewinding to the commit just before it.</p>
+      <p>A rewind touches only the files it names. The notebook can go back while the paper stays, or the paper while the data stays, and the preview says which cells come out, which go back and which files are left alone before anything is written.<span class="caret" data-caret></span></p>
+
+      <h2>Three weeks of readings</h2>
+      <p>The project read here is small: one notebook of about forty cells, one paper, a data folder and a values file that carries numbers from the notebook into the text. It ran for fifteen working days. Figure&nbsp;1 shows the runs per day and Table&nbsp;1 the commits by kind.</p>
+      <figure data-label="Runs per day across the three weeks">
+        <svg width="456" height="214" viewBox="0 0 456 214" role="img" aria-label="Runs per day" id="fig1"></svg>
+        <figcaption>Figure 1: Runs per day across the three weeks. Red bars are days on which at least one run raised an error.</figcaption>
+      </figure>
+      <h3>Runs per day</h3>
+      <p>The days are uneven in a way that matches the work. The first week is mostly reading data in and cleaning it, with short runs of single cells; the middle of the second week is the analysis proper, where whole sections of the notebook were run again after each change to the model; and the third week is writing, where the notebook ran mainly to redraw figures as the paper&rsquo;s argument settled. The busiest day, the eleventh, had twenty-one runs, most of them the same four cells.</p>
+      <h3>Errors and their fixes</h3>
+      <p>Three days had at least one run that raised an error. In each case the error was found and fixed within the hour, and in each case the paper was not affected; but in two of them the fix changed a number that the paper later quoted, and the record shows both the number before the fix and the commit that changed it.</p>
+      <p>This is the use the record was built for. Without it, the question of whether the quoted number came from before or after the fix would be answered from memory; with it, the answer is a commit, a cell and a time. Table&nbsp;1 counts the commits of each kind across the three weeks.</p>
+      <div class="tab-wrap" data-label="Commits in the record, by kind">
+        <table>
+          <caption>Table 1: Commits in the record, by kind.</caption>
+          <thead><tr><th>Kind</th><th class="n">Commits</th><th class="n">Share</th></tr></thead>
+          <tbody>
+            <tr><td>Timer</td><td class="n">412</td><td class="n">59.6%</td></tr>
+            <tr><td>Run</td><td class="n">186</td><td class="n">26.9%</td></tr>
+            <tr><td>Yours</td><td class="n">46</td><td class="n">6.7%</td></tr>
+            <tr><td>Note</td><td class="n">38</td><td class="n">5.5%</td></tr>
+            <tr><td>Rewind</td><td class="n">9</td><td class="n">1.3%</td></tr>
+            <tr class="total"><td>All</td><td class="n">691</td><td class="n">100.0%</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>What the record is for</h2>
+      <p>A record that nobody reads is only a backup. The record becomes useful when the paper is read against it: when a number in the text can be traced to the run that produced it, and a figure to the commit that drew it. Plass and Knuth share the folder for this reason, so that a rewind of the notebook can carry the paper with it and a reader of either can find the other at the same moment.</p>
+      <h3>Reading a paper backwards</h3>
+      <p>One way to read a finished paper is backwards through its record. Start at the last commit, where the paper says what it says, and step back through the rewinds and the error runs to the points where the argument turned. Each turn is a commit with a time and a reason, and most of them are a single changed cell.</p>
+
+      <h2>Conclusion</h2>
+      <p>The record asks nothing of the person working and keeps everything. Three weeks of it fit in one view, its errors are marked, its rewinds are reversible, and a number in the paper can be traced to the run that made it. Whether this changes how papers are written is a question for a longer project than this one; it already changes how they can be checked.</p>
+
+      <h2>References</h2>
+      <div class="refs">
+        <p>[1] J. F. Claerbout and M. Karrenbach. Electronic documents give reproducible research a new meaning. <i>SEG Technical Program Expanded Abstracts</i>, 1992.</p>
+        <p>[2] D. E. Knuth. Literate programming. <i>The Computer Journal</i>, 27(2):97&ndash;111, 1984.</p>
+        <p>[3] D. E. Knuth and M. F. Plass. Breaking paragraphs into lines. <i>Software: Practice and Experience</i>, 11(11):1119&ndash;1184, 1981.</p>
+        <p>[4] M. F. Plass. <i>Optimal Pagination Techniques for Automatic Typesetting Systems</i>. PhD thesis, Stanford University, 1981.</p>
+      </div>
+    </template>
+
+    <script>
+      'use strict';
+      const $ = (s, r = document) => r.querySelector(s);
+
+      /* ================= the paper (a stand-in for Plass's layout) ================= */
+
+      const PAGE_W = 816, PAGE_H = 1056, GAP = 6, MARGIN = 120, LINE = 25;
+      const BODY_H = PAGE_H - 2 * MARGIN;
+      const scrollEl = $('#scroll'), paperEl = $('#paper'), stackEl = $('#stack'), pagesEl = $('#pages');
+      let scale = 1, pageCount = 0;
+
+      function drawFigure(svg) {
+        const runs = [9, 14, 11, 17, 6, 12, 19, 15, 8, 13, 21, 16, 10, 18, 7];
+        const err = new Set([3, 6, 10]);
+        const x0 = 38, y0 = 186, h = 168, bw = 20, step = 27.2, max = 25;
+        const P = [];
+        for (let v = 0; v <= max; v += 5) {
+          const y = y0 - (v / max) * h;
+          P.push(`<line x1="${x0}" y1="${y}" x2="${x0 + step * 15 + 4}" y2="${y}" stroke="${v ? '#e2e0dc' : '#1a1a1a'}" stroke-width="${v ? 0.8 : 1}"/>`);
+          P.push(`<text x="${x0 - 7}" y="${y + 4}" text-anchor="end" font-size="11">${v}</text>`);
+        }
+        runs.forEach((r, i) => {
+          const x = x0 + 6 + i * step, bh = (r / max) * h;
+          P.push(`<rect x="${x}" y="${y0 - bh}" width="${bw}" height="${bh}" fill="${err.has(i) ? '#c0503f' : '#4a6c8f'}"/>`);
+          P.push(`<text x="${x + bw / 2}" y="${y0 + 15}" text-anchor="middle" font-size="11">${i + 1}</text>`);
+        });
+        [5, 10].forEach((w) => { const x = x0 + 2.5 + w * step; P.push(`<line x1="${x}" y1="${y0 - h}" x2="${x}" y2="${y0}" stroke="#9a9894" stroke-width="0.8" stroke-dasharray="2 3"/>`); });
+        P.push(`<text x="${x0 + 3}" y="${y0 - h - 6}" font-size="11" font-style="italic">runs</text>`);
+        P.push(`<text x="${x0 + step * 7.5 + 4}" y="${y0 + 28}" text-anchor="middle" font-size="11" font-style="italic">working day</text>`);
+        svg.innerHTML = `<g font-family="${getComputedStyle(document.documentElement).getPropertyValue('--doc-font')}" fill="#1a1a1a">${P.join('')}</g>`;
+      }
+
+      /* Lay the blocks into pages at the page's own size: a paragraph that
+         overflows is split at a line (two lines at least either side), a
+         heading left at a page's foot goes over with what follows it. */
+      function paginate() {
+        const blocks = [...$('#doc').content.children];
+        pagesEl.innerHTML = '';
+        let body;
+        const newPage = () => {
+          const page = document.createElement('section');
+          page.className = 'page-box';
+          body = document.createElement('div');
+          body.className = 'page-body';
+          page.append(body);
+          pagesEl.append(page);
+        };
+        const fits = (el) => el.offsetTop + el.offsetHeight <= BODY_H + 0.5;
+        newPage();
+        for (const block of blocks) {
+          const el = block.cloneNode(true);
+          body.append(el);
+          const svg = el.querySelector && el.querySelector('#fig1');
+          if (svg) drawFigure(svg);
+          if (fits(el)) continue;
+          if (el.tagName === 'P') {
+            const lines = Math.round(el.offsetHeight / LINE);
+            const room = Math.floor((BODY_H - el.offsetTop) / LINE);
+            if (room >= 2 && lines - room >= 2) {
+              const head = document.createElement('div');
+              head.className = 'split';
+              head.style.height = room * LINE + 'px';
+              el.replaceWith(head);
+              head.append(el);
+              newPage();
+              const tail = document.createElement('div');
+              tail.className = 'split split-tail';
+              tail.style.height = (lines - room) * LINE + 'px';
+              const rest = block.cloneNode(true);
+              rest.style.marginTop = -room * LINE + 'px';
+              rest.querySelectorAll('[data-caret]').forEach((c) => c.removeAttribute('data-caret'));
+              tail.append(rest);
+              body.append(tail);
+              continue;
+            }
+          }
+          const carry = [el];
+          let prev = el.previousElementSibling;
+          while (prev && /^H[1-6]$/.test(prev.tagName)) { carry.unshift(prev); prev = prev.previousElementSibling; }
+          newPage();
+          body.append(...carry);
+        }
+        const pages = [...pagesEl.children];
+        pageCount = pages.length;
+        pages.forEach((p, i) => {
+          p.style.top = i * (PAGE_H + GAP) + 'px';
+          const n = document.createElement('div');
+          n.className = 'page-num';
+          n.textContent = String(i + 1);
+          p.append(n);
+        });
+        stackEl.style.height = pageCount * PAGE_H + (pageCount - 1) * GAP + 'px';
+        const words = $('#doc').content.textContent.trim().split(/\s+/).length;
+        $('#hud').textContent = `${pageCount} p · ${words.toLocaleString('en-US')} words`;
+      }
+
+      /* paper-scale.ts in small: the stack drawn at the panel's width, the
+         clip box the drawn height, the line at the top kept across a resize. */
+      function fitPaper() {
+        const before = scrollEl.scrollTop / (paperEl.offsetHeight || 1);
+        scale = scrollEl.getBoundingClientRect().width / PAGE_W;
+        stackEl.style.transform = `scale(${scale})`;
+        paperEl.style.height = stackEl.offsetHeight * scale + 'px';
+        scrollEl.scrollTop = before * paperEl.offsetHeight;
+      }
+
+      /* ================= the scroll rail ================= */
+
+      /* What the rail is fed: the document's height and its marks, in the
+         layout's own px (Plass's typeset plugin knows the page breaks, the
+         numbering plugin the headings, figures.ts and the tables theirs; a
+         settled pass would hand them over). Marks are kept in layout px and
+         drawn in proportion — y / docHeight × trackHeight — so a resize,
+         which changes the scale and not the layout, moves nothing on the
+         rail but the track's own length. */
+      const rail = (() => {
+        const root = $('#srail');
+        const track = $('.sr-track', root), thumb = $('.sr-thumb', root);
+        const ticksEl = $('.sr-ticks', root), marksEl = $('.sr-marks', root);
+        const hoverEl = $('.sr-hover', root), label = $('.sr-label', root);
+
+        const BEAT = 1100; // ms the strip stays after the last scroll or hover (macOS waits about as long)
+        const NEAR = 6; // px on the rail within which the pointer takes a mark
+        const SCROLL_PAD = 28; // a heading jumped to lands this far under the panel's top
+
+        let docH = 1; // layout px
+        let marks = []; // {kind, y, top, text, page, el}
+        let ticks = []; // {y, page, el}
+        let idleTimer = 0, hovering = false, drag = null, hot = null, frame = 0;
+
+        const trackH = () => track.clientHeight;
+        const toRail = (y) => (y / docH) * trackH();
+        const pageOf = (y) => Math.min(pageCount, Math.floor(y / (PAGE_H + GAP)) + 1);
+
+        function feed(layout) {
+          docH = layout.height;
+          ticks = layout.breaks.map((y, i) => ({ y, page: i + 2 }));
+          marks = layout.marks;
+          ticksEl.innerHTML = '';
+          for (const t of ticks) { t.el = document.createElement('i'); t.el.className = 'sr-tick'; ticksEl.append(t.el); }
+          marksEl.innerHTML = '';
+          for (const m of marks) { m.el = document.createElement('i'); m.el.className = `sr-mark ${m.kind}`; marksEl.append(m.el); }
+          place();
+        }
+
+        // Positions: on a feed and on a resize (the track's length).
+        function place() {
+          for (const t of ticks) t.el.style.top = toRail(t.y) + 'px';
+          for (const m of marks) m.el.style.top = toRail(m.y) + 'px';
+          view();
+        }
+
+        // The visible span: on every scroll, in a frame.
+        function view() {
+          const H = paperEl.offsetHeight, V = scrollEl.clientHeight, s = scrollEl.scrollTop, T = trackH();
+          thumb.style.top = (s / H) * T + 'px';
+          thumb.style.height = (V / H) * T + 'px';
+          const top = s / scale, bottom = (s + V) / scale;
+          for (const t of ticks) t.el.classList.toggle('is-inview', t.y > top && t.y < bottom);
+        }
+
+        // Shown on scroll and on hover; gone a beat after both stop.
+        function show() {
+          clearTimeout(idleTimer);
+          root.classList.remove('is-idle');
+        }
+        function rest(after = BEAT) {
+          clearTimeout(idleTimer);
+          idleTimer = setTimeout(() => { if (!hovering && !drag) root.classList.add('is-idle'); }, after);
+        }
+
+        // The mark under the pointer: the nearest within NEAR px, headings
+        // before figures before page breaks when two are as near.
+        const rank = { title: 0, h2: 0, h3: 1, fig: 2, tab: 2, caret: 3, page: 4 };
+        function nearest(py) {
+          let best = null, bestD = Infinity;
+          const consider = (m) => {
+            const d = Math.abs(toRail(m.y) - py) + rank[m.kind] * 0.01;
+            if (d < bestD) { best = m; bestD = d; }
+          };
+          marks.forEach(consider);
+          ticks.forEach((t) => consider({ kind: 'page', y: t.y, top: t.y + GAP / 2, page: t.page, el: t.el }));
+          return bestD <= NEAR ? best : null;
+        }
+
+        function esc(s) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }
+        function labelFor(m) {
+          const pg = `<span class="pg">p. ${m.page}</span>`;
+          if (m.kind === 'page') return `<span class="t">Page ${m.page}</span><span class="pg">of ${pageCount}</span>`;
+          if (m.kind === 'fig') return `<span class="k">Figure ${m.n}</span><span class="t">${esc(m.text)}</span>${pg}`;
+          if (m.kind === 'tab') return `<span class="k">Table ${m.n}</span><span class="t">${esc(m.text)}</span>${pg}`;
+          if (m.kind === 'caret') return `<span class="k">Caret</span><span class="t">${esc(m.text)}</span>${pg}`;
+          return `<span class="t ${m.kind}">${esc(m.text)}</span>${pg}`;
+        }
+
+        function hover(py) {
+          const m = nearest(py);
+          if (hot && hot !== m && hot.el) hot.el.classList.remove('is-hot');
+          hot = m;
+          const r = track.getBoundingClientRect();
+          if (m) {
+            if (m.kind !== 'page') m.el.classList.add('is-hot');
+            label.innerHTML = labelFor(m);
+            label.style.top = r.top + toRail(m.y) + 'px';
+            hoverEl.classList.remove('on');
+          } else {
+            const y = Math.max(0, Math.min(trackH(), py));
+            const p = pageOf((y / trackH()) * docH);
+            label.innerHTML = `<span class="t">Page ${p}</span><span class="pg">of ${pageCount}</span>`;
+            label.style.top = r.top + y + 'px';
+            hoverEl.style.top = y + 'px';
+            hoverEl.classList.add('on');
+          }
+          label.hidden = false;
+        }
+
+        function unhover() {
+          if (hot && hot.el) hot.el.classList.remove('is-hot');
+          hot = null;
+          label.hidden = true;
+          hoverEl.classList.remove('on');
+        }
+
+        // Jumps: a mark to its top (a heading a little under the panel's
+        // top edge); the bare track to centre the place clicked.
+        function jumpTo(layoutY, smooth = true) {
+          const top = Math.max(0, Math.min(paperEl.offsetHeight - scrollEl.clientHeight, layoutY));
+          scrollEl.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
+        }
+        function jumpMark(m) {
+          if (m.kind === 'page') jumpTo(m.top * scale - SCROLL_PAD / 2);
+          else if (m.kind === 'caret') jumpTo(m.y * scale - scrollEl.clientHeight / 2);
+          else jumpTo(m.top * scale - SCROLL_PAD);
+        }
+        function jumpPoint(py, smooth) {
+          const f = Math.max(0, Math.min(1, py / trackH()));
+          jumpTo(f * paperEl.offsetHeight - scrollEl.clientHeight / 2, smooth);
+        }
+
+        const localY = (e) => e.clientY - track.getBoundingClientRect().top;
+
+        root.addEventListener('pointerenter', () => { hovering = true; show(); root.classList.add('is-wide'); });
+        root.addEventListener('pointerleave', () => {
+          hovering = false;
+          if (drag) return;
+          root.classList.remove('is-wide');
+          unhover();
+          rest();
+        });
+        root.addEventListener('pointermove', (e) => {
+          const py = localY(e);
+          if (drag) {
+            // Dragging the thumb keeps the grab point under the pointer;
+            // dragging from the bare track scrubs with the view centred.
+            if (drag.offset != null) scrollEl.scrollTop = ((py - drag.offset) / trackH()) * paperEl.offsetHeight;
+            else jumpPoint(py, false);
+            return;
+          }
+          hover(py);
+        });
+        root.addEventListener('pointerdown', (e) => {
+          if (e.button !== 0) return;
+          const py = localY(e);
+          const m = nearest(py);
+          if (m) { jumpMark(m); return; }
+          root.setPointerCapture(e.pointerId);
+          const tTop = parseFloat(thumb.style.top), tH = parseFloat(thumb.style.height);
+          if (py >= tTop && py <= tTop + tH) drag = { offset: py - tTop };
+          else { drag = { offset: null }; jumpPoint(py, true); }
+          unhover();
+        });
+        const endDrag = (e) => {
+          if (!drag) return;
+          drag = null;
+          if (!root.matches(':hover')) { hovering = false; root.classList.remove('is-wide'); rest(); }
+        };
+        root.addEventListener('pointerup', endDrag);
+        root.addEventListener('pointercancel', endDrag);
+
+        scrollEl.addEventListener('scroll', () => {
+          show();
+          if (!hovering) rest();
+          cancelAnimationFrame(frame);
+          frame = requestAnimationFrame(view);
+        }, { passive: true });
+
+        new ResizeObserver(place).observe(track);
+
+        return { feed, place, view, show, rest, root, marks: () => marks, toRail };
+      })();
+
+      /* The marks a settled pass would hand the rail, read here off the
+         laid-out pages at scale 1 (layout px from the stack's top). */
+      function railLayout() {
+        const stackTop = stackEl.getBoundingClientRect().top;
+        const yOf = (el) => {
+          const r = el.getBoundingClientRect();
+          return { top: (r.top - stackTop) / scale, mid: (r.top + r.height / 2 - stackTop) / scale };
+        };
+        const marks = [];
+        let fig = 0, tab = 0;
+        pagesEl.querySelectorAll('h1, h2, h3, figure, .tab-wrap, [data-caret]').forEach((el) => {
+          const y = yOf(el);
+          const page = Math.floor(y.top / (PAGE_H + GAP)) + 1;
+          if (el.matches('h1')) marks.push({ kind: 'title', y: y.mid, top: 0, page, text: el.textContent });
+          else if (el.matches('h2')) marks.push({ kind: 'h2', y: y.mid, top: y.top, page, text: el.textContent });
+          else if (el.matches('h3')) marks.push({ kind: 'h3', y: y.mid, top: y.top, page, text: el.textContent });
+          else if (el.matches('figure')) marks.push({ kind: 'fig', n: ++fig, y: y.mid, top: y.top, page, text: el.dataset.label });
+          else if (el.matches('.tab-wrap')) marks.push({ kind: 'tab', n: ++tab, y: y.mid, top: y.top, page, text: el.dataset.label });
+          else {
+            const line = el.closest('p').textContent.trim().split(/\s+/).slice(-6).join(' ');
+            marks.push({ kind: 'caret', y: y.mid, top: y.top, page, text: '… ' + line });
+          }
+        });
+        const breaks = [];
+        for (let i = 1; i < pageCount; i++) breaks.push(i * (PAGE_H + GAP) - GAP / 2);
+        return { height: pageCount * PAGE_H + (pageCount - 1) * GAP, breaks, marks };
+      }
+
+      async function start() {
+        await document.fonts.ready;
+        paginate();
+        fitPaper();
+        rail.feed(railLayout());
+        new ResizeObserver(() => { fitPaper(); rail.view(); }).observe(scrollEl);
+        // A document opening shows the strip for a beat, as a scroll does,
+        // so it is known to be there; then the paper is bare.
+        rail.show();
+        rail.rest(1500);
+        document.documentElement.dataset.ready = '1';
+      }
+      start();
+    </script>
+  </body>
+</html>

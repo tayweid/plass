@@ -1,8 +1,9 @@
 // Figures: node view, insertion (toolbar / paste / drop), caption behavior.
 
-import { Plugin, NodeSelection, TextSelection, type Command } from 'prosemirror-state';
+import { Plugin, PluginKey, NodeSelection, TextSelection, type Command, type EditorState } from 'prosemirror-state';
 import type { EditorView, NodeView, ViewMutationRecord } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
+import { closeHistory } from 'prosemirror-history';
 import { schema } from './schema';
 import { scheduleTypeset, invalidatePageLayout } from './typeset-plugin';
 import type { FileManager } from './file-manager';
@@ -17,6 +18,7 @@ import {
 } from './remote-images';
 import { COMPILER_LIMITS } from './typst-worker-protocol';
 import { resetCompilerCircuit } from './compiler-circuit';
+import './image-controls.css';
 
 // ---------- project assets (relative paths) ----------
 
@@ -139,11 +141,17 @@ async function assetUrl(path: string): Promise<string | null> {
 
 const ASSET_EVENT = 'typeset-assets-changed';
 
-function dataUrlBytes(src: string): { blob: Blob; ext: string } | null {
+/** The bytes of a data-URL image exactly as embedded (an SVG is NOT
+ *  sanitized: what is written to disk must be the writer's own art), or null
+ *  when it is not a PNG, JPEG, GIF or SVG. Throws past the 20 MiB limit. */
+export function dataUrlBytes(src: string): { blob: Blob; ext: string } | null {
   const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[^;,]*)*),(.*)$/is.exec(src);
   if (!m) return null;
-  const ext = m[1] === 'svg+xml' ? 'svg' : m[1] === 'jpeg' ? 'jpg' : m[1];
-  const mime = `image/${m[1]}`;
+  // A MIME type is case-insensitive; the extension a file is named with,
+  // and that Finder and assetUrl go by, is not (`image/SVG+XML` is .svg).
+  const type = m[1].toLowerCase();
+  const ext = type === 'svg+xml' ? 'svg' : type === 'jpeg' ? 'jpg' : type;
+  const mime = `image/${type}`;
   const payload = m[3];
   if (/(?:^|;)base64(?:;|$)/i.test(m[2])) {
     if (payload.length > Math.ceil(COMPILER_LIMITS.assetBytes / 3) * 4 + 4) {
@@ -265,7 +273,7 @@ export function startAssetWatch(view: EditorView): () => void {
     }
     const paths = new Set<string>();
     view.state.doc.descendants((n) => {
-      if (n.type.name === 'figure' && isPathSrc(n.attrs.src as string)) paths.add(n.attrs.src as string);
+      if (isImageNode(n) && isPathSrc(n.attrs.src as string)) paths.add(n.attrs.src as string);
       return true;
     });
     let changed = false;
@@ -408,7 +416,14 @@ export class FigureView implements NodeView {
     this.contentDOM = document.createElement('figcaption');
     this.dom.append(this.img, this.chip, this.pathChip, this.contentDOM);
     this.unsubscribeRemote = onRemoteImagePermissionChange(this.onRemotePermission);
+    this.updateSize();
     this.setSrc(node.attrs.src as string);
+  }
+
+  private updateSize() {
+    const width = this.node.attrs.widthPct;
+    this.img.style.width = typeof width === 'number' ? `${width}%` : '';
+    this.img.style.maxHeight = typeof width === 'number' ? 'none' : '';
   }
 
   private updatePathChip() {
@@ -433,11 +448,11 @@ export class FigureView implements NodeView {
       this.pathChip.textContent = src;
       this.pathChip.title = 'The image file this figure references — click to change';
     } else {
-      this.pathChip.textContent = 'embedded';
+      this.pathChip.textContent = 'fixed';
       this.pathChip.classList.add('embedded');
       this.pathChip.title = fmRef?.inFolder
-        ? 'Stored inside the document — click to reference a project file instead'
-        : 'Stored inside the document — open a project folder (Project button) to use file paths';
+        ? 'Fixed inside the document — click to reference a project file instead'
+        : 'Fixed inside the document — open a project folder (Project button) to use file paths';
     }
   }
 
@@ -658,6 +673,7 @@ export class FigureView implements NodeView {
     if (node.type !== this.node.type) return false;
     const sourceChanged = node.attrs.src !== this.node.attrs.src;
     this.node = node;
+    this.updateSize();
     if (sourceChanged) this.setSrc(node.attrs.src as string);
     this.updateChip();
     this.updatePathChip();
@@ -739,6 +755,9 @@ export class ImageView implements NodeView {
   private updateAttributes() {
     this.img.alt = (this.node.attrs.alt as string | null) ?? '';
     this.img.title = (this.node.attrs.title as string | null) ?? '';
+    const width = this.node.attrs.widthPct;
+    this.dom.style.width = typeof width === 'number' ? `${width}%` : '';
+    this.img.style.width = typeof width === 'number' ? '100%' : '';
   }
 
   private showMessage(message: string, actionable = false) {
@@ -887,43 +906,80 @@ function insertFigureNode(view: EditorView, src: string, name: string) {
 }
 
 /** A collision-safe figures/ path for a new project image. */
-function projectImagePath(name: string) {
+export function projectImagePath(name: string) {
   const clean = name.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^-+/, '') || 'image.png';
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+  const stamp = `${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}-${crypto.randomUUID().slice(0, 8)}`;
   const dot = clean.lastIndexOf('.');
   return dot > 0
     ? `figures/${clean.slice(0, dot)}-${stamp}${clean.slice(dot)}`
     : `figures/${clean}-${stamp}`;
 }
 
-export function insertFigureFromFile(view: EditorView, file: File) {
+/** Image files live in the project folder; the document references them
+ *  by path so a regenerated plot shows up on its own. Without a folder
+ *  there is nowhere to import to, so one is asked for first: a saved
+ *  document attaches the folder it sits in, an unsaved one gets a home.
+ *  The pickers need a click, which a drop or a file input's change event
+ *  no longer carries — `needs-gesture` lets the caller finish from a toast. */
+type FolderStatus = 'ok' | 'declined' | 'needs-gesture' | 'unsupported';
+
+async function ensureProjectFolder(): Promise<FolderStatus> {
+  if (!fmRef || typeof window.showDirectoryPicker !== 'function') return 'unsupported';
+  if (fmRef.inFolder) return 'ok';
+  if (!navigator.userActivation?.isActive) return 'needs-gesture';
+  const ok = fmRef.saved ? await fmRef.attachFolder() : (await fmRef.openFolder('save')) !== null;
+  if (!ok || !fmRef.inFolder) return 'declined';
+  refreshAssets();
+  return 'ok';
+}
+
+/** Files waiting for a project folder (a drop or a file input arrives
+ *  without the click the folder picker needs). */
+const pendingImports: File[] = [];
+
+function deferImport(view: EditorView, file: File) {
+  pendingImports.push(file);
+  const what = pendingImports.length === 1 ? file.name : `${pendingImports.length} images`;
+  fmRef?.notifyAction(`Choose a project folder to import ${what}`, {
+    label: 'Choose folder',
+    run: () => void (async () => {
+      const status = await ensureProjectFolder();
+      if (status === 'declined') {
+        pendingImports.length = 0;
+        fmRef?.notify('Images not inserted — Plass imports images into a project folder');
+        return;
+      }
+      if (status !== 'ok') return;
+      for (const pending of pendingImports.splice(0)) await insertFigureFromFile(view, pending);
+    })(),
+  });
+}
+
+/** Insert one image file as a figure, importing it into figures/ first.
+ *  Callers with several files await each in turn: one folder question. */
+export async function insertFigureFromFile(view: EditorView, file: File): Promise<void> {
   if (file.size > COMPILER_LIMITS.assetBytes) {
     fmRef?.notify(`${file.name} is larger than Plass's 20 MiB image limit`);
     return;
   }
-  // Folder mode: the file on disk is the source of truth from the first
-  // moment — write it into figures/ and reference it by relative path.
-  if (fmRef?.inFolder) {
-    const path = projectImagePath(file.name);
-    void fmRef.writeAsset(path, file).then((ok) => {
-      if (ok) insertFigureNode(view, path, file.name);
-      else fmRef?.notify('Could not write the image into the project folder');
-    });
+  const status = await ensureProjectFolder();
+  if (status === 'needs-gesture') {
+    deferImport(view, file);
     return;
   }
-  const reader = new FileReader();
-  reader.onload = () => {
-    insertFigureNode(view, String(reader.result), file.name);
-    // Nudge toward the file-based workflow (the embedded copy is frozen at
-    // paste time; a project keeps it a living file).
-    if (fmRef && typeof window.showDirectoryPicker === 'function') {
-      fmRef.notifyAction('Image embedded in the document', {
-        label: 'Save as project',
-        run: () => void fmRef?.openFolder('save'),
-      });
-    }
-  };
-  reader.readAsDataURL(file);
+  if (status === 'declined') {
+    fmRef?.notify(`${file.name} was not inserted — Plass imports images into a project folder`);
+    return;
+  }
+  if (status === 'unsupported' || !fmRef) {
+    // No File System Access API (Safari, Firefox): the bytes have nowhere
+    // to live but the document itself.
+    insertFigureNode(view, await fileDataUrl(file), file.name);
+    return;
+  }
+  const path = projectImagePath(file.name);
+  if (await fmRef.writeAsset(path, file)) insertFigureNode(view, path, file.name);
+  else fmRef.notify('Could not write the image into the project folder');
 }
 
 export function pickAndInsertFigure(view: EditorView) {
@@ -944,7 +1000,7 @@ export function pickAndInsertFigure(view: EditorView) {
         if (rel) {
           insertFigureNode(view, rel, handle.name);
         } else {
-          insertFigureFromFile(view, file);
+          await insertFigureFromFile(view, file);
         }
       } catch (e) {
         if ((e as DOMException)?.name !== 'AbortError') console.warn(e);
@@ -957,19 +1013,374 @@ export function pickAndInsertFigure(view: EditorView) {
   input.accept = 'image/*';
   input.addEventListener('change', () => {
     const file = input.files?.[0];
-    if (file) insertFigureFromFile(view, file);
+    if (file) void insertFigureFromFile(view, file);
   });
   input.click();
 }
 
+// ---------- shared image controls ----------
+
+function isImageNode(node: PMNode | null): node is PMNode {
+  return !!node && (node.type === schema.nodes.image || node.type === schema.nodes.figure);
+}
+
+function selectedImage(state: EditorState): { pos: number; node: PMNode } | null {
+  const selection = state.selection;
+  if (selection instanceof NodeSelection && isImageNode(selection.node)) {
+    return { pos: selection.from, node: selection.node };
+  }
+  // A caption belongs to the same image. Keep the controls available while
+  // editing it, without turning the caption selection into a node selection.
+  for (let depth = selection.$from.depth; depth > 0; depth--) {
+    const node = selection.$from.node(depth);
+    if (node.type === schema.nodes.figure) return { pos: selection.$from.before(depth), node };
+  }
+  return null;
+}
+
+type ImageTarget = { id: object; pos: number; src: string; type: string };
+type TargetAction = { add: ImageTarget } | { remove: object };
+const imageControlsKey = new PluginKey<ImageTarget[]>('image-controls');
+
+/** Track the intended node through edits while a picker or disk write is
+ * open. A changed selection is harmless; replacing/deleting the source node
+ * cancels the action rather than applying it to an unrelated image. */
+function captureImage(view: EditorView): object | null {
+  const selected = selectedImage(view.state);
+  if (!selected) return null;
+  const id = {};
+  view.dispatch(view.state.tr.setMeta(imageControlsKey, { add: {
+    id, pos: selected.pos, src: selected.node.attrs.src, type: selected.node.type.name,
+  } } satisfies TargetAction));
+  return id;
+}
+
+function imageTarget(view: EditorView, id: object): { pos: number; node: PMNode } | null {
+  if (view.isDestroyed) return null;
+  const target = imageControlsKey.getState(view.state)?.find((item) => item.id === id);
+  if (!target) return null;
+  const node = view.state.doc.nodeAt(target.pos);
+  return isImageNode(node) ? { pos: target.pos, node } : null;
+}
+
+function releaseImage(view: EditorView, id: object) {
+  if (!view.isDestroyed) view.dispatch(view.state.tr.setMeta(imageControlsKey, { remove: id } satisfies TargetAction));
+}
+
+function setImageAttrs(view: EditorView, target: { pos: number; node: PMNode }, attrs: Record<string, unknown>) {
+  const selected = view.state.selection instanceof NodeSelection && view.state.selection.from === target.pos;
+  const tr = closeHistory(view.state.tr).setNodeMarkup(target.pos, undefined, attrs);
+  // Replacing an inline atom's markup maps its NodeSelection to a text
+  // cursor. Keep it selected so the same controls remain available.
+  if (selected) tr.setSelection(NodeSelection.create(tr.doc, target.pos));
+  view.dispatch(tr);
+}
+
+function chooseImageFile(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.addEventListener('change', () => resolve(input.files?.[0] ?? null), { once: true });
+    input.addEventListener('cancel', () => resolve(null), { once: true });
+    input.click();
+  });
+}
+
+function fileDataUrl(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read image'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function replaceSelectedImage(view: EditorView) {
+  const id = captureImage(view);
+  if (!id) return;
+  const manager = fmRef;
+  const directory = manager?.dir;
+  let deferred = false;
+  try {
+    let file: File;
+    let src: string | null = null;
+    if (directory && typeof window.showOpenFilePicker === 'function') {
+      const [handle] = await window.showOpenFilePicker({
+        types: [{ description: 'Images', accept: { 'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.svg'] } }],
+      });
+      if (!handle) return;
+      file = await handle.getFile();
+      src = await manager!.relativize(handle);
+    } else {
+      const selected = await chooseImageFile();
+      if (!selected) return;
+      file = selected;
+    }
+    if (file.size > COMPILER_LIMITS.assetBytes) {
+      manager?.notify(`${file.name} is larger than Plass's 20 MiB image limit`);
+      return;
+    }
+    if (!imageTarget(view, id) || fmRef !== manager || manager?.dir !== directory) return;
+    if (src) {
+      const target = imageTarget(view, id);
+      if (target) applyReplacement(view, target, src, file.name);
+    } else {
+      deferred = await importReplacement(view, id, file);
+    }
+  } catch (error) {
+    if ((error as DOMException)?.name !== 'AbortError') manager?.notify(error instanceof Error ? error.message : String(error));
+  } finally {
+    if (!deferred) releaseImage(view, id);
+  }
+}
+
+/** Retain kind, caption, marks, dimensions and all descriptive attrs. A
+ *  replacement only changes the bytes/path and the figure's file name. */
+function applyReplacement(view: EditorView, target: { pos: number; node: PMNode }, src: string, name: string) {
+  const attrs: Record<string, unknown> = { ...target.node.attrs, src };
+  if (target.node.type === schema.nodes.figure) attrs.name = name;
+  setImageAttrs(view, target, attrs);
+  view.focus();
+}
+
+/** Write a picked file into the project (asking for a folder first when
+ *  the document has none) and point the captured image at it. True when
+ *  the folder picker must wait for a click: the target stays captured and
+ *  the toast's action finishes the import. */
+async function importReplacement(view: EditorView, id: object, file: File): Promise<boolean> {
+  if (!imageTarget(view, id)) return false;
+  const status = await ensureProjectFolder();
+  if (status === 'needs-gesture') {
+    fmRef?.notifyAction(`Choose a project folder to import ${file.name}`, {
+      label: 'Choose folder',
+      run: () => void (async () => {
+        let deferred = false;
+        try {
+          deferred = await importReplacement(view, id, file);
+        } catch (error) {
+          fmRef?.notify(error instanceof Error ? error.message : String(error));
+        } finally {
+          if (!deferred) releaseImage(view, id);
+        }
+      })(),
+    });
+    return true;
+  }
+  if (status === 'declined') {
+    fmRef?.notify(`${file.name} was not imported — Plass keeps images in a project folder`);
+    return false;
+  }
+  const target = imageTarget(view, id);
+  if (!target) return false;
+  if (status === 'unsupported' || !fmRef) {
+    applyReplacement(view, target, await fileDataUrl(file), file.name);
+    return false;
+  }
+  const src = projectImagePath(file.name);
+  if (!(await fmRef.writeAsset(src, file))) throw new Error('Could not write the image into the project folder');
+  const current = imageTarget(view, id);
+  if (current) applyReplacement(view, current, src, file.name);
+  return false;
+}
+
+/** Fix the selected image: copy the referenced file's bytes into the
+ *  document, so the figure stops following the file. The reverse of Save
+ *  to project. */
+async function fixSelectedImage(view: EditorView) {
+  const id = captureImage(view);
+  const manager = fmRef;
+  if (!id || !manager) {
+    if (id) releaseImage(view, id);
+    return;
+  }
+  try {
+    const target = imageTarget(view, id);
+    if (!target) return;
+    const src = target.node.attrs.src as string;
+    if (!isPathSrc(src)) return;
+    const asset = await manager.readAsset(src, COMPILER_LIMITS.assetBytes);
+    if (!asset) throw new Error(`No file at ${src} to fix`);
+    const dataUrl = await fileDataUrl(new Blob([asset.data.slice().buffer], { type: imageMime(src, asset.type) }));
+    if (!dataUrlBytes(dataUrl)) throw new Error(`${src} is not an image Plass can fix (PNG, JPEG, GIF or SVG)`);
+    const current = imageTarget(view, id);
+    if (!current) return;
+    setImageAttrs(view, current, { ...current.node.attrs, src: dataUrl });
+    manager.notify(`Image fixed in the document — it no longer follows ${src}`);
+    view.focus();
+  } catch (error) {
+    manager.notify(error instanceof Error ? error.message : String(error));
+  } finally {
+    releaseImage(view, id);
+  }
+}
+
+/** A project file's image type; the browser's guess from the extension
+ *  when it has one, the extension itself otherwise. */
+function imageMime(path: string, type: string): string {
+  if (/^image\//i.test(type)) return type;
+  const ext = path.toLowerCase().replace(/^.*\./, '');
+  return ext === 'svg' ? 'image/svg+xml' : ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+}
+
+/** Write a fixed (in-document) image out to figures/ and follow the file
+ *  from then on. The reverse of Fix image. */
+async function saveSelectedImage(view: EditorView) {
+  const id = captureImage(view);
+  const manager = fmRef;
+  if (!id || !manager) {
+    if (id) releaseImage(view, id);
+    return;
+  }
+  try {
+    if ((await ensureProjectFolder()) !== 'ok' || fmRef !== manager) return;
+    const target = imageTarget(view, id);
+    if (!target) return;
+    const decoded = dataUrlBytes(target.node.attrs.src);
+    if (!decoded) return;
+    // Use the original bytes, as saved in the document. Rendering still
+    // goes through sanitizeSvgImage; saving must not silently rewrite art.
+    const name = String(target.node.attrs.name || target.node.attrs.alt || 'image').replace(/\.[^.]+$/, '');
+    const path = projectImagePath(`${name}.${decoded.ext}`);
+    const directory = manager.dir;
+    if (!(await manager.writeAsset(path, decoded.blob))) throw new Error('Could not save the image into the project folder');
+    const current = imageTarget(view, id);
+    if (!current || fmRef !== manager || manager.dir !== directory) return;
+    setImageAttrs(view, current, { ...current.node.attrs, src: path });
+    manager.notify(`Saved ${path} — the figure follows this file now`);
+    refreshAssets();
+    view.focus();
+  } catch (error) {
+    if ((error as DOMException)?.name !== 'AbortError') manager.notify(error instanceof Error ? error.message : String(error));
+  } finally {
+    releaseImage(view, id);
+  }
+}
+
+class ImageControls {
+  private root = document.createElement('div');
+  private width: HTMLInputElement;
+  private fit: HTMLButtonElement;
+  private save: HTMLButtonElement;
+  private fix: HTMLButtonElement;
+  private source = document.createElement('span');
+
+  constructor(private view: EditorView) {
+    this.root.className = 'image-toolbar';
+    this.root.setAttribute('role', 'toolbar');
+    this.root.setAttribute('aria-label', 'Image controls');
+    const actions = document.createElement('div');
+    actions.className = 'image-toolbar-actions';
+    this.root.append(actions);
+    const button = (label: string, run: () => void) => {
+      const element = document.createElement('button');
+      element.type = 'button';
+      element.textContent = label;
+      element.addEventListener('mousedown', (event) => event.preventDefault());
+      element.addEventListener('click', run);
+      actions.append(element);
+      return element;
+    };
+    button('Replace image', () => void replaceSelectedImage(this.view));
+    this.fit = button('Fit to cell', () => this.setWidth(100));
+    const label = document.createElement('label');
+    label.textContent = 'Width (%)';
+    this.width = document.createElement('input');
+    this.width.type = 'number';
+    this.width.min = '25';
+    this.width.max = '100';
+    this.width.step = '1';
+    this.width.placeholder = 'Auto';
+    this.width.title = 'Percentage of the cell or text area (25–100)';
+    this.width.addEventListener('change', () => {
+      const value = this.width.value === '' ? null : Number(this.width.value);
+      if (value === null || (Number.isFinite(value) && value >= 25 && value <= 100)) this.setWidth(value);
+      else this.resetWidthInput();
+    });
+    this.width.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); this.width.blur(); this.view.focus(); }
+      if (event.key === 'Escape') { event.preventDefault(); this.resetWidthInput(); this.view.focus(); }
+    });
+    label.append(this.width);
+    actions.append(label);
+    button('Auto size', () => this.setWidth(null)).title = 'Use the image’s automatic size';
+    this.fix = button('Fix image', () => void fixSelectedImage(this.view));
+    this.fix.title = 'Store the image inside the document so it stops following the file';
+    this.save = button('Save to project', () => void saveSelectedImage(this.view));
+    this.save.title = 'Write the image out to figures/ and follow that file';
+    this.source.className = 'image-toolbar-source';
+    this.root.append(this.source);
+    document.body.append(this.root);
+    this.update();
+  }
+
+  private setWidth(widthPct: number | null) {
+    const selected = selectedImage(this.view.state);
+    if (selected && selected.node.attrs.widthPct !== widthPct) {
+      setImageAttrs(this.view, selected, { ...selected.node.attrs, widthPct });
+    }
+  }
+
+  private resetWidthInput() {
+    const width = selectedImage(this.view.state)?.node.attrs.widthPct;
+    this.width.value = width == null ? '' : String(width);
+  }
+
+  update() {
+    const selected = selectedImage(this.view.state);
+    this.root.hidden = !selected;
+    if (!selected) return;
+    const src = selected.node.attrs.src as string;
+    if (document.activeElement !== this.width) this.resetWidthInput();
+    let inCell = false;
+    const $pos = this.view.state.doc.resolve(selected.pos);
+    for (let depth = $pos.depth; depth > 0; depth--) {
+      if (['grid_cell', 'table_cell', 'table_header'].includes($pos.node(depth).type.name)) inCell = true;
+    }
+    this.fit.textContent = inCell ? 'Fit to cell' : 'Fit to text width';
+    const fixed = /^data:image\/(?:png|jpe?g|gif|svg\+xml)[;,]/i.test(src);
+    this.save.hidden = !fixed;
+    this.fix.hidden = !(isPathSrc(src) && fmRef?.inFolder);
+    this.source.textContent = isPathSrc(src)
+      ? `${src} · File edits refresh automatically`
+      : fixed ? 'Fixed in the document · Save to project to follow a file again'
+        : /^data:/i.test(src) ? 'Embedded image' : 'Image';
+    this.source.title = this.source.textContent;
+  }
+
+  destroy() { this.root.remove(); }
+}
+
 /** Paste or drop image files to create figures. */
 export function figuresPlugin() {
-  return new Plugin({
+  return new Plugin<ImageTarget[]>({
+    key: imageControlsKey,
+    state: {
+      init: () => [],
+      apply(tr, targets) {
+        const action = tr.getMeta(imageControlsKey) as TargetAction | undefined;
+        const mapped: ImageTarget[] = [];
+        for (const target of targets) {
+          if (action && 'remove' in action && action.remove === target.id) continue;
+          const position = tr.mapping.mapResult(target.pos, 1);
+          const node = tr.doc.nodeAt(position.pos);
+          if (!position.deleted && node?.type.name === target.type && node.attrs.src === target.src) {
+            mapped.push({ ...target, pos: position.pos });
+          }
+        }
+        if (action && 'add' in action) mapped.push(action.add);
+        return mapped;
+      },
+    },
+    view(view) {
+      const controls = new ImageControls(view);
+      return { update: () => controls.update(), destroy: () => controls.destroy() };
+    },
     props: {
       handlePaste(view, event) {
         const files = [...(event.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
         if (!files.length) return false;
-        for (const file of files) insertFigureFromFile(view, file);
+        void insertFigureFiles(view, files);
         return true;
       },
       handleDrop(view, event) {
@@ -979,9 +1390,13 @@ export function figuresPlugin() {
         if (at) {
           view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(at.pos))));
         }
-        for (const file of files) insertFigureFromFile(view, file);
+        void insertFigureFiles(view, files);
         return true;
       },
     },
   });
+}
+
+async function insertFigureFiles(view: EditorView, files: File[]) {
+  for (const file of files) await insertFigureFromFile(view, file);
 }

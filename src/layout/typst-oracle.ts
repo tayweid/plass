@@ -1,24 +1,14 @@
-// The Typst line-break oracle (spec M0): the editor's structural answer to
-// "why aren't the editor and the PDF pixel-identical?" — because two
-// independent Knuth-Plass implementations may choose different optima. This
-// module removes the second decider: paragraphs are compiled by the real
-// Typst (WASM, in-app) and its exact break decisions are imposed on the DOM.
-//
-// Extraction channel: the compiled SVG's invisible text-selection layer
-// (.tsel spans) — one per rendered text run, carrying the line's actual
-// text. The compiled document is byte-identical to what the PDF pipeline
-// sees (no probes, no instrumentation), so the breaks are guaranteed
-// faithful; an earlier probe-injection design perturbed knife-edge breaks
-// through sub-pixel item-boundary effects. Line texts are matched back to
-// character offsets word by word; hyphenation points arrive textually
-// (the line ends with a word prefix).
-//
-// The JS Knuth-Plass remains the instant first pass and the fallback for
-// content the matcher can't align.
+// The paragraph matcher: how a compiled Typst document's text layer (the
+// SVG's invisible .tsel runs, one per rendered text run) is read back as
+// per-paragraph line breaks. buildSpec turns a ProseMirror block into the
+// token stream Typst prints; matchParagraph walks that stream against the
+// extracted lines and records every line boundary as a break. Used by the
+// port audit (page-oracle.ts's auditSvg → src/layout/port-audit.ts), never
+// by the editor while it lays out: Plass has one renderer, and this is how
+// it is measured against Typst.
 
 import type { Node as PMNode } from 'prosemirror-model';
-import { escapeTyp, parityRules, textSetLine } from '../typ-serializer';
-import type { DocSettings } from '../settings';
+import { escapeTyp } from '../typ-serializer';
 import type { ForcedBreak } from './paragraph';
 import { parseTypstSvg } from '../safe-svg';
 
@@ -47,6 +37,11 @@ export interface ResolvedAtom {
   markup: string;
   /** Rendered text as it appears in the selection layer, when known. */
   text?: string;
+  /** True when Typst always glues this atom to the preceding token with no
+   * gap in the rendered/extracted text, regardless of whether the document
+   * has a real space before it (a footnote marker: Typst drops a source
+   * space immediately ahead of the superscript rather than rendering it). */
+  glueLeft?: boolean;
 }
 
 export interface AtomResolver {
@@ -127,12 +122,17 @@ export function buildSpec(node: PMNode, resolveAtom: AtomResolver): ParagraphSpe
       }
       if (child.type.name === 'math_inline') hasMath = true;
       src += resolved.markup;
+      // A real document space just consumed by take() still separates this
+      // atom from the next token — but a glueLeft atom (a footnote marker)
+      // renders glued to whatever precedes it no matter what the source
+      // held, so the predicted stream must say so too.
+      const hadSpace = take();
       tokens.push({
         kind: 'atom',
         start: offset,
         end: offset + child.nodeSize,
         text: resolved.text,
-        spaceBefore: take(),
+        spaceBefore: resolved.glueLeft ? false : hadSpace,
       });
       key += `⟦${resolved.markup}⟧`;
     }
@@ -152,170 +152,7 @@ export interface OracleEntry {
 /** What context a spec compiles in (affects wrapping + painted prefixes). */
 export type SpecKind = { kind: 'body' } | { kind: 'caption'; figNo: number } | { kind: 'footnote' };
 
-interface Queued {
-  spec: ParagraphSpec;
-  widthPx: number;
-  skind: SpecKind;
-  /** Body paragraph carrying the classic first-line indent. */
-  indented: boolean;
-}
-
-const MAX_RESULTS = 800;
-/** Hyphen-like characters Typst may append to a hyphenated line. */
 const HYPHENS = /[-‐‑\u00ad]+$/;
-
-export class TypstOracle {
-  results = new Map<string, OracleEntry>();
-  queue = new Map<string, Queued>();
-  private timer = 0;
-  inflight = false;
-  disposed = false;
-  private settings: DocSettings | null = null;
-  /** Invalidates completions that were already compiling when clear() or
-   * destroy() was called. The underlying compiler task cannot be cancelled,
-   * so publication has to be guarded when it returns. */
-  private generation = 0;
-
-  constructor(
-    private onResults: () => void,
-    private fontFallback: string[],
-    private compileSvg: (source: string) => Promise<string | null> = async (source) => {
-      const { compileSvg } = await import('../pdf');
-      return compileSvg(source);
-    },
-  ) {}
-
-  get(key: string): OracleEntry | undefined {
-    return this.results.get(key);
-  }
-
-  request(key: string, spec: ParagraphSpec, widthPx: number, settings: DocSettings, skind: SpecKind = { kind: 'body' }, indented = false) {
-    if (this.disposed || this.results.has(key) || this.queue.has(key)) return;
-    this.queue.set(key, { spec, widthPx, skind, indented });
-    this.settings = settings;
-    clearTimeout(this.timer);
-    this.timer = window.setTimeout(() => void this.flush(), 80);
-  }
-
-  clear() {
-    this.generation++;
-    clearTimeout(this.timer);
-    this.timer = 0;
-    this.results.clear();
-    this.queue.clear();
-    this.settings = null;
-  }
-
-  destroy() {
-    if (this.disposed) return;
-    this.disposed = true;
-    this.generation++;
-    clearTimeout(this.timer);
-    this.timer = 0;
-    this.queue.clear();
-    this.settings = null;
-  }
-
-  private async flush() {
-    if (this.disposed || this.inflight || !this.queue.size || !this.settings) return;
-    this.inflight = true;
-    const generation = this.generation;
-    // One compile per measure: indented paragraphs (quotes, list items) have
-    // narrower lines and must be broken at their own width. Footnote specs
-    // compile separately — their lines render at the page bottom, after all
-    // content lines, so mixing kinds would scramble the cursor order.
-    const first = [...this.queue.values()][0];
-    const isFn = first.skind.kind === 'footnote';
-    const width0 = first.widthPx;
-    const batch: Array<[string, Queued]> = [];
-    for (const [k, q] of this.queue) {
-      if (
-        Math.abs(q.widthPx - width0) < 0.5 &&
-        (q.skind.kind === 'footnote') === isFn &&
-        q.indented === first.indented
-      ) {
-        batch.push([k, q]);
-        this.queue.delete(k);
-      }
-    }
-    try {
-      const s = this.settings;
-      const widthPt = width0 * 0.75;
-      const hasMath = batch.some(([, q]) => q.spec.hasMath);
-      let src = `#set page(width: ${widthPt.toFixed(3)}pt, height: auto, margin: 0pt)\n`;
-      src += parityRules(s);
-      src += textSetLine(s, this.fontFallback);
-      if (hasMath) src += '#import "@preview/mitex:0.2.5": mi, mitex\n';
-      // Fragments batch several paragraphs into one compile, so "consecutive"
-      // is an artifact of batching, not of the document. Pin the indent
-      // explicitly: on (all lines) for indented specs, off for everything
-      // else — parityRules' document-level rule must not leak in.
-      src += first.indented && !isFn
-        ? '#set par(first-line-indent: (amount: 1.5em, all: true))\n'
-        : '#set par(first-line-indent: 0pt)\n';
-      src += '\n';
-      if (isFn) {
-        // One anchor paragraph carrying every marker; the bodies render in
-        // Typst's real footnote-entry context (its size, leading, indent).
-        src += '#h(0pt)' + batch.map(([, q]) => `#footnote[${q.spec.src}]`).join('') + '\n';
-      } else {
-        src += batch
-          .map(([, q]) =>
-            q.skind.kind === 'caption'
-              ? `#counter(figure.where(kind: image)).update(${q.skind.figNo - 1})\n` +
-                `#figure(rect(height: 0pt, stroke: none), kind: image, supplement: [Figure], caption: [${q.spec.src}])`
-              : q.spec.src,
-          )
-          .join('\n\n');
-      }
-
-      if (this.disposed || generation !== this.generation) return;
-      const svg = await this.compileSvg(src);
-      if (this.disposed || generation !== this.generation) return;
-
-      // Geometry thresholds at the SVG's 1px-per-pt scale.
-      const pitch = s.lineHeight * s.sizePt;
-      const paraGap = (s.lineHeight + 0.45) * s.sizePt; // between pitch and paragraph pitch
-      const lines = svg ? extractLines(svg, pitch / 2) : null;
-      let cursor = isFn ? 1 : 0; // footnotes: skip the anchor-markers line
-      for (const [key, q] of batch) {
-        if (!lines) {
-          this.results.set(key, { status: 'fail', reason: 'compile failed' });
-          continue;
-        }
-        const stripFirst =
-          q.skind.kind === 'caption'
-            ? /^Figure \d+:\s*/
-            : q.skind.kind === 'footnote'
-              ? /^\d+\s*/
-              : undefined;
-        const res = matchParagraph(q.spec, lines, cursor, stripFirst);
-        if (res.status === 'ok') {
-          cursor = res.next;
-          this.results.set(key, res.entry);
-        } else {
-          cursor = skipParagraph(lines, cursor, paraGap);
-          this.results.set(key, res.entry);
-        }
-      }
-      if (this.results.size > MAX_RESULTS) {
-        const keys = [...this.results.keys()];
-        for (let i = 0; i < keys.length / 2; i++) this.results.delete(keys[i]);
-      }
-    } catch (e) {
-      if (this.disposed || generation !== this.generation) return;
-      console.warn('typst oracle batch failed', e);
-      for (const [key] of batch) this.results.set(key, { status: 'fail', reason: String(e).slice(0, 120) });
-    } finally {
-      this.inflight = false;
-      if (!this.disposed && this.queue.size) {
-        clearTimeout(this.timer);
-        this.timer = window.setTimeout(() => void this.flush(), 20);
-      }
-    }
-    if (!this.disposed && generation === this.generation) this.onResults();
-  }
-}
 
 export interface SvgLine {
   text: string;
@@ -349,14 +186,6 @@ export function extractLines(svg: string, yTol: number): SvgLine[] {
   return lines;
 }
 
-/** Advance past the next paragraph-sized gap (fallback resync). */
-function skipParagraph(lines: SvgLine[], from: number, paraGap: number): number {
-  for (let i = from + 1; i < lines.length; i++) {
-    if (lines[i].y - lines[i - 1].y > paraGap) return i;
-  }
-  return lines.length;
-}
-
 /**
  * Match a paragraph's tokens against consecutive SVG lines; every line
  * boundary becomes a break. Tokens carry their exact rendered text and
@@ -386,12 +215,14 @@ export function matchParagraph(
     if (stripFirst && li === cursor) text = text.replace(stripFirst, '');
     const lineStartTi = ti;
     let brokeWithHyphen = false;
+    let consumedSuffix = false;
 
     while (text.length) {
       if (pendingSuffix) {
         if (text.startsWith(pendingSuffix)) {
           text = text.slice(pendingSuffix.length).trimStart();
           pendingSuffix = null;
+          consumedSuffix = true;
           continue;
         }
         return fail(`suffix mismatch: expected '${pendingSuffix}' got '${text.slice(0, 24)}'`);
@@ -461,10 +292,19 @@ export function matchParagraph(
     // Line consumed. If the paragraph continues, this boundary is a break.
     const more = ti < tokens.length || pendingSuffix !== null;
     if (more && !brokeWithHyphen) {
-      if (ti === lineStartTi) return fail('empty line inside paragraph');
+      // The previous line already advanced past a hyphenated word's
+      // token. A line containing only its remaining suffix still consumed
+      // real text — common when a wrapped table cell is followed by a
+      // vertically centered neighbor on another extracted line.
+      if (ti === lineStartTi && !consumedSuffix) return fail('empty line inside paragraph');
       const prev = tokens[ti - 1];
-      // Hard breaks cut by themselves — no forced break needed.
-      if (prev.kind !== 'hard') breaks.push({ at: prev.end, hyphen: false });
+      // Hard breaks cut by themselves — no forced break needed. The hard
+      // token is consumed at the start of the NEXT line's walk, so at this
+      // boundary it is the token ahead, not the one behind: a break
+      // recorded here would sit on the hard break and the partition would
+      // refuse the whole paragraph (compiled verification lost).
+      const next = tokens[ti];
+      if (prev.kind !== 'hard' && !(next && next.kind === 'hard')) breaks.push({ at: prev.end, hyphen: false });
     }
     li++;
     if (!more) break;

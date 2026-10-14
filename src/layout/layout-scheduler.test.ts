@@ -258,4 +258,59 @@ function harness() {
   assert.deepEqual(calls, { live: 0, settled: 0, invalidations: 0 });
 }
 
+
+// Suspension (SOURCE-VIEW.md, decision 6): pending passes are cancelled,
+// every request while asleep is dropped, resize is ignored (a hidden target
+// reads 0 and the reveal must not look like a resize), fonts still
+// invalidate, and resume runs exactly one settled pass.
+{
+  const { environment, widthTarget, calls, scheduler } = harness();
+  environment.flushFrames();
+  scheduler.scheduleLive();
+  scheduler.scheduleAfterEdit();
+  scheduler.suspend();
+  assert.equal(environment.timeouts.size, 0);
+  environment.flushMicrotasks();
+  assert.equal(calls.live, 0);
+  scheduler.scheduleLive();
+  scheduler.scheduleAfterEdit();
+  scheduler.scheduleSettled();
+  assert.equal(environment.microtasks.length, 0);
+  assert.equal(environment.timeouts.size, 0);
+  assert.equal(environment.frames.size, 0);
+  Object.defineProperty(widthTarget, 'clientWidth', { value: 0, configurable: true });
+  environment.resizeListener?.();
+  assert.equal(environment.frames.size, 0);
+  environment.emitLoadingDone();
+  assert.equal(calls.invalidations, 1);
+  assert.equal(environment.frames.size, 0);
+  Object.defineProperty(widthTarget, 'clientWidth', { value: 800, configurable: true });
+  scheduler.resume();
+  assert.equal(environment.frames.size, 1);
+  environment.resizeListener?.();
+  assert.equal(environment.frames.size, 1);
+  environment.flushFrames();
+  assert.deepEqual(calls, { live: 0, settled: 2, invalidations: 1 });
+  scheduler.resume();
+  assert.equal(environment.frames.size, 0);
+  scheduler.destroy();
+}
+
+// A settle frame already queued is cancelled by suspend, and a live microtask
+// already queued becomes a no-op.
+{
+  const { environment, calls, scheduler } = harness();
+  scheduler.scheduleLive();
+  assert.equal(environment.frames.size, 1);
+  assert.equal(environment.microtasks.length, 1);
+  scheduler.suspend();
+  assert.equal(environment.frames.size, 0);
+  environment.flushMicrotasks();
+  assert.equal(scheduler.isSuspended(), true);
+  assert.deepEqual(calls, { live: 0, settled: 0, invalidations: 0 });
+  scheduler.destroy();
+  scheduler.resume();
+  assert.equal(environment.frames.size, 0);
+}
+
 console.log('layout scheduler tests passed');

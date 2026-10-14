@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test } from './fixture';
 
 interface AuditLine {
   from: number;
@@ -20,6 +20,7 @@ interface AuditCase {
   fastPopulations: number;
   legacyPopulations: number;
   hardBreak: boolean;
+  legacyRepresentable: boolean;
 }
 
 declare global {
@@ -134,21 +135,26 @@ test('direct forced layout matches legacy output with fewer DOM measurements', a
     )
     .toBeGreaterThanOrEqual(9);
 
-  // Let the compiled oracle replace matching port answers; identical audit
-  // keys are overwritten rather than counted twice.
+  // Identical audit keys are overwritten rather than counted twice.
   await page.waitForTimeout(1_000);
   const report = await page.evaluate(() => window.__forcedLayoutAudit.stop());
   expect(report.cases.length).toBeGreaterThanOrEqual(9);
 
   for (const entry of report.cases) {
     if (!entry.fast && !entry.legacy) {
-      // A compiled-oracle answer whose breaks failed to partition this block
-      // (hard-break and dash paragraphs do this today): both engines reject
-      // it identically and the cached port layout stays in place, so there is
-      // nothing to compare. Only one engine rejecting would be a real bug.
+      // A break list neither translator can apply:
+      // both engines reject it identically and the cached port layout stays
+      // in place, so there is nothing to compare. Only one engine rejecting
+      // a representable break list would be a real bug.
       continue;
     }
     expect(entry.fast, `${entry.id} fast result`).not.toBeNull();
+    if (!entry.legacyRepresentable) {
+      // Glyphless punctuation splits (break before an em-dash, after a
+      // link's '/') exist only in the direct translator; the legacy
+      // partitioner has no item at those offsets and declines by design.
+      continue;
+    }
     expect(entry.legacy, `${entry.id} legacy result`).not.toBeNull();
     if (!entry.hardBreak) expect(entry.fast, entry.id).toEqual(entry.legacy);
     expect(entry.fastReads, `${entry.id} Range reads`).toBeLessThanOrEqual(entry.legacyReads);

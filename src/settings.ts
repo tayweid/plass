@@ -7,13 +7,18 @@
 import type { EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
-import { DEFAULT_FONT, cssFontStack, effectiveFont, selectableFonts } from './font-registry';
+import { DEFAULT_FONT, cssFontStack, effectiveFont, parityMetrics, selectableFonts, codeBlockMetricsEm, footnoteFrameInsetsEm, FN_LEADING_EM, FN_SCALE } from './font-registry';
+import { CITATION_STYLES, type CitationStyle } from './citation-styles';
+import { placeFlyout } from './flyout';
 
 export interface DocSettings {
   font: string;
   sizePt: number;
   lineHeight: number;
-  page: 'letter' | 'a4' | 'legal' | 'b5';
+  page: PaperName;
+  /** Custom paper size, inches (used when `page` is 'custom'). */
+  pageWidthIn: number;
+  pageHeightIn: number;
   landscape: boolean;
   marginTop: number;
   marginRight: number;
@@ -27,21 +32,49 @@ export interface DocSettings {
   pageNumShow: boolean;
   pageNumFormat: '1' | '— 1 —' | 'i' | '1 / 1';
   pageNumAlign: 'left' | 'center' | 'right';
+  /** Where the automatic page number goes: the footer (Typst's default)
+   *  or the header (`number-align: top + …`). A running header or footer
+   *  text replaces the number on its edge, as Typst's explicit content
+   *  does — write {page} into the text to keep it. */
+  pageNumPlace: 'bottom' | 'top';
   pageNumStart: number;
-  /** Running header text ('' = none). Use {page} for the page number. */
+  /** Running header text ('' = none). {page} is the page number in the
+   *  document's format, {section} the level-1 heading in force at the top
+   *  of the page (the last one on an earlier page, as Typst's
+   *  `query(...).before(here())` sees it from the header). */
   headerText: string;
   headerAlign: 'left' | 'center' | 'right';
   /** Show the header on page 1 (off = academic convention). */
   headerFirstPage: boolean;
+  /** Running footer text ('' = the automatic page number). Same
+   *  substitutions as the header. */
+  footerText: string;
+  footerAlign: 'left' | 'center' | 'right';
+  footerFirstPage: boolean;
   /** One definition per line: \name = expansion (KaTeX macros). */
   mathMacros: string;
+  /** Citation style: a ported formatter, verified against the compiler
+   *  (citation-styles.ts). Exported as `style:` on #bibliography. */
+  citationStyle: CitationStyle;
+  /** Footnote marker numbering (Typst's `footnote(numbering:)` patterns). */
+  footnoteNumbering: FootnoteNumbering;
+  /** The rule above the footnotes: Typst's default short line, a full-width
+   *  line, or none (`footnote.entry(separator:)`). */
+  footnoteSeparator: FootnoteSeparator;
 }
+
+export type FootnoteNumbering = '1' | 'a' | 'i' | '*';
+export type FootnoteSeparator = 'rule' | 'full' | 'none';
+export const FOOTNOTE_NUMBERINGS: readonly FootnoteNumbering[] = ['1', 'a', 'i', '*'];
+export const FOOTNOTE_SEPARATORS: readonly FootnoteSeparator[] = ['rule', 'full', 'none'];
 
 export const DEFAULT_SETTINGS: DocSettings = {
   font: DEFAULT_FONT.label,
   sizePt: 12.5,
   lineHeight: 1.5,
   page: 'letter',
+  pageWidthIn: 8.5,
+  pageHeightIn: 11,
   landscape: false,
   marginTop: 1.25,
   marginRight: 1.25,
@@ -54,10 +87,17 @@ export const DEFAULT_SETTINGS: DocSettings = {
   pageNumShow: true,
   pageNumFormat: '1',
   pageNumAlign: 'center',
+  pageNumPlace: 'bottom',
   pageNumStart: 1,
   headerText: '',
   headerAlign: 'right',
   headerFirstPage: false,
+  footerText: '',
+  footerAlign: 'center',
+  footerFirstPage: true,
+  citationStyle: 'ieee',
+  footnoteNumbering: '1',
+  footnoteSeparator: 'rule',
   mathMacros: '',
 };
 
@@ -91,6 +131,19 @@ export function toRoman(n: number): string {
 }
 
 /** Render a page number per the document's format setting. */
+/** The running text's substitutions: {page} and {section}. */
+export function runningText(template: string, page: string, section: string): string {
+  return template.replace(/\{page\}/g, page).replace(/\{section\}/g, section);
+}
+
+/** The format `counter(page).display()` uses for a {page} in a running
+ *  text: the document's numbering when page numbers are on (a two-number
+ *  pattern shows its first number alone), else Typst's default `1`. */
+export function runningPageFormat(s: DocSettings): DocSettings['pageNumFormat'] {
+  if (!s.pageNumShow) return '1';
+  return s.pageNumFormat === '1 / 1' ? '1' : s.pageNumFormat;
+}
+
 export function formatPageNumber(s: DocSettings, page: number, total: number): string {
   const n = page + s.pageNumStart - 1;
   switch (s.pageNumFormat) {
@@ -106,21 +159,40 @@ export function formatPageNumber(s: DocSettings, page: number, total: number): s
 }
 
 /** Page geometry in CSS px (96/in). Shared by CSS vars, the paginator, and chrome. */
-const PAPER: Record<DocSettings['page'], { w: number; h: number }> = {
+export type PaperName = 'letter' | 'a4' | 'legal' | 'b5' | 'a5' | 'half-letter' | 'custom';
+export const PAPER_NAMES: readonly PaperName[] = ['letter', 'a4', 'legal', 'b5', 'a5', 'half-letter', 'custom'];
+
+/** Named papers in CSS px (96/in): Typst's `paper:` names, plus half
+ *  letter (5.5 × 8.5 in — notes printed two to a sheet), which Typst has no
+ *  name for and which exports as an explicit width and height. */
+const PAPER: Record<Exclude<PaperName, 'custom'>, { w: number; h: number }> = {
   letter: { w: 816, h: 1056 },
   a4: { w: 794, h: 1123 },
   legal: { w: 816, h: 1344 },
   b5: { w: 665, h: 945 },
+  a5: { w: 559, h: 794 },
+  'half-letter': { w: 528, h: 816 },
 };
 
-/** Effective page size in px (orientation applied). */
-export function pageSize(s: Pick<DocSettings, 'page' | 'landscape'>): { w: number; h: number } {
+/** The paper's portrait size in inches: a named paper's, or the custom one. */
+export function paperInches(s: Pick<DocSettings, 'page' | 'pageWidthIn' | 'pageHeightIn'>): { w: number; h: number } {
+  if (s.page === 'custom') return { w: s.pageWidthIn, h: s.pageHeightIn };
   const p = PAPER[s.page] ?? PAPER.letter;
+  return { w: p.w / 96, h: p.h / 96 };
+}
+
+/** Effective page size in px (orientation applied). */
+export function pageSize(s: Pick<DocSettings, 'page' | 'landscape' | 'pageWidthIn' | 'pageHeightIn'>): { w: number; h: number } {
+  const p = s.page === 'custom' ? { w: s.pageWidthIn * 96, h: s.pageHeightIn * 96 } : (PAPER[s.page] ?? PAPER.letter);
   return s.landscape ? { w: p.h, h: p.w } : p;
 }
 
-/** Visual gap between painted pages, px. */
-export const PAGE_GAP = 28;
+/** Visual gap between painted pages, px: a thin line of the frame between
+ *  sheets that fill the panel edge to edge, drawn at the panel's scale (7–8
+ *  screen px in the default 1100 px window, about the frame's 8 px edge).
+ *  It was 28 when the sheets floated in a room. Print and the PDF have no
+ *  gap; the paginator steps pages by the page height plus this. */
+export const PAGE_GAP = 6;
 
 /** Merge stored settings over defaults (migrating legacy fields). */
 export function normalizeSettings(raw: Partial<DocSettings> | null | undefined): DocSettings {
@@ -136,7 +208,9 @@ export function normalizeSettings(raw: Partial<DocSettings> | null | undefined):
   }
   if (finite(source.sizePt, 6, 72)) merged.sizePt = source.sizePt;
   if (finite(source.lineHeight, 1, 3)) merged.lineHeight = source.lineHeight;
-  if (oneOf(source.page, ['letter', 'a4', 'legal', 'b5'])) merged.page = source.page;
+  if (oneOf(source.page, PAPER_NAMES)) merged.page = source.page;
+  if (finite(source.pageWidthIn, 2, 30)) merged.pageWidthIn = source.pageWidthIn;
+  if (finite(source.pageHeightIn, 2, 30)) merged.pageHeightIn = source.pageHeightIn;
   if (typeof source.landscape === 'boolean') merged.landscape = source.landscape;
   for (const field of ['marginTop', 'marginRight', 'marginBottom', 'marginLeft'] as const) {
     if (finite(source[field], 0, 3)) merged[field] = source[field];
@@ -145,6 +219,9 @@ export function normalizeSettings(raw: Partial<DocSettings> | null | undefined):
   if (typeof source.parIndent === 'boolean') merged.parIndent = source.parIndent;
   if (typeof source.numberEquations === 'boolean') merged.numberEquations = source.numberEquations;
   if (typeof source.numberSections === 'boolean') merged.numberSections = source.numberSections;
+  if (oneOf(source.citationStyle, ['ieee', 'apa', 'chicago-author-date'])) merged.citationStyle = source.citationStyle;
+  if (oneOf(source.footnoteNumbering, FOOTNOTE_NUMBERINGS)) merged.footnoteNumbering = source.footnoteNumbering;
+  if (oneOf(source.footnoteSeparator, FOOTNOTE_SEPARATORS)) merged.footnoteSeparator = source.footnoteSeparator;
   if (typeof source.pageNumShow === 'boolean') merged.pageNumShow = source.pageNumShow;
   if (oneOf(source.pageNumFormat, ['1', '— 1 —', 'i', '1 / 1'])) merged.pageNumFormat = source.pageNumFormat;
   if (oneOf(source.pageNumAlign, ['left', 'center', 'right'])) merged.pageNumAlign = source.pageNumAlign;
@@ -156,6 +233,12 @@ export function normalizeSettings(raw: Partial<DocSettings> | null | undefined):
   }
   if (oneOf(source.headerAlign, ['left', 'center', 'right'])) merged.headerAlign = source.headerAlign;
   if (typeof source.headerFirstPage === 'boolean') merged.headerFirstPage = source.headerFirstPage;
+  if (typeof source.footerText === 'string' && source.footerText.length <= 1_024) {
+    merged.footerText = source.footerText;
+  }
+  if (oneOf(source.footerAlign, ['left', 'center', 'right'])) merged.footerAlign = source.footerAlign;
+  if (typeof source.footerFirstPage === 'boolean') merged.footerFirstPage = source.footerFirstPage;
+  if (oneOf(source.pageNumPlace, ['bottom', 'top'])) merged.pageNumPlace = source.pageNumPlace;
   if (
     typeof source.mathMacros === 'string' &&
     // File/editor ingress performs the exact UTF-8 check. Use a conservative
@@ -185,6 +268,25 @@ export function applySettings(state: EditorState) {
   root.setProperty('--doc-line', String(s.lineHeight));
   root.setProperty('--par-margin', s.parIndent ? '0em' : '0.9em');
   root.setProperty('--par-indent', s.parIndent ? '1.5em' : '0em');
+  // Code blocks (and islands) mirror Typst's raw block: published in px so
+  // the block's own 0.8em font size cannot rescale them.
+  const code = codeBlockMetricsEm(s);
+  const bodyPx = (s.sizePt * 4) / 3;
+  // Table cells: a one-line cell is inset + top edge + inset tall in Typst,
+  // while the editor's line box is line-height tall; the difference is the
+  // half-leading on each side (style.css, `--cell-inset`).
+  root.setProperty('--half-leading', `${(((s.lineHeight - parityMetrics(s.font).extent) / 2) * bodyPx).toFixed(4)}px`);
+  // Typst's paragraph leading/spacing are absolute lengths. Reducing a
+  // table's text size changes its glyph extent, not those two gaps.
+  root.setProperty('--table-text-extent', `${(parityMetrics(s.font).extent * bodyPx).toFixed(4)}px`);
+  root.setProperty('--table-par-gap', `${(s.parIndent ? 0 : 0.9 * bodyPx).toFixed(4)}px`);
+  root.setProperty('--code-line', `${(code.lineEm * bodyPx).toFixed(4)}px`);
+  root.setProperty('--fn-top-inset', `${(footnoteFrameInsetsEm(s).top * bodyPx).toFixed(4)}px`);
+  root.setProperty('--fn-sep-width', s.footnoteSeparator === 'full' ? '100%' : '30%');
+  root.setProperty('--fn-sep-display', s.footnoteSeparator === 'none' ? 'none' : 'block');
+  root.setProperty('--fn-line', `${((parityMetrics(s.font).extent + FN_LEADING_EM) * FN_SCALE * bodyPx).toFixed(4)}px`);
+  root.setProperty('--code-pad', `${(code.padTopEm * bodyPx).toFixed(4)}px`);
+  root.setProperty('--code-mb', `${(code.marginBottomEm * bodyPx).toFixed(4)}px`);
   const size = pageSize(s);
   root.setProperty('--page-w', `${size.w}px`);
   root.setProperty('--page-h', `${size.h}px`);
@@ -200,7 +302,9 @@ export function applySettings(state: EditorState) {
     styleEl.id = 'page-style';
     document.head.appendChild(styleEl);
   }
-  const cssSize = { letter: 'letter', a4: 'A4', legal: 'legal', b5: 'B5' }[s.page] ?? 'letter';
+  const named: Partial<Record<PaperName, string>> = { letter: 'letter', a4: 'A4', legal: 'legal', b5: 'B5', a5: 'A5' };
+  const inches = paperInches(s);
+  const cssSize = named[s.page] ?? `${inches.w}in ${inches.h}in`;
   styleEl.textContent = `@page { size: ${cssSize}${s.landscape ? ' landscape' : ''}; margin: ${s.marginTop}in ${s.marginRight}in ${s.marginBottom}in ${s.marginLeft}in; }`;
 }
 
@@ -218,6 +322,11 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
 
   const panel = document.createElement('div');
   panel.className = 'settings-panel';
+  panel.id = 'document-settings';
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-label', 'Document settings');
+  anchor.setAttribute('aria-expanded', 'true');
+  anchor.setAttribute('aria-controls', panel.id);
   openPanel = panel;
 
   const patch = (p: Partial<DocSettings>) => {
@@ -282,6 +391,18 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
         menu.appendChild(item);
       }
       wrap.appendChild(menu);
+      // Keep the dropdown inside the scrolling panel, opening upward when
+      // its control is near the bottom of the available space.
+      const bounds = panel.getBoundingClientRect();
+      const control = btn.getBoundingClientRect();
+      const below = bounds.bottom - control.bottom - 10;
+      const above = control.top - bounds.top - 10;
+      const opensUp = menu.offsetHeight > below && above > below;
+      if (opensUp) {
+        menu.style.top = 'auto';
+        menu.style.bottom = 'calc(100% + 4px)';
+      }
+      menu.style.maxHeight = `${Math.max(40, opensUp ? above : below)}px`;
       document.addEventListener('mousedown', onOutside, true);
     });
     // Value setter for callers that patch it programmatically.
@@ -310,15 +431,35 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
     panel.appendChild(notice);
   }
   row('Size', select([10, 11, 12, 12.5, 13, 14].map((n) => [n, `${n} pt`] as [number, string]), s.sizePt, (v) => patch({ sizePt: +v })));
-  {
+  for (const edge of ['header', 'footer'] as const) {
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Title · Name · {page}';
-    input.value = s.headerText;
-    input.addEventListener('change', () => patch({ headerText: input.value }));
-    row('Header', input);
+    input.placeholder = edge === 'header' ? 'Title · {section} · {page}' : 'Name · {page}';
+    input.value = edge === 'header' ? s.headerText : s.footerText;
+    input.addEventListener('change', () => patch(edge === 'header' ? { headerText: input.value } : { footerText: input.value }));
+    row(edge === 'header' ? 'Header' : 'Footer', input);
+    row(
+      edge === 'header' ? 'Header align' : 'Footer align',
+      select(
+        [['left', 'Left'], ['center', 'Center'], ['right', 'Right']] as Array<[string, string]>,
+        edge === 'header' ? s.headerAlign : s.footerAlign,
+        (v) => patch(edge === 'header' ? { headerAlign: v as DocSettings['headerAlign'] } : { footerAlign: v as DocSettings['footerAlign'] }),
+      ),
+    );
   }
-  row('Header align', select([['left', 'Left'], ['center', 'Center'], ['right', 'Right']] as Array<[string, string]>, s.headerAlign, (v) => patch({ headerAlign: v as DocSettings['headerAlign'] })));
+  row(
+    'On first page',
+    select(
+      [
+        ['both', 'Header and footer'],
+        ['footer', 'Footer only'],
+        ['header', 'Header only'],
+        ['none', 'Neither'],
+      ] as Array<[string, string]>,
+      s.headerFirstPage ? (s.footerFirstPage ? 'both' : 'header') : s.footerFirstPage ? 'footer' : 'none',
+      (v) => patch({ headerFirstPage: v === 'both' || v === 'header', footerFirstPage: v === 'both' || v === 'footer' }),
+    ),
+  );
   {
     // The marker is a document position, but its placement is structural:
     // right after the leading front-matter blocks. The setting manages it.
@@ -364,7 +505,51 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   }
   row('Paragraphs', select([['block', 'Block (spaced)'], ['indent', 'Indented (classic)']] as Array<[string, string]>, s.parIndent ? 'indent' : 'block', (v) => patch({ parIndent: v === 'indent' })));
   row('Line spacing', select([1.3, 1.4, 1.5, 1.65, 1.8].map((n) => [n, String(n)] as [number, string]), s.lineHeight, (v) => patch({ lineHeight: +v })));
-  row('Paper', select([['letter', 'US Letter'], ['a4', 'A4'], ['legal', 'US Legal'], ['b5', 'B5']] as Array<[string, string]>, s.page, (v) => patch({ page: v as DocSettings['page'] })));
+  row('Citations', select(CITATION_STYLES as Array<[string, string]>, s.citationStyle, (v) => patch({ citationStyle: v as CitationStyle })));
+  const sizeCluster = document.createElement('span');
+  sizeCluster.className = 'settings-margins';
+  for (const [key, label] of [
+    ['pageWidthIn', 'W'],
+    ['pageHeightIn', 'H'],
+  ] as Array<['pageWidthIn' | 'pageHeightIn', string]>) {
+    const wrap = document.createElement('label');
+    wrap.className = 'settings-margin-field';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.step = '0.05';
+    input.min = '2';
+    input.max = '30';
+    input.value = String(s[key]);
+    input.addEventListener('change', () => {
+      const v = Math.min(30, Math.max(2, parseFloat(input.value) || DEFAULT_SETTINGS[key]));
+      input.value = String(v);
+      patch({ [key]: v } as Partial<DocSettings>);
+    });
+    wrap.append(label, input);
+    sizeCluster.appendChild(wrap);
+  }
+  row(
+    'Paper',
+    select(
+      [
+        ['letter', 'US Letter'],
+        ['a4', 'A4'],
+        ['legal', 'US Legal'],
+        ['b5', 'B5'],
+        ['a5', 'A5'],
+        ['half-letter', 'Half letter (5.5 × 8.5 in)'],
+        ['custom', 'Custom…'],
+      ] as Array<[string, string]>,
+      s.page,
+      (v) => {
+        sizeRow.hidden = v !== 'custom';
+        patch({ page: v as PaperName });
+      },
+    ),
+  );
+  row('Custom size (in)', sizeCluster);
+  const sizeRow = sizeCluster.closest('label') as HTMLElement;
+  sizeRow.hidden = s.page !== 'custom';
   row('Orientation', select([['portrait', 'Portrait'], ['landscape', 'Landscape']] as Array<[string, string]>, s.landscape ? 'landscape' : 'portrait', (v) => patch({ landscape: v === 'landscape' })));
   {
     const cluster = document.createElement('span');
@@ -408,12 +593,38 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   row(
     'Number position',
     select(
-      [['left', 'Bottom left'], ['center', 'Bottom center'], ['right', 'Bottom right']] as Array<[string, string]>,
-      s.pageNumAlign,
-      (v) => patch({ pageNumAlign: v as DocSettings['pageNumAlign'] }),
+      [
+        ['bottom left', 'Bottom left'],
+        ['bottom center', 'Bottom center'],
+        ['bottom right', 'Bottom right'],
+        ['top left', 'Top left'],
+        ['top center', 'Top center'],
+        ['top right', 'Top right'],
+      ] as Array<[string, string]>,
+      `${s.pageNumPlace} ${s.pageNumAlign}`,
+      (v) => {
+        const [place, align] = v.split(' ');
+        patch({ pageNumPlace: place as DocSettings['pageNumPlace'], pageNumAlign: align as DocSettings['pageNumAlign'] });
+      },
     ),
   );
   row('First page number', select([1, 2, 3, 4, 5, 10, 100].map((n) => [n, String(n)] as [number, string]), s.pageNumStart, (v) => patch({ pageNumStart: +v })));
+  row(
+    'Footnote numbers',
+    select(
+      [['1', '1, 2, 3'], ['a', 'a, b, c'], ['i', 'i, ii, iii'], ['*', '*, †, ‡']] as Array<[string, string]>,
+      s.footnoteNumbering,
+      (v) => patch({ footnoteNumbering: v as FootnoteNumbering }),
+    ),
+  );
+  row(
+    'Footnote rule',
+    select(
+      [['rule', 'Short rule'], ['full', 'Full width'], ['none', 'None']] as Array<[string, string]>,
+      s.footnoteSeparator,
+      (v) => patch({ footnoteSeparator: v as FootnoteSeparator }),
+    ),
+  );
 
   const macrosBtn = document.createElement('button');
   macrosBtn.type = 'button';
@@ -427,13 +638,21 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
 
   const hint = document.createElement('div');
   hint.className = 'settings-hint';
-  hint.textContent = 'Applied live and to the .typ export. Undo works.';
+  hint.textContent = 'Applied live and saved with the document — a .md keeps them in its front matter. Undo works.';
   panel.appendChild(hint);
 
   document.body.appendChild(panel);
-  const rect = anchor.getBoundingClientRect();
-  panel.style.top = `${rect.bottom + 8 + window.scrollY}px`;
-  panel.style.left = `${Math.max(8, rect.right - panel.offsetWidth) + window.scrollX}px`;
+  if (anchor.closest('#rail')) {
+    // A flyout from the rail, placed as the rail's menus are: never over
+    // the bar, scrolling inside itself in a short window.
+    placeFlyout(panel, anchor);
+  } else {
+    const rect = anchor.getBoundingClientRect();
+    const top = rect.bottom + 10;
+    panel.style.top = `${top}px`;
+    panel.style.maxHeight = `${Math.max(80, window.innerHeight - top - 8)}px`;
+    panel.style.left = `${Math.max(8, Math.min(rect.right - panel.offsetWidth, window.innerWidth - panel.offsetWidth - 8))}px`;
+  }
 
   const onDown = (e: MouseEvent) => {
     if (!panel.contains(e.target as Node) && e.target !== anchor && !anchor.contains(e.target as Node)) closePanel();
@@ -443,13 +662,16 @@ export function toggleSettingsPanel(view: EditorView, anchor: HTMLElement) {
   };
   document.addEventListener('mousedown', onDown, true);
   document.addEventListener('keydown', onKey, true);
+  window.addEventListener('resize', closePanel);
 
   function closePanel() {
     panel.remove();
+    anchor.setAttribute('aria-expanded', 'false');
     openPanel = null;
     closeOpen = null;
     document.removeEventListener('mousedown', onDown, true);
     document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('resize', closePanel);
   }
   closeOpen = closePanel;
 }

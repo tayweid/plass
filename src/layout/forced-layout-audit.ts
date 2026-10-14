@@ -29,6 +29,11 @@ export interface ForcedLayoutAuditCase {
   fastPopulations: number;
   legacyPopulations: number;
   hardBreak: boolean;
+  /** Whether the legacy partitioner has an item for every forced cut. A
+   * glyphless punctuation split (break before an em-dash, after a link's
+   * '/') exists only in the direct translator; on those cases fast succeeds
+   * while legacy declines by design. */
+  legacyRepresentable: boolean;
 }
 
 export interface ForcedLayoutAuditReport {
@@ -91,6 +96,19 @@ export class ForcedLayoutAuditor {
       block.forEach((child) => {
         if (child.type.name === 'hard_break') hardBreak = true;
       });
+      // Offset-aligned text: index == PM content offset (atom and nested
+      // inline nodes become padding, matching the translators' token model).
+      let aligned = '';
+      block.forEach((child, childOffset) => {
+        if (child.isText && child.text) aligned = aligned.padEnd(childOffset) + child.text;
+      });
+      const legacyRepresentable = forced.every((entry) => {
+        if (!entry.hyphen) return true;
+        if (opts.hyphenate === false) return false;
+        const before = aligned[entry.at - 1] ?? '';
+        const after = aligned[entry.at] ?? '';
+        return /[-–—]/.test(before) || (/\p{L}/u.test(before) && /\p{L}/u.test(after));
+      });
       this.cases.set(key, {
         id,
         sample: block.textContent.slice(0, 48),
@@ -103,6 +121,7 @@ export class ForcedLayoutAuditor {
         fastPopulations: fastStats.probePopulations,
         legacyPopulations: legacyStats.probePopulations,
         hardBreak,
+        legacyRepresentable,
       });
     } finally {
       fastMeasurer.destroy();

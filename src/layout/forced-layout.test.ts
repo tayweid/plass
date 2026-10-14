@@ -45,6 +45,12 @@ class DeterministicMeasurer implements ForcedLayoutMeasurer {
     return intervals.map(({ start, end }) => this.prefix(text, end, key) - this.prefix(text, start, key));
   }
 
+  intervalWidthsBatch(
+    requests: ReadonlyArray<{ text: string; intervals: readonly TextMeasureInterval[]; key: string }>,
+  ): number[][] {
+    return requests.map(({ text, intervals, key }) => this.intervalWidths(text, intervals, key));
+  }
+
   spaceWidth(): number {
     return 3;
   }
@@ -222,6 +228,121 @@ console.log('  ok  boxless blocks return before forced validation');
   console.log(
     `  ok  Range reads reduced ${legacyMeasurer.rangeReads} -> ${fastMeasurer.rangeReads}`,
   );
+}
+
+// Path-independence regression: given IDENTICAL break offsets, the live KP
+// path and both forced translators must emit identical spacing — the settled
+// oracle confirming the live breaks must be a repaint no-op, never a
+// justification shimmer.
+{
+  const pathCases: Array<{
+    label: string;
+    node: ReturnType<typeof paragraph>;
+    measure: number;
+    opts: Omit<LayoutOptions, 'forced'>;
+  }> = [
+    {
+      label: 'plain prose',
+      node: paragraph(schema.text('alpha beta gamma delta epsilon zeta eta theta iota kappa')),
+      measure: 74,
+      opts: {},
+    },
+    {
+      label: 'hyphenating words',
+      node: paragraph(schema.text('hyphenation state-of-the-art characteristically writing')),
+      measure: 70,
+      opts: {},
+    },
+    {
+      label: 'painted prefix and scale',
+      node: paragraph(schema.text('leading words with a scaled footnote body and more words to wrap')),
+      measure: 92,
+      opts: { firstLineIndent: 13.25, scale: 0.85 },
+    },
+  ];
+  for (const { label, node, measure, opts } of pathCases) {
+    const live = layoutBlock(node, measure, new DeterministicMeasurer() as unknown as Measurer, atomWidth, opts);
+    assert.ok(live && live.length > 1, `${label}: live layout wraps`);
+    const derived = live.flatMap((line) => (line.oracleBreak ? [line.oracleBreak] : []));
+    assert.equal(derived.length, live.length - 1, `${label}: every non-final line reports its break`);
+    const forcedLegacy = layoutBlock(
+      node,
+      measure,
+      new DeterministicMeasurer() as unknown as Measurer,
+      atomWidth,
+      { ...opts, forced: derived },
+    );
+    // Same translator, same items: raw spacing must be bit-identical.
+    assert.deepEqual(forcedLegacy, live, `${label}: forced layoutBlock equals live layoutBlock`);
+    const forcedFast = layoutForcedBlock(node, measure, new DeterministicMeasurer(), atomWidth, {
+      ...opts,
+      forced: derived,
+    });
+    // Different measurement grouping: identical at painted CSS precision.
+    assert.deepEqual(
+      normalized(forcedFast),
+      normalized(live),
+      `${label}: direct forced translator equals live layoutBlock`,
+    );
+    console.log(`  ok  live and forced spacing agree for identical breaks (${label})`);
+  }
+}
+
+// Glyphless punctuation splits: authoritative breaks with no space before
+// them and no injected hyphen glyph — a break carrying an em-dash to the
+// next line, or a '/'-boundary inside a link. Typst renders these as plain
+// Normal breakpoints; only the direct translator can represent them (the
+// legacy partitioner has no item at those offsets and declines by design).
+{
+  const structural = (lines: LineLayout[] | null) =>
+    lines?.map((line) => ({ from: line.from, to: line.to, breakPos: line.breakPos, hyphen: line.hyphen })) ?? null;
+
+  // 'alpha conclusive' is 16 chars; the em-dash sits at offset 16.
+  const emDash = paragraph(schema.text('alpha conclusive—overwhelming end'));
+  const beforeDash = layoutForcedBlock(emDash, 120, new DeterministicMeasurer(), atomWidth, {
+    forced: [{ at: 16, hyphen: true }],
+  });
+  assert.deepEqual(structural(beforeDash), [
+    { from: 0, to: 16, breakPos: 16, hyphen: false },
+    { from: 16, to: 33, breakPos: null, hyphen: false },
+  ]);
+  assert.equal(
+    layoutBlock(emDash, 120, new DeterministicMeasurer() as unknown as Measurer, atomWidth, {
+      forced: [{ at: 16, hyphen: true }],
+    }),
+    null,
+    'legacy partitioner declines a break before an em-dash',
+  );
+
+  // 'alpha input/' is 12 chars; the split lands after the '/'.
+  const slash = paragraph(schema.text('alpha input/output end'));
+  const afterSlash = layoutForcedBlock(slash, 90, new DeterministicMeasurer(), atomWidth, {
+    forced: [{ at: 12, hyphen: true }],
+  });
+  assert.deepEqual(structural(afterSlash), [
+    { from: 0, to: 12, breakPos: 12, hyphen: false },
+    { from: 12, to: 22, breakPos: null, hyphen: false },
+  ]);
+
+  // Glyphless splits are not hyphenation: they stay valid with it disabled.
+  const dashOff = layoutForcedBlock(emDash, 120, new DeterministicMeasurer(), atomWidth, {
+    forced: [{ at: 17, hyphen: true }],
+    hyphenate: false,
+  });
+  assert.deepEqual(structural(dashOff), [
+    { from: 0, to: 17, breakPos: 17, hyphen: false },
+    { from: 17, to: 33, breakPos: null, hyphen: false },
+  ]);
+
+  // SHY carries a glyph the glyphless contract cannot express: decline.
+  const shy = paragraph(schema.text('alpha conti\u00adnuation end'));
+  assert.equal(
+    layoutForcedBlock(shy, 90, new DeterministicMeasurer(), atomWidth, {
+      forced: [{ at: 12, hyphen: true }],
+    }),
+    null,
+  );
+  console.log('  ok  glyphless punctuation splits translate without a glyph');
 }
 
 console.log('\nall forced-layout tests passed');

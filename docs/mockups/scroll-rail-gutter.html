@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plass scroll rail</title>
+    <!--
+      Plass's scroll rail, in the frame's gutter (branch ux/rail, 2026-10-02).
+
+      Taylor, after asking that the paper show its true corners: "and then maybe
+      there's a scrollbar much like the history git page with points on it
+      indicating the parts of the page and page breaks and such." Of the history
+      view: "i like that scroll bar with the added detail vertically for the
+      nodes."
+
+      This angle: the frame's right edge widens from 8 px to a 20 px gutter while
+      a document is open, and the rail lives there, on the frame, outside the
+      paper, as the history view's strip lives beside its river
+      (claerbout/history/history.html, #mini: 16 px, ticks for runs and days,
+      squares for your commits, the view an outlined rounded band, drag to
+      travel). The paper still fills the panel by rule; the panel is 12 px
+      narrower.
+
+      The frame is Plass's at main eb4ea89, measured from src/style.css and
+      src/toolbar.css: #18181a, the bar 44 px with the File tile at (100, 6),
+      the name pill 30 px at (138, 7) and Export 6 px past it; the tool rail
+      44 px of 32 px tiles; the panel from (44, 44) rounded 12 px, its edge 8 px
+      at the bottom and now 20 px at the right; the pages laid out at 816 CSS px
+      and drawn at the panel's width by a transform, 6 CSS px of the frame
+      between sheets, no scrollbar drawn; the HUD in the panel's corner.
+
+      Everything is in this file. Fonts fall back: the paper asks for New
+      Computer Modern (Plass bundles it), then CMU Serif and Latin Modern.
+      Resize the window to see the page as the window's zoom and the rail's
+      marks keep their places (they are percentages of the track).
+    -->
+    <style>
+      /* ---------- Plass's frame (src/style.css :root, toolbar.css) ---------- */
+      :root {
+        --frame: #18181a;
+        --pill: #232326;
+        --tile: #2e2e32;
+        --topbar: 44px;
+        --edge: 8px;
+        --rail-tile: 32px;
+        --rail-gap: 6px;
+        --rail: calc(var(--rail-tile) + 2 * var(--rail-gap));
+        /* NEW. The frame's edge at the panel's right. It is --edge until a
+           document is open, then the gutter the scroll rail lives in. One
+           variable, so the HUD, the toast, --axis and the table toolbar
+           follow it (in Plass they read --edge for the right side today). */
+        --edge-right: var(--edge);
+        --gutter: 20px;
+        --axis: calc((var(--rail) + 100vw - var(--edge-right)) / 2);
+        --sheet: #ffffff;
+        --ink: #1a1a1a;
+        --ink-soft: #6b6b6b;
+        --serif: 'STIX Two Text', 'Charter', 'Iowan Old Style', 'Palatino', 'Georgia', serif;
+        --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+        --doc-font: 'New Computer Modern', 'CMU Serif', 'Latin Modern Roman', 'STIX Two Text', Georgia, serif;
+        --doc-size: 12.5pt;
+        --page-w: 816px;
+        --page-h: 1056px;
+        --page-gap: 6px;
+        --margin: 120px;
+      }
+
+      /* The gutter is the open document's: with no document (Plass's welcome,
+         a shell with nothing loaded) the edge is 8 px all round as today. It
+         does not come and go with the document's length: the panel's width is
+         the page's scale, and a gutter that appeared when a paper grew past one
+         page would zoom the page under the caret. */
+      body.has-doc {
+        --edge-right: var(--gutter);
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: var(--frame);
+        font-family: var(--sans);
+        color: var(--ink);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      button { font: inherit; color: inherit; cursor: default; }
+
+      /* ---------- the bar (Knuth's, 44 px) ---------- */
+      .lights { position: fixed; top: 16px; left: 14px; display: flex; gap: 8px; z-index: 11; }
+      .lights i { width: 12px; height: 12px; border-radius: 50%; background: #3b3b3e; box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.06); }
+      #toolbar {
+        position: fixed; top: 0; left: 0; right: 0; height: var(--topbar); z-index: 10;
+        display: flex; align-items: center; gap: 6px;
+        padding-inline: 100px var(--edge);
+      }
+      .tb-tile {
+        flex: none; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 9px;
+        display: grid; place-items: center; background: transparent; color: rgba(240, 238, 233, 0.62);
+      }
+      .tb-tile:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+      .ico { width: 18px; height: 18px; }
+      .doc-pod {
+        display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 10px;
+        max-width: min(560px, 50vw); background: var(--pill);
+        border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 9px;
+      }
+      .doc-pod .name { font: 15px/1.5 var(--serif); letter-spacing: 0.09em; color: rgba(252, 252, 251, 0.8); padding: 1px 4px; }
+      .doc-mark { width: 6px; height: 6px; border-radius: 50%; background: rgba(110, 165, 118, 0.9); flex: none; }
+      .doc-folder { font: 12px/1.5 var(--sans); color: rgba(240, 238, 233, 0.55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+      /* ---------- the tool rail (toolbar.css #rail) ---------- */
+      #rail {
+        position: fixed; top: var(--topbar); left: 0; bottom: 0; width: var(--rail); z-index: 10;
+        display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0 0 var(--edge);
+      }
+      .groups { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+      .foot { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+      .rule { width: 18px; height: 1px; margin: 3px 0; background: rgba(255, 255, 255, 0.1); }
+      .rt {
+        width: var(--rail-tile); height: var(--rail-tile); padding: 0; border: 0; border-radius: 9px;
+        display: grid; place-items: center; background: transparent; color: rgba(240, 238, 233, 0.64);
+      }
+      .rt:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+      .rt:disabled { opacity: 0.25; background: transparent; }
+      .tico { font: 600 14px/18px var(--sans); min-width: 18px; text-align: center; }
+
+      /* ---------- the panel (style.css "The panel") ---------- */
+      /* The one change to the panel: its right margin is --edge-right. */
+      #scroll {
+        flex: 1; min-height: 0;
+        margin: var(--topbar) var(--edge-right) var(--edge) var(--rail);
+        border-radius: 12px;
+        background: var(--sheet);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 2px 6px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.45);
+        overflow: hidden auto;
+        scrollbar-width: none;
+        overflow-anchor: none;
+      }
+      #scroll::-webkit-scrollbar { display: none; }
+      #paper { overflow: clip; }
+      #stack { position: relative; width: var(--page-w); transform-origin: 0 0; }
+      #pages { position: relative; background: var(--frame); }
+      .page-box { position: absolute; left: 0; width: var(--page-w); height: var(--page-h); background: var(--sheet); }
+      .page-body {
+        position: absolute; top: var(--margin); left: var(--margin); right: var(--margin);
+        height: calc(var(--page-h) - 2 * var(--margin)); overflow: hidden;
+      }
+      .page-num { position: absolute; left: 0; right: 0; top: 968px; text-align: center; font: var(--doc-size) / 1 var(--doc-font); color: var(--ink); }
+
+      /* ---------- the document (style.css's .ProseMirror rules) ---------- */
+      .doc { font-family: var(--doc-font); font-size: var(--doc-size); line-height: 1.5; color: var(--ink); font-kerning: normal; }
+      .doc p { margin: 0 0 0.9em; text-align: justify; hyphens: auto; }
+      .doc h1, .doc h2, .doc h3 { font-weight: 600; line-height: 1.25; margin: 0 0 0.5em; padding-top: 1.4em; }
+      .doc h1 { font-size: 1.9em; padding-top: 0.2em; }
+      .doc h2 { font-size: 1.4em; }
+      .doc h3 { font-size: 1.15em; }
+      .doc [data-secnum]::before { content: attr(data-secnum) '\2002'; }
+      .doc .byline { font-style: italic; margin-bottom: 1.2em; }
+      .doc .abstract { font-size: 0.92em; margin: 0 1.6em 1em; }
+      .doc .eq { display: flex; justify-content: center; align-items: baseline; position: relative; margin: 0.2em 0 1em; font-style: italic; font-size: 1.05em; }
+      .doc .eq .n { position: absolute; right: 0; font-style: normal; }
+      .doc .eq .up { font-style: normal; }
+      .ts-figure { margin: 0 0 0.9em; padding: 0.4em 0 0.2em; text-align: center; }
+      .ts-figure svg { display: block; margin: 0 auto; }
+      .ts-figure figcaption { margin-top: 0.55em; text-align: justify; text-align-last: center; }
+      .doc table { border-collapse: collapse; margin: 1.1em auto 0.4em; font-size: 0.92em; line-height: 1.45; font-variant-numeric: tabular-nums;
+        box-shadow: inset 0 0.08em 0 var(--ink), inset 0 -0.08em 0 var(--ink); }
+      .doc th, .doc td { padding: 0.18em 0.75em; text-align: right; }
+      .doc th:first-child, .doc td:first-child { text-align: left; }
+      .doc th { font-weight: inherit; box-shadow: inset 0 -0.05em 0 var(--ink); }
+      .doc tr.sum td { box-shadow: inset 0 0.05em 0 var(--ink); }
+      .doc .tcap { text-align: center; margin-bottom: 1em; }
+      .doc .refs p { text-align: left; padding-left: 1.5em; text-indent: -1.5em; margin-bottom: 0.5em; }
+      .caret { display: inline-block; width: 0; height: 1.15em; vertical-align: -0.22em; border-left: 1.5px solid var(--ink); margin: 0 -0.75px; animation: blink 1.06s steps(1) infinite; }
+      @keyframes blink { 50% { opacity: 0; } }
+
+      /* ---------- the HUD (style.css #hud), at the panel's corner ---------- */
+      #hud {
+        position: fixed; right: calc(var(--edge-right) + 10px); bottom: calc(var(--edge) + 10px); z-index: 50;
+        padding: 2px 8px; font: 11px var(--sans); color: #6f6d68; background: rgba(252, 252, 251, 0.82);
+        backdrop-filter: blur(8px); border-radius: 7px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06); opacity: 0.7; user-select: none;
+      }
+
+      /* =====================================================================
+         THE SCROLL RAIL
+         The whole document, top to bottom, in the 20 px gutter between the
+         panel's right edge and the window's: the track is exactly the panel's
+         height (the bar's bottom to 8 px above the window's), so at the top of
+         the paper the visible band's top edge is level with the panel's top
+         edge, and at the end its bottom edge is level with the panel's bottom.
+         One fraction maps everything: a point y of the laid-out stack (CSS px,
+         unscaled) is at y / stack height down the track. The marks are placed
+         by that fraction as a percentage, so a resize moves them with no
+         script at all; only the band is written, on scroll and on resize.
+         ===================================================================== */
+      #scrollrail {
+        position: fixed;
+        top: var(--topbar);
+        bottom: var(--edge);
+        right: 0;
+        width: var(--gutter);
+        z-index: 12;
+        user-select: none;
+        touch-action: none;
+        /* The gutter is frame, but not the window's drag region: it takes
+           the pointer (in Plass.app the bar is the drag band; the gutter is
+           below it). */
+        -webkit-app-region: no-drag;
+      }
+      body:not(.has-doc) #scrollrail { display: none; }
+      .sr-track { position: absolute; inset: 0; }
+
+      /* The visible span: the history strip's band (#mview: white 5 % over
+         16 % edge, 3 px corners), as wide as the gutter allows less 3 px a
+         side. At rest it stays, faint: the rail's first job is where you are,
+         and the panel draws no other scrollbar. */
+      .sr-band {
+        position: absolute;
+        left: 3px;
+        right: 3px;
+        top: 0;
+        height: 10%;
+        min-height: 10px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.035);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+        transition: background 0.3s, box-shadow 0.3s;
+      }
+      /* Lit while the paper moves (a wheel, a jump) and while the pointer is
+         near; lighter still while it is being dragged. */
+      #scrollrail.moving .sr-band,
+      #scrollrail.awake .sr-band {
+        background: rgba(255, 255, 255, 0.075);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.17);
+      }
+      #scrollrail.dragging .sr-band {
+        background: rgba(255, 255, 255, 0.11);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+        transition: none;
+      }
+
+      /* Page breaks: a hairline across the rail at the middle of each gap
+         between sheets, the one mark that stays at rest (the sheets are the
+         paper's structure; the HUD counts them). The page's number sits just
+         under its hairline, inside its page, faint, and only while awake. */
+      .sr-break {
+        position: absolute;
+        left: 4px;
+        right: 4px;
+        height: 1px;
+        margin-top: -0.5px;
+        background: rgba(255, 255, 255, 0.17);
+        pointer-events: none;
+        transition: background 0.2s;
+      }
+      .sr-break.first { background: none; }
+      .sr-break.thin { left: 7px; right: 7px; }
+      .sr-break.hot { background: rgba(255, 255, 255, 0.6); }
+      .sr-num {
+        position: absolute;
+        top: 3px;
+        left: -4px;
+        right: -4px;
+        text-align: center;
+        font: 500 8px/1 var(--sans);
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.02em;
+        color: rgba(240, 238, 233, 0.4);
+        opacity: 0;
+        transition: opacity 0.25s;
+      }
+      .sr-break.hot .sr-num { color: rgba(255, 255, 255, 0.85); }
+      .sr-num[hidden] { display: none; }
+
+      /* The marks: real buttons (one tab stop, arrows between them, Enter
+         jumps), but the rail does its own hit-testing by nearest mark, so a
+         3 px dot has the gutter's full width and ±7 px of target. */
+      .sr-mark {
+        position: absolute;
+        left: 50%;
+        padding: 0;
+        border: 0;
+        transform: translate(-50%, -50%);
+        background: rgba(240, 238, 233, 0.62);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s, transform 0.12s, background 0.12s, box-shadow 0.12s;
+      }
+      .sr-mark:focus { outline: none; }
+      /* Headings: dots sized by level. The title, a section, a subsection. */
+      .sr-h1 { width: 7px; height: 7px; border-radius: 50%; background: rgba(240, 238, 233, 0.86); }
+      .sr-h2 { width: 5px; height: 5px; border-radius: 50%; background: rgba(240, 238, 233, 0.72); }
+      .sr-h3 { width: 3px; height: 3px; border-radius: 50%; background: rgba(240, 238, 233, 0.56); }
+      /* Figures and tables: tiny squares, a figure filled, a table open (the
+         history strip's square for your own commits). */
+      .sr-fig { width: 5px; height: 5px; border-radius: 1px; background: rgba(216, 214, 209, 0.6); }
+      .sr-tab { width: 5px; height: 5px; border-radius: 1px; background: none; box-shadow: inset 0 0 0 1.2px rgba(216, 214, 209, 0.7); }
+      /* The caret: a short bar in the frame's focus blue (#9db8d6, the rings
+         on the rail's tiles), the one coloured mark: where you were writing. */
+      .sr-caret { width: 8px; height: 2px; border-radius: 1px; background: #9db8d6; }
+
+      #scrollrail.awake .sr-mark,
+      #scrollrail.awake .sr-num,
+      #scrollrail:focus-within .sr-mark,
+      #scrollrail:focus-within .sr-num {
+        opacity: 1;
+      }
+      /* Marks outside the visible span a step quieter, so the band reads as
+         a window onto them. */
+      #scrollrail.awake .sr-mark.out { opacity: 0.6; }
+      .sr-mark.hot,
+      #scrollrail.awake .sr-mark.hot {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1.45);
+        background: #fff;
+      }
+      .sr-tab.hot { background: none; box-shadow: inset 0 0 0 1.2px #fff; }
+      .sr-caret.hot { background: #c4d7ec; }
+      .sr-mark:focus-visible { box-shadow: 0 0 0 1.5px var(--frame), 0 0 0 3px #9db8d6; }
+
+      /* Where a click on empty track would go: a faint line across it. */
+      .sr-ghost {
+        position: absolute; left: 3px; right: 3px; height: 1px; margin-top: -0.5px;
+        background: rgba(255, 255, 255, 0.4); opacity: 0; pointer-events: none;
+      }
+      .sr-ghost.show { opacity: 1; }
+
+      /* The label: the frame's caption (toolbar.css: the menus' dark glass,
+         11 px, 5 px corners, hairline, the same shadow), a size up for a
+         heading's own words, which are set in the bar's serif. It hangs to
+         the rail's left over the paper's right margin, level with the mark,
+         fixed to the window: the gutter has no room for it and the window's
+         edge is to the right. */
+      #sr-label {
+        position: fixed;
+        right: calc(var(--gutter) + 7px);
+        top: 0;
+        z-index: 60;
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+        max-width: min(360px, 50vw);
+        padding: 3px 9px 4px;
+        border-radius: 6px;
+        background: rgba(27, 26, 30, 0.94);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+        color: rgba(240, 238, 233, 0.92);
+        font: 13px/1.35 var(--serif);
+        white-space: nowrap;
+        transform: translateY(-50%);
+        opacity: 0;
+        transition: opacity 0.12s;
+        pointer-events: none;
+      }
+      #sr-label.show { opacity: 1; }
+      #sr-label .k { flex: none; font: 11px/1 var(--sans); color: rgba(240, 238, 233, 0.5); font-variant-numeric: tabular-nums; }
+      #sr-label .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+      #sr-label .p { flex: none; font: 10.5px/1 var(--sans); color: rgba(240, 238, 233, 0.42); font-variant-numeric: tabular-nums; }
+      /* A page, or a place on empty track: the caption's own size. */
+      #sr-label.quiet { font: 11px/1.35 var(--sans); padding: 2px 8px; border-radius: 5px; }
+
+      @media (prefers-reduced-motion: reduce) {
+        .sr-band, .sr-mark, .sr-num, #sr-label { transition: none; }
+      }
+    </style>
+  </head>
+  <body class="has-doc">
+    <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+
+    <header id="toolbar" aria-label="Document toolbar">
+      <button class="tb-tile" type="button" aria-label="File">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
+      </button>
+      <div class="doc-pod">
+        <span class="name">paper</span><span class="doc-mark"></span><span class="doc-folder">~/Projects/Urban_Spatial_Sorting</span>
+      </div>
+      <button class="tb-tile" type="button" aria-label="Export">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+      </button>
+    </header>
+
+    <nav id="rail" aria-label="Document tools">
+      <div class="groups">
+        <button class="rt" type="button" aria-label="Headings"><span class="tico">H1</span></button>
+        <button class="rt" type="button" aria-label="Text style"><span class="tico"><b>B</b></span></button>
+        <button class="rt" type="button" aria-label="Lists"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="4" cy="6" r="1.2" fill="currentColor" /><circle cx="4" cy="12" r="1.2" fill="currentColor" /><circle cx="4" cy="18" r="1.2" fill="currentColor" /><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /></svg></button>
+        <div class="rule"></div>
+        <button class="rt" type="button" aria-label="Insert figure"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg></button>
+        <button class="rt" type="button" aria-label="Inline math"><span class="tico">Σ</span></button>
+        <button class="rt" type="button" aria-label="Footnote"><span class="tico">†</span></button>
+        <button class="rt" type="button" aria-label="Insert"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg></button>
+        <div class="rule"></div>
+        <button class="rt" type="button" aria-label="Block quote"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="7.5" cy="14.5" r="2.6" fill="currentColor" stroke="none" /><path d="M4.9 14.4C4.9 10.6 6.7 8.1 10.2 6.8" /><circle cx="16.5" cy="14.5" r="2.6" fill="currentColor" stroke="none" /><path d="M13.9 14.4C13.9 10.6 15.7 8.1 19.2 6.8" /></svg></button>
+        <button class="rt" type="button" aria-label="Solution"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="5" y1="4" x2="5" y2="20" stroke="#d9433a" stroke-width="2.8" /><line x1="10" y1="8" x2="20" y2="8" /><line x1="10" y1="12" x2="20" y2="12" /><line x1="10" y1="16" x2="16" y2="16" /></svg></button>
+        <button class="rt" type="button" aria-label="Comment"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /><line x1="8" y1="9" x2="16" y2="9" /><line x1="8" y1="13" x2="13" y2="13" /></svg></button>
+        <button class="rt" type="button" aria-label="Remove quote" disabled><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="15" y2="18" /></svg></button>
+        <div class="rule"></div>
+        <button class="rt" type="button" aria-label="Extras"><span class="tico">⋯</span></button>
+      </div>
+      <div class="foot">
+        <button class="rt" type="button" aria-label="Document settings"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg></button>
+        <button class="rt" type="button" aria-label="Plain text view"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg></button>
+      </div>
+    </nav>
+
+    <main id="scroll">
+      <div id="paper">
+        <div id="stack">
+          <div id="pages" class="doc">
+            <!-- Page 1 -->
+            <section class="page-box">
+              <div class="page-body">
+                <h1>Sorting by Neighbourhood</h1>
+                <p class="byline">Working draft, 2 October 2026</p>
+                <p class="abstract"><b>Abstract.</b> Households with similar incomes increasingly live near one another. Using tract-level income distributions for twelve metropolitan areas from 1990 to 2020, I build an index of residential sorting that separates the sorting of households across neighbourhoods from changes in the income distribution itself. Sorting rose in eleven of the twelve cities, by a fifth on average, and most of the rise came between 2000 and 2010.</p>
+                <h2 data-secnum="1">Introduction</h2>
+                <p>Where a household lives decides more than its commute. It sets the school its children attend, the neighbours it meets, the prices it pays and, through all of these, much of what its children will go on to earn. When households sort by income into separate neighbourhoods, each of these channels carries the advantage or the disadvantage of one generation into the next. Whether that sorting is rising has been argued for as long as it has been measured.</p>
+                <p>The difficulty is that the usual measures confound two things. An index of segregation computed from tract income shares rises when households of different incomes move apart, but it also rises when the income distribution itself widens and leaves the same tracts further from one another in dollars. Over the last three decades both happened at once, and a rising index tells us little until the two are separated.</p>
+                <p>This paper separates them. Section 2 describes the tract data for twelve metropolitan areas; Section 3 builds an index that holds the income distribution fixed and estimates how much of each city's change is sorting proper; Section 4 reports the results city by city, and Section 5 asks what they imply for the supply of housing.</p>
+              </div>
+              <div class="page-num">1</div>
+            </section>
+            <!-- Page 2 -->
+            <section class="page-box">
+              <div class="page-body">
+                <p>Three findings stand out. Sorting proper rose in eleven of the twelve cities. The rise was concentrated in a single decade, 2000 to 2010, and was smaller where housing near the centre grew fastest. And the cities in which sorting rose most are not those in which incomes widened most, which is what a story of preferences over neighbours would predict.</p>
+                <h2 data-secnum="2">Data</h2>
+                <p>The data are tract-level counts of households by income bracket from the decennial censuses of 1990, 2000 and 2010 and the five-year American Community Survey ending in 2020. Tracts are held to their 2010 boundaries throughout, using the published crosswalks.</p>
+                <h3 data-secnum="2.1">Sources</h3>
+                <p>Each source reports households in fifteen or sixteen brackets whose limits differ from year to year. I convert every bracket to percentiles of its metropolitan area's distribution in that year, interpolating within brackets under a Pareto assumption for the top bracket and a uniform one elsewhere. The choice matters little: a uniform assumption throughout moves no city's index by more than 0.004.</p>
+                <h3 data-secnum="2.2">The sample</h3>
+                <p>The sample is the twelve largest metropolitan areas whose boundaries were stable over the period, taken as their 2013 core-based statistical areas. Tracts with fewer than fifty households in any year, mostly parks, airports and institutions, are dropped; they hold less than half a percent of households.<span class="caret" data-caret></span> The final sample has 11,416 tracts and about 14.2 million households in 2020.</p>
+                <p>Table 1, in Section 4, lists the cities with their tract counts.</p>
+              </div>
+              <div class="page-num">2</div>
+            </section>
+            <!-- Page 3 -->
+            <section class="page-box">
+              <div class="page-body">
+                <h2 data-secnum="3">Method</h2>
+                <p>The approach is to compare each city's observed distribution of households over tracts with the one it would have had if every household kept its rank in its city but incomes were drawn from one fixed distribution.</p>
+                <h3 data-secnum="3.1">An index of sorting</h3>
+                <p>Let <i>p</i> index percentiles of income and let <i>s<sub>j</sub></i>(<i>p</i>) be the share of tract <i>j</i>'s households below percentile <i>p</i>. The sorting index at <i>p</i> is the share of the variance of being below <i>p</i> that lies between tracts,</p>
+                <div class="eq"><span>S</span><span class="up">(</span>p<span class="up">)&#8201;=&#8201;Σ</span><sub>j</sub>&#8201;w<sub>j</sub>&#8201;<span class="up">(</span>s<sub>j</sub><span class="up">(</span>p<span class="up">)&#8201;−&#8201;</span>p<span class="up">)²&#8201;/&#8201;</span>p<span class="up">(1&#8201;−&#8201;</span>p<span class="up">),</span><span class="n">(1)</span></div>
+                <p>where <i>w<sub>j</sub></i> is tract <i>j</i>'s share of households. The summary index <i>S</i> averages <i>S</i>(<i>p</i>) over percentiles with weights proportional to <i>p</i>(1 − <i>p</i>), so that neither tail dominates it.</p>
+                <figure class="ts-figure" data-fig="1">
+                  <svg width="480" height="246" viewBox="0 0 480 246" font-family="CMU Serif, Latin Modern Roman, Georgia, serif" font-size="12" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                    <g stroke="#1a1a1a" stroke-width="0.8">
+                      <line x1="56" y1="12" x2="56" y2="208" />
+                      <line x1="56" y1="208" x2="466" y2="208" />
+                      <line x1="52" y1="208" x2="56" y2="208" /><line x1="52" y1="159" x2="56" y2="159" /><line x1="52" y1="110" x2="56" y2="110" /><line x1="52" y1="61" x2="56" y2="61" /><line x1="52" y1="12" x2="56" y2="12" />
+                      <line x1="80" y1="208" x2="80" y2="212" /><line x1="208" y1="208" x2="208" y2="212" /><line x1="336" y1="208" x2="336" y2="212" /><line x1="452" y1="208" x2="452" y2="212" />
+                    </g>
+                    <g fill="#1a1a1a" stroke="none" text-anchor="end">
+                      <text x="47" y="212">0.15</text><text x="47" y="163">0.20</text><text x="47" y="114">0.25</text><text x="47" y="65">0.30</text><text x="47" y="16">0.35</text>
+                    </g>
+                    <g fill="#1a1a1a" stroke="none" text-anchor="middle">
+                      <text x="80" y="228">1990</text><text x="208" y="228">2000</text><text x="336" y="228">2010</text><text x="452" y="228">2020</text>
+                    </g>
+                    <g stroke="#9a9a9a" stroke-width="1">
+                      <polyline points="80,100 208,92 336,51 452,41" />
+                      <polyline points="80,124 208,117 336,90 452,82" />
+                      <polyline points="80,86 208,76 336,40 452,31" />
+                      <polyline points="80,169 208,162 336,133 452,127" />
+                      <polyline points="80,91 208,85 336,46 452,36" />
+                      <polyline points="80,178 208,175 336,156 452,150" />
+                      <polyline points="80,110 208,103 336,72 452,64" />
+                      <polyline points="80,192 208,190 336,183 452,180" />
+                      <polyline points="80,181 208,178 336,169 452,159" />
+                      <polyline points="80,146 208,140 336,113 452,105" />
+                      <polyline points="80,133 208,128 336,101 452,93" />
+                    </g>
+                    <polyline points="80,129 208,122 336,93 452,85" stroke="#1a1a1a" stroke-width="2" />
+                  </svg>
+                  <figcaption><span class="fig-num">Figure 1:</span> The sorting index <i>S</i> by decade for the twelve cities (grey) and their household-weighted mean (black).</figcaption>
+                </figure>
+              </div>
+              <div class="page-num">3</div>
+            </section>
+            <!-- Page 4 -->
+            <section class="page-box">
+              <div class="page-body">
+                <h3 data-secnum="3.2">Estimation</h3>
+                <p>Because <i>S</i> is computed from percentiles rather than dollars, it does not change under any widening of the income distribution that leaves every household's rank where it was. A rise in <i>S</i> therefore measures households moving apart in rank, not the ranks moving apart in dollars. Standard errors come from a bootstrap over tracts within each city, with 500 replications.</p>
+                <h2 data-secnum="4">Results</h2>
+                <p>Table 1 reports the index for each city in 1990 and 2020. Sorting rose everywhere except Portland, where it was flat within its standard error, and rose most in Atlanta, Chicago and Houston.</p>
+                <table data-tab="1">
+                  <thead><tr><th>City</th><th>Tracts</th><th>1990</th><th>2020</th><th>Change</th></tr></thead>
+                  <tbody>
+                    <tr><td>Atlanta</td><td>952</td><td>0.241</td><td>0.302</td><td>+0.061</td></tr>
+                    <tr><td>Boston</td><td>1,004</td><td>0.228</td><td>0.271</td><td>+0.043</td></tr>
+                    <tr><td>Chicago</td><td>2,210</td><td>0.262</td><td>0.318</td><td>+0.056</td></tr>
+                    <tr><td>Denver</td><td>611</td><td>0.204</td><td>0.247</td><td>+0.043</td></tr>
+                    <tr><td>Houston</td><td>1,072</td><td>0.255</td><td>0.311</td><td>+0.056</td></tr>
+                    <tr><td>Minneapolis</td><td>761</td><td>0.198</td><td>0.226</td><td>+0.028</td></tr>
+                    <tr><td>Philadelphia</td><td>1,482</td><td>0.249</td><td>0.296</td><td>+0.047</td></tr>
+                    <tr><td>Portland</td><td>486</td><td>0.187</td><td>0.199</td><td>+0.012</td></tr>
+                    <tr><td>Seattle</td><td>718</td><td>0.193</td><td>0.214</td><td>+0.021</td></tr>
+                    <tr class="sum"><td>All twelve</td><td>11,416</td><td>0.231</td><td>0.276</td><td>+0.045</td></tr>
+                  </tbody>
+                </table>
+                <p class="tcap">Table 1: The sorting index by city, 1990 and 2020 (nine of the twelve shown).</p>
+                <p>The household-weighted mean of <i>S</i> rose from 0.231 to 0.276, a fifth of its 1990 level. Figure 1 shows that almost half of the rise came in the decade to 2010, and that the cities kept their order throughout.</p>
+              </div>
+              <div class="page-num">4</div>
+            </section>
+            <!-- Page 5 -->
+            <section class="page-box">
+              <div class="page-body">
+                <h3 data-secnum="4.1">Where sorting rose least</h3>
+                <p>The three cities with the smallest rise, Portland, Seattle and Minneapolis, share one feature the others lack: each added housing within five miles of its centre faster than at its edge over the period. Across all twelve, the growth of central housing accounts for about 60 percent of the variation in the change in <i>S</i>.</p>
+                <h2 data-secnum="5">Discussion</h2>
+                <p>If proximity to the centre is scarce and priced, households sort by income because they sort by what they can pay for proximity, whatever they think of their neighbours. The results here fit that account better than one driven by preferences over neighbours: the rise is largest where central housing was scarcest, and it does not follow the widening of incomes. The implication is plain, if not easy. Sorting is lowest where cities let housing grow where people most want to live.</p>
+                <h2>References</h2>
+                <div class="refs">
+                  <p>Bischoff, K. and S. F. Reardon (2014). Residential segregation by income, 1970–2009. In J. Logan (ed.), <i>Diversity and Disparities</i>, 208–233. Russell Sage Foundation.</p>
+                  <p>Chetty, R., N. Hendren, P. Kline and E. Saez (2014). Where is the land of opportunity? <i>Quarterly Journal of Economics</i> 129(4), 1553–1623.</p>
+                  <p>Reardon, S. F. and K. Bischoff (2011). Income inequality and income segregation. <i>American Journal of Sociology</i> 116(4), 1092–1153.</p>
+                  <p>Watson, T. (2009). Inequality and the measurement of residential segregation by income. <i>Review of Income and Wealth</i> 55(3), 820–844.</p>
+                </div>
+              </div>
+              <div class="page-num">5</div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- The scroll rail. Its marks are written by refresh() below. -->
+    <nav id="scrollrail" aria-label="Document map">
+      <div class="sr-track">
+        <div class="sr-band" aria-hidden="true"></div>
+        <div class="sr-ghost" aria-hidden="true"></div>
+      </div>
+    </nav>
+    <div id="sr-label" role="tooltip" aria-hidden="true"></div>
+
+    <div id="hud"></div>
+
+    <script>
+      'use strict';
+      const $ = (s) => document.querySelector(s);
+      const scroll = $('#scroll'), paper = $('#paper'), stack = $('#stack'), pagesEl = $('#pages');
+      const rail = $('#scrollrail'), track = rail.querySelector('.sr-track'), band = rail.querySelector('.sr-band');
+      const ghost = rail.querySelector('.sr-ghost'), label = $('#sr-label');
+      const PAGE_W = 816, PAGE_H = 1056, GAP = 6;
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      /* ---------- the paper (src/paper-scale.ts, reduced) ---------- */
+      // The mockup's sheets hold their own content; in Plass one flow
+      // (#editor) runs over painted page boxes (#pages). Either way the
+      // stack is laid out at 816 CSS px and drawn at the panel's width.
+      const sheets = [...pagesEl.querySelectorAll('.page-box')];
+      sheets.forEach((s, i) => (s.style.top = i * (PAGE_H + GAP) + 'px'));
+      const stackH = sheets.length * PAGE_H + (sheets.length - 1) * GAP;
+      pagesEl.style.height = stackH + 'px';
+      let scale = 1;
+      function fitPaper() {
+        scale = scroll.clientWidth / PAGE_W;
+        stack.style.transform = `scale(${scale})`;
+        paper.style.height = stackH * scale + 'px';
+      }
+
+      /* =====================================================================
+         The scroll rail
+         ===================================================================== */
+      // A point of the paper in the stack's own CSS px. offsetTop is layout,
+      // not paint, so the transform is not in it: no atPaperSize, no division
+      // by the scale, and the marks do not move when the window does. In
+      // Plass the walk is over the ProseMirror doc (headings, figures, native
+      // tables, the selection head via coordsAtPos inside atPaperSize) and
+      // the page boxes in #pages, after the layout scheduler settles a pass:
+      // a pass is the only thing that moves a heading across a page.
+      function layoutTop(el) {
+        let y = 0;
+        for (let n = el; n && n !== stack; n = n.offsetParent) y += n.offsetTop;
+        return y;
+      }
+      const text = (el) => el.textContent.replace(/\s+/g, ' ').trim();
+
+      let marks = [];   // {kind, f, el, button?, page, k, t}
+      let breaks = [];  // {f, page, el, num}
+      function pageOf(y) { return Math.min(sheets.length, Math.floor(y / (PAGE_H + GAP)) + 1); }
+
+      function refresh() {
+        track.querySelectorAll('.sr-mark, .sr-break').forEach((n) => n.remove());
+        marks = [];
+        breaks = [];
+        // Pages: a hairline at the middle of each gap (and an unseen one at
+        // the top, which carries page 1's number).
+        sheets.forEach((s, i) => {
+          const y = i === 0 ? 0 : i * (PAGE_H + GAP) - GAP / 2;
+          const el = document.createElement('div');
+          el.className = 'sr-break' + (i === 0 ? ' first' : '');
+          el.style.top = (y / stackH) * 100 + '%';
+          const num = document.createElement('span');
+          num.className = 'sr-num';
+          num.textContent = i + 1;
+          el.append(num);
+          track.append(el);
+          breaks.push({ kind: 'page', f: y / stackH, y: i * (PAGE_H + GAP), page: i + 1, el, num });
+        });
+        // Headings, figures, tables, the caret.
+        const kinds = [
+          ['h1', 'sr-h1'], ['h2', 'sr-h2'], ['h3', 'sr-h3'],
+          ['figure', 'sr-fig'], ['table', 'sr-tab'], ['[data-caret]', 'sr-caret'],
+        ];
+        const els = [...pagesEl.querySelectorAll(kinds.map((k) => k[0]).join(','))];
+        for (const el of els) {
+          const cls = kinds.find((k) => el.matches(k[0]))[1];
+          // A heading's place is its text's top, not its box's (h2 and h3
+          // carry 1.4em of padding above them).
+          const y = layoutTop(el) + (/^H/.test(el.tagName) ? parseFloat(getComputedStyle(el).paddingTop) : 0);
+          const m = { kind: cls.slice(3), f: y / stackH, y, el, page: pageOf(y) };
+          if (cls === 'sr-fig') {
+            m.k = 'Figure ' + el.dataset.fig;
+            m.t = text(el.querySelector('figcaption')).replace(/^Figure \d+:\s*/, '').replace(/\s*\(.*$/, '');
+          } else if (cls === 'sr-tab') {
+            const cap = el.nextElementSibling && el.nextElementSibling.matches('.tcap') ? text(el.nextElementSibling) : '';
+            m.k = 'Table ' + el.dataset.tab;
+            m.t = cap.replace(/^Table \d+:\s*/, '').replace(/\s*\(.*$/, '').replace(/\.$/, '');
+          } else if (cls === 'sr-caret') {
+            m.k = 'Caret';
+            m.t = '…' + el.previousSibling.textContent.trim().split(/\s+/).slice(-6).join(' ');
+          } else {
+            m.k = el.dataset.secnum || (el.tagName === 'H1' ? 'Title' : '');
+            m.t = text(el);
+          }
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'sr-mark ' + cls;
+          b.tabIndex = -1;
+          b.style.top = m.f * 100 + '%';
+          b.setAttribute('aria-label', `${m.k ? m.k + ' ' : ''}${m.t}, page ${m.page}`);
+          b.addEventListener('click', () => jump(m));
+          b.addEventListener('focus', () => { hot(m); });
+          m.button = b;
+          track.append(b);
+          marks.push(m);
+        }
+        // One tab stop: the first heading (roving tabindex, arrows below).
+        if (marks[0]) marks[0].button.tabIndex = 0;
+        layoutRail();
+      }
+
+      // The px the rail needs, once per resize and refresh: the track's
+      // height, so hit-testing and the page numbers' room are in px.
+      let trackH = 1;
+      function layoutRail() {
+        trackH = track.clientHeight;
+        const perPage = trackH * (PAGE_H + GAP) / stackH;
+        // A long paper thins its numbers (every 2nd, 5th, 10th… page) and,
+        // under 4 px a page, its hairlines, so the rail never turns to fur.
+        const stride = [1, 2, 5, 10, 20, 50, 100].find((s) => perPage * s >= 16) || 100;
+        for (const b of breaks) {
+          const shown = (b.page - 1) % stride === 0;
+          b.el.classList.toggle('thin', perPage < 4 && !shown);
+          // A number gives way to a mark that falls in its room under the hairline.
+          const py = b.f * trackH;
+          const crowded = marks.some((m) => m.f * trackH > py - 1 && m.f * trackH < py + 13);
+          b.num.hidden = !shown || crowded;
+        }
+        drawBand();
+      }
+
+      // The visible span. scrollHeight is the stack's height times the
+      // scale, so the band's fraction is the paper's own.
+      function drawBand() {
+        const H = scroll.scrollHeight, top = scroll.scrollTop, vis = scroll.clientHeight;
+        const fits = H <= vis + 1;
+        band.hidden = fits;
+        band.style.top = (top / H) * 100 + '%';
+        band.style.height = (vis / H) * 100 + '%';
+        // Marks outside the span a step quieter.
+        const f0 = top / H, f1 = (top + vis) / H;
+        for (const m of marks) m.button.classList.toggle('out', m.f < f0 || m.f > f1);
+      }
+
+      /* ---------- awake and at rest ---------- */
+      // At rest the rail is its hairlines and a faint band. It wakes (marks,
+      // numbers, a lit band) while the pointer is in the gutter or over the
+      // last 36 px of the paper beside it, which is inside the page's right
+      // margin at any window width; and it sleeps 600 ms after the pointer
+      // leaves. Scrolling lights the band alone for 900 ms, as macOS shows
+      // an overlay scrollbar: you see where you are, not every heading.
+      const WAKE = 36;
+      let sleepT = 0, moveT = 0, dragging = null;
+      function setAwake(on) {
+        clearTimeout(sleepT);
+        if (on) rail.classList.add('awake');
+        else if (!dragging) sleepT = setTimeout(() => { rail.classList.remove('awake'); unhot(); }, 600);
+      }
+      document.addEventListener('pointermove', (e) => {
+        const r = rail.getBoundingClientRect();
+        setAwake(e.clientX >= r.left - WAKE && e.clientY >= r.top && e.clientY <= r.bottom);
+      }, { passive: true });
+      document.documentElement.addEventListener('pointerleave', () => setAwake(false));
+
+      scroll.addEventListener('scroll', () => {
+        drawBand();
+        rail.classList.add('moving');
+        clearTimeout(moveT);
+        moveT = setTimeout(() => rail.classList.remove('moving'), 900);
+        if (current) placeLabel(current);
+      }, { passive: true });
+
+      /* ---------- hover: the nearest mark, and its label ---------- */
+      const HIT = 7; // px either side of a mark, in the rail
+      let current = null;
+      function nearest(y) {
+        let best = null, bd = HIT;
+        for (const m of marks) {
+          const d = Math.abs(m.f * trackH - y);
+          if (d < bd) { bd = d; best = m; }
+        }
+        if (best) return best;
+        // A page break is a target too, a little narrower, and only once
+        // no heading, figure or table is nearer.
+        for (const b of breaks) {
+          if (b.page === 1) continue;
+          const d = Math.abs(b.f * trackH - y);
+          if (d < bd - 2) { bd = d; best = b; }
+        }
+        return best;
+      }
+      const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+      function placeLabel(m) {
+        const r = track.getBoundingClientRect();
+        label.style.top = r.top + m.f * trackH + 'px';
+      }
+      function hot(m) {
+        if (current === m) return;
+        unhot();
+        current = m;
+        ghost.classList.remove('show');
+        (m.button || m.el).classList.add('hot');
+        if (m.kind === 'page') {
+          label.className = 'quiet show';
+          label.innerHTML = `<span class="t">Page ${m.page}</span><span class="p">of ${sheets.length}</span>`;
+        } else {
+          label.className = 'show';
+          label.innerHTML = (m.k ? `<span class="k">${esc(m.k)}</span>` : '') + `<span class="t">${esc(m.t)}</span><span class="p">p.&#8201;${m.page}</span>`;
+        }
+        placeLabel(m);
+      }
+      function unhot() {
+        if (current) (current.button || current.el).classList.remove('hot');
+        current = null;
+        label.classList.remove('show');
+      }
+      // Empty track: the faint line where a click would land, and its page.
+      function ghostAt(y) {
+        unhot();
+        const f = Math.max(0, Math.min(1, y / trackH));
+        ghost.style.top = f * 100 + '%';
+        ghost.classList.add('show');
+        label.className = 'quiet show';
+        label.innerHTML = `<span class="t">p.&#8201;${pageOf(f * stackH)}</span>`;
+        label.style.top = track.getBoundingClientRect().top + y + 'px';
+      }
+
+      /* ---------- jumps and the drag ---------- */
+      // A heading or a figure lands a little under the panel's top (an
+      // eighth of the panel, as a heading reached in a contents list does);
+      // a page break lands its sheet's top edge at the panel's top; empty
+      // track centres the point clicked. Smooth unless reduced motion asks.
+      function jump(m) {
+        const vis = scroll.clientHeight;
+        const y = m.kind === 'page' ? m.y * scale : m.y * scale - vis / 8;
+        scroll.scrollTo({ top: Math.max(0, y), behavior: reduced ? 'auto' : 'smooth' });
+        // The caret's own jump would also put the focus back in the editor.
+      }
+      const yIn = (e) => e.clientY - track.getBoundingClientRect().top;
+      function scrubTo(y) {
+        scroll.scrollTop = (y / trackH) * scroll.scrollHeight;
+      }
+      rail.addEventListener('pointermove', (e) => {
+        const y = yIn(e);
+        if (dragging) {
+          if (Math.abs(e.clientY - dragging.y0) > 3) dragging.moved = true;
+          if (dragging.grab != null && (dragging.moved || dragging.free)) scrubTo(y - dragging.grab);
+          return;
+        }
+        const m = nearest(y);
+        if (m) hot(m);
+        else ghostAt(y);
+      });
+      rail.addEventListener('pointerleave', () => { if (!dragging) { unhot(); ghost.classList.remove('show'); } });
+      rail.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        rail.setPointerCapture(e.pointerId);
+        const y = yIn(e);
+        const bt = band.offsetTop, bh = band.offsetHeight;
+        const m = nearest(y);
+        dragging = { y0: e.clientY, moved: false, mark: null, grab: null, free: false };
+        if (m) {
+          // A mark: a click jumps to it; a drag from it scrubs the band.
+          dragging.mark = m;
+          dragging.grab = y >= bt && y <= bt + bh ? y - bt : bh / 2;
+        } else if (y >= bt && y <= bt + bh) {
+          dragging.grab = y - bt;
+          dragging.free = true;
+        } else {
+          // Empty track: centre the point at once, then drag from there.
+          scrubTo(y - bh / 2);
+          dragging.grab = bh / 2;
+          dragging.free = true;
+        }
+        rail.classList.add('dragging');
+      });
+      const endDrag = () => {
+        if (!dragging) return;
+        const d = dragging;
+        dragging = null;
+        rail.classList.remove('dragging');
+        if (d.mark && !d.moved) jump(d.mark);
+      };
+      rail.addEventListener('pointerup', endDrag);
+      rail.addEventListener('pointercancel', endDrag);
+      // The gutter is outside the scrolling panel, so a wheel over it would
+      // scroll nothing: hand it to the paper.
+      rail.addEventListener('wheel', (e) => {
+        const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroll.clientHeight : 1;
+        scroll.scrollBy(0, e.deltaY * k);
+      }, { passive: true });
+
+      // Keys: one tab stop, ↑/↓ between marks (the label follows), Home/End,
+      // Enter or Space jumps (the button's own click).
+      rail.addEventListener('keydown', (e) => {
+        const i = marks.findIndex((m) => m.button === document.activeElement);
+        if (i < 0) return;
+        let j = i;
+        if (e.key === 'ArrowDown') j = Math.min(marks.length - 1, i + 1);
+        else if (e.key === 'ArrowUp') j = Math.max(0, i - 1);
+        else if (e.key === 'Home') j = 0;
+        else if (e.key === 'End') j = marks.length - 1;
+        else return;
+        e.preventDefault();
+        marks[i].button.tabIndex = -1;
+        marks[j].button.tabIndex = 0;
+        marks[j].button.focus();
+      });
+      rail.addEventListener('focusout', (e) => { if (!rail.contains(e.relatedTarget)) unhot(); });
+
+      /* ---------- start ---------- */
+      function words() {
+        return [...pagesEl.querySelectorAll('.page-body')].map((b) => b.textContent).join(' ').split(/\s+/).filter(Boolean).length;
+      }
+      function hud() { $('#hud').textContent = `${sheets.length} p · ${words().toLocaleString('en-US')} words`; }
+      // In Plass: paper-scale.ts's one ResizeObserver writes the scale and
+      // the clip's height; the rail adds layoutRail() to it (the band and
+      // the numbers' room; the marks are percentages and need nothing).
+      new ResizeObserver(() => { fitPaper(); layoutRail(); }).observe(scroll);
+      fitPaper();
+      refresh();
+      hud();
+      // Fonts change where headings fall; Plass's pass does the same job.
+      document.fonts.ready.then(() => { refresh(); });
+    </script>
+  </body>
+</html>

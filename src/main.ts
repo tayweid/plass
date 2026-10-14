@@ -3,28 +3,48 @@ import './style.css';
 
 import { EditorState } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
-import { history } from 'prosemirror-history';
+import { closeHistory, history } from 'prosemirror-history';
+import { tableEditing } from 'prosemirror-tables';
 import { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
-import { baseKeys, buildInputRules, buildKeymap, collapseSpaces, copyTextWithoutItsBlock } from './editing';
-import { typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugin';
+import { isNativeShell, onShellReload, onShellSave, onShellZoom, reportDocument, resizeWindow, rewoundText, takeLaunchFile, unsavedReporter } from './claerbout';
+import { openInAnotherWindow } from './open-files';
+import { migrateLegacyTableGeometry } from './typ-parser';
+import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
+import { collapseSpaces } from './collapse-spaces';
+import { listIndent } from './list-indent';
+import { printPageAt, typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugin';
+import { stackHeight } from './layout/page-geometry';
 import { MathView } from './math';
 import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
-import { TablePreviewView } from './table-preview';
+import { structuredTablePlugin } from './table-editor';
+import { TableView } from './table-view';
+import './table-controls.css';
+import './editor-comments.css';
 import { equationsPlugin } from './equations';
 import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { BibliographyView, citationsPlugin } from './citations';
-import { CodeBlockView, rawIslandPlugin } from './raw-preview';
 import { TypstInlineView } from './inline-raw';
+import { GridCellView, gridPlugin } from './grid-editor';
+import { EditorCommentView, editorCommentKeymap, editorCommentPaste } from './editor-comments';
 import { refAutocomplete } from './ref-autocomplete';
-import { applySettings, formatPageNumber, getSettings } from './settings';
+import { applySettings, formatPageNumber, getSettings, runningPageFormat, runningText, type DocSettings } from './settings';
 import { FileManager } from './file-manager';
 import { resetCompilerCircuit } from './compiler-circuit';
+import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
+import { describeVerdict } from './environment-check';
+import { attachPaper, paperScale, paperSheets, zoomedWindow } from './paper-scale';
+import { attachScrollRail, type ScrollRail } from './scroll-rail';
+import { attachPaperCaret } from './paper-caret';
+import { FROM_DISK, reloadTransaction } from './reload-in-place';
 
 const STORAGE_KEY = 'typeset-doc-v1';
 const SESSION_KEY = 'typeset-doc-session';
+/** Kept beside the session copy: the document was not on disk when it was
+ *  taken, so a reload (⌘R) leaves it unsaved, as it was. */
+const SESSION_DIRTY_KEY = 'typeset-doc-session-dirty';
 const SECONDARY_KEY = 'typeset-secondary-tab';
 const TAB_ID_KEY = 'typeset-tab-id';
 
@@ -50,9 +70,12 @@ function tabFileKey(): string {
  *  restores its own session must STAY primary. */
 let primaryTab = false;
 let restoredSessionDoc = false;
+/** The restored session copy was not on disk (SESSION_DIRTY_KEY). */
+let restoredSessionDirty = false;
 
-/** Installed-app window (Finder launch or Dock open) vs plain browser tab. */
-const standalone = window.matchMedia('(display-mode: standalone)').matches;
+/** Installed-app window (Finder launch or Dock open) vs plain browser tab.
+ *  A Plass.app window is an app window too. */
+const standalone = window.matchMedia('(display-mode: standalone)').matches || isNativeShell();
 
 function loadDoc(): PMNode {
   // A "New" window starts empty. window.open COPIES the opener's
@@ -61,6 +84,8 @@ function loadDoc(): PMNode {
   // its own work through the session branch below.
   if (new URLSearchParams(location.search).has('new')) {
     sessionStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_DIRTY_KEY);
+    sessionStorage.removeItem(SOURCE_SESSION_KEY);
     // window.open copies sessionStorage, so the inherited tab id would make
     // this window adopt the opener's file. It gets its own on first use.
     sessionStorage.removeItem(TAB_ID_KEY);
@@ -76,7 +101,8 @@ function loadDoc(): PMNode {
     const own = sessionStorage.getItem(SESSION_KEY);
     if (own) {
       restoredSessionDoc = true;
-      return PMNode.fromJSON(schema, JSON.parse(own));
+      restoredSessionDirty = sessionStorage.getItem(SESSION_DIRTY_KEY) === '1';
+      return migrateLegacyTableGeometry(PMNode.fromJSON(schema, JSON.parse(own)));
     }
   } catch (e) {
     console.warn('Could not restore tab session.', e);
@@ -89,7 +115,7 @@ function loadDoc(): PMNode {
   if (standalone) return schema.nodes.doc.createAndFill()!;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return PMNode.fromJSON(schema, JSON.parse(raw));
+    if (raw) return migrateLegacyTableGeometry(PMNode.fromJSON(schema, JSON.parse(raw)));
   } catch (e) {
     console.warn('Could not restore saved document, starting fresh.', e);
   }
@@ -101,6 +127,8 @@ function persistSession(view: EditorView) {
   try {
     const json = JSON.stringify(view.state.doc.toJSON());
     sessionStorage.setItem(SESSION_KEY, json);
+    if (fileManager.dirty) sessionStorage.setItem(SESSION_DIRTY_KEY, '1');
+    else sessionStorage.removeItem(SESSION_DIRTY_KEY);
     if (primaryTab) localStorage.setItem(STORAGE_KEY, json);
   } catch (e) {
     console.warn('Autosave failed.', e);
@@ -119,45 +147,84 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       // Before the keymaps: the popup must see Enter/Tab/arrows first.
       refAutocomplete(),
       buildInputRules(),
+      // Before the editing keymap: its Mod-Enter is the page break.
+      editorCommentKeymap(),
+      editorCommentPaste(),
       buildKeymap(),
       baseKeys,
       history(),
+      isolateDocumentReplace(),
       equationsPlugin(),
       citationsPlugin(),
       figuresPlugin(),
-      rawIslandPlugin(),
       footnoteGuard(),
       collapseSpaces(),
+      listIndent(),
       copyTextWithoutItsBlock(),
-      typesetPlugin({ onStats, onPages: renderPages }),
+      gridPlugin(),
+      typesetPlugin({ onStats, onPages: renderPages, onEnvironment: (v) => showMessage(describeVerdict(v)) }),
+      // Native cell selection, rectangular copy/paste, and structural table
+      // invariants. Keep this last so its broad arrow/mouse handlers only run
+      // after more specific editor behavior has had a chance.
+      structuredTablePlugin(),
+      tableEditing(),
     ],
   });
 }
 
 const editorEl = document.getElementById('editor')!;
 const toolbarEl = document.getElementById('toolbar')!;
+const railEl = document.getElementById('rail')!;
 const scrollEl = document.getElementById('scroll')!;
 
-// The page centers inside the scroll area, which is the window minus the
-// scrollbar; the fixed toolbar spans the full window. Inset its right edge
-// by the scrollbar width so the pills center on the page's axis, not the
-// window's.
-function syncToolbarInset() {
-  toolbarEl.style.right = `${window.innerWidth - scrollEl.clientWidth}px`;
-}
-window.addEventListener('resize', syncToolbarInset);
-requestAnimationFrame(syncToolbarInset);
 const hudEl = document.getElementById('hud')!;
 const toastEl = document.getElementById('toast')!;
 const stackEl = document.getElementById('stack')!;
 const pagesEl = document.getElementById('pages')!;
 
+// The paper is the panel (style.css): the pages fill its width by scaling,
+// never by re-flowing, so the window is the zoom (paper-scale.ts). Only the
+// View menu's zoom sizes the window, and a resize lays nothing out. The shadow on the
+// frame is drawn round the paper in view, its corners rounded only where
+// they are a sheet's (style.css, the paper's corners).
+attachPaper({
+  panel: scrollEl,
+  clip: document.getElementById('paper')!,
+  stack: stackEl,
+  pages: pagesEl,
+  shadow: document.getElementById('paper-shadow')!,
+});
+// Plass.app's View › Zoom In / Zoom Out / Actual Size: the window sized to
+// the paper's next size, the paper still the panel's full width
+// (paper-scale.ts zoomedWindow); the toast says where it landed, once the
+// resize has drawn it.
+const zoomPercent = () => `Zoom ${Math.round(paperScale() * 100)}%`;
+onShellZoom((step) => {
+  const want = zoomedWindow(step);
+  if (!want) {
+    showMessage(zoomPercent());
+    return;
+  }
+  void resizeWindow(want.width, want.height).then((got) => {
+    if (got && !got.resized && got.reason === 'fullscreen') {
+      showMessage('Full screen, the paper fills the screen: zoom sizes the window');
+      return;
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => showMessage(zoomPercent())));
+  });
+});
+
 let pageCount = 0;
 let pageSignature = '';
+// The scroll rail in the frame's gutter (scroll-rail.ts), made once the
+// view exists: it reads its marks from each settled pass's pages.
+let scrollRail: ScrollRail | null = null;
 
 /** Paint the page boxes + numbers behind the editor. */
-function renderPages(info: PageInfo) {
-  stackEl.style.height = `${info.count * (info.pageH + info.gap) - info.gap}px`;
+function renderPages(info: PageInfo, settled: boolean) {
+  // Sheets are the print pages grown by the editorial comments they hold
+  // (page-geometry.ts): never `k * (pageH + gap)`.
+  stackEl.style.height = `${stackHeight(info.pages)}px`;
   pageCount = info.count;
   const s = getSettings(view.state);
   // A numbering-restart marker splits the document: roman front matter,
@@ -170,61 +237,93 @@ function renderPages(info: PageInfo) {
     });
     if (markerPos >= 0) {
       try {
-        const host = view.dom.parentElement ?? view.dom;
-        const stackTop = host.getBoundingClientRect().top;
-        const c = view.coordsAtPos(markerPos + 1);
-        restartPage = Math.min(info.count - 1, Math.max(0, Math.round((c.top - stackTop) / (info.pageH + info.gap))));
+        restartPage = printPageAt(view, markerPos + 1);
       } catch {
         restartPage = -1;
       }
     }
   }
-  const folio = (k: number) =>
+  const numberOn = (k: number, fmt: DocSettings) =>
     restartPage < 0
-      ? formatPageNumber(s, k + 1, info.count)
+      ? formatPageNumber(fmt, k + 1, info.count)
       : k < restartPage
-        ? formatPageNumber({ ...s, pageNumFormat: 'i' }, k + 1, restartPage)
-        : formatPageNumber(s, k - restartPage + 1, info.count - restartPage);
-  const sig = `${info.count}:${info.pageH}:${info.marginBottom}:${info.marginLeft}:${info.marginRight}:${s.pageNumShow}:${s.pageNumFormat}:${s.pageNumAlign}:${s.pageNumStart}:${s.headerText}:${s.headerAlign}:${s.headerFirstPage}:${restartPage}`;
+        ? formatPageNumber({ ...fmt, pageNumFormat: 'i' }, k + 1, restartPage)
+        : formatPageNumber(fmt, k - restartPage + 1, info.count - restartPage);
+  // The automatic number, and the {page} of a running text (the counter
+  // displayed in the numbering in force).
+  const folio = (k: number) => numberOn(k, s);
+  const runningPage = (k: number) => numberOn(k, { ...s, pageNumFormat: runningPageFormat(s) });
+  // {section}: the level-1 heading in force at the top of page k — the
+  // last one on an earlier page, which is what Typst's header sees with
+  // `query(heading).before(here())` (a heading opening page k is after
+  // the header's own location).
+  const sections: Array<{ page: number; text: string }> = [];
+  if (/\{section\}/.test(s.headerText + s.footerText)) {
+    view.state.doc.forEach((node, offset) => {
+      if (node.type.name !== 'heading' || node.attrs.level !== 1) return;
+      try {
+        sections.push({ page: printPageAt(view, offset + 1), text: node.textContent });
+      } catch {
+        /* an unmeasurable heading has no page */
+      }
+    });
+  }
+  const sectionOn = (k: number) => {
+    let text = '';
+    for (const h of sections) if (h.page < k) text = h.text;
+    return text;
+  };
+  const sig = [
+    info.count, info.pageH, info.marginBottom, info.marginLeft, info.marginRight, s.marginTop, s.sizePt,
+    s.pageNumShow, s.pageNumFormat, s.pageNumAlign, s.pageNumPlace, s.pageNumStart,
+    s.headerText, s.headerAlign, s.headerFirstPage, s.footerText, s.footerAlign, s.footerFirstPage,
+    restartPage, sections.map((h) => `${h.page}=${h.text}`).join('\u0001'),
+    info.pages.map((p) => `${p.top.toFixed(2)}+${p.height.toFixed(2)}`).join(','),
+  ].join(':');
   if (sig !== pageSignature) {
     pageSignature = sig;
     const frag = document.createDocumentFragment();
+    const em = s.sizePt * (4 / 3);
     for (let k = 0; k < info.count; k++) {
-      const top = k * (info.pageH + info.gap);
+      const sheet = info.pages[k];
+      const top = sheet.top;
       const box = document.createElement('div');
       box.className = 'page-box';
       box.style.top = `${top}px`;
+      box.style.height = `${sheet.height}px`;
       frag.appendChild(box);
-      if (s.headerText && (s.headerFirstPage || k > 0)) {
-        const head = document.createElement('div');
-        head.className = 'page-num page-header';
-        // Typst header: block bottom sits header-ascent (30%) above the
-        // content area, i.e. at 0.7 * top margin.
-        const em = s.sizePt * (4 / 3);
-        head.style.top = `${top + 0.7 * (s.marginTop * 96) - 1.2 * em}px`;
-        head.style.textAlign = s.headerAlign;
-        head.style.padding = `0 ${info.marginRight}px 0 ${info.marginLeft}px`;
-        head.textContent = s.headerText.replace(
-          /\{page\}/g,
-          restartPage < 0 || k >= restartPage
-            ? formatPageNumber({ ...s, pageNumFormat: '1' }, restartPage < 0 ? k + 1 : k - restartPage + 1, info.count)
-            : formatPageNumber({ ...s, pageNumFormat: 'i' }, k + 1, restartPage),
-        );
-        frag.appendChild(head);
-      }
-      if (s.pageNumShow) {
-        const num = document.createElement('div');
-        num.className = 'page-num';
-        // Typst's folio: centered one third of the margin below the content.
-        num.style.top = `${top + info.pageH - (2 / 3) * info.marginBottom - 0.55 * s.sizePt * (4 / 3)}px`;
-        num.style.textAlign = s.pageNumAlign;
-        num.style.padding = `0 ${info.marginRight}px 0 ${info.marginLeft}px`;
-        num.textContent = folio(k);
-        frag.appendChild(num);
+      // Typst's header: its block bottom sits header-ascent (30%) above the
+      // content area, i.e. at 0.7 × top margin; its footer one third of the
+      // bottom margin below the content. A running text on an edge replaces
+      // the automatic number there (Typst: explicit content over `numbering`).
+      const chrome = (edge: 'header' | 'footer', align: string, text: string) => {
+        const el = document.createElement('div');
+        el.className = `page-num page-${edge}`;
+        el.dataset.page = String(k);
+        el.style.top =
+          edge === 'header'
+            ? `${top + 0.7 * (s.marginTop * 96) - 1.2 * em}px`
+            : `${top + sheet.height - (2 / 3) * info.marginBottom - 0.55 * em}px`;
+        el.style.textAlign = align;
+        el.style.padding = `0 ${info.marginRight}px 0 ${info.marginLeft}px`;
+        el.textContent = text;
+        frag.appendChild(el);
+      };
+      for (const [edge, text, align, first] of [
+        ['header', s.headerText, s.headerAlign, s.headerFirstPage],
+        ['footer', s.footerText, s.footerAlign, s.footerFirstPage],
+      ] as Array<['header' | 'footer', string, string, boolean]>) {
+        if (text) {
+          if (first || k > 0) chrome(edge, align, runningText(text, runningPage(k), sectionOn(k)));
+        } else if (s.pageNumShow && (s.pageNumPlace === 'top') === (edge === 'header')) {
+          chrome(edge, s.pageNumAlign, folio(k));
+        }
       }
     }
     pagesEl.replaceChildren(frag);
+    paperSheets(info.pages);
   }
+  if (settled) scrollRail?.pages(info);
   updateStatus();
 }
 
@@ -243,23 +342,75 @@ function onStats(s: TypesetStats) {
 window.addEventListener('vite:preloadError', () => {
   if (sessionStorage.getItem('typeset-reloaded-for-update')) return;
   sessionStorage.setItem('typeset-reloaded-for-update', '1');
+  // The session copy comes back after it: nothing to ask about.
+  leavingOnPurpose = true;
   location.reload();
 });
+
+// Closing with unsaved work. In Plass.app the shell asks (Save / Don't
+// Save / Cancel) from what the page reports (`unsaved`, claerbout.ts),
+// and the page never registers `beforeunload` there: Electron would refuse
+// the close without a word. In a browser tab Chrome's own "Leave site?"
+// asks, through a `beforeunload` registered only while closing would lose
+// work, and never for Plass's own reloads (`leavingOnPurpose`).
+let leavingOnPurpose = false;
+const reportUnsaved = unsavedReporter();
+const askBeforeLeaving = (event: BeforeUnloadEvent) => {
+  if (leavingOnPurpose) return;
+  event.preventDefault();
+  event.returnValue = '';
+};
+let askingBeforeLeaving = false;
+/** Tell the shell (or the tab) what closing now would cost: called once
+ *  after load, on every file-manager state change and every document
+ *  change; the report goes only when its values change. */
+function reportClose() {
+  const report = fileManager.closeReport();
+  void reportUnsaved(report);
+  if (isNativeShell() || report.unsaved === askingBeforeLeaving) return;
+  askingBeforeLeaving = report.unsaved;
+  if (report.unsaved) window.addEventListener('beforeunload', askBeforeLeaving);
+  else window.removeEventListener('beforeunload', askBeforeLeaving);
+}
+
+/** The settings a new document has, to tell a blank sheet by. */
+const DEFAULT_DOC_ATTRS = JSON.stringify(schema.nodes.doc.createAndFill()!.attrs);
+/** A blank sheet: no text and nothing else (a figure, math, a table …),
+ *  every block an empty paragraph, the default settings; in the source
+ *  view, no text. Asked on every keystroke in a document with no file, so
+ *  the walk stops at the first block with anything in it. */
+function isBlankDoc(): boolean {
+  const doc = view.state.doc;
+  if (sourceView.isActive()) {
+    const text = sourceView.textFor(fileManager.format);
+    if (text === null || text.trim()) return false;
+  } else {
+    for (let i = 0; i < doc.childCount; i++) {
+      const block = doc.child(i);
+      if (block.type !== schema.nodes.paragraph || block.content.size > 0) return false;
+    }
+  }
+  return JSON.stringify(doc.attrs) === DEFAULT_DOC_ATTRS;
+}
 
 const view = new EditorView(editorEl, {
   state: makeState(loadDoc(), onStats),
   nodeViews: {
+    table: (node, v, getPos) => new TableView(node, v, getPos),
     math_inline: (node, v, getPos) => new MathView(node, v, getPos),
     math_display: (node, v, getPos) => new MathView(node, v, getPos),
     image: (node, v, getPos) => new ImageView(node, v, getPos),
     figure: (node, v, getPos) => new FigureView(node, v, getPos),
     footnote: (node) => new FootnoteView(node),
     bibliography: (node, v) => new BibliographyView(node, v),
-    table: (node, v, getPos) => new TablePreviewView(node, v, getPos),
-    code_block: (node, v, getPos) => new CodeBlockView(node, v, getPos),
     typst_inline: (node, v, getPos) => new TypstInlineView(node, v, getPos),
+    grid_cell: (node, v) => new GridCellView(node, v),
+    editor_comment: (node, v, getPos) => new EditorCommentView(node, v, getPos),
   },
-  attributes: { spellcheck: 'true' },
+  // No inline writing suggestions (macOS predictive text in WebKit, and the
+  // browsers' own): accepted ghost text would enter the document unasked,
+  // and while shown it sits in the line the layout measures.
+  attributes: { spellcheck: 'true', writingsuggestions: 'false' },
   handleClick: (v, _pos, event) => footnoteMarkerClick(v, event),
   dispatchTransaction(tr) {
     const prevAttrs = view.state.doc.attrs;
@@ -276,13 +427,21 @@ const view = new EditorView(editorEl, {
       // Macro changes must re-render every math node view.
       if (getSettings(newState).mathMacros !== prevMacros) queueMicrotask(refreshMathNodes);
     }
+    // The caret's bar on the scroll rail follows a click or an arrow; typing
+    // leaves it to the settled pass, so a keystroke costs nothing here.
+    if (tr.selectionSet && !tr.docChanged) scrollRail?.selection();
     if (tr.docChanged) {
       scheduleSave(view);
-      fileManager.noteChange();
+      // A reload from disk is not an edit: the document matches the file.
+      if (!tr.getMeta(FROM_DISK)) fileManager.noteChange();
+      // Emptied or filled: whether closing would lose anything.
+      reportClose();
       updateStatus();
     }
   },
 });
+
+scrollRail = attachScrollRail(view, scrollEl, stackEl);
 
 // Timers may never run once a tab is being discarded. Session storage is a
 // synchronous, local write, so take the latest editor snapshot at lifecycle
@@ -290,39 +449,123 @@ const view = new EditorView(editorEl, {
 window.addEventListener('pagehide', () => {
   clearTimeout(saveTimer);
   persistSession(view);
+  sourceView.persist();
 });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     clearTimeout(saveTimer);
     persistSession(view);
+    sourceView.persist();
   }
 });
 
+// The source view (SOURCE-VIEW.md): the text is the truth while it is open.
+const sourceView = createSourceView({
+  view,
+  stack: stackEl,
+  format: () => fileManager.format,
+  onChange() {
+    fileManager.noteChange();
+    reportClose();
+    updateStatus();
+  },
+  onMode(active) {
+    toolbar?.setSourceMode(active);
+    scrollRail?.mode(active);
+    updateStatus();
+  },
+  message: showMessage,
+});
+
+// A press on the paper outside the text (a margin, the blank sheet below
+// the last block, the frame under a short paper) puts the caret in the
+// text, in the page view and the plain-text view alike, and a press on the
+// bare frame keeps it (paper-caret.ts).
+attachPaperCaret(view, scrollEl, sourceView);
+
+let reportedFile: FileSystemFileHandle | null = null;
+/** This window's file as the shell knows it (its answer to `document`),
+ *  which a rewind's `reload` names; null in a browser tab. */
+let documentPath: string | null = null;
 const fileManager = new FileManager({
-  getDoc: () => view.state.doc,
+  getDoc: () => sourceView.currentDoc(),
+  getText: (format) => sourceView.textFor(format),
   emptyDoc: () => schema.nodes.doc.create(null, [schema.nodes.paragraph.create()]),
   setDoc(doc) {
     resetCompilerCircuit();
     view.updateState(makeState(doc, onStats));
+    sourceView.afterSetDoc();
     applySettings(view.state);
     toolbar?.update(view.state);
     updateStatus();
     scheduleSave(view);
-    view.focus();
+    sourceView.focus();
+  },
+  // In place (reload-in-place.ts): the caret and the scroll stay where the
+  // text still allows. The source view, when open, shows the new text.
+  reloadDoc(doc) {
+    const tr = reloadTransaction(view.state, doc);
+    if (tr) {
+      view.dispatch(tr);
+      view.dispatch(closeHistory(view.state.tr));
+    }
+    if (sourceView.isActive()) sourceView.afterSetDoc();
+  },
+  // A `bibliography:` sidecar read once the folder is here: the document
+  // takes its entries (the next save embeds them), the carried front
+  // matter loses the line, and a document with no bibliography block gets
+  // one at its end, to print them (as an open with the folder makes it:
+  // withSidecarBib). Not an edit to save or undo — it is what the file
+  // says, read late.
+  setBib(bib, frontmatter) {
+    const tr = view.state.tr.setDocAttribute('bib', bib).setDocAttribute('frontmatter', frontmatter);
+    let block = false;
+    tr.doc.descendants((n) => {
+      block ||= n.type === schema.nodes.bibliography;
+      return !block;
+    });
+    if (!block) tr.insert(tr.doc.content.size, schema.nodes.bibliography.create());
+    view.dispatch(tr.setMeta('addToHistory', false).setMeta(FROM_DISK, true));
   },
   onState() {
     toolbar?.setFile(fileManager.name, fileManager.dirty);
     // Just the file name, as Knuth does: an installed PWA window already
     // prepends the app's name, so " - Plass" made the window read it twice.
-    document.title = `${fileManager.name}.typ${fileManager.dirty ? ' •' : ''}`;
+    document.title = `${fileManager.name}${fileManager.format}${fileManager.dirty ? ' •' : ''}`;
+    reportClose();
   },
   message: showMessage,
   messageAction: showMessage,
-  onProjectKept: () => void migrateEmbeddedFigures(view),
   hasSessionDoc: () => restoredSessionDoc,
+  isBlank: isBlankDoc,
+  // Plass.app: the shell follows this window's file (its represented file,
+  // and the project whose autosave record it keeps), and answers with its
+  // path, which the bar shows the folder of; a browser tab has nobody to
+  // tell, and no path. The old file's folder goes at once, and an answer
+  // for a file this window has since left is dropped.
+  onFile: (handle) => {
+    if (handle !== reportedFile) {
+      toolbar?.setPath(null);
+      documentPath = null;
+    }
+    reportedFile = handle;
+    void reportDocument(handle).then((path) => {
+      if (fileManager.handle !== handle) return;
+      documentPath = path;
+      toolbar?.setPath(path);
+    });
+  },
 });
 
-toolbar = buildToolbar(toolbarEl, view, fileManager);
+// Plass.app: a rewind from the shell's History window saves every window
+// on the project first, through ⌘S's write, and then the window whose
+// file it wrote or removed reads it again; a window closing with unsaved
+// work saves first, quietly or, from the close dialog's Save, through the
+// first save's folder picker (claerbout.ts).
+onShellSave((ask) => (ask.reason === 'close' ? fileManager.saveForClose(ask.choose) : fileManager.saveForShell()));
+onShellReload(() => documentPath, (rewound) => void fileManager.reloadFromDisk(rewoundText(rewound)));
+
+toolbar = buildToolbar(toolbarEl, railEl, view, fileManager, { toggleSource: () => void sourceView.toggle() });
 setFigureFileManager(fileManager);
 const stopAssetWatch = startAssetWatch(view);
 import.meta.hot?.dispose(() => {
@@ -335,24 +578,65 @@ void import('./pdf').then(({ setAssetReader }) =>
 toolbar.update(view.state);
 toolbar.setFile(fileManager.name, fileManager.dirty);
 applySettings(view.state);
+// A reload (⌘R) of a document that was not on disk leaves it unsaved, the
+// dot and the close's question with it; a reconnect to the window's file
+// below decides again, against the disk.
+if (restoredSessionDirty) fileManager.keepUnsaved();
+// Once after load: the shell learns this window's state (and whether it
+// guards the close at all).
+reportClose();
 
-/** Open a file-handler launch: the file arrives as a bare handle with no
- *  directory context, so documents with on-disk figures get a one-click
+/** Open a file-handler launch. Plass.app's shell hands over the file's
+ *  folder with it (`dir`); a browser launch arrives as a bare handle with
+ *  no directory context, so documents with on-disk figures get a one-click
  *  folder grant. */
-function openLaunched(files: ReadonlyArray<FileSystemFileHandle>) {
+async function openLaunched(
+  files: ReadonlyArray<FileSystemFileHandle>,
+  dir: FileSystemDirectoryHandle | null = null,
+): Promise<void> {
   const [file] = files;
-  void fileManager.loadHandle(file).then((opened) => {
+  // The manifest's launch_handler routes a launch to an existing window
+  // (focus-existing): when that window already shows the launched file,
+  // the launch is only a "bring me to front" — the browser has done that,
+  // and reloading here would throw away unsaved edits or prompt for them.
+  const current = fileManager.handle;
+  if (current && (await current.isSameEntry?.(file).catch(() => false))) {
+    showMessage(`${file.name} is open here`);
+    return;
+  }
+  // Plass.app lands every Finder open in a new window (the shell cannot
+  // know which window holds which file), so this may be a window opened
+  // for a file another window already shows. That window brings itself
+  // forward — the holder asks the shell to focus it (open-files.ts);
+  // nothing else can, the shell knows windows and the pages know handles —
+  // and this one, holding nothing, goes away. Under a shell without the
+  // focus request (older than 0.2.1) the holder is not fronted, and
+  // loadHandle says where the file is, as before; a browser tab never
+  // gets here (no JS can focus a window it did not open; the 2026-09-11
+  // test in AGENTS.md), so its toast stays too.
+  if (isNativeShell() && !fileManager.handle && !fileManager.dirty) {
+    const holder = await openInAnotherWindow(file, true);
+    if (holder?.focused) {
+      window.close();
+      return;
+    }
+  }
+  await fileManager.loadHandle(file, dir).then((opened) => {
     if (!opened) return;
     if (files.length > 1) {
       showMessage(`Opened ${file.name} — Plass opens one document at a time`);
     }
-    let needsFolder = false;
+    let figures = false;
     view.state.doc.descendants((n) => {
-      if (n.type.name === 'figure' && isPathSrc(n.attrs.src as string)) needsFolder = true;
-      return !needsFolder;
+      if ((n.type.name === 'figure' || n.type.name === 'image') && isPathSrc(n.attrs.src as string)) figures = true;
+      return !figures;
     });
+    // A Markdown file's `bibliography:` sidecar is read from the folder too.
+    const bibliography = fileManager.pendingBibliography;
+    const needsFolder = figures || bibliography !== null;
     if (needsFolder && !fileManager.inFolder) {
-      fileManager.notifyAction(`Figures live next to ${file.name} — grant folder access to load them`, {
+      const what = figures && bibliography ? `Figures and the bibliography (${bibliography}) live` : figures ? 'Figures live' : `The bibliography (${bibliography}) lives`;
+      fileManager.notifyAction(`${what} next to ${file.name} — grant folder access to load ${figures ? 'them' : 'it'}`, {
         label: 'Grant folder',
         run: () => void fileManager.attachFolder().then((ok) => ok && refreshAssets()),
       });
@@ -373,15 +657,29 @@ function openLaunched(files: ReadonlyArray<FileSystemFileHandle>) {
 // touches must already be live. App windows start on an empty sheet (see
 // loadDoc), so the launched file renders into blank space.
 let launching = false;
+// Plass.app: a Finder open arrives as ?open=<path> on a fresh window, and
+// the shell drops the file's handle on the page once it is told to.
+const nativeLaunch = takeLaunchFile();
+if (nativeLaunch) {
+  launching = true;
+  nativeLaunch.then(({ handle, dir }) => openLaunched([handle], dir)).catch((e: unknown) => {
+    console.warn('Launched file never arrived', e);
+    showMessage('Could not open the file — try double-clicking it again');
+  });
+}
 window.launchQueue?.setConsumer((params) => {
   if (params.files.length) {
     // Chrome delivers queued launch files synchronously here, so this is set
     // before the reconnect below decides anything: a window reused for a new
     // Finder launch must show THAT file, not race its previous one back in.
     launching = true;
-    openLaunched(params.files);
+    void openLaunched(params.files);
   }
 });
+if (import.meta.env.DEV) {
+  // tests/pwa.spec.ts drives a launch without an OS.
+  (window as unknown as { __openLaunched: typeof openLaunched }).__openLaunched = openLaunched;
+}
 
 // A reloaded window reconnects to the file IT had open — every kind of
 // window, app windows included: refreshing a document must not rename it
@@ -409,10 +707,21 @@ window.addEventListener(
     } else if (key === 'o' && !e.shiftKey) {
       e.preventDefault();
       void fileManager.open();
+    } else if (key === '/' && !e.shiftKey && !e.altKey) {
+      // The source toggle, from either editor. Capture phase, stopped here:
+      // CodeMirror must not see it. (SOURCE-VIEW.md proposed ⌘⇧M with ⌘/
+      // as the fallback if it collided; ⌘⇧M is display math.)
+      e.preventDefault();
+      e.stopPropagation();
+      void sourceView.toggle();
     }
   },
   { capture: true },
 );
+
+// A reloaded tab that was writing in the source lands back in it, its text
+// unparsed (SOURCE-VIEW.md, decision 7).
+void sourceView.restore();
 
 /** Touch every math node (same attrs) so node views re-render with new macros. */
 function refreshMathNodes() {
@@ -431,7 +740,14 @@ function refreshMathNodes() {
 
 let messageTimer = 0;
 function showMessage(text: string, action?: { label: string; run: () => void }) {
-  toastEl.textContent = text;
+  toastEl.textContent = '';
+  toastEl.title = text;
+  // The text truncates inside its own span so a long message never pushes
+  // the action button out of the pill.
+  const textEl = document.createElement('span');
+  textEl.className = 'toast-text';
+  textEl.textContent = text;
+  toastEl.appendChild(textEl);
   toastEl.classList.toggle('actionable', !!action);
   if (action) {
     const btn = document.createElement('button');
@@ -455,12 +771,11 @@ function showMessage(text: string, action?: { label: string; run: () => void }) 
 }
 
 function updateStatus() {
-  const words = view.state.doc.textBetween(0, view.state.doc.content.size, ' ', ' ')
-    .split(/\s+/)
-    .filter(Boolean).length;
-  const pages = pageCount ? `${pageCount} p · ` : '';
+  const words = sourceView.wordCount();
+  // The source view has no pages: the count is a page-view fact.
+  const pages = pageCount && !sourceView.isActive() ? `${pageCount} p · ` : '';
   hudEl.textContent = `${pages}${words} words`;
-  hudEl.title = lastStats ? `layout oracle: ${lastStats.ms.toFixed(1)} ms for ${lastStats.lines} lines` : '';
+  hudEl.title = lastStats ? `layout: ${lastStats.ms.toFixed(1)} ms for ${lastStats.lines} lines` : '';
 }
 updateStatus();
 
@@ -472,14 +787,75 @@ view.focus();
 declare global {
   interface Window {
     view: EditorView;
+    __nativeTableProofGeometry: () => Promise<{ widthPt: number; heightPt: number }>;
+    __tableProofSvg: () => Promise<string | null>;
   }
 }
 if (import.meta.env.DEV) {
   window.view = view;
+  window.__tableProofSvg = async () => {
+    const [{ compileDocSvg }, { parseTypstSvg }] = await Promise.all([import('./pdf'), import('./safe-svg')]);
+    const svg = await compileDocSvg(view.state.doc);
+    return svg ? parseTypstSvg(svg).innerHTML : null;
+  };
+  window.__nativeTableProofGeometry = async () => {
+    const [{ compileDocSvg }, { parseTypstSvg }] = await Promise.all([
+      import('./pdf'),
+      import('./safe-svg'),
+    ]);
+    const svg = await compileDocSvg(view.state.doc);
+    if (!svg) throw new Error('Typst did not return default-table proof geometry');
+    const parsed = parseTypstSvg(svg);
+    const horizontalRules = [...parsed.querySelectorAll('.typst-shape')]
+      .map((element) => {
+        const length = Number(/^M 0 0 L ([\d.]+) 0$/.exec(element.getAttribute('d') ?? '')?.[1]);
+        let localY = Number.NaN;
+        for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+          const translated = /^translate\(([-\d.]+),([-\d.]+)\)$/.exec(parent.getAttribute('transform') ?? '');
+          if (translated && Math.abs(Number(translated[1])) < 2) {
+            localY = Number(translated[2]);
+            break;
+          }
+        }
+        return { length, localY };
+      })
+      .filter((rule) => Number.isFinite(rule.length) && Number.isFinite(rule.localY));
+    const widthPt = Math.max(...horizontalRules.map((rule) => rule.length));
+    const heightPt =
+      Math.max(...horizontalRules.map((rule) => rule.localY)) -
+      Math.min(...horizontalRules.map((rule) => rule.localY));
+    if (!Number.isFinite(widthPt) || !Number.isFinite(heightPt)) {
+      throw new Error('Typst table rules were not measurable');
+    }
+    return { widthPt, heightPt };
+  };
   // Test hooks: adopt a directory handle (e.g. OPFS) as the project folder,
   // and run the app-instance embedded-figure migration (dynamic imports in a
   // test page can hit a second module instance under vite HMR).
   (window as unknown as { __fm: FileManager }).__fm = fileManager;
   (window as unknown as { __migrateEmbedded: () => Promise<void> }).__migrateEmbedded = () =>
     migrateEmbeddedFigures(view);
+  // The source view (tests/source-view.spec.ts) and the demo document it
+  // round-trips, through the app's own instances.
+  (window as unknown as { __sourceView: typeof sourceView }).__sourceView = sourceView;
+  // The library bibliography (tests/library-bib.spec.ts): point it at an
+  // OPFS file, or a snapshot, through the app's own module instance.
+  void import('./library-bib').then((lib) => {
+    (window as unknown as { __library: typeof lib }).__library = lib;
+  });
+  // The citation-style oracle (tests/citation-styles.spec.ts): how many
+  // compiler checks ran and which keys fell back to the compiled string.
+  void import('./citations').then((c) => {
+    (window as unknown as { __citationOracle: { runs: () => number; overrides: () => ReadonlyMap<string, string> } }).__citationOracle = {
+      runs: c.citationOracleRuns,
+      overrides: c.citationOracleOverrides,
+    };
+  });
+  (window as unknown as { __loadDemo: () => void }).__loadDemo = () => fileManager.newDoc(demoDoc(), 'Demo');
+  // Compiler worker counters (tests/layout-suspend.spec.ts proves a
+  // suspended editor posts no compiler task). The dynamic import resolves
+  // to the app's own module instance under vite's dev server, so the
+  // counters are the live ones.
+  (window as unknown as { __compilerLifecycleStats: () => Promise<unknown> }).__compilerLifecycleStats =
+    async () => (await import('./typst-worker-client')).testCompilerLifecycleStats();
 }

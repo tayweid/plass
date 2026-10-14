@@ -1,0 +1,109 @@
+/* ---------- editorial comments (editor-comments.ts) ---------- */
+
+/* A full-sheet-width strip between blocks: warm gray paper with fine
+   dashed rules, its text aligned with the prose column. Visibly not the
+   page: this is the one thing the page shows that the printer never does.
+   Geometry contract (typeset-plugin.ts): zero vertical margins and
+   border-box sizing, so the strip displaces what follows by exactly its
+   own painted height — the height the paginator subtracts back out. The
+   negative horizontal margins reach the sheet edges through #editor's
+   page-margin padding; the matching padding puts the text back on the
+   column. Never hide overflow: selection and caret must stay visible. */
+.ProseMirror .editor-comment {
+  --comment-bg: #eeeadf;
+  --comment-border: #cfc2a7;
+  --comment-ink: #5a4d37;
+  box-sizing: border-box;
+  margin: 0 calc(-1 * var(--page-margin-right, 1.25in)) 0 calc(-1 * var(--page-margin-left, 1.25in));
+  padding: 0.55em var(--page-margin-right, 1.25in) 0.7em var(--page-margin-left, 1.25in);
+  border-top: 1px dashed var(--comment-border);
+  border-bottom: 1px dashed var(--comment-border);
+  background: var(--comment-bg);
+  color: var(--comment-ink);
+  text-indent: 0;
+}
+
+/* Header: a comment glyph and "Comment" on the left; "NOT PRINTED" and
+   the delete on the right. Chrome, not content (contenteditable=false). */
+.ProseMirror .editor-comment-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  margin-bottom: 0.4em;
+  font: 500 12px/1.4 var(--sans);
+  color: var(--comment-ink);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ProseMirror .editor-comment-header svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.ProseMirror .editor-comment-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.ProseMirror .editor-comment-tag {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.ProseMirror .editor-comment-delete {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  padding: 2px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+  border-radius: 4px;
+}
+
+.ProseMirror .editor-comment-delete:hover,
+.ProseMirror .editor-comment-delete:focus-visible {
+  opacity: 1;
+  background: color-mix(in srgb, var(--comment-ink) 12%, transparent);
+  outline: none;
+}
+
+/* Plain text, as typed: newlines and space runs are content here. The
+   size follows the document's so the strip reads as an aside, in a
+   quieter face than the page's. */
+.ProseMirror .editor-comment-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--sans);
+  font-size: 0.86em;
+  line-height: 1.45;
+  min-height: 1.45em;
+  text-align: left;
+  caret-color: var(--comment-ink);
+}
+
+/* Classic mode: a note between two paragraphs is invisible to print, so
+   the second paragraph still carries its first-line indent (mirrors
+   consecutiveParagraph in block-layout.ts; chains up to three adjacent
+   notes, which is as many as a document ever stacks in one place). */
+.ProseMirror p + .editor-comment + p,
+.ProseMirror p + .editor-comment + .editor-comment + p,
+.ProseMirror p + .editor-comment + .editor-comment + .editor-comment + p {
+  text-indent: var(--par-indent, 0em);
+}
+
+/* The printer never sees a note: the browser print drops it whole, with
+   the display-only space it took. */
+@media print {
+  .ProseMirror .editor-comment {
+    display: none;
+  }
+}

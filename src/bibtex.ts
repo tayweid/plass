@@ -8,6 +8,9 @@ export interface BibEntry {
   key: string;
   type: string;
   fields: Record<string, string>;
+  /** The entry's own BibTeX source, `@type{key, …}` — what merge-on-cite
+   *  copies from a library into a document. */
+  raw: string;
 }
 
 /** Citation keys safe in Plass UI, reference syntax, and Typst output. */
@@ -111,7 +114,7 @@ export function parseBibTeX(src: string): BibEntry[] {
       else if (src[i] === '}') depth--;
       i++;
     }
-    entries.push({ type, key: m[2], fields: parseFields(src.slice(start, i - 1)) });
+    entries.push({ type, key: m[2], fields: parseFields(src.slice(start, i - 1)), raw: src.slice(m.index, i) });
     re.lastIndex = i;
   }
   return entries;

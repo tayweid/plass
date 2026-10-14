@@ -61,6 +61,70 @@ export interface ShapedGlyphRaw {
   safeToBreak: boolean;
 }
 
+// --- segment-stitched shaping (keystroke fast path) ---------------------
+//
+// The full-run shape cache is keyed by the entire run text, so typing
+// inside a paragraph misses it on every keystroke and re-shapes the whole
+// run in WASM. For the certified faces we instead split an eligible run
+// into chunks after each U+0020 space run, shape/cache each chunk
+// independently, and stitch the results (cluster offsets rebased). A
+// keystroke then re-shapes only the edited word.
+//
+// Safety argument: stitching is bit-identical to full-run shaping only if
+// no shaping interaction (kerning, ligatures, contextual lookups, cluster
+// merging) crosses a chunk boundary. That property is not true of
+// arbitrary fonts or scripts, so it is CERTIFIED, not assumed:
+// `src/layout/port/shape-cache.test.ts` sweeps every ordered character
+// pair of SEGMENT_SAFE_CHARS across a space, plus randomized longer
+// strings and a real-text corpus, for every registered editor face, and
+// asserts the stitched glyph stream (id, cluster, advance, offset,
+// safe-to-break flag) is bit-identical to one whole-run rustybuzz call.
+// Runs containing any character outside the certified set — notably
+// U+00AD SOFT HYPHEN, whose default-ignorable cluster merging differs at
+// a chunk start, plus newlines/tabs, combining marks, and every
+// uncertified script — fail eligibility and fall back to full-run
+// shaping. So do RTL runs, non-'en' languages, and non-empty feature
+// lists, which the certification did not cover.
+
+/** Every character certified for segment-stitched shaping: printable
+ * ASCII, Latin-1 minus U+00AD SOFT HYPHEN, and the common typographic
+ * punctuation the editor emits. The differential gate sweeps exactly this
+ * string — extend it only together with that test. */
+export const SEGMENT_SAFE_CHARS: string = (() => {
+  let s = '';
+  for (let c = 0x20; c <= 0x7e; c++) s += String.fromCharCode(c);
+  for (let c = 0xa0; c <= 0xff; c++) if (c !== 0xad) s += String.fromCharCode(c);
+  // Hyphens/dashes U+2010–U+2014, quotes, ellipsis, primes, single guillemets.
+  s += '‐‑‒–—‘’“”…′″‹›';
+  return s;
+})();
+
+const SEGMENT_SAFE = new Set<number>();
+for (let i = 0; i < SEGMENT_SAFE_CHARS.length; i++) SEGMENT_SAFE.add(SEGMENT_SAFE_CHARS.charCodeAt(i));
+
+/** True when every char of `text` is in the certified stitching charset.
+ * (All certified chars are single BMP code units, so any surrogate is
+ * automatically ineligible.) */
+export function segmentShapingEligible(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    if (!SEGMENT_SAFE.has(text.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+/** UTF-8 byte length for certified (BMP, non-surrogate) text. */
+function utf8LenBmp(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
+  }
+  return n;
+}
+
+/** LRU bound of the per-chunk shape cache (typing vocabulary). */
+const SEGMENT_CACHE_MAX = 20000;
+
 class Primitives {
   private shaper: Shaper;
   private fontIds = new Map<string, number>();
@@ -72,6 +136,11 @@ class Primitives {
   private hyphCache = new Map<string, Uint32Array>();
   private wbCache = new Map<string, Uint32Array>();
   private shapeCache = new Map<string, ShapedGlyphRaw[]>();
+  /** Per-chunk cache for segment-stitched shaping (LRU, insertion order =
+   * recency via delete/re-set on hit). */
+  private segmentShapeCache = new Map<string, ShapedGlyphRaw[]>();
+  /** Test hook: force the reference whole-run path (differential gate). */
+  segmentShapingEnabled = true;
 
   constructor(shaper: Shaper, fontIds: Map<string, number>, upems: Map<string, number>) {
     this.shaper = shaper;
@@ -163,7 +232,9 @@ class Primitives {
     return this.shaper.glyph_advance(id, glyph);
   }
 
-  /** Shape a run exactly as Typst's shape_segment does. */
+  /** Shape a run exactly as Typst's shape_segment does. Certified-charset
+   * LTR/'en'/no-features runs go through the segment-stitched fast path,
+   * which is differentially gated to be bit-identical to shapeFull. */
   shape(fontKey: string, text: string, opts?: { rtl?: boolean; lang?: string; features?: string }): ShapedGlyphRaw[] {
     const rtl = opts?.rtl ?? false;
     const lang = opts?.lang ?? 'en';
@@ -171,22 +242,89 @@ class Primitives {
     const key = `${fontKey}${rtl ? 1 : 0}${lang}${features}${text}`;
     let r = this.shapeCache.get(key);
     if (!r) {
-      const id = this.fontIds.get(fontKey);
-      if (id === undefined) throw new Error(`unknown font: ${fontKey}`);
-      const flat = this.shaper.shape(id, text, rtl, lang, features);
-      r = [];
-      for (let i = 0; i < flat.length; i += 5) {
-        r.push({
-          glyphId: flat[i],
-          cluster: flat[i + 1],
-          xAdvance: flat[i + 2],
-          xOffset: flat[i + 3],
-          safeToBreak: flat[i + 4] === 0,
-        });
+      if (this.segmentShapingEnabled && !rtl && lang === 'en' && features === '' && segmentShapingEligible(text)) {
+        r = this.shapeStitched(fontKey, text) ?? this.shapeFull(fontKey, text, rtl, lang, features);
+      } else {
+        r = this.shapeFull(fontKey, text, rtl, lang, features);
       }
       this.bound(this.shapeCache).set(key, r);
     }
     return r;
+  }
+
+  /** Reference path: one uncached rustybuzz call over the whole run. */
+  shapeFull(fontKey: string, text: string, rtl = false, lang = 'en', features = ''): ShapedGlyphRaw[] {
+    const id = this.fontIds.get(fontKey);
+    if (id === undefined) throw new Error(`unknown font: ${fontKey}`);
+    const flat = this.shaper.shape(id, text, rtl, lang, features);
+    const r: ShapedGlyphRaw[] = [];
+    for (let i = 0; i < flat.length; i += 5) {
+      r.push({
+        glyphId: flat[i],
+        cluster: flat[i + 1],
+        xAdvance: flat[i + 2],
+        xOffset: flat[i + 3],
+        safeToBreak: flat[i + 4] === 0,
+      });
+    }
+    return r;
+  }
+
+  /** Shape an eligible run chunk-by-chunk (split after each space run) and
+   * stitch the cached per-chunk results. Returns null when the run has no
+   * split point (the full path handles it in one call anyway). */
+  private shapeStitched(fontKey: string, text: string): ShapedGlyphRaw[] | null {
+    // Chunk boundaries: after a U+0020 whose successor is not a U+0020,
+    // so each chunk is a word plus its trailing space run.
+    const bounds: number[] = [];
+    for (let i = 0; i + 1 < text.length; i++) {
+      if (text.charCodeAt(i) === 0x20 && text.charCodeAt(i + 1) !== 0x20) bounds.push(i + 1);
+    }
+    if (bounds.length === 0) return null;
+    bounds.push(text.length);
+    const out: ShapedGlyphRaw[] = [];
+    let start = 0;
+    let base = 0;
+    for (const end of bounds) {
+      const chunk = text.slice(start, end);
+      for (const g of this.shapeChunk(fontKey, chunk)) {
+        out.push({
+          glyphId: g.glyphId,
+          cluster: g.cluster + base,
+          xAdvance: g.xAdvance,
+          xOffset: g.xOffset,
+          safeToBreak: g.safeToBreak,
+        });
+      }
+      base += utf8LenBmp(chunk);
+      start = end;
+    }
+    return out;
+  }
+
+  /** LRU-cached single-chunk shaping. The key omits rtl/lang/features
+   * because shapeStitched is gated to rtl=false, lang='en', features=''. */
+  private shapeChunk(fontKey: string, chunk: string): ShapedGlyphRaw[] {
+    const key = `${fontKey}${chunk}`;
+    const cached = this.segmentShapeCache.get(key);
+    if (cached) {
+      this.segmentShapeCache.delete(key);
+      this.segmentShapeCache.set(key, cached);
+      return cached;
+    }
+    const r = this.shapeFull(fontKey, chunk);
+    this.segmentShapeCache.set(key, r);
+    if (this.segmentShapeCache.size > SEGMENT_CACHE_MAX) {
+      const oldest = this.segmentShapeCache.keys().next().value;
+      if (oldest !== undefined) this.segmentShapeCache.delete(oldest);
+    }
+    return r;
+  }
+
+  /** Test hook: reset shaping caches so the next shape() re-derives. */
+  clearShapeCaches(): void {
+    this.shapeCache.clear();
+    this.segmentShapeCache.clear();
   }
 
   /** Crude cache bound: reset when huge (vocabulary/paragraph churn). */

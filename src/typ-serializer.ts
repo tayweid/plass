@@ -1,15 +1,33 @@
 // PM doc -> Typst markup (.typ) serialization (spec §3.3, serialize half).
 //
-// Math is authored as LaTeX (KaTeX) in v1, so exported math goes through the
-// mitex Typst package, which compiles LaTeX math inside Typst documents.
+// Math is authored as LaTeX (KaTeX). What Plass compiles and exports
+// (`islands: 'print'`) is native Typst math, converted formula by formula
+// (math-convert.ts), with the handles it names defined in the header
+// (typst-math-prelude.ts). The working .typ file (`'file'`) keeps each
+// formula's LaTeX in a `#mi`/`#mitex` call of the mitex package, so the
+// file reopens exactly.
 
 import type { Node as PMNode } from 'prosemirror-model';
-import { normalizeSettings, parseMathMacros, type DocSettings } from './settings';
+import { TableMap } from 'prosemirror-tables';
+import { normalizeSettings, parseMathMacros, type DocSettings, paperInches, DEFAULT_SETTINGS } from './settings';
 import { wrapAligned } from './math-src';
-import { isPortableCitationKey } from './bibtex';
-import { effectiveFont, parityMetrics } from './font-registry';
+import { isPortableCitationKey, parseBibTeX } from './bibtex';
+import { RAW_FONT, codeBlockMetricsEm, effectiveFont, parityMetrics } from './font-registry';
+import { TABLE_DENSITY_INSET_PT, type TableDensity } from './table-density';
+import { rowRuleArg, type RowRule } from './table-rules';
+import { CELL_FILL_TYPST, type CellFill } from './table-fills';
+import type { CitationStyle } from './citation-styles';
+import { commentToTyp } from './editor-comments-format';
+import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config';
+import { convertMath, displayEquation, inlineEquation, mathConverterReady } from './math-convert';
+import { mathPrelude } from './typst-math-prelude';
 
 export interface TypExportOptions {
+  /** When given, receives the text offset at which each top-level block's
+   *  serialization begins (index = position of the block in `doc`). The
+   *  source view maps a caret between the document and its text by block;
+   *  nothing finer is promised (SOURCE-VIEW.md, decision 5). */
+  offsets?: number[];
   /** Rewrite image sources (e.g. data: URLs to VFS paths for compilation). */
   resolveImage?: (src: string) => string;
   /** Extra font families appended to #set text(font: …) as fallbacks. */
@@ -19,6 +37,30 @@ export interface TypExportOptions {
    * compiled SVGs expose per-cell hit geometry for in-place editing.
    */
   cellLinks?: boolean;
+  /**
+   * What becomes of islands — raw Typst (`typst-raw` blocks, `typst_inline`
+   * spans) and raw Markdown (`md-raw` blocks). 'file' (default) is the .typ
+   * on disk: raw Typst verbatim, so the file never loses content. 'print'
+   * is what Plass compiles (the audit, PDF): every island is a raw code
+   * block or inline raw, shown as source and never run — the page shows the
+   * same code block, so page and print agree (Typst on rails). Math too:
+   * 'file' keeps each formula's LaTeX (`#mi`/`#mitex`); 'print' converts it
+   * to native Typst math, which needs `ensureMathConverter()` awaited first
+   * and throws MathConvertError for a formula the converter rejects.
+   */
+  islands?: 'file' | 'print';
+}
+
+/** A fence longer than any backtick run inside `text` (Typst raw blocks). */
+function rawFence(text: string): string {
+  const longest = Math.max(2, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  return '`'.repeat(longest + 1);
+}
+
+/** An island as printed: a raw block, never executed. */
+function islandBlock(text: string, indent: string): string {
+  const fence = rawFence(text);
+  return indent + fence + '\n' + text + '\n' + fence + '\n\n';
 }
 
 // ---------- editor↔Typst vertical parity ----------
@@ -38,65 +80,223 @@ export interface TypExportOptions {
  * editor's CSS line boxes/padding still apply. The paginator shifts its
  * page spacers by this amount so page-top ink coincides with the PDF.
  */
-export function pageTopAdjustEm(s: DocSettings, unit: 'paragraph' | 'line' | 'h1' | 'h2' | 'h3'): number {
+export function pageTopAdjustEm(s: DocSettings, unit: 'paragraph' | 'line' | 'h1' | 'h2' | 'h3' | 'code'): number {
   const m = parityMetrics(s.font);
   const pSlackAbove = s.lineHeight / 2 + (m.cssA - m.cssD) / 2;
   if (unit === 'paragraph' || unit === 'line') return m.typAsc - pSlackAbove;
+  if (unit === 'code') {
+    // The raw block's top edge sits at the margin; its first baseline is
+    // one raw top-edge below. The editor's first baseline is the padding
+    // plus the line box's slack above the glyphs.
+    const c = codeBlockMetricsEm(s);
+    const slackAbove = c.lineEm / 2 + (RAW_FONT.scale * (RAW_FONT.cssA - RAW_FONT.cssD)) / 2;
+    return RAW_FONT.scale * RAW_FONT.topEdge - (c.padTopEm + slackAbove);
+  }
   const h = HEADINGS[unit === 'h1' ? 0 : unit === 'h2' ? 1 : 2];
   const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
-  return m.typAsc * h.hs - (h.padTop * h.hs + hSlackAbove);
+  // `shift`: Typst's heading frame sits that much lower than the metric
+  // model predicts (headingBlockSpacingEm's calibration), at a page top too.
+  return m.typAsc * h.hs - (h.padTop * h.hs + hSlackAbove) + h.shift;
+}
+
+/**
+ * How far a unit's Typst frame BOTTOM sits above the bottom of its painted
+ * editor box, in body em — the counterpart of pageTopAdjustEm for the page
+ * bottom. Typst's default bottom edge is the baseline, so a text frame ends
+ * at its last baseline; the editor's line box goes on below it by the
+ * descent and the half-leading. The local paginator subtracts this before
+ * testing a unit against the page's content bottom, so a line or block that
+ * Typst would place — its frame ending at the margin — is placed here too.
+ *
+ * Derivation per kind: box = padTop + n·lineBox; frame top = box top +
+ * (padTop + slackAbove − typAsc) (pageTopAdjustEm, negated); frame height
+ * = n·extent + (n−1)·leading with lineBox = extent + leading. The box's
+ * excess below the frame is then lineBox − slackAbove − (extent − typAsc),
+ * independent of n and of padTop.
+ */
+export function pageBottomInsetEm(s: DocSettings, unit: 'paragraph' | 'line' | 'h1' | 'h2' | 'h3' | 'code'): number {
+  const m = parityMetrics(s.font);
+  if (unit === 'paragraph' || unit === 'line') {
+    const pSlackAbove = s.lineHeight / 2 + (m.cssA - m.cssD) / 2;
+    return s.lineHeight - pSlackAbove - (m.extent - m.typAsc);
+  }
+  if (unit === 'code') {
+    // The raw frame's extent is its top edge (typeset-plugin's rail).
+    const c = codeBlockMetricsEm(s);
+    const slackAbove = c.lineEm / 2 + (RAW_FONT.scale * (RAW_FONT.cssA - RAW_FONT.cssD)) / 2;
+    return c.lineEm - slackAbove;
+  }
+  const h = HEADINGS[unit === 'h1' ? 0 : unit === 'h2' ? 1 : 2];
+  const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
+  return 1.25 * h.hs - hSlackAbove - (m.extent - m.typAsc) * h.hs - h.shift;
+}
+
+/**
+ * A table's block spacing in the editor, body em: Typst's Auto spacing (=
+ * paragraph spacing) measured frame to frame, less what the neighbouring
+ * paragraph boxes already carry (descent below, cap slack above). The
+ * margin-top is dropped at a page top like every weak block spacing.
+ */
+export function tableMarginsEm(s: DocSettings): { top: number; bottom: number } {
+  return {
+    top: parSpacingEm(s) - pageBottomInsetEm(s, 'paragraph'),
+    bottom: parSpacingEm(s) + pageTopAdjustEm(s, 'paragraph'),
+  };
+}
+
+/** A heading level's text size as a ratio of the body size (levels 4–6
+ * print like 3). The port lays headings out at this scale, bold. */
+export function headingScale(level: number): number {
+  return HEADINGS[Math.min(3, Math.max(1, level)) - 1].hs;
 }
 
 // Heading scale mirrored from the editor CSS (.ProseMirror h1/h2/h3).
 // `shift` is a measured per-level baseline correction (em of body size):
 // Typst places heading baselines slightly lower than the metric model
 // predicts; calibrated against the live editor (NCM defaults).
+/** The solution block's colour — a verified preset, not a free parameter
+ * (`style.css`'s `--solution-red` paints the same value in the editor).
+ * The block is `#block(width: 100%, stroke: (left: 2pt + red), inset:
+ * (left: 1em))` with `#set text(fill: red)` inside: a left inset the CSS
+ * mirrors as padding, no vertical inset, Auto block spacing — so its
+ * vertical box equals a plain paragraph run and needs no calibration. */
+const SOLUTION_COLOR = 'rgb("#c00000")';
+
 const HEADINGS: Array<{ level: number; hs: number; padTop: number; marginBottom: number; shift: number }> = [
   { level: 1, hs: 1.9, padTop: 0.2, marginBottom: 0.5, shift: 0.1932 },
   { level: 2, hs: 1.4, padTop: 1.4, marginBottom: 0.5, shift: 0.1269 },
   { level: 3, hs: 1.15, padTop: 1.4, marginBottom: 0.5, shift: 0.1833 },
 ];
 
+/**
+ * `#set par(spacing: ...)` in body em: the Auto block-spacing fallback
+ * Typst resolves for every block whose `above`/`below` isn't explicitly
+ * set (`styles.resolve(ParElem::spacing)` in `flow/collect.rs::block`) —
+ * paragraphs, lists, plain code blocks, raw-Typst islands, figures, and
+ * tables all collapse to this SAME value on both sides when adjacent,
+ * since Auto is independently resolved for `above` and `below` alike.
+ * Exported so `flow-rules.ts` can build the weakness-tagged spacing item
+ * Typst's collector assigns this construct (weakness 4) without
+ * duplicating the formula.
+ */
+/** Item pitch (body em, frame to frame): a tight list's items sit at
+ *  leading + 0.25em (the editor's `li > p` margin), a loose list's at
+ *  paragraph spacing — Typst's own rule, with `spacing: auto`. */
+export function listSpacingEm(s: DocSettings, tight: boolean): number {
+  if (!tight) return parSpacingEm(s);
+  return s.lineHeight + 0.25 - parityMetrics(s.font).extent;
+}
+
+export function parSpacingEm(s: DocSettings): number {
+  const m = parityMetrics(s.font);
+  // Classic (indented) paragraphs flow with no extra gap: spacing = leading.
+  const parGapEm = s.parIndent ? 0 : 0.9;
+  return s.lineHeight + parGapEm - m.extent;
+}
+
+/**
+ * Explicit `#set block(above/below: ...)` (body em) a heading's show rule
+ * emits — Typst's weakness-3 explicit block spacing for headings (see
+ * `parityRules` below, which calls this per level so the emitted text and
+ * this value can never drift apart). Exported for `flow-rules.ts`'s
+ * region-top spacing-drop rule.
+ */
+export function headingBlockSpacingEm(s: DocSettings, level: number): { above: number; below: number } {
+  const m = parityMetrics(s.font);
+  const lh = s.lineHeight;
+  const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
+  const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
+  const h = HEADINGS[Math.min(3, level) - 1];
+  const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
+  const hSlackBelow = (h.hs * (1.25 + m.cssD - m.cssA)) / 2;
+  const above = pSlackBelow + 0.9 + h.padTop * h.hs + hSlackAbove - (m.typDesc + m.typAsc * h.hs) - h.shift;
+  const below = hSlackBelow + h.marginBottom * h.hs + pSlackAbove - (m.typDesc * h.hs + m.typAsc) + h.shift;
+  return { above, below };
+}
+
+/**
+ * Explicit `#set block(above/below: ...)` (body em) the display-math show
+ * rule emits — weakness-3 explicit block spacing, same status as headings'.
+ * Exported for `flow-rules.ts`'s region-top spacing-drop rule.
+ */
+export function equationBlockSpacingEm(s: DocSettings): { above: number; below: number } {
+  const m = parityMetrics(s.font);
+  const lh = s.lineHeight;
+  const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
+  const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
+  const above = pSlackBelow + 0.9 + 0.5 - m.typDesc;
+  const below = 0.5 + 0.9 + pSlackAbove - m.typAsc;
+  return { above, below };
+}
+
+/** {page} in a running text: the page counter in the numbering in force. */
+export const RUNNING_PAGE_TYP = '#context counter(page).display()';
+/** {section} in a running text: the level-1 heading in force at the top
+ *  of the page — the last one before the header's own location, so a
+ *  heading that opens this page is not yet it (the editor mirrors this:
+ *  the last level-1 heading on an earlier page). */
+export const RUNNING_SECTION_TYP =
+  '#context { let hs = query(selector(heading.where(level: 1)).before(here())); if hs.len() > 0 { hs.last().body } }';
+
+/** A leaf block's Typst frame inside its painted box, body em: `above` is
+ *  the slack from the box top down to the frame top, `below` the inset from
+ *  the frame bottom down to the box bottom. Text kinds carry the
+ *  calibrated line-box slack; the kinds with no calibration (figure, table,
+ *  display math, raw islands…) have frame = box. Grid cells (grid-editor.ts)
+ *  normalize every cell to the paragraph's values with these. */
+export function blockFrameSlackEm(node: PMNode, s: DocSettings): { above: number; below: number } {
+  const name = node.type.name;
+  const kind =
+    name === 'paragraph' || name === 'doc_title' || name === 'doc_authors' || name === 'doc_date'
+      ? 'paragraph'
+      : name === 'heading'
+        ? (`h${Math.min(3, (node.attrs.level as number) || 1)}` as 'h1' | 'h2' | 'h3')
+        : name === 'code_block'
+          ? 'code'
+          : null;
+  if (!kind) return { above: 0, below: 0 };
+  return { above: -pageTopAdjustEm(s, kind), below: pageBottomInsetEm(s, kind) };
+}
+
 /** The parity header: set/show rules reproducing editor spacing in Typst. */
 export function parityRules(s: DocSettings): string {
   const m = parityMetrics(s.font);
   const lh = s.lineHeight;
   const pt = (em: number) => `${(em * s.sizePt).toFixed(3)}pt`;
-  // Baseline → block-edge slack of a body paragraph line (em).
-  const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
-  const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
   let out = '';
-  // Classic (indented) paragraphs flow with no extra gap: spacing = leading.
-  const parGapEm = s.parIndent ? 0 : 0.9;
-  out += `#set par(justify: true, leading: ${pt(lh - m.extent)}, spacing: ${pt(lh + parGapEm - m.extent)})\n`;
+  out += `#set par(justify: true, leading: ${pt(lh - m.extent)}, spacing: ${pt(parSpacingEm(s))})\n`;
   if (s.parIndent) out += `#set par(first-line-indent: 1.5em)\n`;
-  out += `#set list(spacing: ${pt(lh + 0.25 - m.extent)})\n`;
-  out += `#set enum(spacing: ${pt(lh + 0.25 - m.extent)})\n`;
-  for (const h of HEADINGS) {
-    const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
-    const hSlackBelow = (h.hs * (1.25 + m.cssD - m.cssA)) / 2;
-    const above = pSlackBelow + 0.9 + h.padTop * h.hs + hSlackAbove - (m.typDesc + m.typAsc * h.hs) - h.shift;
-    const below = hSlackBelow + h.marginBottom * h.hs + pSlackAbove - (m.typDesc * h.hs + m.typAsc) + h.shift;
-    out += `#show heading.where(level: ${h.level}): set text(size: ${pt(h.hs)})\n`;
-    out += `#show heading.where(level: ${h.level}): set block(above: ${pt(above)}, below: ${pt(below)})\n`;
-    out += `#show heading.where(level: ${h.level}): set par(leading: ${pt((1.25 - m.extent) * h.hs)})\n`;
+  out += `#set list(spacing: ${pt(listSpacingEm(s, true))})\n`;
+  out += `#set enum(spacing: ${pt(listSpacingEm(s, true))})\n`;
+  // Grid rows are atomic: the editor moves a row whole between pages.
+  out += '#set grid.cell(breakable: false)\n';
+  // Levels 4–6 print like level 3 (the editor styles them the same), so
+  // the metrics calibrated for three levels hold for six.
+  for (let level = 1; level <= 6; level++) {
+    const h = HEADINGS[Math.min(3, level) - 1];
+    const { above, below } = headingBlockSpacingEm(s, level);
+    out += `#show heading.where(level: ${level}): set text(size: ${pt(h.hs)})\n`;
+    out += `#show heading.where(level: ${level}): set block(above: ${pt(above)}, below: ${pt(below)})\n`;
+    out += `#show heading.where(level: ${level}): set par(leading: ${pt((1.25 - m.extent) * h.hs)})\n`;
   }
   // Inline raw: pin Typst's defaults so editor code spans (same font file,
   // same ratio) have identical advance widths.
   out += `#show raw.where(block: false): set text(font: "DejaVu Sans Mono", size: ${pt(0.8)})\n`;
   // Display math: the editor shows Typst's own ink inside 0.5em padding.
-  const eqAbove = pSlackBelow + 0.9 + 0.5 - m.typDesc;
-  const eqBelow = 0.5 + 0.9 + pSlackAbove - m.typAsc;
+  const { above: eqAbove, below: eqBelow } = equationBlockSpacingEm(s);
   out += `#show math.equation.where(block: true): set block(above: ${pt(eqAbove)}, below: ${pt(eqBelow)})\n`;
-  // Tables break across pages Typst-natively (repeated table.header rows
-  // and all): the editor mirrors the split via the paged mini-compile in
-  // table-split.ts, and the page oracle represents mid-table page starts.
+  // Tables remain continuous structured editor content. Typst breaks them
+  // between rows with the repeating table.header row laid at the top of each
+  // continuation page; the editor mirrors that as a row-boundary widget
+  // (PAGE-PORT.md Phase 7) and places a table atomically only when it
+  // cannot certify the split.
   return out;
 }
 
 let exportOpts: TypExportOptions = {};
 let eqLabels = new Set<string>();
 let docBib: { name: string; content: string } | null = null;
+let docBibKeys = new Set<string>();
 let docMacros: Record<string, string> = {};
 
 /** Expand math macros so exported LaTeX compiles anywhere. */
@@ -121,7 +321,7 @@ function expandMacros(src: string): string {
   return expandMacrosWith(src, docMacros);
 }
 
-/** The #set text(...) header line (shared with the layout oracle's probes). */
+/** The #set text(...) header line. */
 export function textSetLine(s: DocSettings, fontFallback?: string[]): string {
   const primary = effectiveFont(s.font).typstFamily;
   const fonts = fontFallback?.length
@@ -134,32 +334,104 @@ function imageSrc(src: string): string {
   return exportOpts.resolveImage ? exportOpts.resolveImage(src) : src;
 }
 
+function imageWidthArg(node: PMNode): string {
+  const width = node.attrs.widthPct;
+  return typeof width === 'number' && Number.isFinite(width) && width > 0 && width <= 100 ? `, width: ${width}%` : '';
+}
+
 export function escapeTyp(text: string): string {
   // A literal ~ must escape — Typst reads a bare ~ as a non-breaking
   // space, silently gluing the words around it. A real U+00A0 in the text
   // emits AS Typst's ~, so the printed glue matches the editor's.
-  return text.replace(/[\\#$*_`@<>[\]~]/g, (c) => '\\' + c).replace(/\u00a0/g, '~');
+  // A straight quote escapes too: unescaped, Typst would print it curly,
+  // and the document already holds the curly glyph wherever that is
+  // wanted (smart-quotes.ts) — document text equals printed text.
+  return text.replace(/[\\#$*_`@<>[\]~"']/g, (c) => '\\' + c).replace(/\u00a0/g, '~');
 }
 
-function inlineToTyp(node: PMNode): string {
+/** Table cells are serialized through a deliberately narrower path. A Typst
+ * comment opener is executable even inside a content block, so keep it inert
+ * without changing the established encoding of ordinary document prose. */
+function escapeTableCellText(text: string): string {
+  return escapeTyp(text).replace(/\/\//g, '\\/\\/');
+}
+
+function portableTableLabel(label: unknown): string {
+  const value = String(label ?? '');
+  if (!value) return '';
+  if (!isPortableCitationKey(value)) {
+    throw new Error(`Cannot export table: reference label ${JSON.stringify(value)} is not portable Typst syntax`);
+  }
+  return ` <${value}>`;
+}
+
+/** Marks that wrap a run of inline content on export, outermost last. */
+const RUN_MARKS = ['strong', 'em', 'strike'] as const;
+
+function runSignature(child: PMNode): string {
+  const names = new Set(child.marks.map((m) => m.type.name));
+  return RUN_MARKS.filter((n) => names.has(n)).join(',');
+}
+
+function wrapRun(t: string, sig: string): string {
+  if (sig.includes('strong')) t = `*${t}*`;
+  if (sig.includes('em')) t = `_${t}_`;
+  if (sig.includes('strike')) t = `#strike[${t}]`;
+  return t;
+}
+
+/**
+ * Inline content -> Typst markup. Text and inline math sharing the same
+ * strong/em/strike marks form one run wrapped once (`*#mi(\`2\`) drinks*`):
+ * Typst's strong emboldens math, and the editor compiles such a formula's
+ * ink in that context, so the printed span must stay one span. Every other
+ * atom (raw Typst, refs, citations, footnotes, images) closes the run and
+ * is emitted bare — their print does not follow the surrounding marks.
+ */
+function inlineToTyp(node: PMNode, tableCell = false): string {
   let out = '';
+  let run = '';
+  let sig = '';
+  const flush = () => {
+    if (run) out += wrapRun(run, sig);
+    run = '';
+  };
   node.forEach((child) => {
     if (child.isText && child.text) {
-      const marks = new Set(child.marks.map((m) => m.type.name));
-      if (marks.has('code')) {
-        out += '`' + child.text + '`';
-        return;
+      const s = runSignature(child);
+      if (s !== sig) {
+        flush();
+        sig = s;
       }
-      let t = escapeTyp(child.text);
-      if (marks.has('strong')) t = `*${t}*`;
-      if (marks.has('em')) t = `_${t}_`;
-      if (marks.has('strike')) t = `#strike[${t}]`;
-      out += t;
-    } else if (child.type.name === 'typst_inline') {
-      // Raw Typst: the source IS the export.
-      out += child.attrs.src;
-    } else if (child.type.name === 'math_inline') {
-      out += `#mi(\`${expandMacros(child.attrs.src)}\`)`;
+      if (child.marks.some((m) => m.type.name === 'code')) {
+        // Typst has no variable-length inline raw fence. Use its string form
+        // for certified table cells when a literal backtick would close `...`.
+        run += tableCell && child.text.includes('`')
+          ? `#raw(${JSON.stringify(child.text)}, block: false)`
+          : '`' + child.text + '`';
+      } else {
+        run += tableCell ? escapeTableCellText(child.text) : escapeTyp(child.text);
+      }
+      return;
+    }
+    if (child.type.name === 'math_inline') {
+      const s = runSignature(child);
+      if (s !== sig) {
+        flush();
+        sig = s;
+      }
+      const source = inlineLatex(child);
+      if (exportOpts.islands === 'print') run += inlineEquation(convertMath(source));
+      else run += tableCell ? `#mi(raw(${JSON.stringify(source)}, block: false))` : `#mi(\`${source}\`)`;
+      return;
+    }
+    flush();
+    sig = '';
+    if (child.type.name === 'typst_inline') {
+      // Raw Typst: verbatim in the file; printed as inline raw, never run.
+      // Inline HTML has no Typst form and is inline raw in the file too.
+      const raw = exportOpts.islands === 'print' || child.attrs.lang === 'html';
+      out += raw ? `#raw(${JSON.stringify(child.attrs.src as string)})` : child.attrs.src;
     } else if (child.type.name === 'eq_ref') {
       // Equation refs render as "(1)" to match the editor (Typst's default
       // would be "Equation 1"); figure refs keep "Figure 1".
@@ -178,10 +450,94 @@ function inlineToTyp(node: PMNode): string {
     } else if (child.type.name === 'hard_break') {
       out += ' \\\n';
     } else if (child.type.name === 'image') {
-      out += `#image("${imageSrc(child.attrs.src)}")`;
+      out += `#image("${imageSrc(child.attrs.src)}"${imageWidthArg(child)})`;
     }
   });
+  flush();
   return out;
+}
+
+const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code']);
+const TABLE_CELL_INLINE = new Set([
+  'text',
+  'hard_break',
+  'math_inline',
+  'eq_ref',
+  'citation',
+]);
+
+/**
+ * Serialize only the table-cell subset that the importer can reconstruct
+ * without guessing. The schema permits arbitrary blocks; an explicit failure
+ * leaves the ProseMirror document untouched instead of silently dropping them.
+ */
+function tableCellContentToTyp(cell: PMNode, row: number, column: number): string {
+  const where = `table cell ${row + 1}:${column + 1}`;
+  const paragraphs: string[] = [];
+  cell.forEach((block) => {
+    if (block.type.name !== 'paragraph') {
+      throw new Error(`Cannot export ${where}: unsupported ${block.type.name} block; content was not discarded`);
+    }
+    if (block.attrs.keep || block.attrs.align) {
+      throw new Error(`Cannot export ${where}: paragraph layout attributes are not supported inside table cells`);
+    }
+    block.descendants((child) => {
+      if (!TABLE_CELL_INLINE.has(child.type.name)) {
+        throw new Error(`Cannot export ${where}: unsupported inline ${child.type.name}; content was not discarded`);
+      }
+      const markNames = child.marks.map((mark) => mark.type.name);
+      const unsupported = markNames.find((name) => !TABLE_CELL_MARKS.has(name));
+      if (unsupported) {
+        throw new Error(`Cannot export ${where}: unsupported ${unsupported} mark; content was not discarded`);
+      }
+      if (!child.isText && markNames.length) {
+        throw new Error(`Cannot export ${where}: marks on ${child.type.name} are not supported`);
+      }
+      if (markNames.includes('code') && markNames.length > 1) {
+        throw new Error(`Cannot export ${where}: code combined with another mark is not supported`);
+      }
+      const inlineSource = child.isText
+        ? (child.text ?? '')
+        : child.type.name === 'math_inline'
+          ? (child.attrs.src as string)
+          : '';
+      if (/[\r\n]/.test(inlineSource)) {
+        throw new Error(`Cannot export ${where}: multiline inline content is not supported`);
+      }
+      if (child.type.name === 'citation') {
+        const key = child.attrs.key as string;
+        if (!isPortableCitationKey(key) || !docBibKeys.has(key)) {
+          throw new Error(`Cannot export ${where}: citation ${JSON.stringify(key)} has no portable bibliography entry`);
+        }
+      }
+      if (child.type.name === 'eq_ref') {
+        const label = child.attrs.label as string;
+        if (!isPortableCitationKey(label)) {
+          throw new Error(`Cannot export ${where}: reference label ${JSON.stringify(label)} is not portable Typst syntax`);
+        }
+        if (unnumberedEqLabels.has(label)) {
+          throw new Error(`Cannot export ${where}: a reference to an unnumbered equation is not lossless`);
+        }
+      }
+      return true;
+    });
+    let body = inlineToTyp(block, true);
+    // In a Typst content block these prefixes otherwise acquire block syntax.
+    body = body.replace(/(^|\n)([=+\-])/g, '$1\\$2');
+    if (/\n[ \t]*\n/.test(body)) {
+      throw new Error(`Cannot export ${where}: an inline source contains a blank line`);
+    }
+    paragraphs.push(body);
+  });
+  if (paragraphs.length === 1 && !paragraphs[0]) return '';
+  return paragraphs
+    .map((body) => body || '// typeset:empty-table-paragraph\n~')
+    .join('\n\n');
+}
+
+function tableCellBrackets(content: string): string {
+  if (!content.includes('\n')) return `[${content}]`;
+  return `[\n${content.split('\n').map((line) => `    ${line}`).join('\n')}\n  ]`;
 }
 
 function blocksToTyp(parent: PMNode, indent: string): string {
@@ -198,8 +554,8 @@ function blockToTyp(node: PMNode, indent = ''): string {
       let s = inlineToTyp(node);
       // An empty paragraph is one blank line of vertical space — in the PDF
       // too (a bare ~ renders as an empty line of full line height). Without
-      // this, Typst sees nothing where the editor shows a gap, and the page
-      // oracle's breaks drift below the editor's real heights.
+      // this, Typst sees nothing where the editor shows a gap, and its pages
+      // drift from the editor's real heights.
       if (!s.trim()) return indent + '~\n\n';
       // A leading =, - or + would re-parse as heading/list syntax.
       if (/^[=\-+]/.test(s)) s = '\\' + s;
@@ -233,10 +589,30 @@ function blockToTyp(node: PMNode, indent = ''): string {
         ']\n\n'
       );
     case 'blockquote':
+      if (node.attrs.kind === 'solution') {
+        return (
+          indent +
+          `#block(width: 100%, stroke: (left: 2pt + ${SOLUTION_COLOR}), inset: (left: 1em))[\n` +
+          indent +
+          `  #set text(fill: ${SOLUTION_COLOR})\n\n` +
+          blocksToTyp(node, indent + '  ') +
+          indent +
+          ']\n\n'
+        );
+      }
       return indent + '#quote(block: true)[\n' + blocksToTyp(node, indent + '  ') + indent + ']\n\n';
+    case 'editor_comment':
+      // The working file keeps the note in its comment frame; the print
+      // compile (PDF, the audit) omits it whole — no separator, no trace —
+      // so the printed body equals that of the same document without it.
+      if (exportOpts.islands === 'print') return '';
+      return indent + commentToTyp(node.textContent) + '\n\n';
     case 'code_block':
-      // Raw-Typst escape-hatch islands (from import) pass through verbatim.
-      if (node.attrs.params === 'typst-raw') return indent + node.textContent + '\n\n';
+      // Islands: a raw-Typst block stays verbatim in the .typ file and is
+      // printed as a raw block; a Markdown block has no Typst form and is
+      // a raw block in both.
+      if (node.attrs.params === 'typst-raw' && exportOpts.islands !== 'print') return indent + node.textContent + '\n\n';
+      if (node.attrs.params === 'typst-raw' || node.attrs.params === 'md-raw') return islandBlock(node.textContent, indent);
       return indent + '```' + (node.attrs.params ?? '') + '\n' + node.textContent + '\n```\n\n';
     case 'math_display': {
       const numberedAttr = node.attrs.numbered as boolean | null;
@@ -245,7 +621,8 @@ function blockToTyp(node: PMNode, indent = ''): string {
       // a compile error (Typst: cannot ref an unnumbered equation) — drop
       // it; the references degrade to literal placeholders.
       const label = node.attrs.label && effNumbered ? ` <${node.attrs.label}>` : '';
-      const body = '#mitex(`\n' + expandMacros(wrapAligned(node.attrs.src as string)) + '\n`)' + label;
+      const latex = displayLatex(node);
+      const body = (exportOpts.islands === 'print' ? displayEquation(convertMath(latex)) : '#mitex(`' + latex + '`)') + label;
       const numbered = node.attrs.numbered as boolean | null;
       // Per-equation override as bare set/restore rules: a wrapping content
       // block (#[...]) changes Typst's block spacing (~0.5em) and shifted
@@ -263,17 +640,52 @@ function blockToTyp(node: PMNode, indent = ''): string {
       // src is emitted verbatim (even data: URLs) so our own files round-trip
       // losslessly; swap in a real image path for Typst compilation.
       const label = node.attrs.label ? ` <${node.attrs.label}>` : '';
-      return indent + `#figure(image("${imageSrc(node.attrs.src)}"), caption: [${inlineToTyp(node)}])${label}\n\n`;
+      return indent + `#figure(image("${imageSrc(node.attrs.src)}"${imageWidthArg(node)}), caption: [${inlineToTyp(node)}])${label}\n\n`;
     }
     case 'bullet_list':
     case 'ordered_list': {
       const marker = node.type.name === 'bullet_list' ? '- ' : '+ ';
+      const tight = node.attrs.tight !== false;
       let out = '';
-      node.forEach((item) => {
+      node.forEach((item, _o, k) => {
         const body = blocksToTyp(item, '').trimEnd().split('\n').join('\n' + indent + '  ');
-        out += indent + marker + body + '\n';
+        // A loose list: blank lines between the items (Typst's own tight:
+        // false), spaced by paragraph spacing. The document's `#set` fixes
+        // the item pitch for tight lists, so the loose one is set and
+        // restored around the list (bare set rules, like an equation's
+        // numbering override: a wrapping content block would add spacing).
+        out += (tight || k === 0 ? '' : '\n') + indent + marker + body + '\n';
       });
+      if (!tight) {
+        const kind = node.type.name === 'bullet_list' ? 'list' : 'enum';
+        const spacing = (em: number) => `${(em * docSettings.sizePt).toFixed(3)}pt`;
+        out =
+          indent + `#set ${kind}(spacing: ${spacing(listSpacingEm(docSettings, false))})\n` +
+          out +
+          indent + `#set ${kind}(spacing: ${spacing(listSpacingEm(docSettings, true))})\n`;
+      }
       return out + '\n';
+    }
+    case 'grid': {
+      // Typst's grid: fraction columns, one gutter, cells row-major as
+      // content blocks (the rail's whole vocabulary — grid-editor.ts).
+      const columns = node.attrs.columns as number[];
+      const gutter = node.attrs.gutter as number;
+      const fr = (c: number) => `${+c.toFixed(3)}fr`;
+      let out = indent + `#grid(\n${indent}  columns: (${columns.map(fr).join(', ')}),\n${indent}  gutter: ${+gutter.toFixed(2)}em,\n`;
+      node.forEach((row) => {
+        row.forEach((cell) => {
+          const body = blocksToTyp(cell, '').trimEnd();
+          // An empty cell (one empty paragraph) is `[]`, not the `~` an
+          // empty paragraph prints as in the flow.
+          if (!body.trim() || (cell.childCount === 1 && cell.firstChild!.type.name === 'paragraph' && !cell.firstChild!.content.size)) {
+            out += indent + '  [],\n';
+            return;
+          }
+          out += indent + '  [\n' + body.split('\n').map((l) => (l.trim() ? indent + '    ' + l : '')).join('\n') + '\n' + indent + '  ],\n';
+        });
+      });
+      return out + indent + ')\n\n';
     }
     case 'table': {
       // Row-major cell list; header rows via table.header, merges via
@@ -286,18 +698,27 @@ function blockToTyp(node: PMNode, indent = ''): string {
         columns += (cell.attrs.colspan as number) ?? 1;
       });
 
-      // Per-column alignment: first non-null cell alignment wins.
-      const colAligns: Array<string | null> = new Array(columns).fill(null);
-      node.forEach((row) => {
-        let col = 0;
-        row.forEach((cell) => {
-          const span = (cell.attrs.colspan as number) ?? 1;
-          const a = cell.attrs.align as string | null;
-          if (a && col < columns && colAligns[col] === null) colAligns[col] = a;
-          col += span;
+      // A column default is an optimization; every differing cell overrides
+      // it. Keep unspecified axes distinct from explicit left/top so a trip
+      // through source does not change the document or mark it dirty. If any
+      // cell leaves an axis unset, the column must leave that axis unset too.
+      const tableMap = TableMap.get(node);
+      const colValues: Array<Set<string | null>> = Array.from({ length: columns }, () => new Set());
+      const colVerticals: Array<Set<string | null>> = Array.from({ length: columns }, () => new Set());
+      node.forEach((row, rowOffset) => {
+        row.forEach((cell, cellOffset) => {
+          const col = tableMap.findCell(rowOffset + cellOffset + 1).left;
+          colValues[col]?.add((cell.attrs.align as string) || null);
+          colVerticals[col]?.add((cell.attrs.valign as string) || null);
         });
       });
-      const anyAlign = colAligns.some(Boolean);
+      const columnDefault = (values: Set<string | null>) => values.has(null) ? null : [...values][0] ?? null;
+      const colAligns = colValues.map((values) => values.has('decimal') ? 'decimal' : columnDefault(values));
+      const colValigns = colVerticals.map(columnDefault);
+      // Typst's auto inherits the centered table wrapper. Write physical
+      // left with a preservation comment for the editor's implicit default.
+      const aligned = (horizontal: string | null, vertical: string | null) =>
+        `${horizontal ?? 'left /* typeset:default */'}${vertical === null ? '' : ` + ${vertical === 'middle' ? 'horizon' : vertical}`}`;
 
       // Decimal columns split into paired sub-columns at the point (integer
       // part right-aligned, fraction left-aligned, zero inner inset so the
@@ -310,23 +731,23 @@ function blockToTyp(node: PMNode, indent = ''): string {
 
       let hasHeader = false;
       const rows: string[] = [];
-      node.forEach((row, _rowOffset, rowIndex) => {
+      node.forEach((row, rowOffset, rowIndex) => {
         const cells: string[] = [];
         let allHeader = row.childCount > 0;
-        let col = 0;
-        row.forEach((cell, _cellOffset, cellIndex) => {
+        row.forEach((cell, cellOffset, cellIndex) => {
+          const col = tableMap.findCell(rowOffset + cellOffset + 1).left;
           if (cell.type.name !== 'table_header') allHeader = false;
-          const parts: string[] = [];
-          cell.forEach((block) => {
-            if (block.isTextblock) parts.push(inlineToTyp(block));
-          });
-          let content = parts.join(' ').trim();
+          let content = tableCellContentToTyp(cell, rowIndex, cellIndex);
           if (exportOpts.cellLinks) {
             content = `#link("cell://${rowIndex}-${cellIndex}")[${content || '#h(1em)'}]`;
           }
+          const body = tableCellBrackets(content);
           const colspan = (cell.attrs.colspan as number) ?? 1;
           const rowspan = (cell.attrs.rowspan as number) ?? 1;
-          const align = cell.attrs.align as string | null;
+          const align = (cell.attrs.align as string) || null;
+          const valign = (cell.attrs.valign as string) || null;
+          const fill = ((cell.attrs.fill as CellFill) || '') as CellFill;
+          const fillArg = fill ? `fill: ${CELL_FILL_TYPST[fill]}` : '';
 
           const inDecimal = decimalCols.includes(col) && colspan === 1;
           if (inDecimal) {
@@ -336,17 +757,17 @@ function blockToTyp(node: PMNode, indent = ''): string {
             if (!isHeader && plain && numM && !exportOpts.cellLinks) {
               const intPart = numM[1] ?? '';
               const fracPart = numM[2] ?? '';
-              const rs = rowspan > 1 ? `, rowspan: ${rowspan}` : '';
-              cells.push(`table.cell(align: right, inset: (right: 0pt)${rs})[${escapeTyp(intPart)}]`);
-              cells.push(`table.cell(align: left, inset: (left: 0pt)${rs})[${escapeTyp(fracPart)}]`);
+              const rs = (rowspan > 1 ? `, rowspan: ${rowspan}` : '') + (fillArg ? `, ${fillArg}` : '');
+              cells.push(`table.cell(align: ${aligned('right', valign)}, inset: (right: 0pt)${rs})[${escapeTyp(intPart)}]`);
+              cells.push(`table.cell(align: ${aligned('left', valign)}, inset: (left: 0pt)${rs})[${escapeTyp(fracPart)}]`);
             } else {
               // Headers, empties, and non-numeric content span the pair.
               const args = [`colspan: 2`];
               if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
-              args.push(`align: ${isHeader ? 'center' : 'right'}`);
-              cells.push(`table.cell(${args.join(', ')})[${content}]`);
+              args.push(`align: ${aligned(isHeader ? 'center' : 'right', valign)}`);
+              if (fillArg) args.push(fillArg);
+              cells.push(`table.cell(${args.join(', ')})${body}`);
             }
-            col += colspan;
             return;
           }
 
@@ -354,19 +775,28 @@ function blockToTyp(node: PMNode, indent = ''): string {
           const args: string[] = [];
           if (emitSpan > 1) args.push(`colspan: ${emitSpan}`);
           if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
-          if (align && align !== colAligns[col]) args.push(`align: ${align}`);
-          cells.push(args.length ? `table.cell(${args.join(', ')})[${content}]` : `[${content}]`);
-          col += colspan;
+          if (align !== colAligns[col] || valign !== colValigns[col]) {
+            args.push(`align: ${aligned(align, valign)}`);
+          }
+          if (fillArg) args.push(fillArg);
+          cells.push(args.length ? `table.cell(${args.join(', ')})${body}` : body);
         });
         if (allHeader) hasHeader = true;
         rows.push(allHeader ? `  table.header(${cells.join(', ')}),` : `  ${cells.join(', ')},`);
       });
 
       // User midrules (table.hline(y: …)) coexist with style presets; the
-      // rest of the custom params replace the preset entirely.
-      const customAll = ((node.attrs.params as string) || '').trim();
-      const userRules: string[] = [];
-      const custom = customAll
+      // rest of the custom params replace the preset entirely. A row's own
+      // rule preset is the same construct at the row's lower boundary.
+      const rowRules: string[] = [];
+      node.forEach((row, _off, i) => {
+        const rule = (row.attrs.rule as RowRule) || '';
+        if (rule) rowRules.push(rowRuleArg(i, rule));
+      });
+      const customAll = [((node.attrs.params as string) || '').trim(), ...rowRules].filter(Boolean).join(',\n');
+      const userRules: string[] = [...rowRules];
+      const custom = ((node.attrs.params as string) || '')
+        .trim()
         .replace(/table\.[hv]line\([^)]*\)\s*,?/g, (m) => {
           userRules.push(m.replace(/,?\s*$/, ''));
           return '';
@@ -399,14 +829,26 @@ function blockToTyp(node: PMNode, indent = ''): string {
       }
 
       const params: string[] = [];
-      if (!customHas('columns')) params.push(`  columns: ${columns + decimalCols.length},`);
-      if (anyAlign && !customHas('align')) {
+      if (!customHas('columns')) {
+        const widths = node.attrs.columnWidths as string[] | null;
+        const expanded = widths?.length === columns
+          ? widths.flatMap((width, index) => decimalCols.includes(index) ? [width, 'auto'] : [width]) : null;
+        params.push(`  columns: ${expanded ? `(${expanded.join(', ')}${expanded.length === 1 ? ',' : ''})` : columns + decimalCols.length},`);
+      }
+      // Density preset: a uniform cell inset (Typst's default 5pt is implicit).
+      const density = ((node.attrs.density as string) || '') as TableDensity;
+      const insetPt = node.attrs.insetPt;
+      if (!customHas('inset')) {
+        if (typeof insetPt === 'number' && Number.isFinite(insetPt) && insetPt >= 0 && insetPt <= 72) params.push(`  inset: ${insetPt}pt,`);
+        else if (density) params.push(`  inset: ${TABLE_DENSITY_INSET_PT[density]}pt,`);
+      }
+      if (!customHas('align')) {
         const emitted: string[] = [];
         colAligns.forEach((a, i) => {
-          if (decimalCols.includes(i)) emitted.push('right', 'left');
-          else emitted.push(a === 'decimal' ? 'right' : (a ?? 'auto'));
+          if (decimalCols.includes(i)) emitted.push(aligned('right', colValigns[i]), aligned('left', colValigns[i]));
+          else emitted.push(aligned(a, colValigns[i]));
         });
-        params.push(`  align: (${emitted.join(', ')}),`);
+        params.push(`  align: (${emitted.join(', ')}${emitted.length === 1 ? ',' : ''}),`);
       }
       // Style preset and custom params are ADDITIVE: the preset renders
       // unless a custom key overrides it (stroke overrides the preset
@@ -441,9 +883,9 @@ function blockToTyp(node: PMNode, indent = ''): string {
       const tLabel = (node.attrs.label as string) || '';
       if (caption || tLabel) {
         // A captioned table is a figure: numbered "Table N", referenceable.
-        const cap = caption ? `,\n  caption: [${escapeTyp(caption)}]` : '';
+        const cap = caption ? `,\n  caption: [${escapeTableCellText(caption)}]` : '';
         const kind = fontSize ? ',\n  kind: table' : '';
-        const lab = tLabel ? ` <${tLabel}>` : '';
+        const lab = portableTableLabel(tLabel);
         return indent + directive + `#figure(\n${tableCall.split('\n').map((l) => '  ' + l).join('\n')}${cap}${kind},\n)${lab}\n\n`;
       }
       return indent + directive + `#align(center, ${tableCall})\n\n`;
@@ -452,7 +894,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
       // Embedded inline so the .typ stays self-contained (bytes() source).
       const bib = docBib;
       if (!bib?.content) return '';
-      return indent + `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "ieee")\n\n`;
+      return indent + `#bibliography(bytes(${JSON.stringify(bib.content)}), title: "References", style: "${docCitationStyle}")\n\n`;
     }
     case 'page_break':
       return indent + '#pagebreak()\n\n';
@@ -463,12 +905,13 @@ function blockToTyp(node: PMNode, indent = ''): string {
     case 'horizontal_rule':
       return indent + '#line(length: 100%)\n\n';
     case 'image':
-      return indent + `#image("${imageSrc(node.attrs.src)}")\n\n`;
+      return indent + `#image("${imageSrc(node.attrs.src)}"${imageWidthArg(node)})\n\n`;
     default:
       return node.isTextblock ? indent + inlineToTyp(node) + '\n\n' : '';
   }
 }
 
+/** Whether the export needs the mitex import: a math node anywhere. */
 function containsMath(doc: PMNode): boolean {
   let found = false;
   doc.descendants((n) => {
@@ -478,13 +921,44 @@ function containsMath(doc: PMNode): boolean {
   return found;
 }
 
+/** The LaTeX an inline formula prints from: its macros expanded. */
+function inlineLatex(node: PMNode): string {
+  return expandMacros(node.attrs.src as string);
+}
+
+/** The LaTeX a display formula prints from, between the two newlines the
+ * `#mitex` raw block holds: what the converter has always been given. */
+function displayLatex(node: PMNode): string {
+  return '\n' + expandMacros(wrapAligned(node.attrs.src as string)) + '\n';
+}
+
+/** The print header's math definitions: every formula converted first (so
+ * a rejected one throws before any text is built), then the prelude for
+ * the handles they name. */
+function printMathPrelude(doc: PMNode): string {
+  if (!mathConverterReady()) {
+    throw new Error('Printing math needs the math converter: await ensureMathConverter() before docToTyp');
+  }
+  const converted: string[] = [];
+  doc.descendants((n) => {
+    if (n.type.name === 'math_inline') converted.push(convertMath(inlineLatex(n)));
+    else if (n.type.name === 'math_display') converted.push(convertMath(displayLatex(n)));
+    return true;
+  });
+  const prelude = mathPrelude(converted);
+  return prelude ? '// LaTeX math handles, from mitex 0.2.7 (Apache-2.0)\n' + prelude : '';
+}
+
 let docNumFormat = '1';
+let docSettings: DocSettings = DEFAULT_SETTINGS;
 let emitNumberEquations = true;
+let docCitationStyle: CitationStyle = 'ieee';
 let unnumberedEqLabels = new Set<string>();
 
-export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
+function beginExport(doc: PMNode, opts: TypExportOptions) {
   exportOpts = opts;
   docBib = (doc.attrs?.bib as { name: string; content: string } | null) ?? null;
+  docBibKeys = new Set(docBib ? parseBibTeX(docBib.content).map((entry) => entry.key) : []);
   eqLabels = new Set();
   unnumberedEqLabels = new Set();
   doc.descendants((n) => {
@@ -494,45 +968,72 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     }
     return true;
   });
+}
+
+export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
+  beginExport(doc, opts);
   try {
     const s: DocSettings = normalizeSettings(doc.attrs?.settings as Partial<DocSettings> | null);
     docMacros = parseMathMacros(s.mathMacros);
-    let out = '// Exported from Plass\n';
-    const paperName = { letter: 'us-letter', a4: 'a4', legal: 'us-legal', b5: 'iso-b5' }[s.page] ?? 'us-letter';
+    // Line 1 names the Typst release the export is exact for: the in-app
+    // compiler's. (It compiles on later CLIs too; their layout may differ.)
+    let out = `// Exported from Plass — exact on typst ${TYPST_EXACT_VERSION}\n`;
+    // Named papers by Typst's names; half letter and a custom size by their
+    // dimensions (Typst has no name for them).
+    const paperName: Partial<Record<DocSettings['page'], string>> = { letter: 'us-letter', a4: 'a4', legal: 'us-legal', b5: 'iso-b5', a5: 'a5' };
+    const inches = paperInches(s);
+    const paperArg = paperName[s.page] ? `paper: "${paperName[s.page]}"` : `width: ${inches.w}in, height: ${inches.h}in`;
     const uniform = s.marginTop === s.marginRight && s.marginTop === s.marginBottom && s.marginTop === s.marginLeft;
     const marginArg = uniform
       ? `margin: ${s.marginTop}in`
       : `margin: (top: ${s.marginTop}in, right: ${s.marginRight}in, bottom: ${s.marginBottom}in, left: ${s.marginLeft}in)`;
-    const pageArgs = [`paper: "${paperName}"`, marginArg];
+    const pageArgs = [paperArg, marginArg];
     if (s.landscape) pageArgs.push('flipped: true');
     let hasRestart = false;
     doc.forEach((n) => {
       if (n.type.name === 'numbering_restart') hasRestart = true;
     });
     docNumFormat = s.pageNumFormat;
+    docSettings = s;
     // With a restart marker, front-matter pages number in roman.
     const frontFormat = hasRestart ? 'i' : s.pageNumFormat;
-    if (s.pageNumShow) pageArgs.push(`numbering: "${frontFormat}"`, `number-align: ${s.pageNumAlign}`);
-    if (s.headerText) {
-      const inner = escapeTyp(s.headerText).replace(/\\\{page\\\}|\{page\}/g, '#context counter(page).display()');
-      const body = `align(${s.headerAlign})[${inner}]`;
-      pageArgs.push(
-        s.headerFirstPage
-          ? `header: ${body}`
-          : `header: context if(counter(page).get().first() > 1) { ${body} }`,
-      );
+    if (s.pageNumShow) {
+      pageArgs.push(`numbering: "${frontFormat}"`, `number-align: ${s.pageNumPlace === 'top' ? 'top + ' : ''}${s.pageNumAlign}`);
+    }
+    // Running header and footer: explicit page content (which replaces the
+    // automatic number on that edge, as in Typst), with {page} and
+    // {section} as context expressions.
+    for (const [key, text, align, first] of [
+      ['header', s.headerText, s.headerAlign, s.headerFirstPage],
+      ['footer', s.footerText, s.footerAlign, s.footerFirstPage],
+    ] as Array<[string, string, string, boolean]>) {
+      if (!text) continue;
+      const inner = escapeTyp(text)
+        .replace(/\\\{page\\\}|\{page\}/g, RUNNING_PAGE_TYP)
+        .replace(/\\\{section\\\}|\{section\}/g, RUNNING_SECTION_TYP);
+      const body = `align(${align})[${inner}]`;
+      pageArgs.push(first ? `${key}: ${body}` : `${key}: context if(counter(page).get().first() > 1) { ${body} }`);
     }
     out += `#set page(${pageArgs.join(', ')})\n`;
     out += parityRules(s);
     out += textSetLine(s, opts.fontFallback);
     emitNumberEquations = s.numberEquations;
+    docCitationStyle = s.citationStyle;
     if (s.numberEquations) out += '#set math.equation(numbering: "(1)")\n';
     if (s.numberSections) out += '#set heading(numbering: "1.1")\n';
+    if (s.footnoteNumbering !== '1') out += `#set footnote(numbering: "${s.footnoteNumbering}")\n`;
+    if (s.footnoteSeparator === 'none') out += '#set footnote.entry(separator: none)\n';
+    else if (s.footnoteSeparator === 'full') out += '#set footnote.entry(separator: line(length: 100%, stroke: 0.5pt))\n';
     if (s.pageNumStart !== 1) out += `#counter(page).update(${s.pageNumStart})\n`;
     if (s.mathMacros.trim()) out += `// typeset:math-macros ${JSON.stringify(s.mathMacros)}\n`;
-    if (containsMath(doc)) out += '#import "@preview/mitex:0.2.5": mi, mitex\n';
+    if (containsMath(doc)) out += opts.islands === 'print' ? printMathPrelude(doc) : MITEX_IMPORT + '\n';
     out += '\n';
-    out += blocksToTyp(doc, '');
+    const offsets = opts.offsets;
+    if (offsets) offsets.length = 0;
+    doc.forEach((node) => {
+      offsets?.push(out.length);
+      out += blockToTyp(node, '');
+    });
     return out.trimEnd() + '\n';
   } finally {
     exportOpts = {};

@@ -24,11 +24,17 @@ install:
 npm audit --audit-level=moderate
 npm run verify:licenses
 npm test
+npm run test:parity
 npm run test:layout
 npm run test:browser
 npm run build
 npm run verify:production
 ```
+
+`npm run test:parity` is the pandoc content referee and needs pandoc 3.4
+(`$PANDOC`, `pandoc` on PATH, or Quarto's bundled binary). `npm test` runs
+the same suite but skips it when there is no pandoc; `test:parity` sets
+`PANDOC_REQUIRED=1`, which turns the skip into a failure.
 
 For a release or any change under `sidecar/`, also run the pinned Rust audit
 and native sidecar tests:
@@ -103,12 +109,14 @@ Layout changes carry a stricter contract than ordinary UI changes:
   algorithmic references. Do not mix changes to either file into a renderer,
   cache, scheduling, or pagination refactor. A deliberate upstream-port change
   requires its own review and regenerated differential evidence.
-- The live port and compiled Typst oracle must choose the same ordered break
-  offsets and hyphen kinds for every certified font and supported content
-  context. Browser-greedy breaks, frozen-prefix approximations, or stability
-  costs must never replace the selected exact breaks.
-- A normal edit installs at most one line-decoration update. A matching oracle
-  result must be a no-op, not a second visual correction.
+- The port must choose the same ordered break offsets and hyphen kinds as
+  the pinned Typst compiler for every certified font and supported content
+  context, and the local paginator the same page starts; `npm run audit`
+  measures both. Browser-greedy breaks, frozen-prefix approximations, or
+  stability costs must never replace the selected exact breaks.
+- A normal edit installs at most one line-decoration update. Nothing
+  compiles while editing: Typst is the printer and the measuring stick,
+  never a second opinion installed over the page.
 - Line breaks, spacing, hyphens, and page gaps stay presentation-only. They may
   not enter document content, undo history, clipboard data, accessibility
   text, persistence, or exported source.
@@ -129,13 +137,13 @@ For any layout change, in addition to the full command set above:
    ```
 
 2. Run `npm run test:layout` for port smoke and font certification, `npm test`
-   for pure layout contracts, and `npm run test:browser` for live/oracle,
+   for pure layout contracts, and `npm run test:browser` for live layout,
    decoration, pagination, selection, undo, and writing-stability behavior.
-3. Confirm the compiled oracle causes no correction in certified cases, page
-   starts and line ranges retain their signatures, and performance counters do
-   not exceed their checked-in budgets. Do not loosen a tolerance or update a
-   baseline without attaching the before/after fixture and explaining the
-   numerical cause.
+3. Run `npm run audit`: every fixture must agree with Typst on every line
+   break, page start, and margin line (a new rail adds a fixture), and
+   performance counters must not exceed their checked-in budgets. Do not
+   loosen a tolerance or update a baseline without attaching the
+   before/after fixture and explaining the numerical cause.
 
 ## Supported-font contract
 
@@ -169,8 +177,9 @@ For each release, also confirm:
   lockfiles, and bundled font notices match the production dependency and
   asset tree;
 - the built preview passes document creation, open/save and external-conflict
-  handling, project-image reload, remote-image consent, Typst round-trip, PDF
-  export, refresh/session recovery, and supported-browser smoke tests;
+  handling, project-image reload, remote-image consent, Markdown round-trip
+  and Typst export, PDF export, refresh/session recovery, and
+  supported-browser smoke tests;
 - `npm run verify:production` passes after the final build, and the deployed
   HTTPS site is checked again for its CSP, compiler worker, startup, and PDF
   export; and

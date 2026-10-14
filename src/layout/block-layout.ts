@@ -7,52 +7,42 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import { cssFontStack, effectiveFont } from '../font-registry';
-import { isFlexibleAtom } from '../inline-raw';
-import { getInk, inkKey } from '../math-ink';
+import { getInk, inkKeyFor } from '../math-ink';
 import type { DocSettings } from '../settings';
 import type { ForcedBreak, LineLayout } from './paragraph';
 
-export type BlockLayoutOracleState = 'none' | 'ok' | 'fail';
-export type BlockLayoutAuthority = 'compiled' | 'port' | 'fallback';
+export type BlockLayoutAuthority = 'port' | 'fallback';
 
 /** Cached browser line layout for one persistent ProseMirror node. */
 export interface BlockLayoutEntry {
   measure: number;
   lines: LineLayout[];
-  /** State of the compiled Typst oracle when these lines were produced. */
-  oracle: BlockLayoutOracleState;
   /**
-   * Oracle/content key used for the layout. Resolved atom text lives in this
-   * key, so a citation or reference repaint invalidates an otherwise-identical
-   * PM node.
+   * Content key used for the layout. Resolved atom text and widths live in
+   * this key, so a citation, reference, or formula repaint invalidates an
+   * otherwise-identical PM node.
    */
   key: string | null;
   /** Painted prefix and content scale used by captions and footnote bodies. */
   indent: number;
   scale: number;
-  /**
-   * Source of the break decisions. Optional during the staged coordinator
-   * migration; entries without it are never reused against compiled breaks.
-   */
+  /** Source of the break decisions. */
   authority?: BlockLayoutAuthority;
   /**
-   * Semantic signature of authoritative compiled/port breaks. `null` (or an
-   * absent value during migration) means the entry came from fallback layout.
+   * Semantic break signature of the layout: the port's breaks, or the
+   * KP-chosen breaks of a fallback layout (derived from its lines). `null`/
+   * absent means the breaks are unknown (a layout that reported none). The
+   * port audit compares it with Typst's.
    */
   breakSignature?: string | null;
 }
 
-/** Stable layout inputs, excluding the compiled oracle's transient status. */
-export interface BlockLayoutBaseCacheKey {
+/** The stable layout inputs a cached entry must match to be reused. */
+export interface BlockLayoutCacheKey {
   measure: number;
   key: string | null;
   indent: number;
   scale: number;
-}
-
-/** Legacy strict cache key retained while the coordinator is migrated. */
-export interface BlockLayoutCacheKey extends BlockLayoutBaseCacheKey {
-  oracle: BlockLayoutOracleState;
 }
 
 /**
@@ -64,10 +54,23 @@ export function forcedBreakSignature(breaks: readonly ForcedBreak[]): string {
   return `v1:${breaks.map((item) => `${item.hyphen ? 'h' : 's'}${item.at}`).join(',')}`;
 }
 
+/**
+ * Semantic break signature derived from laid-out lines: exactly the forced
+ * break list a forced layout would need to reproduce them (segment-final
+ * lines carry no break, matching the oracle contract). Gives fallback (KP)
+ * layouts a comparable signature, so later-arriving identical compiled
+ * breaks are recognized as agreement instead of forcing a rebuild.
+ */
+export function lineBreakSignature(lines: readonly LineLayout[]): string {
+  const breaks: ForcedBreak[] = [];
+  for (const line of lines) if (line.oracleBreak) breaks.push(line.oracleBreak);
+  return forcedBreakSignature(breaks);
+}
+
 /** Match stable inputs while deliberately ignoring transient oracle status. */
 export function blockLayoutEntryBaseMatches(
   entry: BlockLayoutEntry,
-  expected: BlockLayoutBaseCacheKey | BlockLayoutCacheKey,
+  expected: BlockLayoutCacheKey,
 ): boolean {
   return !(
     Math.abs(entry.measure - expected.measure) > 0.5 ||
@@ -77,29 +80,9 @@ export function blockLayoutEntryBaseMatches(
   );
 }
 
-/** Preserve the coordinator's legacy strict status matching exactly. */
-export function blockLayoutEntryMatches(entry: BlockLayoutEntry, expected: BlockLayoutCacheKey): boolean {
-  return blockLayoutEntryBaseMatches(entry, expected) && entry.oracle === expected.oracle;
-}
-
-/**
- * Decide whether an entry remains valid for the coordinator's current view.
- *
- * Pending/missing/failed compiled results do not change layout semantics, so
- * stable inputs alone are sufficient. Once compiled breaks are available,
- * only an authoritative port/compiled entry with the identical semantic
- * break list can be retained. Legacy entries without the new metadata fail
- * closed and are recomputed once.
- */
-export function canReuseBlockLayoutEntry(
-  entry: BlockLayoutEntry,
-  expected: BlockLayoutBaseCacheKey | BlockLayoutCacheKey,
-  compiledBreaks?: readonly ForcedBreak[] | null,
-): boolean {
-  if (!blockLayoutEntryBaseMatches(entry, expected)) return false;
-  if (compiledBreaks == null) return true;
-  if (entry.authority !== 'port' && entry.authority !== 'compiled') return false;
-  return entry.breakSignature === forcedBreakSignature(compiledBreaks);
+/** Whether an entry remains valid for the current inputs. */
+export function canReuseBlockLayoutEntry(entry: BlockLayoutEntry, expected: BlockLayoutCacheKey): boolean {
+  return blockLayoutEntryBaseMatches(entry, expected);
 }
 
 /** Weak node-identity cache; unchanged PM subtrees remain reusable after edits. */
@@ -110,19 +93,9 @@ export class BlockLayoutCache {
     return this.entries.get(node);
   }
 
-  getMatching(node: PMNode, expected: BlockLayoutCacheKey): BlockLayoutEntry | undefined {
+  getReusable(node: PMNode, expected: BlockLayoutCacheKey): BlockLayoutEntry | undefined {
     const entry = this.entries.get(node);
-    return entry && blockLayoutEntryMatches(entry, expected) ? entry : undefined;
-  }
-
-  /** Status-independent lookup with semantic compiled-break validation. */
-  getReusable(
-    node: PMNode,
-    expected: BlockLayoutBaseCacheKey | BlockLayoutCacheKey,
-    compiledBreaks?: readonly ForcedBreak[] | null,
-  ): BlockLayoutEntry | undefined {
-    const entry = this.entries.get(node);
-    return entry && canReuseBlockLayoutEntry(entry, expected, compiledBreaks) ? entry : undefined;
+    return entry && canReuseBlockLayoutEntry(entry, expected) ? entry : undefined;
   }
 
   set(node: PMNode, entry: BlockLayoutEntry): BlockLayoutEntry {
@@ -151,11 +124,15 @@ export function blockOracleKey(settingsKey: string, keyTag: string, measure: num
   return `${settingsKey}|${keyTag}|w${measure.toFixed(1)}|${specKey}`;
 }
 
-/** Whether the paragraph at `pos` directly follows a sibling paragraph. */
+/** Whether the paragraph at `pos` directly follows a sibling paragraph.
+ *  Editorial comments between the two are invisible to print (Typst never
+ *  sees them), so they do not break the run; style.css's `p + p` chain
+ *  paints the same indent across them. */
 export function consecutiveParagraph(doc: PMNode, pos: number): boolean {
   const $pos = doc.resolve(pos);
-  const index = $pos.index();
-  return index > 0 && $pos.parent.child(index - 1).type.name === 'paragraph';
+  let index = $pos.index() - 1;
+  while (index >= 0 && $pos.parent.child(index).type.name === 'editor_comment') index--;
+  return index >= 0 && $pos.parent.child(index).type.name === 'paragraph';
 }
 
 /** Body-paragraph context tag used by the compiled-oracle cache. */
@@ -172,14 +149,23 @@ export type AtomWidth = (offset: number, child: PMNode) => number;
  */
 export function makeAtomWidth(view: EditorView, settings: DocSettings, pos: number): AtomWidth {
   return (offset, child) => {
-    if (child.type.name === 'math_inline') {
-      const ink = getInk(inkKey(child.attrs.src as string, false, settings));
+    const isMath = child.type.name === 'math_inline';
+    if (isMath) {
+      const ink = getInk(inkKeyFor(child, settings));
       if (ink) return ink.widthPx;
     }
-    // A flexible inline island has no natural width — layout gives it one.
-    if (isFlexibleAtom(child)) return 0;
     const dom = view.nodeDOM(pos + 1 + offset);
-    if (dom instanceof HTMLElement) return dom.getBoundingClientRect().width;
+    if (dom instanceof HTMLElement) {
+      // Width hold: a formula inside a math-editor session keeps its last
+      // compiled advance (mirrored onto the element by MathView) until the
+      // edited source compiles, so the line does not re-break through the
+      // KaTeX-width gap.
+      if (isMath) {
+        const held = Number.parseFloat(dom.dataset.mathHoldWidth ?? '');
+        if (Number.isFinite(held)) return held;
+      }
+      return dom.getBoundingClientRect().width;
+    }
     return child.nodeSize * 8;
   };
 }
@@ -189,7 +175,7 @@ export const FOOTNOTE_SCALE = 0.85;
 
 export interface PaintedPrefixMeasurements {
   footnoteScale: typeof FOOTNOTE_SCALE;
-  footnoteIndent(number: number): number;
+  footnoteIndent(label: string): number;
   captionIndent(number: number): number;
 }
 
@@ -215,14 +201,10 @@ export function createPaintedPrefixMeasurements(
   const fontStack = cssFontStack(fontName);
   return {
     footnoteScale: FOOTNOTE_SCALE,
-    footnoteIndent(number) {
+    footnoteIndent(label) {
       const footnotePx = FOOTNOTE_SCALE * bodyPx;
       const numberPx = 0.72 * footnotePx;
-      return (
-        0.9 * footnotePx +
-        textWidth(String(number), `${numberPx}px ${fontStack}`) +
-        0.15 * numberPx
-      );
+      return 0.9 * footnotePx + textWidth(label, `${numberPx}px ${fontStack}`) + 0.15 * numberPx;
     },
     captionIndent(number) {
       return textWidth(`Figure ${number}:`, `${bodyPx}px ${fontStack}`) + 0.32 * bodyPx;

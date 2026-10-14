@@ -5,3 +5,6 @@ vendor/
 sidecar/target/
 test-results/
 playwright-report/
+.claude/worktrees/
+.claude/settings.local.json
+.claude/launch.json

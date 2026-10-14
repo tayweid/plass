@@ -6,13 +6,11 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import type { AtomWidth } from './block-layout';
 import type { Measurer, TextMeasureInterval } from './measure';
-import type { ForcedBreak, LineLayout } from './paragraph';
-
-const FORCED_EPS = 1.5;
+import { fitEps, lineWordSpacing, type ForcedBreak, type LineLayout } from './paragraph';
 
 export type ForcedLayoutMeasurer = Pick<
   Measurer,
-  'fontFor' | 'intervalWidths' | 'spaceWidth' | 'hyphenWidth'
+  'fontFor' | 'intervalWidthsBatch' | 'spaceWidth' | 'hyphenWidth'
 >;
 
 export interface ForcedLayoutOptions {
@@ -22,12 +20,16 @@ export interface ForcedLayoutOptions {
    *  path does not model them, so a block containing one declines to the
    *  translator, which does. */
   isFill?: (child: PMNode) => boolean;
-  /** False means the legacy translator has no intra-word break items. */
+  /** False rejects glyph-injecting hyphenation cuts (letter|letter);
+   *  glyphless splits at existing dashes and punctuation stay valid —
+   *  Typst breaks there regardless of the hyphenation setting. */
   hyphenate?: boolean;
   /** Width consumed by a painted prefix on the first line. */
   firstLineIndent?: number;
   /** Text/hyphen em scale. Atoms and the painted prefix are already scaled. */
   scale?: number;
+  /** The face unmarked text takes (bold for headings). */
+  baseStyle?: 'regular' | 'bold';
 }
 
 interface TextRun {
@@ -80,6 +82,8 @@ interface LineDraft {
   spaces: number;
   contributions: Array<number | MeasuredContribution>;
   breakKind: Token['kind'];
+  /** Start offset of the break token (LineLayout.oracleBreak's `at`). */
+  breakAt: number;
   breakPos: number | null;
   hyphen: boolean;
   hyphenWidth: number;
@@ -111,8 +115,13 @@ function adjacentCodePoints(text: string, offset: number): { before: string; aft
  *
  * Conservative null cases intentionally fall back to the existing forced
  * translator: malformed/unordered offsets, a normal break that is not the
- * start of a retained whitespace run, a soft hyphen outside an alphabetic
- * word, a boundary between PM text runs, or a UTF-16 surrogate split.
+ * start of a retained whitespace run, a break after a soft hyphen (SHY),
+ * a hyphenation cut while hyphenation is disabled, a boundary between PM
+ * text runs, or a UTF-16 surrogate split. Intra-token `hyphen` cuts whose
+ * adjacency is not letter|letter translate as glyphless breaks (existing
+ * dashes, em-dashes carried forward, link punctuation) — the legacy
+ * partitioner has no item at most of those offsets, so this translator is
+ * their only representation.
  *
  * Hard breaks are always partitioned, including after the last forced point.
  * This fixes the legacy forced translator's accidental final-segment merge;
@@ -154,8 +163,7 @@ export function layoutForcedBlock(
       !Number.isSafeInteger(forced.at) ||
       forced.at < 0 ||
       forced.at > block.content.size ||
-      forced.at <= previousAt ||
-      (forced.hyphen && opts.hyphenate === false)
+      forced.at <= previousAt
     ) {
       return null;
     }
@@ -179,7 +187,7 @@ export function layoutForcedBlock(
     if (invalid) return;
     if (child.isText && child.text) {
       const text = child.text;
-      const font = measurer.fontFor(child.marks);
+      const font = measurer.fontFor(child.marks, opts.baseStyle);
       const run: TextRun = { text, font, intervals: [], widths: [] };
       runs.push(run);
 
@@ -213,9 +221,19 @@ export function layoutForcedBlock(
             invalid = true;
             return;
           }
+          // A glyph is injected only for a real hyphenation point
+          // (letter|letter, and only with hyphenation enabled). Every other
+          // split — an existing dash, an em-dash carried to the next line, a
+          // '/' or '.' boundary inside a link — breaks glyphlessly, exactly
+          // as Typst renders a Normal breakpoint. SHY stays unrepresentable
+          // (Typst paints a glyph the adjacency rule would drop): decline.
           const { before, after } = adjacentCodePoints(text, local);
-          const glyphless = /[-–—]/.test(before);
-          if (!glyphless && (!/^\p{L}$/u.test(before) || !/^\p{L}$/u.test(after))) {
+          if (before === '\u00ad') {
+            invalid = true;
+            return;
+          }
+          const letterBoth = /^\p{L}$/u.test(before) && /^\p{L}$/u.test(after);
+          if (letterBoth && opts.hyphenate === false) {
             invalid = true;
             return;
           }
@@ -226,8 +244,8 @@ export function layoutForcedBlock(
         let partStart = localStart;
         for (const partEnd of [...cuts, localEnd]) {
           if (partStart !== localStart) {
-            const { before } = adjacentCodePoints(text, partStart);
-            const glyphless = /[-–—]/.test(before);
+            const { before, after } = adjacentCodePoints(text, partStart);
+            const glyphless = !(/^\p{L}$/u.test(before) && /^\p{L}$/u.test(after));
             tokens.push({
               kind: 'hyphen',
               from: offset + partStart,
@@ -251,6 +269,11 @@ export function layoutForcedBlock(
       trimTrailingSpaces();
       tokens.push({ kind: 'nodebreak', from: offset, to: offset + child.nodeSize });
     } else {
+      // A footnote marker glues to whatever precedes it no matter what the
+      // document holds: Typst drops a source space immediately ahead of the
+      // superscript rather than rendering it (see layoutBlock's identical
+      // treatment in paragraph.ts and ResolvedAtom.glueLeft in the oracle).
+      if (child.type.name === 'footnote') trimTrailingSpaces();
       tokens.push({
         kind: 'box',
         from: offset,
@@ -326,6 +349,7 @@ export function layoutForcedBlock(
       spaces,
       contributions,
       breakKind: breakToken.kind,
+      breakAt: breakToken.from,
       breakPos:
         breakToken.kind === 'space'
           ? breakToken.to
@@ -337,13 +361,21 @@ export function layoutForcedBlock(
     });
   }
 
-  for (const run of runs) {
-    if (run.intervals.length) run.widths = measurer.intervalWidths(run.text, run.intervals, run.font);
+  // One batch: all probe writes land before all Range reads, so measuring
+  // every run costs a single forced layout pass.
+  const measuredRuns = runs.filter((run) => run.intervals.length);
+  if (measuredRuns.length) {
+    const widths = measurer.intervalWidthsBatch(
+      measuredRuns.map((run) => ({ text: run.text, intervals: run.intervals, key: run.font })),
+    );
+    measuredRuns.forEach((run, index) => {
+      run.widths = widths[index];
+    });
   }
 
-  const baseFont = measurer.fontFor([]);
+  const baseFont = measurer.fontFor([], opts.baseStyle);
   const baseSpace = measurer.spaceWidth(baseFont) * K;
-  const eps = FORCED_EPS + (K !== 1 ? 4.5 : 0);
+  const eps = fitEps(K);
 
   return drafts.map((draft) => {
     let natural = 0;
@@ -355,13 +387,8 @@ export function layoutForcedBlock(
     }
     natural += draft.hyphenWidth;
 
-    let spacing = 0;
-    if ((draft.breakKind === 'space' || draft.breakKind === 'hyphen') && draft.spaces > 0) {
-      spacing = (measure - eps - natural) / draft.spaces;
-      spacing = Math.max(-0.9 * baseSpace, Math.min(spacing, 3 * baseSpace));
-    } else if (draft.spaces > 0 && natural > measure - eps) {
-      spacing = Math.max(-0.45 * baseSpace, (measure - eps - natural) / draft.spaces);
-    }
+    const justified = draft.breakKind === 'space' || draft.breakKind === 'hyphen';
+    const spacing = lineWordSpacing(justified, draft.spaces, natural, measure, eps, baseSpace);
 
     return {
       from: draft.from,
@@ -369,6 +396,7 @@ export function layoutForcedBlock(
       spacing,
       breakPos: draft.breakPos,
       hyphen: draft.hyphen,
+      oracleBreak: justified ? { at: draft.breakAt, hyphen: draft.breakKind === 'hyphen' } : undefined,
     };
   });
 }

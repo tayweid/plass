@@ -4,6 +4,7 @@
 
 import { PluginKey } from 'prosemirror-state';
 import type { DecorationSet } from 'prosemirror-view';
+import type { DisplayPage } from './page-geometry';
 
 export interface TypesetStats {
   ms: number;
@@ -14,8 +15,11 @@ export interface TypesetStats {
 export interface PageInfo {
   count: number;
   pageW: number;
+  /** The PRINT page height. A displayed sheet may be taller (`pages`). */
   pageH: number;
   gap: number;
+  /** Displayed sheet geometry, one per page (page-geometry.ts). */
+  pages: DisplayPage[];
   marginBottom: number;
   marginLeft: number;
   marginRight: number;
@@ -23,13 +27,8 @@ export interface PageInfo {
 
 export interface TypesetState {
   decos: DecorationSet;
-  /** Zero-width markers at the last oracle page starts. ProseMirror maps them
-   * through edits to retain stale-but-stable pagination while Typst compiles. */
-  pageMarks: DecorationSet;
 }
 
-export type TypesetMeta =
-  | { type: 'decos'; decos: DecorationSet; pageMarks?: DecorationSet }
-  | { type: 'pageMarks'; pageMarks: DecorationSet };
+export type TypesetMeta = { type: 'decos'; decos: DecorationSet };
 
 export const typesetKey = new PluginKey<TypesetState>('typeset');

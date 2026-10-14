@@ -8,12 +8,18 @@
 // editor owning the document, instead of LaTeX's compile-to-find-out.
 
 import { Plugin, PluginKey } from 'prosemirror-state';
+import { footnoteLabel } from './footnotes';
+import type { FootnoteNumbering } from './settings';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 import { Fragment, type Node as PMNode } from 'prosemirror-model';
 import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
 import { getSettings } from './settings';
 import { getBib } from './citations';
+import {
+  transactionChangesDerivedStructure,
+  type DerivedStructureRules,
+} from './transaction-impact';
 
 interface EqState {
   decos: DecorationSet;
@@ -21,6 +27,30 @@ interface EqState {
 }
 
 export const eqKey = new PluginKey<EqState>('equations');
+
+// Only attributes and topology which can alter numbers or reference targets
+// invalidate the full-document index. Text inside headings, figure captions,
+// footnotes, and table cells maps the existing decorations through the
+// transaction. Caption text is presentation metadata, but crossing the
+// empty/non-empty boundary starts or stops a Typst table figure from consuming
+// a number. Labels and semantic row/header/cell structure remain exact-value
+// invalidations.
+const NUMBERING_STRUCTURE: DerivedStructureRules = {
+  heading: { attrs: ['level', 'label'] },
+  math_display: { attrs: ['label', 'numbered'] },
+  figure: { attrs: ['label'] },
+  table: {
+    attrs: ['label'],
+    attrPresence: ['caption'],
+    structure: {
+      table_row: [],
+      table_cell: ['colspan', 'rowspan', 'colwidth', 'align'],
+      table_header: ['colspan', 'rowspan', 'colwidth', 'align'],
+    },
+  },
+  footnote: {},
+  eq_ref: { attrs: ['label'] },
+};
 
 function figNumWidget(text: string) {
   return () => {
@@ -44,20 +74,20 @@ function fnNumWidget(text: string) {
   };
 }
 
-function build(doc: PMNode, numberEquations: boolean, numberSections: boolean): EqState {
+function build(doc: PMNode, numberEquations: boolean, numberSections: boolean, footnoteNumbering: FootnoteNumbering = '1'): EqState {
   const labels = new Map<string, string>();
   const decos: Decoration[] = [];
   let eq = 0;
   let fig = 0;
   let fn = 0;
   let tab = 0;
-  const sec = [0, 0, 0];
+  const sec = [0, 0, 0, 0, 0, 0];
 
   doc.descendants((node, pos) => {
     if (node.type.name === 'heading' && numberSections) {
-      const level = Math.min(3, node.attrs.level as number);
+      const level = Math.min(6, node.attrs.level as number);
       sec[level - 1]++;
-      for (let i = level; i < 3; i++) sec[i] = 0;
+      for (let i = level; i < 6; i++) sec[i] = 0;
       const num = sec.slice(0, level).join('.');
       decos.push(Decoration.node(pos, pos + node.nodeSize, { 'data-secnum': num }));
       const label = node.attrs.label as string;
@@ -102,18 +132,24 @@ function build(doc: PMNode, numberEquations: boolean, numberSections: boolean): 
       return true;
     }
     if (node.type.name === 'table') {
-      tab++;
+      const caption = node.attrs.caption as string;
       const label = node.attrs.label as string;
-      if (label && !labels.has(label)) labels.set(label, `Table ${tab}`);
+      // The serializer emits a numbered Typst figure only when a table has a
+      // caption or label. Plain native tables must not consume that counter.
+      if (caption || label) {
+        tab++;
+        if (label && !labels.has(label)) labels.set(label, `Table ${tab}`);
+      }
       return false;
     }
     if (node.type.name === 'footnote') {
       fn++;
+      const label = footnoteLabel(fn, footnoteNumbering);
       // superscript marker (CSS ::before reads data-fn) …
-      decos.push(Decoration.node(pos, pos + node.nodeSize, { 'data-fn': String(fn) }));
+      decos.push(Decoration.node(pos, pos + node.nodeSize, { 'data-fn': label }));
       // … and the number at the head of the body text.
       decos.push(
-        Decoration.widget(pos + 1, fnNumWidget(String(fn)), { side: -1, key: `fn:${pos}:${fn}` }),
+        Decoration.widget(pos + 1, fnNumWidget(label), { side: -1, key: `fn:${pos}:${label}` }),
       );
       return true;
     }
@@ -156,12 +192,20 @@ export function equationsPlugin() {
     state: {
       init: (_, state) => {
         const s = getSettings(state);
-        return build(state.doc, s.numberEquations, s.numberSections);
+        return build(state.doc, s.numberEquations, s.numberSections, s.footnoteNumbering);
       },
-      apply: (tr, val, _old, newState) => {
+      apply: (tr, val, oldState, newState) => {
         if (!tr.docChanged) return val;
-        const s = getSettings(newState);
-        return build(newState.doc, s.numberEquations, s.numberSections);
+        const before = getSettings(oldState);
+        const after = getSettings(newState);
+        const settingsChanged =
+          before.numberEquations !== after.numberEquations ||
+          before.numberSections !== after.numberSections ||
+          before.footnoteNumbering !== after.footnoteNumbering;
+        if (!settingsChanged && !transactionChangesDerivedStructure(tr, NUMBERING_STRUCTURE)) {
+          return { decos: val.decos.map(tr.mapping, tr.doc), labels: val.labels };
+        }
+        return build(newState.doc, after.numberEquations, after.numberSections, after.footnoteNumbering);
       },
     },
     props: {

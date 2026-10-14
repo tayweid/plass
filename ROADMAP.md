@@ -1,147 +1,172 @@
 # Roadmap
 
-The next milestone is not a feature: **write a real document in Plass** — a
-problem set or lecture note with math, figures, and citations — and let the
-frictions found there reorder everything below. The ordering here is a
-pre-dogfood guess (value ÷ effort for academic writing); parity notes flag
-where a feature touches the oracle machinery. Completed work lives in git
-history and [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN.md).
+What is open, in the order it matters. Everything that landed is in git
+history; the day-by-day record of the 2026-09 push is
+[`docs/archive/ROADMAP-2026-09-11.md`](./docs/archive/ROADMAP-2026-09-11.md),
+older plans in [`docs/archive/IMPROVEMENT_PLAN.md`](./docs/archive/IMPROVEMENT_PLAN.md).
+Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
 
-## Session queue
+## Next
 
-1. **Dogfood.** Write the document. Frictions harvested there become the new
-   top of this file and outrank everything queued below.
-2. **Finish the started features** — each is one short session:
-   - *Keep-together*: machinery exists (⌘⌥K, atomic pagination,
-     `block(breakable: false)` emission/import). Open: a discoverable UI
-     control and "keep heading with next block."
-   - *Running headers/footers*: header text, alignment, `{page}`
-     substitution, first-page suppression, and emission/import are done.
-     Open: custom footer content, section-aware values via `context`, a
-     first-page behavior control in the settings UI, and moving the ordinary
-     folio into the header.
-   - *Draft niceties*: 1.5 spacing exists. Open: double spacing, DRAFT
-     watermark/background, margin line numbers.
-3. **Table styling remainder:**
-   - *Rule weights* — light/heavy midrule choice (booktabs toprule vs
-     midrule); maybe a click-cycle on an active rule.
-   - *Cell insets* — density presets (compact / normal / roomy) → `inset:`.
-   - *Merges + shape ops together* — column/row insert/delete that
-     understands spans (occupancy grid) instead of disabling while merges
-     exist.
-   - *Rich cells in the card* — editing math/references inside cells
-     (currently preserved but read-only-ish). Possibly a per-cell "edit as
-     math" affordance.
-   - Per-selection cell fills (the fill presets ship; individual cells are
-     still open). Complex-table stress testing and split-interaction polish.
-4. **Citations** (see the worked plan below — the largest planned feature).
-5. **Paragraph typography odds and ends** — hyphenation language selection,
-   per-document justification toggle, heading font pairing (sans headings
-   over serif body).
+1. **Dogfood.** Write real documents in Plass — the course notes, a problem
+   set with math, figures, citations — and let the frictions found there
+   reorder everything below. Frictions harvested become the top of this
+   file.
+2. **Markdown fidelity, exit criterion.** `scripts/md-corpus.ts` reports the
+   course-notes folder byte-identical except for the decided normalizations
+   (smart quotes, one-time reflow of hard-wrapped paragraphs, list
+   re-indents, loose lists written with their blank lines);
+   `node --import tsx scripts/pandoc-parity.ts` on the course folder
+   reports no divergence from pandoc beyond the accepted ones
+   (`npm run test:parity` holds the fixtures to the same); and
+   `MD_FILE=… npx playwright test tests/md-comments.spec.ts` passes on a
+   sample through the live editor.
+3. **Markdown follow-ups.** On 2026-10-05 the referee found 34 of 470
+   econ-0100 notes diverging from pandoc. Each item is a decision first,
+   then a reader fix:
+   - Fancy list markers (`a.`, `i.`) are lists to pandoc and text to Plass
+     (decided, pitfall 19 in `docs/MARKDOWN-FORMAT.md`; reported by design).
+   - A list, quote or table directly after paragraph text interrupts the
+     paragraph in CommonMark (Plass) but not in pandoc.
+   - A line of only underscores is a rule to pandoc, a fill-in blank to
+     Plass.
+   - Four emphasis edge cases (`*…(*$R$*)…*`, `*~~*1*~~*`, `**P*=4**`,
+     `*… L * w*`) and task-list boxes (`[ ]`, ☐ to pandoc).
+   - A hand-written `H~2~O` or `x^2^` gets no import warning.
+   - A link on an image or a formula is dropped silently.
+4. **The rest of the Markdown plan** (`docs/MARKDOWN-SOURCE-PLAN.md`):
+   step 12, the course conversion (Taylor's, outside the repo); step 13,
+   `.typ` import-only (required, after 12); step 14, comments in place
+   instead of hoisted; step 16, citation supplements; step 17, unresolved
+   references printed as text.
+5. **Small open items** (each a short session):
+   - Multi-paragraph footnotes flatten to one paragraph.
+   - A `.typ` save has no home for the Markdown-only carry (frontmatter
+     extras) and drops it silently.
+   - A *numbered* heading keeps browser layout (its painted section number
+     is not in the port's text); the audit reports it as `browser-mismatch`
+     when it wraps differently from Typst.
+   - A table row Typst splits across pages (a rowspan across the break, a
+     tall cell) is placed whole instead — declared, not mirrored.
+   - A `#grid` off the rail (auto or fixed columns, spans, fills, differing
+     row and column gutters) stays an island; add a rail only if a real
+     document needs it.
+   - Citations: linking picker entries to local PDFs when keys match
+     filenames.
+6. **Tables and grids: a UI pass** (Taylor, 2026-10-12). Both work; both
+   look and feel unfinished. Seen on a grid in a mini-exam:
+   - The edit bar is a floating strip pinned over the top of the page,
+     covering the text it sits on, far from the grid being edited.
+     Controls belong near the grid (or in the side rail), not over the
+     prose.
+   - The controls do not match the rest of the UI: plain text buttons
+     (`+ Column`, `− Row`, `Unwrap`) beside the icon toolbar and rail,
+     raw fields (`Columns 1 : 1.174`, `Gutter (em) 1.2`), and a long
+     hint line under them.
+   - Cell boxes do not read as containing their content: dashed outlines
+     whose bottom edge runs through the last line of text, and the
+     selected cell's border cuts through its text. They are square;
+     softer, rounded boxes that clearly enclose the cell would look
+     better.
+   - Tables get the same review. A few more frictions to collect when
+     the pass starts.
+   Constraint: every change is paint-only. Cell chrome must not change
+   block heights (CLAUDE.md, vertical parity), so outlines enclose by
+   `box-shadow`/`outline`/an overlay, never by border or padding. Start
+   by scripting the current behavior in the browser and taking
+   screenshots, as the before.
+7. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
+   for Plass and Knuth, Knuth's `docs/ROADMAP.md` carries the same
+   entry, and `docs/COAUTHOR.md` there is the git-only design it
+   replaces for live partners). The idea, from a chat of Taylor's: the
+   document shared live through a CRDT (Yjs; y-prosemirror binds to
+   the editor Plass already has), relayed and kept by a Cloudflare
+   Durable Object (one per document, WebSockets; y-partyserver is the
+   relay in a few dozen lines). The owner registers once and sets it up
+   at the front; a coauthor joins by link with a name and no account,
+   and sees the other's cursor and edits as they land. The shell's
+   autosave record stays underneath, untouched: the owner's shell
+   commits the owner's working tree as now. Plass goes first: a paper
+   is what two people write at once, and one ProseMirror document binds
+   as it is, with the `.typ` and `.md` serializers working from the
+   owner's side; the editorial comments
+   (`src/editor-comments-format.ts`) need a home in the shared document.
+   Knuth follows only if it makes sense there (Taylor is not sure it
+   does), and never shares kernel access: editing the file, nothing
+   else. The way to find out before any server account exists: two
+   shells on one Mac with their own state folders, a local relay
+   (`wrangler dev`), a morning of writing in both. Costs on record: a
+   hosted service is a new dependency for a local-first app; a coauthor
+   without the app needs a hosted edit-only page; per-line authorship in
+   the record blurs to the owner, with coauthors named in the commit
+   message.
 
-## Citations (worked plan)
+## Done: Plass.app on the Claerbout shell (Electron, 2026-09-30)
 
-1. **Library bib — external location, merge-on-cite.** A persistent
-   app-level "library" bibliography pointing at a user-selected external
-   `.bib`. The @-picker searches doc bib ∪ library; citing a
-   library-only key copies **that one entry** into the document's
-   embedded bib — documents stay self-contained and carry exactly their
-   cited subset. (Rejected alternative: importing the whole library into
-   each document — works today via Document → Bib → Import .bib, but
-   embeds a stale snapshot per paper.) Storage: persist the file handle in
-   IndexedDB like recents (or reuse the project-folder machinery) and re-read
-   it on change like referenced figures. When a library's citation keys map
-   to local PDF filenames, picker/reference entries could optionally link to
-   those files. This pairs naturally with item 2 in the same code area.
+Decided 2026-09-29 for the whole suite (ManimLive's `maniml/docs/app_plan.md`,
+"Claerbout: Electron for all three apps"); shipped 2026-09-30, the day
+after Knuth. The work, in order, with what each step found, is
+`docs/CLAERBOUT-SHELL.md`. What it settled:
 
-2. **Citation styles — minimal TS port, oracle-verified.** The
-   line-breaker pattern, not a CSL engine: hand-write per-style
-   formatters in TS and offer ONLY ported styles in a document-settings
-   dropdown. IEEE numeric is the existing first-use counter in
-   `citations.ts`; author-year is ~150–250 lines (BibTeX name parsing —
-   `von` parts, "Last, First" vs "First Last" —, et-al threshold,
-   multi-cite separators, a/b year-suffix disambiguation over the cited
-   set). Decided AGAINST porting hayagriva/CSL interpretation (it's a
-   style-XML interpreter — huge parity surface, a project not a feature)
-   and AGAINST citeproc-js (a *different* CSL interpreter; would
-   disagree with hayagriva in exactly the edge cases that matter).
-   - Wiring: `"ieee"` is currently emitted by the document serializer and
-     compiled bibliography preview. Style becomes a document setting,
-     emitted as `style: "…"` on `#bibliography` and parsed back on import
-     (round-trip).
-   - Painting unchanged: decoration sets `data-cite-num`, CSS `::after`
-     paints it, and the typesetting adapter prices the painted text for the
-     line breaker — only the *source of the string* changes, from the TS
-     counter to the TS formatter.
-   - Verify: `compileInk`'s hidden-citation compile of the References
-     block doubles as the oracle — read the inline citation strings
-     back from the SVG text layer, diff against the TS formatter,
-     per-citation fallback to the oracle's text on mismatch + log
-     (the `__comparePort` discipline). Formatter bugs become invisible
-     corrections that also tell us where the port drifts.
-   - 1–2 days full (mostly formatter + tests; oracle plumbing is nearly
-     free). Half-day minimal version: dropdown wired to PDF + References
-     block only, quick TS author-year for the inline marks.
+- **Chromium is Plass's reference engine.** The in-app WebKit caveats are
+  gone: no private flag, no separate app-parity story, no `webkit-app`
+  test project; the `chromium` project is the app's page, and
+  `app/smoke.mjs` drives the built app with Playwright's `_electron`.
+- **No file bridge.** The File System Access API works in the window and
+  handles stored in IndexedDB reopen after a relaunch (the shell's
+  permission handler grants what the page holds); a Finder open is dropped
+  on the page as a real handle. `native-fs.ts`, the grants model and the
+  Swift shell's whole file protocol retired with it.
+- **No engine.** The shell serves the page from `plass://app/` in the
+  bundle (compiler WASM and fonts included, 20 MB zips) and does the rest
+  itself.
+- **Inherited from Knuth**: the app ships without Electron's framework and
+  completes itself (cloned from an installed Claerbout app, else a
+  one-time download), the install line runs its `complete.sh`, ad-hoc
+  signing, no asar, macOS 13 or later. The shell is its own repository,
+  `github.com/tayweid/claerbout`, pinned by tag; a bump is one tag and one
+  pull request per app the same day.
 
-## Needs its own design session
+## Parked (Taylor, 2026-09-11)
 
-- **Multiple columns** — `#set page(columns: 2)`. The big one, flagged
-  honestly: this reshapes the whole oracle pipeline. The line-break
-  oracle needs the per-column measure; the page oracle needs per-column
-  line extraction (tsel geometry per column region); the editor's
-  continuous-flow-with-spacers model needs a two-column rendering
-  strategy (CSS columns fight the decoration/pagination model — likely
-  needs oracle-driven column-break spacers analogous to page breaks).
-  Design session first; don't start it as a side quest.
+- **Incremental pagination** for 50+ page documents — until speed has been
+  tested more. The suffix planner and the full-versus-suffix comparator
+  exist as development shadow telemetry (the full result is always
+  installed); the 40–50-page fixture requires a late-edit candidate to visit
+  less than 25% of the top-level units while preserving selection, undo,
+  spellcheck, and caret/scroll position within 2 px. With the compile out
+  of the edit loop a 50-page settle is a full walk, but it no longer shows
+  as lag.
+- **Offline launch for the installed PWA** — until things are more settled.
+  No service worker: the installed app fetches plass.tayweid.io on every
+  launch. The useful version is a shell-plus-sidecar cache that opens
+  documents and types immediately; the 28 MB compiler WASM and Pages'
+  `max-age=600` decide how an update reaches an open app.
+- **Float placement** (`placement: top/bottom`) — assessed not easy: the
+  figure leaves the flow for the page edge while the document keeps it
+  mid-flow; a new page-layout mechanism, not a fixture.
+- The four ICU 1.5 → 2.x sidecar bumps — until the sidecar's version-pinned
+  identity is re-verified against them.
 
-## Standing backlog
+## Dropped (Taylor, 2026-09-11)
 
-- Raw-Typst-island compiled previews (same pattern as tables/math/bib).
-- **Source view toggle** — a toolbar button switching between the WYSIWYG
-  view and the document's plain-text source (its on-disk format: .typ or
-  .md, which `file-manager`'s text method already produces). Both directions
-  exist: `docToTyp` is computed per edit as the oracle signature, and the
-  return trip is the file-open parser (unknown Typst survives as raw
-  islands, so an editable source view doubles as the escape hatch for Typst
-  the editor has no UI for). New work: the toggle + a mono `<textarea>`
-  (no CodeMirror in v1), one `replaceWith` on return (a single undo step),
-  a toggle-and-back identity test. Punt cursor/scroll mapping and live
-  two-view sync. Known cost to accept: the serializer re-normalizes
-  hand-formatting of untouched regions after a source-side edit.
-  Editable version ~1 day; read-only half that.
-- **Incremental pagination activation for 50+ page documents.** The suffix
-  planner and full-versus-suffix comparator exist, and the 40–50-page browser
-  fixture requires a late-edit candidate to visit less than 25% of the full
-  top-level units while preserving selection, undo, spellcheck, and caret/
-  scroll position within 2 px. It remains development shadow telemetry: the
-  full result is always installed. Promotion requires a production-mode
-  exact-source fixture proving mapped page-marker and painted-spacer
-  provenance with zero corrections.
-- Table/figure float placement (`placement: auto` — drift to page top).
-- **Offline launch for the installed PWA.** There is no service worker, so
-  the installed app is a standalone window that fetches plass.tayweid.io on
-  every launch and cannot open without a network — an odd gap for an editor
-  whose documents already live in IndexedDB and whose privacy claim is that
-  nothing leaves the machine. Precaching the shell is complicated by the
-  28 MB Typst compiler WASM (plus the renderer and sidecar), so the useful
-  version is probably a shell-plus-sidecar cache that opens documents and
-  types immediately, with compiled-oracle features degrading until the
-  compiler is available. Pages serves everything `max-age=600`, so a worker
-  also decides how an update reaches an already-open app.
-- Custom paper dimensions; inside/outside (two-sided) margins; footnote
-  per-page vs continuous numbering and separator options.
-- **Compiled line-break verification skips hard-break and dash paragraphs.**
-  The compiled oracle's forced breaks fail to partition blocks containing
-  `hard_break` nodes or en/em dashes (`layoutAuthoritative` returns null) and
-  the port stands in — correct output, but those paragraphs never get
-  compiled verification. Surfaced when the sanitizer regression was fixed
-  (the text layer was stripped 2026-08-16 → 2026-08-19, blinding every
-  oracle); likely an offset mapping issue in `typst-oracle.ts` matching.
-- **Fallback paginator moves list items whole.** `container()` in
-  `typeset-plugin.ts` breaks lists between children only; while the page
-  oracle is pending (or failed) a long bullet crossing a page boundary
-  leaves a gap, and a bullet taller than one page gets no break at all.
-  Teach it the same line-boundary splitting `paragraph()` does.
+A keep-together control and "keep heading with next"; the draft niceties
+(double spacing, DRAFT watermark, margin line numbers); paragraph typography
+odds and ends (hyphenation language, a justification toggle, sans headings);
+two-sided margins; page-wide multiple columns (the grid rail and the
+half-letter paper size cover the two real needs); per-page footnote
+numbering (Typst has none either).
+
+## Not planned (Taylor, 2026-09-16)
+
+A warm "bookish" editor look — the cream-paper mockup set in Iowan Old
+Style. The palette alone was tried and dropped the same day: without the
+typeface it is not the look, and the typeface is a certification job (a
+warmer serif made exact for layout and export: TeX Gyre Pagella or
+Libertinus Serif, both bundled, neither calibrated — parity metrics, the
+compiler's font set, the audit fixtures under the new face), not a
+screen-only swap, which would break the editor/Typst contract. Iowan
+itself is Apple's and cannot be bundled.
 
 ## Not on this roadmap
 

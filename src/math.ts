@@ -7,13 +7,15 @@
 
 import katex from 'katex';
 import type { Node as PMNode } from 'prosemirror-model';
-import { TextSelection, type Command } from 'prosemirror-state';
+import { NodeSelection, TextSelection, type Command } from 'prosemirror-state';
 import type { EditorView, NodeView } from 'prosemirror-view';
+import type { EditorState } from 'prosemirror-state';
+import type { Mark } from 'prosemirror-model';
 import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
 import { wrapAligned } from './math-src';
 import { getSettings, parseMathMacros } from './settings';
-import { forgetInk, getInk, inkKey, onInk, requestInk } from './math-ink';
+import { forgetInk, getInk, inkDeferredReason, inkKey, inkStatus, isBoldMath, onInk, requestInk } from './math-ink';
 import { scheduleTypeset } from './typeset-plugin';
 import { mountTypstSvg } from './safe-svg';
 
@@ -33,12 +35,38 @@ function renderInto(el: HTMLElement, src: string, displayMode: boolean, macros: 
   }
 }
 
+/** NodeView lookup by document element — the editor popover starts and
+ * settles the width hold through it (see MathView.beginWidthHold). */
+const mathViews = new WeakMap<Node, MathView>();
+
+/** The marks a new inline formula inherits from its insertion point: the
+ * ones that change Typst's print (strong widens the math) or the ink
+ * (strike). Code and link marks do not apply to a formula. */
+function inheritedMathMarks(state: EditorState): readonly Mark[] {
+  const marks = state.storedMarks ?? state.selection.$from.marks();
+  return marks.filter((m) => m.type.name === 'strong' || m.type.name === 'em' || m.type.name === 'strike');
+}
+
 export class MathView implements NodeView {
   dom: HTMLElement;
   private lastMacros: string;
   private display: boolean;
+  private bold: boolean;
   private inkApplied = '';
   private stopInk: () => void;
+  /**
+   * Width hold (anti-jitter): while a math-editor session touches this
+   * formula, the document keeps painting the last COMPILED ink — geometry
+   * frozen — even after a commit changes the source. The popover's live
+   * KaTeX preview is the user's echo; the in-document swap happens exactly
+   * once, when the new compile lands. Lifecycle: begins at editor open
+   * (only when compiled ink exists), ends at the first render where the
+   * current source has its own settled ink, or is abandoned (fall back to
+   * KaTeX, one re-layout) when the new compile fails or the held ink is
+   * evicted. `data-math-hold-width` mirrors the held advance for
+   * makeAtomWidth, so every line breaker keeps the held reservation.
+   */
+  private holdKey: string | null = null;
 
   constructor(
     private node: PMNode,
@@ -47,9 +75,11 @@ export class MathView implements NodeView {
   ) {
     const display = node.type.name === 'math_display';
     this.display = display;
+    this.bold = isBoldMath(node);
     this.dom = document.createElement(display ? 'div' : 'span');
     this.dom.className = display ? 'math-display' : 'math-inline';
     this.dom.setAttribute('data-math', node.attrs.src);
+    mathViews.set(this.dom, this);
     this.lastMacros = getSettings(view.state).mathMacros;
     this.render();
     this.stopInk = onInk(() => this.render());
@@ -74,17 +104,46 @@ export class MathView implements NodeView {
    * KaTeX instantly until then. Ink arrival re-runs the typesetter so line
    * justification picks up the exact atom width.
    */
+  /** Editor open: freeze this formula's reservation at its compiled ink. */
+  beginWidthHold() {
+    const src = this.node.attrs.src as string;
+    if (!src.trim()) return;
+    const key = inkKey(src, this.display, getSettings(this.view.state), this.bold);
+    const ink = getInk(key);
+    if (!ink) return;
+    this.holdKey = key;
+    this.dom.dataset.mathHoldWidth = String(ink.widthPx);
+  }
+
+  /** Editor closed: settle immediately if the current source is compiled
+   * (unchanged source, or the new ink already arrived). Otherwise the hold
+   * ends at the next render with settled ink. */
+  settleWidthHold() {
+    if (this.holdKey === null) return;
+    const key = inkKey(this.node.attrs.src as string, this.display, getSettings(this.view.state), this.bold);
+    if (getInk(key)) this.endWidthHold();
+  }
+
+  private endWidthHold() {
+    this.holdKey = null;
+    delete this.dom.dataset.mathHoldWidth;
+  }
+
   private render() {
     const src = this.node.attrs.src as string;
     const settings = getSettings(this.view.state);
     if (!src.trim()) {
+      this.endWidthHold();
       this.inkApplied = '';
+      this.markUnmeasured(null);
       renderInto(this.dom, src, this.display);
       return;
     }
-    const key = inkKey(src, this.display, settings);
+    const key = inkKey(src, this.display, settings, this.bold);
     const ink = getInk(key);
     if (ink) {
+      this.endWidthHold();
+      this.markUnmeasured(null);
       if (this.inkApplied === key) return;
       this.inkApplied = key;
       mountTypstSvg(this.dom, ink.svg);
@@ -104,26 +163,68 @@ export class MathView implements NodeView {
       scheduleTypeset(this.view);
       return;
     }
+    // No settled ink for the current source yet. During a width hold the
+    // document keeps the held compiled ink painted (geometry frozen; the
+    // popover shows the live KaTeX echo) and only queues the new compile —
+    // the surrounding line re-breaks once, when that compile settles.
+    requestInk(key, src, this.display, settings, this.bold);
+    const status = inkStatus(key);
+    if (this.holdKey !== null) {
+      if (getInk(this.holdKey) && status === 'pending') return;
+      // New source failed to compile (or could not be compiled now), or
+      // the held ink was evicted: abandon the hold and fall back to the
+      // KaTeX echo (one re-layout).
+      this.endWidthHold();
+      scheduleTypeset(this.view);
+    }
     if (this.inkApplied) {
       this.inkApplied = '';
       this.dom.classList.remove('math-ink');
     }
     renderInto(this.dom, src, this.display, parseMathMacros(this.lastMacros));
-    requestInk(key, src, this.display, settings);
+    this.markUnmeasured(status === 'failed' || status === 'deferred' ? key : null);
+  }
+
+  /**
+   * A formula left on its KaTeX echo has KaTeX's width, not Typst's: the
+   * lines around it may break differently in print. Say so on the page
+   * (paint only — an outline moves nothing) rather than lay out silently
+   * wrong. Pending ink is the ordinary echo and is not marked.
+   */
+  private markUnmeasured(key: string | null) {
+    const was = this.dom.classList.contains('math-unmeasured');
+    if (key === null) {
+      if (!was) return;
+      this.dom.classList.remove('math-unmeasured');
+      this.dom.removeAttribute('title');
+      return;
+    }
+    const reason = inkDeferredReason(key);
+    this.dom.classList.add('math-unmeasured');
+    this.dom.title = reason
+      ? `Typst has not measured this formula (${reason}). Line breaks around it are approximate until it compiles; editing the document retries.`
+      : 'Typst could not compile this formula. It is shown with an approximate width, and the print will differ.';
   }
 
   update(node: PMNode): boolean {
     if (node.type !== this.node.type) return false;
     const macros = getSettings(this.view.state).mathMacros;
+    const bold = isBoldMath(node);
     if (node.attrs.src !== this.node.attrs.src || macros !== this.lastMacros) {
       this.lastMacros = macros;
       this.node = node;
+      this.bold = bold;
       this.dom.setAttribute('data-math', node.attrs.src);
-      forgetInk(inkKey(node.attrs.src as string, this.display, getSettings(this.view.state)));
+      forgetInk(inkKey(node.attrs.src as string, this.display, getSettings(this.view.state), bold));
       this.render();
       return true;
     }
     this.node = node;
+    if (bold !== this.bold) {
+      // Bolded or unbolded in place: a different ink (and advance).
+      this.bold = bold;
+      this.render();
+    }
     return true;
   }
 
@@ -151,6 +252,22 @@ export function openMathEditor(view: EditorView, pos: number) {
   if (!node || (node.type !== schema.nodes.math_inline && node.type !== schema.nodes.math_display)) return;
   if (mathEditorOpen) return;
   mathEditorOpen = true;
+
+  // The formula being edited is the selection: a click on it opens the
+  // editor from its mousedown (no caret move), and without this the
+  // selection-driven UI (the table toolbar) would describe wherever the
+  // caret was before — another cell, another column.
+  const sel = view.state.selection;
+  if (!(sel instanceof NodeSelection && sel.from === pos)) {
+    view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)));
+  }
+
+  // Anti-jitter width hold: the surrounding text keeps this formula's
+  // compiled reservation for the whole editor session (see MathView).
+  {
+    const dom = view.nodeDOM(pos);
+    if (dom) mathViews.get(dom)?.beginWidthHold();
+  }
 
   const display = node.type.name === 'math_display';
 
@@ -228,6 +345,10 @@ export function openMathEditor(view: EditorView, pos: number) {
     closed = true;
     mathEditorOpen = false;
     panel.remove();
+    // Source unchanged (or already compiled): release the width hold now.
+    // A changed source keeps its hold until the new ink settles.
+    const dom = view.nodeDOM(pos);
+    if (dom) mathViews.get(dom)?.settleWidthHold();
     view.focus();
   };
 
@@ -292,7 +413,7 @@ export function insertMath(display: boolean): Command {
     const type = display ? schema.nodes.math_display : schema.nodes.math_inline;
     const { from, to, empty } = state.selection;
     const src = empty ? '' : state.doc.textBetween(from, to, ' ');
-    const node = type.create({ src });
+    const node = type.create({ src }, null, display ? undefined : inheritedMathMarks(state));
     if (dispatch) dispatch(state.tr.replaceSelectionWith(node).scrollIntoView());
     return true;
   };
@@ -300,7 +421,11 @@ export function insertMath(display: boolean): Command {
 
 /** `$...$` becomes inline math as you type the closing dollar. */
 export const mathInlineRule = new InputRule(/\$([^$\s](?:[^$]*[^$\s])?)\$$/, (state, match, start, end) => {
-  return state.tr.replaceWith(start, end, schema.nodes.math_inline.create({ src: match[1] }));
+  const marks = state.doc
+    .resolve(start)
+    .marks()
+    .filter((m) => m.type.name === 'strong' || m.type.name === 'em' || m.type.name === 'strike');
+  return state.tr.replaceWith(start, end, schema.nodes.math_inline.create({ src: match[1] }, null, marks));
 });
 
 /** `$$` on an empty line becomes a display-math block. */

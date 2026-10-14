@@ -19,6 +19,8 @@ interface Window {
   showSaveFilePicker?: (opts?: {
     suggestedName?: string;
     types?: FilePickerType[];
+    // A handle here opens the dialog where that file or folder lives.
+    startIn?: FileSystemHandle;
   }) => Promise<FileSystemFileHandle>;
 }
 
@@ -70,6 +72,15 @@ interface LaunchQueue {
 
 interface Window {
   launchQueue?: LaunchQueue;
+}
+
+// Plass.app: the Claerbout shell's bridge (preload.js), see src/claerbout.ts.
+interface Window {
+  claerbout?: {
+    request(message: Record<string, unknown>): Promise<unknown>;
+    on(event: string, listener: (detail: unknown) => void): () => void;
+    pathOf?(file: File): string;
+  };
 }
 
 interface FileSystemDirectoryHandle {

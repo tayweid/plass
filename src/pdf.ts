@@ -1,13 +1,16 @@
 // In-app PDF export: compile the document with Typst (WASM) in the browser.
 //
 // Untrusted Typst evaluation runs in a dedicated worker with input/output
-// budgets and a main-thread watchdog. The compiler, bundled fonts, and mitex
-// package load lazily there and are cached until the worker is idle or must be
-// terminated. Embedded images are decoded into its virtual filesystem and
-// markup is rewritten to reference them, so figures compile properly.
+// budgets and a main-thread watchdog. The compiler and bundled fonts load
+// lazily there and are cached until the worker is idle or must be
+// terminated; it resolves no package. Math reaches it as native Typst,
+// converted on this thread (math-convert.ts) before the source is built.
+// Embedded images are decoded into its virtual filesystem and markup is
+// rewritten to reference them, so figures compile properly.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { docToTyp } from './typ-serializer';
+import { ensureMathConverter } from './math-convert';
 import { loadRemoteImage, remoteImageStatus, sanitizeSvgImage } from './remote-images';
 import { FONT_FALLBACK } from './typst-config';
 import { runCompilerTask } from './typst-worker-client';
@@ -33,7 +36,10 @@ export function setAssetReader(fn: (path: string, maxBytes: number) => Promise<U
 function dataUrlToBytes(src: string): { data: Uint8Array; ext: string } | null {
   const m = /^data:image\/(png|jpe?g|gif|svg\+xml)((?:;[^;,]*)*),(.*)$/is.exec(src);
   if (!m) return null;
-  const ext = m[1] === 'svg+xml' ? 'svg' : m[1] === 'jpeg' ? 'jpg' : m[1];
+  // MIME types are case-insensitive: `image/SVG+XML` is an SVG, and must
+  // not skip the sanitizer below for want of a lowercase name.
+  const type = m[1].toLowerCase();
+  const ext = type === 'svg+xml' ? 'svg' : type === 'jpeg' ? 'jpg' : type;
   const payload = m[3];
   if (/(?:^|;)base64(?:;|$)/i.test(m[2])) {
     // Reject before atob allocates a second, decoded copy. A few trailing
@@ -66,7 +72,7 @@ function dataUrlToBytes(src: string): { data: Uint8Array; ext: string } | null {
  * path map. Remote URLs never leave the browser until the editor's explicit
  * per-origin load action has granted this shared session policy. */
 /** A gray dashed "missing image" PNG, generated once — registered in place
- * of unreadable assets so exports and oracle compiles never hard-fail. */
+ * of unreadable assets so exports and the audit compile never hard-fail. */
 let placeholderPng: Uint8Array | null = null;
 async function missingPlaceholder(): Promise<Uint8Array> {
   if (placeholderPng) return placeholderPng;
@@ -182,8 +188,8 @@ async function prepareAssets(doc: PMNode): Promise<{
       // A reference that walks above the project folder ("../logo.png") has no
       // VFS location — Typst's own root rule forbids one just as the browser
       // forbids reading it — so it gets a flat placeholder path. Registering it
-      // literally would produce "/../logo.png" and fail the whole compile, page
-      // oracle included, over one unreachable image.
+      // literally would produce "/../logo.png" and fail the whole compile
+      // over one unreachable image.
       const placeable = isValidAssetPath('/' + src);
       const data = placeable ? await assetReader(src, COMPILER_LIMITS.assetBytes) : null;
       if (data) {
@@ -239,13 +245,14 @@ export function typstQuery<T = unknown>(
 
 /**
  * Compile the full document (with embedded assets) to a multi-page SVG —
- * the page-break oracle's channel. Returns null on failure.
+ * the port audit's channel. Returns null on failure.
  */
 export function compileDocSvg(doc: PMNode, onMsg: (m: string) => void = () => {}): Promise<string | null> {
   return (async () => {
     try {
       const { map, assets } = await prepareAssets(doc);
-      const source = docToTyp(doc, { resolveImage: (s) => map.get(s) ?? s, fontFallback: FONT_FALLBACK });
+      await ensureMathConverter();
+      const source = docToTyp(doc, { resolveImage: (s) => map.get(s) ?? s, fontFallback: FONT_FALLBACK, islands: 'print' });
       return await runCompilerTask<string>(
         { kind: 'document-svg', source, assets },
         { timeoutMs: COMPILER_DEADLINES.documentMs, onMessage: onMsg },
@@ -266,16 +273,42 @@ export function compileTyp(src: string, onMsg: (m: string) => void = () => {}): 
   );
 }
 
-export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string) => void): Promise<void> {
+/** Where an exported file ends up. Resolves to a description of the
+ *  destination for the toast, or null when the user cancelled. */
+export type ExportSink = (fileName: string, blob: Blob) => Promise<string | null>;
+
+/** Default sink: a plain browser download. */
+export const downloadSink: ExportSink = async (fileName, blob) => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  return fileName;
+};
+
+export async function exportPdf(
+  doc: PMNode,
+  baseName: string,
+  onMsg: (m: string) => void,
+  sink: ExportSink = downloadSink,
+  // A failure must outlast the ordinary 3.5 s toast: the export can run a
+  // minute before failing, long after the writer stopped watching.
+  onFail: (m: string) => void = onMsg,
+): Promise<void> {
   // Export is an explicit user action, so it may make one fresh attempt after
   // a background timeout. Another timeout reopens the circuit immediately.
   resetCompilerCircuit();
   try {
     onMsg('Preparing document…');
     const { map, assets, missing, blockedRemote } = await prepareAssets(doc);
+    // With the converter loaded, docToTyp throws for a formula it rejects,
+    // naming the formula, and the export reports that instead of printing.
+    await ensureMathConverter();
     const src = docToTyp(doc, {
       resolveImage: (s) => map.get(s) ?? s,
       fontFallback: FONT_FALLBACK,
+      islands: 'print',
     });
 
     onMsg('Typesetting with Typst…');
@@ -286,13 +319,14 @@ export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string
     );
 
     const blob = new Blob([data.buffer as ArrayBuffer], { type: 'application/pdf' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${baseName}.pdf`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    const fileName = `${baseName}.pdf`;
+    const where = await sink(fileName, blob);
+    if (where === null) {
+      onMsg('PDF export cancelled');
+      return;
+    }
     onMsg(
-      `Exported ${a.download} in ${((performance.now() - t0) / 1000).toFixed(1)}s` +
+      `Exported ${where} in ${((performance.now() - t0) / 1000).toFixed(1)}s` +
         (missing ? ` — ${missing} missing image(s) exported as placeholders` : '') +
         (blockedRemote
           ? ` — ${blockedRemote} remote image(s) blocked; use the image’s Load action before exporting to include them`
@@ -300,6 +334,6 @@ export async function exportPdf(doc: PMNode, baseName: string, onMsg: (m: string
     );
   } catch (e) {
     console.error('PDF export failed', e);
-    onMsg(`PDF export failed: ${e instanceof Error ? e.message : String(e)}`);
+    onFail(`PDF export failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 }

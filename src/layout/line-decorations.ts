@@ -5,7 +5,8 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import { Decoration, type DecorationSet } from 'prosemirror-view';
 import type { LineLayout } from './paragraph';
-import { applyFill } from '../inline-raw';
+import { tableBreakWidget } from './table-break-widget';
+import { tableRowModel } from './table-rows';
 
 /** Semantic roles owned by the typesetting layer. These tags are deliberately
  * independent of widget keys: callers can select layout decorations without
@@ -16,7 +17,8 @@ export type TypesetDecorationKind =
   | 'hyphen-break'
   | 'no-spell'
   | 'line-page-gap'
-  | 'block-page-gap';
+  | 'block-page-gap'
+  | 'row-page-gap';
 
 export interface TypesetDecorationSpec {
   tsKind: TypesetDecorationKind;
@@ -24,6 +26,10 @@ export interface TypesetDecorationSpec {
   sig?: string;
   h?: number;
   hy?: boolean;
+  /** row-page-gap: the repeated table header's share of `h` (px). */
+  hdr?: number;
+  /** row-page-gap: immutable header content and repetition-rule identity. */
+  headerSig?: string;
 }
 
 /** A current, mapped ProseMirror node range. Ownership is range-based rather
@@ -62,7 +68,9 @@ function typesetKind(spec: unknown): TypesetDecorationKind | null {
   if (!spec || typeof spec !== 'object') return null;
   const kind = (spec as { tsKind?: unknown }).tsKind;
   return typeof kind === 'string' &&
-    (BLOCK_DECORATION_KINDS.has(kind as TypesetDecorationKind) || kind === 'block-page-gap')
+    (BLOCK_DECORATION_KINDS.has(kind as TypesetDecorationKind) ||
+      kind === 'block-page-gap' ||
+      kind === 'row-page-gap')
     ? (kind as TypesetDecorationKind)
     : null;
 }
@@ -75,7 +83,12 @@ function isBlockDecorationSpec(spec: unknown): boolean {
 export interface Spacer {
   pos: number;
   height: number;
-  kind: 'line' | 'block';
+  /** `line`: inside a paragraph at a line boundary; `block`: before a
+   * block; `row`: inside a native table before a row (PAGE-PORT.md Phase
+   * 7) — its widget also carries the repeated header copy. */
+  kind: 'line' | 'block' | 'row';
+  /** `row` only: the repeated header's height, included in `height`. */
+  hdr?: number;
 }
 
 /** The two DOM halves of a hyphenated word read as separate words to the
@@ -140,12 +153,15 @@ export function pageGapWidget(height: number, hyphen: boolean, key?: string) {
 
 /** A line-position page spacer. `key` is accepted for mapped-decoration
  * revival, where the original identity must survive even if its position
- * was re-anchored by a transaction. */
+ * was re-anchored by a transaction. Every page-gap key carries the height
+ * in the hundredths its CSS writes: ProseMirror keeps the DOM of a widget
+ * whose key is unchanged, so any change in the painted height must change
+ * the key. */
 export function pageSpacerDecoration(
   pos: number,
   height: number,
   hyphen: boolean,
-  key = `pg:${pos}:${Math.round(height)}:${hyphen ? 'h' : ''}`,
+  key = `pg:${pos}:${height.toFixed(2)}:${hyphen ? 'h' : ''}`,
 ): Decoration {
   return Decoration.widget(pos, () => pageGapWidget(height, hyphen, key), {
     side: -1,
@@ -158,13 +174,72 @@ export function pageSpacerDecoration(
 
 /** A spacer between whole blocks rather than at a paragraph line break. */
 export function blockSpacerDecoration(spacer: Spacer): Decoration {
-  const key = `pgb:${spacer.pos}:${Math.round(spacer.height)}`;
+  const key = `pgb:${spacer.pos}:${spacer.height.toFixed(2)}`;
   return Decoration.widget(spacer.pos, () => pageGapWidget(spacer.height, false, key), {
     side: -1,
     key,
     h: spacer.height,
     tsKind: 'block-page-gap',
   });
+}
+
+const headerNodeIds = new WeakMap<PMNode, number>();
+const tableHeaderSignatures = new WeakMap<PMNode, string>();
+let nextHeaderNodeId = 1;
+
+/** Geometry alone cannot identify a repeated header: edits to its fill,
+ * alignment, or same-size text must rebuild the cloned DOM too. Immutable
+ * node identity keeps this cheap and remains stable across body-row edits. */
+function repeatedHeaderSignature(doc: PMNode | undefined, pos: number): string {
+  if (!doc) return '';
+  let table: PMNode;
+  try {
+    table = doc.resolve(pos).parent;
+  } catch {
+    return '';
+  }
+  if (table.type.name !== 'table') return '';
+  const cached = tableHeaderSignatures.get(table);
+  if (cached !== undefined) return cached;
+  const model = tableRowModel(table);
+  let signature = '';
+  if (model.repeatRow !== null) {
+    const header = table.child(model.repeatRow);
+    let id = headerNodeIds.get(header);
+    if (id === undefined) {
+      id = nextHeaderNodeId++;
+      headerNodeIds.set(header, id);
+    }
+    // The same final header can follow a different header run, changing
+    // whether the continuation paints a booktabs rule beneath the copy.
+    signature = `h${id}-${model.headerRun}`;
+  }
+  tableHeaderSignatures.set(table, signature);
+  return signature;
+}
+
+/**
+ * A page break between two rows of a native table: a widget `<tr>` holding
+ * the gap plus the repeated header copy (table-break-widget.ts). `pos` is
+ * the position before the row that starts the next page; `height` is the
+ * whole insertion, `hdr` the header copy's share of it.
+ */
+export function rowSpacerDecoration(spacer: Spacer, doc?: PMNode): Decoration {
+  const hdr = spacer.hdr ?? 0;
+  const headerSig = hdr > 0 ? repeatedHeaderSignature(doc, spacer.pos) : '';
+  const key = `pgr:${spacer.pos}:${spacer.height.toFixed(2)}:${hdr.toFixed(2)}${headerSig ? `:${headerSig}` : ''}`;
+  return Decoration.widget(
+    spacer.pos,
+    (view) => tableBreakWidget(view, { pos: spacer.pos, height: spacer.height, hdr, key }),
+    {
+      side: -1,
+      key,
+      h: spacer.height,
+      hdr,
+      headerSig,
+      tsKind: 'row-page-gap',
+    },
+  );
 }
 
 export type LineSpacerResolver = (line: LineLayout, pos: number) => Spacer | undefined;
@@ -228,15 +303,6 @@ export function appendLineDecorations(
     if (spacing) {
       emitSpacing(line.from, line.to, `word-spacing:${spacing}px`);
     }
-    // Flexible (fr) inline atoms take the line's leftover space: layout
-    // measured it, the atom's view paints it. Both layout paths land here,
-    // so the assignment happens once, wherever the lines came from.
-    if (line.fills) {
-      for (const offset of line.fills.offsets) {
-        const child = node.nodeAt(offset);
-        if (child) applyFill(child, line.fills.width);
-      }
-    }
     if (line.breakPos === null) continue;
 
     const at = base + line.breakPos;
@@ -283,6 +349,9 @@ function semanticEntry(decoration: Decoration, relativeTo: number): DecorationSe
     case 'block-page-gap':
       identity = String(spec?.h ?? '');
       break;
+    case 'row-page-gap':
+      identity = `${spec?.h ?? ''}:${spec?.hdr ?? ''}${spec?.headerSig ? `:${spec.headerSig}` : ''}`;
+      break;
     case 'word-spacing':
     case 'no-spell':
       identity = spec?.sig ?? '';
@@ -299,12 +368,19 @@ function semanticEntry(decoration: Decoration, relativeTo: number): DecorationSe
   };
 }
 
+/** Binary code-unit order: only equality of the joined canonical string
+ * matters, and locale collation can rank distinct strings equal (and is far
+ * slower), so it must not decide the canonical order. */
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function compareSemanticEntries(a: DecorationSemanticEntry, b: DecorationSemanticEntry): number {
   return (
     a.from - b.from ||
     a.to - b.to ||
-    a.kind.localeCompare(b.kind) ||
-    a.identity.localeCompare(b.identity)
+    compareStrings(a.kind, b.kind) ||
+    compareStrings(a.identity, b.identity)
   );
 }
 

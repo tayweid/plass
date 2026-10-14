@@ -3,18 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#2b2a2d" />
+    <meta name="theme-color" content="#18181a" />
     <meta name="referrer" content="no-referrer" />
     <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="./icons/plass.svg" />
     <link rel="icon" type="image/png" href="./icons/plass-192.png" />
-    <title>Plass.typ</title>
+    <link rel="apple-touch-icon" href="./icons/plass-192.png" />
+    <title>Plass.md</title>
   </head>
   <body>
     <header id="toolbar"></header>
+    <nav id="rail"></nav>
+    <div id="paper-shadow" aria-hidden="true"></div>
     <main id="scroll">
-      <div id="stack">
-        <div id="pages" aria-hidden="true"></div>
-        <div id="editor"></div>
+      <div id="paper">
+        <div id="stack">
+          <div id="pages" aria-hidden="true"></div>
+          <div id="editor"></div>
+        </div>
       </div>
     </main>
     <div id="hud" title=""></div>

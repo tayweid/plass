@@ -28,4 +28,14 @@ export function openCompilerCircuit(workEpoch: number): void {
  * compiler lifecycle. A timeout in that lifecycle opens it again. */
 export function resetCompilerCircuit(): void {
   epoch++;
+  for (const fn of resetListeners) fn();
+}
+
+const resetListeners = new Set<() => void>();
+
+/** Called on every new lifecycle (every document edit): keep it cheap.
+ * Work deferred by a failed lifecycle retries from here. */
+export function onCompilerCircuitReset(fn: () => void): () => void {
+  resetListeners.add(fn);
+  return () => resetListeners.delete(fn);
 }

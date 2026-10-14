@@ -12,9 +12,14 @@ import {
 import { keymap } from 'prosemirror-keymap';
 import { Plugin, TextSelection } from 'prosemirror-state';
 import { baseKeymap, chainCommands, exitCode, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
-import { redo, undo } from 'prosemirror-history';
-import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
-import { Slice, type Mark, type MarkType } from 'prosemirror-model';
+import { closeHistory, redo, undo } from 'prosemirror-history';
+import { ReplaceStep } from 'prosemirror-transform';
+import { liftListItem, sinkListItem, wrapInList } from 'prosemirror-schema-list';
+import { goToNextCell } from 'prosemirror-tables';
+import { enterInTable, exitTableVertically, tabInTable } from './table-editor';
+import { enterInList } from './list-enter';
+import { tabInGrid } from './grid-editor';
+import { Slice, type MarkType } from 'prosemirror-model';
 import type { Command } from 'prosemirror-state';
 import { schema } from './schema';
 import { insertMath, mathDisplayRule, mathInlineRule } from './math';
@@ -22,6 +27,7 @@ import { eqRefRule } from './equations';
 import { exitFigure } from './figures';
 import { exitFootnote, footnoteCloseRule, footnoteOpenRules, insertFootnote, skipFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
+import { paperScale } from './paper-scale';
 
 /**
  * `**bold**`, `_em_`, `` `code` `` style mark input rules.
@@ -50,8 +56,8 @@ export function buildInputRules(): Plugin {
     // No emDash rule: Typst's dash shorthands (-- en, --- em) are applied
     // by collapseSpaces' normalizer — the stock rule maps -- to an em dash
     // and makes typing --- impossible.
-    // # / ## / ### headings
-    textblockTypeInputRule(/^(#{1,3})\s$/, schema.nodes.heading, (m) => ({ level: m[1].length })),
+    // # … ###### headings (levels 4–6 print like level 3)
+    textblockTypeInputRule(/^(#{1,6})\s$/, schema.nodes.heading, (m) => ({ level: m[1].length })),
     // > blockquote
     wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote),
     // - or * bullet list
@@ -140,7 +146,9 @@ function verticalCaret(dir: -1 | 1): Command {
     const domRef = view.domAtPos(sel.head);
     const el =
       domRef.node instanceof HTMLElement ? domRef.node : domRef.node.parentElement;
-    const lineH = (el && parseFloat(getComputedStyle(el).lineHeight)) || 24;
+    // The line pitch as drawn: the probes are client coordinates, and the
+    // paper is scaled to the panel's width (paper-scale.ts).
+    const lineH = ((el && parseFloat(getComputedStyle(el).lineHeight)) || 24) * paperScale();
     const yStart = dir < 0 ? c.top : c.bottom;
     // Probe in HALF-line steps — a full step can jump clean over a line
     // whose pitch is smaller than this block's (paragraph lines after a
@@ -186,6 +194,49 @@ function verticalCaret(dir: -1 | 1): Command {
   };
 }
 
+/**
+ * A transaction that replaces the entire document (an import, a programmatic
+ * rebuild, typing over a select-all) must not absorb the user's next edit
+ * into its undo group: prosemirror-history merges adjacent edits made within
+ * newGroupDelay (500 ms), and a whole-document replacement is adjacent to
+ * everything — one undo after a stray keypress would then discard the whole
+ * document. Closing the group makes the next edit its own undo event.
+ */
+export function isolateDocumentReplace(): Plugin {
+  return new Plugin({
+    appendTransaction(trs, _old, newState) {
+      const wholeDocReplace = trs.some(
+        (tr) =>
+          tr.docChanged &&
+          tr.steps.some(
+            (step, i) =>
+              step instanceof ReplaceStep &&
+              step.from === 0 &&
+              step.to === tr.docs[i].content.size,
+          ),
+      );
+      return wholeDocReplace ? closeHistory(newState.tr) : null;
+    },
+  });
+}
+
+/** Flip the item pitch of the list around the selection: tight (Typst's
+ *  leading-spaced items) or loose (paragraph spacing, the Markdown list
+ *  with blank lines between its items). */
+export const toggleListSpacing: Command = (state, dispatch) => {
+  const { $from } = state.selection;
+  for (let d = $from.depth; d > 0; d--) {
+    const node = $from.node(d);
+    if (node.type === schema.nodes.bullet_list || node.type === schema.nodes.ordered_list) {
+      if (dispatch) {
+        dispatch(state.tr.setNodeMarkup($from.before(d), undefined, { ...node.attrs, tight: node.attrs.tight === false }));
+      }
+      return true;
+    }
+  }
+  return false;
+};
+
 export function buildKeymap(): Plugin {
   const backToParagraph: Command = setBlockType(schema.nodes.paragraph);
   const keys: Record<string, Command> = {
@@ -200,12 +251,16 @@ export function buildKeymap(): Plugin {
     'Shift-Mod-m': insertMath(true),
     'Shift-Mod-8': wrapInList(schema.nodes.bullet_list),
     'Shift-Mod-9': wrapInList(schema.nodes.ordered_list),
+    'Shift-Mod-7': toggleListSpacing,
     'Mod-Alt-0': backToParagraph,
     'Mod-Alt-1': setBlockType(schema.nodes.heading, { level: 1 }),
     'Mod-Alt-2': setBlockType(schema.nodes.heading, { level: 2 }),
     'Mod-Alt-3': setBlockType(schema.nodes.heading, { level: 3 }),
+    'Mod-Alt-4': setBlockType(schema.nodes.heading, { level: 4 }),
+    'Mod-Alt-5': setBlockType(schema.nodes.heading, { level: 5 }),
+    'Mod-Alt-6': setBlockType(schema.nodes.heading, { level: 6 }),
     'Ctrl->': wrapIn(schema.nodes.blockquote),
-    'Enter': chainCommands(exitFootnote, exitFigure, exitFrontMatter, splitListItem(schema.nodes.list_item)),
+    'Enter': chainCommands(exitFootnote, exitFigure, exitFrontMatter, enterInTable, enterInList),
     'Mod-Alt-f': insertFootnote,
     'Mod-Enter': (state, dispatch) => {
       const { $from } = state.selection;
@@ -231,11 +286,11 @@ export function buildKeymap(): Plugin {
     },
     'ArrowRight': skipFootnote(1),
     'ArrowLeft': skipFootnote(-1),
-    'ArrowUp': verticalCaret(-1),
-    'ArrowDown': verticalCaret(1),
+    'ArrowUp': chainCommands(verticalCaret(-1), exitTableVertically(-1)),
+    'ArrowDown': chainCommands(verticalCaret(1), exitTableVertically(1)),
     'Mod-Alt-t': (_state, dispatch, view) => {
       if (dispatch && view) {
-        void import('./table-editor').then(({ insertTableWithEditor }) => insertTableWithEditor(view));
+        void import('./table-editor').then(({ insertStructuredTable }) => insertStructuredTable(view));
       }
       return true;
     },
@@ -244,8 +299,11 @@ export function buildKeymap(): Plugin {
       if (dispatch && view) pickAndInsertFigure(view);
       return true;
     },
-    'Tab': sinkListItem(schema.nodes.list_item),
-    'Shift-Tab': liftListItem(schema.nodes.list_item),
+    // In a table, Tab and Enter are spreadsheet navigation (the last cell
+    // and the last row grow the table). Outside one they keep the list
+    // behavior.
+    'Tab': chainCommands(tabInTable, tabInGrid(1), sinkListItem(schema.nodes.list_item)),
+    'Shift-Tab': chainCommands(goToNextCell(-1), tabInGrid(-1), liftListItem(schema.nodes.list_item)),
     'Shift-Enter': chainCommands(exitCode, (state, dispatch) => {
       if (dispatch) {
         dispatch(state.tr.replaceSelectionWith(schema.nodes.hard_break.create()).scrollIntoView());
@@ -258,14 +316,6 @@ export function buildKeymap(): Plugin {
 
 export const baseKeys = keymap(baseKeymap);
 
-/**
- * Typst collapses runs of ordinary spaces to a single space, so a document
- * holding "a  b" PRINTS as "a b" — and the live breaker and the compiled
- * oracle would forever disagree about the paragraph's text. Keep the
- * document in printed form: after any edit, collapse space runs in plain
- * text (code blocks and code-marked text keep their spaces — raw preserves
- * them in Typst too). Non-breaking spaces are meaningful and untouched.
- */
 /** Copying TEXT out of a bullet copies the text, not the bullet.
  *
  *  ProseMirror slices a selection at its own depth, so highlighting the words
@@ -294,55 +344,6 @@ export function copyTextWithoutItsBlock(): Plugin {
         if (content.childCount && !content.child(0).isInline) return slice;
         return new Slice(content, 0, 0);
       },
-    },
-  });
-}
-
-export function collapseSpaces(): Plugin {
-  return new Plugin({
-    appendTransaction(trs, _old, state) {
-      if (!trs.some((tr) => tr.docChanged)) return null;
-      const swaps: Array<[number, number, string, readonly Mark[]]> = [];
-      state.doc.descendants((node, pos) => {
-        if (node.type.name === 'code_block') return false;
-        if (!node.isTextblock) return true;
-        node.forEach((child, offset) => {
-          if (!child.isText || !child.text) return;
-          if (child.marks.some((m) => m.type.name === 'code')) return;
-          const text = child.text;
-          // Whitespace runs collapse to ONE plain space — including runs
-          // the browser polluted with non-breaking spaces (contenteditable
-          // substitutes U+00A0 when spaces are typed adjacently, and the
-          // editor honors nbsp as glue, welding words together). A run of
-          // PURE nbsp is intentional (~~) and stays.
-          const re = /[ \u00a0]{2,}/g;
-          let m: RegExpExecArray | null;
-          while ((m = re.exec(text))) {
-            if (!m[0].includes(' ')) continue;
-            const base = pos + 1 + offset + m.index;
-            swaps.push([base, base + m[0].length, ' ', child.marks]);
-          }
-          // Typst dash shorthands print differently than they type: the
-          // document holds the printed glyphs (--- em, -- en — including
-          // the "–-" state mid-way through typing an em dash — and a
-          // whitespace-preceded hyphen before a digit is a minus sign).
-          const dashRe = /---|\u2013-|--|(?<=^|\s)-(?=\d)/g;
-          while ((m = dashRe.exec(text))) {
-            const base = pos + 1 + offset + m.index;
-            const glyph = m[0] === '--' ? '\u2013' : m[0] === '-' ? '\u2212' : '\u2014';
-            swaps.push([base, base + m[0].length, glyph, child.marks]);
-          }
-        });
-        return true;
-      });
-      if (!swaps.length) return null;
-      const tr = state.tr;
-      // Descending order keeps earlier positions valid; marks carry over so
-      // a normalized character inside bold/italic text stays styled.
-      for (const [from, to, text, marks] of swaps.sort((a, b) => b[0] - a[0])) {
-        tr.replaceWith(from, to, state.schema.text(text, marks));
-      }
-      return tr;
     },
   });
 }

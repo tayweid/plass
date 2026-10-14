@@ -1,22 +1,19 @@
-// The page-break oracle: Typst decides where pages break; the editor obeys.
-//
-// The full document (the byte-exact export, embedded assets and all)
-// compiles in the background; the multi-page SVG's text-selection layer
-// gives each page's lines. Matching those lines against the document's
-// blocks — exact token matching for paragraphs and headings (the same
-// machinery as the line-break oracle), anchored resync across opaque blocks
-// (equations, figures, tables, raw), footnote-area lines filtered against
-// the known footnote texts — yields the block (and line, for split
-// paragraphs) that starts every page. The editor's paginator then places
-// its page spacers exactly there instead of running its own fit rules.
-//
-// Any mismatch fails the whole result and the editor keeps its own
-// pagination for that document state (graceful, self-healing on edit).
+// The page matcher: how a compiled Typst document's page starts are read
+// back from its multi-page SVG. The text-selection layer gives each page's
+// lines; matching them against the document's units — exact token matching
+// for paragraphs and headings (the paragraph matcher), row by row for
+// tables, anchored resync across opaque blocks (equations, figures, raw),
+// footnote-area lines filtered against the known footnote texts — yields the
+// block (and line, or row) that starts every page. Used by the port audit
+// (auditSvg → src/layout/port-audit.ts) to measure the local paginator
+// against Typst; the editor never installs these answers.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { buildSpec, matchParagraph, type AtomResolver, type SvgLine, type ParagraphSpec } from './typst-oracle';
-import { formatPageNumber, pageSize, type DocSettings } from '../settings';
+import type { ForcedBreak } from './paragraph';
+import { pageSize, type DocSettings } from '../settings';
 import { parseTypstSvg } from '../safe-svg';
+import { tableRowModel, type TableRowModel } from './table-rows';
 
 export interface PageStart {
   /** Document position of the block that begins the page. */
@@ -35,112 +32,36 @@ export interface PageOracleEntry {
   reason?: string;
 }
 
-interface Unit {
-  kind: 'exact' | 'opaque';
+export interface Unit {
+  /** `table`: a breakable native table matched ROW by row (PAGE-PORT.md
+   * Phase 7) — `rows` holds one merged spec per row, `model` the header/
+   * rowspan structure the exporter hands Typst. */
+  kind: 'exact' | 'opaque' | 'table';
   pos: number;
   type: string;
   level?: number;
   spec?: ParagraphSpec;
-  /** exact list-item paragraphs may carry a marker glyph on their first line. */
-  marker?: boolean;
+  rows?: ParagraphSpec[];
+  model?: TableRowModel;
+  /** exact list-item paragraphs may carry a marker glued onto their first
+   * line: `true` for a bullet/quote marker glyph (stripped by the generic
+   * MARKER pattern below) or the exact literal text Typst renders for an
+   * ordered-list marker ("1.", "2.", …) — deterministic from the item's
+   * position in its own list, so it is matched and stripped exactly rather
+   * than guessed at. */
+  marker?: boolean | string;
+  /** A grid row: its cells' blocks as units in reading order (Typst lays
+   * the row cell by cell, each cell's blocks in flow order, so their lines
+   * follow one another in the text layer). Each inner text block is
+   * matched exactly — the port's breaks at the cell's measure are audited
+   * like any paragraph's — and a page can start only AT the row. */
+  inner?: Unit[];
 }
 
-interface PagedLine extends SvgLine {
+export interface PagedLine extends SvgLine {
   page: number;
-}
-
-const MAX_RESULTS = 8;
-
-export class PageOracle {
-  private results = new Map<string, PageOracleEntry>();
-  private pendingSig: string | null = null;
-  private timer = 0;
-  private inflight = false;
-  private disposed = false;
-  /** Identifies the latest requested page layout. Page compiles cannot be
-   * cancelled once running, so older completions must not publish. */
-  private generation = 0;
-
-  constructor(
-    private onResults: (entry: PageOracleEntry) => void,
-    private compileDocSvg: (doc: PMNode) => Promise<string | null> = async (doc) => {
-      const { compileDocSvg } = await import('../pdf');
-      return compileDocSvg(doc);
-    },
-  ) {}
-
-  get(sig: string): PageOracleEntry | undefined {
-    return this.results.get(sig);
-  }
-
-  request(sig: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver) {
-    if (this.disposed || this.results.has(sig) || this.pendingSig === sig) return;
-    this.generation++;
-    this.pendingSig = sig;
-    this.payload = { doc, settings, resolveAtom };
-    clearTimeout(this.timer);
-    this.timer = window.setTimeout(() => void this.flush(), 350);
-  }
-
-  private payload: { doc: PMNode; settings: DocSettings; resolveAtom: AtomResolver } | null = null;
-
-  clear() {
-    this.generation++;
-    clearTimeout(this.timer);
-    this.timer = 0;
-    this.results.clear();
-    this.pendingSig = null;
-    this.payload = null;
-  }
-
-  destroy() {
-    if (this.disposed) return;
-    this.disposed = true;
-    this.generation++;
-    clearTimeout(this.timer);
-    this.timer = 0;
-    this.pendingSig = null;
-    this.payload = null;
-  }
-
-  private async flush() {
-    if (this.disposed || this.inflight || !this.pendingSig || !this.payload) return;
-    const generation = this.generation;
-    const sig = this.pendingSig;
-    const { doc, settings, resolveAtom } = this.payload;
-    this.inflight = true;
-    let published: PageOracleEntry | undefined;
-    try {
-      if (this.disposed || generation !== this.generation) return;
-      const svg = await this.compileDocSvg(doc);
-      if (this.disposed || generation !== this.generation) return;
-      const entry = svg ? analyze(svg, doc, settings, resolveAtom) : ({ status: 'fail', reason: 'compile failed' } as PageOracleEntry);
-      this.results.set(sig, entry);
-      published = entry;
-      if (this.results.size > MAX_RESULTS) {
-        this.results.delete(this.results.keys().next().value!);
-      }
-    } catch (e) {
-      if (this.disposed || generation !== this.generation) return;
-      console.warn('page oracle failed', e);
-      published = { status: 'fail', reason: String(e).slice(0, 120) };
-      this.results.set(sig, published);
-    } finally {
-      this.inflight = false;
-      // A newer request may use the same signature after clear(). Only the
-      // generation that started this compile may consume its pending state.
-      if (generation === this.generation && this.pendingSig === sig) {
-        this.pendingSig = null;
-        this.payload = null;
-      }
-      // A newer request may have arrived while compiling.
-      if (!this.disposed && this.pendingSig) {
-        clearTimeout(this.timer);
-        this.timer = window.setTimeout(() => void this.flush(), 60);
-      }
-    }
-    if (!this.disposed && generation === this.generation && published) this.onResults(published);
-  }
+  /** Top of the line as a fraction of the page height. */
+  yFrac: number;
 }
 
 /** Per-page tsel lines from the multi-page SVG. The svg renders at an
@@ -155,15 +76,25 @@ function extractPages(svg: string, yTolPt: number, pageHPt: number): PagedLine[]
   document.body.appendChild(div);
   const out: PagedLine[] = [];
   const pages = [...div.querySelectorAll('.typst-page')];
+  // A page group's bounding box is its ink, not the sheet: the sheet's top
+  // is the group's translate and its height the page attribute, scaled by
+  // the svg's px per pt (the viewBox is in pt).
+  const svgRect = svgEl.getBoundingClientRect();
+  const viewW = parseFloat(svgEl.getAttribute('viewBox')?.split(/\s+/)[2] ?? '') || svgRect.width;
+  const scale = svgRect.width / viewW;
   pages.forEach((pageEl, page) => {
-    const rect = pageEl.getBoundingClientRect();
-    const yTol = (yTolPt * rect.height) / pageHPt;
+    const ink = pageEl.getBoundingClientRect();
+    const ty = parseFloat(/translate\(\s*[-\d.]+[\s,]+([-\d.]+)/.exec(pageEl.getAttribute('transform') ?? '')?.[1] ?? '');
+    const hAttr = parseFloat(pageEl.getAttribute('data-page-height') ?? '');
+    const top = Number.isFinite(ty) ? svgRect.top + ty * scale : ink.top;
+    const height = Number.isFinite(hAttr) ? hAttr * scale : ink.height;
+    const yTol = (yTolPt * height) / pageHPt;
     for (const el of pageEl.querySelectorAll('.tsel')) {
-      const y = el.getBoundingClientRect().top - rect.top;
+      const y = el.getBoundingClientRect().top - top;
       const text = el.textContent ?? '';
       const last = out[out.length - 1];
       if (last && last.page === page && Math.abs(y - last.y) < yTol) last.text += text;
-      else out.push({ text, y, page });
+      else out.push({ text, y, page, yFrac: y / height });
     }
   });
   // Record the page count on the array for the caller.
@@ -173,9 +104,10 @@ function extractPages(svg: string, yTolPt: number, pageHPt: number): PagedLine[]
 }
 
 /** Build the document's unit list (blocks in reading order). */
-function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
+export function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
   const units: Unit[] = [];
-  const push = (node: PMNode, pos: number, marker = false) => {
+  const push = (node: PMNode, pos: number, marker: boolean | string = false, target: Unit[] = units) => {
+    const units = target;
     if (node.type.name === 'paragraph' && node.attrs.align) {
       // Aligned paragraphs are browser-laid (no line cache): opaque, so a
       // page can start AT them but a split inside one fails to fallback.
@@ -197,28 +129,147 @@ function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
       // The painted "Abstract" label line is emitted but not stored; an
       // opaque unit lets the matcher resync on the first body paragraph.
       units.push({ kind: 'opaque', pos, type: 'abstract-label' });
-      node.forEach((child, off) => push(child, pos + 1 + off));
+      node.forEach((child, off) => push(child, pos + 1 + off, false, target));
     } else if (node.type.name === 'bullet_list' || node.type.name === 'ordered_list' || node.type.name === 'blockquote') {
+      // Ordered markers are deterministic per item: Typst's default enum
+      // numbering ("1.", "2.", …) restarts at 1 for every list (including a
+      // nested one), regardless of the export's own item-`order` attr — the
+      // exporter (typ-serializer's `+` items) never emits a start override,
+      // so this counts along with what actually gets compiled. Only the
+      // item's FIRST block carries the marker; a second paragraph or a
+      // nested list inside the same list_item has none.
+      const ordered = node.type.name === 'ordered_list';
+      let itemIndex = 0;
       node.forEach((child, off) => {
         const childPos = pos + 1 + off;
         if (child.type.name === 'list_item') {
-          child.forEach((g, goff) => push(g, childPos + 1 + goff, true));
+          itemIndex++;
+          const itemMarker: boolean | string = ordered
+            ? `${itemIndex}.`
+            : node.type.name === 'bullet_list';
+          child.forEach((g, goff) => push(g, childPos + 1 + goff, goff === 0 ? itemMarker : false, target));
         } else {
-          push(child, childPos);
+          push(child, childPos, false, target);
         }
+      });
+    } else if (node.type.name === 'table') {
+      units.push(buildTableUnit(node, pos, resolveAtom));
+    } else if (node.type.name === 'grid') {
+      // A grid row is opaque (its cells' lines merge in the text layer),
+      // one unit per row so a page can start at any row; the row's first
+      // text block anchors it.
+      node.forEach((row, off) => {
+        const rowPos = pos + 1 + off;
+        const inner: Unit[] = [];
+        row.forEach((cell, coff) => {
+          const cellPos = rowPos + 1 + coff;
+          cell.forEach((block, boff) => push(block, cellPos + 1 + boff, false, inner));
+        });
+        units.push({ kind: 'opaque', pos: rowPos, type: 'grid_row', inner });
       });
     } else {
       units.push({ kind: 'opaque', pos, type: node.type.name });
     }
   };
-  doc.forEach((node, offset) => push(node, offset));
+  // Editorial comments are not printed: the compile omits them, so the
+  // matcher must never expect a unit for one.
+  doc.forEach((node, offset) => {
+    if (node.type.name !== 'editor_comment') push(node, offset);
+  });
   return units;
+}
+
+/**
+ * A breakable table's row specs: every row is matched like one paragraph
+ * whose tokens are the row's cells in reading order. Typst's text layer
+ * emits one run per cell; runs sharing a baseline merge into one extracted
+ * line with NO separator ("Alpha 11.5n1" for cells "Alpha 1" | "1.5" | "n1"),
+ * so the first token of every cell and cell paragraph is glued
+ * (`spaceBefore: false`). A cell's second paragraph starts its own line,
+ * where the matcher trims leading space anyway.
+ *
+ * Fail closed to an opaque unit (today's atomic behaviour) whenever any row
+ * cannot be predicted exactly: an unrepresentable atom, or a row without a
+ * single known token (an all-empty row emits no text at all, so its page
+ * could never be observed).
+ */
+export function buildTableUnit(node: PMNode, pos: number, resolveAtom: AtomResolver): Unit {
+  const model = tableRowModel(node);
+  const opaque: Unit = { kind: 'opaque', pos, type: 'table' };
+  if (model.atomicReason) return opaque;
+  const rows: ParagraphSpec[] = [];
+  let failed = false;
+  node.forEach((row) => {
+    if (failed) return;
+    const tokens: ParagraphSpec['tokens'] = [];
+    let hasMath = false;
+    row.forEach((cell) => {
+      if (failed) return;
+      cell.forEach((block) => {
+        if (failed) return;
+        if (block.type.name !== 'paragraph') {
+          failed = true;
+          return;
+        }
+        if (!block.content.size) return;
+        const spec = buildSpec(block, resolveAtom);
+        if (!spec) {
+          failed = true;
+          return;
+        }
+        hasMath ||= spec.hasMath;
+        spec.tokens.forEach((t, i) => tokens.push(i === 0 ? { ...t, spaceBefore: false } : t));
+      });
+    });
+    if (!tokens.some((t) => t.text !== undefined)) failed = true;
+    rows.push({ key: '', src: '', tokens, hasMath });
+  });
+  if (failed) return opaque;
+  return { kind: 'table', pos, type: 'table', rows, model };
 }
 
 const MARKER = /^[•‣–\-*]?\s*|^\d+[.)]\s*/;
 
+/**
+ * Strip a list-item's marker off the first line of its rendered text.
+ * `marker === true` is a bullet/quote glyph (matched loosely — the exact
+ * glyph varies by nesting depth and Typst's own default cycle); a string
+ * is an ordered-list marker's exact predicted text ("1.", "2.", …), which
+ * must match verbatim — left untouched otherwise, so a real mismatch
+ * still surfaces as a token-mismatch failure downstream (fail closed,
+ * never a fuzzy skip that could paper over a genuinely wrong layout).
+ */
+export function stripListMarker(text: string, marker: boolean | string | undefined): string {
+  if (!marker) return text;
+  if (typeof marker === 'string') return text.startsWith(marker) ? text.slice(marker.length) : text;
+  return text.replace(MARKER, '');
+}
+
+/** The resync target when an opaque block hands off to the next exact unit:
+ * that unit's first two words, plus its own marker (if any) — a list item
+ * carries one, and Typst glues it onto the rendered line's front exactly
+ * like it does for the exact-match branch above. */
+export interface Anchor {
+  text: string;
+  marker?: boolean | string;
+}
+
+/**
+ * Whether an opaque block's current SVG line is where the next exact unit
+ * (the anchor) begins. The anchor's own marker must be stripped from the
+ * candidate line first — Typst glues a list item's marker onto its first
+ * line with no separating space, so an un-stripped comparison can never
+ * satisfy `startsWith` and the opaque block would consume straight past
+ * its real end into lines that belong to the marked item.
+ */
+export function matchesAnchor(lineText: string, anchor: Anchor | null): boolean {
+  if (!anchor) return false;
+  const text = stripListMarker(lineText.replace(/\s+/g, ' ').trim(), anchor.marker);
+  return text === anchor.text || text.startsWith(anchor.text + ' ') || text.startsWith(anchor.text);
+}
+
 /** First words of every footnote body, in document order. */
-function footnoteHeads(doc: PMNode): string[] {
+export function footnoteHeads(doc: PMNode): string[] {
   const heads: string[] = [];
   doc.descendants((n) => {
     if (n.type.name === 'footnote') {
@@ -230,8 +281,15 @@ function footnoteHeads(doc: PMNode): string[] {
   return heads;
 }
 
+/** An entry line without its leading marker (a number, letters, roman
+ *  numerals, or Typst's footnote symbols, glued to the body's first word). */
+function stripFootnoteMarker(raw: string): string {
+  const text = raw.replace(/\s+/g, ' ').trim();
+  return text.replace(/^(?:\d+|[a-z]{1,3}|[*†‡§¶‖]+)(?=[A-Za-z0-9“"(])/, '');
+}
+
 /** Remove per-page trailing footnote-area lines (matched against known texts). */
-function stripFootnoteLines(lines: PagedLine[], heads: string[]): PagedLine[] {
+export function stripFootnoteLines(lines: PagedLine[], heads: string[]): PagedLine[] {
   if (!heads.length) return lines;
   let hi = 0;
   const drop = new Set<number>();
@@ -245,14 +303,14 @@ function stripFootnoteLines(lines: PagedLine[], heads: string[]): PagedLine[] {
     if (hi >= heads.length) break;
     // Find the first line on this page that starts the pending footnote body.
     for (let k = 0; k < idxs.length; k++) {
-      const text = lines[idxs[k]].text.replace(/\s+/g, ' ').trim().replace(/^\d+[.)]?\s*/, '');
+      const text = stripFootnoteMarker(lines[idxs[k]].text);
       if (hi < heads.length && text.startsWith(heads[hi].slice(0, 12))) {
         // Everything from here to the end of the page is footnote area.
         for (let j = k; j < idxs.length; j++) drop.add(idxs[j]);
         // Consume as many queued footnotes as begin in this area.
         hi++;
         for (let j = k + 1; j < idxs.length && hi < heads.length; j++) {
-          const t = lines[idxs[j]].text.replace(/\s+/g, ' ').trim().replace(/^\d+[.)]?\s*/, '');
+          const t = stripFootnoteMarker(lines[idxs[j]].text);
           if (t.startsWith(heads[hi].slice(0, 12))) hi++;
         }
         break;
@@ -262,41 +320,57 @@ function stripFootnoteLines(lines: PagedLine[], heads: string[]): PagedLine[] {
   return lines.filter((_, i) => !drop.has(i));
 }
 
-function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver): PageOracleEntry {
+function analyze(
+  svg: string,
+  doc: PMNode,
+  settings: DocSettings,
+  resolveAtom: AtomResolver,
+  audit?: UnitAudit[],
+  marginals?: Marginal[],
+): PageOracleEntry {
   const pitch = settings.lineHeight * settings.sizePt;
   const pageHPt = pageSize(settings).h * 0.75;
   const raw = extractPages(svg, pitch / 2, pageHPt);
   const pageCount = (raw as PagedLine[] & { pageCount?: number }).pageCount ?? 1;
   if (!raw.length) return { status: 'fail', reason: 'no text layer' };
 
-  // Page numbers render in the footer and reach the text layer too. A
-  // numbering-restart marker makes folio values non-sequential (roman
-  // front matter, body restarting at 1), so match folio PATTERNS for the
-  // formats in play rather than one exact per-page value.
-  let hasRestart = false;
-  doc.forEach((n) => {
-    if (n.type.name === 'numbering_restart') hasRestart = true;
-  });
-  const folioRe = (fmt: DocSettings['pageNumFormat']): RegExp =>
-    fmt === '1'
-      ? /^\d+$/
-      : fmt === '— 1 —'
-        ? /^— \d+ —$/
-        : fmt === 'i'
-          ? /^[ivxlcdm]+$/
-          : /^\d+ \/ \d+$/;
-  const folioPatterns = hasRestart
-    ? [folioRe(settings.pageNumFormat), folioRe('i')]
-    : [folioRe(settings.pageNumFormat)];
-  const isFolio = (l: PagedLine) =>
-    hasRestart
-      ? folioPatterns.some((re) => re.test(l.text.trim()))
-      : l.text.trim() === formatPageNumber(settings, l.page + 1, pageCount);
-  const all = settings.pageNumShow ? raw.filter((l) => !isFolio(l)) : raw;
+  // The page chrome (the number, a running header or footer) reaches the
+  // text layer too, in the margins: everything above the top margin or
+  // below the bottom one is a marginal, kept aside for the chrome check.
+  // A text line's box top is its tallest ink, which can poke half a
+  // size above the cap top a first line sets at the margin; the chrome
+  // sits well clear (a header's bottom at 0.7 × the margin, a footer's
+  // top past 0.7 × the margin below the content).
+  const topFrac = (settings.marginTop * 72 - 0.5 * settings.sizePt) / pageHPt;
+  const bottomFrac = 1 - (settings.marginBottom * 72 - 0.5 * settings.sizePt) / pageHPt;
+  const all: PagedLine[] = [];
+  for (const l of raw) {
+    if (l.yFrac < topFrac || l.yFrac > bottomFrac) marginals?.push({ page: l.page, text: l.text });
+    else all.push(l);
+  }
 
   const units = buildUnits(doc, resolveAtom);
   const lines = stripFootnoteLines(all, footnoteHeads(doc));
+  const matched = matchPageStarts(units, lines, audit);
+  return { ...matched, pageCount };
+}
 
+/**
+ * Walk the document's units against the per-page text lines and record
+ * the (block, line-or-row) that starts every page. Pure: exported so the
+ * matcher's unit rules (paragraph lines, opaque resync, table rows) are
+ * testable without a compiled SVG.
+ */
+export interface UnitAudit {
+  pos: number;
+  type: string;
+  status: 'ok' | 'fail';
+  /** Typst's line breaks inside the unit (exact units only). */
+  breaks?: ForcedBreak[];
+  reason?: string;
+}
+
+export function matchPageStarts(units: Unit[], lines: PagedLine[], audit?: UnitAudit[]): PageOracleEntry {
   const pageStarts: PageStart[] = [];
   let cursor = 0;
   let lastPage = 0;
@@ -323,39 +397,179 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
     }
   };
 
-  const anchorFor = (idx: number): { text: string } | null => {
+  const firstSpec = (u: Unit): ParagraphSpec | undefined => {
+    if (u.kind === 'exact') return u.spec;
+    if (u.kind === 'table') return u.rows?.[0];
+    for (const inner of u.inner ?? []) {
+      const spec = firstSpec(inner);
+      if (spec) return spec;
+    }
+    return undefined;
+  };
+  const anchorFrom = (list: Unit[], idx: number, fallback: Anchor | null): Anchor | null => {
+    for (let j = idx; j < list.length; j++) {
+      const u = list[j];
+      const spec = firstSpec(u);
+      if (spec) {
+        const words = spec.tokens.filter((t) => t.text).slice(0, 2);
+        if (words.length) {
+          const joiner = u.kind === 'table' && words[1] && !words[1].spaceBefore ? '' : ' ';
+          return { text: words.map((t) => t.text).join(joiner), marker: u.marker };
+        }
+      }
+    }
+    return fallback;
+  };
+  const anchorFor = (idx: number): Anchor | null => {
     for (let j = idx; j < units.length; j++) {
       const u = units[j];
-      if (u.kind === 'exact' && u.spec) {
-        const words = u.spec.tokens.filter((t) => t.text).slice(0, 2);
-        if (words.length) return { text: words.map((t) => t.text).join(' ') };
+      const spec = firstSpec(u);
+      if (spec) {
+        const words = spec.tokens.filter((t) => t.text).slice(0, 2);
+        if (words.length) {
+          // A row's cells merge without a separator in the text layer.
+          const joiner = u.kind === 'table' && words[1] && !words[1].spaceBefore ? '' : ' ';
+          return { text: words.map((t) => t.text).join(joiner), marker: u.marker };
+        }
       }
     }
     return null;
+  };
+
+  /** Match one table row (or its repeated header) starting at `cursor`;
+   * every line it consumes must sit on one page — a row split across pages
+   * is a cell split (Typst's `layout_multi_row`), which the editor does not
+   * mirror, so the whole answer fails closed. Returns the next cursor. */
+  const matchRow = (unit: Unit, r: number, cursor: number, what: string): number | { fail: string } => {
+    const res = matchParagraph(unit.rows![r], lines.slice(cursor), 0);
+    if (res.status !== 'ok') return { fail: `unit@${unit.pos} (table ${what} ${r}): ${res.entry.reason}` };
+    const page = lines[cursor].page;
+    for (let k = 1; k < res.next; k++) {
+      if (lines[cursor + k].page !== page) return { fail: `page splits inside table row @${unit.pos} row ${r}` };
+    }
+    return cursor + res.next;
   };
 
   for (let ui = 0; ui < units.length; ui++) {
     const unit = units[ui];
     if (cursor >= lines.length) break;
     if (unit.kind === 'exact' && unit.spec) {
-      // List markers ride on the first line; strip before matching.
-      const slice = lines.slice(cursor).map((l, i) => ({
-        ...l,
-        text: i === 0 && unit.marker ? l.text.replace(MARKER, '') : l.text,
-      }));
+      // List markers ride on the first line; strip before matching. An
+      // ordered marker's exact text is known — require it verbatim (fail
+      // closed on a mismatch instead of silently leaving it, which would
+      // just surface as a token-mismatch failure downstream, exactly as it
+      // should for a genuinely wrong layout).
+      const slice = lines.slice(cursor).map((l, i) => (i === 0 ? { ...l, text: stripListMarker(l.text, unit.marker) } : l));
       const res = matchParagraph(unit.spec, slice, 0);
       if (res.status !== 'ok') {
-        return { status: 'fail', reason: `unit@${unit.pos} (${unit.type}): ${res.entry.reason}` };
+        if (!audit) return { status: 'fail', reason: `unit@${unit.pos} (${unit.type}): ${res.entry.reason}` };
+        // Audit: record the disagreement and resync on the next unit's
+        // anchor, exactly as an opaque block would, so one bad paragraph
+        // does not hide the rest of the document.
+        audit.push({ pos: unit.pos, type: unit.type, status: 'fail', reason: res.entry.reason });
+        const anchor = anchorFor(ui + 1);
+        let consumed = 0;
+        while (cursor < lines.length && !(consumed > 0 && matchesAnchor(lines[cursor].text, anchor))) {
+          notePage(cursor, unit, consumed);
+          cursor++;
+          consumed++;
+        }
+        continue;
       }
+      audit?.push({ pos: unit.pos, type: unit.type, status: 'ok', breaks: res.entry.breaks ?? [] });
       for (let k = 0; k < res.next; k++) notePage(cursor + k, unit, k);
       cursor += res.next;
+    } else if (unit.kind === 'table' && unit.rows && unit.model) {
+      // Row-level matching (PAGE-PORT.md Phase 7): a page that begins at
+      // row r is recorded as {table pos, line: r}. On a continuation page
+      // Typst lays the repeating header first (repeated.rs
+      // `layout_active_headers`), so its exact text is expected — and
+      // required — ahead of row r there.
+      const rep = unit.model.repeatRow;
+      for (let r = 0; r < unit.rows.length; r++) {
+        if (cursor >= lines.length) return { status: 'fail', reason: `unit@${unit.pos} (table): ran out of lines at row ${r}` };
+        const page = lines[cursor].page;
+        if (page > lastPage) {
+          if (r > 0 && rep !== null && r > rep) {
+            const next = matchRow(unit, rep, cursor, 'repeated header before row');
+            if (typeof next !== 'number') {
+              if (!audit) return { status: 'fail', reason: next.fail };
+              audit.push({ pos: unit.pos, type: 'table', status: 'fail', reason: next.fail });
+              break;
+            }
+            cursor = next;
+          }
+          while (lastPage < page) {
+            lastPage++;
+            pageStarts.push({ pos: unit.pos, line: r, unit: 'table' });
+          }
+        }
+        const next = matchRow(unit, r, cursor, 'row');
+        if (typeof next !== 'number') {
+          if (!audit) return { status: 'fail', reason: next.fail };
+          audit.push({ pos: unit.pos, type: 'table', status: 'fail', reason: next.fail });
+          break;
+        }
+        cursor = next;
+      }
+      if (audit && !audit.some((a) => a.pos === unit.pos)) audit.push({ pos: unit.pos, type: 'table', status: 'ok' });
+    } else if (unit.inner) {
+      // A grid row: its blocks in reading order, each text block matched
+      // exactly, a table by its rows, anything else consumed up to the
+      // next block's anchor (or the next unit's after the row). Every line
+      // is the ROW's for page starts: a page begins at the row or not at
+      // all (rows are atomic; a split inside fails closed below).
+      const rowStart = cursor;
+      const after = anchorFor(ui + 1);
+      const inner = unit.inner;
+      for (let ii = 0; ii < inner.length && cursor < lines.length; ii++) {
+        const u = inner[ii];
+        const next = anchorFrom(inner, ii + 1, after);
+        const consumeTo = (anchor: Anchor | null, atLeast: number) => {
+          let consumed = 0;
+          while (cursor < lines.length && !(consumed >= atLeast && matchesAnchor(lines[cursor].text, anchor))) {
+            notePage(cursor, unit, cursor - rowStart);
+            cursor++;
+            consumed++;
+          }
+        };
+        if (u.kind === 'exact' && u.spec) {
+          const slice = lines.slice(cursor).map((l, i) => (i === 0 ? { ...l, text: stripListMarker(l.text, u.marker) } : l));
+          const res = matchParagraph(u.spec, slice, 0);
+          if (res.status !== 'ok') {
+            if (!audit) return { status: 'fail', reason: `unit@${u.pos} (${u.type}, in grid row @${unit.pos}): ${res.entry.reason}` };
+            audit.push({ pos: u.pos, type: u.type, status: 'fail', reason: res.entry.reason });
+            consumeTo(next, 1);
+            continue;
+          }
+          audit?.push({ pos: u.pos, type: u.type, status: 'ok', breaks: res.entry.breaks ?? [] });
+          for (let k = 0; k < res.next; k++) notePage(cursor + k, unit, cursor + k - rowStart);
+          cursor += res.next;
+        } else if (u.kind === 'table' && u.rows) {
+          let ok = true;
+          for (let r = 0; r < u.rows.length && cursor < lines.length; r++) {
+            const res = matchParagraph(u.rows[r], lines.slice(cursor), 0);
+            if (res.status !== 'ok') {
+              ok = false;
+              if (!audit) return { status: 'fail', reason: `unit@${u.pos} (table in grid row @${unit.pos}, row ${r}): ${res.entry.reason}` };
+              audit.push({ pos: u.pos, type: 'table', status: 'fail', reason: res.entry.reason });
+              consumeTo(next, 1);
+              break;
+            }
+            for (let k = 0; k < res.next; k++) notePage(cursor + k, unit, cursor + k - rowStart);
+            cursor += res.next;
+          }
+          if (ok) audit?.push({ pos: u.pos, type: 'table', status: 'ok' });
+        } else {
+          consumeTo(next, 0);
+        }
+      }
     } else {
       // Opaque block: consume lines until the next exact unit's anchor.
       const anchor = anchorFor(ui + 1);
       let consumed = 0;
       while (cursor < lines.length) {
-        const text = lines[cursor].text.replace(/\s+/g, ' ').trim();
-        if (anchor && (text === anchor.text || text.startsWith(anchor.text + ' ') || text.startsWith(anchor.text))) break;
+        if (matchesAnchor(lines[cursor].text, anchor)) break;
         notePage(cursor, unit, consumed === 0 ? 0 : consumed);
         cursor++;
         consumed++;
@@ -368,14 +582,53 @@ function analyze(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: A
     }
   }
 
-  // Mid-opaque page splits can't be represented (editor blocks are atomic)
-  // — except tables, whose node view renders Typst's own split fragments
-  // (typeset-plugin's forced paginator verifies the break count agrees).
+  // Mid-opaque page splits can't be represented (editor blocks are atomic).
+  // A 'table' start with line > 0 is a ROW start from the table branch
+  // above (a breakable table is never opaque); typeset-plugin's forced
+  // paginator re-validates it against the live row model before installing
+  // a row-boundary spacer, declining anything it cannot mirror.
   for (const ps of pageStarts) {
     if (ps.line > 0 && ps.unit !== 'line' && ps.unit !== 'table') {
-      return { status: 'fail', reason: `page splits inside atomic block @${ps.pos} (${ps.unit})` };
+      return { status: 'fail', reason: `page splits inside atomic block @${ps.pos} (${ps.unit})`, pageStarts };
     }
   }
 
-  return { status: 'ok', pageStarts, pageCount };
+  return { status: 'ok', pageStarts };
+}
+
+/** A text line Typst set in a page's margin: the number, a running text. */
+export interface Marginal {
+  page: number;
+  text: string;
+}
+
+export interface SvgAudit {
+  /** Typst's page starts, present even when a unit disagreed (audit mode
+   * resyncs); `status` says whether the whole match was clean. */
+  status: 'ok' | 'fail';
+  reason?: string;
+  pageStarts: PageStart[];
+  pageCount: number;
+  units: UnitAudit[];
+  marginals: Marginal[];
+}
+
+/**
+ * Measure the compiled document against the editor's units: every exact
+ * unit's Typst line breaks and the page starts, in one pass that keeps
+ * going past disagreements. The port audit (tests/port-audit.spec.ts) is
+ * the only caller; nothing in the edit loop compiles.
+ */
+export function auditSvg(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver): SvgAudit {
+  const units: UnitAudit[] = [];
+  const marginals: Marginal[] = [];
+  const entry = analyze(svg, doc, settings, resolveAtom, units, marginals);
+  return {
+    status: entry.status,
+    reason: entry.reason,
+    pageStarts: entry.pageStarts ?? [],
+    pageCount: entry.pageCount ?? 1,
+    units,
+    marginals,
+  };
 }

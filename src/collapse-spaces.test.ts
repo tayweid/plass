@@ -1,0 +1,233 @@
+// The printed-form normalizer: collapsing and dash substitution must behave
+// exactly as if the whole document were rescanned, while actually visiting
+// only the blocks an edit touched.
+// Run: npx tsx src/collapse-spaces.test.ts
+import { EditorState, TextSelection } from 'prosemirror-state';
+import { Fragment, Slice } from 'prosemirror-model';
+import { history, undo } from 'prosemirror-history';
+import { schema } from './schema';
+import { collapseSpaces } from './collapse-spaces';
+import { FROM_DISK } from './reload-in-place';
+
+let failures = 0;
+function check(name: string, ok: boolean, detail = '') {
+  console.log(`  ${ok ? 'ok ' : 'FAIL'} ${name}${ok ? '' : ' — ' + detail}`);
+  if (!ok) failures++;
+}
+
+const p = (text: string) => schema.nodes.paragraph.create(null, text ? schema.text(text) : undefined);
+const state = (...paras: ReturnType<typeof p>[]) =>
+  EditorState.create({ doc: schema.nodes.doc.create(null, paras), plugins: [collapseSpaces()] });
+
+console.log('collapse-spaces:');
+
+{
+  // Typing a second space collapses the run to one plain space.
+  const s = state(p('a b'));
+  const after = s.apply(s.tr.insertText(' ', 3));
+  check('typed double space collapses', after.doc.firstChild!.textContent === 'a b', JSON.stringify(after.doc.firstChild!.textContent));
+}
+
+{
+  // Dash shorthands normalize as they are typed: -- en, then em, and a
+  // whitespace-preceded hyphen before a digit becomes a minus sign.
+  const s1 = state(p('x -'));
+  const en = s1.apply(s1.tr.insertText('-', 4));
+  check('-- becomes en dash', en.doc.firstChild!.textContent === 'x –', JSON.stringify(en.doc.firstChild!.textContent));
+  const em = en.apply(en.tr.insertText('-', 4));
+  check('en dash + - becomes em dash', em.doc.firstChild!.textContent === 'x —', JSON.stringify(em.doc.firstChild!.textContent));
+  const s2 = state(p('x -'));
+  const minus = s2.apply(s2.tr.insertText('5', 4));
+  check('space-hyphen-digit becomes minus', minus.doc.firstChild!.textContent === 'x −5', JSON.stringify(minus.doc.firstChild!.textContent));
+  // Three dots print as an ellipsis (Typst's `...` shorthand).
+  const s3 = state(p('wait..'));
+  const dots = s3.apply(s3.tr.insertText('.', 7));
+  check('... becomes an ellipsis', dots.doc.firstChild!.textContent === 'wait…', JSON.stringify(dots.doc.firstChild!.textContent));
+}
+
+{
+  // A paste inserting several blocks mid-document normalizes ALL pasted
+  // blocks, not just the one holding the selection.
+  const s = state(p('start'), p('end'));
+  const pasted = Fragment.fromArray([p('c  d'), p('e -- f')]);
+  const after = s.apply(s.tr.insert(7, pasted));
+  check('pasted block 1 normalized', after.doc.child(1).textContent === 'c d', JSON.stringify(after.doc.child(1).textContent));
+  check('pasted block 2 normalized', after.doc.child(2).textContent === 'e – f', JSON.stringify(after.doc.child(2).textContent));
+}
+
+{
+  // The scan is scoped to the edited ranges: a block the edit never touched
+  // is not rescanned (its content is already normalized by whichever
+  // transaction wrote it — here it is seeded directly to prove the scope).
+  const s = state(p('hello'), p('x  y'));
+  const after = s.apply(s.tr.insertText('!', 6));
+  check('edited block updated', after.doc.child(0).textContent === 'hello!', JSON.stringify(after.doc.child(0).textContent));
+  check('untouched block not rescanned', after.doc.child(1).textContent === 'x  y', JSON.stringify(after.doc.child(1).textContent));
+}
+
+{
+  // A run of PURE non-breaking spaces is intentional and survives an edit
+  // in the same block.
+  const s = state(p('a\u00a0\u00a0b'));
+  const after = s.apply(s.tr.insertText('x', 5));
+  check('pure nbsp run preserved', after.doc.firstChild!.textContent === 'a\u00a0\u00a0bx', JSON.stringify(after.doc.firstChild!.textContent));
+  // ...but a run polluted with a plain space collapses to one plain space.
+  const s2 = state(p('a b'));
+  const after2 = s2.apply(s2.tr.insertText('\u00a0', 3));
+  check('mixed space+nbsp run collapses', after2.doc.firstChild!.textContent === 'a b', JSON.stringify(after2.doc.firstChild!.textContent));
+}
+
+{
+  // Code-marked text keeps its spaces even when its block is edited.
+  const code = schema.nodes.paragraph.create(null, [
+    schema.text('cmd  --flag', [schema.marks.code.create()]),
+    schema.text(' tail'),
+  ]);
+  const s = EditorState.create({ doc: schema.nodes.doc.create(null, [code]), plugins: [collapseSpaces()] });
+  const after = s.apply(s.tr.insertText('!', code.nodeSize - 1));
+  check('code-marked text untouched', after.doc.firstChild!.textContent === 'cmd  --flag tail!', JSON.stringify(after.doc.firstChild!.textContent));
+}
+
+{
+  // Deleting a block boundary rescans the merged block: "a " + " b" joins
+  // into "a  b", which must collapse.
+  const s = state(p('a '), p(' b'));
+  // Delete the boundary between the two paragraphs (positions 3..5).
+  const after = s.apply(s.tr.delete(3, 5));
+  check('merge across blocks collapses', after.doc.firstChild!.textContent === 'a b', JSON.stringify(after.doc.firstChild!.textContent));
+}
+
+{
+  // A footnote marker swallows the space typed before it (Typst's footnote
+  // show rule prefixes the superscript with a weak zero-width hole), so the
+  // document drops that space the moment the footnote is inserted.
+  const fn = () => schema.nodes.footnote.create(null, schema.text('n'));
+  const s = state(p('word '));
+  const after = s.apply(s.tr.insert(6, fn()));
+  const para = after.doc.firstChild!;
+  check(
+    'space before a footnote marker is dropped',
+    para.child(0).text === 'word' && para.child(1).type.name === 'footnote',
+    JSON.stringify(para.toJSON()),
+  );
+  const s2 = state(p('word\u00a0'));
+  const after2 = s2.apply(s2.tr.insert(6, fn()));
+  check('nbsp before a footnote marker survives', after2.doc.firstChild!.child(0).text === 'word\u00a0', JSON.stringify(after2.doc.firstChild!.toJSON()));
+  const s3 = state(p('word  '));
+  const after3 = s3.apply(s3.tr.insert(7, fn()));
+  check('space run before a footnote marker goes whole', after3.doc.firstChild!.child(0).text === 'word', JSON.stringify(after3.doc.firstChild!.toJSON()));
+  const s4 = state(p(' '));
+  const after4 = s4.apply(s4.tr.insert(2, fn()));
+  check(
+    'a text node that was only the space is removed',
+    after4.doc.firstChild!.childCount === 1 && after4.doc.firstChild!.child(0).type.name === 'footnote',
+    JSON.stringify(after4.doc.firstChild!.toJSON()),
+  );
+  const s5 = state(p('word '), p('x'));
+  const after5 = s5.apply(s5.tr.insertText('!', 8));
+  check('space before nothing in particular is kept', after5.doc.firstChild!.textContent === 'word ', JSON.stringify(after5.doc.firstChild!.textContent));
+}
+
+{
+  // Quotes normalize as they are typed, Typst's way: an opening quote,
+  // then the closing one after an already-normalized opening; an
+  // apostrophe inside a word; nothing inside code; pasted prose whole.
+  const s = state(p('He said '));
+  const open = s.apply(s.tr.insertText('"', 9));
+  check('a typed double quote opens', open.doc.firstChild!.textContent === 'He said “', JSON.stringify(open.doc.firstChild!.textContent));
+  const word = open.apply(open.tr.insertText('no', 10));
+  const close = word.apply(word.tr.insertText('"', 12));
+  check('the next typed double quote closes', close.doc.firstChild!.textContent === 'He said “no”', JSON.stringify(close.doc.firstChild!.textContent));
+  const apos = state(p('shouldn'));
+  const a = apos.apply(apos.tr.insertText("'t", 8));
+  check("a typed apostrophe is ’", a.doc.firstChild!.textContent === 'shouldn’t', JSON.stringify(a.doc.firstChild!.textContent));
+  const code = state(p('x = '));
+  const c = code.apply(code.tr.insert(5, schema.text('"s"', [schema.marks.code.create()])));
+  check('quotes inside code stay straight', c.doc.firstChild!.textContent === 'x = "s"', JSON.stringify(c.doc.firstChild!.textContent));
+  const pasted = state(p(''));
+  const pd = pasted.apply(pasted.tr.insertText(`The 5'11" 'quick' fox's "lazy" dog`, 1));
+  check('pasted prose normalizes whole', pd.doc.firstChild!.textContent === 'The 5′11″ ‘quick’ fox’s “lazy” dog', JSON.stringify(pd.doc.firstChild!.textContent));
+}
+
+{
+  // The browser writes a space typed against an inline atom as a lone
+  // nbsp. Recognized by how it arrives — a typing transaction inserting
+  // exactly one nbsp — it becomes a plain space once a character follows;
+  // the same character imported from a `~` in the file is glue and stays.
+  const math = schema.nodes.math_inline.create({ src: 'x' });
+  const para = schema.nodes.paragraph.create(null, [schema.text('area '), math]);
+  const s = EditorState.create({ doc: schema.nodes.doc.create(null, [para]), plugins: [collapseSpaces()] });
+  const end = s.doc.content.size - 1;
+  const typedNbsp = s.apply(s.tr.insertText('\u00a0', end));
+  check('a typed nbsp waits while it is trailing', typedNbsp.doc.firstChild!.child(2).text === '\u00a0', JSON.stringify(typedNbsp.doc.firstChild!.textContent));
+  const typedWord = typedNbsp.apply(typedNbsp.tr.insertText('d', typedNbsp.doc.content.size - 1));
+  check('a typed nbsp after a formula becomes a space once a character follows', typedWord.doc.firstChild!.child(2).text === ' d', JSON.stringify(typedWord.doc.firstChild!.child(2).text));
+  const imported = schema.nodes.paragraph.create(null, [schema.text('area '), math, schema.text('\u00a0done')]);
+  const s2 = EditorState.create({ doc: schema.nodes.doc.create(null, [imported]), plugins: [collapseSpaces()] });
+  const edited = s2.apply(s2.tr.insertText('!', s2.doc.content.size - 1));
+  check('an imported nbsp after a formula is glue and stays', edited.doc.firstChild!.child(2).text === '\u00a0done!', JSON.stringify(edited.doc.firstChild!.child(2).text));
+  const loaded = s2.apply(s2.tr.replaceWith(0, s2.doc.content.size, imported).setMeta('addToHistory', false));
+  check('a document load never touches a lone nbsp', loaded.doc.firstChild!.child(2).text === '\u00a0done', JSON.stringify(loaded.doc.firstChild!.textContent));
+  const beforeAtom = EditorState.create({ doc: schema.nodes.doc.create(null, [schema.nodes.paragraph.create(null, [schema.text('see'), math])]), plugins: [collapseSpaces()] });
+  const typedBefore = beforeAtom.apply(beforeAtom.tr.insertText('\u00a0', 4));
+  const typedMore = typedBefore.apply(typedBefore.tr.insertText('x', 5));
+  check('a typed nbsp before a formula becomes a space once a character follows', typedMore.doc.firstChild!.child(0).text === 'see x', JSON.stringify(typedMore.doc.firstChild!.child(0).text));
+  const glue = schema.nodes.paragraph.create(null, [schema.text('a'), math, schema.text('\u00a0\u00a0b')]);
+  const s3 = EditorState.create({ doc: schema.nodes.doc.create(null, [glue]), plugins: [collapseSpaces()] });
+  const after3 = s3.apply(s3.tr.insertText('!', 1));
+  check('a pure nbsp run after a formula stays', after3.doc.firstChild!.child(2).text === '\u00a0\u00a0b', JSON.stringify(after3.doc.firstChild!.child(2).text));
+}
+
+{
+  // A paragraph holding only a no-break space is a blank line (how the
+  // Markdown writer saves an empty paragraph): what is typed, pasted or
+  // inserted into it replaces the space, wherever the caret was, instead
+  // of following it as a one-space indent. Not a reload from disk, a
+  // composition in progress, or a space with company.
+  const NB = '\u00a0';
+  const texts = (s: EditorState) => {
+    const out: string[] = [];
+    s.doc.forEach((n) => out.push(n.textContent));
+    return JSON.stringify(out);
+  };
+  const blank = state(p('Q1.'), p(NB), p('Q2.'));
+  // The blank line's space is 6..7 (Q1. is 0..5, the blank line 5..8).
+  const after = blank.apply(blank.tr.insertText('A', 7));
+  check('typed after a blank line\'s space, the text replaces it', texts(after) === '["Q1.","A","Q2."]', texts(after));
+  const before = blank.apply(blank.tr.insertText('A', 6));
+  check('typed before it, too', texts(before) === '["Q1.","A","Q2."]', texts(before));
+  const math = blank.apply(blank.tr.insert(7, schema.nodes.math_inline.create({ src: 'x' })));
+  check('an inserted formula replaces it', math.doc.child(1).childCount === 1 && math.doc.child(1).firstChild!.type.name === 'math_inline', JSON.stringify(math.doc.child(1).toJSON()));
+  const pasted = blank.apply(blank.tr.setSelection(TextSelection.create(blank.doc, 7)).replaceSelection(new Slice(Fragment.fromArray([p('c'), p('d')]), 1, 1)).setMeta('uiEvent', 'paste'));
+  check('pasted paragraphs replace it', texts(pasted) === '["Q1.","c","d","Q2."]', texts(pasted));
+  const split = blank.apply(blank.tr.split(7));
+  check('Enter on a blank line leaves it blank', texts(split) === `["Q1.","${NB}","","Q2."]`, texts(split));
+  const over = blank.apply(blank.tr.insertText('A', 6, 7));
+  check('typing over the space is an ordinary replacement', texts(over) === '["Q1.","A","Q2."]', texts(over));
+  const undone = (() => {
+    const s = EditorState.create({ doc: blank.doc, plugins: [history(), collapseSpaces()] });
+    const typed = s.apply(s.tr.insertText('A', 7));
+    let back = typed;
+    undo(typed, (tr) => {
+      back = typed.apply(tr);
+    });
+    return [typed, back];
+  })();
+  check('one undo puts the blank line back', texts(undone[0]) === '["Q1.","A","Q2."]' && texts(undone[1]) === texts(blank), texts(undone[1]));
+  const disk = blank.apply(blank.tr.insertText('A', 7).setMeta(FROM_DISK, true));
+  check('a reload from disk is left as the file has it', texts(disk) === `["Q1.","${NB}A","Q2."]`, texts(disk));
+  const composing = blank.apply(blank.tr.insertText('A', 7).setMeta('composition', 1));
+  check('a composition in progress is left alone', texts(composing) === `["Q1.","${NB}A","Q2."]`, texts(composing));
+  const glue = state(p(`5${NB}cakes`));
+  const typedGlue = glue.apply(glue.tr.insertText('!', 8));
+  check('a no-break space between words is glue and stays', texts(typedGlue) === `["5${NB}cakes!"]`, texts(typedGlue));
+  const code = EditorState.create({ doc: schema.nodes.doc.create(null, [schema.nodes.paragraph.create(null, schema.text(NB, [schema.marks.code.create()]))]), plugins: [collapseSpaces()] });
+  const typedCode = code.apply(code.tr.insertText('x', 2));
+  check('a code no-break space is no blank line', typedCode.doc.firstChild!.textContent === `${NB}x`, JSON.stringify(typedCode.doc.firstChild!.textContent));
+}
+
+if (failures) {
+  console.error(`${failures} failure(s)`);
+  process.exit(1);
+}
+console.log('all passed');

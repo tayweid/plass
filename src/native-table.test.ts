@@ -1,0 +1,317 @@
+// Native structured-table regressions. Run with:
+//   node --import tsx src/native-table.test.ts
+import { setBlockType } from 'prosemirror-commands';
+import { history, redo, undo } from 'prosemirror-history';
+import type { Node as PMNode } from 'prosemirror-model';
+import { EditorState, NodeSelection, TextSelection } from 'prosemirror-state';
+import { TableMap, goToNextCell, tableEditing } from 'prosemirror-tables';
+import {
+  CellSelection,
+  addBodyRowAfter,
+  addColumnAfter,
+  addRowAfter,
+  deleteColumn,
+  deleteRow,
+  deleteSelectedColumns,
+  deleteSelectedRows,
+  mergeCells,
+  splitCell,
+  structuredTablePlugin,
+  toggleHeaderRow,
+} from './table-editor.ts';
+import { schema } from './schema.ts';
+import { docToTyp } from './typ-serializer.ts';
+import { allocateTableColumns, normalizeInsetPt, normalizeTableColumns, tableInsetPt } from './table-geometry.ts';
+
+let failures = 0;
+function check(name: string, condition: boolean, detail = '') {
+  if (condition) console.log(`  ok  ${name}`);
+  else {
+    failures++;
+    console.error(`FAIL  ${name}${detail ? `\n${detail}` : ''}`);
+  }
+}
+
+const bib = '@book{knuth86, title={The TeXbook}, author={Knuth, Donald E.}, year={1986}}';
+const { doc: docType, table, table_row, table_cell, table_header, paragraph } = schema.nodes;
+const richCell = table_cell.create(null, [
+  paragraph.create(null, [
+    schema.text('Marked', [schema.marks.strong.create()]),
+    schema.text(' math '),
+    schema.nodes.math_inline.create({ src: 'x^2' }),
+    schema.text(' cite '),
+    schema.nodes.citation.create({ key: 'knuth86' }),
+  ]),
+  paragraph.create(null, schema.text('Second paragraph', [schema.marks.em.create()])),
+]);
+const plainCell = (text: string, header = false) => (header ? table_header : table_cell).create(
+  null,
+  paragraph.create(null, text ? schema.text(text) : undefined),
+);
+const fixtureTable = table.create(
+  { style: 'booktabs', caption: 'Structured results', label: 'tab:structured' },
+  [
+    table_row.create(null, [richCell, plainCell('B')]),
+    table_row.create(null, [plainCell('C'), plainCell('D')]),
+  ],
+);
+
+function makeState(): EditorState {
+  return EditorState.create({
+    doc: docType.create({ bib: { name: 'refs.bib', content: bib } }, [fixtureTable]),
+    plugins: [history(), structuredTablePlugin(), tableEditing()],
+  });
+}
+
+function firstTable(state: EditorState): { node: PMNode; pos: number } {
+  let found: { node: PMNode; pos: number } | null = null;
+  state.doc.descendants((node, pos) => {
+    if (node.type.name === 'table') {
+      found = { node, pos };
+      return false;
+    }
+    return !found;
+  });
+  if (!found) throw new Error('table fixture disappeared');
+  return found;
+}
+
+function cellPos(state: EditorState, index: number): number {
+  const found = firstTable(state);
+  return found.pos + 1 + TableMap.get(found.node).map[index];
+}
+
+function selectedCellPos(state: EditorState): number {
+  const $from = state.selection.$from;
+  for (let depth = $from.depth; depth > 0; depth--) {
+    const role = $from.node(depth).type.spec.tableRole;
+    if (role === 'cell' || role === 'header_cell') return $from.before(depth);
+  }
+  return -1;
+}
+
+function hasInline(node: PMNode, type: string): boolean {
+  let found = false;
+  node.descendants((child) => {
+    if (child.type.name === type) found = true;
+    return !found;
+  });
+  return found;
+}
+
+// Direct character editing is a normal PM transaction. Only the intended
+// text changes; marks, inline atoms, and the second paragraph remain.
+{
+  let state = makeState();
+  const dispatch = (tr: Parameters<EditorState['apply']>[0]) => { state = state.apply(tr); };
+  const insertion = cellPos(state, 0) + 2 + 'Marked'.length;
+  dispatch(state.tr.insertText('!', insertion));
+  const edited = firstTable(state).node.child(0).child(0);
+  check('one-character edit reaches the native rich cell', edited.textContent.startsWith('Marked! math'));
+  check('strong mark survives direct editing', edited.child(0).child(0).marks.some((mark) => mark.type.name === 'strong'));
+  check('inline math survives direct editing', hasInline(edited, 'math_inline'));
+  check('citation survives direct editing', hasInline(edited, 'citation'));
+  check('paragraph boundary survives direct editing', edited.childCount === 2 && edited.child(1).textContent === 'Second paragraph');
+  check('edited table still exports through the lossless path', docToTyp(state.doc).includes('Marked!'));
+
+  check('undo handles a native cell edit', undo(state, dispatch));
+  check('undo restores the rich cell exactly', JSON.stringify(firstTable(state).node.child(0).child(0).toJSON()) === JSON.stringify(richCell.toJSON()));
+  check('redo handles a native cell edit', redo(state, dispatch));
+  check('redo restores only the intended text edit', firstTable(state).node.child(0).child(0).textContent.startsWith('Marked! math'));
+}
+
+// A legacy table may contain a schema-valid block that today's structured
+// editor deliberately refuses to create. Deleting it is allowed, and undo
+// must restore the exact historical content instead of being filtered.
+{
+  const legacyList = schema.nodes.bullet_list.create(null, [
+    schema.nodes.list_item.create(null, [paragraph.create(null, schema.text('Legacy list'))]),
+  ]);
+  const legacyTable = table.create(null, [
+    table_row.create(null, [table_cell.create(null, [legacyList])]),
+  ]);
+  let state = EditorState.create({
+    doc: docType.create(null, [legacyTable, paragraph.create(null, schema.text('After'))]),
+    plugins: [history(), structuredTablePlugin(), tableEditing()],
+  });
+  const dispatch = (tr: Parameters<EditorState['apply']>[0]) => { state = state.apply(tr); };
+  dispatch(state.tr.setSelection(NodeSelection.create(state.doc, 0)).deleteSelection());
+  check('unsupported legacy table can be deleted', state.doc.firstChild?.type.name === 'paragraph');
+  check('undo accepts restoration of an unsupported legacy table', undo(state, dispatch));
+  check(
+    'undo restores unsupported legacy table byte-for-byte',
+    JSON.stringify(state.doc.firstChild?.toJSON()) === JSON.stringify(legacyTable.toJSON()),
+  );
+}
+
+// Tab navigation uses table topology without creating a modal editor or a
+// second cell-selection state.
+{
+  let state = makeState();
+  const dispatch = (tr: Parameters<EditorState['apply']>[0]) => { state = state.apply(tr); };
+  dispatch(state.tr.setSelection(TextSelection.create(state.doc, cellPos(state, 0) + 2)));
+  check('Tab command is available in a cell', goToNextCell(1)(state, dispatch));
+  check('Tab moves to the next semantic cell', selectedCellPos(state) === cellPos(state, 1));
+  check('Shift-Tab command is available in a cell', goToNextCell(-1)(state, dispatch));
+  check('Shift-Tab returns to the previous cell', selectedCellPos(state) === cellPos(state, 0));
+}
+
+// Row/column operations transform the table tree and leave existing rich
+// content byte-for-byte intact.
+{
+  let state = makeState();
+  const dispatch = (tr: Parameters<EditorState['apply']>[0]) => { state = state.apply(tr); };
+  dispatch(state.tr.setSelection(TextSelection.create(state.doc, cellPos(state, 0) + 2)));
+  check('add row command runs natively', addRowAfter(state, dispatch));
+  check('row command changes table structure', firstTable(state).node.childCount === 3);
+  check('add column command runs natively', addColumnAfter(state, dispatch));
+  check('column command changes table structure', TableMap.get(firstTable(state).node).width === 3);
+  check('structure mutations preserve rich cell JSON', JSON.stringify(firstTable(state).node.child(0).child(0).toJSON()) === JSON.stringify(richCell.toJSON()));
+  dispatch(state.tr.setSelection(TextSelection.create(state.doc, cellPos(state, 3) + 2)));
+  check('header-row command runs natively', toggleHeaderRow(state, dispatch));
+  check('header-row command changes cell node types', firstTable(state).node.child(1).child(0).type.name === 'table_header');
+  check('mutated table remains losslessly exportable', docToTyp(state.doc).includes('Second paragraph'));
+}
+
+// Deleting an unneeded row/column leaves surviving rich cells untouched.
+{
+  let state = makeState();
+  const dispatch = (tr: Parameters<EditorState['apply']>[0]) => { state = state.apply(tr); };
+  dispatch(state.tr.setSelection(TextSelection.create(state.doc, cellPos(state, 2) + 2)));
+  check('delete row command runs natively', deleteRow(state, dispatch));
+  check('delete row updates table structure', firstTable(state).node.childCount === 1);
+  dispatch(state.tr.setSelection(TextSelection.create(state.doc, cellPos(state, 1) + 2)));
+  check('delete column command runs natively', deleteColumn(state, dispatch));
+  check('delete column updates table structure', TableMap.get(firstTable(state).node).width === 1);
+  check('deletions preserve surviving rich cell JSON', JSON.stringify(firstTable(state).node.child(0).child(0).toJSON()) === JSON.stringify(richCell.toJSON()));
+}
+
+// Merge/split use CellSelection and retain every rich inline node and
+// paragraph; no string-grid flattening is involved.
+{
+  let state = makeState();
+  const dispatch = (tr: Parameters<EditorState['apply']>[0]) => { state = state.apply(tr); };
+  const anchor = state.doc.resolve(cellPos(state, 0));
+  const head = state.doc.resolve(cellPos(state, 1));
+  dispatch(state.tr.setSelection(new CellSelection(anchor, head)));
+  check('merge command accepts a rectangular cell selection', mergeCells(state, dispatch));
+  const merged = firstTable(state).node.child(0).child(0);
+  check('merge retains the rich cell atoms', hasInline(merged, 'math_inline') && hasInline(merged, 'citation'));
+  check('merge retains rich paragraph boundaries', merged.childCount >= 3);
+  check('split command restores table topology', splitCell(state, dispatch));
+  check('split restores two columns', TableMap.get(firstTable(state).node).width === 2);
+  check('split retains the rich cell atoms', hasInline(firstTable(state).node.child(0).child(0), 'math_inline'));
+}
+
+// Schema-valid but serializer-unsupported cell structures are blocked at the
+// transaction boundary. The prior document is untouched rather than being
+// flattened or becoming an export-time surprise.
+{
+  let state = makeState();
+  const dispatch = (tr: Parameters<EditorState['apply']>[0]) => { state = state.apply(tr); };
+  dispatch(state.tr.setSelection(TextSelection.create(state.doc, cellPos(state, 0) + 2)));
+  const before = JSON.stringify(state.doc.toJSON());
+  const commandAccepted = setBlockType(schema.nodes.code_block)(state, dispatch);
+  check('unsupported block command produces a transaction', commandAccepted);
+  check('unsupported cell edit is explicitly rejected without document loss', JSON.stringify(state.doc.toJSON()) === before);
+}
+
+{
+  // Span-aware structure: deleting from inside a merged cell removes one
+  // row or column, not the whole span; a row added below the header is a
+  // body row.
+  const p = (t: string) => schema.text(t);
+  const cell = (t: string, header = false) => (header ? schema.nodes.table_header : schema.nodes.table_cell).create(null, schema.nodes.paragraph.create(null, p(t)));
+  const row = (...cells: PMNode[]) => schema.nodes.table_row.create(null, cells);
+  const table = schema.nodes.table.create({ style: 'booktabs' }, [
+    row(cell('A', true), cell('B', true), cell('C', true)),
+    row(cell('a1'), cell('b1'), cell('c1')),
+    row(cell('a2'), cell('b2'), cell('c2')),
+    row(cell('a3'), cell('b3'), cell('c3')),
+  ]);
+  let state = EditorState.create({ doc: schema.nodes.doc.create(null, [table]), plugins: [tableEditing()] });
+  const cellPos = (s: EditorState, r: number, c: number) => {
+    const t = s.doc.child(0);
+    const map = TableMap.get(t);
+    return 1 + map.map[r * map.width + c];
+  };
+  const shape = (s: EditorState) => {
+    const t = s.doc.child(0);
+    const rows: string[] = [];
+    t.forEach((r) => {
+      const cs: string[] = [];
+      r.forEach((c) => cs.push(`${c.textContent || '·'}${c.attrs.colspan > 1 ? 'x' + c.attrs.colspan : ''}${c.attrs.rowspan > 1 ? 'y' + c.attrs.rowspan : ''}`));
+      rows.push(cs.join('|'));
+    });
+    return rows.join(' / ');
+  };
+  const run = (cmd: (s: EditorState, d: (tr: import('prosemirror-state').Transaction) => void) => boolean) => {
+    let next = state;
+    const ok = cmd(state, (tr) => { next = state.apply(tr); });
+    state = next;
+    return ok;
+  };
+  const select = (r1: number, c1: number, r2: number, c2: number) => {
+    state = state.apply(state.tr.setSelection(CellSelection.create(state.doc, cellPos(state, r1, c1), cellPos(state, r2, c2))));
+  };
+  const caret = (r: number, c: number) => {
+    state = state.apply(state.tr.setSelection(TextSelection.create(state.doc, cellPos(state, r, c) + 2)));
+  };
+  select(1, 0, 1, 1);
+  run(mergeCells);
+  select(2, 2, 3, 2);
+  run(mergeCells);
+  check('merges in place', shape(state) === 'A|B|C / a1b1x2|c1 / a2|b2|c2c3y2 / a3|b3', shape(state));
+  caret(1, 0);
+  run(deleteSelectedColumns);
+  check('deleting a column from inside a merged cell removes one column', shape(state) === 'B|C / a1b1|c1 / b2|c2c3y2 / b3', shape(state));
+  caret(2, 1);
+  run(deleteSelectedRows);
+  check('deleting a row from inside a merged cell removes one row', shape(state) === 'B|C / a1b1|c1 / b3|c2c3', shape(state));
+  select(1, 0, 1, 1);
+  run(deleteSelectedRows);
+  check('a cell selection still deletes what it covers', shape(state) === 'B|C / b3|c2c3', shape(state));
+  caret(0, 0);
+  run(addBodyRowAfter);
+  const added = state.doc.child(0).child(1);
+  check('a row added below the header is a body row', added.child(0).type.name === 'table_cell' && shape(state) === 'B|C / ·|· / b3|c2c3', shape(state));
+  caret(0, 0);
+  run(deleteSelectedRows);
+  caret(0, 0);
+  run(deleteSelectedRows);
+  run(deleteSelectedRows);
+  check('deleting the last row deletes the table', state.doc.childCount === 1 && state.doc.child(0).type.name !== 'table', state.doc.child(0).type.name);
+}
+
+// Column widths are measured in CSS px, with explicit points converted at
+// 96dpi. Check concrete layout contracts rather than reproducing the solver.
+{
+  const close = (actual: number[], expected: number[]) => actual.length === expected.length && actual.every((value, i) => Math.abs(value - expected[i]) < 1e-9);
+  const mixed = allocateTableColumns(['75pt', 'auto', '1fr', '3fr'], [999, 80, 999, 999], 500);
+  check('fixed and content columns reserve space before fractional sharing', close(mixed, [100, 80, 80, 240]), JSON.stringify(mixed));
+  const crowded = allocateTableColumns(['auto', 'auto', 'auto', '1fr'], [40, 500, 200, 20], 300);
+  check('oversized content columns keep the small column and share remaining room', close(crowded, [40, 130, 130, 0]), JSON.stringify(crowded));
+  const overflow = allocateTableColumns(['90pt', 'auto', '1fr'], [0, 60, 40], 100);
+  check('explicit fixed widths remain fixed when wider than their container', close(overflow, [120, 0, 0]), JSON.stringify(overflow));
+  const zero = allocateTableColumns(['0pt', 'auto', '1fr'], [100, 0, 100], 200);
+  check('zero fixed and empty content widths leave space for fractional columns', close(zero, [0, 0, 200]), JSON.stringify(zero));
+  const noRoom = allocateTableColumns(['0pt', 'auto', '1fr'], [100, 80, 100], 0);
+  check('a zero-width container yields finite zero flexible widths', close(noRoom, [0, 0, 0]), JSON.stringify(noRoom));
+  const fractional = allocateTableColumns(['1fr', '3fr'], [0, 0], 412.8);
+  check('fractional page widths remain fractional without pixel rounding', close(fractional, [103.2, 309.6]), JSON.stringify(fractional));
+  check('zero point widths remain valid but zero fraction shares do not', normalizeTableColumns(['0pt'])?.[0] === '0pt' && normalizeTableColumns(['0fr']) === null);
+  for (const value of [['NaNpt'], ['Infinityfr'], ['-1pt'], ['1441pt'], ['1e3pt'], [Number.NaN], [Infinity]]) {
+    check(`invalid column dimensions are rejected: ${String(value)}`, normalizeTableColumns(value) === null);
+  }
+  check('numeric padding includes its zero and maximum boundaries', normalizeInsetPt(0) === 0 && normalizeInsetPt(72) === 72);
+  check('invalid padding never becomes document geometry', [-1, 72.1, NaN, Infinity, -Infinity, '9', null].every((value) => normalizeInsetPt(value) === null));
+  check('numeric padding takes precedence over density without losing zero', tableInsetPt({ insetPt: 0, density: 'roomy' }) === 0 && tableInsetPt({ insetPt: NaN, density: 'compact' }) === 3);
+}
+
+declare const process: { exitCode?: number };
+if (failures) {
+  console.error(`\n${failures} failure(s)`);
+  process.exitCode = 1;
+} else {
+  console.log('\nall native-table tests passed');
+}

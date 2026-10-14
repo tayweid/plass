@@ -17,10 +17,10 @@ and glance at a preview — you are always looking at a representation of the
 document, never the document. WYSIWYG editors (Typora, Word, Docs) let you work
 in the document itself but top out at browser-grade layout: greedy line
 breaking, no real pagination. Plass threads the needle by keeping the document
-in the DOM — native selection, IME, accessibility — and demoting the
-typesetting engine to a *layout oracle* whose decisions are imposed as
-presentation-only decorations. The browser becomes a rasterizer following
-instructions rather than a layout engine making its own, worse ones. The
+in the DOM — native selection, IME, accessibility — and imposing the
+decisions of a port of Typst's layout as presentation-only decorations. The
+browser becomes a rasterizer following instructions rather than a layout
+engine making its own, worse ones. The
 original design argument is preserved in
 [`docs/archive/wysiwyg-typeset-editor-spec.md`](./docs/archive/wysiwyg-typeset-editor-spec.md);
 the fidelity contract and architecture below describe the current
@@ -36,6 +36,43 @@ or Edge, use **Install Plass** in the toolbar; in Safari on macOS, choose
 **File → Add to Dock**. Supporting systems can also register the installed app
 for `.typ` and `.md` files. The same hosted frontend continues to receive new
 versions when it is opened online.
+
+## Install the Mac app
+
+Paste this into Terminal (in Applications → Utilities):
+
+```sh
+curl -fsSL https://plass.tayweid.io/install | bash
+```
+
+It downloads Plass.app (about 20 MB, including the Typst compiler and
+fonts) and puts it in Applications, then gets Electron (Chromium) once:
+cloned from another Claerbout app already installed, such as Knuth, or
+downloaded (about 130 MB). Plass then works offline, and PDF export never
+waits on the network. Run the same line again to update. Nothing else
+needs installing. `.typ` and `.md` files list Plass under **Open With**;
+choose it in a file's **Get Info** to make it the default. Needs macOS 13
+or later.
+
+Every deploy packages the app on a GitHub Mac from that deploy's site and
+publishes it beside the site, so the app and plass.tayweid.io are always the
+same version. The app is the site's page inside the Claerbout shell, the
+Electron shell Knuth ships on (`docs/CLAERBOUT-SHELL.md`).
+
+From a checkout (needs Apple's Command Line Tools, Node 22 and the
+`claerbout` repository beside this one): to run the checkout,
+`npx vite build`, then `npm run app`, which starts the shell on `dist/` with
+a state folder of its own, beside an installed Plass. To install the checkout's
+build as the app, with nothing pushed: quit Plass, then
+`npm run install:local`. It does the deploy's steps on this Mac (builds the
+site, packages Plass.app for this Mac's processor into a scratch site folder
+and runs the install line against it) and installs `/Applications/Plass.app`,
+or the `.app` named after `--` (`npm run install:local -- ~/Desktop/Plass.app`).
+Its build is the checkout's commit (`-dirty` when the tree has changes),
+and the app's **Check for Updates…** replaces it with the site's build once
+the site has a newer one, the next deploy.
+`npm run app:build` is the packager alone (`--install <App.app>`, or the
+deploy's `--zip`).
 
 ## Run it
 
@@ -55,9 +92,9 @@ reuses already-compiled break offsets when they are available; otherwise it
 runs a TypeScript mirror of Typst's breaker against version-pinned ICU,
 hyphenation, shaping, and font primitives from a small Rust/WASM sidecar. A
 direct translator imposes those authoritative offsets on the DOM without
-running syllabification or break search a second time. The background Typst
-compile remains the verifier and authority, and an identical result is a
-no-op rather than a second visual correction.
+running syllabification or break search a second time. There is one
+renderer: nothing compiles while you type. Typst is the printer, and the
+port audit (`npm run audit`) is how the port is measured against it.
 
 That exact contract is deliberately narrow: New Computer Modern is currently
 the only selectable body family, with all four faces registered across the
@@ -78,16 +115,64 @@ handles footnote reservations and widow/orphan rules. This is a scoped,
 fail-closed agreement rather than a claim that every arbitrary Typst document
 or every browser raster detail is identical.
 
+## Typst on rails
+
+Plass is not a Typst editor. It is a writing surface whose documents are
+plain Markdown files that Typst prints, and it deliberately supports a fixed
+set of things rather than the whole of Typst. That is what makes the
+fidelity contract above possible: the editor can only show live, exactly,
+what it can mirror, and arbitrary Typst can lay out in ways no browser
+surface can follow.
+Everything Plass supports therefore falls into one of three tiers, and the
+tier is always visible to the writer.
+
+- **On rails.** Headings, paragraphs, lists, math, figures, footnotes,
+  tables, citations, and the document settings the toolbar exposes. These
+  are edited directly in the page, laid out live by the local mirror, and
+  verified by the compiler. What you see is what prints.
+- **Tolerated.** Content that arrives in a file and that Plass does not
+  model (a `{=typst}` block, an HTML block, an unknown div, Typst in a
+  `.typ`) is preserved verbatim as a raw island: a code block tagged in the
+  margin ("typst · not run", "markdown · printed as code"), never altered
+  in the file, and printed by Plass as the same code block — its source,
+  never executed. It can be
+  read, moved, or deleted. Page and print agree because both show the same
+  block. This is how files survive round trips through other
+  tools; it is not an authoring path.
+- **Off.** Multi-column layout, floats, custom show and set rules, and
+  hand-written layout code are declined on purpose. They are not queued
+  features; adding one means adding a rail, with its local mirror and its
+  an audit fixture, one at a time.
+
+One thing the page shows that the printer never does, on purpose:
+**editorial comments** (Comment, on the rail). A comment is a plain-text note
+between blocks, drawn as a full-width strip labeled "Comment · Not
+printed" so it can never be mistaken for the page. It lives in the working
+file (in `.md` every HTML comment is one; in `.typ`, a `// plass:comment`
+frame), it is omitted from the PDF, the Typst and the TeX export, and it has
+no printed height: adding, editing, or deleting one moves no line break
+and no page start — the displayed sheet simply grows by the note's height.
+
+Styling uses verified presets, with a supported numeric rail for table column
+widths and cell padding: fit-content, fractional, or point-sized columns,
+and uniform padding in points. These values are shared by the local layout
+and Typst export and checked by the audit. The source view is a second
+editor for the same rails: a plain-text surface in the spirit of iA Writer for simpler files, editing
+the same headings, lists, math, and notes as text. It does not admit
+constructs the page view cannot show. A document that needs more than the
+rails can always be finished in Typst itself: Export → Typst writes it as a
+plain Typst file.
+
 ## What works today
 
-- **Oracle layout** (spec §1.3): the document lives in the DOM — native
-  selection, cursor, IME, spell-check, screen readers — while a layout oracle
-  imposes Typst-selected break offsets, hyphens, and per-line justification.
-  The fast local port and the compiled Typst verifier share pinned shaping and
-  font inputs within the supported contract.
+- **Ported layout** (spec §1.3): the document lives in the DOM — native
+  selection, cursor, IME, spell-check, screen readers — while the port of
+  Typst's breaker imposes break offsets, hyphens, and per-line
+  justification. The port and Typst share pinned shaping and font inputs
+  within the supported contract.
 - **Real pages**: content flows across painted page boxes (US Letter/A4 from
   document settings) with margins, inter-page gaps, and page numbers.
-  Paragraphs split across page boundaries at oracle-chosen line breaks while
+  Paragraphs split across page boundaries at port-chosen line breaks while
   remaining single editable nodes; lists and blockquotes break between
   children. Widow/orphan control: a paragraph never leaves fewer than two
   lines at the bottom of the page where it starts (it moves whole instead)
@@ -99,47 +184,86 @@ or every browser raster detail is identical.
   boundary (inside a paragraph, a block-in-inline spacer replaces the line's
   `<br>`, so it forces the break and adds precisely the gap height). Print
   CSS zeroes the spacers — line breaks survive, gaps vanish — and `@page`
-  takes over for the printed artifact. Whole-document Typst page starts are
-  used when they compile and map safely; otherwise the full local paginator is
-  authoritative. A suffix-only paginator is currently development shadow
-  telemetry: it is compared with the full result, but never installed.
+  takes over for the printed artifact. The local paginator is the
+  authority; `npm run audit` compiles a document once and reports where its
+  page starts differ from Typst's. A suffix-only paginator is currently
+  development shadow telemetry: it is compared with the full result, but
+  never installed.
 - **Fast**: the edit path discovers and rebuilds only changed body, caption,
   and footnote blocks, while unchanged block geometry stays cached. The direct
   forced-break translator avoids the legacy path's repeated DOM measurement,
   and pagination captures spacer/table geometry once per pass behind a
   prefix-sum index. Browser tests enforce one line-decoration dispatch for a
-  normal edit and no redundant reinstall when the compiled verifier agrees.
+  normal edit and no redundant reinstall when nothing moved.
   Live diagnostic timings remain available in development, but wall-clock
   values are not treated as portable performance promises.
 - **Editing**: ProseMirror core. Markdown-style input rules (`#` headings,
   `**bold**`, `*italic*`, `` `code` ``, `>` quotes, `-`/`1.` lists, ` ``` `
   code blocks), keyboard shortcuts, undo/redo, autosave to localStorage.
+  A list is tight or loose (blank lines between its items in the file,
+  paragraph spacing on the page); the List control or ⌘⇧7 flips it.
+  Enter on an empty item leaves the list: in the middle of one it cuts
+  the list in half around the new paragraph, and sub-items the item held
+  join the second half.
+- **Grids** (⊟ in the toolbar): rows × columns of any blocks — a paragraph
+  beside a figure or table, three columns of notes, a two-row layout.
+  Column widths are fraction shares typed into the grid bar (`2 : 1`),
+  the gutter is em; Tab moves between cells, Tab from the last cell adds
+  a row, Unwrap puts the blocks back in the flow. Click a cell and choose
+  **Figure in cell** to insert an image; **+ Row** adds a row and focuses
+  its first cell. Click an existing image to show its replacement and size
+  controls. Typst's `#grid(columns:
+  (2fr, 1fr), gutter: 1em, [...], [...])`, cells unbreakable, the grid
+  breaking between rows; a `.md` file carries it as one `::: columns` div
+  per row of `::: column` cells, later rows marked `.continued`. Cells
+  are normalized to the paragraph's frame so a table's top rule meets the paragraph's cap top, as Typst aligns them;
+  the audit matches every cell's text block and the page starts.
+- **Solution blocks**: the Block control (plain / quote / solution) turns
+  the selected paragraphs into a solution — red text with a red rule down
+  the left, for problem-set answers. It is a preset on the quote rail:
+  the same container, exported as a left-stroked Typst block, laid out and
+  paginated exactly like a quote (a long solution splits across pages and
+  the rule stops at each page's last line, as in the PDF). Markdown writes
+  it as a `::: solution` div.
 - **Typora-style chrome**: a slim quiet bar — filename on the left, and on
   the right a row of small monochrome icon groups whose text labels appear on
   hover. The title/File controls own document lifecycle and recents; the
   tools, Document, and Export controls own inserts, bibliography/settings,
   help, and downloads. Formatting itself is markdown rules + shortcuts
   (cheat-sheet behind the ? button), and the demo lives there too. A faint
-  corner HUD shows pages · words (hover for oracle timing), while messages
+  corner HUD shows pages · words (hover for layout timing), while messages
   appear as transient toasts. Insert
   shortcuts: ⌘⌥T table, ⌘⌥I figure, ⌘⌥F footnote, ⌘M/⌘⇧M math.
 - **Math**: type `$e^{i\pi}+1=0$` for inline math, `$$` on an empty line for
-  display math. Formulas display **Typst's own ink** — each is compiled by
-  the in-app compiler (mitex + New Computer Modern Math) and shown from that
-  compiled result, baseline-aligned to the text; KaTeX provides the immediate
+  display math. Formulas display **Typst's own ink** — each is converted
+  to native Typst math by mitex's translator, which ships inside Plass
+  (`src/math-convert.ts`), compiled by the in-app compiler (New Computer
+  Modern Math) and shown from that compiled result, baseline-aligned to
+  the text; KaTeX provides the immediate
   editing preview and the compiled ink replaces it when ready. Click-to-edit
-  popover with live preview. The oracle justifies
+  popover with live preview. The port justifies
   around inline math using the Typst-exact atom width.
 - **Figures**: insert from the toolbar, or paste/drop an image. Editable
   inline captions with a painted "Figure N:" prefix that renumbers live; a
   label chip on the figure (hover top-right) names it for `@label`
   references, which share the machinery with equation refs. Figures paginate
-  atomically (never split across pages). Exports as Typst
-  `#figure(image(...), caption: [...]) <label>`; image data (data: URLs) is
-  exported verbatim so our own files round-trip losslessly — swap in a real
-  image path when compiling with Typst. Project-relative images are watched
-  by lightweight metadata polling every four seconds and on window focus, so
+  atomically (never split across pages). Markdown writes
+  `![Caption](src){#fig:label width=60%}`; the Typst export writes
+  `#figure(image(...), caption: [...]) <label>`. An embedded image (a
+  `data:` URL) keeps the document one file; with the project folder open,
+  Export → Typst writes it to `figures/` (below). Project-relative
+  images are watched by lightweight metadata polling every four seconds and on window focus, so
   regenerating a plot on disk refreshes the editor without reopening it.
+  **Click the image itself** to open Image controls:
+  **Replace image** keeps its grid cell, surrounding text, caption, and
+  size. **Fit to cell** (or **Fit to text width**) fills the available
+  width; **Width (%)** accepts 25–100, and **Auto size** resets it.
+  For an embedded SVG, choose **Save SVG to project** and select a project
+  folder if prompted. Plass saves the original drawing in `figures/` and
+  links the image to that file. Edit its lines and labels in another app,
+  save, then return to Plass; the image refreshes automatically. Plass
+  edits the image's placement and caption; the drawing itself stays in
+  the SVG file.
 - **Footnotes** (type `^[` Pandoc-style or `\footnote{` LaTeX-style — the
   matching `]`/`}` or Enter hops back out, with a bracket-balance check so
   literal "[1]" still types inside a note; also † in the toolbar or ⌘⌥F):
@@ -152,53 +276,79 @@ or every browser raster detail is identical.
   clicking a marker jumps to its body. Exports as Typst `#footnote[...]`
   (the PDF gets true Typst footnotes); in browser print, bodies degrade to
   inline notes.
-- **Tables** (⊞ in the toolbar): header row, Tab/Shift-Tab cell navigation,
-  and contextual controls that appear in the toolbar while inside a table —
-  add/delete rows and columns, merge/split cells, toggle header,
-  **per-column alignment (L/C/R — right-align for regression numbers)**, and
-  a **Style cycle: booktabs (academic default: horizontal rules only) →
-  grid → plain**. Cell selection by shift-click/drag. Breakable long tables
-  use a paged Typst mini-compile and appear as cropped page fragments,
-  including repeated `table.header` rows; content Typst keeps unbreakable is
-  pushed whole. While a split compile is pending or cannot be verified, the
-  existing split or atomic layout remains in place. Tables export as native
-  Typst — booktabs becomes `stroke: none` + `table.hline()` rules, alignment
-  becomes the `align: (…)` tuple with per-cell overrides, and merges become
-  `table.cell(colspan/rowspan)` — all preserved through the round trip. (Cells
-  keep browser layout — narrow measures justify badly.) For full Typst control,
-  the **Opts** button
-  stores raw `#table` arguments on the table (stroke/fill functions,
-  `inset`, fractional column widths, …), emitted verbatim into the export
-  and PDF — presets are suppressed while custom args exist. The document
-  **always shows the compiled table** (the in-app Typst render — same
-  fonts, engine, and centering as the PDF). Clicking it opens a focused
-  **editing card**, following the math-editor pattern: a plain cell grid
-  (Tab/arrows to move, header row bold, shift-click to select a range),
-  structural controls (rows, columns, merge/split, header toggle,
-  per-column alignment, style cycle), **clickable row boundaries** that
-  toggle booktabs midrules, a card-local **⌘Z/⌘⇧Z undo stack**, and a live
-  compiled result. The **Typst panel** at the bottom always shows the full
-  `#table(...)` arguments the current state compiles with — editing it
-  parses back through the importer, so GUI and source are two views of one
-  thing; custom arguments are additive with the style preset (add
-  `inset: 9pt` and booktabs stays). ⌘Enter saves as one undoable step; Esc
-  cancels. Cells with rich content (math, references) are preserved unless
-  their text is edited. Imported tables keep
-  unknown named arguments the same way; forms we can't reconstruct
-  faithfully (custom-positioned rules, vlines) fall back to raw-Typst
-  islands rather than being simplified.
+- **Tables** (⊞ in the toolbar or ⌘⌥T): a 3×3 table with a header row
+  lands in the document as **native editable cells** — the first header's
+  placeholder is selected so typing replaces it, Tab/Shift-Tab move between
+  cells (Tab from the last cell adds a row), Enter moves down a row (and
+  adds one from the last row; Shift-Enter is a line break inside a cell),
+  ArrowUp/ArrowDown leave the table at its edges, and shift-click/drag
+  selects a range. The table controls dock under the toolbar while the
+  caret is in a table, never over the text. Cells hold ordinary rich text (marks,
+  inline math, citations, `@` references); an edit that would leave that
+  lossless subset is refused with a notice rather than flattened. While the
+  caret is inside a table a control bar docks under the toolbar: add/delete
+  rows and columns (span-aware: deleting from inside a merged cell removes
+  one row or column and shrinks the merge), merge/split, toggle the header
+  row, **L/C/R alignment for
+  the selected cells** (right-align regression numbers), a **style preset
+  (booktabs — the academic default, horizontal rules only — grid, plain)**,
+  a text-size menu (100–75%), a **density** menu (compact / normal / roomy
+  — Typst's cell `inset` at 3, 5, or 8pt, exact in the page), a **Rule**
+  control that cycles the rule under the selected rows (preset → light →
+  heavy → none; exported as `table.hline(y: N, stroke: …)` at that
+  boundary, where the style's own rule yields to it), a **Fill** control
+  that cycles a preset colour behind the selected cells (gray / yellow /
+  blue, exported as `table.cell(fill: …)`), and **Details** for a caption
+  and a reference label.
+  **Click a cell → Layout** to change its column sizing: **Fit content**,
+  **Share remaining space** (a weight of 2 gets twice the space of 1), or
+  **Fixed width** in points. Shift-click to apply a width to several
+  columns; a merged cell covers all columns in its span. **Padding (pt)**
+  sets uniform padding for the whole table (0–72pt); choosing a density
+  preset resets that override. Press Enter or leave a numeric field to
+  apply it; Escape restores its current value. The same panel sets
+  **Vertical align** and **Cell fill** for the selected cells, including
+  gray for a shaded header. For a skillsheet, set Code and Practice to
+  Fit content, Skill to Share remaining space, and Padding to 9pt.
+  A captioned or labelled table gets a painted "Table N:" caption
+  that renumbers live and is listed in the `@` picker. The editor table
+  defaults to Typst's intrinsic centered box with 5pt insets, so it
+  sits where the PDF puts it. Long tables **break between rows with the
+  header repeated** on the next page, laid out locally and matched against
+  Typst's page starts row by row; a rowspan across the break, a tall split
+  cell, or a captioned table (a Typst figure) is placed whole instead.
+  Exports as native Typst — booktabs becomes `stroke: none` +
+  `table.hline()` rules, alignment the `align: (…)` tuple with per-cell
+  overrides, merges `table.cell(colspan/rowspan)`, captions
+  `#figure(table(…), caption: [...]) <label>` — and all of it round-trips.
+  Supported imported column widths, uniform point insets, alignment, and
+  header shading become the same editable settings. Remaining custom
+  table options are preserved and flagged in the control bar when the
+  page cannot show them; rule layouts that no preset can reconstruct
+  stay raw-Typst islands rather than being simplified.
 - **Citations & bibliography** (hover the References block → Edit, or
   Document → Bib → Import .bib): the BibTeX is editable in-app (live entry
   count, ⌘Enter to save, Download .bib to get it back out; saves are
   undoable) or loadable from a `.bib`
   file into the document — the BibTeX lives in a document attribute, so it
-  autosaves, participates in undo, and is embedded in the `.typ` export
+  autosaves, participates in undo, is saved in the `.md` as a
+  ```` ```{=bibtex} ```` block, and is embedded in the Typst export
   (`#bibliography(bytes(...), style: "ieee")`), keeping files fully
   self-contained. Cite with the same `@` picker (searchable by key, author,
-  or title); citations render as live "[n]" in first-use order — IEEE style,
-  matching the PDF — and a generated References block lists cited works in
-  order, renumbering as citations move. Typed `@key ` auto-converts when the
+  or title); citations render live in the document's **citation style**
+  (Settings → Citations: IEEE numeric `[n]` in first-use order, APA
+  author–year `(Knuth & Plass, 1981)`, or Chicago author–date
+  `(Knuth and Plass 1981)`) — the in-text string comes from a
+  ported formatter that the References block's own compile checks against
+  Typst, so it matches the PDF — and a generated References block lists
+  cited works, renumbering as citations move. Typed `@key ` auto-converts when the
   key is in the bibliography; clicking a citation jumps to the references.
+  A **library** (Bib → Library…) is a `.bib` outside any document — your
+  whole reference collection — whose entries the `@` picker offers beside
+  the document's own, marked `lib`. Citing one copies that single entry
+  into the document's bibliography, so documents stay self-contained and
+  carry exactly what they cite; the library file is re-read when it
+  changes on disk.
 - **Numbered equations & references**: display equations are numbered
   automatically and renumber live as you add/reorder them. Give an equation a
   label in its popover, then type `@` in text to open the reference picker —
@@ -209,49 +359,97 @@ or every browser raster detail is identical.
   are painted via decorations (never stored), so the document model stays
   clean. Exports as Typst `#set math.equation(numbering: "(1)")` +
   `<label>`/`@label`.
+- **Source view** (the `<>` button or ⌘/): the same document as its own
+  text, Markdown (or Typst for a legacy `.typ`), in a quiet wide-margined
+  sheet in the spirit of iA Writer — a second editor for the same rails,
+  not an escape hatch. The caret and scroll position map across by block;
+  a `.typ`'s generated preamble is folded, a `.md`'s front matter stays in
+  view; Typst typed there is kept but never run (it comes back as an
+  island shown as code). Writing niceties: **Focus** (a toggle
+  in the sheet's corner, ⌘⇧F) dims every paragraph but the one you are in,
+  typewriter scrolling keeps your line in the middle of the screen, ⌘B/⌘I
+  wrap the selection in the format's markup, and a format you last left
+  in the source view opens there next time.
 - **Document settings** (⚙ in the toolbar): font (New Computer Modern — the
   TeX face — is the sole certified public choice, with the same family and
   styles feeding live layout and PDF export), size, line spacing,
-  paper (US Letter/A4), margins, hyphenation, equation numbering, **section
+  paper (US Letter, A4, Legal, B5, A5, half letter, or a custom size), margins, footnote numbering and rule, hyphenation, equation numbering, **section
   numbering** ("1.2"-style painted on headings; headings then become
   `@sec:` targets in the picker, auto-labeled on first reference and
   exported as `= Title <label>` + `#set heading(numbering: "1.1")`), **page
-  numbers** (show/hide, formats 1 / — 1 — / roman / 1-of-N, position,
-  first-page number — mirrored in the painted chrome and exported as
-  `#set page(numbering:, number-align:)` + `#counter(page).update()`), and
+  numbers** (show/hide, formats 1 / — 1 — / roman / 1-of-N, position at
+  the bottom or the top of the page, first-page number — mirrored in the
+  painted chrome and exported as `#set page(numbering:, number-align:)` +
+  `#counter(page).update()`), **running header and footer** (a text with
+  `{page}` for the page number in the document's format and `{section}`
+  for the level-1 heading in force at the top of the page; alignment;
+  either can be off on page 1; a footer text replaces the automatic
+  number on its edge, as Typst's explicit `footer:` does — put `{page}`
+  in it to keep the number; the port audit checks every page's margins
+  against Typst's), and
   **math macros** (define `\E = \mathbb{E}` once; live in every KaTeX
   render and expanded to plain LaTeX on export so files compile anywhere;
-  persisted via a `// typeset:math-macros` header directive). Settings are
-  document attributes — undoable, autosaved, applied live (the oracle
-  re-measures and re-typesets), and exported as Typst `#set` rules. This is
-  the WYSIWYG face of a preamble.
-- **Real files** (File controls, ⌘O/⌘S): open and save `.typ` documents on
+  persisted as `plass: math-macros:` in a `.md`'s front matter, or a
+  `// typeset:math-macros` header directive in a `.typ`). Settings are
+  document attributes — undoable, autosaved (in a `.md`, as its YAML front
+  matter: pandoc's names where pandoc has one, the rest under `plass:`),
+  applied live (the layout re-measures and re-typesets), and exported as
+  Typst `#set` rules. This is the WYSIWYG face of a preamble.
+- **Formats**: a document is one `.md` file in Pandoc Markdown.
+  [`docs/MARKDOWN-FORMAT.md`](./docs/MARKDOWN-FORMAT.md) is the one-page
+  reference for writing one by hand, or having a model write one: YAML
+  front matter for the settings, `:::` divs for solutions, grids, aligned
+  paragraphs and table attributes, HTML comments as editorial comments,
+  `{=typst}` for Typst kept as code. It exports to PDF, Typst and LaTeX.
+- **Real files** (File controls, ⌘O/⌘S): open and save `.md` documents on
   disk via the File System Access API, with silent autosave to the open file,
   a dirty indicator, recent files (IndexedDB-persisted handles), and
   automatic reconnection to the last file when the browser still grants
-  access. Safari/Firefox fall back to upload/download. Opening runs the
-  importer (`typ-parser.ts`): full fidelity for our own output — the
-  export→import→export round trip is byte-identical (tested) — plus a
-  pragmatic subset of hand-written Typst (headings, marked-up paragraphs,
-  lists, quotes, fenced code, mitex math, labels/references, and the
-  settings header, which applies live). Anything else (`#let`, `#show`,
-  unknown directives) is preserved verbatim as a raw-Typst island and
-  re-exported unchanged — open + save never destroys what we don't model.
+  access. Safari/Firefox fall back to upload/download. A new document is
+  Markdown. Opening runs the reader (`md-parser.ts`), which reads a
+  hand-written file the way pandoc does (checked against pandoc itself,
+  `npm run test:parity`); the first save rewrites such a file once into
+  Plass's spelling of it (`docs/MARKDOWN-FORMAT.md` lists what changes),
+  and after that a save leaves it as it is. Anything Plass has no form
+  for is kept verbatim as an island — open + save never destroys what we
+  don't model. A legacy `.typ` still opens and saves as Typst
+  (`typ-parser.ts`: full fidelity for Plass's own output, a pragmatic
+  subset of hand-written Typst, anything else kept as a raw-Typst island)
+  until the course notes are converted; after that it will open as an
+  import into Markdown.
 - **One-click PDF export (Export flyout → PDF)**: the document compiles with
   the real Typst engine, as WASM, in a watchdog-protected Web Worker — no CLI,
   no install. The compiler (~28 MB) and bundled fonts in `public/fonts/` load
   lazily; those fonts retain the individual licenses documented in
-  [`public/fonts/README.md`](./public/fonts/README.md). Math uses only the
-  pinned mitex 0.2.5 archive: it is fetched from
-  the Typst registry when first needed, size-bounded, and SHA-256 verified;
-  imported documents cannot request arbitrary packages. Embedded images are
+  [`public/fonts/README.md`](./public/fonts/README.md). Math compiles as
+  native Typst, converted inside Plass, so the compiler needs no package:
+  it resolves none and makes no network request, and an imported document
+  cannot import one. Embedded images are
   decoded into the compiler's bounded virtual filesystem and the markup is
   rewritten to reference them, so figures compile properly. Equation refs
   export as `(#ref(<label>, supplement: none))` so the PDF shows "(1)"
   exactly like the editor.
-- **Export**: `.typ` (Typst markup; math wrapped with mitex so it compiles —
-  `typst compile document.typ` also works from the CLI), plus Print/PDF of
-  the typeset view itself.
+- **Export**: `.md` (the document as Markdown, beside it; an `.md`
+  already in the folder is replaced only if you say so) and `.typ`, the
+  Typst source Plass compiles: kept-but-unrendered content prints as code,
+  editorial comments are left out, and math is native Typst, so the file
+  imports no package and compiles with no network. Exported with the
+  project folder open, every embedded image
+  is written to `figures/` beside the `.typ` and linked by path, so
+  `typst compile document.typ` works from the CLI; each file is named after
+  its content, so exporting again links the one already there. Exported
+  without a folder, the images stay `data:` URLs, which the CLI cannot
+  read, and the export says so. The `.typ` is for compiling and reading,
+  not editing or reopening: Export → Typst never overwrites the open
+  document, asks before replacing a `.typ` already in the folder unless it is still the
+  one the last export wrote there, and neither export touches a file open
+  in another Plass window. The export is exact on
+  typst 0.14.2, the in-app compiler's release, compiled with Plass's own
+  fonts (`--ignore-system-fonts --ignore-embedded-fonts --font-path
+  public/fonts`), and says so on its first line; typst 0.15.x compiles it
+  too, but Typst 0.15 changed some math layout (calligraphic letters and
+  `\binom` among others), so those formulas can sit differently there.
+  Plus Print/PDF of the typeset view itself.
 
 ## Architecture (how the needle gets threaded)
 
@@ -283,16 +481,18 @@ ProseMirror transaction → native DOM echo
 
 Current architecture notes:
 
-1. **The fast certified path is a TypeScript mirror of Typst; Typst-WASM stays
-   the verifier and authority.** The legacy Knuth–Plass implementation remains
+1. **The certified path is a TypeScript mirror of Typst, and it is the only
+   renderer.** Typst-WASM prints (PDF export) and measures (`npm run audit`,
+   never in the edit loop). The legacy Knuth–Plass implementation remains
    available for unsupported or degraded cases, not as the exactness claim.
-2. **Pagination has explicit exact, held, and fallback states.** Exact starts
-   come from the whole-document compiler; held starts stabilize a pending edit
-   burst; the full local paginator fails closed when exact mapping is not
-   available. The conservative suffix candidate runs only in development and
-   the full result is always installed.
+2. **Pagination is local.** The full local paginator decides every page
+   start; the port audit reports where Typst would have broken differently.
+   The conservative suffix candidate runs only in development and the full
+   result is always installed.
 3. **Math is LaTeX/KaTeX, not Typst syntax** — friendlier to most academics;
-   the `.typ` export bridges via mitex.
+   Plass converts each formula to native Typst math with mitex's
+   translator, bundled with the app (`src/math-convert.ts`), for the PDF,
+   the formula ink and the `.typ` export.
 
 ## Found & fixed while building (measurement-agreement war stories)
 
