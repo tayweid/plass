@@ -107,7 +107,7 @@ jobs:
       # log; publish them so a parity failure on this runner can be read.
       - name: Publish the browser test results when they fail
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: browser-test-results
           path: test-results
@@ -116,7 +116,7 @@ jobs:
       - run: npm run verify:production
       # The verified site, handed to the Mac app build and to the deploy.
       - if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: site
           path: dist
@@ -186,7 +186,7 @@ jobs:
         run: |
           CLAERBOUT_BUILD=next node app/build.mjs --web dist --arch arm64 --zip "$RUNNER_TEMP/next/app"
           node "$CLAERBOUT_SHELL/smoke.mjs" --config app/plass.json update "$RUNNER_TEMP/Plass.app" "$RUNNER_TEMP/next"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: app
           path: published/app
@@ -255,7 +255,7 @@ jobs:
       # committed instead of leaving the diff unreachable in a log.
       - name: Publish the canonical rebuild when it differs
         if: steps.reproducibility.outputs.differs == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: canonical-sidecar-pkg
           path: |
