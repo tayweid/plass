@@ -175,7 +175,17 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   from a `~` in the file, or was pasted, is glue and stays, unless it is
   a paragraph's only character: that is a blank line (the `.md` writer's
   empty paragraph), and what is typed into it replaces the nbsp
-  (`blankLineSpaces`; never in a reload from disk). The importers and the
+  (`blankLineSpaces`; never in a reload from disk). The same
+  `white-space: normal` collapses the space a line breaks at (before a
+  `br.ts-br` or a `.ts-pagegap`), and Chrome's editing deletes collapsed
+  whitespace beside what it writes (or writes an nbsp in its place), so
+  text typed or a Backspace beside a break space is the document's, not
+  the browser's, and an IME's text gets the space put back
+  (`src/break-space.ts`). No layout pass runs while an IME composes
+  (`holdForComposition` in the typeset plugin): re-drawing the composing
+  paragraph can move the text node Chrome composes in, and Chrome then
+  writes the composed text a second time; the passes run when the
+  composition ends. The importers and the
   edit-time normalizer (`src/collapse-spaces.ts`) keep the document in
   printed form. Any new Typst text shorthand must be handled the same way or the
   browser presentation and the compiled snapshot fight (visible as jitter).
