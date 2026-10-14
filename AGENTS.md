@@ -189,6 +189,10 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   edit-time normalizer (`src/collapse-spaces.ts`) keep the document in
   printed form. Any new Typst text shorthand must be handled the same way or the
   browser presentation and the compiled snapshot fight (visible as jitter).
+  Text Typst would read as markup at a line's head (`=`, `-`, `+`, `/ `,
+  `3. `) is escaped on export wherever a line starts — a paragraph or list
+  item, a content block (footnote, caption, cell, running header), after
+  a hard break; never a heading's text (`escapeLineHead`).
 - Vertical parity: editor block heights must match Typst's. CSS changes
   must not alter layout heights — paint-only shifts use `transform` or
   `box-shadow`; math atom advance = the Typst-exact compiled atom width
@@ -212,10 +216,17 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   justified and hyphenated as Typst does); numbered headings are the
   exception (browser-laid, audit reads their breaks from the DOM).
 - Lists mirror Typst's grid: body indent = the marker's shaped width +
-  0.5em (enums: the widest label), published by the plugin as
-  `--list-indent-N`/`--enum-indent-N` (`publishGeometryVars`,
-  `list-indent.ts` sets `data-digits` on every `<ol>`); markers are
-  painted out of flow. Never hard-code a list indent in CSS. Item pitch
+  0.5em (enums: the widest label, the last one — the bundled faces have
+  tabular figures), published by the plugin as
+  `--list-indent-N`/`--enum-indent-N` (`publishGeometryVars`;
+  `list-indent.ts` sets `data-digits` on every `<ol>` from its last
+  label, start + items − 1, with the counter-reset that paints the labels
+  from the list's start, its `order` attr); markers are painted out of
+  flow, an enum label right-aligned in its column (Typst's `number-align:
+  end`). Never hard-code a list indent in CSS. A start past 1 prints as
+  `3.` on the export's first item (`+` after it: Typst counts on), as
+  `\setcounter` in TeX; a `.typ` list whose items skip numbers is an
+  island (Plass holds one start per list, as Markdown does). Item pitch
   is the list's `tight` attr: tight = leading + 0.25em (`listSpacingEm`,
   the document's `#set list(spacing:)`), loose (blank lines between items
   in either format) = paragraph spacing, exported as a set/restore pair

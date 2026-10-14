@@ -430,6 +430,18 @@ function linkMarkup(url: string, after: string): string {
   return `#link("${url}")` + (/^[;([.]/.test(after) ? ';' : '');
 }
 
+/** Markup Typst reads at the head of a line — a heading, list, enum or term
+ *  marker (`=`, `-`, `+`, `/ `, `3. `) — escaped, so the line prints as the
+ *  text it is. A line's head is a paragraph's start (a list item's too: the
+ *  item's body starts a line), a content block's (a footnote, a caption, a
+ *  cell, a running header), and the text after a hard break; a heading's
+ *  text is not one. */
+function escapeLineHead(t: string): string {
+  return t.replace(/^([ \t]*)(?:([=+-]|\/(?=[ \t]|$))|(\d+)(?=\.(?:[ \t]|$)))/, (_m, lead: string, mark?: string, digits?: string) =>
+    mark ? `${lead}\\${mark}` : `${lead}${digits}\\`,
+  );
+}
+
 /** Table cells keep their established, narrower encoding: a URL's
  * slashes escape like any other, so a URL in a cell prints as text, not a
  * link. */
@@ -468,8 +480,10 @@ function wrapRun(t: Piece[], sig: string): Piece[] {
  * ink in that context, so the printed span must stay one span. Every other
  * atom (raw Typst, refs, citations, footnotes, images) closes the run and
  * is emitted bare — their print does not follow the surrounding marks.
+ * `head`: the content starts a Typst line (escapeLineHead), as everything
+ * but a heading's text does.
  */
-function inlineToTyp(node: PMNode, tableCell = false): string {
+function inlineToTyp(node: PMNode, tableCell = false, head = true): string {
   const out: Piece[] = [];
   let run: Piece[] = [];
   let sig = '';
@@ -478,6 +492,10 @@ function inlineToTyp(node: PMNode, tableCell = false): string {
     run = [];
   };
   node.forEach((child) => {
+    // Plain text first on its line could read as markup; a marked run
+    // opens with its own delimiter, a code span with a backtick.
+    const atHead = head;
+    head = child.type.name === 'hard_break';
     if (child.isText && child.text) {
       const s = runSignature(child);
       if (s !== sig) {
@@ -491,7 +509,9 @@ function inlineToTyp(node: PMNode, tableCell = false): string {
           ? `#raw(${JSON.stringify(child.text)}, block: false)`
           : '`' + child.text + '`');
       } else {
-        run.push(...escapePieces(child.text, !tableCell));
+        const pieces = escapePieces(child.text, !tableCell);
+        if (atHead && !s && typeof pieces[0] === 'string') pieces[0] = escapeLineHead(pieces[0]);
+        run.push(...pieces);
       }
       return;
     }
@@ -602,9 +622,9 @@ function tableCellContentToTyp(cell: PMNode, row: number, column: number): strin
       }
       return true;
     });
-    let body = inlineToTyp(block, true);
-    // In a Typst content block these prefixes otherwise acquire block syntax.
-    body = body.replace(/(^|\n)([=+\-])/g, '$1\\$2');
+    // A cell's text starts a line, as each line after a hard break does:
+    // inlineToTyp escapes their markup heads.
+    const body = inlineToTyp(block, true);
     if (/\n[ \t]*\n/.test(body)) {
       throw new Error(`Cannot export ${where}: an inline source contains a blank line`);
     }
@@ -632,14 +652,14 @@ function blocksToTyp(parent: PMNode, indent: string): string {
 function blockToTyp(node: PMNode, indent = ''): string {
   switch (node.type.name) {
     case 'paragraph': {
-      let s = inlineToTyp(node);
+      // A leading =, -, +, `/ ` or `3. ` is escaped by inlineToTyp: it would
+      // re-parse as heading or list syntax.
+      const s = inlineToTyp(node);
       // An empty paragraph is one blank line of vertical space — in the PDF
       // too (a bare ~ renders as an empty line of full line height). Without
       // this, Typst sees nothing where the editor shows a gap, and its pages
       // drift from the editor's real heights.
       if (!s.trim()) return indent + '~\n\n';
-      // A leading =, - or + would re-parse as heading/list syntax.
-      if (/^[=\-+]/.test(s)) s = '\\' + s;
       const body = node.attrs.keep ? `#block(breakable: false)[${s}]` : s;
       // Aligned paragraphs (top level only): the MULTI-line #align form —
       // the single-line form right after a title is the authors line.
@@ -651,7 +671,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
     }
     case 'heading': {
       const label = node.attrs.label ? ` <${node.attrs.label}>` : '';
-      return indent + '='.repeat(node.attrs.level) + ' ' + inlineToTyp(node) + label + '\n\n';
+      return indent + '='.repeat(node.attrs.level) + ' ' + inlineToTyp(node, false, false) + label + '\n\n';
     }
     case 'doc_title':
       return indent + `#align(center, text(size: 1.55em, weight: 700)[${inlineToTyp(node)}])\n\n`;
@@ -726,6 +746,10 @@ function blockToTyp(node: PMNode, indent = ''): string {
     case 'bullet_list':
     case 'ordered_list': {
       const marker = node.type.name === 'bullet_list' ? '- ' : '+ ';
+      // A numbered list that starts past 1 opens with that number, Typst's
+      // explicit enum marker; the items after it count on from there. (A
+      // `#set enum(start:)` would restart every nested list too.)
+      const start = node.type.name === 'ordered_list' ? (node.attrs.order as number) : 1;
       const tight = node.attrs.tight !== false;
       let out = '';
       node.forEach((item, _o, k) => {
@@ -735,7 +759,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
         // the item pitch for tight lists, so the loose one is set and
         // restored around the list (bare set rules, like an equation's
         // numbering override: a wrapping content block would add spacing).
-        out += (tight || k === 0 ? '' : '\n') + indent + marker + body + '\n';
+        out += (tight || k === 0 ? '' : '\n') + indent + (k === 0 && start !== 1 ? `${start}. ` : marker) + body + '\n';
       });
       if (!tight) {
         const kind = node.type.name === 'bullet_list' ? 'list' : 'enum';
@@ -964,7 +988,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
       const tLabel = (node.attrs.label as string) || '';
       if (caption || tLabel) {
         // A captioned table is a figure: numbered "Table N", referenceable.
-        const cap = caption ? `,\n  caption: [${escapeTableCellText(caption)}]` : '';
+        const cap = caption ? `,\n  caption: [${escapeLineHead(escapeTableCellText(caption))}]` : '';
         const kind = fontSize ? ',\n  kind: table' : '';
         const lab = portableTableLabel(tLabel);
         return indent + directive + `#figure(\n${tableCall.split('\n').map((l) => '  ' + l).join('\n')}${cap}${kind},\n)${lab}\n\n`;
@@ -1090,9 +1114,11 @@ export function docToTyp(doc: PMNode, opts: TypExportOptions = {}): string {
     ] as Array<[string, string, string, boolean]>) {
       if (!text) continue;
       // The placeholders become code before the links are written, so a
-      // URL right before one ends where it should.
+      // URL right before one ends where it should. The text starts a line.
+      const pieces = escapePieces(text, true);
+      if (typeof pieces[0] === 'string') pieces[0] = escapeLineHead(pieces[0]);
       const inner = writeLinks(
-        escapePieces(text, true).map((piece) =>
+        pieces.map((piece) =>
           typeof piece === 'string'
             ? piece.replace(/\\\{page\\\}|\{page\}/g, RUNNING_PAGE_TYP).replace(/\\\{section\\\}|\{section\}/g, RUNNING_SECTION_TYP)
             : piece,

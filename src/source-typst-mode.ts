@@ -1,5 +1,5 @@
 // Typst highlighting for the source view, covering ONLY the rails
-// (SOURCE-VIEW.md, decision 4): `=` headings, `-`/`+` list markers, `$…$`
+// (SOURCE-VIEW.md, decision 4): `=` headings, `-`/`+`/`3.` list markers, `$…$`
 // math, `#name[` / `#name(` calls, `//` comments, raw fences and inline
 // raw, `@key` citations and references, `*…*` / `_…_` emphasis, `<label>`.
 // Everything else is plain text — the highlighter, like the editor, only
@@ -102,7 +102,7 @@ export const typstRails: StreamParser<TypstRailsState> = {
         state.heading = true;
         return 'processingInstruction';
       }
-      if (stream.match(/^\s*[-+](?=\s)/)) return 'processingInstruction';
+      if (stream.match(/^\s*(?:[-+]|\d{1,9}\.)(?=\s)/)) return 'processingInstruction';
     }
 
     const ch = stream.peek() ?? '';

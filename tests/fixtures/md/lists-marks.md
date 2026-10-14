@@ -8,6 +8,11 @@
 3. three
 4. four
 
+A list may start at zero.
+
+0. zero
+1. one
+
 A loose list follows; blank lines between its items make it loose.
 
 1. a loose item

@@ -139,7 +139,7 @@ plass:
 | a line break | `\` at the end of the line | |
 | a footnote | `a claim.[^1]` and, below, `[^1]: The note.`; or `a claim.^[The note.]` | one paragraph per footnote |
 | a bullet list | `- item` | |
-| a numbered list | `3. item` | keeps its starting number |
+| a numbered list | `3. item` | keeps its starting number, 0 included, on the page and in print. Later items' numbers are not read (as in pandoc): `3.` `3.` is 3, 4 |
 | a loose list | a blank line between items | spaced like paragraphs. With no blank lines, the list is tight. A tight list cannot hold an item whose blocks need a blank line between them (a second paragraph, an empty one too, a quote, a div, a table): Plass saves such a list loose, with a warning. Empty paragraphs at the end of a tight list's last item are saved after the list instead, where they print the same |
 | a quote | `> text`, with a bare `>` line between paragraphs | |
 | a code listing | ```` ```python ```` … ```` ``` ```` | printed as a monospace block |

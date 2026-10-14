@@ -361,8 +361,9 @@ function fuseDecimalColumns(table: PMNode, logicalDecimals: number[]): PMNode {
 
 function unescapeTypText(t: string): string {
   // Table captions use the table-cell-safe text encoder, which also protects
-  // literal tildes and Typst comment openers.
-  return t.replace(/\\([\\#$*_`@<>\[\]~\/])/g, '$1');
+  // literal tildes and Typst comment openers; a caption or running header
+  // opening with list or heading markup has it escaped (`\-`, `3\.`).
+  return t.replace(/\\([\\#$*_`@<>\[\]~\/=+.-])/g, '$1');
 }
 
 /** Body numbering format captured from a numbering-restart marker. */
@@ -669,21 +670,30 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     }
 
     // lists (marker at line start; continuation lines indented two spaces;
-    // a blank line between two items makes the list loose)
-    m = /^([-+]) /.exec(line);
+    // a blank line between two items makes the list loose). An enum item
+    // is `+` or numbered (`3.`): the first item's number is the list's
+    // start, and Plass numbers on from it, so a list whose later items
+    // name other numbers (`1.`, then `5.`) cannot be held — it is kept as
+    // a raw island and prints as written.
+    m = /^(-|\+|\d{1,9}\.) /.exec(line);
     if (m) {
-      const marker = m[1];
-      const itemRe = new RegExp(`^\\${marker} (.*)$`);
-      const items: PMNode[] = [];
+      const bullet = m[1] === '-';
+      const itemRe = bullet ? /^- (?<body>.*)$/ : /^(?:\+|(?<num>\d{1,9})\.) (?<body>.*)$/;
+      const start = m[1].endsWith('.') ? parseInt(m[1], 10) : 1;
+      const from = i;
+      const bodies: string[][] = [];
+      let skips = false;
       let tight = true;
       while (i < n) {
-        if (items.length && lines[i].trim() === '' && itemRe.test(lines[i + 1] ?? '')) {
+        if (bodies.length && lines[i].trim() === '' && itemRe.test(lines[i + 1] ?? '')) {
           tight = false;
           i++;
         }
         const im = itemRe.exec(lines[i]);
         if (!im) break;
-        const body: string[] = [im[1]];
+        const num = im.groups!.num;
+        if (num !== undefined && parseInt(num, 10) !== start + bodies.length) skips = true;
+        const body: string[] = [im.groups!.body];
         i++;
         while (
           i < n &&
@@ -691,15 +701,22 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
         ) {
           body.push(lines[i++].replace(/^  /, ''));
         }
+        bodies.push(body);
+      }
+      if (skips) {
+        warnings.push('kept as raw Typst: a numbered list whose items skip numbers (Plass numbers a list on from its first item)');
+        out.push(schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text(lines.slice(from, i).join('\n').trimEnd())]));
+        continue;
+      }
+      const items = bodies.map((body) => {
         const inner = parseBlocks(body, warnings);
         const content =
           inner.length && inner[0].type === schema.nodes.paragraph
             ? inner
             : [schema.nodes.paragraph.create(), ...inner];
-        items.push(schema.nodes.list_item.create(null, content));
-      }
-      const type = marker === '-' ? schema.nodes.bullet_list : schema.nodes.ordered_list;
-      out.push(type.create({ tight }, items));
+        return schema.nodes.list_item.create(null, content);
+      });
+      out.push(bullet ? schema.nodes.bullet_list.create({ tight }, items) : schema.nodes.ordered_list.create({ tight, order: start }, items));
       continue;
     }
 
@@ -803,11 +820,15 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
       continue;
     }
 
-    // paragraph: consume until a blank line or the start of another construct
-    const para: string[] = [];
+    // paragraph: consume until a blank line or the start of another
+    // construct. The first line is always taken: one that only looks like
+    // another construct here (an indented `- a` or `3. a`, which the list
+    // reader takes at a line's start only) is text, never a stop — the
+    // reader would otherwise stand on it forever.
+    const para: string[] = [lines[i++]];
     while (i < n) {
       const pt = lines[i].trim();
-      if (!pt || (/^(```|={1,6} |[-+] |#)/.test(pt) && !INLINE_MATH_START.test(pt)) || pt === TYP_COMMENT_OPEN) break;
+      if (!pt || (/^(```|={1,6} |[-+] |\d{1,9}\. |#)/.test(pt) && !INLINE_MATH_START.test(pt)) || pt === TYP_COMMENT_OPEN) break;
       para.push(lines[i++]);
     }
     out.push(schema.nodes.paragraph.create(null, parseParagraph(para)));

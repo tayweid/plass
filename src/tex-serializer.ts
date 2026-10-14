@@ -72,6 +72,9 @@ function inlineToTex(node: PMNode): string {
   return out;
 }
 
+/** How many enumerate environments the list being written sits in. */
+let enumDepth = 0;
+
 let dataUrlNote = false;
 function imagePath(src: string): string {
   if (src.startsWith('data:')) {
@@ -274,11 +277,18 @@ function blockToTex(node: PMNode, s: DocSettings): string {
     }
     case 'bullet_list':
     case 'ordered_list': {
-      const env = node.type.name === 'bullet_list' ? 'itemize' : 'enumerate';
+      const ordered = node.type.name === 'ordered_list';
+      const env = ordered ? 'enumerate' : 'itemize';
       let out = `\\begin{${env}}\n`;
+      // A list that starts past 1: its level's counter (enumi … enumiv)
+      // stands one short of the start, so the first \item takes it.
+      if (ordered) enumDepth++;
+      const start = ordered ? (node.attrs.order as number) : 1;
+      if (start !== 1) out += `\\setcounter{enum${['i', 'ii', 'iii', 'iv'][Math.min(enumDepth, 4) - 1]}}{${start - 1}}\n`;
       node.forEach((item) => {
         out += '\\item ' + blocksToTex(item, s).trim() + '\n';
       });
+      if (ordered) enumDepth--;
       return out + `\\end{${env}}\n\n`;
     }
     case 'blockquote':
@@ -334,6 +344,7 @@ export function docToTex(doc: PMNode): string {
   const s = normalizeSettings(doc.attrs?.settings as Partial<DocSettings> | null);
   macros = parseMathMacros(s.mathMacros);
   dataUrlNote = false;
+  enumDepth = 0;
 
   const classSize = s.sizePt <= 10.5 ? 10 : s.sizePt <= 11.5 ? 11 : 12;
   // Named papers as class options; half letter and a custom size through

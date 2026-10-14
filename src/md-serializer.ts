@@ -562,7 +562,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
   const tightAfter = (prev: PMNode, next: PMNode) =>
     (plainParagraph(prev) || prev.type.name === 'math_display') &&
     (next.type.name === 'bullet_list' ||
-      (next.type.name === 'ordered_list' && ((next.attrs.order as number) || 1) === 1) ||
+      (next.type.name === 'ordered_list' && ((next.attrs.order as number) ?? 1) === 1) ||
       (next.type.name === 'code_block' && next.attrs.params !== 'md-raw') ||
       next.type.name === 'math_display' ||
       (prev.type.name === 'math_display' && plainParagraph(next)));
@@ -733,7 +733,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       case 'bullet_list':
       case 'ordered_list': {
         const ordered = node.type.name === 'ordered_list';
-        const start = (node.attrs.order as number) || 1;
+        const start = (node.attrs.order as number) ?? 1;
         // An item whose blocks Markdown must set apart with a blank line (a
         // second paragraph, a quote, a div, a table) makes the list loose:
         // a tight list cannot hold it. Its container writes the empty
