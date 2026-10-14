@@ -2398,9 +2398,16 @@ body {
   margin: 0;
 }
 
+/* Its one line is zero tall, and the browser centres the caret on it: at
+   the cell's top inset, half a text line above where a typed character
+   would sit (a typed line's baseline is the empty line's plus half the
+   text extent: margin inset - half-leading, then half its line-height
+   inset + half-leading, against the empty line's inset alone). Drawn that
+   much lower, paint only, the caret stands on the row's baseline. */
 .ProseMirror th > p:only-child:has(> br.ProseMirror-trailingBreak:only-child),
 .ProseMirror td > p:only-child:has(> br.ProseMirror-trailingBreak:only-child) {
   line-height: 0;
+  transform: translateY(calc(var(--table-text-extent, 11.4px) * var(--table-scale, 1) / 2));
 }
 
 .ProseMirror th p + p,

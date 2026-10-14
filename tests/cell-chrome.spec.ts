@@ -346,3 +346,41 @@ test('the chrome is the same in a dark OS appearance (the sheet is always white)
   await page.emulateMedia({ colorScheme: 'dark' });
   expect(await paint()).toBe(light);
 });
+
+test('the caret in an empty table cell stands on its row’s baseline, as typed text would', async ({ page }) => {
+  // An empty cell's paragraph is one zero-tall line (so the cell is its two
+  // insets, as Typst prints it); the browser centred the caret on it, half
+  // a text line high (Taylor, 2026-10-14: "the cursor sits too high when
+  // it's blank after i tabbed in"). Drawn lower, paint only, it matches.
+  for (const fontSize of ['', '0.8em']) {
+    await page.goto('/?new=1');
+    await page.waitForFunction(() => !!window.view);
+    await page.evaluate((fontSize) => {
+      const { state } = window.view;
+      const s = state.schema;
+      const p = (t: string) => s.nodes.paragraph.create(null, t ? s.text(t) : undefined);
+      const c = (t: string) => s.nodes.table_cell.create(null, p(t));
+      const table = s.nodes.table.create({ style: 'booktabs', caption: '', label: '', fontSize }, [
+        s.nodes.table_row.create(null, [c('test'), c('test'), c('test')]),
+        s.nodes.table_row.create(null, [c('test'), c('test'), c('')]),
+      ]);
+      window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, [p('Above.'), table, p('Below.')]));
+    }, fontSize);
+    await settleLocal(page);
+    const line = () => page.evaluate(() => {
+      const row = document.querySelectorAll('.ProseMirror table tr')[1];
+      const range = document.createRange();
+      range.selectNodeContents(row.children[1].querySelector('p')!);
+      const text = range.getClientRects()[0];
+      const empty = row.children[2].querySelector('br')!.getBoundingClientRect();
+      const cell = row.children[2].getBoundingClientRect();
+      return { textTop: text.top, textBottom: text.bottom, emptyTop: empty.top, emptyBottom: empty.bottom, cellHeight: cell.height };
+    });
+    const before = await line();
+    expect(Math.abs(before.emptyTop - before.textTop), `top at ${fontSize || '100%'}`).toBeLessThan(1.5);
+    expect(Math.abs(before.emptyBottom - before.textBottom), `bottom at ${fontSize || '100%'}`).toBeLessThan(1.5);
+    // Paint only: the empty cell's box is what it was.
+    await page.locator('.ProseMirror table tr').nth(1).locator('td').nth(2).click();
+    expect((await line()).cellHeight).toBeCloseTo(before.cellHeight, 2);
+  }
+});
