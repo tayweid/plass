@@ -26,8 +26,9 @@ updates:
       time: '09:30'
       timezone: America/New_York
     open-pull-requests-limit: 5
-    # ICU is pinned with the sidecar's line-break and hyphenation data so
-    # the port breaks lines as Typst does; it moves on purpose, with the
-    # audit, never as a routine bump.
+    # ICU and hypher are pinned with the sidecar's line-break and
+    # hyphenation data so the port breaks lines as Typst does; they move on
+    # purpose, with the audit, never as a routine bump.
     ignore:
       - dependency-name: 'icu_*'
+      - dependency-name: 'hypher'
