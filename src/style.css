@@ -2261,11 +2261,16 @@ body {
    its width to every row and the table, and the page would drift from the
    print by a rule's width per rule. */
 
-/* grid preset: Typst's default one-point black cell strokes — a half-point
-   ring outside each cell, so neighbours overlap to one point and the outer
-   edge gets the half Typst paints outside the table box. Collapsed-border
-   tables do not paint cell shadows, so the grid keeps separate borders
-   with no spacing: the same box, shadow-capable cells. */
+/* grid preset: Typst's default one-point black cell strokes, centred on
+   every cell boundary, the table's outer edge included. Each cell draws
+   half a point inside its box and half outside, so two neighbours make
+   one point between them and the outer edge gets both halves, as Typst
+   paints it. The inside half is what keeps a stroke whole beside a fill:
+   Typst draws strokes over fills, but a later cell's background paints
+   over its neighbour's outside half, and its own inside half paints that
+   strip again. Collapsed-border tables do not paint cell shadows, so the
+   grid keeps separate borders with no spacing: the same box,
+   shadow-capable cells. */
 .ProseMirror table.ts-table-grid {
   border-collapse: separate;
   border-spacing: 0;
@@ -2273,11 +2278,23 @@ body {
 
 .ProseMirror table.ts-table-grid th,
 .ProseMirror table.ts-table-grid td {
-  box-shadow: 0 0 0 0.5pt var(--ink);
+  box-shadow: 0 0 0 0.5pt var(--ink), inset 0 0 0 0.5pt var(--ink);
 }
 
-/* booktabs preset: horizontal rules only — the academic look */
+/* booktabs preset: horizontal rules only — the academic look. The top
+   and bottom rules are drawn by an overlay above the cells: on the
+   table's own box they sat under the cells, so a filled cell in the first
+   or last row hid its stretch of the rule, where Typst draws the rule over
+   the fill. Positioned, the overlay paints after the (positioned) cells. */
 .ProseMirror table.ts-table-booktabs {
+  position: relative;
+}
+
+.ProseMirror table.ts-table-booktabs::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
   box-shadow: inset 0 0.08em 0 var(--ink), inset 0 -0.08em 0 var(--ink);
 }
 
@@ -2443,7 +2460,7 @@ body {
    full column width, and its ring matches the real cells. The spacer
    cells themselves must never draw lines through the page margins. */
 .ProseMirror table.ts-table-grid tr.ts-table-break .ts-table-hdr {
-  box-shadow: 0 0 0 0.5pt var(--ink);
+  box-shadow: 0 0 0 0.5pt var(--ink), inset 0 0 0 0.5pt var(--ink);
 }
 
 /* prosemirror-tables cell-selection highlight: square, so adjacent cells
