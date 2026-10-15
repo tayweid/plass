@@ -592,11 +592,10 @@ export class FigureView implements NodeView {
    *  sources resolve to object URLs. Unapproved remotes remain inert. */
   private setSrc(src: string) {
     const version = ++this.sourceVersion;
-    this.dom.classList.remove('fig-missing', 'fig-remote-blocked', 'fig-remote-loading');
-    delete this.dom.dataset.placeholder;
-
     const remote = remoteImageStatus(src);
     if (remote) {
+      this.dom.classList.remove('fig-missing', 'fig-remote-blocked', 'fig-remote-loading');
+      delete this.dom.dataset.placeholder;
       this.img.removeAttribute('src');
       this.dom.classList.add('fig-missing', 'fig-remote-blocked');
       if (remote.reason) {
@@ -635,38 +634,35 @@ export class FigureView implements NodeView {
     }
 
     if (!src) {
+      this.dom.classList.remove('fig-remote-blocked', 'fig-remote-loading');
       this.img.removeAttribute('src');
       this.dom.classList.add('fig-missing');
       this.dom.dataset.placeholder = 'missing image source';
       scheduleTypeset(this.view);
       return;
     }
-    if (!isPathSrc(src)) {
-      void embeddedDisplayUrl(src).then((url) => {
-        if (version !== this.sourceVersion || this.node.attrs.src !== src) return;
-        if (url) this.img.src = url;
-        else {
-          this.dom.classList.add('fig-missing');
-          this.dom.dataset.placeholder = 'embedded SVG could not be sanitized';
-          scheduleTypeset(this.view);
-        }
-      });
-      return;
-    }
-    this.img.removeAttribute('src');
-    void assetUrl(src).then((url) => {
+    // A file or embedded figure keeps the picture it shows until the new
+    // one is ready (InlineImageView.setSrc has the why): clearing it first
+    // collapsed every figure on each asset refresh.
+    const show = (url: string | null, reason: string) => {
       if (version !== this.sourceVersion || this.node.attrs.src !== src) return;
+      this.dom.classList.remove('fig-remote-blocked', 'fig-remote-loading');
       if (url) {
         this.dom.classList.remove('fig-missing');
         delete this.dom.dataset.placeholder;
-        if (this.img.src !== url) this.img.src = url;
+        if (this.img.getAttribute('src') !== url) this.img.src = url;
       } else {
         this.dom.classList.add('fig-missing');
         this.img.removeAttribute('src');
-        this.dom.dataset.placeholder = missingImageReason(src);
+        this.dom.dataset.placeholder = reason;
         scheduleTypeset(this.view);
       }
-    });
+    };
+    if (!isPathSrc(src)) {
+      void embeddedDisplayUrl(src).then((url) => show(url, 'embedded SVG could not be sanitized'));
+      return;
+    }
+    void assetUrl(src).then((url) => show(url, missingImageReason(src)));
   }
 
   update(node: PMNode): boolean {
@@ -769,11 +765,10 @@ export class ImageView implements NodeView {
 
   private setSrc(src: string) {
     const version = ++this.sourceVersion;
-    this.dom.classList.remove('inline-image-missing', 'inline-image-remote');
-    this.img.removeAttribute('src');
-
     const remote = remoteImageStatus(src);
     if (remote) {
+      this.dom.classList.remove('inline-image-missing', 'inline-image-remote');
+      this.img.removeAttribute('src');
       if (remote.reason) {
         this.showMessage(remote.reason);
         return;
@@ -800,30 +795,33 @@ export class ImageView implements NodeView {
     }
 
     if (!src) {
+      this.img.removeAttribute('src');
       this.showMessage('missing image source');
       return;
     }
-    if (!isPathSrc(src)) {
-      void embeddedDisplayUrl(src).then((url) => {
-        if (version !== this.sourceVersion || this.node.attrs.src !== src) return;
-        if (url) this.img.src = url;
-        else {
-          this.showMessage('embedded SVG could not be sanitized');
-          scheduleTypeset(this.view);
-        }
-      });
-      return;
-    }
-    void assetUrl(src).then((url) => {
+    // A file or embedded image keeps the picture it shows until the new one
+    // is ready. Clearing it first emptied the box for as long as the lookup
+    // took (real file reads), so on every asset refresh (the folder
+    // watcher's first pass, each file change) every image on the page
+    // collapsed and the page reflowed twice. An unchanged file resolves to
+    // the same URL, which is left alone.
+    const show = (url: string | null, reason: string) => {
       if (version !== this.sourceVersion || this.node.attrs.src !== src) return;
       if (url) {
-        this.dom.classList.remove('inline-image-missing');
-        this.img.src = url;
+        this.dom.classList.remove('inline-image-missing', 'inline-image-remote');
+        if (this.img.getAttribute('src') !== url) this.img.src = url;
       } else {
-        this.showMessage(missingImageReason(src));
+        this.img.removeAttribute('src');
+        this.dom.classList.remove('inline-image-remote');
+        this.showMessage(reason);
         scheduleTypeset(this.view);
       }
-    });
+    };
+    if (!isPathSrc(src)) {
+      void embeddedDisplayUrl(src).then((url) => show(url, 'embedded SVG could not be sanitized'));
+      return;
+    }
+    void assetUrl(src).then((url) => show(url, missingImageReason(src)));
   }
 
   private activate() {
