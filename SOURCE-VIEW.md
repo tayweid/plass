@@ -98,9 +98,16 @@ either serializer, or a code editor dependency.
 
 ## Look
 
-- A single sheet the width of the page column, text column at a fixed
-  measure (~68ch), generous top padding, `--mono` at 15–16px, line-height
-  ~1.6, `--ink` on `--sheet`. No page boxes, no page numbers.
+- A single sheet the width of the page column: the page's own (white,
+  rounded, in the dark frame). No page boxes, no page numbers. The text
+  sits as in a plain code editor (2026-10-15, replacing a centred ~68ch
+  column under 88 px of air, which read as a sheet with a stripe of
+  type floating in it): flush left under a small inset (22 px above,
+  30 px beside), wrapping at the sheet's width up to a wrap column
+  (104ch) anchored left, `--mono` at 14 px, line-height 1.65, the ink a
+  shade under the page's (90% `--ink`). Taylor's brief: "the softer look
+  [of the page] crossed with a basic text code editor with small margins,
+  but keeping it simple".
 - Markup dimmed to `--ink-soft`: heading markers, list markers, emphasis
   delimiters, `#`, brackets. Heading lines bold. Math and raw fences in a
   faint tint. Links and `@` references in `--accent`.

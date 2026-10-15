@@ -1080,7 +1080,11 @@ body {
 }
 
 /* One quiet sheet the width of the page column: no page boxes, no
-   numbers. The text column sits at a fixed measure under generous air. */
+   numbers. The text sits as in a plain code editor: flush left under a
+   small inset, wrapping at the sheet's width up to a wrap column, in a
+   lighter mono; the sheet itself is the page's (white, rounded, in the
+   dark frame). Taylor, 2026-10-15: "the softer look ... crossed with a
+   basic text code editor with small margins, but keeping it simple". */
 #source {
   --source-raw: color-mix(in srgb, var(--ink) 78%, var(--accent));
   --source-tint: color-mix(in srgb, var(--accent) 7%, transparent);
@@ -1093,9 +1097,10 @@ body {
 }
 
 #source .cm-editor {
-  font: 15.5px/1.6 var(--mono);
-  color: var(--ink);
-  padding: 88px 0 45vh;
+  font: 14px/1.65 var(--mono);
+  /* A shade under the page's ink: mono on white at full ink reads hard. */
+  color: color-mix(in srgb, var(--ink) 90%, var(--sheet));
+  padding: 22px 0 45vh;
 }
 
 #source .cm-editor.cm-focused {
@@ -1110,9 +1115,10 @@ body {
 }
 
 #source .cm-content {
-  max-width: 68ch;
-  margin: 0 auto;
-  padding: 0 28px;
+  /* A code editor's wrap column, anchored left: never a centred measure. */
+  max-width: 104ch;
+  margin: 0;
+  padding: 0 28px 0 30px;
   caret-color: var(--ink);
 }
 
@@ -1146,18 +1152,18 @@ body {
 
 #source .source-focus {
   position: absolute;
-  top: 18px;
-  right: 20px;
+  top: 14px;
+  right: 16px;
   z-index: 2;
-  font: 11px var(--sans);
+  font: 10.5px var(--sans);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink);
-  opacity: 0.45;
+  opacity: 0.4;
   background: transparent;
-  border: 1px solid color-mix(in srgb, var(--ink) 25%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink) 22%, transparent);
   border-radius: 999px;
-  padding: 4px 10px;
+  padding: 3px 9px;
   cursor: pointer;
 }
 
