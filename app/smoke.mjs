@@ -95,9 +95,57 @@ await page.waitForFunction(() => document.querySelector('.ProseMirror')?.textCon
 const notice = await page.evaluate(() => document.body.innerText.includes('exact') && document.body.innerText.includes('off'));
 if (notice) await fail('the environment check turned the exact path off');
 
-// Edit and save.
+// Chromium's spellchecker, as in a tab (shell 0.2.13; off in the shell
+// before): a misspelling typed is marked once typing pauses, and a
+// right-click on it brings the shell's menu with Chromium's suggestions
+// and Add to Dictionary. The menu is caught here, not shown (shown, it
+// would hold the window); the word is taken back before the edit below.
 await page.click('.ProseMirror p');
 await page.keyboard.press('End');
+await app.evaluate(({ Menu }) => {
+  global.__popup = Menu.prototype.popup;
+  global.__popped = [];
+  Menu.prototype.popup = function () {
+    global.__popped.push(this.items.map((item) => item.label || item.type));
+  };
+});
+await page.keyboard.type(' spellng ');
+await page.waitForTimeout(1500);
+// The word on the shown paper (not a measuring copy), scrolled into view.
+const misspelling = await page.evaluate(() => {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    const at = node.data.indexOf('spellng');
+    if (at === -1 || !node.parentElement.closest('.ProseMirror') || node.parentElement.offsetParent === null) continue;
+    node.parentElement.scrollIntoView({ block: 'center' });
+    const range = document.createRange();
+    range.setStart(node, at);
+    range.setEnd(node, at + 'spellng'.length);
+    const box = range.getBoundingClientRect();
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2, inner: [window.innerWidth, window.innerHeight] };
+  }
+  return null;
+});
+if (!misspelling) await fail('the typed misspelling is not on the paper');
+if (misspelling.x < 0 || misspelling.y < 0 || misspelling.x > misspelling.inner[0] || misspelling.y > misspelling.inner[1]) {
+  await fail(`the misspelling is off the window at ${JSON.stringify(misspelling)}`);
+}
+await page.waitForTimeout(300);
+await page.mouse.click(misspelling.x, misspelling.y, { button: 'right' });
+await page.waitForTimeout(400);
+const spellingMenus = await app.evaluate(({ Menu }) => {
+  Menu.prototype.popup = global.__popup;
+  return global.__popped;
+});
+if (spellingMenus.length !== 1 || !spellingMenus[0].includes('Add to Dictionary') || !spellingMenus[0].includes('spelling')) {
+  await fail(`a right-click on "spellng" did not bring the spelling menu: ${JSON.stringify(spellingMenus)}`);
+}
+for (let i = 0; i < ' spellng '.length; i++) await page.keyboard.press('Backspace');
+if (await page.evaluate(() => document.querySelector('.ProseMirror').textContent.includes('spellng'))) await fail('the misspelling did not come off the paper');
+console.log(`smoke: "spellng" marked, the right-click menu offered ${JSON.stringify(spellingMenus[0])}`);
+
+// Edit and save.
 await page.keyboard.type(' Edited.');
 await page.keyboard.press('Meta+s');
 for (let i = 0; i < 40 && !fs.readFileSync(doc, 'utf8').includes('Edited.'); i++) await page.waitForTimeout(250);

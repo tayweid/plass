@@ -681,3 +681,21 @@ prompted.
     0.2.8; the deploy's `CLAERBOUT_TAG` moves to it once the tag is
     published. Under an older shell the page's report is answered null and
     the window closes as it always did.
+- ~~Spell check in Plass.app.~~ FIXED 2026-10-15, shell 0.2.13. The shell
+  had run every page with Chromium's spellchecker off (`spellcheck: false`
+  in its web preferences, from its first commit on 2026-09-30, the day
+  Plass.app moved onto it from the WebKit shell, which checked natively),
+  so the paper's `spellcheck="true"` was never consulted and no word was
+  marked. The shell now leaves the checker on, as a browser tab does (the
+  page's attribute decides: the paper says yes, a code cell says no), and
+  gives a document window the right-click menu Electron lacks
+  (`spellingMenu` in the shell's main.js): on a marked word, Chromium's
+  suggestions, each replacing the word, and Add to Dictionary (macOS's own
+  custom dictionary, so the word is learned for every app); in editable
+  text, Cut, Copy and Paste besides; on a selection elsewhere, Copy; any
+  other right-click shows nothing, as before. Tests: the shell's
+  `test/spellcheck.mjs` on its fixture, and `app/smoke.mjs` here, which
+  types a misspelling into the paper, right-clicks it and reads the menu
+  the shell pops (caught, not shown). The deploy's `CLAERBOUT_TAG` moves to
+  v0.2.13 with this; under an older shell the smoke test fails at that
+  step and the app job stops, the site deploying as before.
