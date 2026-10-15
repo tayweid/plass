@@ -791,6 +791,9 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
           const cells: string[] = [];
           row.forEach((cell, _c, c) => {
             const kvs: Array<[string, string]> = equal ? [] : [['width', widths[c] ?? widths[widths.length - 1]]];
+            // The cell's alignment (grid.cell(align:) in Typst): across and down.
+            if (cell.attrs.align) kvs.push(['align', cell.attrs.align as string]);
+            if (cell.attrs.valign) kvs.push(['valign', cell.attrs.valign as string]);
             cells.push(div(depth - 1, writeFenceAttrs({ id: '', classes: ['column'], kvs }), blocks(sequence(cell))));
           });
           const head = writeAttrBlock({ id: '', classes: r ? ['columns', 'continued'] : ['columns'], kvs: [['gutter', `${num(node.attrs.gutter as number)}em`]] });

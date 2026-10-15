@@ -664,6 +664,15 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('[60,40] reads as [1.5,1] and writes 60%/40%', JSON.stringify(grid(cols(['60%', '40%'])).attrs.columns) === '[1.5,1]' && docToMd(mdToDoc(cols(['60%', '40%'])).doc).includes('width=60%') && docToMd(mdToDoc(cols(['60%', '40%'])).doc).includes('width=40%'));
   check('[1,2] written as 33.333%/66.667% reads back as [1,2]', JSON.stringify(grid(cols(['33.333%', '66.667%'])).attrs.columns) === '[1,2]');
   check('[1.5,1] as bare numbers', JSON.stringify(grid(cols(['1.5', '1'])).attrs.columns) === '[1.5,1]');
+  // A cell's alignment: align= / valign= on its column div (grid.cell(align:) in Typst).
+  const alignedMd = ':::: {.columns gutter=1em}\n\n::: {.column align=center valign=middle}\n\ncentred\n\n:::\n\n::: {.column align=right}\n\nright\n\n:::\n\n::::\n';
+  const aligned = mdToDoc(alignedMd);
+  const cellAttrs = (c: number) => JSON.stringify(aligned.doc.firstChild!.child(0).child(c).attrs);
+  check('column align= and valign= read as the cell\'s', cellAttrs(0) === '{"align":"center","valign":"middle"}' && cellAttrs(1) === '{"align":"right","valign":null}' && !aligned.warnings.length, cellAttrs(0) + ' ' + cellAttrs(1) + ' ' + aligned.warnings.join('; '));
+  check('an aligned grid round-trips byte for byte', docToMd(aligned.doc) === alignedMd, firstDiff(docToMd(aligned.doc), alignedMd));
+  check('an aligned cell prints as grid.cell(align:)', docToTyp(aligned.doc).includes('grid.cell(align: center + horizon)[\n    centred\n  ],\n  grid.cell(align: right)[\n    right\n  ],'), docToTyp(aligned.doc));
+  const badAlign = mdToDoc(':::: {.columns gutter=1em}\n\n::: {.column align=justify valign=middle}\n\nx\n\n:::\n\n::::\n');
+  check('an unknown column alignment is dropped with a warning, the other kept', badAlign.doc.firstChild!.child(0).child(0).attrs.align === null && badAlign.doc.firstChild!.child(0).child(0).attrs.valign === 'middle' && badAlign.warnings.length === 1 && /align "justify"/.test(badAlign.warnings[0]), JSON.stringify([badAlign.doc.firstChild!.child(0).child(0).attrs, badAlign.warnings]));
   check('a point gutter converts to em at the font size', grid(cols(['', ''], '12.5pt')).attrs.gutter === 1, JSON.stringify(grid(cols(['', ''], '12.5pt')).attrs));
   const two = cols(['', '']) + '\n' + cols(['', '']).replace('{.columns ', '{.columns .continued ');
   const g2 = mdToDoc(two).doc;

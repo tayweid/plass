@@ -91,7 +91,11 @@ are gone. The design, its rules and where the code lives:
 [`docs/BLOCK-CHROME.md`](./docs/BLOCK-CHROME.md), keyboard included
 (Escape selects the block, ⌘⏎ / ⇧⌘⏎ add rows in a cell, ↑/↓ leave a
 grid, Tab into the pill). Still open from the same design: an optional
-dark-glass image bar.
+dark-glass image bar. Grid cells align (2026-10-15): the pill's Align
+panel, as a table's, sets a cell's `align` (across: the last line of each
+paragraph) and `valign` (down: the cell in its row), kept as
+`grid.cell(align: …)` in `.typ` and `align=` / `valign=` on the
+`::: column` div in `.md`; the audit's grid fixture carries both.
 
 ## Done: Plass.app on the Claerbout shell (Electron, 2026-09-30)
 

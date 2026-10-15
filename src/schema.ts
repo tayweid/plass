@@ -362,10 +362,38 @@ const gridSpecs: Record<string, NodeSpec> = {
   grid_cell: {
     content: 'block+',
     isolating: true,
-    parseDOM: [{ tag: 'div.ts-grid-cell' }],
-    toDOM: () => ['div', { class: 'ts-grid-cell' }, 0],
+    // Typst's grid.cell(align:), as a table cell's: across, where each
+    // paragraph's last line sits (left / center / right); down, where the
+    // cell sits in its row (top / middle / bottom). Null is Typst's default.
+    attrs: { align: { default: null }, valign: { default: null } },
+    parseDOM: [
+      {
+        tag: 'div.ts-grid-cell',
+        getAttrs: (el: HTMLElement | string) =>
+          typeof el === 'string'
+            ? null
+            : { align: gridAlign(el.getAttribute('data-align')), valign: gridValign(el.getAttribute('data-valign')) },
+      },
+    ],
+    toDOM(node) {
+      const attrs: Record<string, string> = { class: 'ts-grid-cell' };
+      if (node.attrs.align) attrs['data-align'] = node.attrs.align as string;
+      if (node.attrs.valign) attrs['data-valign'] = node.attrs.valign as string;
+      return ['div', attrs, 0];
+    },
   },
 };
+
+/** A grid cell's horizontal alignment, or null for Typst's default. */
+export const GRID_ALIGNS = ['left', 'center', 'right'] as const;
+/** A grid cell's vertical alignment (Typst's top / horizon / bottom). */
+export const GRID_VALIGNS = ['top', 'middle', 'bottom'] as const;
+export type GridAlign = (typeof GRID_ALIGNS)[number];
+export type GridValign = (typeof GRID_VALIGNS)[number];
+export const gridAlign = (value: string | null | undefined): GridAlign | null =>
+  (GRID_ALIGNS as readonly string[]).includes(value ?? '') ? (value as GridAlign) : null;
+export const gridValign = (value: string | null | undefined): GridValign | null =>
+  (GRID_VALIGNS as readonly string[]).includes(value ?? '') ? (value as GridValign) : null;
 
 // An editorial comment (editor-comments.ts): plain text between top-level
 // blocks, shown on the page as a strip that is visibly not paper, kept in

@@ -71,10 +71,12 @@ import {
   deleteGridColumnAt,
   deleteGridRowAt,
   gridCaretPlace,
+  gridCellAttr,
   gridContext,
   insertGridColumnAt,
   insertGridRowAt,
   setGridColumns,
+  setGridCellAttr,
   setGridGutter,
   unwrapGrid,
 } from './grid-editor';
@@ -139,7 +141,12 @@ function mayWiden(node: PMNode): boolean {
   return !tracks || tracks.includes('auto');
 }
 
-const gridKey = (node: PMNode) => `${(node.attrs.columns as number[]).join(',')}/${node.attrs.gutter}/${node.childCount}`;
+const gridKey = (node: PMNode) => {
+  // The cells' alignments too: the Align tile shows the caret cell's.
+  let cells = '';
+  node.forEach((row) => row.forEach((cell) => { cells += `${(cell.attrs.align as string | null)?.[0] ?? '-'}${(cell.attrs.valign as string | null)?.[0] ?? '-'}`; }));
+  return `${(node.attrs.columns as number[]).join(',')}/${node.attrs.gutter}/${node.childCount}/${cells}`;
+};
 
 /** Changes only when the block's structure or attributes do: never for a
  *  character typed in a cell (table-editor.ts's revision ignores text). */
@@ -440,6 +447,7 @@ class BlockChrome {
       return [
         { ...rows, flyout: 'gridrows' },
         { ...cols, flyout: 'gridcols' },
+        { id: 'align', glyph: icon('alignleft'), caption: 'Align · Left', flyout: 'align', popup: 'dialog' },
         { id: 'image', glyph: icon('image'), caption: 'Image in cell', action: () => this.insertImage() },
         '|',
         { id: 'grid', glyph: icon('grid'), caption: 'Grid layout', flyout: 'gridlayout', popup: 'dialog' },
@@ -527,7 +535,7 @@ class BlockChrome {
     const place = gridCaretPlace(state);
     const align = this.tiles.get('align');
     if (align) {
-      const value = selectedCellsAttr(state, 'align');
+      const value = ctx.kind === 'grid' ? gridCellAttr(state, 'align') : selectedCellsAttr(state, 'align');
       const known = value && value !== 'mixed' && value !== 'decimal' ? value : 'left';
       const name = value === 'mixed' ? 'Mixed' : value === 'decimal' ? 'Decimal' : ALIGN_NAME[known] ?? 'Left';
       const glyph = `align${known}`;
@@ -1295,55 +1303,58 @@ class BlockChrome {
 
   private alignPanel(builder: Builder, parent?: FlyoutId): Builder {
     const state = () => this.cellState();
-    this.back(builder, parent, 'Table controls');
-    const across = this.section(builder, 'Across', 'Selected cells horizontal alignment');
-    for (const value of ['left', 'center', 'right'] as const) {
+    // One panel for both kinds: a table's selected cells, or a grid's
+    // caret cell (grid.cell(align:)); each axis as radios.
+    const grid = this.ctx?.kind === 'grid';
+    const who = grid ? 'this cell' : 'selected cells';
+    const value = (name: 'align' | 'valign') => (grid ? gridCellAttr(state(), name) : selectedCellsAttr(state(), name));
+    const enabled = () => (grid ? !!gridCaretPlace(state()) : isInTable(state()));
+    const radio = (name: string, glyph: string, label: string, pick: () => unknown) => {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'tb-btn';
       button.setAttribute('role', 'radio');
-      button.setAttribute('aria-label', `Align selected cells ${value}`);
-      button.dataset.value = value;
-      button.innerHTML = icon(`align${value}`);
-      this.caption(builder, button, ALIGN_NAME[value]);
+      button.setAttribute('aria-label', `Align ${who} ${name}`);
+      button.dataset.value = name;
+      button.innerHTML = icon(glyph);
+      this.caption(builder, button, label);
       button.addEventListener('mousedown', (e) => e.preventDefault());
-      button.addEventListener('click', () => this.run(alignSelectedTableCells(value)));
+      button.addEventListener('click', () => pick());
+      return button;
+    };
+    this.back(builder, parent, grid ? 'Grid controls' : 'Table controls');
+    const across = this.section(builder, 'Across', `${grid ? "This cell's" : 'Selected cells'} horizontal alignment`);
+    for (const v of ['left', 'center', 'right'] as const) {
+      const button = radio(v, `align${v}`, ALIGN_NAME[v], () => this.run(grid ? setGridCellAttr('align', v) : alignSelectedTableCells(v)));
       builder.syncs.push(() => {
-        setAttr(button, 'aria-checked', String(selectedCellsAttr(state(), 'align') === value));
-        const disabled = !isInTable(state());
+        setAttr(button, 'aria-checked', String(value('align') === v));
+        const disabled = !enabled();
         if (button.disabled !== disabled) button.disabled = disabled;
       });
       across.append(button);
     }
-    // A decimal-aligned column: none of L/C/R, and a chip saying so (shown
-    // only then; display only).
-    const decimal = document.createElement('button');
-    decimal.type = 'button';
-    decimal.className = 'tb-btn bc-decimal';
-    decimal.disabled = true;
-    decimal.setAttribute('role', 'radio');
-    decimal.setAttribute('aria-checked', 'true');
-    decimal.setAttribute('aria-label', 'Decimal aligned');
-    decimal.dataset.value = 'decimal';
-    decimal.innerHTML = '<span class="ico tico">.00</span>';
-    across.append(decimal);
-    builder.syncs.push(() => { decimal.hidden = selectedCellsAttr(state(), 'align') !== 'decimal'; });
-    this.note(builder, across, () => (selectedCellsAttr(state(), 'align') === 'mixed' ? 'Mixed' : ''));
-    const down = this.section(builder, 'Down', 'Selected cells vertical alignment');
-    for (const [value, glyph, name] of [['top', 'valigntop', 'Top'], ['middle', 'valignmid', 'Middle'], ['bottom', 'valignbot', 'Bottom']] as const) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'tb-btn';
-      button.setAttribute('role', 'radio');
-      button.setAttribute('aria-label', `Align selected cells ${value}`);
-      button.dataset.value = value;
-      button.innerHTML = icon(glyph);
-      this.caption(builder, button, name);
-      button.addEventListener('mousedown', (e) => e.preventDefault());
-      button.addEventListener('click', () => this.run(setCellAttr('valign', value)));
+    if (!grid) {
+      // A decimal-aligned column: none of L/C/R, and a chip saying so (shown
+      // only then; display only).
+      const decimal = document.createElement('button');
+      decimal.type = 'button';
+      decimal.className = 'tb-btn bc-decimal';
+      decimal.disabled = true;
+      decimal.setAttribute('role', 'radio');
+      decimal.setAttribute('aria-checked', 'true');
+      decimal.setAttribute('aria-label', 'Decimal aligned');
+      decimal.dataset.value = 'decimal';
+      decimal.innerHTML = '<span class="ico tico">.00</span>';
+      across.append(decimal);
+      builder.syncs.push(() => { decimal.hidden = value('align') !== 'decimal'; });
+      this.note(builder, across, () => (value('align') === 'mixed' ? 'Mixed' : ''));
+    }
+    const down = this.section(builder, 'Down', `${grid ? "This cell's" : 'Selected cells'} vertical alignment`);
+    for (const [v, glyph, name] of [['top', 'valigntop', 'Top'], ['middle', 'valignmid', 'Middle'], ['bottom', 'valignbot', 'Bottom']] as const) {
+      const button = radio(v, glyph, name, () => this.run(grid ? setGridCellAttr('valign', v) : setCellAttr('valign', v)));
       builder.syncs.push(() => {
-        setAttr(button, 'aria-checked', String(selectedCellsAttr(state(), 'valign') === value));
-        const disabled = !isInTable(state());
+        setAttr(button, 'aria-checked', String(value('valign') === v));
+        const disabled = !enabled();
         if (button.disabled !== disabled) button.disabled = disabled;
       });
       down.append(button);
@@ -1968,6 +1979,7 @@ class BlockChrome {
     if (ctx.kind === 'grid') {
       this.item(builder, 'Rows', () => this.reopen('gridrows', 'more'), { submenu: true });
       this.item(builder, 'Columns', () => this.reopen('gridcols', 'more'), { submenu: true });
+      this.item(builder, 'Align…', () => this.reopen('align', 'more'), { dialog: true });
       this.item(builder, 'Image in cell', () => this.insertImage(), { enabled: () => !!gridCaretPlace(this.cellState()) });
       this.divider(builder);
       this.item(builder, 'Grid layout…', () => this.reopen('gridlayout', 'more'), { dialog: true });

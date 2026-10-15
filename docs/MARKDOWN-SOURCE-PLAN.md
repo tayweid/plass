@@ -460,7 +460,7 @@ Rules:
 | Node | Form | Notes |
 |---|---|---|
 | `blockquote{kind:'solution'}` | `::: solution` … `:::` | also read `::: {.solution}`; blank line before and after |
-| `grid` | one `::: {.columns gutter=1em}` div per ROW holding its cells as `::: {.column width=60%}`; rows after the first carry `.continued` (`::: {.columns .continued gutter=1em}`) | the standard form (pandoc's slide columns, Quarto); consecutive divs merge into one grid only through `.continued`; equal shares write no `width` |
+| `grid` | one `::: {.columns gutter=1em}` div per ROW holding its cells as `::: {.column width=60%}`; rows after the first carry `.continued` (`::: {.columns .continued gutter=1em}`); an aligned cell adds `align=center` / `valign=middle` (2026-10-15) | the standard form (pandoc's slide columns, Quarto); consecutive divs merge into one grid only through `.continued`; equal shares write no `width` |
 | `paragraph{align}` / `paragraph{keep}` | `::: center`, `::: right`, `::: {.keep}` (classes combine: `::: {.keep .center}`) around exactly one paragraph | the rail for the two features the brief's list omits; any other content inside → the unknown-div island |
 | `blockquote` | `> …` | quoted paragraphs are separated by a bare `>` line (today's `> >` bug fixed) |
 | `editor_comment` | `<!-- … -->` at top level | every HTML comment; written verbatim except `-->` → `--&gt;` (decoded on read); the tagged `<!-- plass:comment` frame is still read with its old decoding, never written |

@@ -721,6 +721,25 @@ function firstDiff(a: string, b: string): string {
     check('rich grid round-trips byte for byte', o === docToTyp(typToDoc(o).doc), firstDiff(o, docToTyp(typToDoc(o).doc)));
     check('rich grid keeps the table native inside the cell', o.includes('  [\n    #align(center, table(\n'), o);
   }
+  {
+    // grid.cell(align:): the rail's one cell argument, either axis or
+    // both (Typst's horizon is the rail's middle); a span is an island.
+    const gridSrc = '#grid(\n  columns: (1fr, 1fr),\n  gutter: 1em,\n  grid.cell(align: center + horizon)[\n    centred\n  ],\n  grid.cell(align: right)[\n    right\n  ],\n  grid.cell(align: bottom)[],\n  [\n    plain\n  ],\n)';
+    const r = typToDoc('Intro.\n\n' + gridSrc + '\n\nAfter.\n');
+    const g = r.doc.child(1);
+    const attrs = (row: number, col: number) => JSON.stringify(g.child(row).child(col).attrs);
+    check(
+      'grid.cell(align:) reads both axes',
+      g.type.name === 'grid' && attrs(0, 0) === '{"align":"center","valign":"middle"}' && attrs(0, 1) === '{"align":"right","valign":null}' && attrs(1, 0) === '{"align":null,"valign":"bottom"}' && attrs(1, 1) === '{"align":null,"valign":null}',
+      g.type.name + ' ' + [attrs(0, 0), attrs(0, 1), attrs(1, 0), attrs(1, 1)].join(' '),
+    );
+    check('no warning for aligned cells', r.warnings.length === 0, r.warnings.join('; '));
+    const o = docToTyp(r.doc);
+    check('aligned cells export as grid.cell(align:)', o.includes(gridSrc), o);
+    check('aligned grid round-trip is idempotent', o === docToTyp(typToDoc(o).doc), firstDiff(o, docToTyp(typToDoc(o).doc)));
+    const off = typToDoc('Intro.\n\n#grid(\n  columns: (1fr, 1fr),\n  grid.cell(colspan: 2)[wide],\n  [a],\n  [b],\n)\n\nAfter.\n');
+    check('a grid.cell with a span is an island', off.doc.child(1).type.name === 'code_block' && off.doc.child(1).attrs.params === 'typst-raw', off.doc.child(1).type.name);
+  }
   // Islands never run: the file keeps the Typst verbatim, the print is a
   // raw block of the same source (Typst on rails).
   const island = schema.nodes.code_block.create({ params: 'typst-raw' }, [schema.text('#grid(columns: 2, [a `x`], [b])')]);

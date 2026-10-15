@@ -88,8 +88,12 @@ Nothing here may move a line break, a block height or a page start.
   so Escape never moves it. Collapsed (< 46 px): one ⋯ tile
   opening the same items as a menu.
 - **Tiles**: table: Rows · Columns · Align (its glyph shows the caret
-  cell's value) · Cell │ Table settings; grid: Rows · Columns · Image │
-  Grid layout. A table in a grid cell owns the pill and adds one Grid tile.
+  cell's value) · Cell │ Table settings; grid: Rows · Columns · Align ·
+  Image │ Grid layout. A table in a grid cell owns the pill and adds one
+  Grid tile. Align is the same panel for both (Across: left / center /
+  right; Down: top / middle / bottom), on a table's selected cells
+  ("Align selected cells …") or a grid's caret cell ("Align this cell
+  …", `grid.cell(align:)` since 2026-10-15).
 - **Names**: `role=toolbar` "Table controls" / "Grid controls"; menu
   items keep the commands' long names ("Add row below", "Merge selected
   cells", …), values ride as `data-value` (`booktabs`, `gray-dark`, `fr`).

@@ -47,7 +47,7 @@
 import MarkdownIt from 'markdown-it';
 import footnotePlugin from 'markdown-it-footnote';
 import { Fragment, type Node as PMNode, type Mark } from 'prosemirror-model';
-import { schema } from './schema';
+import { GRID_ALIGNS, GRID_VALIGNS, gridAlign, gridValign, schema } from './schema';
 import { readMdComment, readMdComments } from './editor-comments-format';
 import { DEFAULT_SETTINGS, normalizeSettings } from './settings';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
@@ -2120,8 +2120,18 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
         }
         const cellMeta = u.meta as DivMeta;
         const ca = cellMeta.attrs;
-        const extra = [...(ca.id ? [`#${ca.id}`] : []), ...ca.classes.filter((c) => c !== 'column').map((c) => `.${c}`), ...ca.kvs.filter(([k]) => k !== 'width').map(([k]) => k)];
+        const extra = [...(ca.id ? [`#${ca.id}`] : []), ...ca.classes.filter((c) => c !== 'column').map((c) => `.${c}`), ...ca.kvs.filter(([k]) => !['width', 'align', 'valign'].includes(k)).map(([k]) => k)];
         if (extra.length) warn(`${extra.join(', ')} on a ::: column has no Plass form — dropped`);
+        // The cell's alignment, as Typst's grid.cell(align:): `align=`
+        // left / center / right, `valign=` top / middle / bottom.
+        const alignment = { align: null as string | null, valign: null as string | null };
+        for (const [key, read] of [['align', gridAlign], ['valign', gridValign]] as const) {
+          const value = ca.kvs.filter(([k]) => k === key).pop()?.[1];
+          if (value === undefined) continue;
+          const known = read(value);
+          if (known) alignment[key] = known;
+          else warn(`column ${key} "${value}" is not ${(key === 'align' ? GRID_ALIGNS : GRID_VALIGNS).join(', ')} — dropped`);
+        }
         const width = ca.kvs.filter(([k]) => k === 'width').pop()?.[1];
         let share: number | null = null;
         if (width !== undefined) {
@@ -2132,7 +2142,7 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
         shares.push(share);
         const inner = parseSeq(j + 1, 'div_close', false);
         if (cellMeta.unclosed && endsOpen(inner.nodes)) taken = true;
-        cells.push(schema.nodes.grid_cell.create(null, inner.nodes.length ? inner.nodes : [paragraph.create()]));
+        cells.push(schema.nodes.grid_cell.create(alignment, inner.nodes.length ? inner.nodes : [paragraph.create()]));
         j = inner.next;
       }
       if (taken) return readAsIsland(mark, TAKEN);

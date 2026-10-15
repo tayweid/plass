@@ -240,6 +240,31 @@ export function gridCaretPlace(state: EditorState): { row: number; rows: number;
   return { row: at.row, rows: at.ctx.node.childCount, column: at.column, columns: (at.ctx.node.attrs.columns as number[]).length };
 }
 
+/** The caret cell's alignment (`align`: left / center / right; `valign`:
+ *  top / middle / bottom), '' where unset, as selectedCellsAttr reads a
+ *  table's; null outside a grid cell. */
+export function gridCellAttr(state: EditorState, name: 'align' | 'valign'): string | null {
+  const at = caretCell(state);
+  if (!at) return null;
+  return String(at.ctx.node.child(at.row).child(at.column).attrs[name] ?? '');
+}
+
+/** Set the caret cell's alignment (Typst's grid.cell(align:)); null is
+ *  Typst's default again. */
+export function setGridCellAttr(name: 'align' | 'valign', value: string | null): Command {
+  return (state, dispatch) => {
+    const at = caretCell(state);
+    if (!at) return false;
+    const cell = at.ctx.node.child(at.row).child(at.column);
+    if ((cell.attrs[name] ?? null) === value) return true;
+    if (dispatch) {
+      const pos = cellPosition(at.ctx.node, at.ctx.pos, at.row, at.column);
+      dispatch(state.tr.setNodeMarkup(pos, undefined, { ...cell.attrs, [name]: value }));
+    }
+    return true;
+  };
+}
+
 /** Replace the grid by its cells' blocks in reading order. */
 export function unwrapGrid(view: EditorView): boolean {
   const ctx = gridContext(view.state);
@@ -406,6 +431,7 @@ export class GridCellView implements NodeView {
     this.dom = document.createElement('div');
     this.dom.className = 'ts-grid-cell';
     this.contentDOM = this.dom;
+    this.paintAlign(node);
     liveCells.add(this);
     observeCell(this, this.dom);
     this.schedule();
@@ -413,9 +439,24 @@ export class GridCellView implements NodeView {
 
   update(node: PMNode): boolean {
     if (node.type !== this.node.type) return false;
+    const moved = node.attrs.valign !== this.node.attrs.valign;
     this.node = node;
+    this.paintAlign(node);
     this.schedule();
+    // A cell placed elsewhere in its row (align-self) keeps its size, so
+    // no observer fires: its wash is placed again here.
+    if (moved) scheduleWashPass(this.dom.closest('.ts-grid'));
     return true;
+  }
+
+  /** The cell's alignment as the data attributes style.css paints (the
+   *  node view stands in for the schema's toDOM). */
+  private paintAlign(node: PMNode): void {
+    for (const [name, value] of [['data-align', node.attrs.align], ['data-valign', node.attrs.valign]] as const) {
+      if (typeof value === 'string' && value) {
+        if (this.dom.getAttribute(name) !== value) this.dom.setAttribute(name, value);
+      } else if (this.dom.hasAttribute(name)) this.dom.removeAttribute(name);
+    }
   }
 
   ignoreMutation(m: ViewMutationRecord): boolean {

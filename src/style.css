@@ -1669,6 +1669,37 @@ body {
   position: relative;
 }
 
+/* grid.cell(align:), painted as a table cell's (schema.ts cellAttributes).
+   Across: the cell's text-align-last places each paragraph's final line;
+   the port-laid lines above it end in <br> and are already justified by
+   their word-spacing decorations, so they do not move, and the live
+   paragraph being edited (no decorations) takes the same shape from CSS.
+   Down: the cell in its row's track. Every cell's box carries the
+   paragraph's frame slack (GridCellView), so centring or bottoming the
+   boxes centres or bottoms Typst's frames. */
+.ProseMirror .ts-grid-cell[data-align='left'] {
+  text-align: left;
+  text-align-last: left;
+}
+
+.ProseMirror .ts-grid-cell[data-align='center'] {
+  text-align: center;
+  text-align-last: center;
+}
+
+.ProseMirror .ts-grid-cell[data-align='right'] {
+  text-align: right;
+  text-align-last: right;
+}
+
+.ProseMirror .ts-grid-cell[data-valign='middle'] {
+  align-self: center;
+}
+
+.ProseMirror .ts-grid-cell[data-valign='bottom'] {
+  align-self: end;
+}
+
 /* Editing chrome on the paper (docs/BLOCK-CHROME.md): paint only. The editor
    owns focus, so its selection decorations identify the grid being edited
    (ts-grid-editing, ts-grid-cell-active, data-grid-empty, ts-grid-joined).

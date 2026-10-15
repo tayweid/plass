@@ -318,3 +318,103 @@ test('cells align at their Typst frames, rows break between pages, and Typst agr
   expect(report!.summary.mismatch).toBe(0);
   expect(report!.summary.typstFail, JSON.stringify(report!.blocks.filter((b) => b.status === 'typst-fail'))).toBe(0);
 });
+
+test('cell alignment: the pill\'s Align panel sets across and down, painted as Typst places them, kept in both files', async ({ page }) => {
+  await openTyp(
+    page,
+    HEAD('paper: "us-letter", margin: 1.25in') +
+      `#grid(\n  columns: (1fr, 1fr),\n  gutter: 1em,\n  [\n    ${FILLER.repeat(2).trimEnd()}\n  ],\n  [\n    Short.\n  ],\n)`,
+  );
+  const cells = page.locator('.ProseMirror .ts-grid-cell');
+  await expect(cells).toHaveCount(2);
+  const lines = (index: number) =>
+    cells.nth(index).locator('p').evaluate((p) => {
+      const range = document.createRange();
+      range.selectNodeContents(p);
+      const rect = p.getBoundingClientRect();
+      const cell = p.parentElement!.getBoundingClientRect();
+      const row = p.parentElement!.parentElement!.getBoundingClientRect();
+      return {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        cell: { top: cell.top, bottom: cell.bottom, left: cell.left, right: cell.right },
+        row: { top: row.top, bottom: row.bottom },
+        // Visual lines: a port-laid paragraph is split into word-spacing
+        // spans, each with rects of its own, merged here by their top.
+        lines: [...range.getClientRects()]
+          .filter((r) => r.width > 0 && r.height > 0)
+          .sort((a, b) => a.top - b.top || a.left - b.left)
+          .reduce<Array<{ top: number; left: number; right: number }>>((acc, r) => {
+            const last = acc.at(-1);
+            if (last && Math.abs(last.top - r.top) < 2) {
+              last.left = Math.min(last.left, r.left);
+              last.right = Math.max(last.right, r.right);
+            } else acc.push({ top: r.top, left: r.left, right: r.right });
+            return acc;
+          }, []),
+      };
+    });
+
+  // The short cell: centred across (its one line) and down (its box in the row).
+  await cells.nth(1).locator('p').click();
+  await tile(page, 'align').click();
+  const panel = page.getByRole('dialog', { name: /^Align/ });
+  await expect(panel).toBeVisible();
+  await panel.getByRole('radio', { name: 'Align this cell center', exact: true }).click();
+  await expect(cells.nth(1)).toHaveAttribute('data-align', 'center');
+  await expect(panel.getByRole('radio', { name: 'Align this cell center', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await panel.getByRole('radio', { name: 'Align this cell middle', exact: true }).click();
+  await expect(cells.nth(1)).toHaveAttribute('data-valign', 'middle');
+  await expect(tile(page, 'align')).toHaveAttribute('aria-label', 'Align · Center');
+  await page.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
+  const short = await lines(1);
+  const long = await lines(0);
+  expect(short.lines).toHaveLength(1);
+  expect(Math.abs(short.lines[0].left + short.lines[0].right - short.cell.left - short.cell.right) / 2, JSON.stringify(short)).toBeLessThan(0.5);
+  // Typst's horizon centres the cell's frame in the row's: the two cells'
+  // paragraph boxes (each the frame plus the same slack) share a centre.
+  // The cell's own box does not: it carries the normalizing margin.
+  expect(Math.abs(short.top + short.bottom - long.top - long.bottom) / 2, JSON.stringify({ short, long })).toBeLessThan(0.5);
+  expect(short.bottom - short.top, 'the short cell is shorter than its row').toBeLessThan(short.row.bottom - short.row.top - 10);
+
+  // The long cell, right: the wrapped lines keep their justified width
+  // (the port's breaks) and the last line alone is set right.
+  const before = await lines(0);
+  expect(before.lines.length).toBeGreaterThan(2);
+  await cells.nth(0).locator('p').click();
+  await tile(page, 'align').click();
+  await panel.getByRole('radio', { name: 'Align this cell right', exact: true }).click();
+  await expect(cells.nth(0)).toHaveAttribute('data-align', 'right');
+  await page.keyboard.press('Escape');
+  const after = await lines(0);
+  expect(after.lines.length).toBe(before.lines.length);
+  // The justified lines keep their breaks and widths. Their painted width
+  // is a hair under the measure (Chrome's glyph advances against the
+  // port's, bounded by src/environment-check.ts), and text-align-last
+  // moves that hair from the right edge to the left: a shift of a pixel
+  // or so, never a change of width.
+  for (let i = 0; i + 1 < after.lines.length; i++) {
+    const width = (line: { left: number; right: number }) => line.right - line.left;
+    expect(Math.abs(width(after.lines[i]) - width(before.lines[i])), `line ${i}: ${JSON.stringify({ before, after })}`).toBeLessThan(0.5);
+    expect(Math.abs(after.lines[i].left - before.lines[i].left), `line ${i}: ${JSON.stringify({ before, after })}`).toBeLessThan(2.5);
+  }
+  const lastBefore = before.lines.at(-1)!;
+  const lastAfter = after.lines.at(-1)!;
+  expect(Math.abs(lastAfter.right - after.right), JSON.stringify({ before, after })).toBeLessThan(0.5);
+  expect(lastAfter.left - lastBefore.left, 'the last line moved right').toBeGreaterThan(10);
+  expect(Math.abs(lastAfter.right - lastAfter.left - (lastBefore.right - lastBefore.left)), 'the last line kept its width').toBeLessThan(0.5);
+
+  // Both files carry it.
+  const { typ, md } = await page.evaluate(async () => {
+    const { docToTyp } = await import('/src/typ-serializer.ts');
+    const { docToMd } = await import('/src/md-serializer.ts');
+    return { typ: docToTyp(window.view.state.doc), md: docToMd(window.view.state.doc) };
+  });
+  expect(typ).toContain('  grid.cell(align: right)[\n    The Knuth');
+  expect(typ).toContain('  grid.cell(align: center + horizon)[\n    Short.\n  ],');
+  expect(md).toContain('::: {.column align=right}');
+  expect(md).toContain('::: {.column align=center valign=middle}');
+});

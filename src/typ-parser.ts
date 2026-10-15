@@ -1058,7 +1058,7 @@ export function parseGridCall(src: string, warnings: string[] = []): PMNode | nu
   const args = splitTopArgs(s.slice(open + 1, close)).map((a) => a.trim()).filter(Boolean);
   let columns: number[] | null = null;
   let gutter: number | null = null;
-  const cells: string[] = [];
+  const cells: Array<{ body: string } & CellAlignment> = [];
   const em = (v: string): number | null => {
     const m = /^([\d.]+)em$/.exec(v.trim());
     return m ? Number(m[1]) : null;
@@ -1090,16 +1090,27 @@ export function parseGridCall(src: string, warnings: string[] = []): PMNode | nu
       } else return null;
       continue;
     }
-    if (!(arg.startsWith('[') && arg.endsWith(']') && matchBracket(arg, 0) === arg.length - 1)) return null;
-    cells.push(arg.slice(1, -1));
+    // A cell: `[body]`, or `grid.cell(align: …)[body]`, the rail's one
+    // cell argument (a span, a fill, an inset: off the rail, an island).
+    let body = arg;
+    let alignment: CellAlignment = { align: null, valign: null };
+    const aligned = /^grid\.cell\(\s*align\s*:\s*([^()]*?)\s*\)\s*(\[[\s\S]*\])$/.exec(arg);
+    if (aligned) {
+      const parsed = parseCellAlignment(aligned[1]);
+      if (!parsed) return null;
+      alignment = parsed;
+      body = aligned[2];
+    }
+    if (!(body.startsWith('[') && body.endsWith(']') && matchBracket(body, 0) === body.length - 1)) return null;
+    cells.push({ body: body.slice(1, -1), ...alignment });
   }
   if (!columns || !cells.length) return null;
-  const cellNodes = cells.map((body) => {
+  const cellNodes = cells.map(({ body, align, valign }) => {
     const raw = body.replace(/^\n/, '').replace(/\s+$/, '').split('\n');
     const indent = Math.min(...raw.filter((l) => l.trim()).map((l) => /^ */.exec(l)![0].length), Infinity);
     const dedented = raw.map((l) => (l.trim() ? l.slice(indent === Infinity ? 0 : indent) : ''));
     const blocks = dedented.some((l) => l.trim()) ? parseBlocks(dedented, warnings) : [];
-    return schema.nodes.grid_cell.create(null, blocks.length ? blocks : [schema.nodes.paragraph.create()]);
+    return schema.nodes.grid_cell.create({ align, valign }, blocks.length ? blocks : [schema.nodes.paragraph.create()]);
   });
   const width = columns.length;
   while (cellNodes.length % width) cellNodes.push(schema.nodes.grid_cell.create(null, [schema.nodes.paragraph.create()]));
