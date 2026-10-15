@@ -201,7 +201,10 @@ test('in the plain-text view, a press on the sheet outside the text writes', asy
   const editor = await box(page, '.cm-editor');
   const paper = await box(page, '#paper');
   const line = await box(page, '.cm-line');
-  expect(editor.y).toBeLessThan(content.y - 40);
+  // The editor's top inset (style.css: 22 px since the plain view took a
+  // code editor's small margins, 2026-10-15): air above the text to press.
+  const inset = content.y - editor.y;
+  expect(inset).toBeGreaterThan(12);
   expect(paper.bottom).toBeGreaterThan(editor.bottom + 40);
   const middle = line.y + line.height / 2;
 
@@ -217,7 +220,7 @@ test('in the plain-text view, a press on the sheet outside the text writes', asy
   const lineEnd = (text: string) => text.indexOf('\n') < 0 ? text.length : text.indexOf('\n');
   await press('the left margin beside the line', editor.x + 20, middle, () => 0, '>');
   await press('the right margin beside the line', editor.right - 20, middle, lineEnd, '<');
-  await press('the top margin, over the line\'s start', content.x + 2, editor.y + 20, () => 0, '^');
+  await press('the top margin, over the line\'s start', content.x + 2, editor.y + inset / 2, () => 0, '^');
   await press('the editor\'s padding below the text', content.x + 60, editor.bottom - 20, (t) => t.length, '!');
   await press('the sheet below the editor', content.x + 60, (editor.bottom + paper.bottom) / 2, (t) => t.length, '?');
   await expect.poll(() => sourceText(page)).toMatch(/^\^>Hello<\n*!\?$/);

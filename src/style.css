@@ -1100,7 +1100,11 @@ body {
   font: 14px/1.65 var(--mono);
   /* A shade under the page's ink: mono on white at full ink reads hard. */
   color: color-mix(in srgb, var(--ink) 90%, var(--sheet));
-  padding: 22px 0 45vh;
+  /* The insets are the editor's, outside the editable text: a press in
+     them is the sheet's (source-view.ts pressAt puts the caret at the
+     line's start or end), and a right-click there is nothing, where
+     inside the editable Chromium would select the nearest word. */
+  padding: 22px 28px 45vh 30px;
 }
 
 #source .cm-editor.cm-focused {
@@ -1118,7 +1122,7 @@ body {
   /* A code editor's wrap column, anchored left: never a centred measure. */
   max-width: 104ch;
   margin: 0;
-  padding: 0 28px 0 30px;
+  padding: 0;
   caret-color: var(--ink);
 }
 

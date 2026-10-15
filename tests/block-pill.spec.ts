@@ -154,7 +154,8 @@ test.describe('the block pill', () => {
     // A grid spans the text column: the pill sits in the margin.
     await caretIn(page, { grid: 0, cell: 1 });
     await expect(page.getByRole('toolbar', { name: 'Grid controls' })).toBeVisible();
-    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(4);
+    // Rows · Columns · Align · Image │ Grid layout (docs/BLOCK-CHROME.md).
+    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(5);
     await expect(pill(page)).not.toHaveClass(/is-hug/);
     // Out of the block: gone.
     await page.evaluate(() => {
