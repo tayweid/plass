@@ -60,9 +60,6 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      lays the paragraph spacing out in 1/64 px units, and the paginator
      reads paragraph tops from the DOM, so it inherits the drift (about
      0.2 px over a page of short paragraphs).
-   - The audit fixture math.md disagrees by one line at page 5's start
-     (the page holds one line fewer than Typst). Not footnotes and not
-     painted line growth: its lines pitch exactly. Undiagnosed.
    - Page bottoms within a few tenths of a pixel of a line, after the body
      pitch fix: a sweep of the nine heading pairs over top margins
      1.00–1.26 in (2026-10-16) has 3 of 243 cases off by a line. H1+H3 at

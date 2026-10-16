@@ -44,7 +44,7 @@ import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdic
 import { atPaperSize, fitPaper, paperPass, paperScale, type PaperCaret } from './paper-scale';
 import { caretBox } from './caret-box';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
-import { escapeTyp, expandMacrosWith, headingRunPadTopEm, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
+import { escapeTyp, expandMacrosWith, headingRunPadTopEm, headingScale, MATH_DISPLAY_PAD_EM, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
 import {
   containerPageTopDropEm,
   footnoteEmptyFrameAction,
@@ -1981,12 +1981,20 @@ class TypesetView {
     // like a paragraph.
     if (node.type.name === 'grid' || node.type.name === 'grid_row') return pageTopAdjustEm(s, 'paragraph') * F;
     if (node.type.name === 'code_block') return pageTopAdjustEm(s, 'code') * F;
+    // A display equation lands its frame, not its padding, at the margin.
+    if (node.type.name === 'math_display') return -MATH_DISPLAY_PAD_EM * F;
     if (node.type.name === 'table') return -tableMarginsEm(s).top * F;
     const dropEm = containerPageTopDropEm(node.type.name, (node.attrs.kind as string | null) ?? null);
     let first: PMNode | null = node;
     while (first && !first.isTextblock && !first.isAtom && first.type.name !== 'table' && first.firstChild) first = first.firstChild;
     const innerKind = first && first !== node ? this.unitKindOf(first) : null;
-    const inner = innerKind ? pageTopAdjustEm(s, innerKind) * F : first?.type.name === 'code_block' && first !== node ? pageTopAdjustEm(s, 'code') * F : 0;
+    const inner = innerKind
+      ? pageTopAdjustEm(s, innerKind) * F
+      : first?.type.name === 'code_block' && first !== node
+        ? pageTopAdjustEm(s, 'code') * F
+        : first?.type.name === 'math_display' && first !== node
+          ? -MATH_DISPLAY_PAD_EM * F
+          : 0;
     return -dropEm * F + inner;
   }
 
@@ -3222,6 +3230,8 @@ class TypesetView {
       // A grid row's cells end one paragraph inset below their frames.
       if (n.type.name === 'grid_row' || n.type.name === 'paragraph') return pageBottomInsetEm(s, 'paragraph') * F;
       if (n.type.name === 'code_block') return pageBottomInsetEm(s, 'code') * F;
+      // A display equation's frame ends its padding above the box bottom.
+      if (n.type.name === 'math_display') return MATH_DISPLAY_PAD_EM * F;
       if (n.type.name === 'heading') {
         const lv = Math.min(3, (n.attrs.level as number) || 1);
         return pageBottomInsetEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;

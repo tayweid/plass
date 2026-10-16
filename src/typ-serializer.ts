@@ -268,8 +268,8 @@ export const RUNNING_SECTION_TYP =
 /** A leaf block's Typst frame inside its painted box, body em: `above` is
  *  the slack from the box top down to the frame top, `below` the inset from
  *  the frame bottom down to the box bottom. Text kinds carry the
- *  calibrated line-box slack; the kinds with no calibration (figure, table,
- *  display math, raw islands…) have frame = box. Grid cells (grid-editor.ts)
+ *  calibrated line-box slack, display math its padding; the kinds with no
+ *  calibration (figure, table, raw islands…) have frame = box. Grid cells (grid-editor.ts)
  *  normalize every cell to the paragraph's values with these. */
 export function blockFrameSlackEm(node: PMNode, s: DocSettings): { above: number; below: number } {
   const name = node.type.name;
@@ -281,6 +281,7 @@ export function blockFrameSlackEm(node: PMNode, s: DocSettings): { above: number
         : name === 'code_block'
           ? 'code'
           : null;
+  if (name === 'math_display') return { above: MATH_DISPLAY_PAD_EM, below: MATH_DISPLAY_PAD_EM };
   if (!kind) return { above: 0, below: 0 };
   return { above: -pageTopAdjustEm(s, kind), below: pageBottomInsetEm(s, kind) };
 }
