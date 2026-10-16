@@ -132,7 +132,9 @@ test('a press below a document ending in an equation puts a caret in the text, n
     const math = state.schema.nodes.math_display.create({ src: 'x^2' });
     window.view.dispatch(state.tr.insert(state.doc.content.size, math));
   });
-  await expect(page.locator('.ProseMirror > *').last()).toBeVisible();
+  // The layout's text-measure probe is a hidden `.ProseMirror` after the
+  // editor, holding a <p> whenever a pass measured with it: not the page.
+  await expect(page.locator('.ProseMirror:not(.ts-measure-probe) > *').last()).toBeVisible();
   const last = await box(page, '.ProseMirror > *', 1);
   await pressAndType(page, last.x + 40, last.bottom + 120, '!');
   await expect.poll(() => page.evaluate(() => {

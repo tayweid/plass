@@ -1308,7 +1308,10 @@ body {
 }
 
 /* Blocks use bottom margins only (top spacing via padding) so margins never
-   collapse: page-gap spacers then insert exactly their own height. */
+   collapse: page-gap spacers then insert exactly their own height. A
+   heading's padding and margin are these em values snapped to layout units
+   by the plugin (--hN-pad, --hN-mb), so its box ends where the print's
+   frame model puts it, not up to 3/64 px short (publishGeometryVars). */
 .ProseMirror h1,
 .ProseMirror h2,
 .ProseMirror h3,
@@ -1323,7 +1326,8 @@ body {
 
 .ProseMirror h1 {
   font-size: 1.9em;
-  padding-top: 0.2em;
+  padding-top: var(--h1-pad, 0.2em);
+  margin-bottom: var(--h1-mb, 0.5em);
 }
 
 /* Section numbers, painted by the numbering plugin. */
@@ -1340,6 +1344,8 @@ body {
 
 .ProseMirror h2 {
   font-size: 1.4em;
+  padding-top: var(--h2-pad, 1.4em);
+  margin-bottom: var(--h2-mb, 0.5em);
 }
 
 /* A heading right after a heading (an editorial comment between them
@@ -1393,6 +1399,8 @@ body {
 .ProseMirror h5,
 .ProseMirror h6 {
   font-size: 1.15em;
+  padding-top: var(--h3-pad, 1.4em);
+  margin-bottom: var(--h3-mb, 0.5em);
 }
 
 .ProseMirror blockquote {

@@ -133,15 +133,17 @@ for (const bold of [false, true]) {
 // breaks where Typst does. At a top margin of 1.0266 in the 35th line fits
 // with 0.06 px to spare and stays on page 1; the old leading put it 0.06
 // px past the margin in print, and Typst moved it. At 1.029 in it runs
-// 0.17 px past and starts page 2 on both sides. (A line past the margin
-// by less than the paginator's 0.1 px fit tolerance still stays on the
-// page: FIT_TOLERANCE_PX in typeset-plugin.ts.)
+// 0.17 px past and starts page 2 on both sides. At 1.0278 in it runs 0.05
+// px past: the page kept it while the paginator's fit tolerance
+// (FIT_TOLERANCE_PX in typeset-plugin.ts) was 0.1 px; it is one layout
+// unit, 1/64 px, since the page's geometry is exact to that.
 //
 // With a bold word on every line, at 1.0195 in the 35th line fits with
 // 0.74 px to spare, and Typst keeps it too; with bold's taller frame it
 // printed 0.94 px past the margin, and Typst moved it.
 for (const { marginTop, startsPage2, bold } of [
   { marginTop: 1.029, startsPage2: 34, bold: false },
+  { marginTop: 1.0278, startsPage2: 34, bold: false },
   { marginTop: 1.0266, startsPage2: 35, bold: false },
   { marginTop: 1.0195, startsPage2: 35, bold: true },
   { marginTop: 1.029, startsPage2: 34, bold: true },

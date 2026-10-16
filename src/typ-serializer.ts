@@ -73,8 +73,12 @@ function islandBlock(text: string, indent: string): string {
 // reproduce the editor's baseline geometry exactly (calibrated empirically;
 // see README "Fidelity").
 //   cssA/cssD: Chrome's ascent/descent for the font (line-box placement)
-//   typAsc/typDesc: Typst's first/last-baseline offsets from block edges
+//   typAsc: a paragraph's Typst frame top above the editor's baseline
 //   extent: Typst's baseline pitch at leading 0 — the body face's cap height
+//   boldExtent: the same for a heading line — the bold face's cap height
+// Every spacing the export emits is the editor's gap between two Typst
+// frames, each frame placed in its editor box by pageTopAdjustEm (top) and
+// pageBottomInsetEm (bottom): one model for the page and the print.
 /**
  * First-baseline offset difference (Typst − editor CSS) in body em for a
  * unit type standing at a page top: Typst suppresses leading block spacing
@@ -94,11 +98,7 @@ export function pageTopAdjustEm(s: DocSettings, unit: 'paragraph' | 'line' | 'h1
     const slackAbove = c.lineEm / 2 + (RAW_FONT.scale * (RAW_FONT.cssA - RAW_FONT.cssD)) / 2;
     return RAW_FONT.scale * RAW_FONT.topEdge - (c.padTopEm + slackAbove);
   }
-  const h = HEADINGS[unit === 'h1' ? 0 : unit === 'h2' ? 1 : 2];
-  const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
-  // `shift`: Typst's heading frame sits that much lower than the metric
-  // model predicts (headingBlockSpacingEm's calibration), at a page top too.
-  return m.typAsc * h.hs - (h.padTop * h.hs + hSlackAbove) + h.shift;
+  return -headingFrameEm(s, unit === 'h1' ? 1 : unit === 'h2' ? 2 : 3).top;
 }
 
 /**
@@ -128,9 +128,27 @@ export function pageBottomInsetEm(s: DocSettings, unit: 'paragraph' | 'line' | '
     const slackAbove = c.lineEm / 2 + (RAW_FONT.scale * (RAW_FONT.cssA - RAW_FONT.cssD)) / 2;
     return c.lineEm - slackAbove;
   }
-  const h = HEADINGS[unit === 'h1' ? 0 : unit === 'h2' ? 1 : 2];
-  const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
-  return 1.25 * h.hs - hSlackAbove - (m.extent - m.typAsc) * h.hs - h.shift;
+  return headingFrameEm(s, unit === 'h1' ? 1 : unit === 'h2' ? 2 : 3).bottom;
+}
+
+/**
+ * A heading's Typst frame inside its editor box, body em: `top` from the
+ * box top (its padding-top `padTop`, the plain one by default) down to the
+ * frame top, `bottom` from the frame bottom down to the box bottom. Typst's
+ * heading line runs from the bold face's cap height to the baseline (its
+ * text's top and bottom edges), so a one-line frame is boldExtent · hs
+ * tall, and the heading leading (parityRules) pitches further lines at the
+ * editor's 1.25 · hs: `bottom` holds for any number of lines. Typst's
+ * baseline sits `rise` above the editor line box's (HEADINGS).
+ */
+function headingFrameEm(s: DocSettings, level: number, padTop?: number): { top: number; bottom: number } {
+  const m = parityMetrics(s.font);
+  const h = HEADINGS[Math.min(3, Math.max(1, level)) - 1];
+  const slackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
+  return {
+    top: (padTop ?? h.padTop * h.hs) + slackAbove - h.rise - m.boldExtent * h.hs,
+    bottom: 1.25 * h.hs - slackAbove + h.rise,
+  };
 }
 
 /**
@@ -152,10 +170,22 @@ export function headingScale(level: number): number {
   return HEADINGS[Math.min(3, Math.max(1, level)) - 1].hs;
 }
 
+/** A heading level's editor box, body em (style.css): its plain
+ *  padding-top, its line (1.25 × the heading's size) and its margin-bottom. */
+export function headingBoxEm(level: number): { padTop: number; line: number; marginBottom: number } {
+  const h = HEADINGS[Math.min(3, Math.max(1, level)) - 1];
+  return { padTop: h.padTop * h.hs, line: 1.25 * h.hs, marginBottom: h.marginBottom * h.hs };
+}
+
 // Heading scale mirrored from the editor CSS (.ProseMirror h1/h2/h3).
-// `shift` is a measured per-level baseline correction (em of body size):
-// Typst places heading baselines slightly lower than the metric model
-// predicts; calibrated against the live editor (NCM defaults).
+// `rise` (body em) is how far Typst's heading baseline sits above the
+// editor line box's metric baseline, which places the print's heading
+// inside the gap the page gives it: its spacing below is the page's gap
+// less this. Calibrated in July against the live editor (NCM defaults; it
+// was stated as `shift` with a descent of 0.0123 em, rise = shift −
+// 0.0123 hs). It moves no frame against another: the page and the print
+// share every gap. The page paints its heading ink about this much lower
+// than the print does.
 /** The solution block's colour — a verified preset, not a free parameter
  * (`style.css`'s `--solution-red` paints the same value in the editor).
  * The block is `#block(width: 100%, stroke: (left: 2pt + red), inset:
@@ -164,10 +194,10 @@ export function headingScale(level: number): number {
  * vertical box equals a plain paragraph run and needs no calibration. */
 const SOLUTION_COLOR = 'rgb("#c00000")';
 
-const HEADINGS: Array<{ level: number; hs: number; padTop: number; marginBottom: number; shift: number }> = [
-  { level: 1, hs: 1.9, padTop: 0.2, marginBottom: 0.5, shift: 0.1932 },
-  { level: 2, hs: 1.4, padTop: 1.4, marginBottom: 0.5, shift: 0.1269 },
-  { level: 3, hs: 1.15, padTop: 1.4, marginBottom: 0.5, shift: 0.1833 },
+const HEADINGS: Array<{ level: number; hs: number; padTop: number; marginBottom: number; rise: number }> = [
+  { level: 1, hs: 1.9, padTop: 0.2, marginBottom: 0.5, rise: 0.1698 },
+  { level: 2, hs: 1.4, padTop: 1.4, marginBottom: 0.5, rise: 0.1097 },
+  { level: 3, hs: 1.15, padTop: 1.4, marginBottom: 0.5, rise: 0.1692 },
 ];
 
 /**
@@ -202,53 +232,48 @@ export function parSpacingEm(s: DocSettings): number {
  * `parityRules` below, which calls this per level so the emitted text and
  * this value can never drift apart). Exported for `flow-rules.ts`'s
  * region-top spacing-drop rule.
+ *
+ * Each is the page's gap between the heading's frame and a paragraph's:
+ * above, from the paragraph's frame bottom over its inset and 0.9em margin
+ * to the heading's frame top; below, from the heading's frame bottom over
+ * its inset and margin to the paragraph's frame top. Explicit spacing beats
+ * the paragraph's Auto spacing (weakness 3 against 4, distribute.rs
+ * `keep_spacing`) whichever is larger, so Typst's gap is exactly this.
  */
 export function headingBlockSpacingEm(s: DocSettings, level: number): { above: number; below: number } {
-  const m = parityMetrics(s.font);
-  const lh = s.lineHeight;
-  const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
-  const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
-  const h = HEADINGS[Math.min(3, level) - 1];
-  const hSlackAbove = (h.hs * (1.25 + m.cssA - m.cssD)) / 2;
-  const hSlackBelow = (h.hs * (1.25 + m.cssD - m.cssA)) / 2;
-  const above = pSlackBelow + 0.9 + h.padTop * h.hs + hSlackAbove - (m.typDesc + m.typAsc * h.hs) - h.shift;
-  const below = hSlackBelow + h.marginBottom * h.hs + pSlackAbove - (m.typDesc * h.hs + m.typAsc) + h.shift;
+  const h = HEADINGS[Math.min(3, Math.max(1, level)) - 1];
+  const frame = headingFrameEm(s, level);
+  const above = pageBottomInsetEm(s, 'paragraph') + 0.9 + frame.top;
+  const below = frame.bottom + h.marginBottom * h.hs - pageTopAdjustEm(s, 'paragraph');
   return { above, below };
 }
 
 /**
  * A heading's padding-top (body em) when the block printed before it is a
- * heading of level `prev`: a run, as in "= Part" then "== Section". Both
- * spacings were calibrated beside a paragraph, so `prev`'s `below` and this
- * level's `above` each include a paragraph's side of the gap (`parPart`
- * between them: its line box around the frame and its 0.9em margin). The
- * editor's boxes give the run `below + above − parPart`, the leading
- * heading's margin-bottom plus this one's padding-top. Typst collapses the
- * two spacings — both weakness 3 (flow/collect.rs `block`) — to the larger
- * (distribute.rs `keep_spacing`), so this padding gives back
- * `min(above, below) − parPart`.
+ * heading of level `prev`: a run, as in "= Part" then "== Section". Typst
+ * collapses `prev`'s spacing below and this level's above — both weakness 3
+ * (flow/collect.rs `block`) — to the larger (distribute.rs `keep_spacing`);
+ * the editor's boxes already carry part of that gap around it, `prev`'s
+ * inset below its frame and its margin-bottom, and this heading's line-box
+ * slack above its frame. The padding is the rest (negative below a line
+ * height of about 1.3: the plugin publishes that part as a margin-top).
  */
 export function headingRunPadTopEm(s: DocSettings, prev: number, level: number): number {
-  const m = parityMetrics(s.font);
-  const h = HEADINGS[Math.min(3, level) - 1];
-  const below = headingBlockSpacingEm(s, prev).below;
-  const above = headingBlockSpacingEm(s, level).above;
-  const parPart = s.lineHeight + 0.9 - (m.typAsc + m.typDesc);
-  return h.padTop * h.hs - (Math.min(above, below) - parPart);
+  const p = HEADINGS[Math.min(3, Math.max(1, prev)) - 1];
+  const gap = Math.max(headingBlockSpacingEm(s, prev).below, headingBlockSpacingEm(s, level).above);
+  return gap - (headingFrameEm(s, prev).bottom + p.marginBottom * p.hs) - headingFrameEm(s, level, 0).top;
 }
 
 /**
  * Explicit `#set block(above/below: ...)` (body em) the display-math show
  * rule emits — weakness-3 explicit block spacing, same status as headings'.
- * Exported for `flow-rules.ts`'s region-top spacing-drop rule.
+ * Exported for `flow-rules.ts`'s region-top spacing-drop rule. The
+ * equation's frame is its ink, inside the editor's 0.5em padding; the rest
+ * of each gap is a paragraph's frame inset and its 0.9em margin.
  */
 export function equationBlockSpacingEm(s: DocSettings): { above: number; below: number } {
-  const m = parityMetrics(s.font);
-  const lh = s.lineHeight;
-  const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
-  const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
-  const above = pSlackBelow + 0.9 + DISPLAY_MATH_PAD_EM - m.typDesc;
-  const below = DISPLAY_MATH_PAD_EM + 0.9 + pSlackAbove - m.typAsc;
+  const above = pageBottomInsetEm(s, 'paragraph') + 0.9 + DISPLAY_MATH_PAD_EM;
+  const below = DISPLAY_MATH_PAD_EM + 0.9 - pageTopAdjustEm(s, 'paragraph');
   return { above, below };
 }
 
@@ -319,7 +344,7 @@ export function parityRules(s: DocSettings): string {
     const { above, below } = headingBlockSpacingEm(s, level);
     out += `#show heading.where(level: ${level}): set text(size: ${pt(h.hs)})\n`;
     out += `#show heading.where(level: ${level}): set block(above: ${pt(above)}, below: ${pt(below)})\n`;
-    out += `#show heading.where(level: ${level}): set par(leading: ${pt((1.25 - m.extent) * h.hs)})\n`;
+    out += `#show heading.where(level: ${level}): set par(leading: ${pt((1.25 - m.boldExtent) * h.hs)})\n`;
   }
   // Inline raw: pin Typst's defaults so editor code spans (same font file,
   // same ratio) have identical advance widths.

@@ -228,7 +228,14 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   The paginator fits Typst FRAMES, not browser boxes: a frame runs from
   the cap top (`pageTopAdjustEm` below the box top) to the last baseline
   (`pageBottomInsetEm` above the box bottom), footnote entries included
-  (`footnoteFrameInsetsEm`); fit tolerance is 0.1 px. Block spacing that
+  (`footnoteFrameInsetsEm`); fit tolerance is 1/64 px, one layout unit
+  (`FIT_TOLERANCE_PX`). A heading's frame is its line from the BOLD cap
+  height (`boldExtent`, 0.686) to its baseline (`headingFrameEm`), and
+  every spacing the export emits is the page's gap between two frames, so
+  page and print share it by construction. Chrome truncates each em
+  length to 1/64 px: a heading's padding and margin are published snapped
+  to the exact model (`--hN-pad`/`--hN-mb`, `publishGeometryVars`), its
+  line box measured. Block spacing that
   Typst drops at a page top must live in the PREVIOUS block's margin-bottom
   or be dropped by `blockTopAdjustPx` (tables: `tableMarginsEm`; a list or
   quote at a page top lands by its first text block's cap top). A heading

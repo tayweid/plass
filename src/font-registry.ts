@@ -15,13 +15,15 @@ export interface ParityMetrics {
   cssA: number;
   cssD: number;
   typAsc: number;
-  typDesc: number;
   /** A body line's Typst frame, em: the regular face's cap height (OS/2
    *  `sCapHeight` / upem). Typst's text runs from `top-edge: "cap-height"`
    *  to `bottom-edge: "baseline"`, so a line is this tall and lines are
    *  pitched at leading + this; the exported leading is `lineHeight −
    *  extent`, which makes the pitch the editor's line height exactly. */
   extent: number;
+  /** A heading line's Typst frame, em of the heading's size: the bold
+   *  face's cap height (headings print bold). */
+  boldExtent: number;
   /** Ink above the Typst frame's top (the cap height: ascenders, accents,
    *  parentheses), body em. Paint only: the grid cell washes enclose it. */
   inkAboveCapEm?: number;
@@ -91,8 +93,9 @@ export const DEFAULT_FONT: FontDefinition = {
   // reads it from the file). It was a measured 0.6828 until 2026-10-16,
   // which made the exported leading 0.0025 pt long at 12.5 pt: Typst
   // pitched lines at 25.0033 px against the editor's 25, and a page's 35th
-  // line printed 0.12 px below where the page showed it.
-  parity: { cssA: 1.127, cssD: 0.29, typAsc: 0.6723, typDesc: 0.0123, extent: 0.683, inkAboveCapEm: 0.08, inkBelowBaselineEm: 0.25 },
+  // line printed 0.12 px below where the page showed it. `boldExtent` is
+  // the bold face's, 686/1000: a heading line's frame.
+  parity: { cssA: 1.127, cssD: 0.29, typAsc: 0.6723, extent: 0.683, boldExtent: 0.686, inkAboveCapEm: 0.08, inkBelowBaselineEm: 0.25 },
   exact: true,
   selectable: true,
   compilerFallback: true,
@@ -118,7 +121,7 @@ const STIX_TWO_TEXT: FontDefinition = {
   ),
   portKeys: keys('stix-two-text'),
   // Kept as calibration history, not a certification claim.
-  parity: { cssA: 0.762, cssD: 0.238, typAsc: 0.657, typDesc: -0.0001, extent: 0.657 },
+  parity: { cssA: 0.762, cssD: 0.238, typAsc: 0.657, extent: 0.657, boldExtent: 0.657 },
   exact: false,
   selectable: false,
   compilerFallback: true,
@@ -144,7 +147,7 @@ const LIBERTINUS_SERIF: FontDefinition = {
   ),
   portKeys: keys('libertinus-serif'),
   // Kept as calibration history, not a certification claim.
-  parity: { cssA: 0.9, cssD: 0.25, typAsc: 0.6547, typDesc: -0.0053, extent: 0.6582 },
+  parity: { cssA: 0.9, cssD: 0.25, typAsc: 0.6547, extent: 0.6582, boldExtent: 0.645 },
   exact: false,
   selectable: false,
   compilerFallback: true,

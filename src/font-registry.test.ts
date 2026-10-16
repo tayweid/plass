@@ -81,6 +81,9 @@ function capHeightEm(bytes: Buffer): number {
 for (const font of selectableFonts()) {
   const cap = capHeightEm(readFileSync(root(`public/fonts/${font.compilerFiles.regular}`)));
   check(`${font.label}: extent is the regular face's cap height (${cap})`, font.parity?.extent === cap);
+  // A heading prints bold: its line frame is the bold face's cap height.
+  const boldCap = capHeightEm(readFileSync(root(`public/fonts/${font.compilerFiles.bold}`)));
+  check(`${font.label}: boldExtent is the bold face's cap height (${boldCap})`, font.parity?.boldExtent === boldCap);
   for (const sizePt of [10, 11, 12, 12.5]) {
     for (const lineHeight of [1.2, 1.5, 2]) {
       const s = { ...DEFAULT_SETTINGS, font: font.label, sizePt, lineHeight };
