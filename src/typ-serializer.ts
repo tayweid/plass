@@ -74,7 +74,7 @@ function islandBlock(text: string, indent: string): string {
 // see README "Fidelity").
 //   cssA/cssD: Chrome's ascent/descent for the font (line-box placement)
 //   typAsc/typDesc: Typst's first/last-baseline offsets from block edges
-//   extent: Typst's baseline pitch at leading 0
+//   extent: Typst's baseline pitch at leading 0 — the body face's cap height
 /**
  * First-baseline offset difference (Typst − editor CSS) in body em for a
  * unit type standing at a page top: Typst suppresses leading block spacing
@@ -283,11 +283,19 @@ export function blockFrameSlackEm(node: PMNode, s: DocSettings): { above: number
   return { above: -pageTopAdjustEm(s, kind), below: pageBottomInsetEm(s, kind) };
 }
 
+/** A parity length in body em, printed in pt. Four places: Typst pitches
+ *  every line by the leading, so a rounding error is paid once per line,
+ *  and at 12.5 pt the body leading is 10.2125 pt (three places would print
+ *  10.212 and lose 0.02 px over a page). */
+function parityPt(s: DocSettings): (em: number) => string {
+  return (em) => `${+(em * s.sizePt).toFixed(4)}pt`;
+}
+
 /** The parity header: set/show rules reproducing editor spacing in Typst. */
 export function parityRules(s: DocSettings): string {
   const m = parityMetrics(s.font);
   const lh = s.lineHeight;
-  const pt = (em: number) => `${(em * s.sizePt).toFixed(3)}pt`;
+  const pt = parityPt(s);
   let out = '';
   out += `#set par(justify: true, leading: ${pt(lh - m.extent)}, spacing: ${pt(parSpacingEm(s))})\n`;
   if (s.parIndent) out += `#set par(first-line-indent: 1.5em)\n`;
@@ -787,7 +795,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
       });
       if (!tight) {
         const kind = node.type.name === 'bullet_list' ? 'list' : 'enum';
-        const spacing = (em: number) => `${(em * docSettings.sizePt).toFixed(3)}pt`;
+        const spacing = parityPt(docSettings);
         out =
           indent + `#set ${kind}(spacing: ${spacing(listSpacingEm(docSettings, false))})\n` +
           out +

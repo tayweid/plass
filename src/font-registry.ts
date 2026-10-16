@@ -16,6 +16,11 @@ export interface ParityMetrics {
   cssD: number;
   typAsc: number;
   typDesc: number;
+  /** A body line's Typst frame, em: the regular face's cap height (OS/2
+   *  `sCapHeight` / upem). Typst's text runs from `top-edge: "cap-height"`
+   *  to `bottom-edge: "baseline"`, so a line is this tall and lines are
+   *  pitched at leading + this; the exported leading is `lineHeight −
+   *  extent`, which makes the pitch the editor's line height exactly. */
   extent: number;
   /** Ink above the Typst frame's top (the cap height: ascenders, accents,
    *  parentheses), body em. Paint only: the grid cell washes enclose it. */
@@ -82,7 +87,12 @@ export const DEFAULT_FONT: FontDefinition = {
     'NewCM10-BoldItalic.woff2',
   ),
   portKeys: keys('new-computer-modern'),
-  parity: { cssA: 1.127, cssD: 0.29, typAsc: 0.6723, typDesc: 0.0123, extent: 0.6828, inkAboveCapEm: 0.08, inkBelowBaselineEm: 0.25 },
+  // `extent` is the font's cap height, 683/1000 (font-registry.test.ts
+  // reads it from the file). It was a measured 0.6828 until 2026-10-16,
+  // which made the exported leading 0.0025 pt long at 12.5 pt: Typst
+  // pitched lines at 25.0033 px against the editor's 25, and a page's 35th
+  // line printed 0.12 px below where the page showed it.
+  parity: { cssA: 1.127, cssD: 0.29, typAsc: 0.6723, typDesc: 0.0123, extent: 0.683, inkAboveCapEm: 0.08, inkBelowBaselineEm: 0.25 },
   exact: true,
   selectable: true,
   compilerFallback: true,
