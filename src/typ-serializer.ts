@@ -236,6 +236,11 @@ export function headingRunPadTopEm(s: DocSettings, prev: number, level: number):
   return h.padTop * h.hs - (Math.min(above, below) - parPart);
 }
 
+/** A display equation's painted box is its Typst frame (the ink block,
+ *  math.ts) inside this much padding above and below, body em (style.css
+ *  `.math-display`). */
+export const MATH_DISPLAY_PAD_EM = 0.5;
+
 /**
  * Explicit `#set block(above/below: ...)` (body em) the display-math show
  * rule emits — weakness-3 explicit block spacing, same status as headings'.
@@ -246,8 +251,8 @@ export function equationBlockSpacingEm(s: DocSettings): { above: number; below: 
   const lh = s.lineHeight;
   const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
   const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
-  const above = pSlackBelow + 0.9 + 0.5 - m.typDesc;
-  const below = 0.5 + 0.9 + pSlackAbove - m.typAsc;
+  const above = pSlackBelow + 0.9 + MATH_DISPLAY_PAD_EM - m.typDesc;
+  const below = MATH_DISPLAY_PAD_EM + 0.9 + pSlackAbove - m.typAsc;
   return { above, below };
 }
 

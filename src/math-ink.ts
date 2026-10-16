@@ -24,6 +24,11 @@ export interface MathInk {
   heightPx: number;
   /** Ink below the text baseline (px) — inline vertical-align offset. */
   descentPx: number;
+  /** Display math: the equation's frame height (px), as Typst measures it
+   *  in the flow. The SVG's page is rounded up to a whole point below the
+   *  ink (33.14 pt came back as a 34 pt page), so the block is this tall,
+   *  not `heightPx`. */
+  frameHeightPx?: number;
 }
 
 type Listener = () => void;
@@ -248,18 +253,20 @@ interface InkItem {
  * expanded, between two newlines. Null for an empty formula; throws
  * MathConvertError for one the converter rejects.
  */
-function inkSource(item: InkItem): string | null {
+function inkSource(item: InkItem, probe = false): string | null {
   const latex = expandMacrosWith(item.display ? wrapAligned(item.src) : item.src, parseMathMacros(item.macros));
   if (!latex.trim()) return null;
-  return inkTypst(item.display ? '\n' + latex + '\n' : latex, item.display, item.sizePt, item.bold);
+  return inkTypst(item.display ? '\n' + latex + '\n' : latex, item.display, item.sizePt, item.bold, probe);
 }
 
 /**
  * One formula's ink compile: the prelude its math names and the equation
  * as the print has it, on an auto-sized page at the document's size.
- * `latex` is exactly what the converter is given.
+ * `latex` is exactly what the converter is given. `probe` (display only)
+ * replaces the ink with the equation's measured size, for a query: the
+ * page the ink is drawn on is rounded to whole points.
  */
-export function inkTypst(latex: string, display: boolean, sizePt: number, bold: boolean): string {
+export function inkTypst(latex: string, display: boolean, sizePt: number, bold: boolean, probe = false): string {
   const typ = convertMath(latex);
   // Display equations hug the page tightly with no instrumentation (a
   // trailing probe would start a phantom paragraph below the ink). Inline
@@ -274,7 +281,9 @@ export function inkTypst(latex: string, display: boolean, sizePt: number, bold: 
     mathPrelude([typ]) +
     '\n' +
     (display
-      ? `${eq}\n`
+      ? probe
+        ? `#context metadata((width: measure(${eq}).width / 1pt, height: measure(${eq}).height / 1pt))\n`
+        : `${eq}\n`
       : `#(${expr})` +
         // The baseline, and the formula's exact advance: an auto-sized page
         // rounds to whole points (68.8pt came back as a 69pt page), and the
@@ -308,6 +317,14 @@ async function compileOne(
       );
   const baselinePt = meta?.[0]?.value?.pos ? parseFloat(meta[0].value.pos.y) : NaN;
   const measuredPt = meta?.[0]?.value?.width ? parseFloat(meta[0].value.width) : NaN;
+  // Display math: the frame's exact height, from its own query (a probe in
+  // the drawn source would start a paragraph below the ink).
+  const frame = item.display
+    ? await compileVerdict<Array<{ func: string; value: { width: number; height: number } }>>(
+        run({ kind: 'query', source: inkSource(item, true)!, selector: 'metadata' }),
+      )
+    : null;
+  const frameHeightPt = Number(frame?.[0]?.value?.height);
 
   // The viewBox carries the exact page size; the width/height attributes
   // are rounded (an auto-sized page came back as width="69" for 68.8pt),
@@ -321,7 +338,13 @@ async function compileOne(
 
   const PX = 4 / 3;
   const descentPx = Number.isFinite(baselinePt) ? Math.max(0, (hPt - baselinePt) * PX) : 0;
-  return { svg, widthPx: wPt * PX, heightPx: hPt * PX, descentPx };
+  return {
+    svg,
+    widthPx: wPt * PX,
+    heightPx: hPt * PX,
+    descentPx,
+    ...(frameHeightPt > 0 && frameHeightPt <= hPt ? { frameHeightPx: frameHeightPt * PX } : {}),
+  };
 }
 /** A compile error is Typst's verdict on the formula (null); every other
  * failure means the compiler did not run, and propagates. */

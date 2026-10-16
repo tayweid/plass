@@ -2949,11 +2949,13 @@ body {
   margin: 0 -1px;
 }
 
-/* The Typst ink svg is inline and sits on the text baseline, leaving
-   descender slack below — visually ~3px high in its box. Pure paint
-   shift (transform): zero layout change, vertical parity untouched. */
+/* The Typst ink is a block: the box is the padding and the equation's
+   frame, exactly as Typst spaces it (equationBlockSpacingEm). Drawn inline
+   it sat on the text baseline, and the line box added the strut's descent
+   below it, 6 px more than the print. */
 .math-display > svg {
-  transform: translateY(0.18em);
+  display: block;
+  margin: 0 auto;
 }
 
 .math-display {
