@@ -44,10 +44,19 @@ import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdic
 import { atPaperSize, fitPaper, paperPass, paperScale, type PaperCaret } from './paper-scale';
 import { caretBox } from './caret-box';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
-import { escapeTyp, expandMacrosWith, headingRunPadTopEm, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
+import {
+  displayMathPadEm,
+  escapeTyp,
+  expandMacrosWith,
+  headingRunPadTopEm,
+  headingScale,
+  pageBottomInsetEm,
+  pageTopAdjustEm,
+  quoteBoxEm,
+  tableMarginsEm,
+} from './typ-serializer';
 import {
   containerPageTopDropEm,
-  DISPLAY_MATH_PAD_EM,
   footnoteEmptyFrameAction,
   footnoteEntryCost,
   footnoteEntryFit,
@@ -1958,9 +1967,10 @@ class TypesetView {
    * margin-top; a container (list, quote) drops its own painted top
    * spacing and lands its first text block like a paragraph — Typst starts
    * a page with the item's or quote's first line at the margin, not with
-   * the container's box.
+   * the container's box. `parent` and `index` place `node` (a display
+   * equation that opens a quote is boxed like a paragraph there).
    */
-  private blockTopAdjustPx(node: PMNode | null, s: DocSettings, F: number): number {
+  private blockTopAdjustPx(node: PMNode | null, s: DocSettings, F: number, parent: PMNode | null = null, index = 0): number {
     if (!node) return 0;
     const kind = this.unitKindOf(node);
     if (kind) return pageTopAdjustEm(s, kind) * F;
@@ -1970,16 +1980,22 @@ class TypesetView {
     if (node.type.name === 'grid' || node.type.name === 'grid_row') return pageTopAdjustEm(s, 'paragraph') * F;
     if (node.type.name === 'code_block') return pageTopAdjustEm(s, 'code') * F;
     if (node.type.name === 'table') return -tableMarginsEm(s).top * F;
-    const dropEm = containerPageTopDropEm(node.type.name, (node.attrs.kind as string | null) ?? null);
+    if (node.type.name === 'math_display') return -displayMathPadEm(s, parent, index).top * F;
+    const dropEm =
+      node.type.name === 'blockquote' ? (node.attrs.kind === 'solution' ? 0 : quoteBoxEm(s).padTop) : containerPageTopDropEm(node.type.name);
     let first: PMNode | null = node;
-    while (first && !first.isTextblock && !first.isAtom && first.type.name !== 'table' && first.firstChild) first = first.firstChild;
+    let firstParent: PMNode | null = parent;
+    while (first && !first.isTextblock && !first.isAtom && first.type.name !== 'table' && first.firstChild) {
+      firstParent = first;
+      first = first.firstChild;
+    }
     const innerKind = first && first !== node ? this.unitKindOf(first) : null;
     const inner = innerKind
       ? pageTopAdjustEm(s, innerKind) * F
       : first?.type.name === 'code_block' && first !== node
         ? pageTopAdjustEm(s, 'code') * F
         : first?.type.name === 'math_display' && first !== node
-          ? -DISPLAY_MATH_PAD_EM * F
+          ? -displayMathPadEm(s, firstParent, 0).top * F
           : 0;
     return -dropEm * F + inner;
   }
@@ -2013,8 +2029,10 @@ class TypesetView {
    * indents by the digit count of a list's last label (list-indent.ts),
    * the table's block spacing (Typst's Auto spacing = paragraph
    * spacing, measured frame to frame; the editor's box has the paragraph's
-   * descent below and cap slack above to absorb), and the padding of a
-   * heading that follows a heading (`headingRunPadTopEm`).
+   * descent below and cap slack above to absorb), the padding of a
+   * heading that follows a heading (`headingRunPadTopEm`), and a quote's
+   * spacing over a paragraph's (`quoteBoxEm`) with the paragraph box's
+   * slack an equation at a quote's edge is padded with (`displayMathPadEm`).
    * Idempotent per (font, size, spacing) key; the CSS carries fallbacks
    * until the port is up.
    */
@@ -2049,6 +2067,16 @@ class TypesetView {
         root.setProperty(`--heading-run-mt-${prev}-${level}`, `${Math.min(0, pad).toFixed(4)}px`);
       }
     }
+    // A quote (style.css): its padding-top (a part below zero as its
+    // margin-top) and what its last child adds to its margin-bottom.
+    const quote = quoteBoxEm(s);
+    root.setProperty('--quote-pad', `${(quote.padTop * F).toFixed(4)}px`);
+    root.setProperty('--quote-mt', `${(quote.marginTop * F).toFixed(4)}px`);
+    root.setProperty('--quote-below', `${(quote.below * F).toFixed(4)}px`);
+    // A paragraph box's edge-to-frame slack, the padding of an equation
+    // that opens (top) or closes (bottom) a quote.
+    root.setProperty('--par-cap-slack', `${(-pageTopAdjustEm(s, 'paragraph') * F).toFixed(4)}px`);
+    root.setProperty('--par-inset', `${(pageBottomInsetEm(s, 'paragraph') * F).toFixed(4)}px`);
     // Boxes normalized against the old values re-fit now, so this pass
     // measures them settled (a grid cell ending in a table read the
     // previous document's --table-mb and grew on the first click).
@@ -3194,30 +3222,37 @@ class TypesetView {
       // A later grid row at a page top: Typst drops the gutter above it,
       // the editor's row keeps its margin-top — take it back, as a table's
       // block margin is.
+      const $at = view.state.doc.resolve(pos);
       if (node?.type.name === 'grid_row') {
-        const $row = view.state.doc.resolve(pos);
-        const gap = $row.index() > 0 ? this.gridRowGapPx($row.parent, s, F) : 0;
+        const gap = $at.index() > 0 ? this.gridRowGapPx($at.parent, s, F) : 0;
         return this.blockTopAdjustPx(node, s, F) - gap;
       }
-      return this.blockTopAdjustPx(node, s, F);
+      return this.blockTopAdjustPx(node, s, F, $at.parent, $at.index());
     };
     /** The Typst frame ends ABOVE the painted box's bottom by this much
      *  (pageBottomInsetEm): the last line's descent and half-leading for
      *  text blocks, a container's last text block's, a display equation's
      *  padding-bottom (its frame is the content box, and Typst trims the
-     *  equation's `below` at a region's end), nothing for the kinds with no
-     *  calibration (figures, tables). Fit tests compare frame bottoms
-     *  against the page bottom — the counterpart of adjFor, which lands
-     *  frame TOPS at the page top. */
+     *  equation's `below` at a region's end; a paragraph's inset where it
+     *  closes a quote), nothing for the kinds with no calibration (figures,
+     *  tables). Fit tests compare frame bottoms against the page bottom —
+     *  the counterpart of adjFor, which lands frame TOPS at the page top. */
     const bottomInsetFor = (pos: number): number => {
+      const $at = view.state.doc.resolve(pos);
       let n = view.state.doc.nodeAt(pos);
+      let parent: PMNode = $at.parent;
+      let index = $at.index();
       // A container's frame ends where its last descendant block's does.
-      while (n && !n.isTextblock && !n.isAtom && n.type.name !== 'table' && n.type.name !== 'figure' && n.type.name !== 'grid_row' && n.lastChild) n = n.lastChild;
+      while (n && !n.isTextblock && !n.isAtom && n.type.name !== 'table' && n.type.name !== 'figure' && n.type.name !== 'grid_row' && n.lastChild) {
+        parent = n;
+        index = n.childCount - 1;
+        n = n.lastChild;
+      }
       if (!n) return 0;
       // A grid row's cells end one paragraph inset below their frames.
       if (n.type.name === 'grid_row' || n.type.name === 'paragraph') return pageBottomInsetEm(s, 'paragraph') * F;
       if (n.type.name === 'code_block') return pageBottomInsetEm(s, 'code') * F;
-      if (n.type.name === 'math_display') return DISPLAY_MATH_PAD_EM * F;
+      if (n.type.name === 'math_display') return displayMathPadEm(s, parent, index).bottom * F;
       if (n.type.name === 'heading') {
         const lv = Math.min(3, (n.attrs.level as number) || 1);
         return pageBottomInsetEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;

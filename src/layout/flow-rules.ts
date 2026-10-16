@@ -629,10 +629,12 @@ export function peekWeakSpacing(items: readonly FlowItem[]): number {
  * Page-top drop for the top-level block kinds whose own CSS encodes their
  * Auto (weakness-4) "above" spacing as `padding-top` on the block's own box
  * rather than as a calibrated ascent formula the way paragraphs/headings/
- * lines get via `pageTopAdjustEm` (`typ-serializer.ts`): blockquote
- * (`#quote(block: true)`, 0.66em), a figure (`.ts-figure`, 0.4em) and a
- * display equation (`.math-display`, 0.5em, `DISPLAY_MATH_PAD_EM`: part of
- * its explicit, weakness-3 `above`, `equationBlockSpacingEm`).
+ * lines get via `pageTopAdjustEm` (`typ-serializer.ts`): a figure
+ * (`.ts-figure`, 0.4em) and a display equation (`.math-display`, 0.5em,
+ * `DISPLAY_MATH_PAD_EM`: part of its explicit, weakness-3 `above`,
+ * `equationBlockSpacingEm`). A quote's padding-top depends on the settings
+ * (`quoteBoxEm` in `typ-serializer.ts`), so the paginator takes it from
+ * there; the solution variant paints none.
  * Code blocks (islands included) have a calibrated landing spot of their
  * own (`pageTopAdjustEm(s, 'code')`), like paragraphs. Lists and
  * tables paint zero padding-top already (their CSS puts spacing entirely in
@@ -652,7 +654,6 @@ export function peekWeakSpacing(items: readonly FlowItem[]): number {
  * default already makes for zero-padding kinds like tables and lists).
  */
 export const CONTAINER_PAGE_TOP_PADDING_EM: Readonly<Record<string, number>> = {
-  blockquote: 0.66,
   figure: 0.4,
   math_display: 0.5,
 };
@@ -666,13 +667,8 @@ export const CONTAINER_PAGE_TOP_PADDING_EM: Readonly<Record<string, number>> = {
 export const DISPLAY_MATH_PAD_EM = CONTAINER_PAGE_TOP_PADDING_EM.math_display;
 
 /** The page-top spacing drop (body em) for a container `kind`, or 0 for a
- * kind not in `CONTAINER_PAGE_TOP_PADDING_EM` (nothing to drop). `variant`
- * is a blockquote's `kind` attr: the 0.66em entry is `#quote(block: true)`'s
- * only; the 'solution' kind paints no padding-top. */
-export function containerPageTopDropEm(kind: string, variant: string | null = null): number {
-  // The solution variant paints no padding-top (Auto spacing lives in the
-  // previous sibling's margin-bottom, like a paragraph): nothing to drop.
-  if (kind === 'blockquote' && variant === 'solution') return 0;
+ * kind not in `CONTAINER_PAGE_TOP_PADDING_EM` (nothing to drop). */
+export function containerPageTopDropEm(kind: string): number {
   return CONTAINER_PAGE_TOP_PADDING_EM[kind] ?? 0;
 }
 

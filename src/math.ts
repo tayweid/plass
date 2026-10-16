@@ -171,10 +171,10 @@ export class MathView implements NodeView {
           const top = withNumber ? ink.numberedInkTopPx ?? 0 : 0;
           svg.style.marginTop = `${top.toFixed(3)}px`;
           svg.style.marginBottom = `${(frame - top - heightPx).toFixed(3)}px`;
-          // Center the painted equation number on the frame (as Typst does).
-          const cs = getComputedStyle(this.dom);
-          const center = parseFloat(cs.paddingTop) + frame / 2;
-          this.dom.style.setProperty('--eqnum-center', `${center.toFixed(1)}px`);
+          // Center the painted equation number on the frame (as Typst
+          // does): the CSS adds the padding above it, which depends on
+          // where the equation sits (style.css).
+          this.dom.style.setProperty('--eqnum-center', `calc(var(--math-pad-top) + ${(frame / 2).toFixed(1)}px)`);
         }
       }
       scheduleTypeset(this.view);

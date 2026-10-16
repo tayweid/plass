@@ -1396,11 +1396,20 @@ body {
 }
 
 .ProseMirror blockquote {
-  /* Typst's #quote(block: true): plain indentation, no bar; vertical box
-     calibrated to Typst's quote spacing (top via padding — margins must
-     not collapse or pagination spacers lose height). */
-  margin: 0 0 0.9em;
-  padding: 0.66em 1em 0;
+  /* Typst's #quote(block: true): plain indentation, no bar; 2.4em above and
+     1.8em below, frame to frame (QUOTE_SPACING_EM in typ-serializer.ts),
+     where the neighbouring paragraphs' boxes paint paragraph spacing. The
+     quote adds the rest (quoteBoxEm, published by the plugin): above as
+     padding (a margin would collapse, and pagination spacers lose height),
+     a part below zero as a margin-top after a sibling (past line height
+     2.2); below on its last child's margin-bottom, which collapses through
+     the quote's bottom (the rules after the solution block's). */
+  margin: 0;
+  padding: var(--quote-pad, 0.6828em) 1em 0;
+}
+
+.ProseMirror * + blockquote {
+  margin-top: var(--quote-mt, 0);
 }
 
 /* Solution block — the export's #block(stroke: (left: 2pt + red), inset:
@@ -1438,6 +1447,33 @@ body {
 
 .ProseMirror blockquote[data-kind='solution'] > :last-child {
   margin-bottom: 0;
+}
+
+/* A quote's last child carries the quote's spacing below (--quote-below,
+   negative where paragraph spacing is the larger, line height 1.8) on top
+   of its own margin: exact for a paragraph, a list or an equation boxed
+   as a paragraph (below); other kinds keep their own. */
+.ProseMirror blockquote:not([data-kind='solution']) > :is(p, .math-display):last-child {
+  margin-bottom: calc(var(--par-margin, 0.9em) + var(--quote-below, 0.0828em));
+}
+
+.ProseMirror blockquote:not([data-kind='solution']) > :is(ul, ol):last-child {
+  margin-bottom: calc(0.9em + var(--quote-below, 0.0828em));
+}
+
+/* A display equation that opens or closes a quote (either kind): inside
+   the block Typst drops the equation's own spacing and the block's runs
+   from the equation's frame, so on that side it is boxed like a paragraph
+   (displayMathPadEm): padded by a paragraph box's slack (--par-cap-slack
+   above, --par-inset below) and, closing a quote, with a paragraph's
+   margin (above). A page gap that opens a quote broken before its
+   equation is a widget: the equation keeps its box behind it. */
+.ProseMirror blockquote > :is(.math-display:first-child, .ts-pagegap:first-child + .math-display) {
+  --math-pad-top: var(--par-cap-slack, 0.4962em);
+}
+
+.ProseMirror blockquote > .math-display:last-child {
+  --math-pad-bottom: var(--par-inset, 0.321em);
 }
 
 /* Lists mirror Typst's list/enum grid: a marker column as wide as the
@@ -2964,13 +3000,29 @@ body {
 /* The padding is DISPLAY_MATH_PAD_EM (src/layout/flow-rules.ts): the
    export's equation spacing is derived with it, and the paginator drops it
    at a page top and leaves it out of the fit at a page bottom, as Typst
-   drops and trims the equation's spacing there. */
+   drops and trims the equation's spacing there. At a quote's edge it is a
+   paragraph's (above). Registered lengths, so the number (::after, a
+   smaller font) reads them in px. */
+@property --math-pad-top {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --math-pad-bottom {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+
 .math-display {
+  --math-pad-top: 0.5em;
+  --math-pad-bottom: 0.5em;
   display: block;
   position: relative;
   text-align: center;
   cursor: pointer;
-  padding: 0.5em 0;
+  padding: var(--math-pad-top) 0 var(--math-pad-bottom);
   margin: 0 0 0.9em;
   border-radius: 5px;
 }
