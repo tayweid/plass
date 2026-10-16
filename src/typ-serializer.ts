@@ -220,10 +220,14 @@ export function listSpacingEm(s: DocSettings, tight: boolean): number {
 }
 
 export function parSpacingEm(s: DocSettings): number {
-  const m = parityMetrics(s.font);
-  // Classic (indented) paragraphs flow with no extra gap: spacing = leading.
-  const parGapEm = s.parIndent ? 0 : 0.9;
-  return s.lineHeight + parGapEm - m.extent;
+  return s.lineHeight + parMarginEm(s) - parityMetrics(s.font).extent;
+}
+
+/** A paragraph's margin-bottom on the page, body em (`--par-margin`,
+ *  settings.ts): classic (indented) paragraphs flow with no extra gap, so
+ *  their spacing is the leading. */
+function parMarginEm(s: DocSettings): number {
+  return s.parIndent ? 0 : 0.9;
 }
 
 /**
@@ -234,16 +238,17 @@ export function parSpacingEm(s: DocSettings): number {
  * region-top spacing-drop rule.
  *
  * Each is the page's gap between the heading's frame and a paragraph's:
- * above, from the paragraph's frame bottom over its inset and 0.9em margin
- * to the heading's frame top; below, from the heading's frame bottom over
- * its inset and margin to the paragraph's frame top. Explicit spacing beats
- * the paragraph's Auto spacing (weakness 3 against 4, distribute.rs
- * `keep_spacing`) whichever is larger, so Typst's gap is exactly this.
+ * above, from the paragraph's frame bottom over its inset and margin (0.9em,
+ * none in classic mode) to the heading's frame top; below, from the
+ * heading's frame bottom over its inset and margin to the paragraph's frame
+ * top. Explicit spacing beats the paragraph's Auto spacing (weakness 3
+ * against 4, distribute.rs `keep_spacing`) whichever is larger, so Typst's
+ * gap is exactly this.
  */
 export function headingBlockSpacingEm(s: DocSettings, level: number): { above: number; below: number } {
   const h = HEADINGS[Math.min(3, Math.max(1, level)) - 1];
   const frame = headingFrameEm(s, level);
-  const above = pageBottomInsetEm(s, 'paragraph') + 0.9 + frame.top;
+  const above = pageBottomInsetEm(s, 'paragraph') + parMarginEm(s) + frame.top;
   const below = frame.bottom + h.marginBottom * h.hs - pageTopAdjustEm(s, 'paragraph');
   return { above, below };
 }
@@ -269,10 +274,12 @@ export function headingRunPadTopEm(s: DocSettings, prev: number, level: number):
  * rule emits — weakness-3 explicit block spacing, same status as headings'.
  * Exported for `flow-rules.ts`'s region-top spacing-drop rule. The
  * equation's frame is its ink, inside the editor's 0.5em padding; the rest
- * of each gap is a paragraph's frame inset and its 0.9em margin.
+ * of the gap above is a paragraph's frame inset and its margin (none in
+ * classic mode), of the gap below the equation's own 0.9em margin and the
+ * paragraph's slack above its frame.
  */
 export function equationBlockSpacingEm(s: DocSettings): { above: number; below: number } {
-  const above = pageBottomInsetEm(s, 'paragraph') + 0.9 + DISPLAY_MATH_PAD_EM;
+  const above = pageBottomInsetEm(s, 'paragraph') + parMarginEm(s) + DISPLAY_MATH_PAD_EM;
   const below = DISPLAY_MATH_PAD_EM + 0.9 - pageTopAdjustEm(s, 'paragraph');
   return { above, below };
 }

@@ -85,6 +85,20 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      body's is Chrome rounding the font's ascent. A paint-only transform,
      or a re-calibrated `rise` (which moves the print), would close it; a
      design choice.
+   - A display equation's box on the page is its line box, not the
+     formula's frame: the ink svg sits on the baseline of a 1.5-line strut,
+     so `x^2 + y^2 = z^2` (17.3 px of frame at 12.5 pt) fills a 25 px line,
+     and the page puts the paragraph after it 7.7 px lower than the print
+     does, in either paragraph mode (measured 2026-10-16; tests/
+     classic-spacing.spec.ts holds the two modes to the same offset). The
+     paginator takes the box as the frame. Possibly the audit's math.md
+     difference (local breaks a line earlier than Typst).
+   - Classic (indented) paragraphs: headings and display equations print at
+     the page's gap since 2026-10-16 (the spacing above them carried the
+     spaced mode's 0.9 em margin). Other blocks with a fixed 0.9 em margin
+     in style.css (quotes, ordered lists, figures, the abstract, the
+     bibliography) have not been checked against the print in classic
+     mode.
 6. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
    for Plass and Knuth, Knuth's `docs/ROADMAP.md` carries the same
    entry, and `docs/COAUTHOR.md` there is the git-only design it
