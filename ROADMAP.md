@@ -60,15 +60,11 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      bottom (2026-10-16) put two more lines on page 2 than Typst does at
      two of thirteen points. The same equation at the top level, and the
      quote at a page top, agree.
-   - A line holding a bold glyph is 0.686 em tall in Typst (Typst's
-     line frame is the tallest cap height among its fonts, and the bold
-     faces' is 686/1000), 0.05 px more than the page's line at 12.5 pt; a
-     paragraph with bold on every line prints 1.6 px lower by its 35th
-     line. Likely why the audit fixtures slashes.md and urls.md (bold in
-     every paragraph) keep a line Typst moves at 1 in margins. Pin the
-     top edge in the export, or carry per-line heights: a design choice.
-     (Body lines themselves are exact since 2026-10-16: `extent` is the
-     cap height, tests/line-pitch.spec.ts.)
+   - Each paragraph starts 1/64 px higher on the page than in print,
+     cumulatively (measured 2026-10-16 against the audit's SVG): Chrome
+     lays the paragraph spacing out in 1/64 px units, and the paginator
+     reads paragraph tops from the DOM, so it inherits the drift (about
+     0.2 px over a page of short paragraphs).
    - Page bottoms within a few tenths of a pixel of a line, after the body
      pitch fix: a sweep of the nine heading pairs over top margins
      1.00–1.26 in (2026-10-16) has 3 of 243 cases off by a line. H1+H3 at

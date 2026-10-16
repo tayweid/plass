@@ -360,7 +360,8 @@ items against this before scope.
 - Paper: named sizes export as `paper:`; half letter and a custom size as
   `width:`/`height:` (`paperInches`). Footnote numbering (`1 a i *`) and
   the separator (`rule | full | none`) are settings: `footnoteLabel` paints
-  and measures the marker, the reservation drops the rule's height.
+  and measures the marker. A rule reserves no height (a line's frame has
+  none; its stroke is ink), only the clearance above it.
 - Page chrome (number, running header/footer with `{page}`/`{section}`)
   is painted by `renderPages` in main.ts and measured by the audit: Typst's
   margin lines (by position) against the painted `#pages .page-num`

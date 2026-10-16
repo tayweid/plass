@@ -46,6 +46,14 @@ const F = 16.666666666666668; // bodyPx at the app default (12.5pt @ 96dpi)
 }
 
 {
+  // The separator is a horizontal line, whose frame has no height
+  // (layout_line: the box its ends span); the stroke is ink outside it.
+  assert.equal(footnoteSeparatorHeightPx(), 0);
+  assert.equal(footnoteHeadReservePx(F), FOOTNOTE_CLEARANCE_EM * F);
+  console.log('  ok  the separator line reserves no height, only the clearance');
+}
+
+{
   const h1 = 20;
   const expected = FOOTNOTE_CLEARANCE_EM * F + footnoteSeparatorHeightPx() + FOOTNOTE_GAP_EM * F + h1;
   assert.ok(Math.abs(footnoteAreaHeight([h1], F) - expected) < 1e-9);
@@ -322,6 +330,42 @@ const GAP = FOOTNOTE_GAP_EM * F;
   assert.equal(orphan.carry.length, 1);
   assert.equal(orphan.carry[0].heightPx, 4 * line);
   console.log('  ok  carry settle: second entry splits, its remainder re-carries');
+}
+
+{
+  // An entry is a paragraph to Typst's flow (Collector::lines, collect.rs
+  // ~196-238; Distributor::line, distribute.rs ~226-245): its first two
+  // lines go together, so do its last two, and three lines go whole. A pod
+  // with room for fewer lines than the next pair needs leaves the first
+  // frame empty, and the marker's line migrates.
+  const line = 14;
+  const lead = 4;
+  const fitAt = (lines: number, roomLines: number, continues = false) =>
+    footnoteEntryFit(lines * line - lead, HEAD + GAP + roomLines * line - lead, false, F, {
+      lineHeightPx: line,
+      leadingPx: lead,
+      firstLine: continues ? 1 : 0,
+    });
+  // Two lines, room for one: no split, the first frame is empty.
+  assert.equal(fitAt(2, 1.7).empty, true);
+  assert.equal(fitAt(2, 1.7).fragment, 0);
+  // Three lines, room for two: whole or nothing.
+  assert.equal(fitAt(3, 2.5).empty, true);
+  // Four lines, room for three: the third would leave a widow, so two.
+  const four = fitAt(4, 3.5);
+  assert.ok(Math.abs(four.fragment - (2 * line - lead)) < 1e-9);
+  assert.ok(Math.abs(four.remainder - (2 * line - lead)) < 1e-9);
+  // Five lines, room for three: three go, two follow.
+  const five = fitAt(5, 3.5);
+  assert.ok(Math.abs(five.fragment - (3 * line - lead)) < 1e-9);
+  assert.ok(Math.abs(five.remainder - (2 * line - lead)) < 1e-9);
+  // A remainder continues its paragraph: no orphan pair at its first line,
+  // so one of its three lines goes where a fresh entry's would not.
+  const rest = fitAt(3, 1.5, true);
+  assert.ok(Math.abs(rest.fragment - (line - lead)) < 1e-9);
+  assert.ok(Math.abs(rest.remainder - (2 * line - lead)) < 1e-9);
+  assert.equal(fitAt(3, 1.5).empty, true);
+  console.log('  ok  an entry keeps its orphan and widow pairs');
 }
 
 {

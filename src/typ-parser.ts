@@ -128,6 +128,8 @@ export function typToDoc(src: string): TypImport {
     if (
       /^#set (list|enum)\(spacing:/.test(line) ||
       /^#set grid\.cell\(breakable: false\)$/.test(line) ||
+      /^#show strong: set text\(top-edge: [\d.]+em\)$/.test(line) ||
+      /^#show heading: it => \{ show strong: set text\(top-edge: "cap-height"\); it \}$/.test(line) ||
       /^#show heading\.where\(level: \d+\): set (text|block|par)\(/.test(line) ||
       /^#show raw\.where\(block: false\): set text\(/.test(line) ||
       /^#show math\.equation\.where\(block: true\): set block\(/.test(line) ||

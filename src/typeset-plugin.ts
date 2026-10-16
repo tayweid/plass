@@ -149,8 +149,9 @@ function firstPrintedBlock(doc: PMNode, pos: number): PMNode | null {
   return found;
 }
 
-/** The footnote separator's reserved height for a document: Typst's 0.5pt
- * line, or nothing when the setting removes it. */
+/** The footnote separator's reserved height for a document: its frame's
+ * (none for a line, `footnoteSeparatorHeightPx`), or nothing when the
+ * setting removes it. */
 function footnoteSeparatorPx(s: DocSettings): number {
   return s.footnoteSeparator === 'none' ? 0 : footnoteSeparatorHeightPx();
 }
