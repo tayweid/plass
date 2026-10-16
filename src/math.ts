@@ -53,6 +53,8 @@ export class MathView implements NodeView {
   private display: boolean;
   private bold: boolean;
   private inkApplied = '';
+  /** Whether the applied ink's geometry is the numbered frame's. */
+  private numberedApplied = false;
   private stopInk: () => void;
   /**
    * Width hold (anti-jitter): while a math-editor session touches this
@@ -144,19 +146,34 @@ export class MathView implements NodeView {
     if (ink) {
       this.endWidthHold();
       this.markUnmeasured(null);
-      if (this.inkApplied === key) return;
+      const numbered = this.isNumbered();
+      if (this.inkApplied === key && this.numberedApplied === numbered) return;
+      if (this.inkApplied !== key) {
+        mountTypstSvg(this.dom, ink.svg);
+        this.dom.classList.add('math-ink');
+      }
       this.inkApplied = key;
-      mountTypstSvg(this.dom, ink.svg);
-      this.dom.classList.add('math-ink');
+      this.numberedApplied = numbered;
       const svg = this.dom.querySelector('svg');
       if (svg) {
         svg.style.width = `${ink.widthPx.toFixed(2)}px`;
-        svg.style.height = `${ink.heightPx.toFixed(2)}px`;
+        const heightPx = +ink.heightPx.toFixed(2);
+        svg.style.height = `${heightPx}px`;
         if (!this.display) svg.style.verticalAlign = `${(-ink.descentPx).toFixed(2)}px`;
         else {
-          // Center the painted equation number on the ink (as Typst does).
+          // The block is the equation's Typst frame (vertical parity): the
+          // svg (a block, so no line strut below it) gives back what its
+          // page added by rounding up, which is blank ink-free space. A
+          // numbered equation's frame holds its number too: the room the
+          // number takes above the ink is a margin over the svg.
+          const withNumber = numbered && ink.numberedFrameHeightPx !== undefined;
+          const frame = withNumber ? ink.numberedFrameHeightPx! : ink.frameHeightPx ?? heightPx;
+          const top = withNumber ? ink.numberedInkTopPx ?? 0 : 0;
+          svg.style.marginTop = `${top.toFixed(3)}px`;
+          svg.style.marginBottom = `${(frame - top - heightPx).toFixed(3)}px`;
+          // Center the painted equation number on the frame (as Typst does).
           const cs = getComputedStyle(this.dom);
-          const center = parseFloat(cs.paddingTop) + ink.heightPx / 2;
+          const center = parseFloat(cs.paddingTop) + frame / 2;
           this.dom.style.setProperty('--eqnum-center', `${center.toFixed(1)}px`);
         }
       }
@@ -206,6 +223,13 @@ export class MathView implements NodeView {
       : 'Typst could not compile this formula. It is shown with an approximate width, and the print will differ.';
   }
 
+  /** A display equation the print numbers: its own `numbered` attr, else
+   * the document's setting (the export's rule, `typ-serializer.ts`). */
+  private isNumbered(): boolean {
+    if (!this.display) return false;
+    return (this.node.attrs.numbered as boolean | null) ?? getSettings(this.view.state).numberEquations;
+  }
+
   update(node: PMNode): boolean {
     if (node.type !== this.node.type) return false;
     const macros = getSettings(this.view.state).mathMacros;
@@ -223,6 +247,10 @@ export class MathView implements NodeView {
     if (bold !== this.bold) {
       // Bolded or unbolded in place: a different ink (and advance).
       this.bold = bold;
+      this.render();
+    } else if (this.inkApplied && this.isNumbered() !== this.numberedApplied) {
+      // Numbered or unnumbered (its attr, or the document's setting, which
+      // reaches the view through its number decoration): a different frame.
       this.render();
     }
     return true;

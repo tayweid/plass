@@ -1981,10 +1981,15 @@ body {
 
 /* ---------- footnotes ---------- */
 
-/* Superscript marker, painted by the numbering plugin. */
+/* Superscript marker, painted by the numbering plugin. Typst raises the
+   marker inside its line without growing the line (a baseline shift moves
+   the glyph, not the frame); line-height 0 keeps the raised box out of the
+   line box here too, or every line holding a marker would be half a pixel
+   taller than Typst's (vertical parity). */
 .ts-footnote::before {
   content: attr(data-fn);
   vertical-align: super;
+  line-height: 0;
   font-size: 0.68em;
   font-weight: 600;
   color: var(--accent);
@@ -2946,13 +2951,20 @@ body {
   margin: 0 -1px;
 }
 
-/* The Typst ink svg is inline and sits on the text baseline, leaving
-   descender slack below — visually ~3px high in its box. Pure paint
-   shift (transform): zero layout change, vertical parity untouched. */
+/* The Typst ink svg is a block, centered: inline, it sat on a text
+   baseline with the line's strut below it, and the block came out taller
+   than Typst's equation frame (by 6px and more; a one-letter formula was
+   a whole line tall). The node view trims the svg's page rounding with a
+   margin, so the content box is exactly the frame (math.ts). */
 .math-display > svg {
-  transform: translateY(0.18em);
+  display: block;
+  margin-inline: auto;
 }
 
+/* The padding is DISPLAY_MATH_PAD_EM (src/layout/flow-rules.ts): the
+   export's equation spacing is derived with it, and the paginator drops it
+   at a page top and leaves it out of the fit at a page bottom, as Typst
+   drops and trims the equation's spacing there. */
 .math-display {
   display: block;
   position: relative;

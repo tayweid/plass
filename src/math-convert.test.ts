@@ -150,6 +150,23 @@ check(
 );
 check('bold ink compiles under strong', inkTypst('x', false, 11, true).includes('#(strong($x $))#context metadata((pos: here().position(), width: measure(strong($x $)).width))'));
 check('display ink is the bare block', inkTypst('\nx\n', true, 10, false).endsWith('#set text(size: 10pt)\n\n$\nx \n$\n'), inkTypst('\nx\n', true, 10, false));
+{
+  const probe = inkTypst('\nx\n', true, 10, false, true);
+  check('display probe measures the same block, unrounded', probe.includes('  height: measure($\nx \n$).height.pt(),\n'), probe);
+  // Numbered as the export numbers it, and the ink's place in that frame
+  // read from the flow: the two equations stacked with no spacing, a tag
+  // at the head of each body (on its first baseline).
+  check('display probe measures the numbered block', probe.includes('  numbered: measure(math.equation(block: true, numbering: "(1)", plass-body)).height.pt(),\n'), probe);
+  check(
+    'display probe lays both blocks, tagged, with no spacing',
+    probe.includes(
+      '#let plass-body = ($\nx \n$).body\n#set block(spacing: 0pt)\n#metadata(none)<plass-top>\n' +
+        '#math.equation(block: true, numbering: "(1)", [#metadata(none)<plass-num>] + plass-body)\n#metadata(none)<plass-mid>\n' +
+        '#math.equation(block: true, [#metadata(none)<plass-bare>] + plass-body)\n',
+    ),
+    probe,
+  );
+}
 
 if (failures) {
   console.error(`\n${failures} math-convert test(s) failed`);

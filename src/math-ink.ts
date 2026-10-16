@@ -24,6 +24,22 @@ export interface MathInk {
   heightPx: number;
   /** Ink below the text baseline (px) — inline vertical-align offset. */
   descentPx: number;
+  /** Display math: the equation's frame height as Typst lays it in the
+   * flow (px). The svg's auto-sized page rounds up to whole points (a
+   * 33.135pt equation came back as a 34pt page), and the page's block
+   * must be exactly the frame: the export's equation spacing assumes it
+   * (`equationBlockSpacingEm`). Absent when the measurement failed. */
+  frameHeightPx?: number;
+  /** Display math, numbered: the frame with its number (px). Typst sets
+   * the number on the equation's baseline (a multi-line equation's centre)
+   * and grows the frame to hold it, so a formula shorter than "(1)" is as
+   * tall as "(1)" (8.675pt at 12.5pt for `x`, against its own 5.6625pt).
+   * The number is set in the math font, so the height depends on the size
+   * alone, which the key carries. */
+  numberedFrameHeightPx?: number;
+  /** Display math, numbered: how far below the numbered frame's top the
+   * equation's own frame sits (px), the room the number takes above it. */
+  numberedInkTopPx?: number;
 }
 
 type Listener = () => void;
@@ -248,21 +264,28 @@ interface InkItem {
  * expanded, between two newlines. Null for an empty formula; throws
  * MathConvertError for one the converter rejects.
  */
-function inkSource(item: InkItem): string | null {
+function inkSource(item: InkItem, probe = false): string | null {
   const latex = expandMacrosWith(item.display ? wrapAligned(item.src) : item.src, parseMathMacros(item.macros));
   if (!latex.trim()) return null;
-  return inkTypst(item.display ? '\n' + latex + '\n' : latex, item.display, item.sizePt, item.bold);
+  return inkTypst(item.display ? '\n' + latex + '\n' : latex, item.display, item.sizePt, item.bold, probe);
 }
 
 /**
  * One formula's ink compile: the prelude its math names and the equation
  * as the print has it, on an auto-sized page at the document's size.
- * `latex` is exactly what the converter is given.
+ * `latex` is exactly what the converter is given. `probe` (display only)
+ * is the measuring source: the equation's frame height, unrounded
+ * (`.pt()`; a length's repr rounds to two places), and the same with the
+ * export's numbering, `"(1)"`. Where the equation sits inside its
+ * numbered frame is read from the flow: the two are laid one after the
+ * other with no spacing, each with a tag at the head of its body, and a
+ * tag in math is placed on the first line's baseline.
  */
-export function inkTypst(latex: string, display: boolean, sizePt: number, bold: boolean): string {
+export function inkTypst(latex: string, display: boolean, sizePt: number, bold: boolean, probe = false): string {
   const typ = convertMath(latex);
   // Display equations hug the page tightly with no instrumentation (a
-  // trailing probe would start a phantom paragraph below the ink). Inline
+  // trailing probe would start a phantom paragraph below the ink), so
+  // their height is measured by a second source that has one. Inline
   // math needs the baseline probe; #box() anchors it in the flow.
   // One code-mode expression for both the ink and its measurement, so the
   // width measured is the width of the ink drawn.
@@ -274,12 +297,33 @@ export function inkTypst(latex: string, display: boolean, sizePt: number, bold: 
     mathPrelude([typ]) +
     '\n' +
     (display
-      ? `${eq}\n`
+      ? probe
+        ? displayProbe(eq)
+        : `${eq}\n`
       : `#(${expr})` +
         // The baseline, and the formula's exact advance: an auto-sized page
         // rounds to whole points (68.8pt came back as a 69pt page), and the
         // port needs the width Typst measures in the flow.
         `#context metadata((pos: here().position(), width: measure(${expr}).width));#box()\n`)
+  );
+}
+
+/** The display probe's body (see inkTypst). */
+function displayProbe(eq: string): string {
+  const numbered = (body: string) => `math.equation(block: true, numbering: "(1)", ${body})`;
+  const y = (label: string) => `locate(<${label}>).position().y`;
+  return (
+    `#let plass-body = (${eq}).body\n` +
+    '#set block(spacing: 0pt)\n' +
+    '#metadata(none)<plass-top>\n' +
+    `#${numbered('[#metadata(none)<plass-num>] + plass-body')}\n` +
+    '#metadata(none)<plass-mid>\n' +
+    '#math.equation(block: true, [#metadata(none)<plass-bare>] + plass-body)\n' +
+    '#context metadata((\n' +
+    `  height: measure(${eq}).height.pt(),\n` +
+    `  numbered: measure(${numbered('plass-body')}).height.pt(),\n` +
+    `  inkTop: ((${y('plass-num')} - ${y('plass-top')}) - (${y('plass-bare')} - ${y('plass-mid')})).pt(),\n` +
+    '))\n'
   );
 }
 
@@ -301,13 +345,18 @@ async function compileOne(
 
   const svg = await compileVerdict<string>(run({ kind: 'svg', source: src }));
   if (!svg) return null;
-  const meta = item.display
-    ? null
-    : await compileVerdict<Array<{ func: string; value: { pos: { x: string; y: string }; width: string } }>>(
-        run({ kind: 'query', source: src, selector: 'metadata' }),
-      );
-  const baselinePt = meta?.[0]?.value?.pos ? parseFloat(meta[0].value.pos.y) : NaN;
-  const measuredPt = meta?.[0]?.value?.width ? parseFloat(meta[0].value.width) : NaN;
+  type Probe = { pos?: { x: string; y: string }; width?: string; height?: number; numbered?: number; inkTop?: number };
+  const meta = await compileVerdict<Array<{ func: string; value: Probe | null }>>(
+    run({ kind: 'query', source: item.display ? (inkSource(item, true) ?? src) : src, selector: 'metadata' }),
+  );
+  // The display probe's tags are metadata too (`none`): the measurement is
+  // the one value that is a record.
+  const probe = meta?.find((m) => m.value && typeof m.value === 'object')?.value ?? null;
+  const baselinePt = probe?.pos ? parseFloat(probe.pos.y) : NaN;
+  const measuredPt = !item.display && probe?.width ? parseFloat(probe.width) : NaN;
+  const framePt = item.display && typeof probe?.height === 'number' ? probe.height : NaN;
+  const numberedPt = item.display && typeof probe?.numbered === 'number' ? probe.numbered : NaN;
+  const inkTopPt = item.display && typeof probe?.inkTop === 'number' ? probe.inkTop : NaN;
 
   // The viewBox carries the exact page size; the width/height attributes
   // are rounded (an auto-sized page came back as width="69" for 68.8pt),
@@ -321,7 +370,19 @@ async function compileOne(
 
   const PX = 4 / 3;
   const descentPx = Number.isFinite(baselinePt) ? Math.max(0, (hPt - baselinePt) * PX) : 0;
-  return { svg, widthPx: wPt * PX, heightPx: hPt * PX, descentPx };
+  const frameHeightPx = framePt > 0 ? framePt * PX : undefined;
+  // The ink's offset is a difference of positions: zero comes back as
+  // float noise (-3.6e-15), so it is clamped into the room the number made.
+  const numbered = frameHeightPx !== undefined && numberedPt >= framePt && Number.isFinite(inkTopPt);
+  const inkTop = numbered ? Math.min(Math.max(0, inkTopPt), numberedPt - framePt) : 0;
+  return {
+    svg,
+    widthPx: wPt * PX,
+    heightPx: hPt * PX,
+    descentPx,
+    frameHeightPx,
+    ...(numbered ? { numberedFrameHeightPx: numberedPt * PX, numberedInkTopPx: inkTop * PX } : {}),
+  };
 }
 /** A compile error is Typst's verdict on the formula (null); every other
  * failure means the compiler did not run, and propagates. */
