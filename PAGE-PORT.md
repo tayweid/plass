@@ -54,7 +54,12 @@
   page break resets the state (a fresh distributor per region, :14-21):
   the suffix paginator's seed therefore starts from the same fresh state
   the full pass has at that page start, and the old prefix replay is gone
-  (no seed-shape change). Footnote interaction kept in Typst's order:
+  (no seed-shape change). The state does not cover the page BEFORE the
+  seed: it ended by reading the seed page's opening block and, through a
+  heading run there, the block anchoring it, so the planner anchors only
+  strictly above the dirty block and past any such run that reaches it
+  (`lookAheadReachesDirty` in pagination-suffix.ts, 2026-10-16).
+  Footnote interaction kept in Typst's order:
   the sticky step runs before `footnotes()` (:372), so a footnote
   migration from a non-sticky frame leaves the heading behind while one
   from a heading restores its run; a strand at a paragraph's start is a

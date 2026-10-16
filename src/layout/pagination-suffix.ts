@@ -66,6 +66,7 @@ export type SuffixPaginationRejectReason =
   | 'no-boundary-anchor'
   | 'mid-line-anchor'
   | 'anchor-boundary'
+  | 'sticky-look-ahead'
   | 'invalid-spacer'
   | 'prefix-spacer-mismatch';
 
@@ -182,6 +183,45 @@ function reject(reason: SuffixPaginationRejectReason): SuffixPaginationDecision 
   return { kind: 'reject', reason };
 }
 
+/** Whether the paginator's decision to end a page before this top-level
+ * block can depend on the block after it. Its sticky distributor
+ * (src/layout/flow-rules.ts) keeps a heading run's checkpoint until a
+ * non-sticky, non-empty frame anchors the run, and a page that ends before
+ * that moves the whole run: a heading continues the run, an editorial
+ * comment is no frame at all (the walk skips it), and a block whose only
+ * content is hard breaks may lay out as empty lines alone. Every other
+ * block anchors the run inside itself, or ends the page outright (a page
+ * break). */
+function lookAheadPasses(node: PMNode): boolean {
+  const name = node.type.name;
+  if (name === 'heading' || name === 'editor_comment') return true;
+  if (node.isLeaf) return false;
+  let hardBreak = false;
+  let printed = false;
+  node.descendants((child) => {
+    if (printed) return false;
+    if (child.type.name === 'hard_break') hardBreak = true;
+    else if (child.isText || child.isInline || child.isAtom) printed = true;
+    return !printed;
+  });
+  return hardBreak && !printed;
+}
+
+/** Whether the previous page's end, for a page that starts at top-level block
+ * `index`, can depend on a block at or past `dirtyIndex`. That decision reads
+ * the page-opening block (its first lines: the orphan rule, the footnotes
+ * they carry) and, through a sticky run, every block up to and including the
+ * one that anchors it. */
+function lookAheadReachesDirty(
+  blocks: readonly TopLevelBlock[],
+  index: number,
+  dirtyIndex: number,
+): boolean {
+  let last = index;
+  while (last < dirtyIndex && lookAheadPasses(blocks[last].node)) last++;
+  return last >= dirtyIndex;
+}
+
 /**
  * Build a conservative restart seed for fallback pagination.
  *
@@ -192,8 +232,12 @@ function reject(reason: SuffixPaginationRejectReason): SuffixPaginationDecision 
  * deeply equal between basis and current — must survive intact: everything at
  * or after the first differing block (splits, joins, insertions, removals) is
  * recomputed by the seeded pass, so top-level structure may change freely
- * there. A rejection is expected and safe; the caller simply retains the
- * existing full-document pagination path.
+ * there. The restart is a page start strictly BEFORE the first differing
+ * block, and one whose previous page ended by reading clean blocks alone
+ * (`lookAheadReachesDirty`): the seeded pass holds every page above it as
+ * it was, so none of them may be one the edit can change. A rejection is
+ * expected and safe; the caller simply retains the existing full-document
+ * pagination path.
  */
 export function planSuffixPagination(input: SuffixPaginationInput): SuffixPaginationDecision {
   const { basisDoc, currentDoc } = input;
@@ -229,16 +273,20 @@ export function planSuffixPagination(input: SuffixPaginationInput): SuffixPagina
     dirtyIndex < currentBlocks.length ? currentBlocks[dirtyIndex].pos : currentDoc.content.size;
 
   // Validate the marker prefix while scanning to the dirty boundary. Markers
-  // PAST the dirty boundary are recomputed by the seeded pass, so a stale or
-  // unmappable trailing marker merely ends the scan instead of rejecting the
-  // document.
+  // AT or past the dirty boundary are recomputed by the seeded pass, so a
+  // stale or unmappable trailing marker merely ends the scan instead of
+  // rejecting the document. A page start AT the dirty block is never kept:
+  // the page before it ended where it did by reading that block (whether
+  // its first lines fit at the foot, the orphan rule over them), so an edit
+  // there can move that page's end — a short inserted block fits at its
+  // foot, a shortened one pulls lines back.
   let scanEnd = -1;
   let previousPos = -1;
   let previousLine = -1;
   for (let index = 0; index < input.markers.length; index++) {
     const marker = input.markers[index];
     if (!markerIsNumeric(marker)) break;
-    if (marker.pos > dirtyStart) break;
+    if (marker.pos >= dirtyStart) break;
     // Every physical page start is present, so exact marker ordinals are the
     // contiguous internal page indices 1, 2, ... .
     if (marker.page !== index + 1) return reject('invalid-page-ordinal');
@@ -256,23 +304,33 @@ export function planSuffixPagination(input: SuffixPaginationInput): SuffixPagina
   }
   if (scanEnd < 0) return reject('no-boundary-anchor');
 
-  // The anchor is the LATEST page start at or before the dirty boundary that
-  // sits on a top-level block boundary. A later mid-block or container-nested
-  // start cannot seed the runner, but skipping back past it is sound: it is
-  // then part of the recomputed suffix, exactly like every start past the
-  // dirty boundary — the trade is only a larger suffix, never correctness.
+  // The anchor is the LATEST page start before the dirty boundary that sits
+  // on a top-level block boundary and whose previous page's end the dirty
+  // blocks cannot move. A later mid-block or container-nested start cannot
+  // seed the runner, and a page opening with a heading run that reaches the
+  // dirty block ended its previous page by what the edit changed (the run
+  // moved there because the frame that anchors it did not fit); skipping
+  // back past either is sound: it is then part of the recomputed suffix,
+  // exactly like every start past the dirty boundary — the trade is only a
+  // larger suffix, never correctness.
   let anchorMarkerIndex = -1;
   let $anchor: ReturnType<PMNode['resolve']> | null = null;
+  let stickyRejected = false;
   for (let index = scanEnd; index >= 0; index--) {
     const marker = input.markers[index];
     if (marker.line !== 0) continue;
     const $pos = currentDoc.resolve(marker.pos);
     if ($pos.depth !== 0 || !$pos.nodeAfter) continue;
+    if (lookAheadReachesDirty(currentBlocks, $pos.index(0), dirtyIndex)) {
+      stickyRejected = true;
+      continue;
+    }
     anchorMarkerIndex = index;
     $anchor = $pos;
     break;
   }
   if (anchorMarkerIndex < 0 || !$anchor) {
+    if (stickyRejected) return reject('sticky-look-ahead');
     return reject(input.markers[scanEnd].line !== 0 ? 'mid-line-anchor' : 'anchor-boundary');
   }
   const anchor = input.markers[anchorMarkerIndex];
