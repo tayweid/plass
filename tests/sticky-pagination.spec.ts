@@ -102,7 +102,6 @@ async function growFiller(page: Page): Promise<void> {
 test('a heading that would be last on a page migrates with its paragraph', async ({ page }) => {
   test.setTimeout(180_000);
   await page.goto('/?new=1');
-  await pinOldMargins(page);
   await page.evaluate((sentence) => {
     const { state } = window.view;
     const { schema } = state;
@@ -150,7 +149,6 @@ test('a heading that would be last on a page migrates with its paragraph', async
 test('two consecutive headings migrate together', async ({ page }) => {
   test.setTimeout(180_000);
   await page.goto('/?new=1');
-  await pinOldMargins(page);
   await page.evaluate((sentence) => {
     const { state } = window.view;
     const { schema } = state;
