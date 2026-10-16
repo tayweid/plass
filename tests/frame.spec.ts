@@ -1,4 +1,4 @@
-import { expect, OLD_MARGINS_TYP, test, type Page } from './fixture';
+import { expect, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // The frame (src/style.css, "The panel"): one elevated panel under the bar
@@ -1222,9 +1222,12 @@ test('a pass holds the caret where it is on the screen: Enters mid-page, across 
   // once scrolled it a few hundred px by itself a beat after the Enters
   // (the pass takes the paper's transform off and puts it back), and where
   // a line carried over a page break left the caret 365 px below the
-  // panel. A pass holds a followed caret still (src/paper-scale.ts).
+  // panel. A pass holds a followed caret still (src/paper-scale.ts). At
+  // 1 in margins the click lands on the paragraph that opens a sheet (the
+  // next test pins that case), and the burst's first line past the last
+  // sheet runs past it by under a px (fitPaper).
   await page.setViewportSize({ width: 1500, height: 900 });
-  await openTyp(page, OLD_MARGINS_TYP + Array.from({ length: 30 }, (_, i) => `P${i} ` + FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
+  await openTyp(page, Array.from({ length: 30 }, (_, i) => `P${i} ` + FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
   const caret = () =>
     page.evaluate(() => {
       const { view } = window as unknown as Hooks;
@@ -1315,6 +1318,55 @@ test('a pass holds the caret where it is on the screen: Enters mid-page, across 
   settled = await caret();
   expect(settled.sheets).toBeGreaterThan(sheets);
   expect(settled.inView).toBe(true);
+  expect(Math.abs(settled.top - typed.top)).toBeLessThan(1);
+});
+
+test('a pass holds the caret at a page top: Enters at the start of the paragraph that opens a page, the first new line going back to the page before', async ({ page }) => {
+  test.setTimeout(120_000);
+  // At 1 in margins every page of this document ends with room for one
+  // more line, so of the Enters at the start of the paragraph that opens
+  // the third sheet, the first new (empty) line belongs on the second once
+  // the page is laid, and the page gap above the caret moves down a line.
+  // Found 2026-10-16: the first settled pass, seeded at the third page's
+  // start, kept the line on the third; the sampled check's full pass that
+  // corrected it ran outside paperPass, and the caret jumped 70 px
+  // (suffixSoundnessEvent in src/typeset-plugin.ts).
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await openTyp(page, '#set page(margin: 1in)\n\n' + Array.from({ length: 30 }, (_, i) => `P${i} ` + FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
+  const caret = () =>
+    page.evaluate(() => {
+      const { view } = window as unknown as Hooks;
+      const panel = document.getElementById('scroll')!.getBoundingClientRect();
+      const c = view.coordsAtPos(view.state.selection.head);
+      return { top: c.top, inView: c.top >= panel.top && c.bottom <= panel.bottom };
+    });
+  // What stands either side of the second page gap: the last paragraph of
+  // the second sheet and the first of the third.
+  const aroundGap = () =>
+    page.evaluate(() => {
+      const gap = document.querySelectorAll('.ProseMirror > .ts-pagegap')[1];
+      return { before: gap.previousElementSibling!.textContent, after: gap.nextElementSibling!.textContent!.slice(0, 4) };
+    });
+  expect(await aroundGap()).toEqual({ before: expect.stringMatching(/^P11 /), after: 'P12 ' });
+  const start = await page.evaluate(() => {
+    const panel = document.getElementById('scroll')!;
+    const p = document.querySelectorAll('.ProseMirror > .ts-pagegap')[1].nextElementSibling!;
+    panel.scrollTop += p.getBoundingClientRect().top - panel.getBoundingClientRect().top - 300;
+    const r = p.getBoundingClientRect();
+    return { x: r.left + 3, y: r.top + 8 };
+  });
+  await page.mouse.click(start.x, start.y);
+  await expect.poll(() => page.evaluate(() => {
+    const { $head } = (window as unknown as Hooks).view.state.selection;
+    return `${$head.parent.textContent.slice(0, 4)}@${$head.parentOffset}`;
+  })).toBe('P12 @0');
+  const before = await page.evaluate(() => (window as unknown as Hooks).__pagCount());
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Enter');
+  const typed = await caret();
+  await settleLocal(page, before);
+  const settled = await caret();
+  expect(await aroundGap()).toEqual({ before: '', after: '' });
+  expect(typed.inView).toBe(true);
   expect(Math.abs(settled.top - typed.top)).toBeLessThan(1);
 });
 

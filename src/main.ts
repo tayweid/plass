@@ -206,6 +206,7 @@ attachPaper({
   clip: document.getElementById('paper')!,
   stack: stackEl,
   pages: pagesEl,
+  editor: editorEl,
   shadow: document.getElementById('paper-shadow')!,
 });
 // Plass.app's View › Zoom In / Zoom Out / Actual Size: the window sized to

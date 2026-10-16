@@ -70,6 +70,7 @@ type Sheet = { readonly top: number; readonly height: number };
 let panelEl: HTMLElement | null = null;
 let clipEl: HTMLElement | null = null;
 let stack: HTMLElement | null = null;
+let editorEl: HTMLElement | null = null;
 let pagesEl: HTMLElement | null = null;
 let shadowEl: HTMLElement | null = null;
 let scale = 1;
@@ -162,10 +163,20 @@ export function fitPaper(): void {
   const sheetWidth = parseFloat(box.width);
   const sheetHeight = parseFloat(box.height);
   if (!(panelWidth > 0) || !(sheetWidth > 0)) return;
-  // scrollHeight is in whole px: it counts only past the stack's bottom.
-  const overflow = sheet.scrollHeight;
-  runsOn = overflow > sheetHeight + 1;
-  const height = runsOn ? overflow : sheetHeight;
+  // Where the editor ends, in the layout's px: its drawn bottom below the
+  // stack's top, over the stack's drawn px per laid-out px (the scale, or
+  // 1 inside atPaperSize). Fractional: the stack's scrollHeight is in
+  // whole px, and read with a px of slack it missed a line that ran past
+  // the last sheet by less, leaving the caret's foot under the panel's
+  // edge (found 2026-10-16 at 1 in margins: the line 0.6 px past the last
+  // sheet, the panel at its last scroll offset). The editor is hidden in
+  // the plain-text view (its box at 0), where the stack's height is its
+  // own.
+  const drawn = sheet.getBoundingClientRect();
+  const editor = editorEl?.getBoundingClientRect();
+  const editorBottom = editor && editor.height > 0 ? ((editor.bottom - drawn.top) * sheetWidth) / drawn.width : 0;
+  runsOn = editorBottom > sheetHeight;
+  const height = runsOn ? editorBottom : sheetHeight;
   const before = scale;
   scale = panelWidth / sheetWidth;
   // Written only when they change: this runs before every scroll to the
@@ -334,11 +345,13 @@ export function attachPaper(paper: {
   clip: HTMLElement;
   stack: HTMLElement;
   pages: HTMLElement;
+  editor: HTMLElement;
   shadow: HTMLElement;
 }): void {
   panelEl = paper.panel;
   clipEl = paper.clip;
   stack = paper.stack;
+  editorEl = paper.editor;
   pagesEl = paper.pages;
   shadowEl = paper.shadow;
   radius = parseFloat(getComputedStyle(paper.shadow).getPropertyValue('--paper-radius')) || radius;

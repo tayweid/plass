@@ -2148,7 +2148,7 @@ class TypesetView {
         this.suffixVerifyScheduled = false;
         const ticket = this.pendingSuffixVerification;
         this.pendingSuffixVerification = null;
-        if (ticket && !this.destroyed && !this.suspended) atPaperSize(() => this.runSuffixVerification(ticket));
+        if (ticket && !this.destroyed && !this.suspended) this.runSuffixVerification(ticket);
       }, 0);
     });
   }
@@ -2177,10 +2177,11 @@ class TypesetView {
       stats.verificationsDropped++;
       return;
     }
-    const snapshot = this.capturePaginationSnapshot();
-    const runFallback = (seed?: PaginationFallbackSeed) => this.runFallbackPass(snapshot, seed);
+    // The reference reads the paper at its own size. A mismatch's
+    // correction is a pass of its own, run after this read (paperPass reads
+    // the caret as drawn).
+    const reference = atPaperSize(() => this.runFallbackPass(this.capturePaginationSnapshot()));
     const sourceStats = stats.bySource[ticket.source];
-    const reference = runFallback();
     stats.fullRuns++;
     stats.fullUnits += reference.visitedUnits;
     stats.sampledVerifications++;
@@ -2233,7 +2234,12 @@ class TypesetView {
     };
     this.suffixControl.recordMismatch(detail);
     this.pendingSuffixVerification = null;
-    if (!this.destroyed) this.run();
+    // Held at a followed caret like every scheduled pass: the corrected
+    // pages can move the page structure above it. Found 2026-10-16 at 1 in
+    // margins: Enters at the start of a page's first paragraph were seeded
+    // at that page's start, the correction put the first new line back on
+    // the page before, and the caret jumped a line on the screen.
+    if (!this.destroyed) paperPass(() => this.run(), this.followedCaret);
   }
 
   /**
