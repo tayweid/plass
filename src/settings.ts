@@ -194,6 +194,14 @@ export function pageSize(s: Pick<DocSettings, 'page' | 'landscape' | 'pageWidthI
  *  gap; the paginator steps pages by the page height plus this. */
 export const PAGE_GAP = 6;
 
+/** A length in layout units: Chrome holds a length in 1/64 px and
+ *  truncates a CSS length to it, so 0.9em at 12.5 pt (15 px, computed as
+ *  14.99999…) is laid out as 14.984375 px. A length published already
+ *  rounded to 1/64 px is laid out exactly as given. */
+export function layoutPx(px: number): number {
+  return Math.round(px * 64) / 64;
+}
+
 /** Merge stored settings over defaults (migrating legacy fields). */
 export function normalizeSettings(raw: Partial<DocSettings> | null | undefined): DocSettings {
   const source = raw && typeof raw === 'object' ? raw : {};
@@ -266,12 +274,18 @@ export function applySettings(state: EditorState) {
   root.setProperty('--doc-font', cssFontStack(s.font));
   root.setProperty('--doc-size', `${s.sizePt}pt`);
   root.setProperty('--doc-line', String(s.lineHeight));
-  root.setProperty('--par-margin', s.parIndent ? '0em' : '0.9em');
+  const bodyPx = (s.sizePt * 4) / 3;
+  // A paragraph's margin (`parMarginEm` in typ-serializer.ts) in layout
+  // units: a paragraph's box is whole lines, so its margin's end falls
+  // within 1/128 px of Typst's spacing, on it at 12.5 pt. As 0.9em it was
+  // truncated, 1/64 px short at 12.5 pt too, and a page of paragraphs
+  // crept up against the print by that much a gap.
+  const parMarginPx = s.parIndent ? 0 : layoutPx(0.9 * bodyPx);
+  root.setProperty('--par-margin', `${parMarginPx}px`);
   root.setProperty('--par-indent', s.parIndent ? '1.5em' : '0em');
   // Code blocks (and islands) mirror Typst's raw block: published in px so
   // the block's own 0.8em font size cannot rescale them.
   const code = codeBlockMetricsEm(s);
-  const bodyPx = (s.sizePt * 4) / 3;
   // Table cells: a one-line cell is inset + top edge + inset tall in Typst,
   // while the editor's line box is line-height tall; the difference is the
   // half-leading on each side (style.css, `--cell-inset`). It is taken
@@ -282,7 +296,7 @@ export function applySettings(state: EditorState) {
   // Typst's paragraph leading/spacing are absolute lengths. Reducing a
   // table's text size changes its glyph extent, not those two gaps.
   root.setProperty('--table-text-extent', `${extentPx}px`);
-  root.setProperty('--table-par-gap', `${(s.parIndent ? 0 : 0.9 * bodyPx).toFixed(4)}px`);
+  root.setProperty('--table-par-gap', `${parMarginPx}px`);
   root.setProperty('--code-line', `${(code.lineEm * bodyPx).toFixed(4)}px`);
   root.setProperty('--fn-top-inset', `${(footnoteFrameInsetsEm(s).top * bodyPx).toFixed(4)}px`);
   root.setProperty('--fn-sep-width', s.footnoteSeparator === 'full' ? '100%' : '30%');

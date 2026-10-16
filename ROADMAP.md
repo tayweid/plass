@@ -73,11 +73,24 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      the margin, and the page's frame sits 0.019 px high (Chrome places
      boxes in 1/64 px; the page-top spacer and the run follower's padding
      each round). Not worth chasing further unless a real document lands
-     there. Other em lengths still truncate to 1/64 px the way headings
-     did (a list item's 0.25em margin; every 0.9em margin, a paragraph's
-     and a display equation's, at 12.5 pt too: 14.984375 px, measured
-     2026-10-16, so a spaced page's paragraphs drift up by 1/64 px a
-     gap); each could be published snapped the same way.
+     there. Paragraph margins and display equations are in layout units
+     too since 2026-10-16 (tests/margin-drift.spec.ts): 0.9em was
+     truncated to 14.984375 px at 12.5 pt, so a spaced page's paragraphs
+     crept up 1/64 px a gap, 0.33 px by the 22nd, and an equation's
+     paddings, frame and margin lost 0.02-0.03 px more. At 12.5 pt a page of
+     paragraphs is now exact; an equation keeps its own rounding (at most
+     1/128 px, the same each time for the same formula), and at a size
+     where 0.9 em is no whole 1/64 px (11, 12, 13, 14 pt) so does each
+     paragraph gap (12 pt: 1/160 px a gap, 0.13 px by the 22nd); only
+     per-block margins would take that out. Still truncated as these
+     were: a list item's 0.25em margin; the fixed 0.9em margins of quotes,
+     lists, figures, the abstract and the bibliography; the code block's
+     published lengths. And the line box, which no margin can absorb: at
+     10 and 13 pt Chrome lays every line 1/64 px short (19.984375 and
+     25.984375 px at line spacing 1.5), 0.6 px by a 10 pt page's 40th
+     line, and at 12.5 pt with line spacing 1.3 1/192 px long (measured
+     2026-10-16). Line height stays a ratio because inline atoms inherit
+     it, so publishing it in px is a design question.
    - The page paints heading ink lower than the print does: Chrome's
      baseline of an H1 is 2.8 px below Typst's, an H2's 1.5 px, an H3's
      1.8 px, while body lines are 0.65 px above (measured 2026-10-16 at

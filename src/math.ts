@@ -14,7 +14,7 @@ import type { Mark } from 'prosemirror-model';
 import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
 import { wrapAligned } from './math-src';
-import { getSettings, parseMathMacros } from './settings';
+import { getSettings, layoutPx, parseMathMacros } from './settings';
 import { forgetInk, getInk, inkDeferredReason, inkKey, inkStatus, isBoldMath, onInk, requestInk } from './math-ink';
 import { scheduleTypeset } from './typeset-plugin';
 import { mountTypstSvg } from './safe-svg';
@@ -151,14 +151,20 @@ export class MathView implements NodeView {
       const svg = this.dom.querySelector('svg');
       if (svg) {
         svg.style.width = `${ink.widthPx.toFixed(2)}px`;
-        svg.style.height = `${ink.heightPx.toFixed(2)}px`;
-        if (!this.display) svg.style.verticalAlign = `${(-ink.descentPx).toFixed(2)}px`;
-        else {
+        if (!this.display) {
+          svg.style.height = `${ink.heightPx.toFixed(2)}px`;
+          svg.style.verticalAlign = `${(-ink.descentPx).toFixed(2)}px`;
+        } else {
           // The box holds the equation's frame, as the print lays it: the
           // svg's page is rounded up to whole points, and what it has past
-          // the frame hangs into the padding below as paint.
+          // the frame hangs into the padding below as paint (style.css
+          // places every edge from the frame; the svg's height is in
+          // layout units so the edges below it land where computed).
           const frame = ink.frameHeightPx ?? ink.heightPx;
-          svg.style.marginBottom = `${(frame - parseFloat(svg.style.height)).toFixed(3)}px`;
+          const height = layoutPx(ink.heightPx);
+          svg.style.height = `${height}px`;
+          this.dom.style.setProperty('--eq-svg-h', `${height}px`);
+          this.dom.style.setProperty('--eq-frame', `${frame.toFixed(4)}px`);
           if (ink.numberRoomPx !== undefined) this.dom.style.setProperty('--eq-number-room', `${ink.numberRoomPx.toFixed(3)}px`);
           else this.dom.style.removeProperty('--eq-number-room');
           // Center the painted equation number on the ink (as Typst does).

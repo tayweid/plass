@@ -2958,9 +2958,9 @@ body {
    and nothing else (no line box, whose strut would add the text's ascent
    and descent around a short formula), inside the 0.5em padding that is
    the start and end of Typst's spacing (`equationBlockSpacingEm`;
-   `blockFrameSlackEm` gives the paginator the same 0.5em). The node view
-   (math.ts) gives back what the svg's whole-point page has past the frame
-   as a negative margin-bottom. */
+   `blockFrameSlackEm` gives the paginator the same 0.5em). The svg's
+   whole-point page can reach past the frame: below, that hangs into the
+   padding as paint (`.math-display.math-ink > svg`). */
 .math-display > svg {
   display: block;
   margin-left: auto;
@@ -2972,8 +2972,35 @@ body {
    plugin's) reaches above the formula (`--eq-number-room`, the ink's),
    the frame grows by the rest above it (x = y, but not x^2). The label of
    an unnumbered one prints nothing. */
-.math-display[data-eqnum]:not(.eqnum-unnumbered) > svg {
-  margin-top: max(0px, calc(var(--eq-number-cap, 0px) - var(--eq-number-room, 1000px)));
+.math-display.math-ink[data-eqnum]:not(.eqnum-unnumbered) {
+  --eq-grow: max(0px, var(--eq-number-cap, 0px) - var(--eq-number-room, 1000px));
+}
+
+/* The box's edges in layout units. Chrome holds a length in 1/64 px and
+   truncates each one to it: the two 0.5em paddings, the frame and the
+   0.9em margin each came out up to 1/64 px short, and the paragraph after
+   an equation painted 0.02-0.03 px higher than its print at 12.5 pt,
+   more with every equation on the page. Each edge is rounded from the
+   exact model instead (the padding, the frame `--eq-frame` with what a
+   number grows it by, the padding, the margin), so it falls within 1/128
+   px of where Typst puts it below the box's top. The svg's height
+   (`--eq-svg-h`, the node view's) is in layout units already; its
+   margin-bottom gives back what the svg's whole-point page has past the
+   frame. */
+.math-display.math-ink {
+  --eq-grow: 0px;
+  padding-top: round(0.5em, 1px / 64);
+  padding-bottom: calc(
+    round(1em + var(--eq-grow) + var(--eq-frame), 1px / 64) - round(0.5em + var(--eq-grow) + var(--eq-frame), 1px / 64)
+  );
+  margin-bottom: calc(round(1.9em + var(--eq-grow) + var(--eq-frame), 1px / 64) - round(1em + var(--eq-grow) + var(--eq-frame), 1px / 64));
+}
+
+.math-display.math-ink > svg {
+  margin-top: calc(round(0.5em + var(--eq-grow), 1px / 64) - round(0.5em, 1px / 64));
+  margin-bottom: calc(
+    round(0.5em + var(--eq-grow) + var(--eq-frame), 1px / 64) - round(0.5em + var(--eq-grow), 1px / 64) - var(--eq-svg-h)
+  );
 }
 
 .math-display {
