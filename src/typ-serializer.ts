@@ -169,6 +169,13 @@ export function headingScale(level: number): number {
   return HEADINGS[Math.min(3, Math.max(1, level)) - 1].hs;
 }
 
+/** A heading level's editor box, body em (style.css): its plain
+ *  padding-top, its line (1.25 × the heading's size) and its margin-bottom. */
+export function headingBoxEm(level: number): { padTop: number; line: number; marginBottom: number } {
+  const h = HEADINGS[Math.min(3, Math.max(1, level)) - 1];
+  return { padTop: h.padTop * h.hs, line: 1.25 * h.hs, marginBottom: h.marginBottom * h.hs };
+}
+
 // Heading scale mirrored from the editor CSS (.ProseMirror h1/h2/h3).
 // `rise` (body em) is how far Typst's heading baseline sits above the
 // editor line box's metric baseline, which places the print's heading

@@ -64,15 +64,26 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      top edge in the export, or carry per-line heights: a design choice.
      (Body lines themselves are exact since 2026-10-16: `extent` is the
      cap height, tests/line-pitch.spec.ts.)
-   - Page bottoms within a few tenths of a pixel of a line, after the body
-     pitch fix: a sweep of the nine heading pairs over top margins
-     1.00–1.26 in (2026-10-16) has 3 of 243 cases off by a line. H1+H3 at
-     1.16 in and H2+H2 at 1.09 in: the port's run is at least 0.13 px
-     shorter than Typst's (heading calibration). H2+H1 at 1.21 in: Typst's
-     line is 0.05 px past the margin, inside the paginator's 0.1 px fit
-     tolerance (`FIT_TOLERANCE_PX`), which keeps it; body geometry is now
-     exact to 1/64 px, so the tolerance could tighten once the headings
-     are exact too.
+   - Page bottoms at the layout unit. Since 2026-10-16 headings are exact
+     too (their frame is the bold cap height, every spacing is a gap
+     between frames, heading boxes are snapped to 1/64 px) and the fit
+     tolerance is 1/64 px: the heading-run sweep (nine level pairs × top
+     margins 1.00–1.26 in) agrees in 242 of 243 cases. The one left, H2+H1
+     at 1.21 in, is a quantization limit: Typst's line runs 0.016 px past
+     the margin, and the page's frame sits 0.019 px high (Chrome places
+     boxes in 1/64 px; the page-top spacer and the run follower's padding
+     each round). Not worth chasing further unless a real document lands
+     there. Other em lengths still truncate to 1/64 px the way headings
+     did (a list item's 0.25em margin, 0.9em paragraph margins at sizes
+     other than 12.5 pt); each could be published snapped the same way.
+   - The page paints heading ink lower than the print does: Chrome's
+     baseline of an H1 is 2.8 px below Typst's, an H2's 1.5 px, an H3's
+     1.8 px, while body lines are 0.65 px above (measured 2026-10-16 at
+     12.5 pt from the audit's SVG). The headings' part is HEADINGS `rise`
+     in typ-serializer.ts, a July calibration that moves no frame; the
+     body's is Chrome rounding the font's ascent. A paint-only transform,
+     or a re-calibrated `rise` (which moves the print), would close it; a
+     design choice.
 6. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
    for Plass and Knuth, Knuth's `docs/ROADMAP.md` carries the same
    entry, and `docs/COAUTHOR.md` there is the git-only design it

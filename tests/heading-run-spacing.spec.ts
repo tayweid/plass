@@ -98,9 +98,15 @@ test('the paragraph after an H3+H1 run breaks where Typst breaks it', async ({ p
 // on the page than in print. At these top margins the page bottom falls
 // inside that 0.1 px: the paragraph's next line ran 0.23 px (H1+H3) or
 // 0.27 px (H2+H2) past the margin in print, and the page kept it.
+//
+// At 1.088 in, 0.06 px: Chrome holds lengths in 1/64 px and truncated each
+// heading's em padding, line and margin, so the page after the run sat
+// 0.09 px high; the plugin now publishes them snapped to the exact model
+// (publishGeometryVars), and the paginator's fit tolerance is 1/64 px.
 for (const { marginTop, run, starts } of [
   { marginTop: 1.16, run: [1, 3], starts: 'line' },
   { marginTop: 1.09, run: [2, 2], starts: 'run' },
+  { marginTop: 1.088, run: [2, 2], starts: 'run' },
 ] as const) {
   test(`an H${run[0]}+H${run[1]} run at a ${marginTop} in top margin breaks where Typst breaks it`, async ({ page }) => {
     test.setTimeout(90_000);

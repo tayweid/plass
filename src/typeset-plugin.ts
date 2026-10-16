@@ -44,7 +44,7 @@ import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdic
 import { atPaperSize, fitPaper, paperPass, paperScale, type PaperCaret } from './paper-scale';
 import { caretBox } from './caret-box';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
-import { escapeTyp, expandMacrosWith, headingRunPadTopEm, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
+import { escapeTyp, expandMacrosWith, headingBoxEm, headingRunPadTopEm, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
 import {
   containerPageTopDropEm,
   footnoteEmptyFrameAction,
@@ -154,11 +154,36 @@ function footnoteSeparatorPx(s: DocSettings): number {
   return s.footnoteSeparator === 'none' ? 0 : footnoteSeparatorHeightPx();
 }
 
+/** Each heading level's one-line box as Chrome lays it at a body size of
+ *  `sizePt`, no padding or margin: 1.25 × the heading's size, rounded to
+ *  layout units. Read from probes outside the paper, whose transform would
+ *  scale the read. The probes are set in the regular weight: a one-font
+ *  line box is its line-height whatever the face, and bold text here would
+ *  fetch the bold face early, and a face arriving re-measures everything. */
+function headingLineBoxesPx(sizePt: number): number[] {
+  const probe = document.createElement('div');
+  probe.className = 'ProseMirror';
+  probe.setAttribute('aria-hidden', 'true');
+  probe.style.cssText = `position:absolute;left:-10000px;top:0;width:400px;visibility:hidden;font-size:${sizePt}pt`;
+  const hs = [1, 2, 3].map((level) => {
+    const h = probe.appendChild(document.createElement(`h${level}`));
+    h.style.cssText = 'padding:0;margin:0;font-weight:400';
+    h.textContent = 'X';
+    return h;
+  });
+  document.body.appendChild(probe);
+  const heights = hs.map((h) => h.getBoundingClientRect().height);
+  probe.remove();
+  return heights;
+}
+
 /** Slack allowed when a frame is tested against the page bottom, in px.
  * Typst allows none (`Abs::fits` is exact to 1e-6pt); the browser's layout
- * is exact to 1/64 px, so this only absorbs that quantization — a looser
- * value placed lines Typst rejects by half a point. */
-const FIT_TOLERANCE_PX = 0.1;
+ * is exact to 1/64 px, so this only absorbs that quantization: one layout
+ * unit. It was 0.1 px while body lines and headings were modelled less
+ * exactly, and the page kept lines Typst moved by up to 0.1 px (a looser
+ * value still placed lines Typst rejects by half a point). */
+const FIT_TOLERANCE_PX = 1 / 64;
 
 /** The widths of a block's inline atoms, as the port will receive them,
  * folded into its layout cache key: a formula's compiled ink arrives after
@@ -2034,12 +2059,33 @@ class TypesetView {
     const table = tableMarginsEm(s);
     root.setProperty('--table-mt', `${(table.top * F).toFixed(4)}px`);
     root.setProperty('--table-mb', `${(table.bottom * F).toFixed(4)}px`);
-    // A heading run's follower: Typst's collapsed spacing (style.css).
+    // Heading boxes in layout units. Chrome holds a length in 1/64 px and
+    // truncates an em length to it: a heading's padding, line and margin
+    // each came out up to 1/64 px short, and the page after a heading run
+    // sat up to 0.06 px higher than the print. The padding and margin are
+    // published in whole 1/64 px, chosen so the box's bottom and its
+    // margin's end fall within 1/128 px of the exact model; the line box is
+    // measured (line-height stays a ratio, which inline atoms inherit).
+    const snap = (px: number) => Math.round(px * 64) / 64;
+    const exactPx = (s.sizePt * 4) / 3;
+    const lines = headingLineBoxesPx(s.sizePt);
+    const boxes = lines.map((line, i) => {
+      const em = headingBoxEm(i + 1);
+      const [pad, lh, mb] = [em.padTop * exactPx, em.line * exactPx, em.marginBottom * exactPx];
+      return { line, lh, mb, padPx: snap(pad + lh) - line, mbPx: snap(pad + lh + mb) - snap(pad + lh) };
+    });
+    boxes.forEach((b, i) => {
+      root.setProperty(`--h${i + 1}-pad`, `${b.padPx}px`);
+      root.setProperty(`--h${i + 1}-mb`, `${b.mbPx}px`);
+    });
+    // A heading run's follower: Typst's collapsed spacing (style.css), its
+    // margin's end within 1/128 px too.
     for (let prev = 1; prev <= 3; prev++) {
       for (let level = 1; level <= 3; level++) {
-        const pad = headingRunPadTopEm(s, prev, level) * F;
-        root.setProperty(`--heading-run-pad-${prev}-${level}`, `${Math.max(0, pad).toFixed(4)}px`);
-        root.setProperty(`--heading-run-mt-${prev}-${level}`, `${Math.min(0, pad).toFixed(4)}px`);
+        const b = boxes[level - 1];
+        const pad = snap(headingRunPadTopEm(s, prev, level) * exactPx + b.lh + b.mb) - b.mbPx - b.line;
+        root.setProperty(`--heading-run-pad-${prev}-${level}`, `${Math.max(0, pad)}px`);
+        root.setProperty(`--heading-run-mt-${prev}-${level}`, `${Math.min(0, pad)}px`);
       }
     }
     // Boxes normalized against the old values re-fit now, so this pass
