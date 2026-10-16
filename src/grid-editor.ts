@@ -19,6 +19,7 @@ import { blockFrameSlackEm, headingScale } from './typ-serializer';
 import { atPaperSize, onPaperScale, paperScale } from './paper-scale';
 import { inkReachEm } from './font-registry';
 import { onGeometryVarsPublished, scheduleTypeset } from './typeset-plugin';
+import { cellIndexAt, cellSpan, cellStarts, fitGridRow, withSpan } from './grid-spans';
 
 export const DEFAULT_GRID_GUTTER_EM = 1;
 
@@ -38,20 +39,28 @@ export function gridContext(state: EditorState): { pos: number; node: PMNode; de
   return null;
 }
 
+/** The selection's cell: its row, its index in the row (`cell`), the
+ *  first column it covers and how many (`column`, `span`: a merged cell
+ *  covers several), and the caret's offset in it. */
 function selectedCell(state: EditorState, ctx: NonNullable<ReturnType<typeof gridContext>>) {
   const { $from } = state.selection;
   if ($from.depth < ctx.depth + 2) return null;
+  const row = $from.index(ctx.depth);
+  const cell = $from.index(ctx.depth + 1);
   return {
-    row: $from.index(ctx.depth),
-    column: $from.index(ctx.depth + 1),
+    row,
+    cell,
+    column: cellStarts(ctx.node.child(row))[cell],
+    span: cellSpan($from.node(ctx.depth + 2)),
     offset: $from.pos - $from.start(ctx.depth + 2),
   };
 }
 
-function cellPosition(grid: PMNode, pos: number, row: number, column: number): number {
+/** The position of the row's `index`th cell (its index, not a column). */
+function cellPosition(grid: PMNode, pos: number, row: number, index: number): number {
   let at = pos + 2;
   for (let i = 0; i < row; i++) at += grid.child(i).nodeSize;
-  for (let i = 0; i < column; i++) at += grid.child(row).child(i).nodeSize;
+  for (let i = 0; i < index; i++) at += grid.child(row).child(i).nodeSize;
   return at;
 }
 
@@ -76,7 +85,7 @@ export function insertGrid(view: EditorView, columns: number[] = [1, 1]): void {
 }
 
 /** Rebuild the grid at `pos` from a cell matrix (rows of cells), keeping
- *  the caret's cell where it survives. */
+ *  the caret in the cell now covering its column. */
 function replaceGrid(state: EditorState, pos: number, attrs: Record<string, unknown>, rows: PMNode[][]): Transaction {
   const old = state.doc.nodeAt(pos)!;
   const node = schema.nodes.grid.create(attrs, rows.map((cells) => schema.nodes.grid_row.create(null, cells)));
@@ -86,9 +95,9 @@ function replaceGrid(state: EditorState, pos: number, attrs: Record<string, unkn
   let target = pos + 3;
   if (selected) {
     const row = Math.min(selected.row, node.childCount - 1);
-    const column = Math.min(selected.column, node.child(row).childCount - 1);
-    const cell = node.child(row).child(column);
-    target = cellPosition(node, pos, row, column) + 1 + Math.min(selected.offset, cell.content.size);
+    const index = cellIndexAt(node.child(row), selected.column);
+    const cell = node.child(row).child(index);
+    target = cellPosition(node, pos, row, index) + 1 + Math.min(selected.offset, cell.content.size);
   }
   // A grid selected as a block stays selected (its Grid layout panel).
   if (state.selection instanceof NodeSelection && state.selection.from === pos) tr.setSelection(NodeSelection.create(tr.doc, pos));
@@ -107,16 +116,13 @@ const cellMatrix = (grid: PMNode): PMNode[][] => {
 };
 
 /** Set the column shares; a different count adds empty cells on the right
- *  or drops the rightmost columns (their content is lost; Grid layout never
- *  changes the count, Columns › add/delete act at the caret instead). */
+ *  or drops the rightmost columns (their content is lost, a merged cell
+ *  across the new edge narrowed; Grid layout never changes the count,
+ *  Columns › add/delete act at the caret instead). */
 export function setGridColumns(view: EditorView, columns: number[], focus = true): boolean {
   const ctx = gridContext(view.state);
   if (!ctx) return false;
-  const rows = cellMatrix(ctx.node).map((cells) => {
-    const out = cells.slice(0, columns.length);
-    while (out.length < columns.length) out.push(emptyCell());
-    return out;
-  });
+  const rows = cellMatrix(ctx.node).map((cells) => fitGridRow(cells, columns.length));
   view.dispatch(replaceGrid(view.state, ctx.pos, { ...ctx.node.attrs, columns }, rows));
   if (focus) view.focus();
   return true;
@@ -158,10 +164,12 @@ function caretCell(state: EditorState) {
   return selected ? { ctx, ...selected } : null;
 }
 
-/** Put the caret at the start of a cell of the rebuilt grid. */
+/** Put the caret at the start of the rebuilt grid's cell covering
+ *  `column` in `row`. */
 function caretTo(tr: Transaction, pos: number, row: number, column: number): Transaction {
   const grid = tr.doc.nodeAt(pos)!;
-  return tr.setSelection(TextSelection.near(tr.doc.resolve(cellPosition(grid, pos, row, column) + 1)));
+  const index = cellIndexAt(grid.child(row), column);
+  return tr.setSelection(TextSelection.near(tr.doc.resolve(cellPosition(grid, pos, row, index) + 1)));
 }
 
 /** Shares divided by the smallest, to three decimals (parseColumnShares's
@@ -193,24 +201,32 @@ export function deleteGridRowAt(view: EditorView): boolean {
   const rows = cellMatrix(at.ctx.node);
   rows.splice(at.row, 1);
   const row = Math.min(at.row, rows.length - 1);
-  const tr = caretTo(replaceGrid(view.state, at.ctx.pos, at.ctx.node.attrs, rows), at.ctx.pos, row, Math.min(at.column, rows[row].length - 1));
+  const tr = caretTo(replaceGrid(view.state, at.ctx.pos, at.ctx.node.attrs, rows), at.ctx.pos, row, at.column);
   view.dispatch(tr.scrollIntoView());
   view.focus();
   return true;
 }
 
-/** An empty column left or right of the caret's, one share wide (the
- *  smallest share); the caret lands in it, in its row. */
+/** An empty column left or right of the caret's cell (all of a merged
+ *  cell), one share wide (the smallest share); the caret lands in it, in
+ *  its row. A merged cell the new column passes through in another row
+ *  widens over it, as a table's does. */
 export function insertGridColumnAt(view: EditorView, side: 'left' | 'right'): boolean {
   const at = caretCell(view.state);
   if (!at) return false;
   const columns = [...(at.ctx.node.attrs.columns as number[])];
   if (columns.length >= 12) return false;
-  const index = side === 'left' ? at.column : at.column + 1;
+  const index = side === 'left' ? at.column : at.column + at.span;
   columns.splice(index, 0, Math.min(...columns));
   const rows = cellMatrix(at.ctx.node).map((cells) => {
     const out = [...cells];
-    out.splice(Math.min(index, out.length), 0, emptyCell());
+    const starts = cellStarts(cells);
+    const across = starts.findIndex((start, i) => start < index && index < start + cellSpan(cells[i]));
+    if (across >= 0) out[across] = withSpan(cells[across], cellSpan(cells[across]) + 1);
+    else {
+      const before = starts.findIndex((start) => start >= index);
+      out.splice(before < 0 ? out.length : before, 0, emptyCell());
+    }
     return out;
   });
   const tr = caretTo(replaceGrid(view.state, at.ctx.pos, { ...at.ctx.node.attrs, columns: canonical(columns) }, rows), at.ctx.pos, at.row, index);
@@ -219,13 +235,25 @@ export function insertGridColumnAt(view: EditorView, side: 'left' | 'right'): bo
   return true;
 }
 
-/** Remove the caret's column (its content goes with it); never the last. */
+/** Remove the caret's column (its content goes with it); never the last.
+ *  In a merged cell, its first column: the cell narrows by one and keeps
+ *  its content, as a table's merged cell does; so does a merged cell
+ *  across the column in another row. */
 export function deleteGridColumnAt(view: EditorView): boolean {
   const at = caretCell(view.state);
   const columns = [...((at?.ctx.node.attrs.columns as number[]) ?? [])];
   if (!at || columns.length < 2) return false;
   columns.splice(at.column, 1);
-  const rows = cellMatrix(at.ctx.node).map((cells) => cells.filter((_cell, i) => i !== at.column));
+  const rows = cellMatrix(at.ctx.node).map((cells) => {
+    const i = cellIndexAt(cells, at.column);
+    const start = cellStarts(cells)[i];
+    const span = cellSpan(cells[i]);
+    if (!(start <= at.column && at.column < start + span)) return cells;
+    const out = [...cells];
+    if (span > 1) out[i] = withSpan(cells[i], span - 1);
+    else out.splice(i, 1);
+    return out.length ? out : [emptyCell()];
+  });
   const column = Math.min(at.column, columns.length - 1);
   const tr = caretTo(replaceGrid(view.state, at.ctx.pos, { ...at.ctx.node.attrs, columns: canonical(columns) }, rows), at.ctx.pos, at.row, column);
   view.dispatch(tr.scrollIntoView());
@@ -233,11 +261,12 @@ export function deleteGridColumnAt(view: EditorView): boolean {
   return true;
 }
 
-/** The caret's place in its grid, for the pill's live readout. */
-export function gridCaretPlace(state: EditorState): { row: number; rows: number; column: number; columns: number } | null {
+/** The caret's place in its grid, for the pill's live readout: its cell's
+ *  first column and how many it covers. */
+export function gridCaretPlace(state: EditorState): { row: number; rows: number; column: number; span: number; columns: number } | null {
   const at = caretCell(state);
   if (!at) return null;
-  return { row: at.row, rows: at.ctx.node.childCount, column: at.column, columns: (at.ctx.node.attrs.columns as number[]).length };
+  return { row: at.row, rows: at.ctx.node.childCount, column: at.column, span: at.span, columns: (at.ctx.node.attrs.columns as number[]).length };
 }
 
 /** The caret cell's alignment (`align`: left / center / right; `valign`:
@@ -246,7 +275,7 @@ export function gridCaretPlace(state: EditorState): { row: number; rows: number;
 export function gridCellAttr(state: EditorState, name: 'align' | 'valign'): string | null {
   const at = caretCell(state);
   if (!at) return null;
-  return String(at.ctx.node.child(at.row).child(at.column).attrs[name] ?? '');
+  return String(at.ctx.node.child(at.row).child(at.cell).attrs[name] ?? '');
 }
 
 /** Set the caret cell's alignment (Typst's grid.cell(align:)); null is
@@ -255,15 +284,88 @@ export function setGridCellAttr(name: 'align' | 'valign', value: string | null):
   return (state, dispatch) => {
     const at = caretCell(state);
     if (!at) return false;
-    const cell = at.ctx.node.child(at.row).child(at.column);
+    const cell = at.ctx.node.child(at.row).child(at.cell);
     if ((cell.attrs[name] ?? null) === value) return true;
     if (dispatch) {
-      const pos = cellPosition(at.ctx.node, at.ctx.pos, at.row, at.column);
+      const pos = cellPosition(at.ctx.node, at.ctx.pos, at.row, at.cell);
       dispatch(state.tr.setNodeMarkup(pos, undefined, { ...cell.attrs, [name]: value }));
     }
     return true;
   };
 }
+
+/** The index of the cell holding the selection's end, when that is in the
+ *  same row as its start (`at`); null otherwise. */
+function selectionEndCell(state: EditorState, at: NonNullable<ReturnType<typeof caretCell>>): number | null {
+  const { $to } = state.selection;
+  const d = at.ctx.depth;
+  if ($to.depth < d + 2 || $to.before(d) !== at.ctx.pos || $to.index(d) !== at.row) return null;
+  return $to.index(d + 1);
+}
+
+/** The cells a merge joins, as indexes into one row: the run of cells the
+ *  selection spans, or, from a caret (a selection inside one cell), its
+ *  cell and the next. Null when that is not one row's two or more cells. */
+function mergeRun(state: EditorState): { at: NonNullable<ReturnType<typeof caretCell>>; from: number; to: number } | null {
+  const at = caretCell(state);
+  if (!at) return null;
+  const last = selectionEndCell(state, at);
+  if (last === null) return null;
+  const to = last > at.cell ? last : at.cell + 1;
+  return to < at.ctx.node.child(at.row).childCount ? { at, from: at.cell, to } : null;
+}
+
+/** Whether the selection spans two or more cells of one grid row (the
+ *  pill offers Merge cells, not Merge with cell right). */
+export function gridSelectionSpansCells(state: EditorState): boolean {
+  const at = caretCell(state);
+  return !!at && (selectionEndCell(state, at) ?? -1) > at.cell;
+}
+
+/** Merge cells across (Typst's grid.cell(colspan:)): the run mergeRun
+ *  finds becomes one cell covering their columns, holding their blocks in
+ *  order (an empty cell adds none) and the first cell's alignment. */
+export const mergeGridCells: Command = (state, dispatch) => {
+  const run = mergeRun(state);
+  if (!run) return false;
+  if (dispatch) {
+    const { at, from, to } = run;
+    const row = at.ctx.node.child(at.row);
+    const blocks: PMNode[] = [];
+    let span = 0;
+    for (let i = from; i <= to; i++) {
+      const cell = row.child(i);
+      span += cellSpan(cell);
+      const empty = cell.childCount === 1 && cell.firstChild!.type === schema.nodes.paragraph && !cell.firstChild!.content.size;
+      if (!empty) cell.forEach((block) => blocks.push(block));
+    }
+    const first = row.child(from);
+    const merged = first.type.create({ ...first.attrs, colspan: span }, blocks.length ? blocks : [schema.nodes.paragraph.create()]);
+    const start = cellPosition(at.ctx.node, at.ctx.pos, at.row, from);
+    const end = cellPosition(at.ctx.node, at.ctx.pos, at.row, to) + row.child(to).nodeSize;
+    const tr = state.tr.replaceWith(start, end, merged);
+    // The caret stays where it was in the first cell's text (its start
+    // when that cell was empty and added nothing).
+    tr.setSelection(TextSelection.near(tr.doc.resolve(start + 1 + Math.min(state.selection.empty ? at.offset : 0, merged.content.size))));
+    dispatch(tr.scrollIntoView());
+  }
+  return true;
+};
+
+/** Split the caret's merged cell back into one cell per column: the first
+ *  keeps the content and the alignment, the others are empty. */
+export const splitGridCell: Command = (state, dispatch) => {
+  const at = caretCell(state);
+  if (!at || at.span < 2) return false;
+  if (dispatch) {
+    const pos = cellPosition(at.ctx.node, at.ctx.pos, at.row, at.cell);
+    const cell = at.ctx.node.child(at.row).child(at.cell);
+    const tr = state.tr.setNodeMarkup(pos, undefined, { ...cell.attrs, colspan: 1 });
+    tr.insert(pos + cell.nodeSize, Array.from({ length: at.span - 1 }, () => emptyCell()));
+    dispatch(tr.scrollIntoView());
+  }
+  return true;
+};
 
 /** Replace the grid by its cells' blocks in reading order. */
 export function unwrapGrid(view: EditorView): boolean {
@@ -423,6 +525,7 @@ export class GridCellView implements NodeView {
   private node: PMNode;
   private pending = false;
   private fitted = false;
+  private span = 1;
   /** Where this cell's ink lies, for the grid's wash pass (cellWashPass). */
   ink: CellInk | null = null;
 
@@ -431,7 +534,7 @@ export class GridCellView implements NodeView {
     this.dom = document.createElement('div');
     this.dom.className = 'ts-grid-cell';
     this.contentDOM = this.dom;
-    this.paintAlign(node);
+    this.paint(node);
     liveCells.add(this);
     observeCell(this, this.dom);
     this.schedule();
@@ -441,7 +544,7 @@ export class GridCellView implements NodeView {
     if (node.type !== this.node.type) return false;
     const moved = node.attrs.valign !== this.node.attrs.valign;
     this.node = node;
-    this.paintAlign(node);
+    this.paint(node);
     this.schedule();
     // A cell placed elsewhere in its row (align-self) keeps its size, so
     // no observer fires: its wash is placed again here.
@@ -449,13 +552,19 @@ export class GridCellView implements NodeView {
     return true;
   }
 
-  /** The cell's alignment as the data attributes style.css paints (the
-   *  node view stands in for the schema's toDOM). */
-  private paintAlign(node: PMNode): void {
+  /** The cell's alignment as the data attributes style.css paints, and its
+   *  column span as its place in the row's CSS grid (the node view stands
+   *  in for the schema's toDOM). */
+  private paint(node: PMNode): void {
     for (const [name, value] of [['data-align', node.attrs.align], ['data-valign', node.attrs.valign]] as const) {
       if (typeof value === 'string' && value) {
         if (this.dom.getAttribute(name) !== value) this.dom.setAttribute(name, value);
       } else if (this.dom.hasAttribute(name)) this.dom.removeAttribute(name);
+    }
+    const span = cellSpan(node);
+    if (span !== this.span) {
+      this.span = span;
+      this.dom.style.gridColumn = span > 1 ? `span ${span}` : '';
     }
   }
 
@@ -807,7 +916,7 @@ export function gridPlugin(): Plugin {
         ctx.node.forEach((row, rowOff, rowIndex) => {
           row.forEach((cell, cellOff, columnIndex) => {
             const attrs: Record<string, string> = {};
-            if (selected?.row === rowIndex && selected.column === columnIndex) attrs.class = 'ts-grid-cell-active';
+            if (selected?.row === rowIndex && selected.cell === columnIndex) attrs.class = 'ts-grid-cell-active';
             if (cell.childCount === 1 && cell.firstChild?.type === schema.nodes.paragraph && !cell.firstChild.content.size) attrs['data-grid-empty'] = 'true';
             if (!Object.keys(attrs).length) return;
             const pos = ctx.pos + 2 + rowOff + cellOff;

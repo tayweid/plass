@@ -48,6 +48,8 @@ import MarkdownIt from 'markdown-it';
 import footnotePlugin from 'markdown-it-footnote';
 import { Fragment, type Node as PMNode, type Mark } from 'prosemirror-model';
 import { GRID_ALIGNS, GRID_VALIGNS, gridAlign, gridValign, schema } from './schema';
+import { packGridRows } from './grid-spans';
+import { sameSplit } from './grid-split';
 import { readMdComment, readMdComments } from './editor-comments-format';
 import { DEFAULT_SETTINGS, normalizeSettings } from './settings';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
@@ -2101,7 +2103,7 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
       if (!cellDivs.length) return island();
       const mark = readMark();
       let taken = false;
-      dropExtra(['columns', 'continued'], ['gutter']);
+      dropExtra(['columns', 'continued'], ['gutter', 'widths']);
       const continued = classes.includes('continued');
       let gi = seq.length - 1;
       while (gi >= 0 && seq[gi].type === schema.nodes.editor_comment) gi--;
@@ -2110,6 +2112,7 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
       if (continued && !grid) warn(`"${opener}" (${where}) continues no grid (none directly before it) — it starts a grid of its own`);
       else if (grid && gi < seq.length - 1) warn(`a comment between a grid's rows (before ${where}) moves after the grid — the rows are one grid`);
       const shares: Array<number | null> = [];
+      const spans: number[] = [];
       const cells: PMNode[] = [];
       for (let j = i + 1; j < close; ) {
         const u = tokens[j];
@@ -2120,7 +2123,7 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
         }
         const cellMeta = u.meta as DivMeta;
         const ca = cellMeta.attrs;
-        const extra = [...(ca.id ? [`#${ca.id}`] : []), ...ca.classes.filter((c) => c !== 'column').map((c) => `.${c}`), ...ca.kvs.filter(([k]) => !['width', 'align', 'valign'].includes(k)).map(([k]) => k)];
+        const extra = [...(ca.id ? [`#${ca.id}`] : []), ...ca.classes.filter((c) => c !== 'column').map((c) => `.${c}`), ...ca.kvs.filter(([k]) => !['width', 'span', 'align', 'valign'].includes(k)).map(([k]) => k)];
         if (extra.length) warn(`${extra.join(', ')} on a ::: column has no Plass form — dropped`);
         // The cell's alignment, as Typst's grid.cell(align:): `align=`
         // left / center / right, `valign=` top / middle / bottom.
@@ -2140,28 +2143,54 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
           else warn(`column width "${width}" is not a percent, a number or an fr share — the column takes an equal share`);
         }
         shares.push(share);
+        // A merged cell (grid.cell(colspan:)): `span=` columns, its width
+        // theirs together.
+        const spanText = ca.kvs.filter(([k]) => k === 'span').pop()?.[1];
+        let span = 1;
+        if (spanText !== undefined) {
+          if (!/^\d+$/.test(spanText.trim()) || Number(spanText) < 1) warn(`column span "${spanText}" is not a whole number of columns — the cell covers one`);
+          else if (Number(spanText) > MAX_GRID_SPAN) {
+            span = MAX_GRID_SPAN;
+            warn(`column span "${spanText}" is more than ${MAX_GRID_SPAN} columns — the cell covers ${MAX_GRID_SPAN}`);
+          } else span = Number(spanText);
+        }
+        spans.push(span);
         const inner = parseSeq(j + 1, 'div_close', false);
         if (cellMeta.unclosed && endsOpen(inner.nodes)) taken = true;
-        cells.push(schema.nodes.grid_cell.create(alignment, inner.nodes.length ? inner.nodes : [paragraph.create()]));
+        cells.push(schema.nodes.grid_cell.create({ ...alignment, colspan: span }, inner.nodes.length ? inner.nodes : [paragraph.create()]));
         j = inner.next;
       }
       if (taken) return readAsIsland(mark, TAKEN);
-      const given = shares.filter((s): s is number => s !== null);
-      const filled = shares.map((s) => s ?? (given.length ? given.reduce((a, b) => a + b, 0) / given.length : 1));
-      const columns = canonicalShares(filled);
+      // One share per column: a merged cell's width split evenly over the
+      // columns it covers, a cell with none the average of the rest.
+      const perColumn = shares.flatMap((s, k) => Array.from({ length: spans[k] }, () => (s === null ? null : s / spans[k])));
+      const given = perColumn.filter((s): s is number => s !== null);
+      const filled = perColumn.map((s) => s ?? (given.length ? given.reduce((a, b) => a + b, 0) / given.length : 1));
+      let columns = canonicalShares(filled);
+      // `widths=` on the row (written when its first row is merged): every
+      // column's width, which the merged cells no longer spell out.
+      const widthsText = kvs.filter(([k]) => k === 'widths').pop()?.[1];
+      if (widthsText !== undefined) {
+        const declared = widthsText.trim().split(/[\s,]+/).map((w) => /^(\d+(?:\.\d+)?|\.\d+)(%|fr)?$/.exec(w)).map((m) => (m ? Number(m[1]) : NaN));
+        if (declared.some((n) => !(n > 0))) warn(`grid widths "${widthsText}" are not percents, numbers or fr shares — the cells' widths are used`);
+        else if (declared.length !== columns.length) warn(`grid widths "${widthsText}" name ${declared.length} column(s) where the row covers ${columns.length} — the cells' widths are used`);
+        else columns = canonicalShares(declared);
+      }
       const gutter = gutterEm(kvs.filter(([k]) => k === 'gutter').pop()?.[1]);
       if (grid) {
-        const width = (grid.attrs.columns as number[]).length;
-        if (cells.length !== width) warn(`a .continued grid row has ${cells.length} cell(s) where its grid has ${width} — the row is refit to ${width}`);
-        else if (JSON.stringify(columns) !== JSON.stringify(grid.attrs.columns)) warn('a .continued grid row has other column widths than its grid — the grid keeps its own');
+        const gridColumns = grid.attrs.columns as number[];
+        const width = gridColumns.length;
+        const covered = spans.reduce((a, b) => a + b, 0);
+        if (covered !== width) warn(`a .continued grid row covers ${covered} column(s) where its grid has ${width} — the row is refit to ${width}`);
+        else if (!sameCellWidths(columns, gridColumns, spans)) warn('a .continued grid row has other column widths than its grid — the grid keeps its own');
         if (gutter !== grid.attrs.gutter) warn('a .continued grid row has another gutter than its grid — the grid keeps its own');
         const rows: PMNode[] = [];
         grid.forEach((r) => rows.push(r));
-        rows.push(...gridRows(cells, width));
+        rows.push(...packGridRows(cells, width));
         seq[gi] = grid.type.create(grid.attrs, rows);
         return { nodes: [], next };
       }
-      return { nodes: [schema.nodes.grid.create({ columns, gutter }, gridRows(cells, columns.length))], next };
+      return { nodes: [schema.nodes.grid.create({ columns, gutter }, packGridRows(cells, columns.length))], next };
     }
 
     if (rail === 'table') {
@@ -2222,18 +2251,6 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
     }
 
     return island();
-  }
-
-  /** A grid's rows from one row's cells, refit to `width` columns (a
-   *  short row padded, a long one wrapped, as Typst would lay its cells). */
-  function gridRows(cells: PMNode[], width: number): PMNode[] {
-    const rows: PMNode[] = [];
-    for (let k = 0; k < cells.length; k += width) {
-      const row = cells.slice(k, k + width);
-      while (row.length < width) row.push(schema.nodes.grid_cell.create(null, [paragraph.create()]));
-      rows.push(schema.nodes.grid_row.create(null, row));
-    }
-    return rows;
   }
 
   /** A gutter in em: em is native; pt, in, mm and cm are converted at the
@@ -2716,6 +2733,22 @@ function blockKind(chunk: string): string | null {
     }
   }
   return null;
+}
+
+/** The widest merged grid cell `span=` reads (the rail's column limit). */
+const MAX_GRID_SPAN = 12;
+
+/** Whether a later grid row's cells are as wide as its grid's cells over
+ *  the same columns: exactly, cell for cell, in an unmerged row (both are
+ *  canonical shares); within rounding in a merged one, whose cells' widths
+ *  are sums of written percents. */
+function sameCellWidths(row: number[], grid: number[], spans: number[]): boolean {
+  if (spans.every((s) => s === 1)) return JSON.stringify(row) === JSON.stringify(grid);
+  const sums = (shares: number[]) => {
+    let at = 0;
+    return spans.map((s) => shares.slice(at, (at += s)).reduce((a, b) => a + b, 0));
+  };
+  return sameSplit(sums(row), sums(grid));
 }
 
 /** Grid shares as the model holds them: each divided by the smallest and

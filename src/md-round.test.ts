@@ -667,7 +667,10 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   // A cell's alignment: align= / valign= on its column div (grid.cell(align:) in Typst).
   const alignedMd = ':::: {.columns gutter=1em}\n\n::: {.column align=center valign=middle}\n\ncentred\n\n:::\n\n::: {.column align=right}\n\nright\n\n:::\n\n::::\n';
   const aligned = mdToDoc(alignedMd);
-  const cellAttrs = (c: number) => JSON.stringify(aligned.doc.firstChild!.child(0).child(c).attrs);
+  const cellAttrs = (c: number) => {
+    const { align, valign } = aligned.doc.firstChild!.child(0).child(c).attrs;
+    return JSON.stringify({ align, valign });
+  };
   check('column align= and valign= read as the cell\'s', cellAttrs(0) === '{"align":"center","valign":"middle"}' && cellAttrs(1) === '{"align":"right","valign":null}' && !aligned.warnings.length, cellAttrs(0) + ' ' + cellAttrs(1) + ' ' + aligned.warnings.join('; '));
   check('an aligned grid round-trips byte for byte', docToMd(aligned.doc) === alignedMd, firstDiff(docToMd(aligned.doc), alignedMd));
   check('an aligned cell prints as grid.cell(align:)', docToTyp(aligned.doc).includes('grid.cell(align: center + horizon)[\n    centred\n  ],\n  grid.cell(align: right)[\n    right\n  ],'), docToTyp(aligned.doc));
@@ -682,7 +685,45 @@ check('round-trip keeps doc shape', second.doc.childCount === doc.childCount, `$
   check('two adjacent equal grids stay two grids', JSON.stringify(kinds(mdToDoc(pair).doc)) === '["grid","grid"]' && trip(pair).converges);
   const ragged = cols(['', '']) + '\n' + cols(['', '', '']).replace('{.columns ', '{.columns .continued ');
   const r = mdToDoc(ragged);
-  check('a .continued row of another width warns and is refit', r.warnings.some((w) => /has 3 cell\(s\) where its grid has 2/.test(w)) && r.doc.firstChild!.childCount === 3 && r.doc.firstChild!.child(2).childCount === 2, JSON.stringify([r.warnings, r.doc.firstChild!.childCount]));
+  check('a .continued row of another width warns and is refit', r.warnings.some((w) => /covers 3 column\(s\) where its grid has 2/.test(w)) && r.doc.firstChild!.childCount === 3 && r.doc.firstChild!.child(2).childCount === 2, JSON.stringify([r.warnings, r.doc.firstChild!.childCount]));
+  // Merged cells (grid.cell(colspan:)): `span=` and the width of the
+  // columns it covers on the .column div; a merged first row also writes
+  // every column's width on its .columns div (`widths=`).
+  {
+    const spansOf = (g: PMNode) => {
+      const out: string[] = [];
+      g.forEach((row) => {
+        const cells: string[] = [];
+        row.forEach((cell) => cells.push(`${cell.textContent}/${cell.attrs.colspan}`));
+        out.push(cells.join(' '));
+      });
+      return out.join(' | ');
+    };
+    const mergedMd =
+      ':::: {.columns gutter=1em widths="50% 25% 25%"}\n\n::: {.column width=100% span=3}\n\nwide\n\n:::\n\n::::\n\n' +
+      ':::: {.columns .continued gutter=1em}\n\n::: {.column width=50%}\n\na\n\n:::\n\n::: {.column width=50% span=2 align=center}\n\nb and c\n\n:::\n\n::::\n';
+    const merged = mdToDoc(mergedMd);
+    const g = merged.doc.firstChild!;
+    check('span= reads as a merged cell, widths= as the columns', g.type === schema.nodes.grid && JSON.stringify(g.attrs.columns) === '[2,1,1]' && spansOf(g) === 'wide/3 | a/1 b and c/2' && g.child(1).child(1).attrs.align === 'center' && !merged.warnings.length, JSON.stringify([g.attrs, g.type === schema.nodes.grid ? spansOf(g) : '', merged.warnings]));
+    check('a merged grid round-trips byte for byte', docToMd(merged.doc) === mergedMd, firstDiff(docToMd(merged.doc), mergedMd));
+    check('a merged cell prints as grid.cell(colspan:)', docToTyp(merged.doc).includes('grid.cell(colspan: 3)[\n    wide\n  ],') && docToTyp(merged.doc).includes('grid.cell(colspan: 2, align: center)[\n    b and c\n  ],'), docToTyp(merged.doc));
+    const equalMd = ':::: {.columns gutter=1em}\n\n::: {.column span=2}\n\nwide\n\n:::\n\n::::\n\n:::: {.columns .continued gutter=1em}\n\n::: column\n\na\n\n:::\n\n::: column\n\nb\n\n:::\n\n::::\n';
+    const equal = mdToDoc(equalMd);
+    check('equal columns write span= but no widths', JSON.stringify(equal.doc.firstChild!.attrs.columns) === '[1,1]' && docToMd(equal.doc) === equalMd && !equal.warnings.length, JSON.stringify([equal.doc.firstChild!.attrs, docToMd(equal.doc), equal.warnings]));
+    const laterMd =
+      ':::: {.columns gutter=1em}\n\n::: {.column width=20%}\n\na\n\n:::\n\n::: {.column width=30%}\n\nb\n\n:::\n\n::: {.column width=50%}\n\nc\n\n:::\n\n::::\n\n' +
+      ':::: {.columns .continued gutter=1em}\n\n::: {.column width=50% span=2}\n\nab\n\n:::\n\n::: {.column width=50%}\n\nc\n\n:::\n\n::::\n';
+    const later = mdToDoc(laterMd);
+    check('a merged later row reads without a widths warning and writes no widths=', !later.warnings.length && docToMd(later.doc) === laterMd, JSON.stringify([later.warnings, firstDiff(docToMd(later.doc), laterMd)]));
+    const split = mdToDoc(':::: {.columns gutter=1em}\n\n::: {.column width=60% span=2}\n\nwide\n\n:::\n\n::: {.column width=40%}\n\nc\n\n:::\n\n::::\n');
+    check('without widths=, a merged cell\'s width splits evenly over its columns', JSON.stringify(split.doc.firstChild!.attrs.columns) === '[1,1,1.333]' && !split.warnings.length, JSON.stringify([split.doc.firstChild!.attrs, split.warnings]));
+    const badSpan = mdToDoc(':::: {.columns gutter=1em}\n\n::: {.column span=two}\n\nx\n\n:::\n\n::: column\n\ny\n\n:::\n\n::::\n');
+    check('a span that is not a whole number warns and covers one column', spansOf(badSpan.doc.firstChild!) === 'x/1 y/1' && badSpan.warnings.length === 1 && /span "two"/.test(badSpan.warnings[0]), JSON.stringify([spansOf(badSpan.doc.firstChild!), badSpan.warnings]));
+    const badWidths = mdToDoc(':::: {.columns gutter=1em widths="50% 50%"}\n\n::: {.column span=3}\n\nx\n\n:::\n\n::::\n');
+    check('widths= naming the wrong number of columns warns and is not used', JSON.stringify(badWidths.doc.firstChild!.attrs.columns) === '[1,1,1]' && badWidths.warnings.some((w) => /name 2 column\(s\) where the row covers 3/.test(w)), JSON.stringify([badWidths.doc.firstChild!.attrs, badWidths.warnings]));
+    const tooWide = mdToDoc(cols(['', '']) + '\n' + ':::: {.columns .continued gutter=1em}\n\n::: {.column span=3}\n\nx\n\n:::\n\n::::\n');
+    check('a later row\'s span wider than its grid is narrowed to it', spansOf(tooWide.doc.firstChild!).endsWith('| x/2') && tooWide.warnings.some((w) => /covers 3 column\(s\) where its grid has 2/.test(w)), JSON.stringify([spansOf(tooWide.doc.firstChild!), tooWide.warnings]));
+  }
   // Every canonical share list reads back as itself: typed whole-number
   // shares (`1:12` is 7.692%/92.308% to three decimals, which would read
   // as [1, 12.001]) and random ones.

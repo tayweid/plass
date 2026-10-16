@@ -216,6 +216,27 @@ export function headingBlockSpacingEm(s: DocSettings, level: number): { above: n
 }
 
 /**
+ * A heading's padding-top (body em) when the block printed before it is a
+ * heading of level `prev`: a run, as in "= Part" then "== Section". Both
+ * spacings were calibrated beside a paragraph, so `prev`'s `below` and this
+ * level's `above` each include a paragraph's side of the gap (`parPart`
+ * between them: its line box around the frame and its 0.9em margin). The
+ * editor's boxes give the run `below + above − parPart`, the leading
+ * heading's margin-bottom plus this one's padding-top. Typst collapses the
+ * two spacings — both weakness 3 (flow/collect.rs `block`) — to the larger
+ * (distribute.rs `keep_spacing`), so this padding gives back
+ * `min(above, below) − parPart`.
+ */
+export function headingRunPadTopEm(s: DocSettings, prev: number, level: number): number {
+  const m = parityMetrics(s.font);
+  const h = HEADINGS[Math.min(3, level) - 1];
+  const below = headingBlockSpacingEm(s, prev).below;
+  const above = headingBlockSpacingEm(s, level).above;
+  const parPart = s.lineHeight + 0.9 - (m.typAsc + m.typDesc);
+  return h.padTop * h.hs - (Math.min(above, below) - parPart);
+}
+
+/**
  * Explicit `#set block(above/below: ...)` (body em) the display-math show
  * rule emits — weakness-3 explicit block spacing, same status as headings'.
  * Exported for `flow-rules.ts`'s region-top spacing-drop rule.
@@ -786,13 +807,16 @@ function blockToTyp(node: PMNode, indent = ''): string {
       const gutter = node.attrs.gutter as number;
       const fr = (c: number) => `${+c.toFixed(3)}fr`;
       let out = indent + `#grid(\n${indent}  columns: (${columns.map(fr).join(', ')}),\n${indent}  gutter: ${+gutter.toFixed(2)}em,\n`;
-      // An aligned cell is grid.cell(align: …)[…]: across, down, or both
-      // (Typst's horizon is the rail's middle).
+      // A merged or aligned cell is grid.cell(colspan: …, align: …)[…]:
+      // its span, then across, down, or both (Typst's horizon is the
+      // rail's middle).
       const head = (cell: PMNode) => {
+        const span = (cell.attrs.colspan as number) || 1;
         const across = cell.attrs.align as string | null;
         const down = cell.attrs.valign as string | null;
         const parts = [across, down === 'middle' ? 'horizon' : down].filter(Boolean);
-        return parts.length ? `grid.cell(align: ${parts.join(' + ')})` : '';
+        const args = [...(span > 1 ? [`colspan: ${span}`] : []), ...(parts.length ? [`align: ${parts.join(' + ')}`] : [])];
+        return args.length ? `grid.cell(${args.join(', ')})` : '';
       };
       node.forEach((row) => {
         row.forEach((cell) => {

@@ -722,12 +722,15 @@ function firstDiff(a: string, b: string): string {
     check('rich grid keeps the table native inside the cell', o.includes('  [\n    #align(center, table(\n'), o);
   }
   {
-    // grid.cell(align:): the rail's one cell argument, either axis or
-    // both (Typst's horizon is the rail's middle); a span is an island.
+    // grid.cell(align:): one of the rail's two cell arguments, either axis
+    // or both (Typst's horizon is the rail's middle).
     const gridSrc = '#grid(\n  columns: (1fr, 1fr),\n  gutter: 1em,\n  grid.cell(align: center + horizon)[\n    centred\n  ],\n  grid.cell(align: right)[\n    right\n  ],\n  grid.cell(align: bottom)[],\n  [\n    plain\n  ],\n)';
     const r = typToDoc('Intro.\n\n' + gridSrc + '\n\nAfter.\n');
     const g = r.doc.child(1);
-    const attrs = (row: number, col: number) => JSON.stringify(g.child(row).child(col).attrs);
+    const attrs = (row: number, col: number) => {
+      const { align, valign } = g.child(row).child(col).attrs;
+      return JSON.stringify({ align, valign });
+    };
     check(
       'grid.cell(align:) reads both axes',
       g.type.name === 'grid' && attrs(0, 0) === '{"align":"center","valign":"middle"}' && attrs(0, 1) === '{"align":"right","valign":null}' && attrs(1, 0) === '{"align":null,"valign":"bottom"}' && attrs(1, 1) === '{"align":null,"valign":null}',
@@ -737,8 +740,43 @@ function firstDiff(a: string, b: string): string {
     const o = docToTyp(r.doc);
     check('aligned cells export as grid.cell(align:)', o.includes(gridSrc), o);
     check('aligned grid round-trip is idempotent', o === docToTyp(typToDoc(o).doc), firstDiff(o, docToTyp(typToDoc(o).doc)));
-    const off = typToDoc('Intro.\n\n#grid(\n  columns: (1fr, 1fr),\n  grid.cell(colspan: 2)[wide],\n  [a],\n  [b],\n)\n\nAfter.\n');
-    check('a grid.cell with a span is an island', off.doc.child(1).type.name === 'code_block' && off.doc.child(1).attrs.params === 'typst-raw', off.doc.child(1).type.name);
+    const off = typToDoc('Intro.\n\n#grid(\n  columns: (1fr, 1fr),\n  grid.cell(rowspan: 2)[tall],\n  [a],\n  [b],\n)\n\nAfter.\n');
+    check('a grid.cell with a rowspan is an island', off.doc.child(1).type.name === 'code_block' && off.doc.child(1).attrs.params === 'typst-raw', off.doc.child(1).type.name);
+  }
+  {
+    // grid.cell(colspan:): the rail's other cell argument, a cell merged
+    // across columns (grid-spans.ts), alone or with an alignment.
+    const gridSrc = '#grid(\n  columns: (2fr, 1fr, 1fr),\n  gutter: 1em,\n  grid.cell(colspan: 3)[\n    wide\n  ],\n  [\n    a\n  ],\n  grid.cell(colspan: 2, align: center + horizon)[\n    b and c\n  ],\n)';
+    const r = typToDoc('Intro.\n\n' + gridSrc + '\n\nAfter.\n');
+    const g = r.doc.child(1);
+    const spans = (row: number) => {
+      const out: number[] = [];
+      g.child(row).forEach((cell) => out.push(cell.attrs.colspan as number));
+      return out.join('+');
+    };
+    check('grid.cell(colspan:) is native, one cell per span', g.type.name === 'grid' && g.childCount === 2 && spans(0) === '3' && spans(1) === '1+2', g.type.name + ' ' + (g.type.name === 'grid' ? [spans(0), spans(1)].join(' | ') : ''));
+    check('a merged cell keeps its alignment', g.child(1).child(1).attrs.align === 'center' && g.child(1).child(1).attrs.valign === 'middle', JSON.stringify(g.child(1).child(1).attrs));
+    check('no warning for merged cells', r.warnings.length === 0, r.warnings.join('; '));
+    const o = docToTyp(r.doc);
+    check('merged cells export as grid.cell(colspan:)', o.includes(gridSrc), o);
+    check('merged grid round-trip is idempotent', o === docToTyp(typToDoc(o).doc), firstDiff(o, docToTyp(typToDoc(o).doc)));
+    // Typst's placement: a cell too wide for what is left of its row
+    // opens the next one, the gap an empty cell.
+    const wrap = typToDoc('#grid(\n  columns: (1fr, 1fr),\n  [a],\n  grid.cell(colspan: 2)[wide],\n  [b],\n)\n').doc.child(0);
+    const rowsOf = (n: typeof wrap) => {
+      const out: string[] = [];
+      n.forEach((row) => {
+        const cells: string[] = [];
+        row.forEach((cell) => cells.push(`${cell.textContent || '∅'}/${cell.attrs.colspan}`));
+        out.push(cells.join(' '));
+      });
+      return out.join(' | ');
+    };
+    check('a span that does not fit opens the next row', rowsOf(wrap) === 'a/1 ∅/1 | wide/2 | b/1 ∅/1', rowsOf(wrap));
+    const tooWide = typToDoc('#grid(\n  columns: (1fr, 1fr),\n  grid.cell(colspan: 3)[wide],\n)\n').doc.child(0);
+    check('a span wider than the grid is an island', tooWide.type.name === 'code_block' && tooWide.attrs.params === 'typst-raw', tooWide.type.name);
+    const other = typToDoc('#grid(\n  columns: (1fr, 1fr),\n  grid.cell(colspan: 2, fill: red)[x],\n)\n').doc.child(0);
+    check('any other cell argument beside a span is an island', other.type.name === 'code_block', other.type.name);
   }
   // Islands never run: the file keeps the Typst verbatim, the print is a
   // raw block of the same source (Typst on rails).

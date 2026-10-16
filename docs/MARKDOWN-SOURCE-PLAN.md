@@ -460,7 +460,7 @@ Rules:
 | Node | Form | Notes |
 |---|---|---|
 | `blockquote{kind:'solution'}` | `::: solution` … `:::` | also read `::: {.solution}`; blank line before and after |
-| `grid` | one `::: {.columns gutter=1em}` div per ROW holding its cells as `::: {.column width=60%}`; rows after the first carry `.continued` (`::: {.columns .continued gutter=1em}`); an aligned cell adds `align=center` / `valign=middle` (2026-10-15) | the standard form (pandoc's slide columns, Quarto); consecutive divs merge into one grid only through `.continued`; equal shares write no `width` |
+| `grid` | one `::: {.columns gutter=1em}` div per ROW holding its cells as `::: {.column width=60%}`; rows after the first carry `.continued` (`::: {.columns .continued gutter=1em}`); an aligned cell adds `align=center` / `valign=middle` (2026-10-15); a merged cell adds `span=2` with the covered columns' width, and a merged first row writes `widths="50% 25% 25%"` on its `.columns` div (2026-10-16) | the standard form (pandoc's slide columns, Quarto); consecutive divs merge into one grid only through `.continued`; equal shares write no `width` |
 | `paragraph{align}` / `paragraph{keep}` | `::: center`, `::: right`, `::: {.keep}` (classes combine: `::: {.keep .center}`) around exactly one paragraph | the rail for the two features the brief's list omits; any other content inside → the unknown-div island |
 | `blockquote` | `> …` | quoted paragraphs are separated by a bare `>` line (today's `> >` bug fixed) |
 | `editor_comment` | `<!-- … -->` at top level | every HTML comment; written verbatim except `-->` → `--&gt;` (decoded on read); the tagged `<!-- plass:comment` frame is still read with its old decoding, never written |
@@ -495,7 +495,13 @@ never stored as shares. The writer omits `width` when every share is 1
 and otherwise writes `share/sum` as a percent to 3 decimals; the reader
 accepts `N%`, a bare number or `Nfr` and canonicalizes, so `33.333%`/
 `66.667%` recovers `[1, 2]`. Gutter: `em` native; `pt`/`in`/`mm`/`cm`
-converted at the document font size.
+converted at the document font size. Merged cells (2026-10-16): a
+`.column` with `span=N` covers N columns and writes their width summed;
+since a merged first row no longer spells out each column, its `.columns`
+div then carries `widths=` (one width per column; written only when the
+shares are unequal). Without it the reader splits a merged cell's width
+evenly over its columns; a later row is checked cell by cell against the
+grid's columns, within rounding.
 
 Grid rows (decided 2026-10-04 with Taylor: follow the standard): one
 `.columns` div per row, as pandoc's slide columns and Quarto define it.

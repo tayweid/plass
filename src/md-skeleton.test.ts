@@ -492,6 +492,24 @@ same(
   ],
 );
 
+same(
+  'columns: a merged first row counts the columns its span= covers',
+  doc(
+    N.grid.create({ columns: [2, 1, 1], gutter: 1 }, [
+      N.grid_row.create(null, [N.grid_cell.create({ colspan: 3 }, [p(t('wide'))])]),
+      N.grid_row.create(null, [gcell(p(t('a'))), N.grid_cell.create({ colspan: 2 }, [p(t('b'))])]),
+    ]),
+  ),
+  ast([
+    Div(attr('', ['columns'], [['gutter', '1em'], ['widths', '50% 25% 25%']]), [Div(attr('', ['column'], [['width', '100%'], ['span', '3']]), [Para(S('wide'))])]),
+    Div(attr('', ['columns', 'continued'], [['gutter', '1em']]), [
+      Div(attr('', ['column'], [['width', '50%']]), [Para(S('a'))]),
+      Div(attr('', ['column'], [['width', '50%'], ['span', '2']]), [Para(S('b'))]),
+    ]),
+  ]),
+  [rec('columns', 0, { cols: 3, rows: 2, classes: ['cells=1/2'] }), ...cellRecs('wide', 'a', 'b')],
+);
+
 {
   // Two adjacent unmarked rows with equal shares and gutter: two grids.
   const pd = ast([rowDiv([], 'a', 'b'), rowDiv([], 'c', 'd')]);

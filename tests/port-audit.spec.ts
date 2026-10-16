@@ -392,6 +392,12 @@ FIXTURES.push({
     FILLER.repeat(1).trimEnd() +
     '\n  ],\n  grid.cell(align: right + horizon)[\n    - one\n    - two\n    - three\n  ],\n  grid.cell(align: center)[\n    ' +
     FILLER.repeat(1).trimEnd() +
+    // Merged cells (grid.cell(colspan:)): two columns and the gutter
+    // between them, then all three; the port breaks at the merged width.
+    '\n  ],\n  grid.cell(colspan: 2)[\n    ' +
+    FILLER.repeat(2).trimEnd() +
+    '\n  ],\n  [\n    Short.\n  ],\n  grid.cell(colspan: 3, align: center)[\n    ' +
+    FILLER.repeat(1).trimEnd() +
     '\n  ],\n)\n\n' +
     Array.from({ length: 4 }, () => FILLER.repeat(4).trimEnd()).join('\n\n') +
     '\n\n#grid(\n  columns: (1fr, 1fr),\n  gutter: 1em,\n' +

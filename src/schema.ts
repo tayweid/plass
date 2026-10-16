@@ -365,20 +365,31 @@ const gridSpecs: Record<string, NodeSpec> = {
     // Typst's grid.cell(align:), as a table cell's: across, where each
     // paragraph's last line sits (left / center / right); down, where the
     // cell sits in its row (top / middle / bottom). Null is Typst's default.
-    attrs: { align: { default: null }, valign: { default: null } },
+    // `colspan`: the columns the cell covers, Typst's grid.cell(colspan:)
+    // (grid-spans.ts); a row's spans add up to the grid's column count.
+    attrs: { align: { default: null }, valign: { default: null }, colspan: { default: 1 } },
     parseDOM: [
       {
         tag: 'div.ts-grid-cell',
         getAttrs: (el: HTMLElement | string) =>
           typeof el === 'string'
             ? null
-            : { align: gridAlign(el.getAttribute('data-align')), valign: gridValign(el.getAttribute('data-valign')) },
+            : {
+                align: gridAlign(el.getAttribute('data-align')),
+                valign: gridValign(el.getAttribute('data-valign')),
+                colspan: Math.max(1, parseInt(el.getAttribute('data-colspan') ?? '1', 10) || 1),
+              },
       },
     ],
     toDOM(node) {
       const attrs: Record<string, string> = { class: 'ts-grid-cell' };
       if (node.attrs.align) attrs['data-align'] = node.attrs.align as string;
       if (node.attrs.valign) attrs['data-valign'] = node.attrs.valign as string;
+      const span = node.attrs.colspan as number;
+      if (span > 1) {
+        attrs['data-colspan'] = String(span);
+        attrs.style = `grid-column: span ${span}`;
+      }
       return ['div', attrs, 0];
     },
   },

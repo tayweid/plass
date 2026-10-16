@@ -295,7 +295,8 @@ function blockToTex(node: PMNode, s: DocSettings): string {
       return `\\begin{quote}\n${blocksToTex(node, s).trim()}\n\\end{quote}\n\n`;
     case 'grid': {
       // Side-by-side minipages at the columns' shares of the line, less a
-      // small gap; rows one after another.
+      // small gap; rows one after another. A merged cell is as wide as its
+      // columns and the gaps between them.
       const columns = node.attrs.columns as number[];
       const total = columns.reduce((a, b) => a + b, 0);
       const gap = 0.03;
@@ -303,8 +304,13 @@ function blockToTex(node: PMNode, s: DocSettings): string {
       let out = '';
       node.forEach((row) => {
         const parts: string[] = [];
-        row.forEach((cell, _o, i) => {
-          parts.push(`\\begin{minipage}[t]{${width(columns[i] ?? 1).toFixed(3)}\\linewidth}\n${blocksToTex(cell, s).trim()}\n\\end{minipage}`);
+        let column = 0;
+        row.forEach((cell) => {
+          const span = (cell.attrs.colspan as number) || 1;
+          const covered = columns.slice(column, column + span);
+          const w = covered.length ? covered.reduce((sum, c) => sum + width(c), 0) + gap * (covered.length - 1) : width(1);
+          column += span;
+          parts.push(`\\begin{minipage}[t]{${w.toFixed(3)}\\linewidth}\n${blocksToTex(cell, s).trim()}\n\\end{minipage}`);
         });
         out += '\\noindent\n' + parts.join('\\hfill\n') + '\n\n';
       });
