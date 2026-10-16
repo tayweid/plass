@@ -144,6 +144,54 @@ after Knuth. The work, in order, with what each step found, is
 - The four ICU 1.5 → 2.x sidecar bumps — until the sidecar's version-pinned
   identity is re-verified against them.
 
+## Later: journal and thesis targets (Taylor, 2026-10-16)
+
+The last mile — a paper into a journal's class, a thesis into the school's
+template — is rare, but it would be a large win if the page could carry
+the target's typesetting. Assessed 2026-10-16: exactness against an
+arbitrary class is not reachable by mirroring (a class is a program —
+output routines, floats, two-column, microtype — and the only exact
+renderer of arbitrary TeX is TeX, which would make the page a compiled
+preview, the architecture rejected for lag). What is reachable is an
+approximation on the existing rails, exact against Plass's own print of
+the preset and close to the class where the fonts match, since both
+breakers are Knuth–Plass over the same hyphenation patterns. None of it
+needs a different engine. In the order they pay off:
+
+1. **Class-aware `.tex` export.** The serializer hard-codes `article`
+   (`tex-serializer.ts`). Make the target class a setting, emit it, and
+   give each curated class a small front-matter adapter (every class spells
+   author, affiliation and abstract its own way); an unknown class falls
+   back to article-style front matter. With a class set, the export carries
+   no layout overrides, so the class rules. The smallest piece and the one
+   that removes the friction actually felt; it never touches the page.
+2. **Journal and thesis presets.** A preset is today's settings list in a
+   file, importable and shippable; a curated set hand-derived from common
+   classes and thesis templates. The work is vocabulary: a class also sets
+   heading font/size/spacing per level, paragraph spacing amounts, caption
+   style and the title block, and each missing knob is a new rail (local
+   mirror plus audit fixture, one at a time). Fonts are the other cost: a
+   Times journal needs TeX Gyre Termes bundled and certified (the Nimbus
+   metrics newtx/mathptmx share); Computer Modern classes are near the
+   bundled New Computer Modern; Palatino is the Pagella above. Theses are
+   the better first target than journals: single column, fixed margins,
+   chapter headings, double spacing — preset material almost entirely.
+   The residual against the real class is measurable with the audit's
+   method pointed at pdfLaTeX offline (compile the export with the class,
+   read breaks from `\tracingparagraphs` or synctex, count agreeing
+   paragraphs) — a dev-time number, never in the app.
+3. **A LaTeX render of the PDF in Plass.app.** Not in the browser (no
+   usable TeX in a page, no server behind the deploy). In the Mac app it is
+   a Claerbout capability: run `latexmk` when a TeX is installed, or bundle
+   tectonic (XeTeX-based, fetches packages on first use; some classes
+   assume pdfTeX). A second printer that writes a file, never a second
+   opinion on the page. On the web the equivalent is download the `.tex`
+   and compile in Overleaf.
+4. **Deriving a preset from a `.cls`.** The page cannot read TeX macros;
+   the reliable route is a probe document compiled with the class, its
+   lengths and fonts read back from the log, which needs a TeX on the
+   machine (item 3's). Last, or never — the curated set may be enough.
+
 ## Dropped (Taylor, 2026-09-11)
 
 A keep-together control and "keep heading with next"; the draft niceties
