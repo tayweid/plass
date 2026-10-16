@@ -17,7 +17,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test as base } from 'playwright/test';
+import { test as base, type Page } from 'playwright/test';
 
 export const test = base.extend({
   // The other browsers (the fallback projects) keep Playwright's context.
@@ -41,5 +41,22 @@ export const test = base.extend({
  *  (a pill, a click point) finds it mid-scroll. Cmd+Right is the Mac's
  *  line end, and moves only the caret. */
 export const LINE_END = process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End';
+
+/** Margins of 1.25 in, the default until 2026-10-16 (now 1 in). A spec
+ *  whose document was sized to put a line, a row or a heading at a page
+ *  break under that default pins it, so the break stays where the spec
+ *  looks for it: this line at the head of a `.typ` fixture, or
+ *  `pinOldMargins` on the open document. */
+export const OLD_MARGINS_TYP = '#set page(margin: 1.25in)\n\n';
+export async function pinOldMargins(page: Page): Promise<void> {
+  type Hooks = { view: import('prosemirror-view').EditorView };
+  await page.waitForFunction(() => Boolean((window as unknown as Hooks).view));
+  await page.evaluate(() => {
+    const { view } = window as unknown as Hooks;
+    const m = 1.25;
+    view.dispatch(view.state.tr.setDocAttribute('settings', { ...view.state.doc.attrs.settings, marginTop: m, marginRight: m, marginBottom: m, marginLeft: m }));
+  });
+}
+
 export { expect } from 'playwright/test';
 export type { Page } from 'playwright/test';

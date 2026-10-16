@@ -1,4 +1,4 @@
-import { expect, test } from './fixture';
+import { expect, pinOldMargins, test } from './fixture';
 import { settleLocal } from './settle';
 
 declare global {
@@ -17,6 +17,7 @@ const FILLER =
  *  starts. */
 async function loadProblemSet(page: import('playwright/test').Page) {
   await page.goto('/?new=1');
+  await pinOldMargins(page);
   await page.evaluate((filler) => {
     const { state } = window.view;
     const { schema } = state;

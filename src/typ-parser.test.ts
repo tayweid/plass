@@ -48,15 +48,15 @@ function firstDiff(a: string, b: string): string {
 {
   const src = docToTyp(demoDoc())
     .replace('paper: "us-letter"', 'paper: "a4"')
-    .replace('margin: 1.25in', 'margin: 1in')
+    .replace('margin: 1in', 'margin: 0.75in')
     .replace('size: 12.5pt', 'size: 11pt');
   const { doc } = typToDoc(src);
   const s = doc.attrs.settings;
   check('paper imported', s.page === 'a4');
-  check('margin imported', s.marginTop === 1 && s.marginLeft === 1);
+  check('margin imported', s.marginTop === 0.75 && s.marginLeft === 0.75);
   check('size imported', s.sizePt === 11);
   const out = docToTyp(doc);
-  check('modified settings re-export', out.includes('paper: "a4"') && out.includes('margin: 1in'));
+  check('modified settings re-export', out.includes('paper: "a4"') && out.includes('margin: 0.75in'));
 }
 
 // --- 3b. paper sizes and footnote options round-trip ---

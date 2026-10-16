@@ -1066,7 +1066,7 @@ body {
 #editor {
   position: relative;
   z-index: 1;
-  padding: var(--page-margin-top, 1.25in) var(--page-margin-right, 1.25in) 0 var(--page-margin-left, 1.25in);
+  padding: var(--page-margin-top, 1in) var(--page-margin-right, 1in) 0 var(--page-margin-left, 1in);
 }
 
 /* ---------- source view (SOURCE-VIEW.md) ---------- */

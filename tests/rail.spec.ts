@@ -1,4 +1,4 @@
-import { expect, test, type Page } from './fixture';
+import { expect, OLD_MARGINS_TYP, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // The scroll rail (src/scroll-rail.ts; docs/mockups/scroll-rail.md, the
@@ -49,7 +49,7 @@ const PAPER = [
  *  a title: 36 sheets and 41 marks, a heading at or near the top of most
  *  sheets. */
 const LONG = (() => {
-  const parts = ['#set heading(numbering: "1.")', '#align(center, text(size: 1.55em, weight: 700)[A Long Paper])'];
+  const parts = [OLD_MARGINS_TYP + '#set heading(numbering: "1.")', '#align(center, text(size: 1.55em, weight: 700)[A Long Paper])'];
   for (let k = 1; k <= 20; k++) parts.push(`= Section number ${k}`, para(4), para(5), para(3), `== Part ${k}.1 of the section`, para(5), para(4), para(4));
   return parts.join('\n\n') + '\n';
 })();
@@ -549,7 +549,7 @@ test('nothing opens or grows while a mouse button is down: a selection dragged i
 test('page numbers under the breaks thin on a thirty-page paper so the shown ones stay 16 px apart', async ({ page }) => {
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 1100, height: 900 });
-  await openTyp(page, Array.from({ length: 82 }, () => para(6)).join('\n\n') + '\n', 'thirty.typ');
+  await openTyp(page, OLD_MARGINS_TYP + Array.from({ length: 82 }, () => para(6)).join('\n\n') + '\n', 'thirty.typ');
   await expect.poll(async () => (await frame(page)).gutter).toBe(true);
   const numbers = () =>
     page.evaluate(() => {

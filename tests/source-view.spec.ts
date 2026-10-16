@@ -628,17 +628,17 @@ test('a Markdown front matter carries the settings through the source', async ({
 test('a settings edit in the unfolded preamble applies on exit', async ({ page }) => {
   await boot(page);
   await openSeeded(page, 'Paper.typ', '= Paper\n\nBody text.\n');
-  expect(await page.evaluate(() => window.view.state.doc.attrs.settings.marginTop)).toBe(1.25);
+  expect(await page.evaluate(() => window.view.state.doc.attrs.settings.marginTop)).toBe(1);
   await enter(page);
   await page.locator('#source .source-preamble-fold').click();
   await page.evaluate(() => {
     const sv = window.__sourceView;
-    sv.setText(sv.text()!.replace('margin: 1.25in', 'margin: 1in'));
+    sv.setText(sv.text()!.replace('margin: 1in', 'margin: 0.75in'));
   });
   await exit(page);
   const settings = await page.evaluate(() => window.view.state.doc.attrs.settings);
-  expect(settings.marginTop).toBe(1);
-  expect(settings.marginLeft).toBe(1);
+  expect(settings.marginTop).toBe(0.75);
+  expect(settings.marginLeft).toBe(0.75);
   // The body came through untouched.
   expect(await page.evaluate(() => window.view.state.doc.firstChild!.textContent)).toBe('Paper');
 });

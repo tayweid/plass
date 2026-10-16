@@ -1988,7 +1988,7 @@ function emptyParagraphsDoc(): PMNode {
   const fixtures: Array<[string, PMNode, boolean]> = [
     ['demo', demoDoc(), false],
     ...([
-      ['3 settings', demoTyp.replace('paper: "us-letter"', 'paper: "a4"').replace('margin: 1.25in', 'margin: 1in').replace('size: 12.5pt', 'size: 11pt')],
+      ['3 settings', demoTyp.replace('paper: "us-letter"', 'paper: "a4"').replace('margin: 1in', 'margin: 0.75in').replace('size: 12.5pt', 'size: 11pt')],
       ['3b half letter', demoTyp.replace('paper: "us-letter"', 'width: 5.5in, height: 8.5in')],
       ['3b metric custom size', demoTyp.replace('paper: "us-letter"', 'width: 148mm, height: 210mm')],
       ['3b a5', demoTyp.replace('paper: "us-letter"', 'paper: "a5"')],

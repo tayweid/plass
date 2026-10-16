@@ -14,8 +14,8 @@
   --comment-border: #cfc2a7;
   --comment-ink: #5a4d37;
   box-sizing: border-box;
-  margin: 0 calc(-1 * var(--page-margin-right, 1.25in)) 0 calc(-1 * var(--page-margin-left, 1.25in));
-  padding: 0.55em var(--page-margin-right, 1.25in) 0.7em var(--page-margin-left, 1.25in);
+  margin: 0 calc(-1 * var(--page-margin-right, 1in)) 0 calc(-1 * var(--page-margin-left, 1in));
+  padding: 0.55em var(--page-margin-right, 1in) 0.7em var(--page-margin-left, 1in);
   border-top: 1px dashed var(--comment-border);
   border-bottom: 1px dashed var(--comment-border);
   background: var(--comment-bg);

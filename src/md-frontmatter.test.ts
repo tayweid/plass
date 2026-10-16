@@ -35,7 +35,7 @@ const SAMPLE: { [K in keyof DocSettings]: DocSettings[K] } = {
   pageWidthIn: 6.25,
   pageHeightIn: 9.5,
   landscape: true,
-  marginTop: 1,
+  marginTop: 1.5,
   marginRight: 0.75,
   marginBottom: 0.5,
   marginLeft: 2,
@@ -86,7 +86,7 @@ for (const field of Object.keys(SAMPLE) as Array<keyof DocSettings>) {
   // The plan's fixed order: pandoc's keys, then plass's.
   const golden = [
     '---',
-    'margin: {top: 1in, right: 0.75in, bottom: 0.5in, left: 2in}',
+    'margin: {top: 1.5in, right: 0.75in, bottom: 0.5in, left: 2in}',
     'fontsize: 11pt',
     'mainfont: Libertinus Serif',
     "section-numbering: '1.1'",
@@ -145,7 +145,7 @@ console.log('margins and units:');
   check('a dict reads x, y and a side over them', json([xy.settings.marginTop, xy.settings.marginRight, xy.settings.marginBottom, xy.settings.marginLeft]) === json([1, 1, 1, 2]), json(xy.settings));
   const block = read('margin:\n  top: 0.5in\n  bottom: 0.75in');
   check('a block-map margin reads', block.settings.marginTop === 0.5 && block.settings.marginBottom === 0.75 && block.settings.marginLeft === undefined, json(block.settings));
-  check('a margin is written as the dict', writeFrontmatter({ settings: { marginTop: 2 } }) === '---\nmargin: {top: 2in, right: 1.25in, bottom: 1.25in, left: 1.25in}\n---');
+  check('a margin is written as the dict', writeFrontmatter({ settings: { marginTop: 2 } }) === '---\nmargin: {top: 2in, right: 1in, bottom: 1in, left: 1in}\n---');
   const bare = read('fontsize: 12');
   check('a length with no unit warns and is ignored', bare.settings.sizePt === undefined && /needs a unit/.test(bare.warnings[0] ?? ''), json(bare.warnings));
 }
@@ -543,7 +543,7 @@ console.log('comments in known keys:');
   check('… is carried, and written where it cannot join a key', writeFrontmatter(author) === '---\nauthor: Ada, Charles\ndate: 2026-10-04\n# - Removed\n---', writeFrontmatter(author));
   const margin = read('title: T\nmargin:\n  top: 2in\n# c\n  bottom: 1in');
   check('a margin comment inside a margin map', margin.settings.marginTop === 2 && margin.settings.marginBottom === 1 && margin.warnings.length === 0, json(margin));
-  check('… written as the dict, the comment after it', writeFrontmatter(margin) === '---\ntitle: T\nmargin: {top: 2in, right: 1.25in, bottom: 1in, left: 1.25in}\n# c\n---', writeFrontmatter(margin));
+  check('… written as the dict, the comment after it', writeFrontmatter(margin) === '---\ntitle: T\nmargin: {top: 2in, right: 1in, bottom: 1in, left: 1in}\n# c\n---', writeFrontmatter(margin));
   const plassFirst = read('title: Notes\nplass:\n# page setup\n  landscape: true');
   check('a margin comment as the first line under plass:', plassFirst.settings.landscape === true && plassFirst.warnings.length === 0, json(plassFirst));
   check('… stays in the plass block', writeFrontmatter(plassFirst) === '---\ntitle: Notes\nplass:\n  landscape: true\n  # page setup\n---', writeFrontmatter(plassFirst));

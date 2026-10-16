@@ -92,7 +92,7 @@ plass:
 | `abstract` | the abstract | Markdown paragraphs, as a YAML block scalar | none |
 | `papersize` | paper | `us-letter`, `a4`, `us-legal`, `iso-b5`, `a5` | `us-letter` |
 | `plass.page` | paper with no Typst name (use it instead of `papersize`) | `half-letter`, or `{width: 6in, height: 9in}` (2–30 in) | none |
-| `margin` | margins | a map of all four sides, or one value for all of them; `in`, `mm`, `cm`, `pt`; 0–3 in | `1.25in` |
+| `margin` | margins | a map of all four sides, or one value for all of them; `in`, `mm`, `cm`, `pt`; 0–3 in | `1in` |
 | `fontsize` | body text size | 6–72 pt | `12.5pt` |
 | `mainfont` | font | New Computer Modern is the one certified font. Any other name is kept, but the page still prints in New Computer Modern | New Computer Modern |
 | `linestretch` | line spacing, as a multiple of the font size | 1–3 | `1.5` |

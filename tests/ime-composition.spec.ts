@@ -1,4 +1,4 @@
-import { expect, LINE_END, test, type Page } from './fixture';
+import { expect, LINE_END, pinOldMargins, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // An IME's composition while the layout would re-break its paragraph
@@ -20,6 +20,7 @@ async function demo(page: Page) {
   await page.goto('/?new=1');
   await page.waitForFunction(() => Boolean((window as unknown as Hooks).view && (window as unknown as Hooks).__loadDemo));
   await page.evaluate(() => (window as unknown as Hooks).__loadDemo());
+  await pinOldMargins(page);
   await settleLocal(page);
 }
 

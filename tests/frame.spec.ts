@@ -1,4 +1,4 @@
-import { expect, test, type Page } from './fixture';
+import { expect, OLD_MARGINS_TYP, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // The frame (src/style.css, "The panel"): one elevated panel under the bar
@@ -1224,7 +1224,7 @@ test('a pass holds the caret where it is on the screen: Enters mid-page, across 
   // a line carried over a page break left the caret 365 px below the
   // panel. A pass holds a followed caret still (src/paper-scale.ts).
   await page.setViewportSize({ width: 1500, height: 900 });
-  await openTyp(page, Array.from({ length: 30 }, (_, i) => `P${i} ` + FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
+  await openTyp(page, OLD_MARGINS_TYP + Array.from({ length: 30 }, (_, i) => `P${i} ` + FILLER.repeat(3).trimEnd()).join('\n\n') + '\n');
   const caret = () =>
     page.evaluate(() => {
       const { view } = window as unknown as Hooks;

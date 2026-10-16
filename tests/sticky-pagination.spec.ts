@@ -1,4 +1,4 @@
-import { expect, test } from './fixture';
+import { expect, pinOldMargins, test } from './fixture';
 import { settleLocal as waitSettled } from './settle';
 
 // PAGE-PORT Phase 3: sticky blocks (Typst's `Distributor::frame` snapshot /
@@ -102,6 +102,7 @@ async function growFiller(page: Page): Promise<void> {
 test('a heading that would be last on a page migrates with its paragraph', async ({ page }) => {
   test.setTimeout(180_000);
   await page.goto('/?new=1');
+  await pinOldMargins(page);
   await page.evaluate((sentence) => {
     const { state } = window.view;
     const { schema } = state;
@@ -149,6 +150,7 @@ test('a heading that would be last on a page migrates with its paragraph', async
 test('two consecutive headings migrate together', async ({ page }) => {
   test.setTimeout(180_000);
   await page.goto('/?new=1');
+  await pinOldMargins(page);
   await page.evaluate((sentence) => {
     const { state } = window.view;
     const { schema } = state;
@@ -197,6 +199,7 @@ test('two consecutive headings migrate together', async ({ page }) => {
 test('a heading run already at a page top does not migrate', async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto('/?new=1');
+  await pinOldMargins(page);
 
   const build = (sentences: number) =>
     page.evaluate(

@@ -1,4 +1,4 @@
-import { expect, test } from './fixture';
+import { expect, pinOldMargins, test } from './fixture';
 import { settleLocal } from './settle';
 
 declare global {
@@ -129,6 +129,7 @@ test('a code block immediately followed by an ordered list paginates', async ({
 // item too.
 async function fallbackOnly(page: import('playwright/test').Page) {
   await page.goto('/?new=1');
+  await pinOldMargins(page);
 }
 
 const SENTENCE =

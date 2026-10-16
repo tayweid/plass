@@ -1,4 +1,4 @@
-import { expect, test, type Page } from './fixture';
+import { expect, pinOldMargins, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 declare global {
@@ -39,7 +39,10 @@ interface TableOptions {
 }
 
 async function installDoc(page: Page, opts: TableOptions, navigate = true): Promise<number> {
-  if (navigate) await page.goto('/?new=1');
+  if (navigate) {
+    await page.goto('/?new=1');
+    await pinOldMargins(page);
+  }
   await page.waitForFunction(() => !!window.view && !!window.__pagLog);
   return page.evaluate((o) => {
     const { state } = window.view;
