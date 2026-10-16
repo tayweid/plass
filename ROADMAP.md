@@ -63,11 +63,19 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      that close to a line, the page keeps a line Typst moves on. A sweep
      of heading runs over top margins 1.00–1.26 in (2026-10-16) found 3
      such breaks in 162.
-   - A quote that opens with a display equation, in mid-page, is shorter
-     in the editor than in Typst: a sweep of that quote across page 1's
-     bottom (2026-10-16) put two more lines on page 2 than Typst does at
-     two of thirteen points. The same equation at the top level, and the
-     quote at a page top, agree.
+   - Spacing found off by a sweep of quotes and solutions at line heights
+     1.3 and 1.8 and with indented paragraphs (2026-10-16), none of it the
+     quote's: at `linestretch: 1.8` a document that opens with a level-1
+     heading puts a line more on page 1 than Typst (the same paragraphs
+     without the heading agree), so the heading's spacing is off there;
+     with `indent: true` the gap over a display equation that follows a
+     paragraph is 0.9em (11.25 pt) short in the editor (the export's
+     `equationBlockSpacingEm` counts the paragraph's 0.9em margin, which
+     indented paragraphs do not paint). A quote's neighbour with explicit
+     spacing of its own (a heading, an equation or another quote) gets the
+     sum of the two spacings where Typst keeps the larger, and a table or
+     code block at a quote's edge keeps its own box (`quoteBoxEm` is exact
+     for paragraph-like edges).
 6. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
    for Plass and Knuth, Knuth's `docs/ROADMAP.md` carries the same
    entry, and `docs/COAUTHOR.md` there is the git-only design it

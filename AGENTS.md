@@ -222,7 +222,10 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   alone decides it). The 0.5em padding round the frame
   (`DISPLAY_MATH_PAD_EM`) is spacing Typst drops at a page top
   (`containerPageTopDropEm`), trims at a page bottom (`bottomInsetFor`),
-  and drops and trims at a grid cell's edges (`blockFrameSlackEm`). Inline content
+  and drops and trims at a grid cell's edges (`blockFrameSlackEm`); at a
+  quote's edge (either kind) Typst drops it too and the quote's spacing
+  runs from the frame, so there the equation is boxed like a paragraph
+  (`displayMathPadEm`: the paragraph's cap slack above, inset below). Inline content
   raised off the baseline (a footnote marker) gets `line-height: 0`:
   Typst's baseline shift never grows a line.
   The paginator fits Typst FRAMES, not browser boxes: a frame runs from
@@ -235,7 +238,13 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   right after a heading gets Typst's spacing for the pair, the larger of
   the two headings' (both explicit, weakness 3), not the editor's sum: the
   follower's padding comes from `headingRunPadTopEm`, published by
-  `publishGeometryVars`. Line k of
+  `publishGeometryVars`. A quote (`#quote(block: true)`) is 2.4em above
+  and 1.8em below, frame to frame (`QUOTE_SPACING_EM`; explicit, so it
+  wins over paragraph spacing even where it is smaller, line height
+  1.8): the box adds what the paragraphs beside it leave over
+  (`quoteBoxEm`, published by `publishGeometryVars`), a padding-top the
+  page top drops and an addition to its last child's margin-bottom; a
+  solution block is Auto spacing, a paragraph run. Line k of
   a paragraph is at the paragraph's top plus k line-heights (never the
   caret box: Chrome rounds its height, and Typst's line pitch is exact).
   Block measures are fractional (`getBoundingClientRect`, never

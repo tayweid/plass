@@ -32,7 +32,7 @@ import {
   stickyFinish,
   stickyRelayoutCheckpoint,
 } from './flow-rules';
-import { blockFrameSlackEm } from '../typ-serializer';
+import { QUOTE_SPACING_EM, blockFrameSlackEm, displayMathPadEm, pageBottomInsetEm, pageTopAdjustEm, quoteBoxEm } from '../typ-serializer';
 import { DEFAULT_SETTINGS } from '../settings';
 import { schema } from '../schema';
 
@@ -658,16 +658,15 @@ function content(): FlowItem {
 // --- containerPageTopDropEm ------------------------------------------------
 
 {
-  assert.equal(containerPageTopDropEm('blockquote'), 0.66);
+  assert.equal(containerPageTopDropEm('blockquote'), 0); // settings-dependent: quoteBoxEm (typ-serializer.ts)
   assert.equal(containerPageTopDropEm('code_block'), 0); // calibrated via pageTopAdjustEm('code')
-  assert.equal(containerPageTopDropEm('blockquote', 'solution'), 0); // solution kind: no padding-top
   assert.equal(containerPageTopDropEm('figure'), 0.4);
   assert.equal(containerPageTopDropEm('math_display'), DISPLAY_MATH_PAD_EM); // its padding-top, which holds part of its `above`
   assert.equal(DISPLAY_MATH_PAD_EM, 0.5); // .math-display's padding in style.css
   assert.equal(containerPageTopDropEm('bullet_list'), 0); // no padding-top to drop
   assert.equal(containerPageTopDropEm('table'), 0);
   assert.equal(containerPageTopDropEm('paragraph'), 0); // handled by pageTopAdjustEm instead
-  console.log('  ok  containerPageTopDropEm: only the padded kinds drop (display math included), typst-raw excluded');
+  console.log('  ok  containerPageTopDropEm: only the fixed-padding kinds drop (display math included), typst-raw excluded');
 }
 
 {
@@ -678,6 +677,50 @@ function content(): FlowItem {
   assert.deepEqual(eq, { above: DISPLAY_MATH_PAD_EM, below: DISPLAY_MATH_PAD_EM });
   assert.deepEqual(blockFrameSlackEm(schema.nodes.horizontal_rule.create(), DEFAULT_SETTINGS), { above: 0, below: 0 });
   console.log('  ok  blockFrameSlackEm: a display equation\'s frame sits inside its padding');
+}
+
+{
+  // A quote is 2.4em above and 1.8em below, frame to frame (Typst's
+  // `#quote(block: true)`), whatever the paragraph spacing beside it: the
+  // paragraph boxes around it paint their inset, margin and cap slack, the
+  // quote the rest — negative below where paragraph spacing is the larger,
+  // as Typst's explicit spacing wins over it there (line height 1.8).
+  for (const lineHeight of [1.3, 1.5, 1.8, 3]) {
+    for (const parIndent of [false, true]) {
+      const s = { ...DEFAULT_SETTINGS, lineHeight, parIndent };
+      const inset = pageBottomInsetEm(s, 'paragraph');
+      const cap = -pageTopAdjustEm(s, 'paragraph');
+      const margin = parIndent ? 0 : 0.9;
+      const q = quoteBoxEm(s);
+      assert.ok(Math.abs(inset + margin + q.padTop + q.marginTop + cap - QUOTE_SPACING_EM.above) < 1e-9);
+      assert.ok(Math.abs(inset + margin + q.below + cap - QUOTE_SPACING_EM.below) < 1e-9);
+      assert.ok(q.padTop >= 0 && q.marginTop <= 0);
+    }
+  }
+  assert.ok(quoteBoxEm({ ...DEFAULT_SETTINGS, lineHeight: 1.8 }).below < 0);
+  assert.equal(quoteBoxEm({ ...DEFAULT_SETTINGS, lineHeight: 3 }).padTop, 0);
+  console.log('  ok  quoteBoxEm: a quote is 2.4em above and 1.8em below a paragraph, at every line height');
+}
+
+{
+  // An equation that opens or closes a quote (either kind) is boxed like a
+  // paragraph on that side; anywhere else it keeps its 0.5em.
+  const s = { ...DEFAULT_SETTINGS, lineHeight: 1.8 };
+  const eq = schema.nodes.math_display.create({ src: 'x' });
+  const p = schema.nodes.paragraph.create(null, schema.text('Text.'));
+  const cap = -pageTopAdjustEm(s, 'paragraph');
+  const inset = pageBottomInsetEm(s, 'paragraph');
+  const pad = { top: DISPLAY_MATH_PAD_EM, bottom: DISPLAY_MATH_PAD_EM };
+  const quote = schema.nodes.blockquote.create(null, [eq, p, eq]);
+  const solution = schema.nodes.blockquote.create({ kind: 'solution' }, [eq]);
+  const item = schema.nodes.list_item.create(null, [p, eq]);
+  assert.deepEqual(displayMathPadEm(s, schema.nodes.doc.create(null, [eq]), 0), pad);
+  assert.deepEqual(displayMathPadEm(s, quote, 0), { top: cap, bottom: DISPLAY_MATH_PAD_EM });
+  assert.deepEqual(displayMathPadEm(s, quote, 2), { top: DISPLAY_MATH_PAD_EM, bottom: inset });
+  assert.deepEqual(displayMathPadEm(s, solution, 0), { top: cap, bottom: inset });
+  assert.deepEqual(displayMathPadEm(s, item, 1), pad);
+  assert.deepEqual(displayMathPadEm(s, null, 0), pad);
+  console.log('  ok  displayMathPadEm: an equation at a quote\'s edge is padded like a paragraph there');
 }
 
 // --- lineNeedSpans ------------------------------------------------------
