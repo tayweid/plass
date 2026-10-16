@@ -418,3 +418,93 @@ test('cell alignment: the pill\'s Align panel sets across and down, painted as T
   expect(md).toContain('::: {.column align=right}');
   expect(md).toContain('::: {.column align=center valign=middle}');
 });
+
+test('merging across: the pill merges and splits cells, a merged cell spans its columns and the gutter, and Typst agrees', async ({ page }) => {
+  test.setTimeout(90_000);
+  await openTyp(
+    page,
+    HEAD('paper: "us-letter", margin: 1.25in') +
+      '#grid(\n  columns: (2fr, 1fr, 1fr),\n  gutter: 1em,\n' +
+      `  [\n    ${FILLER.repeat(2).trimEnd()}\n  ],\n  [\n    Beside.\n  ],\n  [\n    Third.\n  ],\n` +
+      // Full sentences below: the audit's text reader runs one-line cells
+      // that share a baseline together ("a" read as "abc").
+      `  [\n    ${FILLER.trimEnd()}\n  ],\n  [\n    ${FILLER.trimEnd()}\n  ],\n  [\n    ${FILLER.trimEnd()}\n  ],\n)\n\n` +
+      FILLER.repeat(2).trimEnd() +
+      '\n',
+  );
+  const rows = page.locator('.ProseMirror .ts-grid-row');
+  const cellsOf = (row: number) => rows.nth(row).locator(':scope > .ts-grid-cell');
+  await expect(cellsOf(0)).toHaveCount(3);
+  const box = (row: number, cell: number) => cellsOf(row).nth(cell).evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { left: r.left, right: r.right };
+  });
+
+  // Merge the long cell with the one to its right: one cell over the first
+  // two columns and the gutter between them, its text after the long one's.
+  await cellsOf(0).nth(0).locator('p').first().click();
+  await menuItem(page, 'cols', 'Merge with the cell to the right');
+  await page.keyboard.press('Escape');
+  await expect(cellsOf(0)).toHaveCount(2);
+  const merged = cellsOf(0).nth(0);
+  await expect(merged.locator('p')).toHaveCount(2);
+  await expect(merged.locator('p').nth(1)).toHaveText('Beside.');
+  const [wide, under0, under1] = [await box(0, 0), await box(1, 0), await box(1, 1)];
+  expect(Math.abs(wide.left - under0.left), JSON.stringify({ wide, under0 })).toBeLessThan(0.5);
+  expect(Math.abs(wide.right - under1.right), JSON.stringify({ wide, under1 })).toBeLessThan(0.5);
+  await settleLocal(page);
+  // The port lays the paragraph at the merged width: its justified lines
+  // run (within a pixel of glyph rounding) from edge to edge.
+  const lines = await merged.locator('p').first().evaluate((p) => {
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const byTop = new Map<number, { left: number; right: number }>();
+    for (const r of range.getClientRects()) {
+      if (!r.width || !r.height) continue;
+      const key = Math.round(r.top);
+      const line = byTop.get(key) ?? { left: r.left, right: r.right };
+      byTop.set(key, { left: Math.min(line.left, r.left), right: Math.max(line.right, r.right) });
+    }
+    return [...byTop.values()];
+  });
+  expect(lines.length).toBeGreaterThan(1);
+  expect(Math.abs(lines[0].right - lines[0].left - (wide.right - wide.left)), JSON.stringify({ lines, wide })).toBeLessThan(2);
+
+  // Both files carry the span.
+  const files = await page.evaluate(async () => {
+    const { docToTyp } = await import('/src/typ-serializer.ts');
+    const { docToMd } = await import('/src/md-serializer.ts');
+    return { typ: docToTyp(window.view.state.doc), md: docToMd(window.view.state.doc) };
+  });
+  expect(files.typ).toContain('  grid.cell(colspan: 2)[\n    The Knuth');
+  expect(files.md).toContain(':::: {.columns gutter=1em widths="50% 25% 25%"}');
+  expect(files.md).toContain('::: {.column width=75% span=2}');
+
+  // Typst breaks the merged cell's lines where the port does.
+  const report = await page.evaluate(() => window.__audit());
+  expect(report).not.toBeNull();
+  expect(report!.summary.mismatch, JSON.stringify(report!.blocks.filter((b) => b.status !== 'match'))).toBe(0);
+  expect(report!.summary.typstFail, JSON.stringify(report!.blocks.filter((b) => b.status === 'typst-fail'))).toBe(0);
+  expect(report!.summary.pagesAgree, JSON.stringify(report!.pages)).toBe(true);
+
+  // A column added through the merged cell (from the cell below it)
+  // widens it; deleting that column narrows it again.
+  await cellsOf(1).nth(1).locator('p').click();
+  await menuItem(page, 'cols', 'Add column before');
+  await expect(cellsOf(1)).toHaveCount(4);
+  await expect(cellsOf(0)).toHaveCount(2);
+  await expect(merged).toHaveCSS('grid-column-start', 'span 3');
+  await menuItem(page, 'cols', 'Delete selected column');
+  await expect(cellsOf(1)).toHaveCount(3);
+  await expect(merged).toHaveCSS('grid-column-start', 'span 2');
+
+  // Split: the first cell keeps the content, the second is empty again.
+  await merged.locator('p').first().click();
+  await menuItem(page, 'cols', 'Split merged cell');
+  await page.keyboard.press('Escape');
+  await expect(cellsOf(0)).toHaveCount(3);
+  await expect(cellsOf(0).nth(0).locator('p')).toHaveCount(2);
+  await expect(cellsOf(0).nth(1)).toHaveText('');
+  const [first, below] = [await box(0, 0), await box(1, 0)];
+  expect(Math.abs(first.right - below.right), JSON.stringify({ first, below })).toBeLessThan(0.5);
+});

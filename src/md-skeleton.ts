@@ -65,8 +65,9 @@
 //   a `.columns` div holding only `.column` divs is a row, and every
 //   following sibling `.columns` row that carries `.continued` (comments
 //   between rows allowed) is a later row of the SAME grid — one `columns`
-//   record whose `cols` is the first row's cell count (the model's
-//   `columns.length`), then each row's `column` records in order. A row
+//   record whose `cols` is the columns the first row covers (the model's
+//   `columns.length`: its cell count, a merged cell's `span=` counted),
+//   then each row's `column` records in order. A row
 //   without `.continued` starts a new grid, so two adjacent unmarked rows
 //   are two grids; a `.continued` row with no grid before it starts one.
 //   The `columns` record carries `rows`, and `cells=a/b/…` (each row's
@@ -1305,15 +1306,23 @@ function gridEnd(blocks: PandocNode[], i: number): number {
   return end;
 }
 
-/** One grid from its row divs: one `columns` record, its `cols` the first
- *  row's cell count (the model's `columns.length`) and its `rows` the row
- *  count (with each row's cell count when they differ), then every row's
- *  `column` records in order. A comment between rows or between cells is
- *  inside the grid, so it is hoisted like any nested comment. */
+/** One grid from its row divs: one `columns` record, its `cols` the
+ *  columns the first row covers (the model's `columns.length`: its cell
+ *  count, a merged cell's `span=` counted as the reader counts it) and its
+ *  `rows` the row count (with each row's cell count when they differ),
+ *  then every row's `column` records in order. A comment between rows or
+ *  between cells is inside the grid, so it is hoisted like any nested
+ *  comment. */
 function gridRecords(group: PandocNode[], depth: number, ctx: Ctx, out: SkeletonRecord[]): void {
   const cells = (row: PandocNode) => (row.c as [unknown, PandocNode[]])[1];
-  const counts = group.filter((row) => row.t === 'Div').map((row) => cells(row).filter((n) => n.t === 'Div').length);
-  out.push(gridRecord(depth, counts[0], counts));
+  const rows = group.filter((row) => row.t === 'Div');
+  const counts = rows.map((row) => cells(row).filter((n) => n.t === 'Div').length);
+  const span = (cell: PandocNode) => {
+    const text = attrOf((cell.c as [Attr])[0])[2].filter(([k]) => k === 'span').pop()?.[1]?.trim() ?? '1';
+    return /^\d+$/.test(text) && Number(text) >= 1 ? Math.min(Number(text), 12) : 1;
+  };
+  const covered = cells(rows[0]).filter((n) => n.t === 'Div').reduce((sum, cell) => sum + span(cell), 0);
+  out.push(gridRecord(depth, covered, counts));
   for (const row of group) {
     if (row.t !== 'Div') {
       reduceBlock(row, depth, ctx, out);

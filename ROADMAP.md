@@ -48,9 +48,11 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      when it wraps differently from Typst.
    - A table row Typst splits across pages (a rowspan across the break, a
      tall cell) is placed whole instead — declared, not mirrored.
-   - A `#grid` off the rail (auto or fixed columns, spans, fills, differing
-     row and column gutters) stays an island; add a rail only if a real
-     document needs it.
+   - A `#grid` off the rail (auto or fixed columns, rowspans, fills,
+     differing row and column gutters) stays an island; add a rail only if
+     a real document needs it. Merging down (a rowspan) would tie rows the
+     paginator now moves one at a time, and Markdown's one div per row has
+     no home for it.
    - Citations: linking picker entries to local PDFs when keys match
      filenames.
 6. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
@@ -96,6 +98,11 @@ panel, as a table's, sets a cell's `align` (across: the last line of each
 paragraph) and `valign` (down: the cell in its row), kept as
 `grid.cell(align: …)` in `.typ` and `align=` / `valign=` on the
 `::: column` div in `.md`; the audit's grid fixture carries both.
+Grid cells merge across (2026-10-16): Columns › Merge with cell right /
+Split cell, `grid.cell(colspan: …)` in `.typ`, `span=` and the covered
+columns' width on the `::: column` div in `.md` (a merged first row also
+writes `widths=` on its `.columns` div); the audit's grid fixture carries
+a two- and a three-column merge.
 
 ## Done: Plass.app on the Claerbout shell (Electron, 2026-09-30)
 

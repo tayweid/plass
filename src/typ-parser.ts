@@ -12,6 +12,7 @@
 import { Fragment, type Mark, type Node as PMNode } from 'prosemirror-model';
 import { TableMap } from 'prosemirror-tables';
 import { schema } from './schema';
+import { packGridRows } from './grid-spans';
 import { TYP_COMMENT_OPEN, readTypComment } from './editor-comments-format';
 import { unwrapAligned } from './math-src';
 import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings, FOOTNOTE_NUMBERINGS, type FootnoteNumbering } from './settings';
@@ -1058,7 +1059,7 @@ export function parseGridCall(src: string, warnings: string[] = []): PMNode | nu
   const args = splitTopArgs(s.slice(open + 1, close)).map((a) => a.trim()).filter(Boolean);
   let columns: number[] | null = null;
   let gutter: number | null = null;
-  const cells: Array<{ body: string } & CellAlignment> = [];
+  const cells: Array<{ body: string; colspan: number } & CellAlignment> = [];
   const em = (v: string): number | null => {
     const m = /^([\d.]+)em$/.exec(v.trim());
     return m ? Number(m[1]) : null;
@@ -1090,33 +1091,38 @@ export function parseGridCall(src: string, warnings: string[] = []): PMNode | nu
       } else return null;
       continue;
     }
-    // A cell: `[body]`, or `grid.cell(align: …)[body]`, the rail's one
-    // cell argument (a span, a fill, an inset: off the rail, an island).
+    // A cell: `[body]`, or `grid.cell(colspan: …, align: …)[body]` with
+    // either or both of the rail's two cell arguments (a rowspan, a fill,
+    // an inset: off the rail, an island).
     let body = arg;
     let alignment: CellAlignment = { align: null, valign: null };
-    const aligned = /^grid\.cell\(\s*align\s*:\s*([^()]*?)\s*\)\s*(\[[\s\S]*\])$/.exec(arg);
-    if (aligned) {
-      const parsed = parseCellAlignment(aligned[1]);
-      if (!parsed) return null;
-      alignment = parsed;
-      body = aligned[2];
+    let colspan = 1;
+    const head = /^grid\.cell\(([^()]*)\)\s*(\[[\s\S]*\])$/.exec(arg);
+    if (head) {
+      for (const cellArg of splitTopArgs(head[1]).map((a) => a.trim()).filter(Boolean)) {
+        const kv = /^([a-z-]+)\s*:\s*([\s\S]*?)\s*$/.exec(cellArg);
+        if (kv?.[1] === 'align') {
+          const parsed = parseCellAlignment(kv[2]);
+          if (!parsed) return null;
+          alignment = parsed;
+        } else if (kv?.[1] === 'colspan' && /^\d+$/.test(kv[2]) && Number(kv[2]) >= 1) colspan = Number(kv[2]);
+        else return null;
+      }
+      body = head[2];
     }
     if (!(body.startsWith('[') && body.endsWith(']') && matchBracket(body, 0) === body.length - 1)) return null;
-    cells.push({ body: body.slice(1, -1), ...alignment });
+    cells.push({ body: body.slice(1, -1), colspan, ...alignment });
   }
-  if (!columns || !cells.length) return null;
-  const cellNodes = cells.map(({ body, align, valign }) => {
+  // A span wider than the grid is an error in Typst: kept as written.
+  if (!columns || !cells.length || cells.some((c) => c.colspan > columns!.length)) return null;
+  const cellNodes = cells.map(({ body, colspan, align, valign }) => {
     const raw = body.replace(/^\n/, '').replace(/\s+$/, '').split('\n');
     const indent = Math.min(...raw.filter((l) => l.trim()).map((l) => /^ */.exec(l)![0].length), Infinity);
     const dedented = raw.map((l) => (l.trim() ? l.slice(indent === Infinity ? 0 : indent) : ''));
     const blocks = dedented.some((l) => l.trim()) ? parseBlocks(dedented, warnings) : [];
-    return schema.nodes.grid_cell.create({ align, valign }, blocks.length ? blocks : [schema.nodes.paragraph.create()]);
+    return schema.nodes.grid_cell.create({ align, valign, colspan }, blocks.length ? blocks : [schema.nodes.paragraph.create()]);
   });
-  const width = columns.length;
-  while (cellNodes.length % width) cellNodes.push(schema.nodes.grid_cell.create(null, [schema.nodes.paragraph.create()]));
-  const rows: PMNode[] = [];
-  for (let r = 0; r < cellNodes.length; r += width) rows.push(schema.nodes.grid_row.create(null, cellNodes.slice(r, r + width)));
-  return schema.nodes.grid.create({ columns, gutter: gutter ?? 0 }, rows);
+  return schema.nodes.grid.create({ columns, gutter: gutter ?? 0 }, packGridRows(cellNodes, columns.length));
 }
 
 function matchParen(src: string, open: number): number {

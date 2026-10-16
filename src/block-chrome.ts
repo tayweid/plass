@@ -73,11 +73,14 @@ import {
   gridCaretPlace,
   gridCellAttr,
   gridContext,
+  gridSelectionSpansCells,
   insertGridColumnAt,
   insertGridRowAt,
+  mergeGridCells,
   setGridColumns,
   setGridCellAttr,
   setGridGutter,
+  splitGridCell,
   unwrapGrid,
 } from './grid-editor';
 import { canonicalShares, displayColumnShares, parseColumnShares, sameSplit, splitPresets } from './grid-split';
@@ -560,7 +563,10 @@ class BlockChrome {
     }
     // The readout for assistive tech (spec §6), and the image hint.
     let readout = '';
-    if (ctx.kind === 'grid' && place) readout = `Row ${place.row + 1} of ${place.rows} · Column ${place.column + 1} of ${place.columns}`;
+    if (ctx.kind === 'grid' && place) {
+      const columns = place.span > 1 ? `Columns ${place.column + 1}–${place.column + place.span}` : `Column ${place.column + 1}`;
+      readout = `Row ${place.row + 1} of ${place.rows} · ${columns} of ${place.columns}`;
+    }
     else if (ctx.kind === 'table' && inTable) {
       try {
         const rect = selectedRect(state);
@@ -1961,6 +1967,19 @@ class BlockChrome {
     this.item(builder, 'Add column right', () => this.atCell(() => insertGridColumnAt(this.view, 'right')), { name: 'Add column after', enabled: () => (place()?.columns ?? 12) < 12 });
     this.divider(builder);
     this.item(builder, 'Delete column', () => this.atCell(() => deleteGridColumnAt(this.view)), { name: 'Delete selected column', enabled: () => (place()?.columns ?? 0) > 1 });
+    // Merging across (grid.cell(colspan:)): the cells a selection spans in
+    // one row, or the caret's cell and the next; never down.
+    this.divider(builder);
+    const spans = () => gridSelectionSpansCells(this.cellState());
+    this.item(builder, 'Merge cells', () => this.run(mergeGridCells), {
+      name: 'Merge selected cells', keepOpen: true, visible: spans, enabled: () => mergeGridCells(this.cellState()),
+    });
+    this.item(builder, 'Merge with cell right', () => this.run(mergeGridCells), {
+      name: 'Merge with the cell to the right', keepOpen: true, visible: () => !spans(), enabled: () => mergeGridCells(this.cellState()),
+    });
+    this.item(builder, 'Split cell', () => this.run(splitGridCell), {
+      name: 'Split merged cell', keepOpen: true, visible: () => splitGridCell(this.cellState()),
+    });
     return builder;
   }
 

@@ -778,13 +778,16 @@ function blockToTyp(node: PMNode, indent = ''): string {
       const gutter = node.attrs.gutter as number;
       const fr = (c: number) => `${+c.toFixed(3)}fr`;
       let out = indent + `#grid(\n${indent}  columns: (${columns.map(fr).join(', ')}),\n${indent}  gutter: ${+gutter.toFixed(2)}em,\n`;
-      // An aligned cell is grid.cell(align: …)[…]: across, down, or both
-      // (Typst's horizon is the rail's middle).
+      // A merged or aligned cell is grid.cell(colspan: …, align: …)[…]:
+      // its span, then across, down, or both (Typst's horizon is the
+      // rail's middle).
       const head = (cell: PMNode) => {
+        const span = (cell.attrs.colspan as number) || 1;
         const across = cell.attrs.align as string | null;
         const down = cell.attrs.valign as string | null;
         const parts = [across, down === 'middle' ? 'horizon' : down].filter(Boolean);
-        return parts.length ? `grid.cell(align: ${parts.join(' + ')})` : '';
+        const args = [...(span > 1 ? [`colspan: ${span}`] : []), ...(parts.length ? [`align: ${parts.join(' + ')}`] : [])];
+        return args.length ? `grid.cell(${args.join(', ')})` : '';
       };
       node.forEach((row) => {
         row.forEach((cell) => {

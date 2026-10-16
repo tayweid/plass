@@ -68,7 +68,11 @@ Nothing here may move a line break, a block height or a page start.
    margin place. When it hugs, captions and flyouts open to the left, into
    the empty margin, when they fit there.
 4. Grid add and delete row or column act at the caret's row or column,
-   as they do in tables.
+   as they do in tables. Grid cells merge across, never down
+   (2026-10-16, `grid.cell(colspan:)`): Columns › Merge with cell right
+   (or Merge cells, when a selection spans cells of one row) and Split
+   cell. A column added through a merged cell widens it; deleting one of
+   its columns narrows it and keeps its content, as in a table.
 5. The grid's Image tile inserts a plain inline image at 100% of the cell
    width (how exam answer boxes are written). Numbered figures still come
    from Insert.
@@ -99,7 +103,8 @@ Nothing here may move a line break, a block height or a page start.
   cells", …), values ride as `data-value` (`booktabs`, `gray-dark`, `fr`).
   Tests select by role, name and `data-value`.
 - **Readout**: a visually hidden, `aria-live` readout says `Row r of R ·
-  Column c of C` (`.grid-toolbar-position` / `.table-toolbar-position`).
+  Column c of C` (`.grid-toolbar-position` / `.table-toolbar-position`;
+  a merged grid cell says `Columns c–d of C`).
   A hidden image hint (`.grid-toolbar-hint`) speaks while an image in a
   cell is selected.
 - **Menus and panels** use the rail's dark glass, placed by `flyout.ts`.
@@ -120,6 +125,7 @@ Nothing here may move a line break, a block height or a page start.
 | `src/table-editor.ts` | table commands, `ts-table-editing` / `ts-cell-active` / `ts-cell-col0`, `--ps` on the table |
 | `src/style.css` | cell-chrome tokens (`--cell-wash`, `--cell-ring`, `--cell-line`, …) and the paper CSS |
 | `src/grid-split.ts` | split parsing (ratios, `60/40`, percents) and the display rule |
+| `src/grid-spans.ts` | merged cells' column spans: which cell covers a column, Typst's row placement (`packGridRows`), refitting a row |
 | `src/flyout.ts`, `src/notify.ts`, `src/paper-scale.ts` | flyout placement, toasts, scale hook |
 | `tests/block-chrome.spec.ts`, `cell-chrome.spec.ts` | layout stays put; paint vocabulary |
 | `tests/block-pill.spec.ts`, `block-panels.spec.ts` | pill, menus, panels, hot path |

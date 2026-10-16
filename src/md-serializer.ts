@@ -121,6 +121,17 @@ function percents(shares: number[]): string[] {
   return canonical(shares).map((s) => `${s}fr`);
 }
 
+/** The width of `span` columns from `start`, as `percents` writes one
+ *  (`66.667%`, or `3fr` where it fell back to shares). */
+function spannedWidth(widths: string[], start: number, span: number): string {
+  const covered = widths.slice(start, start + span);
+  if (!covered.length) return widths[widths.length - 1];
+  if (covered.length === 1) return covered[0];
+  const unit = /fr$/.test(covered[0]) ? 'fr' : '%';
+  const total = covered.reduce((sum, w) => sum + parseFloat(w), 0);
+  return `${Math.round(total * 1e9) / 1e9}${unit}`;
+}
+
 /** An ordered-list marker at the head of a line, by pandoc's fancy_lists
  *  and example_lists: a number, a letter, a roman numeral, `#` or an
  *  example `@`, closed by `.` or `)` or wrapped in parentheses, then a
@@ -781,7 +792,10 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
       }
       case 'grid': {
         // One `.columns` div per row; rows after the first `.continued`.
-        // Equal shares write no width; others their percent of the row.
+        // Equal shares write no width; others their percent of the row. A
+        // merged cell writes `span=` and the width of the columns it covers;
+        // when the first row has one, its `.columns` div also writes every
+        // column's width (`widths=`), which its cells no longer spell out.
         const shares = node.attrs.columns as number[];
         const equal = shares.every((s) => s === shares[0]);
         const widths = equal ? [] : percents(shares);
@@ -789,14 +803,24 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         const rows: string[] = [];
         node.forEach((row, _o, r) => {
           const cells: string[] = [];
-          row.forEach((cell, _c, c) => {
-            const kvs: Array<[string, string]> = equal ? [] : [['width', widths[c] ?? widths[widths.length - 1]]];
+          let column = 0;
+          let merged = false;
+          row.forEach((cell) => {
+            const span = (cell.attrs.colspan as number) || 1;
+            const kvs: Array<[string, string]> = equal ? [] : [['width', spannedWidth(widths, column, span)]];
+            if (span > 1) {
+              kvs.push(['span', String(span)]);
+              merged = true;
+            }
+            column += span;
             // The cell's alignment (grid.cell(align:) in Typst): across and down.
             if (cell.attrs.align) kvs.push(['align', cell.attrs.align as string]);
             if (cell.attrs.valign) kvs.push(['valign', cell.attrs.valign as string]);
             cells.push(div(depth - 1, writeFenceAttrs({ id: '', classes: ['column'], kvs }), blocks(sequence(cell))));
           });
-          const head = writeAttrBlock({ id: '', classes: r ? ['columns', 'continued'] : ['columns'], kvs: [['gutter', `${num(node.attrs.gutter as number)}em`]] });
+          const kvs: Array<[string, string]> = [['gutter', `${num(node.attrs.gutter as number)}em`]];
+          if (!r && merged && !equal) kvs.push(['widths', widths.join(' ')]);
+          const head = writeAttrBlock({ id: '', classes: r ? ['columns', 'continued'] : ['columns'], kvs });
           rows.push(div(depth, head, cells.join('\n\n')));
         });
         return rows.join('\n\n');
