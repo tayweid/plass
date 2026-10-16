@@ -150,6 +150,8 @@ check(
 );
 check('bold ink compiles under strong', inkTypst('x', false, 11, true).includes('#(strong($x $))#context metadata((pos: here().position(), width: measure(strong($x $)).width))'));
 check('display ink is the bare block', inkTypst('\nx\n', true, 10, false).endsWith('#set text(size: 10pt)\n\n$\nx \n$\n'), inkTypst('\nx\n', true, 10, false));
+const leading = inkTypst('\nx\n', true, 10, false, false, 8.17);
+check('display ink sets its rows at the document leading', leading.startsWith('#set page(width: auto, height: auto, margin: 0pt)\n#set par(leading: 8.17pt)\n#set text(size: 10pt)\n'), leading);
 {
   const probe = inkTypst('\nx\n', true, 10, false, true);
   check('display probe measures the same block, unrounded', probe.includes('  height: measure($\nx \n$).height.pt(),\n'), probe);

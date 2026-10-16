@@ -11,7 +11,7 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { parseMathMacros, type DocSettings } from './settings';
-import { expandMacrosWith } from './typ-serializer';
+import { bodyLeadingPt, expandMacrosWith } from './typ-serializer';
 import { wrapAligned } from './math-src';
 import { compilerCircuitEpoch, onCompilerCircuitReset } from './compiler-circuit';
 import { convertMath, displayEquation, ensureMathConverter, inlineEquation, MathConvertError } from './math-convert';
@@ -57,6 +57,8 @@ interface QueueItem {
   src: string;
   display: boolean;
   sizePt: number;
+  /** Display math: the document's leading, which sets rows apart. */
+  leadingPt: number;
   macros: string;
   bold: boolean;
 }
@@ -90,7 +92,8 @@ let inflight = false;
  * embolden and widen it (~15% for `2x`). `emph`/`strike` never change
  * math ink and need no key of their own. */
 export function inkKey(src: string, display: boolean, s: DocSettings, bold = false): string {
-  return `${display ? 'D' : bold ? 'B' : 'I'}|${s.sizePt}|${s.mathMacros}|${src}`;
+  if (display) return `D|${s.sizePt}|${bodyLeadingPt(s)}|${s.mathMacros}|${src}`;
+  return `${bold ? 'B' : 'I'}|${s.sizePt}|${s.mathMacros}|${src}`;
 }
 
 /** Inline math inside a strong span compiles as bold ink. */
@@ -140,7 +143,7 @@ export function requestInk(key: string, src: string, display: boolean, s: DocSet
   if (isDeferred(v) && v.epoch < compilerCircuitEpoch()) setEntry(key, undefined);
   else if (v !== undefined) return;
   setEntry(key, 'pending');
-  queue.push({ key, src, display, sizePt: s.sizePt, macros: s.mathMacros, bold: bold && !display });
+  queue.push({ key, src, display, sizePt: s.sizePt, leadingPt: bodyLeadingPt(s), macros: s.mathMacros, bold: bold && !display });
   clearTimeout(timer);
   timer = window.setTimeout(() => void flush(), 120);
 }
@@ -254,6 +257,7 @@ interface InkItem {
   src: string;
   display: boolean;
   sizePt: number;
+  leadingPt: number;
   macros: string;
   bold: boolean;
 }
@@ -267,7 +271,7 @@ interface InkItem {
 function inkSource(item: InkItem, probe = false): string | null {
   const latex = expandMacrosWith(item.display ? wrapAligned(item.src) : item.src, parseMathMacros(item.macros));
   if (!latex.trim()) return null;
-  return inkTypst(item.display ? '\n' + latex + '\n' : latex, item.display, item.sizePt, item.bold, probe);
+  return inkTypst(item.display ? '\n' + latex + '\n' : latex, item.display, item.sizePt, item.bold, probe, item.leadingPt);
 }
 
 /**
@@ -279,9 +283,12 @@ function inkSource(item: InkItem, probe = false): string | null {
  * export's numbering, `"(1)"`. Where the equation sits inside its
  * numbered frame is read from the flow: the two are laid one after the
  * other with no spacing, each with a tag at the head of its body, and a
- * tag in math is placed on the first line's baseline.
+ * tag in math is placed on the first line's baseline. Display math is set
+ * at the document's leading (`leadingPt`): Typst sets the rows of a
+ * multi-line equation apart by it, and without it they were drawn 0.6-2.1
+ * pt closer than they print.
  */
-export function inkTypst(latex: string, display: boolean, sizePt: number, bold: boolean, probe = false): string {
+export function inkTypst(latex: string, display: boolean, sizePt: number, bold: boolean, probe = false, leadingPt?: number): string {
   const typ = convertMath(latex);
   // Display equations hug the page tightly with no instrumentation (a
   // trailing probe would start a phantom paragraph below the ink), so
@@ -293,6 +300,7 @@ export function inkTypst(latex: string, display: boolean, sizePt: number, bold: 
   const expr = bold ? `strong(${eq})` : eq;
   return (
     `#set page(width: auto, height: auto, margin: 0pt)\n` +
+    (display && leadingPt !== undefined ? `#set par(leading: ${leadingPt}pt)\n` : '') +
     `#set text(size: ${sizePt}pt)\n` +
     mathPrelude([typ]) +
     '\n' +

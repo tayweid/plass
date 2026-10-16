@@ -323,13 +323,20 @@ function parityPt(s: DocSettings): (em: number) => string {
   return (em) => `${+(em * s.sizePt).toFixed(4)}pt`;
 }
 
+/** The body leading the parity header prints, pt (`parityPt`'s four
+ *  places). Typst also sets a multi-line equation's rows apart by it, so a
+ *  display formula's ink compiles with it (math-ink.ts). */
+export function bodyLeadingPt(s: DocSettings): number {
+  return +((s.lineHeight - parityMetrics(s.font).extent) * s.sizePt).toFixed(4);
+}
+
 /** The parity header: set/show rules reproducing editor spacing in Typst. */
 export function parityRules(s: DocSettings): string {
   const m = parityMetrics(s.font);
   const lh = s.lineHeight;
   const pt = parityPt(s);
   let out = '';
-  out += `#set par(justify: true, leading: ${pt(lh - m.extent)}, spacing: ${pt(parSpacingEm(s))})\n`;
+  out += `#set par(justify: true, leading: ${bodyLeadingPt(s)}pt, spacing: ${pt(parSpacingEm(s))})\n`;
   if (s.parIndent) out += `#set par(first-line-indent: 1.5em)\n`;
   out += `#set list(spacing: ${pt(listSpacingEm(s, true))})\n`;
   out += `#set enum(spacing: ${pt(listSpacingEm(s, true))})\n`;
