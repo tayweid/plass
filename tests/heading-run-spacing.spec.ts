@@ -89,3 +89,38 @@ test('the paragraph after an H3+H1 run breaks where Typst breaks it', async ({ p
   });
   expect(pages.agree, JSON.stringify(pages.firstDiff)).toBe(true);
 });
+
+// A fraction of a pixel. Typst's heading line is the bold face's cap height
+// tall (0.686 em, against the body's 0.683), and the spacings the export
+// emits are the page's gaps between frames; the model added the paragraph's
+// frame top and bottom as 0.6846 em where the frame is 0.683, and a
+// heading's as 0.6846 em where it is 0.686. A run came out 0.1 px shorter
+// on the page than in print. At these top margins the page bottom falls
+// inside that 0.1 px: the paragraph's next line ran 0.23 px (H1+H3) or
+// 0.27 px (H2+H2) past the margin in print, and the page kept it.
+for (const { marginTop, run, starts } of [
+  { marginTop: 1.16, run: [1, 3], starts: 'line' },
+  { marginTop: 1.09, run: [2, 2], starts: 'run' },
+] as const) {
+  test(`an H${run[0]}+H${run[1]} run at a ${marginTop} in top margin breaks where Typst breaks it`, async ({ page }) => {
+    test.setTimeout(90_000);
+    const { pages, body } = await build(page, {
+      marginTop,
+      title: 'Sweep fixture',
+      run: [
+        [run[0], 'First heading'],
+        [run[1], 'Second heading'],
+      ],
+    });
+    expect(pages.agree, JSON.stringify(pages.firstDiff)).toBe(true);
+    // H1+H3: two lines of the paragraph after the run stay on page 1, the
+    // third starts page 2. H2+H2: the second line does not fit, one line
+    // would be an orphan, and the run goes to page 2 with the paragraph.
+    const first = await page.evaluate(() => {
+      const blocks: number[] = [];
+      window.view.state.doc.forEach((_node, offset) => blocks.push(offset));
+      return blocks[2];
+    });
+    expect(pages.local.map((s) => [s.pos, s.line])).toEqual([starts === 'line' ? [body, 2] : [first, 0]]);
+  });
+}
