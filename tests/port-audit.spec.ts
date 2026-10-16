@@ -461,6 +461,54 @@ FIXTURES.push({
   text: ['| Item | Value |', '| --- | --- |', ...Array.from({ length: TABLE_ROWS - 1 }, (_, i) => `| Row ${i + 1} | ${i + 1} |`), ''].join('\n'),
 });
 
+// Display math at a page's edge (the 2026-10-16 sweep: an equation walked
+// across page 1's bottom at 1 in margins). Each document is the sweep's at
+// a point the editor once got wrong. A display equation's frame is its
+// content box, inside 0.5em of padding; Typst trims the equation's spacing
+// at a page's end (bottom: it fits by its frame) and drops it at a page's
+// top (top: it lands with its frame at the margin, and the audit names the
+// start `math_display` on both sides), inside a quote and at a grid cell's
+// edges too (quote, grid); a numbered equation shorter than its number is
+// the number's height (numbered: `x` is 8.675pt, not 5.6625pt).
+{
+  const words = FILLER.repeat(8).trim().split(' ');
+  const edge = (w: number, block: string[]) =>
+    [
+      '# Sweep',
+      '',
+      ...Array.from({ length: 3 }, () => [FILLER.repeat(4).trim(), '']).flat(),
+      words.slice(0, w).join(' ') + '.',
+      '',
+      ...block,
+      ...Array.from({ length: 6 }, () => [FILLER.repeat(4).trim(), '']).flat(),
+    ].join('\n');
+  const frac = '$$ \\frac{a+b}{c} = d $$';
+  FIXTURES.push(
+    { name: 'math-edge-bottom.md', text: edge(69, ['$$ \\int_0^1 f(x) \\, dx = F(1) - F(0) $$', '']) },
+    { name: 'math-edge-top.md', text: edge(82, [frac, '']) },
+    { name: 'math-edge-numbered.md', text: edge(147, ['$$ x $$', '']) },
+    { name: 'math-edge-quote.md', text: edge(108, ['> ' + frac, '>', '> ' + FILLER.repeat(2).trim(), '']) },
+    {
+      name: 'math-edge-grid.md',
+      text: edge(30, [
+        '::: {.columns gutter=1em}',
+        '::: {.column}',
+        frac,
+        '',
+        FILLER.trim(),
+        ':::',
+        '::: {.column}',
+        FILLER.trim(),
+        '',
+        '$$ x^2 $$',
+        ':::',
+        ':::',
+        '',
+      ]),
+    },
+  );
+}
+
 function collect(target: string): string[] {
   const p = resolve(target);
   const st = statSync(p);

@@ -69,11 +69,14 @@ export interface PortAuditReport {
 }
 
 /** The local paginator names a page start by its top-level block (a list
- * or quote is `block` at the container), Typst's text layer by the first
- * textblock inside it. Descend to that textblock so both sides speak the
- * same vocabulary; the unit label is informational after that. */
+ * or quote at the container), Typst's text layer by the first block inside
+ * it. Descend to that block so both sides speak the same vocabulary: the
+ * position, and the unit as the oracle labels it (the node type, a heading
+ * by its level), so a block that starts a page on both sides is the same
+ * start (a display equation was `block` here, `math_display` there, and
+ * read as a difference). A line or table-row start is already exact. */
 export function canonicalStart(doc: PMNode, entry: PageStartEntry): PageStartEntry {
-  if (entry.line !== 0 || entry.unit !== 'block') return entry;
+  if (entry.line !== 0 || entry.unit === 'line') return entry;
   let pos = entry.pos;
   let node = doc.nodeAt(pos);
   // A page that starts at an editorial comment (a note right after an
@@ -88,8 +91,7 @@ export function canonicalStart(doc: PMNode, entry: PageStartEntry): PageStartEnt
     node = node.firstChild;
   }
   if (!node) return entry;
-  const unit =
-    node.type.name === 'heading' ? `h${Math.min(3, (node.attrs.level as number) || 1)}` : node.isTextblock ? node.type.name : entry.unit;
+  const unit = node.type.name === 'heading' ? `h${Math.min(3, (node.attrs.level as number) || 1)}` : node.type.name;
   return { pos, line: 0, unit };
 }
 

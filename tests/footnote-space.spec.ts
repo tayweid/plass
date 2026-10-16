@@ -49,7 +49,10 @@ test('a footnote marker typed after a space does not inflate the paragraph', asy
   expect(result.length).toBeGreaterThan(10);
   for (const r of result) {
     expect(r.glued, `marker at word ${r.k}: space not dropped`).toBe(true);
-    // Sub-pixel slack only: the superscript's own overhang, never a line box.
-    expect(r.over, `marker at word ${r.k}: paragraph ${r.over.toFixed(2)}px taller than ${r.lines} lines`).toBeLessThan(2);
+    // Exactly its lines: the raised marker grows no line box, as in Typst
+    // (its superscript once overhung the strut by half a pixel, and the
+    // paginator, which pitches a paragraph's lines at one line height, put
+    // the next block that much too high).
+    expect(Math.abs(r.over), `marker at word ${r.k}: paragraph ${r.over.toFixed(3)}px off ${r.lines} lines`).toBeLessThan(0.05);
   }
 });

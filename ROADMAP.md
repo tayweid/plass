@@ -63,6 +63,11 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      that close to a line, the page keeps a line Typst moves on. A sweep
      of heading runs over top margins 1.00–1.26 in (2026-10-16) found 3
      such breaks in 162.
+   - A quote that opens with a display equation, in mid-page, is shorter
+     in the editor than in Typst: a sweep of that quote across page 1's
+     bottom (2026-10-16) put two more lines on page 2 than Typst does at
+     two of thirteen points. The same equation at the top level, and the
+     quote at a page top, agree.
 6. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
    for Plass and Knuth, Knuth's `docs/ROADMAP.md` carries the same
    entry, and `docs/COAUTHOR.md` there is the git-only design it

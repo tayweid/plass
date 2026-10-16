@@ -132,7 +132,8 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
 - **The port audit is how exactness is measured.** `npm run audit`
   (tests/port-audit.spec.ts, `__audit()` in the plugin) compiles a document
   once and reports every block whose port breaks differ from Typst's and
-  the first page start that differs; `AUDIT=<file-or-folder>` runs it on
+  the first page start that differs (both sides name a page start by its
+  first block's node type, `canonicalStart`); `AUDIT=<file-or-folder>` runs it on
   your own documents. It never runs in the edit loop and never blocks a
   deploy (CI runs it as a non-blocking step). What it finds are port bugs,
   fixed one at a time; the open list is in ROADMAP.md. Why: the
@@ -201,6 +202,17 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   could not run it — timeout, paused circuit: `deferred`, retried at the
   next circuit epoch; not loadable: retried after the next good compile) is outlined `.math-unmeasured` on the page and listed
   by the audit (`unmeasured`). Read widths through `inkKeyFor` (bold key).
+  A display equation's content box is its Typst frame, measured by the
+  ink compile (`frameHeightPx`; the svg's page rounds up to whole
+  points), the svg a block so no line strut sits under it. A numbered
+  one's frame holds its number (`numberedFrameHeightPx`: `x` is 8.675pt
+  at 12.5pt, not 5.6625pt; the number is in the math font, so the size
+  alone decides it). The 0.5em padding round the frame
+  (`DISPLAY_MATH_PAD_EM`) is spacing Typst drops at a page top
+  (`containerPageTopDropEm`), trims at a page bottom (`bottomInsetFor`),
+  and drops and trims at a grid cell's edges (`blockFrameSlackEm`). Inline content
+  raised off the baseline (a footnote marker) gets `line-height: 0`:
+  Typst's baseline shift never grows a line.
   The paginator fits Typst FRAMES, not browser boxes: a frame runs from
   the cap top (`pageTopAdjustEm` below the box top) to the last baseline
   (`pageBottomInsetEm` above the box bottom), footnote entries included

@@ -22,6 +22,7 @@ import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config';
 import { convertMath, displayEquation, inlineEquation, mathConverterReady } from './math-convert';
 import { mathPrelude } from './typst-math-prelude';
 import { linkPrefixScan } from './layout/port/linebreak';
+import { DISPLAY_MATH_PAD_EM } from './layout/flow-rules';
 
 export interface TypExportOptions {
   /** When given, receives the text offset at which each top-level block's
@@ -246,8 +247,8 @@ export function equationBlockSpacingEm(s: DocSettings): { above: number; below: 
   const lh = s.lineHeight;
   const pSlackBelow = lh / 2 + (m.cssD - m.cssA) / 2;
   const pSlackAbove = lh / 2 + (m.cssA - m.cssD) / 2;
-  const above = pSlackBelow + 0.9 + 0.5 - m.typDesc;
-  const below = 0.5 + 0.9 + pSlackAbove - m.typAsc;
+  const above = pSlackBelow + 0.9 + DISPLAY_MATH_PAD_EM - m.typDesc;
+  const below = DISPLAY_MATH_PAD_EM + 0.9 + pSlackAbove - m.typAsc;
   return { above, below };
 }
 
@@ -263,11 +264,13 @@ export const RUNNING_SECTION_TYP =
 /** A leaf block's Typst frame inside its painted box, body em: `above` is
  *  the slack from the box top down to the frame top, `below` the inset from
  *  the frame bottom down to the box bottom. Text kinds carry the
- *  calibrated line-box slack; the kinds with no calibration (figure, table,
- *  display math, raw islands…) have frame = box. Grid cells (grid-editor.ts)
- *  normalize every cell to the paragraph's values with these. */
+ *  calibrated line-box slack; a display equation its padding (the frame is
+ *  its content box); the kinds with no calibration (figure, table, raw
+ *  islands…) have frame = box. Grid cells (grid-editor.ts) normalize every
+ *  cell to the paragraph's values with these. */
 export function blockFrameSlackEm(node: PMNode, s: DocSettings): { above: number; below: number } {
   const name = node.type.name;
+  if (name === 'math_display') return { above: DISPLAY_MATH_PAD_EM, below: DISPLAY_MATH_PAD_EM };
   const kind =
     name === 'paragraph' || name === 'doc_title' || name === 'doc_authors' || name === 'doc_date'
       ? 'paragraph'

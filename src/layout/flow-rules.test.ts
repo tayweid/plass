@@ -24,6 +24,7 @@ import {
   trimSpacing,
   peekWeakSpacing,
   containerPageTopDropEm,
+  DISPLAY_MATH_PAD_EM,
   lineNeedSpans,
   type LineNeedsOptions,
   freshStickyState,
@@ -31,6 +32,9 @@ import {
   stickyFinish,
   stickyRelayoutCheckpoint,
 } from './flow-rules';
+import { blockFrameSlackEm } from '../typ-serializer';
+import { DEFAULT_SETTINGS } from '../settings';
+import { schema } from '../schema';
 
 const F = 16.666666666666668; // bodyPx at the app default (12.5pt @ 96dpi)
 
@@ -162,6 +166,42 @@ const GAP = FOOTNOTE_GAP_EM * F;
 }
 
 {
+  // Widow/orphan prevention inside the entry (`layout_footnote` lays the
+  // entry out as a flow, so Collector::lines pairs its lines too). Lines
+  // here are 14px boxes with a 4px leading: a frame of n lines is
+  // 14n - 4. `pod(k)` is room for exactly k lines' frame and a little.
+  const line = 14;
+  const lead = 4;
+  const frame = (n: number) => n * line - lead;
+  const pod = (k: number) => HEAD + GAP + frame(k) + 1;
+  const split = (n: number, k: number, firstLine?: number) =>
+    footnoteEntryFit(frame(n), pod(k), false, F, { lineHeightPx: line, leadingPx: lead, firstLine });
+  // Two lines, room for one: the orphan need fails, the first frame is
+  // empty (the slashes.md case at 1 in margins: the marker's line moves).
+  assert.equal(split(2, 1).empty, true);
+  assert.equal(split(2, 1).remainder, frame(2));
+  // Three lines are indivisible: room for two is no room.
+  assert.equal(split(3, 2).empty, true);
+  // Four lines, room for three: the last two stay together.
+  assert.equal(split(4, 3).fragment, frame(2));
+  assert.equal(split(4, 3).remainder, frame(2));
+  assert.equal(split(4, 3).nextLine, 2);
+  // Four lines, room for one: the first two stay together.
+  assert.equal(split(4, 1).empty, true);
+  // Five lines, room for three: three here, the widow pair spills.
+  assert.equal(split(5, 3).fragment, frame(3));
+  assert.equal(split(5, 3).nextLine, 3);
+  // Five lines, room for four: line 3 would strand line 4, so three.
+  assert.equal(split(5, 4).fragment, frame(3));
+  // A spill remainder is paired by its lines' places in the whole entry:
+  // lines 3–4 of a five-line entry are the widow pair, so room for one of
+  // them is no room; lines 1–2 of the same entry are no pair, so it splits.
+  assert.equal(split(2, 1, 3).empty, true);
+  assert.equal(split(4, 1, 1).fragment, frame(1));
+  console.log('  ok  entry split keeps Typst\'s widow/orphan pairs');
+}
+
+{
   // The pod invariant the paginator's post-insertion recheck rests on
   // (Composer::footnote, compose.rs:448-450: `pod = remaining − flow_need −
   // separator − gap`): whatever fragment is committed, its ledger charge —
@@ -260,15 +300,27 @@ const GAP = FOOTNOTE_GAP_EM * F;
   // A queued entry that cannot fit behind the placed fragments carries on:
   // at most one PARTIAL placement per page, everything after it waits.
   const line = 10;
-  const contentPx = HEAD + GAP + 3 * line + GAP + 1.5 * line;
+  const contentPx = HEAD + GAP + 3 * line + GAP + 2.5 * line;
   const settled = settleFootnoteCarry(
     [{ heightPx: 3 * line, lineHeightPx: line }, { heightPx: 4 * line, lineHeightPx: line }],
     contentPx,
     F,
   );
-  assert.deepEqual(settled.placed, [3 * line, line]);
+  assert.deepEqual(settled.placed, [3 * line, 2 * line]);
   assert.equal(settled.carry.length, 1);
-  assert.ok(Math.abs(settled.carry[0].heightPx - 3 * line) < 1e-9);
+  assert.ok(Math.abs(settled.carry[0].heightPx - 2 * line) < 1e-9);
+  // The remainder knows where it starts in its entry.
+  assert.equal(settled.carry[0].firstLine, 2);
+  // With room for one line of the second entry, its orphan need fails: it
+  // waits whole behind the first.
+  const orphan = settleFootnoteCarry(
+    [{ heightPx: 3 * line, lineHeightPx: line }, { heightPx: 4 * line, lineHeightPx: line }],
+    HEAD + GAP + 3 * line + GAP + 1.5 * line,
+    F,
+  );
+  assert.deepEqual(orphan.placed, [3 * line]);
+  assert.equal(orphan.carry.length, 1);
+  assert.equal(orphan.carry[0].heightPx, 4 * line);
   console.log('  ok  carry settle: second entry splits, its remainder re-carries');
 }
 
@@ -610,10 +662,22 @@ function content(): FlowItem {
   assert.equal(containerPageTopDropEm('code_block'), 0); // calibrated via pageTopAdjustEm('code')
   assert.equal(containerPageTopDropEm('blockquote', 'solution'), 0); // solution kind: no padding-top
   assert.equal(containerPageTopDropEm('figure'), 0.4);
+  assert.equal(containerPageTopDropEm('math_display'), DISPLAY_MATH_PAD_EM); // its padding-top, which holds part of its `above`
+  assert.equal(DISPLAY_MATH_PAD_EM, 0.5); // .math-display's padding in style.css
   assert.equal(containerPageTopDropEm('bullet_list'), 0); // no padding-top to drop
   assert.equal(containerPageTopDropEm('table'), 0);
   assert.equal(containerPageTopDropEm('paragraph'), 0); // handled by pageTopAdjustEm instead
-  console.log('  ok  containerPageTopDropEm: only the padded container kinds drop, typst-raw excluded');
+  console.log('  ok  containerPageTopDropEm: only the padded kinds drop (display math included), typst-raw excluded');
+}
+
+{
+  // A display equation's frame is its content box, inside the padding: a
+  // grid cell opening or closing with one is fitted to the frame, as
+  // Typst's cell flow drops and trims the equation's spacing there.
+  const eq = blockFrameSlackEm(schema.nodes.math_display.create({ src: 'x' }), DEFAULT_SETTINGS);
+  assert.deepEqual(eq, { above: DISPLAY_MATH_PAD_EM, below: DISPLAY_MATH_PAD_EM });
+  assert.deepEqual(blockFrameSlackEm(schema.nodes.horizontal_rule.create(), DEFAULT_SETTINGS), { above: 0, below: 0 });
+  console.log('  ok  blockFrameSlackEm: a display equation\'s frame sits inside its padding');
 }
 
 // --- lineNeedSpans ------------------------------------------------------

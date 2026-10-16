@@ -136,6 +136,11 @@ export interface FootnoteCarryItem {
   /** The entry's leading (px): heights are Typst FRAMES, so a fragment of
    * k lines is k line boxes minus one leading (its last baseline ends it). */
   readonly leadingPx?: number;
+  /** Index, within its whole entry, of this piece's first line: 0 for an
+   * entry carried whole (queued), the count already committed for a spill
+   * remainder. Widow/orphan prevention pairs lines by their index in the
+   * entry (see `footnoteEntryFit`). Omitted: 0. */
+  readonly firstLine?: number;
 }
 
 export interface FootnoteFitResult {
@@ -147,6 +152,10 @@ export interface FootnoteFitResult {
    * fit in the pod although the entry has content. This is the ONLY state in
    * which the migrate/queue decision (`footnoteEmptyFrameAction`) runs. */
   readonly empty: boolean;
+  /** The remainder's first line, as an index in the whole entry (the
+   * carry's `firstLine`). Present only when the split was quantized to
+   * lines. */
+  readonly nextLine?: number;
 }
 
 /**
@@ -167,13 +176,25 @@ export interface FootnoteFitResult {
  * the entry's measured line height. Without it (unknown/`normal` line
  * height) the fragment is a plain pixel clamp — never taller than the pod,
  * so the ledger can still not over-commit.
+ *
+ * The entry is laid out by a flow of its own (`layout_footnote`), so its
+ * lines carry the same widow/orphan `need` as a body paragraph's
+ * (`Collector::lines`, ported as `lineNeedSpans`), judged against the pod:
+ * a two-line entry never leaves one line here and one on the next page,
+ * a three-line entry is indivisible, and a longer one never strands its
+ * last line. When the pod holds a line but not its need, the first frame
+ * comes back EMPTY — and the marker's line migrates rather than strand the
+ * line (`footnoteEmptyFrameAction`). `firstLine` is the piece's first line
+ * in its whole entry (a spill remainder's), since the pairing is by the
+ * line's place in the entry. Each line's need is tested against the pod
+ * only: the next region, a full page, always holds three entry lines.
  */
 export function footnoteEntryFit(
   entryHeightPx: number,
   availablePx: number,
   pageHasFootnotes: boolean,
   bodyPx: number,
-  opts: { lineHeightPx?: number; leadingPx?: number; separatorPx?: number } = {},
+  opts: { lineHeightPx?: number; leadingPx?: number; separatorPx?: number; firstLine?: number } = {},
 ): FootnoteFitResult {
   const separatorNeed = pageHasFootnotes ? 0 : footnoteHeadReservePx(bodyPx, opts.separatorPx);
   const pod = availablePx - separatorNeed - FOOTNOTE_GAP_EM * bodyPx;
@@ -183,14 +204,24 @@ export function footnoteEntryFit(
   const leading = opts.leadingPx ?? 0;
   let fragment: number;
   let remainder: number;
+  let nextLine: number | undefined;
   if (typeof lineHeightPx === 'number' && Number.isFinite(lineHeightPx) && lineHeightPx > 0) {
+    // The piece's lines: a frame of n lines is n boxes less one leading.
+    const count = Math.max(1, Math.round((entryHeightPx + leading) / lineHeightPx));
+    const first = opts.firstLine ?? 0;
     // k lines fit when their frame — k boxes less one leading — fits.
-    const lines = Math.max(0, Math.floor((pod + leading + ABS_EPS) / lineHeightPx));
+    const fit = Math.min(count, Math.max(0, Math.floor((pod + leading + ABS_EPS) / lineHeightPx)));
+    // Lines are placed in order until one's need (itself, or the protected
+    // pair or triple it opens) runs past the pod.
+    const spans = lineNeedSpans(first + count);
+    let lines = 0;
+    while (lines < fit && spans[first + lines] - first < fit) lines++;
     fragment = lines > 0 ? Math.min(entryHeightPx, lines * lineHeightPx - leading) : 0;
     // The rest is its own frame: it ends at a baseline too, so the leading
     // between the two fragments belongs to neither page.
     const rest = entryHeightPx - fragment;
     remainder = fragment > 0 && rest > 0 ? Math.max(0, rest - leading) : Math.max(0, rest);
+    nextLine = first + lines;
   } else {
     fragment = Math.max(0, Math.min(entryHeightPx, pod));
     remainder = Math.max(0, entryHeightPx - fragment);
@@ -198,7 +229,7 @@ export function footnoteEntryFit(
   // `exist_non_empty_frame` is true exactly when the entry has any content
   // at all: a zero-height entry produces only empty frames, so Typst falls
   // through to committing it (no queue, no migration) even in no space.
-  return { fragment, remainder, empty: fragment <= 0 && entryHeightPx > 0 };
+  return { fragment, remainder, empty: fragment <= 0 && entryHeightPx > 0, nextLine };
 }
 
 /** What Typst does with an entry whose FIRST frame came back empty
@@ -272,6 +303,7 @@ export function settleFootnoteCarry(
       lineHeightPx: item.lineHeightPx,
       leadingPx: item.leadingPx,
       separatorPx,
+      firstLine: item.firstLine,
     });
     // Nothing at all fits: the whole item (and everything behind it) waits.
     if (fit.empty) break;
@@ -280,7 +312,7 @@ export function settleFootnoteCarry(
     rest.shift();
     if (fit.remainder > 0) {
       // One frame per page: the remainder re-spills and blocks the rest.
-      rest.unshift({ heightPx: fit.remainder, lineHeightPx: item.lineHeightPx, leadingPx: item.leadingPx });
+      rest.unshift({ heightPx: fit.remainder, lineHeightPx: item.lineHeightPx, leadingPx: item.leadingPx, firstLine: fit.nextLine });
       break;
     }
   }
@@ -598,7 +630,9 @@ export function peekWeakSpacing(items: readonly FlowItem[]): number {
  * Auto (weakness-4) "above" spacing as `padding-top` on the block's own box
  * rather than as a calibrated ascent formula the way paragraphs/headings/
  * lines get via `pageTopAdjustEm` (`typ-serializer.ts`): blockquote
- * (`#quote(block: true)`, 0.66em) and a figure (`.ts-figure`, 0.4em).
+ * (`#quote(block: true)`, 0.66em), a figure (`.ts-figure`, 0.4em) and a
+ * display equation (`.math-display`, 0.5em, `DISPLAY_MATH_PAD_EM`: part of
+ * its explicit, weakness-3 `above`, `equationBlockSpacingEm`).
  * Code blocks (islands included) have a calibrated landing spot of their
  * own (`pageTopAdjustEm(s, 'code')`), like paragraphs. Lists and
  * tables paint zero padding-top already (their CSS puts spacing entirely in
@@ -620,7 +654,16 @@ export function peekWeakSpacing(items: readonly FlowItem[]): number {
 export const CONTAINER_PAGE_TOP_PADDING_EM: Readonly<Record<string, number>> = {
   blockquote: 0.66,
   figure: 0.4,
+  math_display: 0.5,
 };
+
+/** A display equation's padding (body em, each side): the editor draws the
+ * equation's Typst frame inside it (`.math-display` in style.css), and the
+ * export's equation spacing is derived with it (`equationBlockSpacingEm`).
+ * Its spacing is explicit (weakness 3), so Typst drops it at a region's top
+ * (`CONTAINER_PAGE_TOP_PADDING_EM`) and trims it at a region's end: a fit
+ * test at a page bottom ends at the frame, above the padding-bottom. */
+export const DISPLAY_MATH_PAD_EM = CONTAINER_PAGE_TOP_PADDING_EM.math_display;
 
 /** The page-top spacing drop (body em) for a container `kind`, or 0 for a
  * kind not in `CONTAINER_PAGE_TOP_PADDING_EM` (nothing to drop). `variant`

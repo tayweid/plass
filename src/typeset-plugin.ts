@@ -47,6 +47,7 @@ import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } fr
 import { escapeTyp, expandMacrosWith, headingRunPadTopEm, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
 import {
   containerPageTopDropEm,
+  DISPLAY_MATH_PAD_EM,
   footnoteEmptyFrameAction,
   footnoteEntryCost,
   footnoteEntryFit,
@@ -1973,7 +1974,13 @@ class TypesetView {
     let first: PMNode | null = node;
     while (first && !first.isTextblock && !first.isAtom && first.type.name !== 'table' && first.firstChild) first = first.firstChild;
     const innerKind = first && first !== node ? this.unitKindOf(first) : null;
-    const inner = innerKind ? pageTopAdjustEm(s, innerKind) * F : first?.type.name === 'code_block' && first !== node ? pageTopAdjustEm(s, 'code') * F : 0;
+    const inner = innerKind
+      ? pageTopAdjustEm(s, innerKind) * F
+      : first?.type.name === 'code_block' && first !== node
+        ? pageTopAdjustEm(s, 'code') * F
+        : first?.type.name === 'math_display' && first !== node
+          ? -DISPLAY_MATH_PAD_EM * F
+          : 0;
     return -dropEm * F + inner;
   }
 
@@ -2645,15 +2652,11 @@ class TypesetView {
     const doc = this.view.state.doc;
     return anchors.map((a): PageStartEntry => {
       if (a.kind === 'block') {
+        // Named as the oracle names a page start (page-oracle's
+        // `notePage`): the node type, a heading by its level. A container
+        // is named too; `canonicalStart` descends to its first block.
         const node = doc.nodeAt(a.pos);
-        let unit = 'block';
-        if (node?.type.name === 'heading') {
-          unit = `h${Math.min(3, (node.attrs.level as number) || 1)}`;
-        } else if (node?.type.name === 'table') {
-          unit = 'table';
-        } else if (node?.type.name === 'paragraph') {
-          unit = 'paragraph';
-        }
+        const unit = !node ? 'block' : node.type.name === 'heading' ? `h${Math.min(3, (node.attrs.level as number) || 1)}` : node.type.name;
         return { pos: a.pos, line: 0, unit };
       }
       if (a.kind === 'row') {
@@ -3012,11 +3015,13 @@ class TypesetView {
     const F = snapshot.bodyPx;
 
     // Footnote bodies, in document order, consumed as units are placed. The
-    // entry's own line height is measured here (same spirit as offsetHeight —
-    // DOM-measured, never derived) so a spilled fragment can be quantized to
-    // whole lines the way Typst's text layout produces them; a 'normal' or
-    // unparseable computed line-height yields 0, which the split function
-    // reads as "plain pixel clamp".
+    // entry's own line height is measured here (DOM-measured, never
+    // derived) so a spilled fragment can be quantized to whole lines the way
+    // Typst's text layout produces them; a 'normal' or unparseable computed
+    // line-height yields 0, which the split function reads as "plain pixel
+    // clamp". The height is fractional (`getBoundingClientRect`): a two-line
+    // entry is 33.5px, which `offsetHeight` rounds to 34, and the half pixel
+    // per entry piled up into a footnote area taller than Typst's.
     // Heights are Typst FRAMES (footnoteFrameInsetsEm): the painted box less
     // its cap-top slack and last-line descent, so the reservation ends at
     // the last entry's baseline exactly as Typst's does.
@@ -3029,9 +3034,10 @@ class TypesetView {
       const dom = view.nodeDOM(pos);
       const body = dom instanceof HTMLElement ? dom.querySelector<HTMLElement>('.fn-body') : null;
       const lineHeight = body ? parseFloat(getComputedStyle(body).lineHeight) : NaN;
+      const boxH = body ? body.getBoundingClientRect().height : 0;
       fnList.push({
         pos,
-        height: body && body.offsetHeight > 0 ? Math.max(0, body.offsetHeight - fnLeadingPx) : 0,
+        height: boxH > 0 ? Math.max(0, boxH - fnLeadingPx) : 0,
         lineHeight: Number.isFinite(lineHeight) ? lineHeight : 0,
         leading: fnLeadingPx,
       });
@@ -3135,7 +3141,7 @@ class TypesetView {
           continue;
         }
         if (fit.remainder > 0) {
-          fnCarry.push({ heightPx: fit.remainder, lineHeightPx: item.lineHeight, leadingPx: item.leading });
+          fnCarry.push({ heightPx: fit.remainder, lineHeightPx: item.lineHeight, leadingPx: item.leading, firstLine: fit.nextLine });
         }
         pageFnH += footnoteEntryCost(fit.fragment, F);
       }
@@ -3197,10 +3203,12 @@ class TypesetView {
     };
     /** The Typst frame ends ABOVE the painted box's bottom by this much
      *  (pageBottomInsetEm): the last line's descent and half-leading for
-     *  text blocks, a container's last text block's, nothing for the kinds
-     *  with no calibration (figures, display math, tables). Fit tests
-     *  compare frame bottoms against the page bottom — the counterpart of
-     *  adjFor, which lands frame TOPS at the page top. */
+     *  text blocks, a container's last text block's, a display equation's
+     *  padding-bottom (its frame is the content box, and Typst trims the
+     *  equation's `below` at a region's end), nothing for the kinds with no
+     *  calibration (figures, tables). Fit tests compare frame bottoms
+     *  against the page bottom — the counterpart of adjFor, which lands
+     *  frame TOPS at the page top. */
     const bottomInsetFor = (pos: number): number => {
       let n = view.state.doc.nodeAt(pos);
       // A container's frame ends where its last descendant block's does.
@@ -3209,6 +3217,7 @@ class TypesetView {
       // A grid row's cells end one paragraph inset below their frames.
       if (n.type.name === 'grid_row' || n.type.name === 'paragraph') return pageBottomInsetEm(s, 'paragraph') * F;
       if (n.type.name === 'code_block') return pageBottomInsetEm(s, 'code') * F;
+      if (n.type.name === 'math_display') return DISPLAY_MATH_PAD_EM * F;
       if (n.type.name === 'heading') {
         const lv = Math.min(3, (n.attrs.level as number) || 1);
         return pageBottomInsetEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;
@@ -3808,8 +3817,16 @@ class TypesetView {
    * so on a page where an entry spilled the painted stack is taller than the
    * reserved area and rises above it. Page STARTS (the parity target) are
    * correct; the visual is not, until split painting lands.
+   *
+   * Every read here is layout geometry (marker tops, entry heights), so it
+   * runs at the paper's own size: a note edit republishes outside a pass
+   * (`refreshDisplayGeometry`).
    */
   private placeFootnotes(count: number, pages: readonly DisplayPage[]) {
+    atPaperSize(() => this.placeFootnotesAtPaperSize(count, pages));
+  }
+
+  private placeFootnotesAtPaperSize(count: number, pages: readonly DisplayPage[]) {
     const view = this.view;
     const s = getSettings(view.state);
     const size = pageSize(s);
@@ -3833,7 +3850,8 @@ class TypesetView {
         const page = printPageIndex(c.top - stackTop - this.lastCommentIndex.heightAbove(pos), size.h, PAGE_GAP, count);
         let list = groups.get(page);
         if (!list) groups.set(page, (list = []));
-        list.push({ el: body, height: Math.max(0, body.offsetHeight - fnInsets.leading * F) });
+        // Fractional, as the paginator measured it (`runFallbackPass`).
+        list.push({ el: body, height: Math.max(0, body.getBoundingClientRect().height - fnInsets.leading * F) });
       }
       return false;
     });
