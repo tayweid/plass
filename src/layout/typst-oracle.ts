@@ -193,13 +193,21 @@ export function extractLines(svg: string, yTol: number): SvgLine[] {
  * match precisely; unknown-text atoms (math) consume up to the next known
  * token. Hyphenations show up textually: a line ends with a prefix of the
  * pending word.
+ *
+ * `tail` lets the paragraph end mid-line. Typst's text layer joins runs
+ * that share a baseline with no separator, so in a grid row a neighbouring
+ * cell's first line can follow this paragraph's last one on the same
+ * extracted line ("Beside.Third."). When the tokens run out with text left
+ * on the line and `tail` accepts that text (it starts the next cell), the
+ * match ends there: `rest` is that text and `next` the line holding it.
  */
 export function matchParagraph(
   spec: ParagraphSpec,
   lines: SvgLine[],
   cursor: number,
   stripFirst?: RegExp,
-): { status: 'ok'; next: number; entry: OracleEntry } | { status: 'fail'; entry: OracleEntry } {
+  tail?: (rest: string) => boolean,
+): { status: 'ok'; next: number; rest?: string; entry: OracleEntry } | { status: 'fail'; entry: OracleEntry } {
   const fail = (reason: string) => ({ status: 'fail' as const, entry: { status: 'fail' as const, reason } });
   const breaks: ForcedBreak[] = [];
   const tokens = spec.tokens;
@@ -227,7 +235,10 @@ export function matchParagraph(
         }
         return fail(`suffix mismatch: expected '${pendingSuffix}' got '${text.slice(0, 24)}'`);
       }
-      if (ti >= tokens.length) return fail(`extra line text: '${text.slice(0, 24)}'`);
+      if (ti >= tokens.length) {
+        if (tail?.(text)) return { status: 'ok', next: li, rest: text, entry: { status: 'ok', breaks } };
+        return fail(`extra line text: '${text.slice(0, 24)}'`);
+      }
       const tok = tokens[ti];
       if (tok.kind === 'hard') {
         ti++;
@@ -263,9 +274,11 @@ export function matchParagraph(
       if (rest.startsWith(w)) {
         const after = rest.slice(w.length);
         // Must end at a boundary: end, space, or a next token that is
-        // explicitly glued (spaceBefore false).
+        // explicitly glued (spaceBefore false). The last token may also be
+        // glued to a neighbouring cell's text, which `tail` checks.
         const glueNext = ti + 1 < tokens.length && !tokens[ti + 1].spaceBefore;
-        if (after === '' || after.startsWith(' ') || glueNext) {
+        const glueTail = tail !== undefined && ti + 1 === tokens.length;
+        if (after === '' || after.startsWith(' ') || glueNext || glueTail) {
           text = after.trimStart() === after && after !== '' && !after.startsWith(' ') ? after : after.trimStart();
           ti++;
           continue;

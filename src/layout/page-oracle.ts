@@ -56,6 +56,8 @@ export interface Unit {
    * matched exactly — the port's breaks at the cell's measure are audited
    * like any paragraph's — and a page can start only AT the row. */
   inner?: Unit[];
+  /** An inner unit's cell: its index in the grid row. */
+  cell?: number;
 }
 
 export interface PagedLine extends SvgLine {
@@ -154,15 +156,18 @@ export function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
     } else if (node.type.name === 'table') {
       units.push(buildTableUnit(node, pos, resolveAtom));
     } else if (node.type.name === 'grid') {
-      // A grid row is opaque (its cells' lines merge in the text layer),
-      // one unit per row so a page can start at any row; the row's first
-      // text block anchors it.
+      // A grid row is opaque (rows are atomic), one unit per row so a page
+      // can start at any row; the row's first text block anchors it. Its
+      // cells' blocks are matched inside it, each knowing its cell: lines
+      // of neighbouring cells that share a baseline join in the text layer.
       node.forEach((row, off) => {
         const rowPos = pos + 1 + off;
         const inner: Unit[] = [];
-        row.forEach((cell, coff) => {
+        row.forEach((cell, coff, ci) => {
           const cellPos = rowPos + 1 + coff;
+          const from = inner.length;
           cell.forEach((block, boff) => push(block, cellPos + 1 + boff, false, inner));
+          for (let k = from; k < inner.length; k++) inner[k].cell = ci;
         });
         units.push({ kind: 'opaque', pos: rowPos, type: 'grid_row', inner });
       });
@@ -369,7 +374,9 @@ export interface UnitAudit {
   reason?: string;
 }
 
-export function matchPageStarts(units: Unit[], lines: PagedLine[], audit?: UnitAudit[]): PageOracleEntry {
+export function matchPageStarts(units: Unit[], typstLines: PagedLine[], audit?: UnitAudit[]): PageOracleEntry {
+  // A grid row's joined baseline run is split in place (below): a copy.
+  const lines = typstLines.slice();
   const pageStarts: PageStart[] = [];
   let cursor = 0;
   let lastPage = 0;
@@ -518,12 +525,28 @@ export function matchPageStarts(units: Unit[], lines: PagedLine[], audit?: UnitA
       // next block's anchor (or the next unit's after the row). Every line
       // is the ROW's for page starts: a page begins at the row or not at
       // all (rows are atomic; a split inside fails closed below).
+      //
+      // Typst lays the row cell by cell, and runs that share a baseline
+      // join into one extracted line with no separator: a cell's last line
+      // can carry the next cell's first ("Beside.Third.", "abc" for cells
+      // a | b | c). A text block (or a table's last row) may therefore end
+      // mid-line when what is left starts a later cell; that rest becomes
+      // the line the next block is matched on.
       const rowStart = cursor;
       const after = anchorFor(ui + 1);
       const inner = unit.inner;
       for (let ii = 0; ii < inner.length && cursor < lines.length; ii++) {
         const u = inner[ii];
         const next = anchorFrom(inner, ii + 1, after);
+        const laterCell = inner.findIndex((v, j) => j > ii && v.cell !== u.cell);
+        const beside = laterCell < 0 ? null : anchorFrom(inner, laterCell, null);
+        const tail = beside ? (rest: string) => matchesAnchor(rest, beside) : undefined;
+        /** Note the lines a match consumed; a rest stays on the line for the next block. */
+        const took = (res: { next: number; rest?: string }) => {
+          for (let k = 0; k < res.next; k++) notePage(cursor + k, unit, cursor + k - rowStart);
+          cursor += res.next;
+          if (res.rest !== undefined) lines[cursor] = { ...lines[cursor], text: res.rest };
+        };
         const consumeTo = (anchor: Anchor | null, atLeast: number) => {
           let consumed = 0;
           while (cursor < lines.length && !(consumed >= atLeast && matchesAnchor(lines[cursor].text, anchor))) {
@@ -534,7 +557,7 @@ export function matchPageStarts(units: Unit[], lines: PagedLine[], audit?: UnitA
         };
         if (u.kind === 'exact' && u.spec) {
           const slice = lines.slice(cursor).map((l, i) => (i === 0 ? { ...l, text: stripListMarker(l.text, u.marker) } : l));
-          const res = matchParagraph(u.spec, slice, 0);
+          const res = matchParagraph(u.spec, slice, 0, undefined, tail);
           if (res.status !== 'ok') {
             if (!audit) return { status: 'fail', reason: `unit@${u.pos} (${u.type}, in grid row @${unit.pos}): ${res.entry.reason}` };
             audit.push({ pos: u.pos, type: u.type, status: 'fail', reason: res.entry.reason });
@@ -542,12 +565,11 @@ export function matchPageStarts(units: Unit[], lines: PagedLine[], audit?: UnitA
             continue;
           }
           audit?.push({ pos: u.pos, type: u.type, status: 'ok', breaks: res.entry.breaks ?? [] });
-          for (let k = 0; k < res.next; k++) notePage(cursor + k, unit, cursor + k - rowStart);
-          cursor += res.next;
+          took(res);
         } else if (u.kind === 'table' && u.rows) {
           let ok = true;
           for (let r = 0; r < u.rows.length && cursor < lines.length; r++) {
-            const res = matchParagraph(u.rows[r], lines.slice(cursor), 0);
+            const res = matchParagraph(u.rows[r], lines.slice(cursor), 0, undefined, r === u.rows.length - 1 ? tail : undefined);
             if (res.status !== 'ok') {
               ok = false;
               if (!audit) return { status: 'fail', reason: `unit@${u.pos} (table in grid row @${unit.pos}, row ${r}): ${res.entry.reason}` };
@@ -555,8 +577,7 @@ export function matchPageStarts(units: Unit[], lines: PagedLine[], audit?: UnitA
               consumeTo(next, 1);
               break;
             }
-            for (let k = 0; k < res.next; k++) notePage(cursor + k, unit, cursor + k - rowStart);
-            cursor += res.next;
+            took(res);
           }
           if (ok) audit?.push({ pos: u.pos, type: 'table', status: 'ok' });
         } else {

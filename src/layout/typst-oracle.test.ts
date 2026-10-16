@@ -124,3 +124,26 @@ const footnoteResolver: AtomResolver = (child) => {
   const wrong = matchParagraph(spec, [lines[0], { text: 'place', y: 25 }, lines[2]], 0);
   check('the suffix must still match its exact expected text', wrong.status === 'fail' && !!wrong.entry.reason?.startsWith('suffix mismatch:'));
 }
+
+// --- matchParagraph's tail: a grid cell's last line joined to the next
+// cell's first. Typst's text layer joins runs on one baseline with no
+// separator, so the paragraph may end mid-line when `tail` accepts the rest.
+{
+  const spec = buildSpec(schema.nodes.paragraph.create(null, schema.text('Beside.')), () => null)!;
+  const third = (rest: string) => rest.startsWith('Third.');
+  const joined: SvgLine[] = [{ text: 'Beside.Third.', y: 0 }];
+  const res = matchParagraph(spec, joined, 0, undefined, third);
+  check('a paragraph ends mid-line when the rest starts the next cell', res.status === 'ok' && res.next === 0 && res.rest === 'Third.');
+  check('without a tail the joined line is still a mismatch', matchParagraph(spec, joined, 0).status === 'fail');
+  const other = matchParagraph(spec, [{ text: 'Beside.Fourth.', y: 0 }], 0, undefined, third);
+  check('a rest that does not start the next cell fails closed', other.status === 'fail' && !!other.entry.reason?.startsWith('extra line text:'));
+  const alone = matchParagraph(spec, [{ text: 'Beside.', y: 0 }, { text: 'Third.', y: 0 }], 0, undefined, third);
+  check('a line of its own is consumed whole', alone.status === 'ok' && alone.next === 1 && alone.rest === undefined);
+
+  const wrapped = buildSpec(schema.nodes.paragraph.create(null, schema.text('Alpha beta gamma.')), () => null)!;
+  const two = matchParagraph(wrapped, [{ text: 'Alpha beta', y: 0 }, { text: 'gamma.Third.', y: 25 }], 0, undefined, third);
+  check(
+    'a wrapped paragraph keeps its breaks and hands on the rest of its last line',
+    two.status === 'ok' && two.next === 1 && two.rest === 'Third.' && JSON.stringify(two.entry.breaks) === JSON.stringify([{ at: 10, hyphen: false }]),
+  );
+}

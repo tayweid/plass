@@ -244,4 +244,50 @@ import { buildTableUnit, matchPageStarts, type PagedLine } from './page-oracle';
   check('a centered row cannot hide a page split inside its cells', split.status === 'fail' && /inside table row/.test(split.reason ?? ''));
 }
 
+// --- Grid rows: cells joined on one baseline ---------------------------------
+// Typst lays a grid row cell by cell; runs that share a baseline join into
+// one extracted line with no separator, so short cells side by side come
+// back as "Beside.Third." or "abc". Each cell's block still matches alone.
+{
+  const cell = (...texts: string[]) => schema.nodes.grid_cell.create(null, texts.map(paragraph));
+  const grid = (...rows: ReturnType<typeof cell>[][]) =>
+    schema.nodes.grid.create({ columns: rows[0].map(() => 1), gutter: 1 }, rows.map((cells) => schema.nodes.grid_row.create(null, cells)));
+  const line = (text: string, y = 0, page = 0): PagedLine => ({ page, y, yFrac: 0.5, text });
+  const run = (doc: ReturnType<typeof schema.nodes.doc.create>, lines: PagedLine[]) => {
+    const audit: import('./page-oracle').UnitAudit[] = [];
+    const result = matchPageStarts(buildUnits(doc, noAtoms), lines, audit);
+    return { result, audit };
+  };
+
+  const wide = schema.nodes.doc.create(null, [
+    grid([cell('Alpha beta gamma delta.'), cell('Beside.'), cell('Third.')]),
+    paragraph('After the grid.'),
+  ]);
+  const units = buildUnits(wide, noAtoms);
+  check('a grid row knows each inner block\'s cell', units[0].inner?.map((u) => u.cell).join() === '0,1,2');
+  const beside = run(wide, [line('Alpha beta', 0), line('gamma delta.', 25), line('Beside.Third.', 0), line('After the grid.', 60)]);
+  check(
+    'a one-line cell joined to the next cell splits back into both',
+    beside.result.status === 'ok' && beside.audit.length === 4 && beside.audit.every((a) => a.status === 'ok'),
+  );
+
+  const abc = schema.nodes.doc.create(null, [grid([cell('a'), cell('b'), cell('c')]), paragraph('After.')]);
+  const three = run(abc, [line('abc'), line('After.', 30)]);
+  check('three one-line cells on one line split three ways', three.result.status === 'ok' && three.audit.every((a) => a.status === 'ok') && three.audit.length === 4);
+  const wrong = run(abc, [line('abd'), line('After.', 30)]);
+  check('a joined line that is not the row\'s cells fails closed', wrong.audit.some((a) => a.status === 'fail'));
+
+  // Blocks of ONE cell are stacked, never joined: a cell's first paragraph
+  // cannot hand its line's rest to its own second paragraph.
+  const stacked = schema.nodes.doc.create(null, [grid([cell('One.', 'Two.'), cell('Uno.')]), paragraph('After.')]);
+  const same = run(stacked, [line('One.Two.'), line('Uno.'), line('After.', 30)]);
+  check('a rest is never handed to a block of the same cell', same.audit[0].status === 'fail');
+  const ok = run(stacked, [line('One.'), line('Two.Uno.', 25), line('After.', 50)]);
+  check('a cell\'s last block hands its rest to the next cell', ok.result.status === 'ok' && ok.audit.every((a) => a.status === 'ok'));
+
+  // The row's last cell has no neighbour to hand text to.
+  const last = run(abc, [line('a'), line('b'), line('cAfter.')]);
+  check('the last cell of a row takes no rest', last.audit.some((a) => a.status === 'fail'));
+}
+
 console.log('all page-oracle tests passed');
