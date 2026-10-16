@@ -1981,10 +1981,13 @@ body {
 
 /* ---------- footnotes ---------- */
 
-/* Superscript marker, painted by the numbering plugin. */
+/* Superscript marker, painted by the numbering plugin. No line box of its
+   own: raised with the body's line height, its box rose 0.55 px above the
+   line's, and the line grew by that (Typst's marker never moves a line). */
 .ts-footnote::before {
   content: attr(data-fn);
   vertical-align: super;
+  line-height: 0;
   font-size: 0.68em;
   font-weight: 600;
   color: var(--accent);
