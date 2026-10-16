@@ -42,6 +42,14 @@ const F = 16.666666666666668; // bodyPx at the app default (12.5pt @ 96dpi)
 }
 
 {
+  // The separator is a horizontal line, whose frame has no height
+  // (layout_line: the box its ends span); the stroke is ink outside it.
+  assert.equal(footnoteSeparatorHeightPx(), 0);
+  assert.equal(footnoteHeadReservePx(F), FOOTNOTE_CLEARANCE_EM * F);
+  console.log('  ok  the separator line reserves no height, only the clearance');
+}
+
+{
   const h1 = 20;
   const expected = FOOTNOTE_CLEARANCE_EM * F + footnoteSeparatorHeightPx() + FOOTNOTE_GAP_EM * F + h1;
   assert.ok(Math.abs(footnoteAreaHeight([h1], F) - expected) < 1e-9);

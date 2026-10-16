@@ -18,21 +18,19 @@
  * entry's `ShowSet` narrows text size to 0.85em for rendering the entry's
  * own content. Hence both convert with the paginator's `bodyPx` (the same
  * body font-size source used everywhere else in the paginator).
- *
- * The separator stroke is an ABSOLUTE `Abs::pt(0.5)`, not an `Em` — its
- * height is independent of the document's body font size.
  */
 export const FOOTNOTE_CLEARANCE_EM = 1;
 export const FOOTNOTE_GAP_EM = 0.5;
-export const FOOTNOTE_SEPARATOR_PT = 0.5;
 
-/** CSS pt → px (96 px/in ÷ 72 pt/in). */
-export const PT_TO_PX = 96 / 72;
-
-/** The footnote separator's own painted height (px) — a fixed physical
- * 0.5pt stroke, independent of body font size. */
+/** The footnote separator's frame height (px): zero. Every separator Plass
+ * prints is a horizontal `line`, and a line's frame is the box its two
+ * ends span (`layout_line`, typst-layout/src/shapes.rs: `size =
+ * start.max(start + delta)`), so it has no height; its 0.5pt stroke is ink
+ * centred on the frame, outside it. The area below the body is the
+ * clearance and the entries. Reserving the stroke's 0.5pt kept every page
+ * with footnotes two thirds of a pixel short of Typst's. */
 export function footnoteSeparatorHeightPx(): number {
-  return FOOTNOTE_SEPARATOR_PT * PT_TO_PX;
+  return 0;
 }
 
 /**

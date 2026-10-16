@@ -148,10 +148,23 @@ function firstPrintedBlock(doc: PMNode, pos: number): PMNode | null {
   return found;
 }
 
-/** The footnote separator's reserved height for a document: Typst's 0.5pt
- * line, or nothing when the setting removes it. */
+/** The footnote separator's reserved height for a document: its frame's
+ * (none for a line, `footnoteSeparatorHeightPx`), or nothing when the
+ * setting removes it. */
 function footnoteSeparatorPx(s: DocSettings): number {
   return s.footnoteSeparator === 'none' ? 0 : footnoteSeparatorHeightPx();
+}
+
+/** A footnote body's height in whole lines of its pitch. The entry is one
+ * paragraph (`inline*`), which Typst pitches exactly, while Chrome rounds
+ * the box: two lines (33.518 px) read 34 through `offsetHeight`, which
+ * charged and painted every entry half a pixel taller than Typst's, and
+ * 33.531 through the rect. Every caller reads inside a pass
+ * (`atPaperSize`), so the rect is the box. */
+function footnoteBodyHeight(body: HTMLElement): number {
+  const box = body.getBoundingClientRect().height;
+  const line = parseFloat(getComputedStyle(body).lineHeight);
+  return box > 0 && line > 0 ? Math.round(box / line) * line : Math.max(0, box);
 }
 
 /** Slack allowed when a frame is tested against the page bottom, in px.
@@ -1687,7 +1700,7 @@ class TypesetView {
       const dom = this.view.nodeDOM(pos);
       const body = dom instanceof HTMLElement ? dom.querySelector<HTMLElement>('.fn-body') : null;
       positions.push(pos);
-      maxHeight = Math.max(maxHeight, body ? body.offsetHeight : 0);
+      maxHeight = Math.max(maxHeight, body ? footnoteBodyHeight(body) : 0);
       return false;
     });
     if (positions.length === 0) return false;
@@ -3012,8 +3025,8 @@ class TypesetView {
     const F = snapshot.bodyPx;
 
     // Footnote bodies, in document order, consumed as units are placed. The
-    // entry's own line height is measured here (same spirit as offsetHeight —
-    // DOM-measured, never derived) so a spilled fragment can be quantized to
+    // entry's own line height is measured here (as its height is — DOM-
+    // measured, never derived) so a spilled fragment can be quantized to
     // whole lines the way Typst's text layout produces them; a 'normal' or
     // unparseable computed line-height yields 0, which the split function
     // reads as "plain pixel clamp".
@@ -3031,7 +3044,7 @@ class TypesetView {
       const lineHeight = body ? parseFloat(getComputedStyle(body).lineHeight) : NaN;
       fnList.push({
         pos,
-        height: body && body.offsetHeight > 0 ? Math.max(0, body.offsetHeight - fnLeadingPx) : 0,
+        height: body ? Math.max(0, footnoteBodyHeight(body) - fnLeadingPx) : 0,
         lineHeight: Number.isFinite(lineHeight) ? lineHeight : 0,
         leading: fnLeadingPx,
       });
@@ -3833,7 +3846,7 @@ class TypesetView {
         const page = printPageIndex(c.top - stackTop - this.lastCommentIndex.heightAbove(pos), size.h, PAGE_GAP, count);
         let list = groups.get(page);
         if (!list) groups.set(page, (list = []));
-        list.push({ el: body, height: Math.max(0, body.offsetHeight - fnInsets.leading * F) });
+        list.push({ el: body, height: Math.max(0, footnoteBodyHeight(body) - fnInsets.leading * F) });
       }
       return false;
     });
