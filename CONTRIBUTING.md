@@ -18,7 +18,11 @@ npm run dev
 ```
 
 Before submitting an ordinary change, run the repository checks from a clean
-install:
+install. `npm run ci` runs them all in the deploy's order and stops at the
+first failure (`scripts/ci.ts`; it also checks that the Claerbout tag the
+app build clones is on GitHub, and runs the browser suite on a free port of
+its own). A pre-push hook runs its quick half (`npm run ci -- --quick`).
+The same checks one by one:
 
 ```sh
 npm audit --audit-level=moderate

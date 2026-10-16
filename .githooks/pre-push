@@ -1,0 +1,8 @@
+#!/bin/sh
+# Before a push leaves this Mac: the quick half of `npm run ci`
+# (scripts/ci.ts), the checks GitHub's deploy most often failed on, in a
+# minute or two. Run the whole `npm run ci` before pushing main; this is
+# the floor, not the gate. `git push --no-verify` skips it, never to get a
+# red check past it. `npm install` points git here (core.hooksPath).
+cd "$(git rev-parse --show-toplevel)" || exit 1
+exec npm run --silent ci -- --quick

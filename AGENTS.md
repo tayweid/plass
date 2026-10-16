@@ -16,6 +16,18 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   `PANDOC_REQUIRED=1`, which makes that a failure. CI installs pandoc 3.4.
   `node --import tsx scripts/pandoc-parity.ts <file-or-folder>` runs the
   comparison on the course corpus.
+- `npm run ci` — what GitHub's deploy checks before it publishes, run
+  here (`scripts/ci.ts`): npm and cargo audits, third-party notices, the
+  build and production checks, the unit, sidecar and layout suites, the
+  whole browser suite (all projects, on a free port of its own, so another
+  checkout's dev server on 5199 is never what gets tested), and the
+  Claerbout tag the app job clones. Run it before every commit that will
+  be pushed; a red run here is a failed deploy there. `npm run ci --
+  --quick` (25 s) is the pre-push hook (`.githooks/pre-push`; `npm install`
+  sets `core.hooksPath`). Claude may push `main` and tag claerbout
+  releases (Taylor, 2026-10-16) once `npm run ci` is green, then confirms
+  the deploy run. On GitHub a failed browser test runs once more
+  (`retries`), so a busy-runner flake reads as flaky, not red.
 - `npm run build` — production build with host-independent relative paths (CI runs this);
   deploy = push `main`: `.github/workflows/deploy.yml` builds and
   publishes to plass.tayweid.io via GitHub Pages.

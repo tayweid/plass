@@ -38,6 +38,8 @@
     "test:parity": "PANDOC_REQUIRED=1 node --import tsx src/md-parity.test.ts",
     "test:layout": "tsx src/layout/port/port-smoke.test.ts && tsx src/layout/port/shape-cache.test.ts && tsx src/layout/port/incremental-linebreak.test.ts && tsx src/layout/font-certification.test.ts",
     "test:browser": "playwright test",
+    "ci": "node --import tsx scripts/ci.ts",
+    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
     "audit": "PLASS_AUDIT=1 playwright test tests/port-audit.spec.ts --project=chromium --reporter=line",
     "sidecar": "node --import tsx scripts/build-sidecar.ts"
   },

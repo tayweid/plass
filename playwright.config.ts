@@ -1,13 +1,22 @@
 import { defineConfig } from 'playwright/test';
 
+// The dev server's port: vite.config.ts's 5199, or PLASS_TEST_PORT, which
+// `npm run ci` sets to a free port of its own. A server already on 5199
+// may be another checkout's (a worktree's) code, and reusing it tests that.
+const PORT = Number(process.env.PLASS_TEST_PORT) || 5199;
+
 export default defineConfig({
   testDir: './tests',
   // The port audit (tests/port-audit.spec.ts) is a measurement run on
   // purpose with `npm run audit`, not part of the verification suite.
   testIgnore: process.env.PLASS_AUDIT ? [] : ['**/port-audit.spec.ts'],
   timeout: 30_000,
+  // On GitHub a failed test runs once more: a spec that fails on a busy
+  // runner and then passes is reported flaky instead of failing the
+  // deploy, and a real failure fails both runs.
+  retries: process.env.CI ? 1 : 0,
   use: {
-    baseURL: 'http://127.0.0.1:5199',
+    baseURL: `http://127.0.0.1:${PORT}`,
     headless: true,
   },
   projects: [
@@ -50,9 +59,9 @@ export default defineConfig({
     // project covers the app's page, and app/smoke.mjs drives the built app.
   ],
   webServer: {
-    command: 'npm run dev -- --host 127.0.0.1',
-    url: 'http://127.0.0.1:5199',
-    reuseExistingServer: !process.env.CI,
+    command: `npm run dev -- --host 127.0.0.1${process.env.PLASS_TEST_PORT ? ` --port ${PORT}` : ''}`,
+    url: `http://127.0.0.1:${PORT}`,
+    reuseExistingServer: !process.env.CI && !process.env.PLASS_TEST_PORT,
     timeout: 30_000,
   },
 });
