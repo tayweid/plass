@@ -8,6 +8,8 @@ import { settleLocal } from './settle';
 // the paragraph's margin only when the page does. It used to add the
 // spaced mode's 0.9 em whatever the mode, and in classic mode the print
 // put every heading and display equation 15 px lower than the page did.
+// (The gap across an equation also carried the page's line box round the
+// formula, in both modes: tests/equation-frame.spec.ts.)
 //
 // Measured line to line: from the last line of the paragraph before a
 // heading (or a run of headings, or an equation) to the first line of the
@@ -79,6 +81,9 @@ async function gaps(page: Page, parIndent: boolean): Promise<{ typst: Gaps; pain
     },
     { sentence: SENTENCE, parIndent },
   );
+  // The equation's box is its Typst frame once its ink is on the page
+  // (KaTeX's echo stands in for it until then).
+  await page.waitForFunction(() => Boolean(document.querySelector('.math-display.math-ink')));
   await settleLocal(page, 0);
   // The page's paragraphs, in layout px (the test window draws the paper
   // at 1:1): first line top, last line top, line count.
@@ -115,25 +120,14 @@ async function gaps(page: Page, parIndent: boolean): Promise<{ typst: Gaps; pain
 }
 
 for (const parIndent of [true, false]) {
-  test(`${parIndent ? 'classic' : 'spaced'} paragraphs: headings print where the page puts them`, async ({ page }) => {
+  test(`${parIndent ? 'classic' : 'spaced'} paragraphs: headings and display equations print where the page puts them`, async ({ page }) => {
     test.setTimeout(90_000);
     const { typst, painted } = await gaps(page, parIndent);
     const detail = JSON.stringify({ typst, painted });
-    // The SVG prints 0.001 pt; the heading boxes are snapped to 1/64 px.
+    // The SVG prints 0.001 pt; the page's boxes and margins are snapped to
+    // 1/64 px.
     expect(Math.abs(typst.heading - painted.heading), detail).toBeLessThan(0.05);
     expect(Math.abs(typst.run - painted.run), detail).toBeLessThan(0.05);
+    expect(Math.abs(typst.equation - painted.equation), detail).toBeLessThan(0.05);
   });
 }
-
-// The page's equation box is its line box, taller than the formula's
-// frame for a formula shorter than a line, so the gap across an equation
-// is not yet the print's in either mode (ROADMAP). Whatever that offset
-// is, classic mode must not add to it: the print's gap shrinks by the
-// paragraph margin the page drops.
-test('classic paragraphs: a display equation prints where the page puts it, as in spaced mode', async ({ page }) => {
-  test.setTimeout(120_000);
-  const classic = await gaps(page, true);
-  const spaced = await gaps(page, false);
-  const offset = (g: { typst: Gaps; painted: Gaps }) => g.typst.equation - g.painted.equation;
-  expect(Math.abs(offset(classic) - offset(spaced)), JSON.stringify({ classic, spaced })).toBeLessThan(0.05);
-});

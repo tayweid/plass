@@ -11,7 +11,7 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { parseMathMacros, type DocSettings } from './settings';
-import { expandMacrosWith } from './typ-serializer';
+import { bodyLeadingPt, expandMacrosWith } from './typ-serializer';
 import { wrapAligned } from './math-src';
 import { compilerCircuitEpoch, onCompilerCircuitReset } from './compiler-circuit';
 import { convertMath, displayEquation, ensureMathConverter, inlineEquation, MathConvertError } from './math-convert';
@@ -24,6 +24,16 @@ export interface MathInk {
   heightPx: number;
   /** Ink below the text baseline (px) — inline vertical-align offset. */
   descentPx: number;
+  /** Display math: the equation's frame height in the print (px). The
+   *  svg's auto-sized page is rounded up to whole points (a 12.91pt frame
+   *  comes back as a 13pt page, `heightPx`), so the frame the print lays
+   *  is Typst's own `measure` of the equation. */
+  frameHeightPx?: number;
+  /** Display math: how far above the baseline Typst sets a number on the
+   *  frame reaches (the formula's ascent, on one line). A numbered
+   *  equation's frame grows by what the number's cap height has past it
+   *  (`resize_equation` in Typst's math layout; style.css). */
+  numberRoomPx?: number;
 }
 
 type Listener = () => void;
@@ -41,6 +51,8 @@ interface QueueItem {
   src: string;
   display: boolean;
   sizePt: number;
+  /** Display math: the document's leading, which sets rows apart. */
+  leadingPt: number;
   macros: string;
   bold: boolean;
 }
@@ -74,7 +86,8 @@ let inflight = false;
  * embolden and widen it (~15% for `2x`). `emph`/`strike` never change
  * math ink and need no key of their own. */
 export function inkKey(src: string, display: boolean, s: DocSettings, bold = false): string {
-  return `${display ? 'D' : bold ? 'B' : 'I'}|${s.sizePt}|${s.mathMacros}|${src}`;
+  if (display) return `D|${s.sizePt}|${bodyLeadingPt(s)}|${s.mathMacros}|${src}`;
+  return `${bold ? 'B' : 'I'}|${s.sizePt}|${s.mathMacros}|${src}`;
 }
 
 /** Inline math inside a strong span compiles as bold ink. */
@@ -124,7 +137,7 @@ export function requestInk(key: string, src: string, display: boolean, s: DocSet
   if (isDeferred(v) && v.epoch < compilerCircuitEpoch()) setEntry(key, undefined);
   else if (v !== undefined) return;
   setEntry(key, 'pending');
-  queue.push({ key, src, display, sizePt: s.sizePt, macros: s.mathMacros, bold: bold && !display });
+  queue.push({ key, src, display, sizePt: s.sizePt, leadingPt: bodyLeadingPt(s), macros: s.mathMacros, bold: bold && !display });
   clearTimeout(timer);
   timer = window.setTimeout(() => void flush(), 120);
 }
@@ -238,6 +251,7 @@ interface InkItem {
   src: string;
   display: boolean;
   sizePt: number;
+  leadingPt: number;
   macros: string;
   bold: boolean;
 }
@@ -248,18 +262,29 @@ interface InkItem {
  * expanded, between two newlines. Null for an empty formula; throws
  * MathConvertError for one the converter rejects.
  */
-function inkSource(item: InkItem): string | null {
+function inkSource(item: InkItem, frame = false): string | null {
   const latex = expandMacrosWith(item.display ? wrapAligned(item.src) : item.src, parseMathMacros(item.macros));
   if (!latex.trim()) return null;
-  return inkTypst(item.display ? '\n' + latex + '\n' : latex, item.display, item.sizePt, item.bold);
+  return inkTypst(item.display ? '\n' + latex + '\n' : latex, item.display, item.sizePt, item.bold, { leadingPt: item.leadingPt, frame });
 }
+
+const NUMBER_PROBE_PT = 100;
 
 /**
  * One formula's ink compile: the prelude its math names and the equation
- * as the print has it, on an auto-sized page at the document's size.
- * `latex` is exactly what the converter is given.
+ * as the print has it, on an auto-sized page at the document's size (and,
+ * display math, its leading: Typst sets the rows of a multi-line equation
+ * apart by the paragraph leading). `latex` is exactly what the converter
+ * is given. `frame` (display math): the query that measures the
+ * equation's frame instead of drawing it.
  */
-export function inkTypst(latex: string, display: boolean, sizePt: number, bold: boolean): string {
+export function inkTypst(
+  latex: string,
+  display: boolean,
+  sizePt: number,
+  bold: boolean,
+  { leadingPt, frame = false }: { leadingPt?: number; frame?: boolean } = {},
+): string {
   const typ = convertMath(latex);
   // Display equations hug the page tightly with no instrumentation (a
   // trailing probe would start a phantom paragraph below the ink). Inline
@@ -270,11 +295,17 @@ export function inkTypst(latex: string, display: boolean, sizePt: number, bold: 
   const expr = bold ? `strong(${eq})` : eq;
   return (
     `#set page(width: auto, height: auto, margin: 0pt)\n` +
+    (display && leadingPt !== undefined ? `#set par(leading: ${leadingPt}pt)\n` : '') +
     `#set text(size: ${sizePt}pt)\n` +
     mathPrelude([typ]) +
     '\n' +
     (display
-      ? `${eq}\n`
+      ? frame
+        ? // The number's frame is its cap height over its baseline: a box
+          // of NUMBER_PROBE_PT over its baseline is a number taller than
+          // any formula's ascent, and grows the frame by exactly the rest.
+          `#context metadata((height: measure(${eq}).height.pt(), numbered: measure({ set math.equation(numbering: _ => box(height: ${NUMBER_PROBE_PT}pt)); ${eq} }).height.pt()))\n`
+        : `${eq}\n`
       : `#(${expr})` +
         // The baseline, and the formula's exact advance: an auto-sized page
         // rounds to whole points (68.8pt came back as a 69pt page), and the
@@ -306,6 +337,13 @@ async function compileOne(
     : await compileVerdict<Array<{ func: string; value: { pos: { x: string; y: string }; width: string } }>>(
         run({ kind: 'query', source: src, selector: 'metadata' }),
       );
+  const frame = item.display
+    ? await compileVerdict<Array<{ func: string; value: { height: number; numbered: number } }>>(
+        run({ kind: 'query', source: inkSource(item, true)!, selector: 'metadata' }),
+      )
+    : null;
+  const framePt = Number(frame?.[0]?.value?.height);
+  const numberedPt = Number(frame?.[0]?.value?.numbered);
   const baselinePt = meta?.[0]?.value?.pos ? parseFloat(meta[0].value.pos.y) : NaN;
   const measuredPt = meta?.[0]?.value?.width ? parseFloat(meta[0].value.width) : NaN;
 
@@ -321,7 +359,13 @@ async function compileOne(
 
   const PX = 4 / 3;
   const descentPx = Number.isFinite(baselinePt) ? Math.max(0, (hPt - baselinePt) * PX) : 0;
-  return { svg, widthPx: wPt * PX, heightPx: hPt * PX, descentPx };
+  const ink: MathInk = { svg, widthPx: wPt * PX, heightPx: hPt * PX, descentPx };
+  if (item.display) {
+    const exact = framePt > 0;
+    ink.frameHeightPx = (exact ? framePt : hPt) * PX;
+    ink.numberRoomPx = (exact && numberedPt >= framePt ? NUMBER_PROBE_PT - (numberedPt - framePt) : NUMBER_PROBE_PT) * PX;
+  }
+  return ink;
 }
 /** A compile error is Typst's verdict on the formula (null); every other
  * failure means the compiler did not run, and propagates. */

@@ -2954,11 +2954,26 @@ body {
   margin: 0 -1px;
 }
 
-/* The Typst ink svg is inline and sits on the text baseline, leaving
-   descender slack below — visually ~3px high in its box. Pure paint
-   shift (transform): zero layout change, vertical parity untouched. */
+/* The Typst ink svg is a block: the box's content is the equation's frame
+   and nothing else (no line box, whose strut would add the text's ascent
+   and descent around a short formula), inside the 0.5em padding that is
+   the start and end of Typst's spacing (`equationBlockSpacingEm`;
+   `blockFrameSlackEm` gives the paginator the same 0.5em). The node view
+   (math.ts) gives back what the svg's whole-point page has past the frame
+   as a negative margin-bottom. */
 .math-display > svg {
-  transform: translateY(0.18em);
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* A numbered equation's frame: Typst sets the number on the formula's
+   baseline, and where the number's cap height (`--eq-number-cap`, the
+   plugin's) reaches above the formula (`--eq-number-room`, the ink's),
+   the frame grows by the rest above it (x = y, but not x^2). The label of
+   an unnumbered one prints nothing. */
+.math-display[data-eqnum]:not(.eqnum-unnumbered) > svg {
+  margin-top: max(0px, calc(var(--eq-number-cap, 0px) - var(--eq-number-room, 1000px)));
 }
 
 .math-display {

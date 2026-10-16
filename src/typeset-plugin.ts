@@ -44,7 +44,7 @@ import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdic
 import { atPaperSize, fitPaper, paperPass, paperScale, type PaperCaret } from './paper-scale';
 import { caretBox } from './caret-box';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
-import { escapeTyp, expandMacrosWith, headingBoxEm, headingRunPadTopEm, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
+import { blockFrameSlackEm, escapeTyp, expandMacrosWith, headingBoxEm, headingRunPadTopEm, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
 import {
   containerPageTopDropEm,
   footnoteEmptyFrameAction,
@@ -744,13 +744,14 @@ class TypesetView {
         });
         return out;
       });
-      // Ink statuses of the document's inline formulas (tests wait for
-      // none pending before measuring).
+      // Ink statuses of the document's formulas (tests wait for none
+      // pending before measuring): an inline one's width and a display
+      // one's frame are its ink's.
       (w as unknown as { __mathInk: () => Record<string, number> }).__mathInk = () => {
         const st = getSettings(this.view.state);
         const counts: Record<string, number> = {};
         this.view.state.doc.descendants((n) => {
-          if (n.type.name !== 'math_inline' || !(n.attrs.src as string).trim()) return true;
+          if ((n.type.name !== 'math_inline' && n.type.name !== 'math_display') || !(n.attrs.src as string).trim()) return true;
           const status = inkStatus(inkKeyFor(n, st));
           counts[status] = (counts[status] ?? 0) + 1;
           return false;
@@ -1993,12 +1994,21 @@ class TypesetView {
     // like a paragraph.
     if (node.type.name === 'grid' || node.type.name === 'grid_row') return pageTopAdjustEm(s, 'paragraph') * F;
     if (node.type.name === 'code_block') return pageTopAdjustEm(s, 'code') * F;
+    // A display equation's frame is inside its padding: Typst drops the
+    // spacing above it at a page top, padding and all.
+    if (node.type.name === 'math_display') return -blockFrameSlackEm(node, s).above * F;
     if (node.type.name === 'table') return -tableMarginsEm(s).top * F;
     const dropEm = containerPageTopDropEm(node.type.name, (node.attrs.kind as string | null) ?? null);
     let first: PMNode | null = node;
     while (first && !first.isTextblock && !first.isAtom && first.type.name !== 'table' && first.firstChild) first = first.firstChild;
     const innerKind = first && first !== node ? this.unitKindOf(first) : null;
-    const inner = innerKind ? pageTopAdjustEm(s, innerKind) * F : first?.type.name === 'code_block' && first !== node ? pageTopAdjustEm(s, 'code') * F : 0;
+    const inner = innerKind
+      ? pageTopAdjustEm(s, innerKind) * F
+      : first && first !== node && first.type.name === 'code_block'
+        ? pageTopAdjustEm(s, 'code') * F
+        : first && first !== node && first.type.name === 'math_display'
+          ? -blockFrameSlackEm(first, s).above * F
+          : 0;
     return -dropEm * F + inner;
   }
 
@@ -2056,6 +2066,9 @@ class TypesetView {
         root.setProperty(`--enum-indent-${digits}`, px((shapedWidthPt(label, font.portKeys.regular, s.sizePt) ?? 0) + bodyIndent));
       }
     }
+    // An equation number's Typst frame, its cap height over its baseline
+    // (style.css: a numbered equation's frame grows to hold it).
+    root.setProperty('--eq-number-cap', px(parityMetrics(s.font).extent * s.sizePt));
     const table = tableMarginsEm(s);
     root.setProperty('--table-mt', `${(table.top * F).toFixed(4)}px`);
     root.setProperty('--table-mb', `${(table.bottom * F).toFixed(4)}px`);
@@ -3243,10 +3256,10 @@ class TypesetView {
     };
     /** The Typst frame ends ABOVE the painted box's bottom by this much
      *  (pageBottomInsetEm): the last line's descent and half-leading for
-     *  text blocks, a container's last text block's, nothing for the kinds
-     *  with no calibration (figures, display math, tables). Fit tests
-     *  compare frame bottoms against the page bottom — the counterpart of
-     *  adjFor, which lands frame TOPS at the page top. */
+     *  text blocks, a container's last text block's, a display equation's
+     *  padding, nothing for the kinds with no calibration (figures,
+     *  tables). Fit tests compare frame bottoms against the page bottom —
+     *  the counterpart of adjFor, which lands frame TOPS at the page top. */
     const bottomInsetFor = (pos: number): number => {
       let n = view.state.doc.nodeAt(pos);
       // A container's frame ends where its last descendant block's does.
@@ -3255,6 +3268,7 @@ class TypesetView {
       // A grid row's cells end one paragraph inset below their frames.
       if (n.type.name === 'grid_row' || n.type.name === 'paragraph') return pageBottomInsetEm(s, 'paragraph') * F;
       if (n.type.name === 'code_block') return pageBottomInsetEm(s, 'code') * F;
+      if (n.type.name === 'math_display') return blockFrameSlackEm(n, s).below * F;
       if (n.type.name === 'heading') {
         const lv = Math.min(3, (n.attrs.level as number) || 1);
         return pageBottomInsetEm(s, `h${lv}` as 'h1' | 'h2' | 'h3') * F;

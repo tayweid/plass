@@ -154,9 +154,16 @@ export class MathView implements NodeView {
         svg.style.height = `${ink.heightPx.toFixed(2)}px`;
         if (!this.display) svg.style.verticalAlign = `${(-ink.descentPx).toFixed(2)}px`;
         else {
+          // The box holds the equation's frame, as the print lays it: the
+          // svg's page is rounded up to whole points, and what it has past
+          // the frame hangs into the padding below as paint.
+          const frame = ink.frameHeightPx ?? ink.heightPx;
+          svg.style.marginBottom = `${(frame - parseFloat(svg.style.height)).toFixed(3)}px`;
+          if (ink.numberRoomPx !== undefined) this.dom.style.setProperty('--eq-number-room', `${ink.numberRoomPx.toFixed(3)}px`);
+          else this.dom.style.removeProperty('--eq-number-room');
           // Center the painted equation number on the ink (as Typst does).
           const cs = getComputedStyle(this.dom);
-          const center = parseFloat(cs.paddingTop) + ink.heightPx / 2;
+          const center = parseFloat(cs.paddingTop) + frame / 2;
           this.dom.style.setProperty('--eqnum-center', `${center.toFixed(1)}px`);
         }
       }

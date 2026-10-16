@@ -74,8 +74,10 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      boxes in 1/64 px; the page-top spacer and the run follower's padding
      each round). Not worth chasing further unless a real document lands
      there. Other em lengths still truncate to 1/64 px the way headings
-     did (a list item's 0.25em margin, 0.9em paragraph margins at sizes
-     other than 12.5 pt); each could be published snapped the same way.
+     did (a list item's 0.25em margin; every 0.9em margin, a paragraph's
+     and a display equation's, at 12.5 pt too: 14.984375 px, measured
+     2026-10-16, so a spaced page's paragraphs drift up by 1/64 px a
+     gap); each could be published snapped the same way.
    - The page paints heading ink lower than the print does: Chrome's
      baseline of an H1 is 2.8 px below Typst's, an H2's 1.5 px, an H3's
      1.8 px, while body lines are 0.65 px above (measured 2026-10-16 at
@@ -84,14 +86,19 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      body's is Chrome rounding the font's ascent. A paint-only transform,
      or a re-calibrated `rise` (which moves the print), would close it; a
      design choice.
-   - A display equation's box on the page is its line box, not the
-     formula's frame: the ink svg sits on the baseline of a 1.5-line strut,
-     so `x^2 + y^2 = z^2` (17.3 px of frame at 12.5 pt) fills a 25 px line,
-     and the page puts the paragraph after it 7.7 px lower than the print
-     does, in either paragraph mode (measured 2026-10-16; tests/
-     classic-spacing.spec.ts holds the two modes to the same offset). The
-     paginator takes the box as the frame. Possibly the audit's math.md
-     difference (local breaks a line earlier than Typst).
+   - Display equations are laid out at their Typst frames since
+     2026-10-16 (tests/equation-frame.spec.ts): the box's content was a
+     line box (the svg on a 1.5-line strut, 6-13 px too tall), the ink's
+     page is rounded up to whole points (the frame is Typst's `measure`
+     now), a numbered equation grows to hold its number as Typst's does,
+     rows are set at the document's leading, and the paginator lands and
+     fits an equation by its frame inside the 0.5 em padding. math.md's
+     page starts agree with Typst. Paint only, still open: the number is
+     centered on the frame (Typst sets a one-line equation's number on
+     its baseline); a display svg is centered by its whole-point width,
+     up to 0.1 pt right of the print; an inline svg is given Typst's
+     exact width over its whole-point viewBox, so its ink is drawn up to
+     0.3 % small.
    - Classic (indented) paragraphs: headings and display equations print at
      the page's gap since 2026-10-16 (the spacing above them carried the
      spaced mode's 0.9 em margin). Other blocks with a fixed 0.9 em margin

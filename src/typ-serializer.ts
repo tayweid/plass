@@ -268,6 +268,11 @@ export function headingRunPadTopEm(s: DocSettings, prev: number, level: number):
   return gap - (headingFrameEm(s, prev).bottom + p.marginBottom * p.hs) - headingFrameEm(s, level, 0).top;
 }
 
+/** `.math-display`'s padding (style.css), body em: the box's content is
+ *  the equation's frame (math.ts), so the padding is the frame's slack in
+ *  the box on both sides, and the start and end of its block spacing. */
+const EQUATION_PAD_EM = 0.5;
+
 /**
  * Explicit `#set block(above/below: ...)` (body em) the display-math show
  * rule emits — weakness-3 explicit block spacing, same status as headings'.
@@ -278,8 +283,8 @@ export function headingRunPadTopEm(s: DocSettings, prev: number, level: number):
  * paragraph's slack above its frame.
  */
 export function equationBlockSpacingEm(s: DocSettings): { above: number; below: number } {
-  const above = pageBottomInsetEm(s, 'paragraph') + parMarginEm(s) + 0.5;
-  const below = 0.5 + 0.9 - pageTopAdjustEm(s, 'paragraph');
+  const above = pageBottomInsetEm(s, 'paragraph') + parMarginEm(s) + EQUATION_PAD_EM;
+  const below = EQUATION_PAD_EM + 0.9 - pageTopAdjustEm(s, 'paragraph');
   return { above, below };
 }
 
@@ -295,11 +300,14 @@ export const RUNNING_SECTION_TYP =
 /** A leaf block's Typst frame inside its painted box, body em: `above` is
  *  the slack from the box top down to the frame top, `below` the inset from
  *  the frame bottom down to the box bottom. Text kinds carry the
- *  calibrated line-box slack; the kinds with no calibration (figure, table,
- *  display math, raw islands…) have frame = box. Grid cells (grid-editor.ts)
- *  normalize every cell to the paragraph's values with these. */
+ *  calibrated line-box slack, a display equation its padding; the kinds
+ *  with no calibration (figure, table, raw islands…) have frame = box.
+ *  Grid cells (grid-editor.ts) normalize every cell to the paragraph's
+ *  values with these, and the paginator lands and fits an equation by
+ *  them. */
 export function blockFrameSlackEm(node: PMNode, s: DocSettings): { above: number; below: number } {
   const name = node.type.name;
+  if (name === 'math_display') return { above: EQUATION_PAD_EM, below: EQUATION_PAD_EM };
   const kind =
     name === 'paragraph' || name === 'doc_title' || name === 'doc_authors' || name === 'doc_date'
       ? 'paragraph'
@@ -320,13 +328,20 @@ function parityPt(s: DocSettings): (em: number) => string {
   return (em) => `${+(em * s.sizePt).toFixed(4)}pt`;
 }
 
+/** The body leading the parity header prints, pt (`parityPt`'s four
+ *  places). Typst also sets a multi-line equation's rows apart by it, so a
+ *  display formula's ink compiles with it (math-ink.ts). */
+export function bodyLeadingPt(s: DocSettings): number {
+  return +((s.lineHeight - parityMetrics(s.font).extent) * s.sizePt).toFixed(4);
+}
+
 /** The parity header: set/show rules reproducing editor spacing in Typst. */
 export function parityRules(s: DocSettings): string {
   const m = parityMetrics(s.font);
   const lh = s.lineHeight;
   const pt = parityPt(s);
   let out = '';
-  out += `#set par(justify: true, leading: ${pt(lh - m.extent)}, spacing: ${pt(parSpacingEm(s))})\n`;
+  out += `#set par(justify: true, leading: ${bodyLeadingPt(s)}pt, spacing: ${pt(parSpacingEm(s))})\n`;
   if (s.parIndent) out += `#set par(first-line-indent: 1.5em)\n`;
   out += `#set list(spacing: ${pt(listSpacingEm(s, true))})\n`;
   out += `#set enum(spacing: ${pt(listSpacingEm(s, true))})\n`;
