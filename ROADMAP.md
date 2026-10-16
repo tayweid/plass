@@ -55,14 +55,24 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      no home for it.
    - Citations: linking picker entries to local PDFs when keys match
      filenames.
-   - The page runs a fraction of a pixel high against Typst: a body line's
-     frame is 0.6828 em in the port and 0.683 em (the cap height) in
-     Typst, so the pitch is 25 px against 25.0033 px at 12.5 pt: 0.07 px
-     high at a page's first line, 0.15 px after 25 lines, and a heading
-     run's calibrated gap adds about 0.1 px. Where a page bottom falls
-     that close to a line, the page keeps a line Typst moves on. A sweep
-     of heading runs over top margins 1.00–1.26 in (2026-10-16) found 3
-     such breaks in 162.
+   - A line holding a bold glyph is 0.686 em tall in Typst (Typst's
+     line frame is the tallest cap height among its fonts, and the bold
+     faces' is 686/1000), 0.05 px more than the page's line at 12.5 pt; a
+     paragraph with bold on every line prints 1.6 px lower by its 35th
+     line. Likely why the audit fixtures slashes.md and urls.md (bold in
+     every paragraph) keep a line Typst moves at 1 in margins. Pin the
+     top edge in the export, or carry per-line heights: a design choice.
+     (Body lines themselves are exact since 2026-10-16: `extent` is the
+     cap height, tests/line-pitch.spec.ts.)
+   - Page bottoms within a few tenths of a pixel of a line, after the body
+     pitch fix: a sweep of the nine heading pairs over top margins
+     1.00–1.26 in (2026-10-16) has 3 of 243 cases off by a line. H1+H3 at
+     1.16 in and H2+H2 at 1.09 in: the port's run is at least 0.13 px
+     shorter than Typst's (heading calibration). H2+H1 at 1.21 in: Typst's
+     line is 0.05 px past the margin, inside the paginator's 0.1 px fit
+     tolerance (`FIT_TOLERANCE_PX`), which keeps it; body geometry is now
+     exact to 1/64 px, so the tolerance could tighten once the headings
+     are exact too.
 6. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
    for Plass and Knuth, Knuth's `docs/ROADMAP.md` carries the same
    entry, and `docs/COAUTHOR.md` there is the git-only design it
