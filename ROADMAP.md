@@ -55,11 +55,6 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      no home for it.
    - Citations: linking picker entries to local PDFs when keys match
      filenames.
-   - A quote that opens with a display equation, in mid-page, is shorter
-     in the editor than in Typst: a sweep of that quote across page 1's
-     bottom (2026-10-16) put two more lines on page 2 than Typst does at
-     two of thirteen points. The same equation at the top level, and the
-     quote at a page top, agree.
    - Each paragraph starts 1/64 px higher on the page than in print,
      cumulatively (measured 2026-10-16 against the audit's SVG): Chrome
      lays the paragraph spacing out in 1/64 px units, and the paginator
@@ -106,6 +101,19 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      in style.css (quotes, ordered lists, figures, the abstract, the
      bibliography) have not been checked against the print in classic
      mode.
+   - Spacing found off by a sweep of quotes and solutions at line heights
+     1.3 and 1.8 and with indented paragraphs (2026-10-16), none of it the
+     quote's: at `linestretch: 1.8` a document that opens with a level-1
+     heading puts a line more on page 1 than Typst (the same paragraphs
+     without the heading agree), so the heading's spacing is off there
+     (found before heading frames were made exact the same day; recheck).
+     A quote's neighbour with explicit spacing of its own (a heading, an
+     equation or another quote) gets the sum of the two spacings where
+     Typst keeps the larger, and a table or code block at a quote's edge
+     keeps its own box (`quoteBoxEm` is exact for paragraph-like edges).
+     The sweep's other finding, the gap over a display equation after an
+     indented paragraph, is fixed (`equationBlockSpacingEm` reads
+     `parMarginEm`).
 6. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
    for Plass and Knuth, Knuth's `docs/ROADMAP.md` carries the same
    entry, and `docs/COAUTHOR.md` there is the git-only design it

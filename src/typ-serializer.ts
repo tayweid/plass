@@ -164,6 +164,32 @@ export function tableMarginsEm(s: DocSettings): { top: number; bottom: number } 
   };
 }
 
+/** `#quote(block: true)`'s block spacing, body em, frame to frame: Typst's
+ *  quote sets `block(above: 2.4em, below: 1.8em)` for itself (measured with
+ *  the CLI: 30 pt and 22.5 pt at 12.5 pt, whatever the quote opens or
+ *  closes with). Explicit spacing, weakness 3: it wins over the paragraph
+ *  spacing beside it even where that is larger (line height 1.8). */
+export const QUOTE_SPACING_EM = { above: 2.4, below: 1.8 } as const;
+
+/**
+ * The editor's quote box, body em (style.css `.ProseMirror blockquote`).
+ * A paragraph's box ends `pageBottomInsetEm` below its frame, then its
+ * margin, and the next box puts its frame its cap slack below its top:
+ * paragraph spacing in all. The quote adds the rest of its own spacing:
+ * `padTop` over its first child (Typst drops that child's spacing inside
+ * the quote; the paginator drops the padding at a page top), any part
+ * below zero as `marginTop`, and `below`, added to its last child's
+ * margin-bottom, which collapses through the quote's bottom. Exact where
+ * the quote's edges are paragraph-like (a paragraph, a list, a display
+ * equation boxed as one there) and its neighbours are paragraphs. The
+ * solution variant is a plain block, Auto spacing: nothing to add.
+ */
+export function quoteBoxEm(s: DocSettings): { padTop: number; marginTop: number; below: number } {
+  const par = parSpacingEm(s);
+  const top = QUOTE_SPACING_EM.above - par;
+  return { padTop: Math.max(0, top), marginTop: Math.min(0, top), below: QUOTE_SPACING_EM.below - par };
+}
+
 /** A heading level's text size as a ratio of the body size (levels 4–6
  * print like 3). The port lays headings out at this scale, bold. */
 export function headingScale(level: number): number {
@@ -328,6 +354,22 @@ function parityPt(s: DocSettings): (em: number) => string {
  *  display formula's ink compiles with it (math-ink.ts). */
 export function bodyLeadingPt(s: DocSettings): number {
   return +((s.lineHeight - parityMetrics(s.font).extent) * s.sizePt).toFixed(4);
+}
+
+/** A display equation's padding (body em, style.css `.math-display`), its
+ *  Typst frame being the content box: `DISPLAY_MATH_PAD_EM` each side,
+ *  except where it opens or closes a quote (either kind; `parent` and
+ *  `index` place it). There Typst drops the equation's own spacing inside
+ *  the block, and the block's spacing runs from the equation's frame, so on
+ *  that side it is boxed like a paragraph, whose box the quote's spacing
+ *  is calibrated with (`quoteBoxEm`): the paragraph's cap slack above, its
+ *  inset below. */
+export function displayMathPadEm(s: DocSettings, parent: PMNode | null, index: number): { top: number; bottom: number } {
+  const inQuote = parent?.type.name === 'blockquote';
+  return {
+    top: inQuote && index === 0 ? -pageTopAdjustEm(s, 'paragraph') : DISPLAY_MATH_PAD_EM,
+    bottom: inQuote && index === parent!.childCount - 1 ? pageBottomInsetEm(s, 'paragraph') : DISPLAY_MATH_PAD_EM,
+  };
 }
 
 /** The parity header: set/show rules reproducing editor spacing in Typst. */

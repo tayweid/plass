@@ -476,7 +476,10 @@ FIXTURES.push({
 // top (top: it lands with its frame at the margin, and the audit names the
 // start `math_display` on both sides), inside a quote and at a grid cell's
 // edges too (quote, grid); a numbered equation shorter than its number is
-// the number's height (numbered: `x` is 8.675pt, not 5.6625pt).
+// the number's height (numbered: `x` is 8.675pt, not 5.6625pt). A quote is
+// 2.4em above and 1.8em below, frame to frame, whatever it opens with
+// (quote-mid: the quote mid-page, opening with the equation; the editor's
+// quote was 1.35pt short and fit two more lines on page 2).
 {
   const words = FILLER.repeat(8).trim().split(' ');
   const edge = (w: number, block: string[]) =>
@@ -495,6 +498,7 @@ FIXTURES.push({
     { name: 'math-edge-top.md', text: edge(82, [frac, '']) },
     { name: 'math-edge-numbered.md', text: edge(147, ['$$ x $$', '']) },
     { name: 'math-edge-quote.md', text: edge(108, ['> ' + frac, '>', '> ' + FILLER.repeat(2).trim(), '']) },
+    { name: 'math-edge-quote-mid.md', text: edge(121, ['> ' + frac, '>', '> ' + FILLER.repeat(2).trim(), '']) },
     {
       name: 'math-edge-grid.md',
       text: edge(30, [
