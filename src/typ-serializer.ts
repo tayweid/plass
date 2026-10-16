@@ -333,7 +333,6 @@ export function bodyLeadingPt(s: DocSettings): number {
 /** The parity header: set/show rules reproducing editor spacing in Typst. */
 export function parityRules(s: DocSettings): string {
   const m = parityMetrics(s.font);
-  const lh = s.lineHeight;
   const pt = parityPt(s);
   let out = '';
   out += `#set par(justify: true, leading: ${bodyLeadingPt(s)}pt, spacing: ${pt(parSpacingEm(s))})\n`;
