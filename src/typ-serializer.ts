@@ -300,6 +300,15 @@ export function parityRules(s: DocSettings): string {
   out += `#set enum(spacing: ${pt(listSpacingEm(s, true))})\n`;
   // Grid rows are atomic: the editor moves a row whole between pages.
   out += '#set grid.cell(breakable: false)\n';
+  // Typst's line frame is the cap height of the tallest face on the line
+  // (`ShapedText::measure`), and the bold faces' capitals are taller (New
+  // Computer Modern: 686 against 683), so a line holding a bold word was
+  // 0.05 px taller than the page's at 12.5 pt. Strong text takes the
+  // regular face's edge, and every line is pitched as the page pitches it.
+  // A heading is bold through its own rules, not strong, and keeps its
+  // face's edge even where the whole heading is strong.
+  out += `#show strong: set text(top-edge: ${+m.extent.toFixed(4)}em)\n`;
+  out += '#show heading: it => { show strong: set text(top-edge: "cap-height"); it }\n';
   // Levels 4–6 print like level 3 (the editor styles them the same), so
   // the metrics calibrated for three levels hold for six.
   for (let level = 1; level <= 6; level++) {

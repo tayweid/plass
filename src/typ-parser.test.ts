@@ -592,6 +592,15 @@ function firstDiff(a: string, b: string): string {
   check('deep headings get show rules like level 3', out.includes('#show heading.where(level: 4): set text(size: 14.375pt)') && out.includes('#show heading.where(level: 6): set text(size: 14.375pt)'), out.slice(0, 900));
 }
 
+// --- 19b2. strong takes the regular face's top edge; headings keep theirs ---
+{
+  const out = docToTyp(typToDoc('A *bold* word.\n').doc);
+  check('strong is pinned to the regular cap height', out.includes('#show strong: set text(top-edge: 0.683em)\n'), out.slice(0, 900));
+  check('a strong heading keeps its own edge', out.includes('#show heading: it => { show strong: set text(top-edge: "cap-height"); it }\n'), out.slice(0, 900));
+  const back = typToDoc(out).doc;
+  check('the pins reopen as header, not islands', back.childCount === 1 && back.child(0).type.name === 'paragraph', back.toString());
+}
+
 // --- 19c. table density presets: a uniform inset round-trips as the preset ---
 {
   const src = F.DENSITY_TYP;
