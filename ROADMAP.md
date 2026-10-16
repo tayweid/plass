@@ -53,6 +53,14 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      document needs it.
    - Citations: linking picker entries to local PDFs when keys match
      filenames.
+   - The page runs a fraction of a pixel high against Typst: a body line's
+     frame is 0.6828 em in the port and 0.683 em (the cap height) in
+     Typst, so the pitch is 25 px against 25.0033 px at 12.5 pt: 0.07 px
+     high at a page's first line, 0.15 px after 25 lines, and a heading
+     run's calibrated gap adds about 0.1 px. Where a page bottom falls
+     that close to a line, the page keeps a line Typst moves on. A sweep
+     of heading runs over top margins 1.00–1.26 in (2026-10-16) found 3
+     such breaks in 162.
 6. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
    for Plass and Knuth, Knuth's `docs/ROADMAP.md` carries the same
    entry, and `docs/COAUTHOR.md` there is the git-only design it

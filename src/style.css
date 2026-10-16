@@ -1342,6 +1342,50 @@ body {
   font-size: 1.4em;
 }
 
+/* A heading right after a heading (an editorial comment between them
+   prints nothing) is a run: Typst keeps the larger of the two headings'
+   spacings, not their sum (headingRunPadTopEm). The plugin publishes the
+   follower's padding, and any part below zero as a negative margin-top,
+   which adds to the leading heading's margin-bottom. A page gap between
+   the two is a sibling, so a run broken across pages keeps the plain
+   padding, which the page top drops anyway. Levels 4-6 are level 3. */
+.ProseMirror :is(h1, h1 + .editor-comment) + h1 {
+  padding-top: var(--heading-run-pad-1-1, 0.2em);
+  margin-top: var(--heading-run-mt-1-1, 0);
+}
+.ProseMirror :is(h1, h1 + .editor-comment) + h2 {
+  padding-top: var(--heading-run-pad-1-2, 1.4em);
+  margin-top: var(--heading-run-mt-1-2, 0);
+}
+.ProseMirror :is(h1, h1 + .editor-comment) + :is(h3, h4, h5, h6) {
+  padding-top: var(--heading-run-pad-1-3, 1.4em);
+  margin-top: var(--heading-run-mt-1-3, 0);
+}
+.ProseMirror :is(h2, h2 + .editor-comment) + h1 {
+  padding-top: var(--heading-run-pad-2-1, 0.2em);
+  margin-top: var(--heading-run-mt-2-1, 0);
+}
+.ProseMirror :is(h2, h2 + .editor-comment) + h2 {
+  padding-top: var(--heading-run-pad-2-2, 1.4em);
+  margin-top: var(--heading-run-mt-2-2, 0);
+}
+.ProseMirror :is(h2, h2 + .editor-comment) + :is(h3, h4, h5, h6) {
+  padding-top: var(--heading-run-pad-2-3, 1.4em);
+  margin-top: var(--heading-run-mt-2-3, 0);
+}
+.ProseMirror :is(h3, h4, h5, h6, :is(h3, h4, h5, h6) + .editor-comment) + h1 {
+  padding-top: var(--heading-run-pad-3-1, 0.2em);
+  margin-top: var(--heading-run-mt-3-1, 0);
+}
+.ProseMirror :is(h3, h4, h5, h6, :is(h3, h4, h5, h6) + .editor-comment) + h2 {
+  padding-top: var(--heading-run-pad-3-2, 1.4em);
+  margin-top: var(--heading-run-mt-3-2, 0);
+}
+.ProseMirror :is(h3, h4, h5, h6, :is(h3, h4, h5, h6) + .editor-comment) + :is(h3, h4, h5, h6) {
+  padding-top: var(--heading-run-pad-3-3, 1.4em);
+  margin-top: var(--heading-run-mt-3-3, 0);
+}
+
 /* Levels 4–6 are level 3's box, in the page and in the print (the export
    gives them level 3's show rules); only the level number differs. */
 .ProseMirror h3,

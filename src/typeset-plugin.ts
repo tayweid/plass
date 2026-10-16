@@ -44,7 +44,7 @@ import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdic
 import { atPaperSize, fitPaper, paperPass, paperScale, type PaperCaret } from './paper-scale';
 import { caretBox } from './caret-box';
 import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
-import { escapeTyp, expandMacrosWith, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
+import { escapeTyp, expandMacrosWith, headingRunPadTopEm, headingScale, pageBottomInsetEm, pageTopAdjustEm, tableMarginsEm } from './typ-serializer';
 import {
   containerPageTopDropEm,
   footnoteEmptyFrameAction,
@@ -2004,9 +2004,10 @@ class TypesetView {
    * width — plus Typst's 0.5em body-indent; "‣" is not in the body fonts,
    * so its width is the compiler's fallback face's, a constant), enum
    * indents by the digit count of a list's last label (list-indent.ts),
-   * and the table's block spacing (Typst's Auto spacing = paragraph
+   * the table's block spacing (Typst's Auto spacing = paragraph
    * spacing, measured frame to frame; the editor's box has the paragraph's
-   * descent below and cap slack above to absorb).
+   * descent below and cap slack above to absorb), and the padding of a
+   * heading that follows a heading (`headingRunPadTopEm`).
    * Idempotent per (font, size, spacing) key; the CSS carries fallbacks
    * until the port is up.
    */
@@ -2033,6 +2034,14 @@ class TypesetView {
     const table = tableMarginsEm(s);
     root.setProperty('--table-mt', `${(table.top * F).toFixed(4)}px`);
     root.setProperty('--table-mb', `${(table.bottom * F).toFixed(4)}px`);
+    // A heading run's follower: Typst's collapsed spacing (style.css).
+    for (let prev = 1; prev <= 3; prev++) {
+      for (let level = 1; level <= 3; level++) {
+        const pad = headingRunPadTopEm(s, prev, level) * F;
+        root.setProperty(`--heading-run-pad-${prev}-${level}`, `${Math.max(0, pad).toFixed(4)}px`);
+        root.setProperty(`--heading-run-mt-${prev}-${level}`, `${Math.min(0, pad).toFixed(4)}px`);
+      }
+    }
     // Boxes normalized against the old values re-fit now, so this pass
     // measures them settled (a grid cell ending in a table read the
     // previous document's --table-mb and grew on the first click).
