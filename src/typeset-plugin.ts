@@ -3135,7 +3135,7 @@ class TypesetView {
           continue;
         }
         if (fit.remainder > 0) {
-          fnCarry.push({ heightPx: fit.remainder, lineHeightPx: item.lineHeight, leadingPx: item.leading });
+          fnCarry.push({ heightPx: fit.remainder, lineHeightPx: item.lineHeight, leadingPx: item.leading, continues: true });
         }
         pageFnH += footnoteEntryCost(fit.fragment, F);
       }

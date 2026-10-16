@@ -136,6 +136,9 @@ export interface FootnoteCarryItem {
   /** The entry's leading (px): heights are Typst FRAMES, so a fragment of
    * k lines is k line boxes minus one leading (its last baseline ends it). */
   readonly leadingPx?: number;
+  /** A spilled remainder: the entry's paragraph continues here, so its
+   * first line is no paragraph start and has no orphan pair. */
+  readonly continues?: boolean;
 }
 
 export interface FootnoteFitResult {
@@ -164,16 +167,20 @@ export interface FootnoteFitResult {
  *
  * Typst lays the entry out as text, so a partial fragment always contains a
  * whole number of lines; `lineHeightPx` reproduces that quantization from
- * the entry's measured line height. Without it (unknown/`normal` line
- * height) the fragment is a plain pixel clamp — never taller than the pod,
- * so the ledger can still not over-commit.
+ * the entry's measured line height. The lines go through Typst's flow like
+ * any paragraph's, so the orphan and widow pairs hold inside an entry too:
+ * a two- or three-line entry never splits, and a longer one keeps two
+ * lines on each side (`continues` drops the orphan pair for a remainder).
+ * Without a line height (unknown/`normal`) the fragment is a plain pixel
+ * clamp — never taller than the pod, so the ledger can still not
+ * over-commit.
  */
 export function footnoteEntryFit(
   entryHeightPx: number,
   availablePx: number,
   pageHasFootnotes: boolean,
   bodyPx: number,
-  opts: { lineHeightPx?: number; leadingPx?: number; separatorPx?: number } = {},
+  opts: { lineHeightPx?: number; leadingPx?: number; separatorPx?: number; continues?: boolean } = {},
 ): FootnoteFitResult {
   const separatorNeed = pageHasFootnotes ? 0 : footnoteHeadReservePx(bodyPx, opts.separatorPx);
   const pod = availablePx - separatorNeed - FOOTNOTE_GAP_EM * bodyPx;
@@ -184,8 +191,17 @@ export function footnoteEntryFit(
   let fragment: number;
   let remainder: number;
   if (typeof lineHeightPx === 'number' && Number.isFinite(lineHeightPx) && lineHeightPx > 0) {
-    // k lines fit when their frame — k boxes less one leading — fits.
-    const lines = Math.max(0, Math.floor((pod + leading + ABS_EPS) / lineHeightPx));
+    // Line k's frame top is k boxes down the pod. Typst's flow places it
+    // when the pod holds its NEED (`Distributor::line`, distribute.rs:
+    // 226-245; `Collector::lines`, collect.rs:196-238): its own frame, or
+    // with its orphan or widow partner the pair's. A need that does not fit
+    // ends the fragment, the next region (a full page) always holding it.
+    // A first frame left empty that way migrates the marker's line or
+    // queues the entry, as one with no room at all.
+    const n = Math.max(1, Math.round((entryHeightPx + leading) / lineHeightPx));
+    const needs = lineNeeds(new Array<number>(n).fill(lineHeightPx - leading), leading, { preventOrphans: !opts.continues });
+    let lines = 0;
+    while (lines < n && fits(pod - lines * lineHeightPx, needs[lines])) lines++;
     fragment = lines > 0 ? Math.min(entryHeightPx, lines * lineHeightPx - leading) : 0;
     // The rest is its own frame: it ends at a baseline too, so the leading
     // between the two fragments belongs to neither page.
@@ -272,6 +288,7 @@ export function settleFootnoteCarry(
       lineHeightPx: item.lineHeightPx,
       leadingPx: item.leadingPx,
       separatorPx,
+      continues: item.continues,
     });
     // Nothing at all fits: the whole item (and everything behind it) waits.
     if (fit.empty) break;
@@ -280,7 +297,7 @@ export function settleFootnoteCarry(
     rest.shift();
     if (fit.remainder > 0) {
       // One frame per page: the remainder re-spills and blocks the rest.
-      rest.unshift({ heightPx: fit.remainder, lineHeightPx: item.lineHeightPx, leadingPx: item.leadingPx });
+      rest.unshift({ heightPx: fit.remainder, lineHeightPx: item.lineHeightPx, leadingPx: item.leadingPx, continues: true });
       break;
     }
   }

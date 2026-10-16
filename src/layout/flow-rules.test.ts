@@ -260,16 +260,62 @@ const GAP = FOOTNOTE_GAP_EM * F;
   // A queued entry that cannot fit behind the placed fragments carries on:
   // at most one PARTIAL placement per page, everything after it waits.
   const line = 10;
-  const contentPx = HEAD + GAP + 3 * line + GAP + 1.5 * line;
+  const contentPx = HEAD + GAP + 3 * line + GAP + 2.5 * line;
   const settled = settleFootnoteCarry(
     [{ heightPx: 3 * line, lineHeightPx: line }, { heightPx: 4 * line, lineHeightPx: line }],
     contentPx,
     F,
   );
-  assert.deepEqual(settled.placed, [3 * line, line]);
+  assert.deepEqual(settled.placed, [3 * line, 2 * line]);
   assert.equal(settled.carry.length, 1);
-  assert.ok(Math.abs(settled.carry[0].heightPx - 3 * line) < 1e-9);
+  assert.ok(Math.abs(settled.carry[0].heightPx - 2 * line) < 1e-9);
+  assert.equal(settled.carry[0].continues, true);
+  // With room for one and a half lines the second entry cannot start: its
+  // first line would be an orphan. It waits whole behind the first.
+  const tight = settleFootnoteCarry(
+    [{ heightPx: 3 * line, lineHeightPx: line }, { heightPx: 4 * line, lineHeightPx: line }],
+    HEAD + GAP + 3 * line + GAP + 1.5 * line,
+    F,
+  );
+  assert.deepEqual(tight.placed, [3 * line]);
+  assert.deepEqual(tight.carry, [{ heightPx: 4 * line, lineHeightPx: line }]);
   console.log('  ok  carry settle: second entry splits, its remainder re-carries');
+}
+
+{
+  // An entry is a paragraph to Typst's flow (Collector::lines, collect.rs
+  // ~196-238; Distributor::line, distribute.rs ~226-245): its first two
+  // lines go together, so do its last two, and three lines go whole. A pod
+  // with room for fewer lines than the next pair needs leaves the first
+  // frame empty, and the marker's line migrates.
+  const line = 14;
+  const lead = 4;
+  const fitAt = (lines: number, roomLines: number, continues = false) =>
+    footnoteEntryFit(lines * line - lead, HEAD + GAP + roomLines * line - lead, false, F, {
+      lineHeightPx: line,
+      leadingPx: lead,
+      continues,
+    });
+  // Two lines, room for one: no split, the first frame is empty.
+  assert.equal(fitAt(2, 1.7).empty, true);
+  assert.equal(fitAt(2, 1.7).fragment, 0);
+  // Three lines, room for two: whole or nothing.
+  assert.equal(fitAt(3, 2.5).empty, true);
+  // Four lines, room for three: the third would leave a widow, so two.
+  const four = fitAt(4, 3.5);
+  assert.ok(Math.abs(four.fragment - (2 * line - lead)) < 1e-9);
+  assert.ok(Math.abs(four.remainder - (2 * line - lead)) < 1e-9);
+  // Five lines, room for three: three go, two follow.
+  const five = fitAt(5, 3.5);
+  assert.ok(Math.abs(five.fragment - (3 * line - lead)) < 1e-9);
+  assert.ok(Math.abs(five.remainder - (2 * line - lead)) < 1e-9);
+  // A remainder continues its paragraph: no orphan pair at its first line,
+  // so one of its three lines goes where a fresh entry's would not.
+  const rest = fitAt(3, 1.5, true);
+  assert.ok(Math.abs(rest.fragment - (line - lead)) < 1e-9);
+  assert.ok(Math.abs(rest.remainder - (2 * line - lead)) < 1e-9);
+  assert.equal(fitAt(3, 1.5).empty, true);
+  console.log('  ok  an entry keeps its orphan and widow pairs');
 }
 
 {
