@@ -190,6 +190,30 @@ export function quoteBoxEm(s: DocSettings): { padTop: number; marginTop: number;
   return { padTop: Math.max(0, top), marginTop: Math.min(0, top), below: QUOTE_SPACING_EM.below - par };
 }
 
+/** Typst's figure gap (`figure(gap:)`, 0.65em by default; the export
+ *  leaves it at that): weak spacing between the image and its caption, so
+ *  it wins over the caption block's Auto spacing (weakness 1 against 4,
+ *  distribute.rs `keep_spacing`). The image's frame bottom to the caption's
+ *  cap top. */
+export const FIGURE_GAP_EM = 0.65;
+
+/**
+ * The editor's figure box, body em (style.css `.ts-figure`). Typst prints
+ * `#figure(image(…), caption: […])` as one unbreakable block with Auto
+ * spacing (paragraph spacing) on both sides, its frame running from the
+ * image's top to the caption's last baseline, the caption FIGURE_GAP_EM
+ * below the image. The box is a paragraph's at both edges: `padTop`, the
+ * paragraph's cap slack, over the image (where a paragraph's frame would
+ * start), and the caption's line boxes end it a paragraph's inset below
+ * the frame, so the paragraph margin after it gives paragraph spacing.
+ * `captionTop` is the caption's margin-top: the gap less the caption
+ * line's own slack above its cap top (below zero at large line heights).
+ */
+export function figureBoxEm(s: DocSettings): { padTop: number; captionTop: number } {
+  const slack = -pageTopAdjustEm(s, 'paragraph');
+  return { padTop: slack, captionTop: FIGURE_GAP_EM - slack };
+}
+
 /** A heading level's text size as a ratio of the body size (levels 4–6
  * print like 3). The port lays headings out at this scale, bold. */
 export function headingScale(level: number): number {
@@ -322,15 +346,16 @@ export const RUNNING_SECTION_TYP =
 /** A leaf block's Typst frame inside its painted box, body em: `above` is
  *  the slack from the box top down to the frame top, `below` the inset from
  *  the frame bottom down to the box bottom. Text kinds carry the
- *  calibrated line-box slack; a display equation its padding (the frame is
- *  its content box); the kinds with no calibration (figure, table, raw
- *  islands…) have frame = box. Grid cells (grid-editor.ts) normalize every
- *  cell to the paragraph's values with these. */
+ *  calibrated line-box slack, a figure the paragraph's (`figureBoxEm`); a
+ *  display equation its padding (the frame is its content box); the kinds
+ *  with no calibration (table, raw islands…) have frame = box. Grid cells
+ *  (grid-editor.ts) normalize every cell to the paragraph's values with
+ *  these. */
 export function blockFrameSlackEm(node: PMNode, s: DocSettings): { above: number; below: number } {
   const name = node.type.name;
   if (name === 'math_display') return { above: DISPLAY_MATH_PAD_EM, below: DISPLAY_MATH_PAD_EM };
   const kind =
-    name === 'paragraph' || name === 'doc_title' || name === 'doc_authors' || name === 'doc_date'
+    name === 'paragraph' || name === 'doc_title' || name === 'doc_authors' || name === 'doc_date' || name === 'figure'
       ? 'paragraph'
       : name === 'heading'
         ? (`h${Math.min(3, (node.attrs.level as number) || 1)}` as 'h1' | 'h2' | 'h3')

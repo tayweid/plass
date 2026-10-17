@@ -625,14 +625,15 @@ export function peekWeakSpacing(items: readonly FlowItem[]): number {
 
 /**
  * Page-top drop for the top-level block kinds whose own CSS encodes their
- * Auto (weakness-4) "above" spacing as `padding-top` on the block's own box
- * rather than as a calibrated ascent formula the way paragraphs/headings/
- * lines get via `pageTopAdjustEm` (`typ-serializer.ts`): a figure
- * (`.ts-figure`, 0.4em) and a display equation (`.math-display`, 0.5em,
- * `DISPLAY_MATH_PAD_EM`: part of its explicit, weakness-3 `above`,
- * `equationBlockSpacingEm`). A quote's padding-top depends on the settings
- * (`quoteBoxEm` in `typ-serializer.ts`), so the paginator takes it from
- * there; the solution variant paints none.
+ * "above" spacing as `padding-top` on the block's own box rather than as a
+ * calibrated ascent formula the way paragraphs/headings/lines get via
+ * `pageTopAdjustEm` (`typ-serializer.ts`): a display equation
+ * (`.math-display`, 0.5em, `DISPLAY_MATH_PAD_EM`: part of its explicit,
+ * weakness-3 `above`, `equationBlockSpacingEm`). A quote's padding-top
+ * depends on the settings (`quoteBoxEm` in `typ-serializer.ts`), so the
+ * paginator takes it from there; the solution variant paints none. A
+ * figure's padding is the paragraph's cap slack (`figureBoxEm`), so it
+ * lands like a paragraph.
  * Code blocks (islands included) have a calibrated landing spot of their
  * own (`pageTopAdjustEm(s, 'code')`), like paragraphs. Lists and
  * tables paint zero padding-top already (their CSS puts spacing entirely in
@@ -652,7 +653,6 @@ export function peekWeakSpacing(items: readonly FlowItem[]): number {
  * default already makes for zero-padding kinds like tables and lists).
  */
 export const CONTAINER_PAGE_TOP_PADDING_EM: Readonly<Record<string, number>> = {
-  figure: 0.4,
   math_display: 0.5,
 };
 

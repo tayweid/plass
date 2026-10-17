@@ -704,7 +704,7 @@ function content(): FlowItem {
 {
   assert.equal(containerPageTopDropEm('blockquote'), 0); // settings-dependent: quoteBoxEm (typ-serializer.ts)
   assert.equal(containerPageTopDropEm('code_block'), 0); // calibrated via pageTopAdjustEm('code')
-  assert.equal(containerPageTopDropEm('figure'), 0.4);
+  assert.equal(containerPageTopDropEm('figure'), 0); // a paragraph's cap slack: figureBoxEm (typ-serializer.ts)
   assert.equal(containerPageTopDropEm('math_display'), DISPLAY_MATH_PAD_EM); // its padding-top, which holds part of its `above`
   assert.equal(DISPLAY_MATH_PAD_EM, 0.5); // .math-display's padding in style.css
   assert.equal(containerPageTopDropEm('bullet_list'), 0); // no padding-top to drop

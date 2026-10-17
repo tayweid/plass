@@ -367,6 +367,8 @@ export class FigureView implements NodeView {
   private chip: HTMLButtonElement;
   private pathChip: HTMLButtonElement;
   private sourceVersion = 0;
+  /** The loaded image's height over its width (0 until it loads). */
+  private ratio = 0;
   private unsubscribeRemote: () => void;
 
   constructor(
@@ -379,7 +381,11 @@ export class FigureView implements NodeView {
 
     this.img = document.createElement('img');
     this.img.alt = '';
-    this.img.addEventListener('load', () => scheduleTypeset(this.view));
+    this.img.addEventListener('load', () => {
+      this.ratio = this.img.naturalWidth > 0 ? this.img.naturalHeight / this.img.naturalWidth : 0;
+      this.updateSize();
+      scheduleTypeset(this.view);
+    });
     window.addEventListener(ASSET_EVENT, this.onAssets);
     // Click the image to select the whole figure.
     this.img.addEventListener('mousedown', (e) => {
@@ -424,6 +430,14 @@ export class FigureView implements NodeView {
     const width = this.node.attrs.widthPct;
     this.img.style.width = typeof width === 'number' ? `${width}%` : '';
     this.img.style.maxHeight = typeof width === 'number' ? 'none' : '';
+    // Typst sizes the image at that share of the column and its height by
+    // the image's ratio, exactly; Chrome truncated the height to its layout
+    // unit (83.1875 px for 83.2). The exact height, a share of the figure's
+    // width (`cqw`), for style.css to round, once the ratio is known.
+    const sized = typeof width === 'number' && this.ratio > 0;
+    this.dom.classList.toggle('fig-sized', sized);
+    if (sized) this.dom.style.setProperty('--fig-img-h', `calc(${width}cqw * ${this.ratio})`);
+    else this.dom.style.removeProperty('--fig-img-h');
   }
 
   private updatePathChip() {
@@ -592,6 +606,8 @@ export class FigureView implements NodeView {
    *  sources resolve to object URLs. Unapproved remotes remain inert. */
   private setSrc(src: string) {
     const version = ++this.sourceVersion;
+    this.ratio = 0;
+    this.updateSize();
     const remote = remoteImageStatus(src);
     if (remote) {
       this.dom.classList.remove('fig-missing', 'fig-remote-blocked', 'fig-remote-loading');

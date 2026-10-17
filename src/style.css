@@ -1945,11 +1945,35 @@ body {
 
 /* ---------- figures ---------- */
 
+/* Typst's figure: one block, paragraph spacing around it, its frame from
+   the image's top to the caption's last baseline, the caption 0.65em below
+   the image (`figureBoxEm`, typ-serializer.ts). The box is a paragraph's at
+   both edges: the paragraph's cap slack over the image, the caption's line
+   boxes at the bottom, then the paragraph margin (none with indented
+   paragraphs, where Typst spaces blocks by the leading). The plugin
+   publishes the padding and the caption's margin in layout units. */
 .ts-figure {
-  margin: 0 0 var(--block-margin, 0.9em);
-  padding: 0.4em 0 0.2em;
+  margin: 0 0 var(--par-margin, 0.9em);
+  padding: var(--fig-pad, 0.5em) 0 0;
   position: relative;
   text-align: center;
+  /* For the image's height in `cqw` (below). */
+  container-type: inline-size;
+}
+
+/* An image at a share of the column (figures.ts, once its ratio is known):
+   its height is Typst's, the share of the column's width times the ratio
+   (`--fig-img-h`), rounded to the layout unit where Chrome truncated it,
+   and the caption's margin is rounded from the figure's top with it, so
+   the caption's line lands within 1/128 px of the gap below the image. */
+.ts-figure.fig-sized img {
+  height: round(var(--fig-img-h), 1px / 64);
+}
+
+.ts-figure.fig-sized figcaption {
+  margin-top: calc(
+    round(var(--fig-img-h) + var(--fig-gap), 1px / 64) - round(var(--fig-img-h), 1px / 64) - var(--fig-pad)
+  );
 }
 
 .ts-figure img {
@@ -1960,7 +1984,7 @@ body {
 }
 
 .ts-figure figcaption {
-  margin-top: 0.55em;
+  margin-top: var(--fig-caption-mt, 0.15em);
   /* Typst renders captions at full body size and ink, justified with a
      centered last line. Oracle-laid lines end in <br> (exempt from CSS
      justify); while being edited, CSS takes over with the same shape. */
