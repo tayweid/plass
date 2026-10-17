@@ -1486,7 +1486,7 @@ body {
 }
 
 .ProseMirror blockquote:not([data-kind='solution']) > :is(ul, ol):last-child {
-  margin-bottom: calc(0.9em + var(--quote-below, 0.0828em));
+  margin-bottom: calc(var(--block-margin, 0.9em) + var(--quote-below, 0.0828em));
 }
 
 /* A display equation that opens or closes a quote (either kind): inside
@@ -1512,11 +1512,15 @@ body {
    counter-reset that starts the labels at the list's start); the fallbacks
    are New Computer Modern's values. Markers are painted out of flow, so the
    body measure is exactly Typst's: a bullet at the column's left edge, an
-   enum label at its right (Typst's number-align: end), "9." under "10.". */
+   enum label at its right (Typst's number-align: end), "9." under "10.".
+   A list is spaced from its neighbours as a paragraph is (Typst's Auto
+   spacing), so its margin is the paragraph's (--par-margin, settings.ts):
+   0.9em, none with indented paragraphs, where Typst spaces it by the
+   leading alone. */
 .ProseMirror ul,
 .ProseMirror ol {
   padding-left: var(--list-indent-1, 1.278em);
-  margin: 0 0 0.9em;
+  margin: 0 0 var(--par-margin, 0.9em);
   list-style: none;
 }
 
@@ -1605,8 +1609,11 @@ body {
   white-space: nowrap;
 }
 
+/* A tight list's item pitch is the leading + 0.25em (`listSpacingEm`):
+   the 0.25em in layout units (--list-item-gap, settings.ts). As an em
+   length it was truncated, 1/96 px short an item at 12.5 pt. */
 .ProseMirror li > p {
-  margin-bottom: 0.25em;
+  margin-bottom: var(--list-item-gap, 0.25em);
 }
 
 /* Inside an item, a paragraph followed by another block is spaced from it
@@ -1618,8 +1625,8 @@ body {
 
 /* A loose list (blank lines between its items in the file): Typst spaces
    the items by paragraph spacing instead of the list's item pitch. The
-   last item keeps the tight margin so the spacing after the list is the
-   same either way. */
+   last item has no margin in either kind (below), so the spacing after
+   the list is the same either way. */
 .ProseMirror ul[data-tight='0'] > li:not(:last-child) > p:last-child,
 .ProseMirror ol[data-tight='0'] > li:not(:last-child) > p:last-child {
   margin-bottom: var(--par-margin, 0.9em);
@@ -1631,7 +1638,25 @@ body {
    after it — the next outer item follows at the item spacing. */
 .ProseMirror li > ul,
 .ProseMirror li > ol {
-  margin: 0.9em 0 0;
+  margin: var(--par-margin, 0.9em) 0 0;
+}
+
+/* The 0.25em is spacing between items, and Typst puts none after a list's
+   last one: the list ends at its last line, and the spacing after it is
+   the list's own. (It used to collapse into the list's 0.9em; with
+   indented paragraphs that margin is none, and the 0.25em was left.) A
+   nested list that ends an item before the last carries the outer list's
+   item spacing instead, a loose list's paragraph spacing. */
+.ProseMirror li:last-child > p:last-child {
+  margin-bottom: 0;
+}
+
+.ProseMirror li:not(:last-child) > :is(ul, ol):last-child {
+  margin-bottom: var(--list-item-gap, 0.25em);
+}
+
+.ProseMirror :is(ul, ol)[data-tight='0'] > li:not(:last-child) > :is(ul, ol):last-child {
+  margin-bottom: var(--par-margin, 0.9em);
 }
 
 .ProseMirror code {
@@ -1973,11 +1998,35 @@ body {
 
 /* ---------- figures ---------- */
 
+/* Typst's figure: one block, paragraph spacing around it, its frame from
+   the image's top to the caption's last baseline, the caption 0.65em below
+   the image (`figureBoxEm`, typ-serializer.ts). The box is a paragraph's at
+   both edges: the paragraph's cap slack over the image, the caption's line
+   boxes at the bottom, then the paragraph margin (none with indented
+   paragraphs, where Typst spaces blocks by the leading). The plugin
+   publishes the padding and the caption's margin in layout units. */
 .ts-figure {
-  margin: 0 0 0.9em;
-  padding: 0.4em 0 0.2em;
+  margin: 0 0 var(--par-margin, 0.9em);
+  padding: var(--fig-pad, 0.5em) 0 0;
   position: relative;
   text-align: center;
+  /* For the image's height in `cqw` (below). */
+  container-type: inline-size;
+}
+
+/* An image at a share of the column (figures.ts, once its ratio is known):
+   its height is Typst's, the share of the column's width times the ratio
+   (`--fig-img-h`), rounded to the layout unit where Chrome truncated it,
+   and the caption's margin is rounded from the figure's top with it, so
+   the caption's line lands within 1/128 px of the gap below the image. */
+.ts-figure.fig-sized img {
+  height: round(var(--fig-img-h), 1px / 64);
+}
+
+.ts-figure.fig-sized figcaption {
+  margin-top: calc(
+    round(var(--fig-img-h) + var(--fig-gap), 1px / 64) - round(var(--fig-img-h), 1px / 64) - var(--fig-pad)
+  );
 }
 
 .ts-figure img {
@@ -1988,7 +2037,7 @@ body {
 }
 
 .ts-figure figcaption {
-  margin-top: 0.55em;
+  margin-top: var(--fig-caption-mt, 0.15em);
   /* Typst renders captions at full body size and ink, justified with a
      centered last line. Oracle-laid lines end in <br> (exempt from CSS
      justify); while being edited, CSS takes over with the same shape. */
@@ -2284,9 +2333,15 @@ body {
   margin: 0 0 0.7em;
 }
 
+/* The export prints the label as a paragraph of its own and the abstract
+   in `#pad(x: 1.8em)`, all at paragraph spacing (`abstractBoxEm`,
+   typ-serializer.ts): the label is a paragraph line with the paragraph
+   margin under it, and the abstract ends with a paragraph's margin (none
+   with indented paragraphs). The bold label's frame is taller than a
+   paragraph line's by the cap heights' difference: the padding over it. */
 .ProseMirror .ts-abstract {
-  padding: 0 1.8em;
-  margin: 0 0 0.9em;
+  padding: var(--abstract-pad, 0px) 1.8em 0;
+  margin: var(--abstract-mt, 0px) 0 var(--par-margin, 0.9em);
 }
 
 /* The label is painted, not stored — the exporter emits it. */
@@ -2295,7 +2350,7 @@ body {
   display: block;
   text-align: center;
   font-weight: 600;
-  margin-bottom: 0.75em;
+  margin-bottom: var(--par-margin, 0.9em);
 }
 
 .ProseMirror .ts-abstract p:last-child {
@@ -2825,25 +2880,46 @@ body {
 
 .ts-bibliography {
   position: relative;
-  margin: 0 0 0.9em;
+  margin: 0 0 var(--par-margin, 0.9em);
   font-size: 1em;
 }
 
 /* Compiled (exact) rendering replaces the DOM list once it arrives. The
-   fragment compiles at its own page top, which suppresses the title's
-   block-above spacing — restore it here (calibrated against the PDF). */
+   fragment's page starts at the title's frame top (Typst drops its spacing
+   at a page top) and its frame ends at the last entry's baseline
+   (`--bib-frame`, citations.ts), so the box is laid out as the print's
+   (`bibliographyBoxEm`, typ-serializer.ts): the title's slack above its
+   frame as the padding, the page's whole-point rounding given back below
+   the frame, and a paragraph's inset and margin after it. Each edge is
+   rounded from the box's top, in layout units. The 0.75em padding and the
+   svg's line box under it put the list 2.3 px higher than its print at
+   12.5 pt, and the paragraph after it 1.2 to 1.6 px higher (with the
+   page's rounding). */
 .ts-bibliography .bib-ink {
   display: none;
 }
 
-.ts-bibliography.bib-has-ink .bib-ink {
-  /* padding, not margin — a margin collapses through the block edge.
-     (+0.75em: the fragment page-top suppresses the title's block-above.) */
-  padding-top: 0.75em;
+.ts-bibliography.bib-has-ink {
+  margin-bottom: calc(
+    round(var(--bib-top) + var(--bib-frame) + var(--bib-below), 1px / 64) -
+      round(var(--bib-top) + var(--bib-frame), 1px / 64)
+  );
 }
 
 .ts-bibliography.bib-has-ink .bib-ink {
+  /* padding, not margin — a margin collapses through the block edge. */
+  padding-top: round(var(--bib-top), 1px / 64);
+}
+
+.ts-bibliography.bib-has-ink .bib-ink > svg {
   display: block;
+  margin-bottom: calc(round(var(--bib-top) + var(--bib-frame), 1px / 64) - round(var(--bib-top), 1px / 64) - var(--bib-svg-h));
+}
+
+/* Its own formatting context: the svg's margin-bottom stays inside, and
+   the box ends at the frame (the paginator fits it there). */
+.ts-bibliography.bib-has-ink .bib-ink {
+  display: flow-root;
 }
 
 .ts-bibliography.bib-has-ink .bib-dom {

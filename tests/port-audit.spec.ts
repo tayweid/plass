@@ -176,6 +176,53 @@ FIXTURES.push({
 });
 
 FIXTURES.push({
+  // Lists with indented (classic) paragraphs: spaced from their neighbours
+  // by the leading alone, as a paragraph is (the page added 0.9em after
+  // every list and over every nested list, and broke a page later than
+  // Typst from page 3). Tight lists, a nested list in the middle and at the
+  // end, an enum, a loose list whose first item ends in a nested list,
+  // headings after them.
+  name: 'lists-classic.md',
+  text: [
+    '---',
+    'indent: true',
+    '---',
+    '',
+    '# Classic lists',
+    '',
+    ...Array.from({ length: 4 }, (_, k) => [
+      FILLER.repeat(3).trimEnd(),
+      '',
+      FILLER.repeat(2).trimEnd(),
+      '',
+      '- ' + FILLER.trimEnd(),
+      '- ' + FILLER.repeat(2).trimEnd(),
+      '  - ' + FILLER.trimEnd(),
+      '  - ' + FILLER.trimEnd(),
+      '- ' + FILLER.trimEnd(),
+      '',
+      FILLER.repeat(2).trimEnd(),
+      '',
+      '1. ' + FILLER.trimEnd(),
+      '2. ' + FILLER.repeat(2).trimEnd(),
+      '    - ' + FILLER.trimEnd(),
+      '',
+      FILLER.trimEnd(),
+      '',
+      '- ' + FILLER.trimEnd(),
+      '  - ' + FILLER.trimEnd(),
+      '',
+      '- ' + FILLER.trimEnd(),
+      '',
+      `## Section ${k + 1}`,
+      '',
+      FILLER.repeat(2).trimEnd(),
+      '',
+    ]).flat(),
+  ].join('\n'),
+});
+
+FIXTURES.push({
   // Numbered lists that start past 1: each prints from its start, its label
   // column as wide as its last label (9 to 10, 98 to 100, 2026), a list
   // from 0, a nested list with its own start, one long enough to cross a
@@ -568,6 +615,16 @@ FIXTURES.push({
       ]),
     },
   );
+  // A figure at a page's edge. Typst prints it as one unbreakable block at
+  // paragraph spacing, its frame from the image's top to the caption's last
+  // baseline (`figureBoxEm`): at a page's end it fits by that baseline
+  // (bottom: at 23 % width it is the last thing on page 1), at a page's top
+  // the image lands at the margin and the page after it is filled by its
+  // full height (top: it opens page 2, and page 3 starts a line later than
+  // the July box let it, 8.3 px taller than the print).
+  const rect = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"><rect width="120" height="80" fill="#38786d"/></svg>';
+  const figure = (pct: number) => [`![A one-line caption.](data:image/svg+xml;base64,${Buffer.from(rect).toString('base64')}){width=${pct}%}`, ''];
+  FIXTURES.push({ name: 'figure-edge-bottom.md', text: edge(44, figure(23)) }, { name: 'figure-edge-top.md', text: edge(60, figure(31)) });
 }
 
 function collect(target: string): string[] {
@@ -619,9 +676,9 @@ async function openText(page: Page, name: string, text: string) {
       { timeout: 30_000, intervals: [250, 500, 1000] },
     )
     .toMatch(/port|none/);
-  // Every inline formula has settled: its Typst width arrived, or the
-  // compiler said it will not (the report lists those). Pagination can go
-  // quiet while formulas still sit at KaTeX's width.
+  // Every formula, inline and display, has settled: its Typst ink arrived,
+  // or the compiler said it will not (the report lists those). Pagination
+  // can go quiet while formulas still sit at KaTeX's box.
   await expect
     .poll(() => page.evaluate(() => window.__mathInk().pending ?? 0), { timeout: 90_000, intervals: [250, 500, 1000] })
     .toBe(0);

@@ -202,6 +202,15 @@ export function layoutPx(px: number): number {
   return Math.round(px * 64) / 64;
 }
 
+/** A paragraph's margin (`parMarginEm` in typ-serializer.ts) in layout
+ *  units: a paragraph's box is whole lines, so its margin's end falls
+ *  within 1/128 px of Typst's spacing, on it at 12.5 pt. As 0.9em it was
+ *  truncated, 1/64 px short at 12.5 pt too, and a page of paragraphs
+ *  crept up against the print by that much a gap. */
+export function parMarginPx(s: Pick<DocSettings, 'sizePt' | 'parIndent'>): number {
+  return s.parIndent ? 0 : layoutPx((0.9 * s.sizePt * 4) / 3);
+}
+
 /** Merge stored settings over defaults (migrating legacy fields). */
 export function normalizeSettings(raw: Partial<DocSettings> | null | undefined): DocSettings {
   const source = raw && typeof raw === 'object' ? raw : {};
@@ -275,13 +284,13 @@ export function applySettings(state: EditorState) {
   root.setProperty('--doc-size', `${s.sizePt}pt`);
   root.setProperty('--doc-line', String(s.lineHeight));
   const bodyPx = (s.sizePt * 4) / 3;
-  // A paragraph's margin (`parMarginEm` in typ-serializer.ts) in layout
-  // units: a paragraph's box is whole lines, so its margin's end falls
-  // within 1/128 px of Typst's spacing, on it at 12.5 pt. As 0.9em it was
-  // truncated, 1/64 px short at 12.5 pt too, and a page of paragraphs
-  // crept up against the print by that much a gap.
-  const parMarginPx = s.parIndent ? 0 : layoutPx(0.9 * bodyPx);
-  root.setProperty('--par-margin', `${parMarginPx}px`);
+  const parMargin = parMarginPx(s);
+  root.setProperty('--par-margin', `${parMargin}px`);
+  // The fixed 0.9em a quote's last list still has below it (style.css; every
+  // other block's margin is the paragraph's or its own) and a tight list
+  // item's 0.25em (`listSpacingEm`), in layout units for the same reason.
+  root.setProperty('--block-margin', `${layoutPx(0.9 * bodyPx)}px`);
+  root.setProperty('--list-item-gap', `${layoutPx(0.25 * bodyPx)}px`);
   root.setProperty('--par-indent', s.parIndent ? '1.5em' : '0em');
   // Code blocks (and islands) mirror Typst's raw block: published in px so
   // the block's own 0.8em font size cannot rescale them.
@@ -296,14 +305,21 @@ export function applySettings(state: EditorState) {
   // Typst's paragraph leading/spacing are absolute lengths. Reducing a
   // table's text size changes its glyph extent, not those two gaps.
   root.setProperty('--table-text-extent', `${extentPx}px`);
-  root.setProperty('--table-par-gap', `${parMarginPx}px`);
-  root.setProperty('--code-line', `${(code.lineEm * bodyPx).toFixed(4)}px`);
+  root.setProperty('--table-par-gap', `${parMargin}px`);
+  // A code block's line pitch, padding and margin in layout units: the
+  // pitch is the nearest one to Typst's raw line (each line keeps that
+  // difference, at most 1/128 px), and the padding and the margin are
+  // rounded from the block's top, so its margin's end lands within 1/128
+  // px of the model besides. As four-decimal lengths the padding and the
+  // margin were truncated, a spaced block 1/64 px short.
+  const codePadPx = layoutPx(code.padTopEm * bodyPx);
+  root.setProperty('--code-line', `${layoutPx(code.lineEm * bodyPx)}px`);
+  root.setProperty('--code-pad', `${codePadPx}px`);
+  root.setProperty('--code-mb', `${layoutPx((code.padTopEm + code.marginBottomEm) * bodyPx) - codePadPx}px`);
   root.setProperty('--fn-top-inset', `${(footnoteFrameInsetsEm(s).top * bodyPx).toFixed(4)}px`);
   root.setProperty('--fn-sep-width', s.footnoteSeparator === 'full' ? '100%' : '30%');
   root.setProperty('--fn-sep-display', s.footnoteSeparator === 'none' ? 'none' : 'block');
   root.setProperty('--fn-line', `${((parityMetrics(s.font).extent + FN_LEADING_EM) * FN_SCALE * bodyPx).toFixed(4)}px`);
-  root.setProperty('--code-pad', `${(code.padTopEm * bodyPx).toFixed(4)}px`);
-  root.setProperty('--code-mb', `${(code.marginBottomEm * bodyPx).toFixed(4)}px`);
   const size = pageSize(s);
   root.setProperty('--page-w', `${size.w}px`);
   root.setProperty('--page-h', `${size.h}px`);
