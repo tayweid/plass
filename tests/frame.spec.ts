@@ -169,7 +169,7 @@ async function richDocument(page: Page) {
     const cell = (t: string) => schema.nodes.table_cell.create(null, [p(t)]);
     const extra = [
       p('Problem. ' + filler.repeat(4)),
-      schema.nodes.blockquote.create({ kind: 'solution' }, [p('Solution. ' + filler.repeat(14)), p('Hence the bound. ' + filler.repeat(3))]),
+      schema.nodes.blockquote.create({ kind: 'solution' }, [p('Solution. ' + filler.repeat(24)), p('Hence the bound. ' + filler.repeat(3))]),
       schema.nodes.grid.create({ columns: [2, 1], gutter: 1 }, [
         schema.nodes.grid_row.create(null, [
           schema.nodes.grid_cell.create(null, [p('Left cell. ' + filler.repeat(2))]),
@@ -1123,9 +1123,9 @@ test('clicks, selections, the caret and the toolbars land where the page is draw
     }, word);
 
   // A click puts the caret where it lands.
-  let r = await phrase('millisecond');
+  let r = await phrase('page');
   await page.mouse.click(r.x + r.width / 2, r.y + r.height / 2);
-  await expect.poll(() => caretIn('millisecond')).toBe(true);
+  await expect.poll(() => caretIn('page')).toBe(true);
   // A drag selects what it covers.
   r = await phrase('Click anywhere');
   const end = await phrase('start typing');
@@ -1153,13 +1153,14 @@ test('clicks, selections, the caret and the toolbars land where the page is draw
   await expect.poll(async () => (await line()).head).not.toBe(from.head);
   const to = await line();
   const pitch = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.ProseMirror p')!).lineHeight));
-  // The demo runs to four sheets: the rail's gutter is there.
+  // The demo runs to three sheets: the rail's gutter is there.
   const scale = (1500 - RAIL - GUTTER) / PAGE_W;
   expect(to.top - from.top).toBeGreaterThan(pitch * scale * 0.8);
   expect(to.top - from.top).toBeLessThan(pitch * scale * 1.6);
 
-  // A click in a table cell brings the table's pill up in the page's left
-  // margin, clear of the text column, level with the table.
+  // A click in a table cell brings the table's pill up beside it, clear of
+  // the table, level with it (beside a narrow table, or in the margin:
+  // docs/BLOCK-CHROME.md, decision 3).
   const cell = await page.evaluate(() => {
     const p = document.querySelector('.ProseMirror table td p')!;
     p.scrollIntoView({ block: 'center' });
@@ -1174,13 +1175,9 @@ test('clicks, selections, the caret and the toolbars land where the page is draw
   const placed = await page.evaluate(() => {
     const pill = document.querySelector('.block-pill')!.getBoundingClientRect();
     const table = document.querySelector('.ProseMirror table')!.getBoundingClientRect();
-    const editor = document.getElementById('editor')!;
-    const stack = document.getElementById('stack')!;
-    const s = stack.getBoundingClientRect().width / stack.offsetWidth;
-    const textLeft = editor.getBoundingClientRect().left + parseFloat(getComputedStyle(editor).paddingLeft) * s;
-    return { right: pill.right, top: pill.top, textLeft, tableTop: table.top, tableBottom: table.bottom };
+    return { right: pill.right, top: pill.top, tableLeft: table.left, tableTop: table.top, tableBottom: table.bottom };
   });
-  expect(placed.right).toBeLessThanOrEqual(placed.textLeft - 8);
+  expect(placed.right).toBeLessThanOrEqual(placed.tableLeft - 8);
   expect(placed.top).toBeGreaterThanOrEqual(placed.tableTop - 1);
   expect(placed.top).toBeLessThan(placed.tableBottom);
 

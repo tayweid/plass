@@ -1,4 +1,4 @@
-import { expect, LINE_END, pinOldMargins, test, type Page } from './fixture';
+import { expect, LINE_END, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // The space a line breaks at (src/break-space.ts). The layout draws a
@@ -20,7 +20,10 @@ async function demo(page: Page) {
   await page.goto('/?new=1');
   await page.waitForFunction(() => Boolean((window as unknown as Hooks).view && (window as unknown as Hooks).__loadDemo));
   await page.evaluate(() => (window as unknown as Hooks).__loadDemo());
-  await pinOldMargins(page);
+  // Until Typst's ink replaces a formula's KaTeX preview the formulas are
+  // their preview's size, and the demo's first page breaks elsewhere: on a
+  // busy machine the ink lands after the layout has gone quiet once.
+  await expect(page.locator('.ProseMirror .katex')).toHaveCount(0, { timeout: 30_000 });
   await settleLocal(page);
 }
 

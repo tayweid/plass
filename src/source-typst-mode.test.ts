@@ -59,9 +59,10 @@ const tokens = tokenize(typ);
 // Calls: `#name(` / `#name[` heads dim; their arguments stay text.
 {
   const meta = new Set(styles(tokens, 'meta'));
-  for (const head of ['#mi', '#mitex', '#figure', '#align', '#quote', '#bibliography', '#footnote']) {
+  for (const head of ['#mi', '#mitex', '#figure', '#quote', '#bibliography', '#footnote']) {
     assert.ok(meta.has(head), `${head} should be a call head`);
   }
+  assert.deepEqual(styles(tokenize('#align(center)[x]'), 'meta'), ['#align']);
   // `#set page(` is off the rails: `#set` is followed by a space, not a bracket.
   assert.ok(!meta.has('#set'));
   assert.ok(!meta.has('#show'));
@@ -89,15 +90,15 @@ const tokens = tokenize(typ);
 // References and labels.
 {
   const refs = styles(tokens, 'link');
-  for (const key of ['@knuthplass81', '@knuth86', '@madje22', '@fig:sd']) {
+  for (const key of ['@knuthplass81', '@knuth86', '@madje22', '@fig:sd', '@tbl:revenue']) {
     assert.ok(refs.includes(key), `${key} should be a reference`);
   }
   assert.deepEqual(styles(tokenize('mail me@example.org'), 'link'), []);
   assert.deepEqual(styles(tokenize('#import "@preview/mitex:0.2.7": mi, mitex'), 'link'), []);
-  // Labels on the equation and the figure, and the equation reference's
+  // Labels on the equation, the figure and the table, and the equation reference's
   // `#ref(<eq:gauss>, …)` argument (the serializer's form for equations).
   const labels = styles(tokens, 'labelName');
-  assert.deepEqual([...new Set(labels)].sort(), ['<eq:gauss>', '<fig:sd>']);
+  assert.deepEqual([...new Set(labels)].sort(), ['<eq:gauss>', '<fig:sd>', '<tbl:revenue>']);
   assert.ok(labels.length >= 3);
   assert.ok(styles(tokens, 'meta').includes('#ref'));
 }
@@ -132,7 +133,7 @@ const tokens = tokenize(typ);
   );
   assert.deepEqual(prose.map((t) => t.style), [null]);
   // The demo's prose lines are plain except for their rails.
-  const n = lines.findIndex((l) => l.startsWith('Markup-and-compile')) + 1;
+  const n = lines.findIndex((l) => l.startsWith('There have long been')) + 1;
   assert.deepEqual(lineOf(tokens, n).map((t) => t.style), [null]);
 }
 

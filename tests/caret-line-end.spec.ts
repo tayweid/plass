@@ -99,11 +99,18 @@ test('a pass that carries the followed caret to the end of the line above holds 
   // A line's first word, its letters deleted from its end until what is
   // left fits on the line above: the caret, after the word, goes from the
   // start of a line to the end of the one above. Which line does that
-  // depends on the demo's text, so try the lines from page 2 on in turn.
+  // depends on the demo's text, so try the lines from page 2 on in turn,
+  // in paragraphs on one page: in one that crosses a page, the shorter
+  // paragraph can carry the caret's line over the page break, and the
+  // pass then scrolls to hold the caret still, as it should.
   const starts = await page.evaluate((ends) => {
     const { view } = window as unknown as Hooks;
     return ends
       .filter((e) => e.page >= 2)
+      .filter((e) => {
+        const $end = view.state.doc.resolve(e.pos);
+        return !(view.nodeDOM($end.before()) as HTMLElement | null)?.querySelector('.ts-pagegap');
+      })
       .map((e) => {
         const $start = view.state.doc.resolve(e.pos + 1);
         const word = $start.parent.textBetween($start.parentOffset, $start.parent.content.size, ' ', ' ').match(/^\S+/)?.[0] ?? '';
