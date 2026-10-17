@@ -9,7 +9,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
 import { parseBibTeX, bibAuthors, bibVenue, isPortableCitationKey, type BibEntry } from './bibtex';
 import { citationLabels } from './citation-styles';
-import { getSettings } from './settings';
+import { getSettings, layoutPx } from './settings';
 import { chooseLibrary, forgetLibrary, libraryStatus, requestLibraryPermission } from './library-bib';
 import { INPUT_LIMITS, InputLimitError, readBoundedText, textSizeError } from './input-limits';
 import { mountTypstSvg } from './safe-svg';
@@ -229,6 +229,21 @@ export function citationsPlugin() {
   });
 }
 
+/** The last baseline on a compiled Typst page, px below its top: its
+ *  frame's bottom (Typst's bottom edge is the baseline). Each text run's
+ *  baseline is the sum of its groups' translations, in points. */
+function lastBaselinePx(svg: SVGSVGElement): number | null {
+  let last: number | null = null;
+  for (const run of svg.querySelectorAll<SVGGraphicsElement>('.typst-text')) {
+    let y = 0;
+    for (let el: Element | null = run; el && el !== svg; el = el.parentElement) {
+      if (el instanceof SVGGraphicsElement) y += el.transform.baseVal.consolidate()?.matrix.f ?? 0;
+    }
+    last = Math.max(last ?? y, y);
+  }
+  return last === null ? null : (last * 4) / 3;
+}
+
 /** Renders the cited entries, in citation order, from the document bib. */
 export class BibliographyView implements NodeView {
   dom: HTMLElement;
@@ -288,8 +303,14 @@ export class BibliographyView implements NodeView {
     if (!holder) return;
     const svgEl = mountTypstSvg(holder, svg);
     if (svgEl) {
+      // The page's height in layout units, and its frame: the page holds
+      // the list from the title's frame top, rounded up to whole points, and
+      // style.css gives back what it has past the last baseline.
+      const heightPx = layoutPx((parseFloat(svgEl.getAttribute('height') ?? '0') * 4) / 3);
       svgEl.style.width = `${(parseFloat(svgEl.getAttribute('width') ?? '0') * 4) / 3}px`;
-      svgEl.style.height = 'auto';
+      svgEl.style.height = `${heightPx}px`;
+      this.dom.style.setProperty('--bib-svg-h', `${heightPx}px`);
+      this.dom.style.setProperty('--bib-frame', `${lastBaselinePx(svgEl) ?? heightPx}px`);
     }
     this.dom.classList.add('bib-has-ink');
     const { scheduleTypeset } = await import('./typeset-plugin');

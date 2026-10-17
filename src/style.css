@@ -2827,25 +2827,46 @@ body {
 
 .ts-bibliography {
   position: relative;
-  margin: 0 0 var(--block-margin, 0.9em);
+  margin: 0 0 var(--par-margin, 0.9em);
   font-size: 1em;
 }
 
 /* Compiled (exact) rendering replaces the DOM list once it arrives. The
-   fragment compiles at its own page top, which suppresses the title's
-   block-above spacing — restore it here (calibrated against the PDF). */
+   fragment's page starts at the title's frame top (Typst drops its spacing
+   at a page top) and its frame ends at the last entry's baseline
+   (`--bib-frame`, citations.ts), so the box is laid out as the print's
+   (`bibliographyBoxEm`, typ-serializer.ts): the title's slack above its
+   frame as the padding, the page's whole-point rounding given back below
+   the frame, and a paragraph's inset and margin after it. Each edge is
+   rounded from the box's top, in layout units. The 0.75em padding and the
+   svg's line box under it put the list 2.3 px higher than its print at
+   12.5 pt, and the paragraph after it 1.2 to 1.6 px higher (with the
+   page's rounding). */
 .ts-bibliography .bib-ink {
   display: none;
 }
 
-.ts-bibliography.bib-has-ink .bib-ink {
-  /* padding, not margin — a margin collapses through the block edge.
-     (+0.75em: the fragment page-top suppresses the title's block-above.) */
-  padding-top: 0.75em;
+.ts-bibliography.bib-has-ink {
+  margin-bottom: calc(
+    round(var(--bib-top) + var(--bib-frame) + var(--bib-below), 1px / 64) -
+      round(var(--bib-top) + var(--bib-frame), 1px / 64)
+  );
 }
 
 .ts-bibliography.bib-has-ink .bib-ink {
+  /* padding, not margin — a margin collapses through the block edge. */
+  padding-top: round(var(--bib-top), 1px / 64);
+}
+
+.ts-bibliography.bib-has-ink .bib-ink > svg {
   display: block;
+  margin-bottom: calc(round(var(--bib-top) + var(--bib-frame), 1px / 64) - round(var(--bib-top), 1px / 64) - var(--bib-svg-h));
+}
+
+/* Its own formatting context: the svg's margin-bottom stays inside, and
+   the box ends at the frame (the paginator fits it there). */
+.ts-bibliography.bib-has-ink .bib-ink {
+  display: flow-root;
 }
 
 .ts-bibliography.bib-has-ink .bib-dom {

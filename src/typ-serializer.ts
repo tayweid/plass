@@ -232,6 +232,22 @@ export function abstractBoxEm(s: DocSettings): { padTop: number; marginTop: numb
   return { padTop: Math.max(0, taller), marginTop: Math.min(0, taller) };
 }
 
+/**
+ * The editor's bibliography box, body em (style.css `.ts-bibliography`).
+ * Typst prints the title as a level-1 heading, its explicit spacing above
+ * (`headingBlockSpacingEm`) dropped at a page top, and the entries at
+ * paragraph spacing below their last baseline. The page shows the list
+ * compiled on a page of its own, which starts at the title's frame top
+ * (the spacing dropped there too) and whose frame ends at the last entry's
+ * baseline (citations.ts measures it): `padTop` over it, the slack a
+ * level-1 heading's box has above its frame, and `below` after its frame,
+ * a paragraph's inset and margin, so what follows is spaced as after a
+ * paragraph.
+ */
+export function bibliographyBoxEm(s: DocSettings): { padTop: number; below: number } {
+  return { padTop: -pageTopAdjustEm(s, 'h1'), below: pageBottomInsetEm(s, 'paragraph') + parMarginEm(s) };
+}
+
 /** A heading level's text size as a ratio of the body size (levels 4–6
  * print like 3). The port lays headings out at this scale, bold. */
 export function headingScale(level: number): number {

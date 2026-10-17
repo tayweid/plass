@@ -337,3 +337,44 @@ for (const parIndent of [false, true]) {
     }
   });
 }
+
+const BIB = `@article{knuth81,
+  author = {Knuth, Donald E. and Plass, Michael F.},
+  title = {Breaking Paragraphs into Lines},
+  journal = {Software: Practice and Experience},
+  year = {1981},
+}
+
+@book{lamport94, author = {Lamport, Leslie}, title = {{LaTeX}: A Document Preparation System}, year = {1994}}
+`;
+
+for (const parIndent of [false, true]) {
+  test(`${parIndent ? 'classic' : 'spaced'}: the bibliography's compiled list and the paragraph after it land on the print`, async ({ page }) => {
+    test.setTimeout(120_000);
+    const cite = (key: string) => ({ type: 'citation', attrs: { key } });
+    const d = await blocksDrift(
+      page,
+      [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Before the list, citing ' }, cite('knuth81'), { type: 'text', text: ' and ' }, cite('lamport94'), { type: 'text', text: '.' }] },
+        { type: 'bibliography' },
+        p('After the list.'),
+        p('The last paragraph.'),
+      ],
+      parIndent,
+      BIB,
+    );
+    expect(d.filter((row) => row.kind.startsWith('bib')).length).toBeGreaterThan(2);
+    // Typst prints the title as a level-1 heading (its spacing above is the
+    // heading's) and the entries at paragraph spacing below their last
+    // baseline (`bibliographyBoxEm`). The page shows the list compiled on a
+    // page of its own, from the title's frame top to the last baseline; its
+    // edges are rounded from the box's top, so the title's line, each
+    // entry's and the paragraph after the list land within a layout unit of
+    // the print. The 0.75em padding put the list 2.34 px higher than its
+    // print at 12.5 pt and the paragraph after it 1.25 px higher (14.08 px
+    // lower with indented paragraphs).
+    for (let i = 1; i < d.length; i++) {
+      expect(Math.abs(d[i].drift - d[i - 1].drift), `${d[i].kind}: ${JSON.stringify(d)}`).toBeLessThan(1 / 128 + 0.002);
+    }
+  });
+}

@@ -46,6 +46,7 @@ import { caretBox } from './caret-box';
 import { getSettings, layoutPx, PAGE_GAP, pageSize, parMarginPx, parseMathMacros, type DocSettings } from './settings';
 import {
   abstractBoxEm,
+  bibliographyBoxEm,
   displayMathPadEm,
   escapeTyp,
   expandMacrosWith,
@@ -2017,6 +2018,9 @@ class TypesetView {
     // whose frame is the bold capitals' (`abstractBoxEm`): its padding is
     // inside the frame, a margin below zero moves the box up with it.
     if (node.type.name === 'abstract') return (pageTopAdjustEm(s, 'paragraph') + abstractBoxEm(s).marginTop) * F;
+    // Typst drops the bibliography title's spacing at a page top: the
+    // title's frame at the margin, above it the box's padding.
+    if (node.type.name === 'bibliography') return -bibliographyBoxEm(s).padTop * F;
     const dropEm =
       node.type.name === 'blockquote' ? (node.attrs.kind === 'solution' ? 0 : quoteBoxEm(s).padTop) : containerPageTopDropEm(node.type.name);
     let first: PMNode | null = node;
@@ -2154,6 +2158,11 @@ class TypesetView {
     const abstract = abstractBoxEm(s);
     root.setProperty('--abstract-pad', `${layoutPx(abstract.padTop * exactPx)}px`);
     root.setProperty('--abstract-mt', `${layoutPx(abstract.marginTop * exactPx)}px`);
+    // The bibliography (style.css): the compiled list's spacing above and
+    // below its frame, exact, for its edges to be rounded from its top.
+    const bibliography = bibliographyBoxEm(s);
+    root.setProperty('--bib-top', `${(bibliography.padTop * exactPx).toFixed(6)}px`);
+    root.setProperty('--bib-below', `${(bibliography.below * exactPx).toFixed(6)}px`);
     // A paragraph box's edge-to-frame slack, the padding of an equation
     // that opens (top) or closes (bottom) a quote.
     root.setProperty('--par-cap-slack', `${(-pageTopAdjustEm(s, 'paragraph') * F).toFixed(4)}px`);
