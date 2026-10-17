@@ -1,5 +1,6 @@
-// The starter document: explains the app, and is built to show it off —
-// justified paragraphs, hyphenation, inline and display math.
+// The starter document: says what the app is, and is built to show it off:
+// justified paragraphs, hyphenation, a footnote, citations, inline and
+// display math, a figure and a table, across a few pages.
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
@@ -72,7 +73,7 @@ function demoTable(): PMNode {
     ]);
   const row = (texts: string[], header = false) =>
     table_row.create(null, texts.map((t, col) => cell(t, col, header)));
-  return table.create({ style: 'booktabs' }, [
+  return table.create({ style: 'booktabs', caption: 'Revenue at three prices.', label: 'tbl:revenue' }, [
     row(['Quantity', 'Price', 'Revenue'], true),
     row(['10', '8.00', '80.00']),
     row(['20', '6.50', '130.00']),
@@ -81,46 +82,36 @@ function demoTable(): PMNode {
 }
 
 export function demoDoc(): PMNode {
+  const code = (text: string) => ({ text, marks: ['code'] });
+  const item = (lead: string, rest: string) => schema.nodes.list_item.create(null, p({ text: lead, marks: ['strong'] }, rest));
   return schema.nodes.doc.create({ bib: { name: 'references.bib', content: DEMO_BIB } }, [
     h(1, 'Plass'),
     p(
-      { text: 'What you are reading is being typeset right now, as you edit it. ', marks: [] },
-      'Every line break in this document was chosen by the ',
-      { text: 'Knuth–Plass algorithm', marks: ['strong'] },
-      ' — the same optimizing paragraph breaker used by TeX and Typst — and imposed on ordinary, fully editable browser text. Click anywhere and start typing: the paragraph re-typesets around your cursor in about a millisecond, and every line lands exactly where the PDF will put it.',
-      { note: ['Footnotes live at the bottom of the page their marker lands on — this text is editable right here, and the paginator reserves space for it when breaking pages. Type ', { text: '^[', marks: ['code'] }, ' anywhere to open one (', { text: ']', marks: ['code'] }, ' or Enter hops back out), or use ', { text: '⌘⌥F', marks: ['code'] }, '.'] },
+      'This page is laid out the way it will print. Every line break, hyphen and page break you see is the one the PDF will have. Click anywhere and start typing: the paragraph sets itself again around your words, and the pages follow.',
+      { note: ['This is a footnote. Type ', code('^['), ' to start one, or press ', code('⌘⌥F'), '; type ', code(']'), ' or press Enter to leave it. It sits at the foot of the page its number is on.'] },
     ),
     h(2, 'Why this exists'),
     p(
-      'Markup-and-compile tools like LaTeX produce beautiful pages but make you write in a two-pane workflow, forever glancing between source and preview. WYSIWYG editors are pleasant to write in, but their typography tops out at what CSS does by default: first-fit line breaking, no global optimization, no hyphenation worth the name. The gap between them has persisted for decades, with characteristically institutional explanations — backward compatibility, standardization inertia, disciplinary boundaries between the people who care about editing and the people who care about typography.',
+      'There have long been two kinds of writing tools. LaTeX and Typst make beautiful pages, but you write code and check a preview beside it. Word and Google Docs let you write on the page, but they break lines one at a time, hyphenate poorly, and print something a little different from what the screen showed.',
     ),
     p(
-      'The line-breaking problem was formalized by Knuth and Plass ',
+      'Plass is both at once. It runs a copy of Typst’s line and page breaking inside the app, so the screen and the PDF agree, and Typst itself prints the PDF. The way of breaking lines goes back to Knuth and Plass ',
       { cite: 'knuthplass81' },
-      ' and realized in TeX ',
+      ', who built it for TeX ',
       { cite: 'knuth86' },
       '; Typst ',
       { cite: 'madje22' },
-      ' modernized the whole stack. Citations here are live: type ',
-      { text: '@', marks: ['code'] },
-      ' and pick an entry — works are numbered by first use and collected in the references list at the end, exactly as the PDF will render them.',
-    ),
-    p(
-      'The insight this editor is built on: ',
-      { text: 'every layout decision a TeX-class engine makes can be expressed in CSS', marks: ['em'] },
-      '. Line breaks, per-line word spacing, hyphenation points — all of it. So the document stays in the DOM, where selection, cursor movement, IME, spell-check, and screen readers all work natively, and a layout oracle demotes the browser from layout engine to rasterizer, imposing optimal breaks through generated styling. The editing surface ',
-      { text: 'is', marks: ['em'] },
-      ' the output surface.',
+      ' carries it on. Citations like these are live: type ',
+      code('@'),
+      ' and pick a source, and the references at the end keep up.',
     ),
     h(2, 'Mathematics'),
     p(
-      'Inline math renders in place: ',
+      'Math is written in LaTeX and drawn by Typst. A formula such as ',
       { math: 'e^{i\\pi} + 1 = 0' },
-      ' sits in the text flow and the oracle treats it as an unbreakable box, justifying around it like any other word. Click a formula to edit its source; type ',
-      { text: '$\\alpha^2$', marks: ['code'] },
-      ' anywhere to create one. Type ',
-      { text: '@', marks: ['code'] },
-      ' to reference any labeled equation or figure — a picker lists them with their current numbers. Display equations get their own block:',
+      ' sits in the line like a word. Type ',
+      code('$x^2$'),
+      ' to make one, and click one to change it. A display equation gets its own line and a number:',
     ),
     schema.nodes.math_display.create({
       src: '\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}',
@@ -128,71 +119,71 @@ export function demoDoc(): PMNode {
     }),
     p(
       'Type ',
-      { text: '$$', marks: ['code'] },
-      ' on an empty line for a new equation. Equations are numbered automatically and renumber live as you add or reorder them; give one a label in its editor and reference it in text by typing ',
-      { text: '@eq:gauss', marks: ['code'] },
-      ' — like this: equation ',
+      code('$$'),
+      ' on an empty line for a new one. To refer to an equation, type ',
+      code('@'),
+      ' and pick it from the list. Equation ',
       { ref: 'eq:gauss' },
-      ' stays correct no matter where it moves, and clicking the reference jumps to it. Math is entered as LaTeX and rendered by KaTeX; the file keeps it as LaTeX between dollar signs, as pandoc reads it.',
+      ' renumbers itself whenever you add or move equations. In the file, a formula stays LaTeX between dollar signs, the way pandoc reads it; for the page and the PDF, Plass turns it into Typst math, so the two always show the same thing.',
     ),
     h(2, 'Figures'),
     schema.nodes.figure.create({ src: DEMO_CHART, label: 'fig:sd' }, inline([
-      'Supply and demand. The caption is ordinary editable text; the ',
-      { text: 'Figure 1', marks: ['em'] },
-      ' prefix is painted by the numbering plugin.',
+      'Supply and demand. You edit the caption; the number is added for you.',
     ])),
     p(
-      'Insert figures with ⌘⌥I (or the Figure button), or just paste or drop an image. Click a figure to select it, click the label chip to name it, and reference it in text the same way as equations: ',
+      'Paste or drop an image to add a figure, or press ',
+      code('⌘⌥I'),
+      '. Figures number themselves too, and ',
+      code('@'),
+      ' refers to them the same way: ',
       { ref: 'fig:sd' },
-      ' renumbers live, exactly like equation ',
-      { ref: 'eq:gauss' },
-      '.',
+      ' is the chart above.',
     ),
     h(2, 'Tables'),
     p(
-      'Insert a table with ',
-      { text: '⌘⌥T', marks: ['code'] },
-      '. What you see is the compiled table — click it to edit in a focused card (cells, rows, columns, alignment, style) with a live result. Tables export as native Typst ',
-      { text: '#table', marks: ['code'] },
-      ':',
+      'Press ',
+      code('⌘⌥T'),
+      ' for a table, then click a cell and type. The controls that appear to its left add rows and columns, align cells and change the style.',
     ),
     demoTable(),
+    p(
+      'A table with a caption numbers itself like a figure, and ',
+      code('@'),
+      ' refers to it the same way: ',
+      { ref: 'tbl:revenue' },
+      ' shows revenue rising as the price falls. A long table breaks across pages and repeats its header row.',
+    ),
     h(2, 'How it works'),
     schema.nodes.bullet_list.create(null, [
-      schema.nodes.list_item.create(null, p(
-        { text: 'Measure.', marks: ['strong'] },
-        ' Every word is measured with the browser’s own font metrics, so the oracle’s arithmetic and the renderer’s pixels agree by construction.',
-      )),
-      schema.nodes.list_item.create(null, p(
-        { text: 'Optimize.', marks: ['strong'] },
-        ' Knuth–Plass considers every feasible set of break points for the whole paragraph — including hyphenation points from Liang’s patterns, TeX’s own hyphenation algorithm — and minimizes total demerits.',
-      )),
-      schema.nodes.list_item.create(null, p(
-        { text: 'Impose.', marks: ['strong'] },
-        ' The chosen breaks and per-line spacing are applied as editor decorations: presentation only, invisible to the document model, the clipboard, and assistive technology.',
-      )),
+      item('Measure.', ' Words are shaped by the same code Typst uses, built into the app, so each word is exactly as wide as it will be in the PDF.'),
+      item('Break.', ' Each paragraph is broken into lines the way Typst breaks it: the whole paragraph is weighed at once, hyphens included, and the best set of breaks wins.'),
+      item('Fill the pages.', ' Lines go onto pages as Typst puts them, with room kept for footnotes, no line left alone at the top or bottom of a page, and each heading kept with the text after it.'),
+      item('Print.', ' Export runs Typst inside the app to make the PDF. There is nothing to install, and nothing leaves your computer.'),
     ]),
     schema.nodes.blockquote.create(null, [
-      p(
-        'The first true WYSIWYG typesetting editor is not a research project; it is a translation layer between two mature systems, plus product polish.',
-      ),
+      p('A block quote. Type ', code('>'), ' at the start of a line to make one.'),
     ]),
     p(
-      'Typing is Markdown: ',
-      { text: '#', marks: ['code'] },
-      ' for headings, ',
-      { text: '**bold**', marks: ['code'] },
+      'Typing Markdown works: ',
+      code('#'),
+      ' for a heading, ',
+      code('**bold**'),
       ', ',
-      { text: '*italic*', marks: ['code'] },
+      code('*italic*'),
       ', ',
-      { text: '>', marks: ['code'] },
-      ' for quotes, ',
-      { text: '-', marks: ['code'] },
-      ' for lists — and so is the file: a document saves as plain Markdown (',
-      { text: '.md', marks: ['code'] },
-      '), human-readable, diffable, and open in any editor or in pandoc. Export writes a PDF, a ',
-      { text: '.typ', marks: ['code'] },
-      ' for the Typst command line, or LaTeX for a journal.',
+      code('-'),
+      ' for a list. The file is Markdown too, a plain ',
+      code('.md'),
+      ' you can open in any text editor, keep in git or run through pandoc. Press ',
+      code('⌘/'),
+      ' to see this page as that text. Export (',
+      code('⌘E'),
+      ') makes a PDF, or a Markdown, Typst or LaTeX file.',
+    ),
+    p(
+      'In the Mac app, Plass also keeps a history of your folder in git as you write. History (',
+      code('⇧⌘H'),
+      ') shows every point in that record and can take the folder back to any of them. The record stays on your Mac.',
     ),
     schema.nodes.bibliography.create(),
   ]);
