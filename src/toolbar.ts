@@ -9,9 +9,10 @@ import { TextSelection } from 'prosemirror-state';
 import { lift, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import type { Command, EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
-import type { MarkType, Node as PMNode } from 'prosemirror-model';
+import type { Node as PMNode } from 'prosemirror-model';
+import { wrapInList } from 'prosemirror-schema-list';
 import { schema } from './schema';
-import { cycleHeading, headingLevelAt, nextHeadingLevel, toggleList, toggleListSpacing } from './editing';
+import { toggleListSpacing } from './editing';
 import { insertMath } from './math';
 import { insertFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
@@ -72,11 +73,7 @@ const ICONS: Record<string, string> = {
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   list: '<circle cx="4" cy="6" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="4" cy="18" r="1.2" fill="currentColor"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>',
-  numlist: '<path d="M3 4.5 4.5 3.8V9"/><path d="M3.2 14.6c.3-.8 2.6-1 2.6.4 0 1-2.6 2-2.6 3.5h2.8"/><line x1="9" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="9" y1="18" x2="21" y2="18"/>',
-  looselist: '<circle cx="4" cy="5" r="1.2" fill="currentColor"/><circle cx="4" cy="19" r="1.2" fill="currentColor"/><line x1="8" y1="5" x2="21" y2="5"/><line x1="8" y1="19" x2="21" y2="19"/><polyline points="12.5 9.5 14.5 7.8 16.5 9.5"/><polyline points="12.5 14.5 14.5 16.2 16.5 14.5"/>',
   chevron: '<polyline points="7 10 12 15 17 10"/>',
-  rowsmenu: '<rect x="3" y="3.5" width="18" height="17" rx="2"/><rect x="3" y="9.2" width="18" height="5.6" fill="currentColor" fill-opacity=".45" stroke="none"/><line x1="3" y1="9.2" x2="21" y2="9.2"/><line x1="3" y1="14.8" x2="21" y2="14.8"/>',
-  colsmenu: '<rect x="3.5" y="3" width="17" height="18" rx="2"/><rect x="9.2" y="3" width="5.6" height="18" fill="currentColor" fill-opacity=".45" stroke="none"/><line x1="9.2" y1="3" x2="9.2" y2="21"/><line x1="14.8" y1="3" x2="14.8" y2="21"/>',
   sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
   code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
   comment: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/>',
@@ -353,10 +350,9 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   exportBtn.title = 'Export as .md, .typ or .tex';
   // The rail, top to bottom, in the bar's old groups; the Blocks, once a
   // row inside Extras, are tiles of their own.
-  // Headings is one tile showing the caret's level; each press steps it
-  // a size up and H1 back to body text (cycleHeading). Bold, Italic and
-  // the two lists are tiles of their own, below.
-  const formatBtn = glyphButton(textGroup, 'Heading level', '<span class="ico tico">¶</span>');
+  const formatBtn = trigger(textGroup, 'Headings', '<span class="ico tico">H1</span>');
+  const styleBtn = trigger(textGroup, 'Text style', '<span class="ico tico"><b>B</b></span>');
+  const listBtn = trigger(textGroup, 'Lists', icon('list'));
   const figureBtn = glyphButton(insertGroup, 'Insert figure', icon('image'));
   const mathBtn = glyphButton(insertGroup, 'Inline math', '<span class="ico tico">Σ</span>');
   const noteBtn = glyphButton(insertGroup, 'Footnote', '<span class="ico tico">†</span>');
@@ -366,7 +362,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   const settingsBtn = glyphButton(railFoot, 'Document settings', icon('sliders'));
   // The formatting tools rest while the text is the truth (the Blocks
   // tiles rest through their own refresh, below).
-  for (const button of [formatBtn, figureBtn, mathBtn, noteBtn]) button.classList.add('tb-rests');
+  for (const button of [formatBtn, styleBtn, listBtn, figureBtn, mathBtn, noteBtn]) button.classList.add('tb-rests');
   const sourceBtn = document.createElement('button');
   sourceBtn.type = 'button';
   sourceBtn.className = 'tb-btn tb-source view-switch';
@@ -459,6 +455,9 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     }
     return menu;
   };
+  const format = createMenu('Headings', formatBtn);
+  const textStyle = createMenu('Text style', styleBtn);
+  const lists = createMenu('Lists', listBtn);
   const insert = createMenu('Insert', insertBtn);
   insert.element.classList.add('tb-menu-extras');
   const extras = createMenu('Extras', extrasBtn);
@@ -603,6 +602,9 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   };
   const refresh = () => refreshItems.forEach((update) => update());
   const refreshRail = () => refreshTiles.forEach((update) => update());
+  format.refresh = refresh;
+  textStyle.refresh = refresh;
+  lists.refresh = refresh;
   insert.refresh = refresh;
   extras.refresh = refresh;
   const runCmd = (command: Command) => () => {
@@ -633,53 +635,38 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     return row;
   };
   const insertRow = extraGroup(insert, 'Insert');
-  const textRow = extraGroup(extras, 'Text');
   const alignmentRow = extraGroup(extras, 'Alignment');
   const codeRow = extraGroup(extras, 'Code');
   const documentRow = extraGroup(extras, 'Document');
-  // The Headings tile: its glyph is the caret's level (¶ for body text),
-  // its caption the level a press steps to.
-  const headingGlyph = formatBtn.querySelector<HTMLElement>('.tico')!;
-  const headingCaption = formatBtn.querySelector<HTMLElement>('.lbl')!;
-  const levelName = (level: number | null) => (level === null ? 'Body text' : `Heading ${level}`);
-  formatBtn.addEventListener('click', () => { closeMenu(); runCmd(cycleHeading)(); });
-  refreshTiles.push(() => {
-    const level = headingLevelAt(view.state) ?? null;
-    const glyph = level === null ? '¶' : `H${level}`;
-    if (headingGlyph.textContent !== glyph) headingGlyph.textContent = glyph;
-    const caption = `${levelName(level)} · click for ${levelName(nextHeadingLevel(level))}`;
-    if (headingCaption.textContent !== caption) headingCaption.textContent = caption;
-    setAttr(formatBtn, 'title', `${caption} (⌘⌥0–3)`);
-    const disabled = sourceActive || !cycleHeading(view.state);
-    if (formatBtn.disabled !== disabled) formatBtn.disabled = disabled;
-  });
-  const markActive = (mark: MarkType) => () => {
-    const { selection, storedMarks, doc } = view.state;
-    return selection.empty ? !!mark.isInSet(storedMarks ?? selection.$from.marks()) : doc.rangeHasMark(selection.from, selection.to, mark);
-  };
-  for (const [name, label, title, glyph] of [
-    ['strong', 'Bold', 'Bold (⌘B) — or type **text**', '<span class="ico tico"><b>B</b></span>'],
-    ['em', 'Italic', 'Italic (⌘I) — or type *text*', '<span class="ico tico tico-italic">I</span>'],
+  const textColumn = format.element;
+  for (const level of [null, 1, 2, 3]) {
+    const command = level ? setBlockType(schema.nodes.heading, { level }) : setBlockType(schema.nodes.paragraph);
+    const current = () => {
+      const node = view.state.selection.$from.parent;
+      return level ? node.type === schema.nodes.heading && node.attrs.level === level : node.type === schema.nodes.paragraph;
+    };
+    commandItem(textColumn, level ? `Heading ${level}` : 'Body text', command, {
+      title: level ? `Heading ${level} (⌘⌥${level})` : 'Body text (⌘⌥0)',
+      shortcut: `⌘⌥${level ?? 0}`,
+      checked: current,
+      // The already-selected style remains available and visibly checked.
+      enabled: () => command(view.state) || current(),
+    });
+  }
+  for (const [name, label, shortcut, title] of [
+    ['strong', 'Bold', '⌘B', 'Bold (⌘B) — or type **text**'],
+    ['em', 'Italic', '⌘I', 'Italic (⌘I) — or type *text*'],
+    ['strike', 'Strikethrough', '⌘⇧X', 'Strikethrough (⌘⇧X) — or type ~~text~~'],
   ]) {
     const mark = schema.marks[name];
-    commandItem(textGroup, label, toggleMark(mark), { title, glyph, tile: true, checked: markActive(mark) }).classList.add('tb-rests');
+    commandItem(textStyle.element, label, toggleMark(mark), {
+      title, shortcut,
+      checked: () => {
+        const { selection, storedMarks, doc } = view.state;
+        return selection.empty ? !!mark.isInSet(storedMarks ?? selection.$from.marks()) : doc.rangeHasMark(selection.from, selection.to, mark);
+      },
+    });
   }
-  commandItem(textGroup, 'Bulleted list', toggleList(schema.nodes.bullet_list), {
-    title: 'Bulleted list (⌘⇧8) — or type - at a line start', glyph: icon('list'), tile: true,
-    checked: () => ancestor('bullet_list', 'ordered_list')?.type === schema.nodes.bullet_list,
-  }).classList.add('tb-rests');
-  commandItem(textGroup, 'Numbered list', toggleList(schema.nodes.ordered_list), {
-    title: 'Numbered list (⌘⇧9) — or type 1. at a line start', glyph: icon('numlist'), tile: true,
-    checked: () => ancestor('bullet_list', 'ordered_list')?.type === schema.nodes.ordered_list,
-  }).classList.add('tb-rests');
-  commandItem(textRow, 'Strikethrough', toggleMark(schema.marks.strike), {
-    title: 'Strikethrough (⌘⇧X) — or type ~~text~~', glyph: '<span class="ico tico"><s>S</s></span>',
-    checked: markActive(schema.marks.strike),
-  });
-  commandItem(textRow, 'Loose list spacing', toggleListSpacing, {
-    title: 'Loose list spacing (⌘⇧7) — paragraph spacing between items, or tight', glyph: icon('looselist'),
-    checked: () => ancestor('bullet_list', 'ordered_list')?.attrs.tight === false,
-  });
 
   const selectedParagraphs = () => {
     const { state } = view;
@@ -714,6 +701,16 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
       checked: () => alignmentEnabled() && selectedParagraphs().every(({ node }) => (node.attrs.align ?? null) === align),
     });
   }
+  commandItem(lists.element, 'Bulleted list', wrapInList(schema.nodes.bullet_list), {
+    title: 'Bulleted list (⌘⇧8) — or type - at a line start', shortcut: '⌘⇧8',
+  });
+  commandItem(lists.element, 'Numbered list', wrapInList(schema.nodes.ordered_list), {
+    title: 'Numbered list (⌘⇧9) — or type 1. at a line start', shortcut: '⌘⇧9',
+  });
+  commandItem(lists.element, 'Loose list spacing', toggleListSpacing, {
+    title: 'Item spacing (⌘⇧7) — tight, or loose with paragraph spacing between items', shortcut: '⌘⇧7',
+    checked: () => ancestor('bullet_list', 'ordered_list')?.attrs.tight === false,
+  });
   const setBlockKind = (kind: 'solution' | null) => {
     const { state } = view;
     const { $from, $to } = state.selection;

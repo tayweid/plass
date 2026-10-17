@@ -440,27 +440,14 @@ class BlockChrome {
   // -- the tiles -------------------------------------------------------------
 
   private tileSpecs(layout: Layout): Array<TileSpec | '|'> {
-    const rows: TileSpec = { id: 'rows', glyph: icon('rowsmenu'), caption: 'Rows', flyout: 'rows', popup: 'menu' };
-    const cols: TileSpec = { id: 'cols', glyph: icon('colsmenu'), caption: 'Columns', flyout: 'cols', popup: 'menu' };
-    // The two commonest edits, one click each: a row under the caret's,
-    // a column right of it. The menus keep the rest.
-    const grid = this.ctx?.kind === 'grid';
-    const addRow: TileSpec = {
-      id: 'addrow', glyph: icon('rows'), caption: 'Add row below', kbd: '⌘⏎',
-      action: () => this.add(grid ? () => this.atCell(() => insertGridRowAt(this.view, 'below')) : () => this.run(insertTableRow('below'))),
-    };
-    const addCol: TileSpec = {
-      id: 'addcol', glyph: icon('cols'), caption: 'Add column right',
-      action: () => this.add(grid ? () => this.atCell(() => insertGridColumnAt(this.view, 'right')) : () => this.run(insertTableColumn('right'))),
-    };
+    const rows: TileSpec = { id: 'rows', glyph: icon('rows'), caption: 'Rows', flyout: 'rows', popup: 'menu' };
+    const cols: TileSpec = { id: 'cols', glyph: icon('cols'), caption: 'Columns', flyout: 'cols', popup: 'menu' };
     if (layout === 'collapsed') {
       const kind = this.ctx?.kind === 'grid' ? 'Grid' : 'Table';
       return [{ id: 'more', glyph: '<span class="ico tico">⋯</span>', caption: `${kind} controls`, flyout: 'more', popup: 'menu' }];
     }
     if (layout === 'grid') {
       return [
-        addRow,
-        addCol,
         { ...rows, flyout: 'gridrows' },
         { ...cols, flyout: 'gridcols' },
         { id: 'align', glyph: icon('alignleft'), caption: 'Align · Left', flyout: 'align', popup: 'dialog' },
@@ -470,8 +457,6 @@ class BlockChrome {
       ];
     }
     const table: Array<TileSpec | '|'> = [
-      addRow,
-      addCol,
       rows,
       cols,
       { id: 'align', glyph: icon('alignleft'), caption: 'Align · Left', flyout: 'align', popup: 'dialog' },
@@ -565,12 +550,10 @@ class BlockChrome {
       setAttr(align, 'aria-label', `Align · ${name}`);
       setText(align.querySelector('.lbl')!, `Align · ${name}`);
     }
-    for (const id of ['addrow', 'addcol', 'rows', 'cols', 'align', 'cell']) {
+    for (const id of ['rows', 'cols', 'align', 'cell']) {
       const tile = this.tiles.get(id);
       if (!tile) continue;
-      // A grid holds twelve columns at most (the Columns menu's limit).
-      const full = id === 'addcol' && ctx.kind === 'grid' && (place?.columns ?? 0) >= 12;
-      const disabled = (ctx.kind === 'table' ? !inTable : !place) || full;
+      const disabled = ctx.kind === 'table' ? !inTable : !place;
       if (tile.disabled !== disabled) tile.disabled = disabled;
     }
     const image = this.tiles.get('image');
@@ -979,11 +962,6 @@ class BlockChrome {
     const out = cell ? state.apply(state.tr.setSelection(cell)) : state;
     this.cellCache = { from: state, state: out };
     return out;
-  }
-
-  private add(action: () => unknown): void {
-    this.closeFlyout();
-    action();
   }
 
   private insertImage(): void {
@@ -2018,10 +1996,6 @@ class BlockChrome {
   private moreMenu(builder: Builder): Builder {
     const ctx = this.ctx!;
     if (ctx.kind === 'grid') {
-      const place = () => gridCaretPlace(this.cellState());
-      this.item(builder, 'Add row below', () => this.atCell(() => insertGridRowAt(this.view, 'below')), { enabled: () => !!place(), kbd: '⌘⏎' });
-      this.item(builder, 'Add column right', () => this.atCell(() => insertGridColumnAt(this.view, 'right')), { enabled: () => (place()?.columns ?? 12) < 12 });
-      this.divider(builder);
       this.item(builder, 'Rows', () => this.reopen('gridrows', 'more'), { submenu: true });
       this.item(builder, 'Columns', () => this.reopen('gridcols', 'more'), { submenu: true });
       this.item(builder, 'Align…', () => this.reopen('align', 'more'), { dialog: true });
@@ -2030,10 +2004,6 @@ class BlockChrome {
       this.item(builder, 'Grid layout…', () => this.reopen('gridlayout', 'more'), { dialog: true });
       return builder;
     }
-    const state = () => this.cellState();
-    this.item(builder, 'Add row below', () => this.run(insertTableRow('below')), { enabled: () => insertTableRow('below')(state()), kbd: '⌘⏎' });
-    this.item(builder, 'Add column right', () => this.run(insertTableColumn('right')), { enabled: () => insertTableColumn('right')(state()) });
-    this.divider(builder);
     this.item(builder, 'Rows', () => this.reopen('rows', 'more'), { submenu: true });
     this.item(builder, 'Columns', () => this.reopen('cols', 'more'), { submenu: true });
     this.item(builder, 'Align…', () => this.reopen('align', 'more'), { dialog: true });
