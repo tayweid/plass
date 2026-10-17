@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from '../schema';
 import {
   planSuffixPagination,
@@ -34,17 +35,21 @@ function input(
   };
 }
 
+// Page two opens with its own paragraph; the edits below it are to the
+// paragraph after the opener, so page two's start is above the dirty block.
 const basis = doc(
   paragraph('first page words'),
+  paragraph('second page opening words'),
   paragraph('second page original words'),
   paragraph('third paragraph words'),
 );
 const current = doc(
   paragraph('first page words'),
+  paragraph('second page opening words'),
   paragraph('second page revised words'),
   paragraph('third paragraph words'),
 );
-const [, page2Pos] = positions(current);
+const [, page2Pos, editedPos, fourthPos] = positions(current);
 const page2Marker: SuffixPageMarker = { pos: page2Pos, line: 0, unit: 'paragraph', page: 1 };
 const page2Gap: SuffixPageSpacer = { pos: page2Pos, height: 412.25, kind: 'block' };
 
@@ -54,8 +59,8 @@ if (page2.kind !== 'seed') throw new Error('expected page-two seed');
 assert.deepEqual(page2.seed, {
   startPos: page2Pos,
   startIndex: 1,
-  dirtyPos: page2Pos + 1 + 'second page '.length,
-  dirtyIndex: 1,
+  dirtyPos: editedPos + 1 + 'second page '.length,
+  dirtyIndex: 2,
   page: 1,
   shift: 412.25,
   prefixSpacers: [page2Gap],
@@ -68,6 +73,65 @@ assert(Object.isFrozen(page2.seed.prefixSpacers));
 assert(Object.isFrozen(page2.seed.prefixMarkers));
 assert(Object.isFrozen(page2.seed.prefixMarkers[0]));
 console.log('  ok  page-two restart preserves one copied prefix gap and its exact shift');
+
+// A page start AT the dirty block is never the anchor: the page before it
+// ended by reading that block (do its first lines fit at the foot, the
+// orphan rule over them), so an edit there can move that page's end — an
+// Enter at the start of a page's opening paragraph makes an empty line that
+// fits at the previous page's foot (found 2026-10-16 at 1 in margins). The
+// seed backs off to the page start before, or rejects when there is none.
+assert.deepEqual(
+  planSuffixPagination(
+    input(
+      basis,
+      doc(
+        paragraph('first page words'),
+        paragraph('second page reworded opening'),
+        paragraph('second page original words'),
+        paragraph('third paragraph words'),
+      ),
+      [page2Marker],
+      [page2Gap],
+    ),
+  ),
+  { kind: 'reject', reason: 'no-boundary-anchor' },
+);
+const page3Marker: SuffixPageMarker = { pos: fourthPos, line: 0, unit: 'paragraph', page: 2 };
+const page3Gap: SuffixPageSpacer = { pos: fourthPos, height: 180.5, kind: 'block' };
+const openerEdits = [
+  // The opener's text changed.
+  doc(
+    paragraph('first page words'),
+    paragraph('second page opening words'),
+    paragraph('second page original words'),
+    paragraph('third paragraph revised words'),
+  ),
+  // Enter at the opener's start: an empty paragraph above it.
+  doc(
+    paragraph('first page words'),
+    paragraph('second page opening words'),
+    paragraph('second page original words'),
+    paragraph(''),
+    paragraph('third paragraph words'),
+  ),
+  // Backspace at the opener's start: joined into the block above it.
+  doc(
+    paragraph('first page words'),
+    paragraph('second page opening words'),
+    paragraph('second page original wordsthird paragraph words'),
+  ),
+];
+for (const edited of openerEdits) {
+  const backedOff = planSuffixPagination(input(basis, edited, [page2Marker, page3Marker], [page2Gap, page3Gap]));
+  assert.equal(backedOff.kind, 'seed');
+  if (backedOff.kind !== 'seed') throw new Error('expected a seed on the page before');
+  assert.equal(backedOff.seed.startPos, page2Pos);
+  assert.equal(backedOff.seed.page, 1);
+  assert.equal(backedOff.seed.shift, 412.25);
+  assert.deepEqual(backedOff.seed.prefixMarkers, [page2Marker]);
+  assert.deepEqual(backedOff.seed.prefixSpacers, [page2Gap]);
+}
+console.log('  ok  an edit to the block that opens a page anchors on the page before it');
 
 const midLine = planSuffixPagination(
   input(
@@ -123,6 +187,7 @@ console.log('  ok  the anchor skips back over a mid-line start to the latest blo
 
 const thirdDirty = doc(
   paragraph('first page words'),
+  paragraph('second page opening words'),
   paragraph('second page original words'),
   paragraph('third paragraph revised words'),
 );
@@ -153,9 +218,11 @@ assert.deepEqual(
 console.log('  ok  page ordinals must be contiguous and marker positions/lines monotone');
 
 // A top-level split or insertion no longer rejects: the clean prefix before
-// the first differing block still anchors the suffix restart.
+// the first differing block still anchors the suffix restart, at the latest
+// page start strictly above it.
 const insertedParagraph = doc(
   paragraph('first page words'),
+  paragraph('second page opening words'),
   paragraph('new structural paragraph'),
   paragraph('second page original words'),
   paragraph('third paragraph words'),
@@ -164,8 +231,12 @@ const inserted = planSuffixPagination(input(basis, insertedParagraph, [page2Mark
 assert.equal(inserted.kind, 'seed');
 if (inserted.kind !== 'seed') throw new Error('expected structural-insert seed');
 assert.equal(inserted.seed.startPos, page2Pos);
-assert.equal(inserted.seed.dirtyIndex, 1);
-const removedParagraph = doc(paragraph('first page words'), paragraph('second page original words'));
+assert.equal(inserted.seed.dirtyIndex, 2);
+const removedParagraph = doc(
+  paragraph('first page words'),
+  paragraph('second page opening words'),
+  paragraph('third paragraph words'),
+);
 const removed = planSuffixPagination(input(basis, removedParagraph, [page2Marker], [page2Gap]));
 assert.equal(removed.kind, 'seed');
 if (removed.kind !== 'seed') throw new Error('expected structural-remove seed');
@@ -175,13 +246,14 @@ console.log('  ok  block splits and joins keep the clean-prefix anchor');
 // A block attribute change dirties that block; the prefix anchor still holds.
 const changedAttrs = doc(
   paragraph('first page words'),
-  paragraph('second page revised words', { keep: true }),
+  paragraph('second page opening words'),
+  paragraph('second page original words', { keep: true }),
   paragraph('third paragraph words'),
 );
 const attrsDirty = planSuffixPagination(input(basis, changedAttrs, [page2Marker], [page2Gap]));
 assert.equal(attrsDirty.kind, 'seed');
 if (attrsDirty.kind !== 'seed') throw new Error('expected attribute-change seed');
-assert.equal(attrsDirty.seed.dirtyIndex, 1);
+assert.equal(attrsDirty.seed.dirtyIndex, 2);
 console.log('  ok  a paragraph attribute change is a dirty block, not a rejection');
 
 // Inline atoms — math, citations, footnote markers, hard breaks — are
@@ -190,11 +262,13 @@ console.log('  ok  a paragraph attribute change is a dirty block, not a rejectio
 const citation = schema.nodes.citation.create({ key: 'special' });
 const specialCurrent = doc(
   paragraph('first page words'),
+  paragraph('second page opening words'),
   schema.nodes.paragraph.create(null, [schema.text('second page '), citation, schema.text(' words')]),
   paragraph('third paragraph words'),
 );
 const specialBasis = doc(
   paragraph('first page words'),
+  paragraph('second page opening words'),
   schema.nodes.paragraph.create(null, [schema.text('second base '), citation, schema.text(' words')]),
   paragraph('third paragraph words'),
 );
@@ -205,10 +279,12 @@ const mathInline = schema.nodes.math_inline.create({ src: 'x^2' });
 const hardBreak = schema.nodes.hard_break.create();
 const atomBasis = doc(
   paragraph('first page words'),
+  paragraph('second page opening words'),
   schema.nodes.paragraph.create(null, [schema.text('claim'), footnote, hardBreak, mathInline]),
 );
 const atomCurrent = doc(
   paragraph('first page words'),
+  paragraph('second page opening words'),
   schema.nodes.paragraph.create(null, [schema.text('revised claim'), footnote, hardBreak, mathInline]),
 );
 const [, atomPage] = positions(atomCurrent);
@@ -261,6 +337,90 @@ assert.equal(richSeed.seed.startPos, headingPos);
 assert.equal(richSeed.seed.startIndex, 1);
 assert.equal(richSeed.seed.dirtyIndex, 6);
 console.log('  ok  headings, code, quotes, figures, and math blocks seed a heading anchor');
+
+// A heading is sticky (src/layout/flow-rules.ts): a page that ends before
+// the frame anchoring a heading run takes the whole run along, so a page
+// opening with a heading ended its previous page by reading every block of
+// the run and the one that anchors it. When that reaches the dirty block,
+// the page start is not a sound anchor even though it is above the edit:
+// the seed steps back a page. A hard-break-only paragraph may be empty
+// lines alone (no anchor), so the run reads past it too.
+const stickyBlocks = (...middle: PMNode[]) => [
+  paragraph('first page words'),
+  paragraph('second page opening words'),
+  ...middle,
+  paragraph('closing original words'),
+];
+const stickyEdited = (...middle: PMNode[]) => [
+  paragraph('first page words'),
+  paragraph('second page opening words'),
+  ...middle,
+  paragraph('closing revised words'),
+];
+const hardBreakOnly = schema.nodes.paragraph.create(null, [schema.nodes.hard_break.create()]);
+const stickyCases: Array<{ name: string; middle: PMNode[]; anchorPage: 1 | 2 }> = [
+  { name: 'a heading directly above the edit', middle: [heading('Results')], anchorPage: 1 },
+  { name: 'a run of two headings', middle: [heading('Part', 1), heading('Results')], anchorPage: 1 },
+  { name: 'a heading over a hard-break-only paragraph', middle: [heading('Results'), hardBreakOnly], anchorPage: 1 },
+  { name: 'a heading anchored by a clean paragraph', middle: [heading('Results'), paragraph('clean words')], anchorPage: 2 },
+  { name: 'a heading over an empty paragraph', middle: [heading('Results'), paragraph('')], anchorPage: 2 },
+];
+for (const { name, middle, anchorPage } of stickyCases) {
+  const stickyBasis = schema.nodes.doc.create(null, stickyBlocks(...middle));
+  const stickyCurrent = schema.nodes.doc.create(null, stickyEdited(...middle));
+  const [, openerPos, headingPos2] = positions(stickyCurrent);
+  const markers: SuffixPageMarker[] = [
+    { pos: openerPos, line: 0, unit: 'paragraph', page: 1 },
+    { pos: headingPos2, line: 0, unit: 'h2', page: 2 },
+  ];
+  const spacers: SuffixPageSpacer[] = [
+    { pos: openerPos, height: 300, kind: 'block' },
+    { pos: headingPos2, height: 150, kind: 'block' },
+  ];
+  const decision = planSuffixPagination(input(stickyBasis, stickyCurrent, markers, spacers));
+  assert.equal(decision.kind, 'seed', name);
+  if (decision.kind !== 'seed') throw new Error(`expected a seed: ${name}`);
+  assert.equal(decision.seed.page, anchorPage, name);
+  assert.equal(decision.seed.startPos, anchorPage === 1 ? openerPos : headingPos2, name);
+  assert.deepEqual(decision.seed.prefixMarkers, markers.slice(0, anchorPage), name);
+}
+// The run reaching the dirty block from the only page start: no anchor.
+const loneHeadingBasis = schema.nodes.doc.create(null, [
+  paragraph('first page words'),
+  heading('Results'),
+  paragraph('closing original words'),
+]);
+const loneHeadingCurrent = schema.nodes.doc.create(null, [
+  paragraph('first page words'),
+  heading('Results'),
+  paragraph('closing revised words'),
+]);
+const [, loneHeadingPos] = positions(loneHeadingCurrent);
+assert.deepEqual(
+  planSuffixPagination(
+    input(
+      loneHeadingBasis,
+      loneHeadingCurrent,
+      [{ pos: loneHeadingPos, line: 0, unit: 'h2', page: 1 }],
+      [{ pos: loneHeadingPos, height: 150, kind: 'block' }],
+    ),
+  ),
+  { kind: 'reject', reason: 'sticky-look-ahead' },
+);
+// Removing the block after a closing heading changes the run as surely as
+// editing it: the run reads to the document's end, which is dirty.
+assert.deepEqual(
+  planSuffixPagination(
+    input(
+      loneHeadingBasis,
+      schema.nodes.doc.create(null, [paragraph('first page words'), heading('Results')]),
+      [{ pos: loneHeadingPos, line: 0, unit: 'h2', page: 1 }],
+      [{ pos: loneHeadingPos, height: 150, kind: 'block' }],
+    ),
+  ),
+  { kind: 'reject', reason: 'sticky-look-ahead' },
+);
+console.log('  ok  a heading run that reaches the dirty block steps the anchor back a page');
 
 // Lists are eligible; a page start between list children is a valid PREFIX
 // marker (block spacer at the nested child boundary) but never an anchor.
@@ -323,11 +483,13 @@ const tableNode = schema.nodes.table.create(null, [tableRow('row one'), tableRow
 const tableBasis = schema.nodes.doc.create(null, [
   paragraph('first page words'),
   tableNode,
+  paragraph('after table words'),
   paragraph('last original words'),
 ]);
 const tableCurrent = schema.nodes.doc.create(null, [
   paragraph('first page words'),
   tableNode,
+  paragraph('after table words'),
   paragraph('last revised words'),
 ]);
 const [, tablePos, tableAfterPos] = positions(tableCurrent);
@@ -358,7 +520,12 @@ console.log('  ok  a row start validates as a prefix gap of a table document');
 const tableRowAnchor = planSuffixPagination(
   input(
     tableBasis,
-    schema.nodes.doc.create(null, [paragraph('first page words'), tableNode, paragraph('last revised words')]),
+    schema.nodes.doc.create(null, [
+      paragraph('first page words'),
+      tableNode,
+      paragraph('after table revised words'),
+      paragraph('last original words'),
+    ]),
     [
       { pos: tablePos, line: 0, unit: 'table', page: 1 },
       { pos: tablePos, line: 2, unit: 'table', page: 2 },
@@ -437,17 +604,19 @@ console.log('  ok  an unmappable post-anchor marker only ends the prefix scan');
 
 const accumulatedBasis = doc(
   paragraph('page one'),
+  paragraph('page two opening'),
   paragraph('page two original'),
   paragraph('page three'),
-  paragraph('page four original'),
+  paragraph('page three original'),
 );
 const accumulatedCurrent = doc(
   paragraph('page one'),
+  paragraph('page two opening'),
   paragraph('page two first edit'),
   paragraph('page three'),
-  paragraph('page four later edit'),
+  paragraph('page three later edit'),
 );
-const [, accumulatedPage2, accumulatedPage3] = positions(accumulatedCurrent);
+const [, accumulatedPage2, accumulatedEdit, accumulatedPage3] = positions(accumulatedCurrent);
 const accumulated = planSuffixPagination(
   input(
     accumulatedBasis,
@@ -465,8 +634,8 @@ const accumulated = planSuffixPagination(
 assert.equal(accumulated.kind, 'seed');
 if (accumulated.kind !== 'seed') throw new Error('expected accumulated-edit seed');
 assert.equal(accumulated.seed.startPos, accumulatedPage2);
-assert.equal(accumulated.seed.dirtyIndex, 1);
-assert.equal(accumulated.seed.dirtyPos, accumulatedPage2 + 1 + 'page two '.length);
+assert.equal(accumulated.seed.dirtyIndex, 2);
+assert.equal(accumulated.seed.dirtyPos, accumulatedEdit + 1 + 'page two '.length);
 assert.equal(accumulated.seed.prefixSpacers.length, 1);
 console.log('  ok  direct basis-to-current diff retains the earliest of two accumulated edits');
 
@@ -479,10 +648,12 @@ console.log('  ok  undo back to the exact basis requires no pagination work');
 
 const prefixBasis = doc(
   paragraph('a very long first paragraph on two pages'),
+  paragraph('third physical page opening'),
   paragraph('third physical page original'),
 );
 const prefixCurrent = doc(
   paragraph('a very long first paragraph on two pages'),
+  paragraph('third physical page opening'),
   paragraph('third physical page revised'),
 );
 const [, page3Pos] = positions(prefixCurrent);
@@ -538,18 +709,20 @@ console.log('\nall suffix pagination eligibility tests passed');
 const exactBasis = doc(
   paragraph('exactly settled opening words'),
   paragraph('a long middle paragraph that Typst split across pages two and three'),
+  paragraph('a paragraph opening the last page'),
   paragraph('a closing paragraph with the original tail words'),
 );
 const exactCurrent = doc(
   paragraph('exactly settled opening words'),
   paragraph('a long middle paragraph that Typst split across pages two and three'),
+  paragraph('a paragraph opening the last page'),
   paragraph('a closing paragraph with the revised tail words'),
 );
-const [, exactMiddlePos, exactClosingPos] = positions(exactCurrent);
+const [, exactMiddlePos, exactLastPagePos] = positions(exactCurrent);
 const exactPublication = [
   { pos: exactMiddlePos, line: 0, unit: 'paragraph' },
   { pos: exactMiddlePos, line: 5, unit: 'line' },
-  { pos: exactClosingPos, line: 0, unit: 'paragraph' },
+  { pos: exactLastPagePos, line: 0, unit: 'paragraph' },
 ];
 const exactMarkers: SuffixPageMarker[] = exactPublication.map((ps, index) => ({
   pos: ps.pos,
@@ -560,12 +733,12 @@ const exactMarkers: SuffixPageMarker[] = exactPublication.map((ps, index) => ({
 const exactSpacers: SuffixPageSpacer[] = [
   { pos: exactMiddlePos, height: 371.5, kind: 'block' },
   { pos: exactMiddlePos + 24, height: 96.25, kind: 'line' },
-  { pos: exactClosingPos, height: 233.75, kind: 'block' },
+  { pos: exactLastPagePos, height: 233.75, kind: 'block' },
 ];
 const exactSeed = planSuffixPagination(input(exactBasis, exactCurrent, exactMarkers, exactSpacers));
 assert.equal(exactSeed.kind, 'seed');
 if (exactSeed.kind !== 'seed') throw new Error('expected exact-basis seed');
-assert.equal(exactSeed.seed.startPos, exactClosingPos);
+assert.equal(exactSeed.seed.startPos, exactLastPagePos);
 assert.equal(exactSeed.seed.page, 3);
 assert.equal(exactSeed.seed.shift, 371.5 + 96.25 + 233.75);
 assert.deepEqual(exactSeed.seed.prefixMarkers, exactMarkers);
@@ -578,6 +751,7 @@ console.log('  ok  a retained exact publication seeds the suffix with its full s
 const exactEditedAbove = doc(
   paragraph('exactly settled revised opening words'),
   paragraph('a long middle paragraph that Typst split across pages two and three'),
+  paragraph('a paragraph opening the last page'),
   paragraph('a closing paragraph with the original tail words'),
 );
 assert.deepEqual(
@@ -586,11 +760,14 @@ assert.deepEqual(
 );
 console.log('  ok  an edit above the first retained page start rejects instead of seeding');
 
-// A mid-burst edit between two exact page starts: only the starts above the
-// dirty block survive into the seed; the rest are recomputed suffix.
+// A mid-burst edit to the block that opens the last page: only the starts
+// strictly above the dirty block survive into the seed, and of those the
+// split middle paragraph's line start cannot anchor, so the seed is the
+// middle paragraph's own start; the rest are recomputed suffix.
 const exactMidEdit = doc(
   paragraph('exactly settled opening words'),
-  paragraph('a long middle paragraph that someone reworded mid burst'),
+  paragraph('a long middle paragraph that Typst split across pages two and three'),
+  paragraph('a paragraph someone reworded mid burst'),
   paragraph('a closing paragraph with the original tail words'),
 );
 const exactMid = planSuffixPagination(input(exactBasis, exactMidEdit, exactMarkers, exactSpacers));
