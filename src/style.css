@@ -142,8 +142,8 @@ body {
 
 /* One plain bar on the frame, a straight line across the top of the
    window, the rail and the panel below it. The paper's way in and out
-   sits on the left beside the traffic lights — File, the name with its
-   save dot, History (Plass.app), Export — and the tools are on the rail
+   sits on the left beside the traffic lights — Open, New window, the name
+   with its save dot, History (Plass.app), Export — and the tools are on the rail
    (toolbar.css). In Plass.app the bar is the window's title bar (the
    shell hides its own and leaves the traffic lights over the page,
    docs/CLAERBOUT-SHELL.md): its empty part drags the window, which is
@@ -182,7 +182,7 @@ body {
 /* ---------- the name pill ---------- */
 
 /* Knuth's (knuth/src/styles.css): the two apps' bars are one bar. Zen's
-   address pill, a shade up from the frame, after the File tile and before
+   address pill, a shade up from the frame, after the New window tile and before
    the History tile (Plass.app) and Export, holding the document's name
    (click to rename), its save dot and the folder it lives in. It is the
    one thing in the bar that gives way (at most half the window, and it
@@ -3551,9 +3551,9 @@ body {
 
 /* ---------- settings panel ---------- */
 
-/* Every floating panel is the pills' dark glass: the dropdowns (File,
-   Headings, Text style, Lists, Extras and its submenus), Settings, and
-   the block pill beside a table or grid (block-chrome.css). */
+/* Every floating panel is the pills' dark glass: the dropdowns (Recent
+   papers, Export, Headings, Text style, Lists, Extras and its submenus),
+   Settings, and the block pill beside a table or grid (block-chrome.css). */
 .tb-menu,
 .settings-panel,
 .block-pill,

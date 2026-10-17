@@ -3,9 +3,9 @@
 // view"): `save {id}` writes the open document through ⌘S's write and
 // answers `saved`, at once when nothing changed and `ok: false` with why
 // when it cannot; `reload {paths, to, app?}` reads the file again, in
-// place, only when the window's own path is among the paths; and File ›
-// History… and the History tile beside the name ask for the History
-// window, one call, inside Plass.app only.
+// place, only when the window's own path is among the paths; and the
+// History tile beside the name asks for the History page, inside
+// Plass.app only.
 //
 // The shell is a stand-in on `window.claerbout` (as in persistence.spec.ts):
 // every request kept on `__shell`, the page's listeners kept so a test can
@@ -222,26 +222,16 @@ const roomBox = (page: Page) =>
 const historyAsks = (page: Page) => page.evaluate(() => (window as any).__shell.filter((m: { type: string }) => m.type === 'history'));
 const openAsk = async (page: Page) => ({ type: 'history', action: 'open', inline: await roomBox(page) });
 
-test('File › History… asks Plass.app for the History page in the room, and is not in a browser tab', async ({ page, context }) => {
-  // A browser tab: no shell, no item.
-  await page.goto('/?new=1');
-  await page.getByRole('button', { name: 'File', exact: true }).click();
-  await expect(page.getByRole('menuitem', { name: 'Open…' })).toBeVisible();
-  await expect(page.getByRole('menuitem', { name: 'History…' })).toHaveCount(0);
-
-  // Plass.app: the item, with the shell's View-menu keys beside it; it
-  // sends the room's box, as the tile does.
+test('History is the bar\u2019s tile alone: no History… in the menu, and a shell from before the room opens its window from the tile', async ({ context }) => {
+  // The File menu's History… went with the menu (2026-10-17): the recent
+  // papers' menu has none, in Plass.app either.
   const app = await context.newPage();
   await inPlassApp(app);
   await app.goto('/?new=1');
   await app.waitForFunction(() => !!(window as any).__fm);
-  await app.getByRole('button', { name: 'File', exact: true }).click();
-  const item = app.getByRole('menuitem', { name: 'History…' });
-  await expect(item).toBeVisible();
-  await expect(item.locator('kbd')).toHaveText('⇧⌘H');
-  await item.click();
-  await expect.poll(() => historyAsks(app)).toEqual([await openAsk(app)]);
-  await expect(app.locator('#toast')).not.toContainText('history view');
+  await app.getByRole('button', { name: 'Recent papers', exact: true }).click();
+  await expect(app.getByRole('menuitem', { name: 'Open project folder…' })).toBeVisible();
+  await expect(app.getByRole('menuitem', { name: /History/ })).toHaveCount(0);
 
   // A shell from before the room (0.2.1, 0.2.2) answers {opened: true}
   // and opens its History window: nothing said, nothing pressed.
@@ -249,28 +239,14 @@ test('File › History… asks Plass.app for the History page in the room, and i
   await inPlassApp(older, { opened: true });
   await older.goto('/?new=1');
   await older.waitForFunction(() => !!(window as any).__fm);
-  await older.getByRole('button', { name: 'File', exact: true }).click();
-  await older.getByRole('menuitem', { name: 'History…' }).click();
+  await older.getByRole('button', { name: 'History', exact: true }).click();
   await expect.poll(() => historyAsks(older)).toEqual([await openAsk(older)]);
   await older.waitForTimeout(300);
   await expect(older.locator('#toast')).not.toContainText('history view');
   await expect(older.locator('#history-tile')).toHaveAttribute('aria-pressed', 'false');
-
-  // A shell without the history view answers null: said, and the item goes.
-  const old = await context.newPage();
-  await inPlassApp(old, null);
-  await old.goto('/?new=1');
-  await old.getByRole('button', { name: 'File', exact: true }).click();
-  await old.getByRole('menuitem', { name: 'History…' }).click();
-  await expect(old.locator('#toast')).toContainText('This Plass.app has no history view');
-  await old.getByRole('button', { name: 'File', exact: true }).click();
-  await expect(old.getByRole('menuitem', { name: 'Open…' })).toBeVisible();
-  await expect(old.getByRole('menuitem', { name: 'History…' })).toBeHidden();
-  // The tile goes with it: one call behind both.
-  await expect(old.locator('#history-tile')).toBeHidden();
 });
 
-test('the History tile beside the name asks Plass.app for the History page in the room as File › History… does, and is not in a browser tab', async ({ page, context }) => {
+test('the History tile beside the name asks Plass.app for the History page in the room, and is not in a browser tab', async ({ page, context }) => {
   // A browser tab: no shell, no tile.
   await page.goto('/?new=1');
   await page.waitForFunction(() => !!(window as any).__fm);
@@ -278,8 +254,8 @@ test('the History tile beside the name asks Plass.app for the History page in th
   await expect(page.getByRole('button', { name: 'History', exact: true })).toHaveCount(0);
 
   // Plass.app: the tile, its caption on hover, and a click sends the
-  // request the menu item sends, the same one. The stand-in never says
-  // the page came up, so nothing is pressed and the item asks again.
+  // room's box. The stand-in never says the page came up, so nothing is
+  // pressed and a second click asks again.
   const app = await context.newPage();
   await inPlassApp(app);
   await app.goto('/?new=1');
@@ -296,28 +272,24 @@ test('the History tile beside the name asks Plass.app for the History page in th
   const ask = await openAsk(app);
   await expect.poll(() => historyAsks(app)).toEqual([ask]);
   await expect(editor).toBeFocused();
-  await app.getByRole('button', { name: 'File', exact: true }).click();
-  await app.getByRole('menuitem', { name: 'History…' }).click();
+  await tile.click();
   await expect.poll(() => historyAsks(app)).toEqual([ask, ask]);
   await expect(app.locator('#toast')).not.toContainText('history view');
   await expect(tile).toBeVisible();
   await expect(tile).toHaveAttribute('aria-pressed', 'false');
 
   // A shell without the history view answers null: the first click says
-  // so and the tile hides itself, Export closing up to the pill; the
-  // menu item goes too.
+  // so (and where to look for a newer app) and the tile hides itself,
+  // Export closing up to the pill.
   const old = await context.newPage();
   await inPlassApp(old, null);
   await old.goto('/?new=1');
   await old.getByRole('button', { name: 'History', exact: true }).click();
-  await expect(old.locator('#toast')).toContainText('This Plass.app has no history view');
+  await expect(old.locator('#toast')).toContainText('This Plass.app has no history view — Plass → Check for Updates…');
   await expect(old.locator('#history-tile')).toBeHidden();
   const pod = (await old.locator('#doc-pod').boundingBox())!;
   const exportTile = (await old.getByRole('button', { name: 'Export PDF', exact: true }).boundingBox())!;
   expect(exportTile.x).toBe(pod.x + pod.width + 6);
-  await old.getByRole('button', { name: 'File', exact: true }).click();
-  await expect(old.getByRole('menuitem', { name: 'Open…' })).toBeVisible();
-  await expect(old.getByRole('menuitem', { name: 'History…' })).toBeHidden();
   expect(await historyAsks(old)).toEqual([{ type: 'history', action: 'open', inline: await roomBox(old) }]);
 });
 
@@ -415,23 +387,22 @@ test('the History tile toggles the History page in the room: pressed by the shel
 
   // View › History… (the shell's toggle): what the tile does, both ways,
   // and with a menu open it closes the menu first.
-  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await page.getByRole('button', { name: 'Recent papers', exact: true }).click();
   await fire(page, 'history', { kind: 'toggle' });
   await expect.poll(async () => (await historyAsks(page)).at(-1)).toEqual({ type: 'history', action: 'open', inline: roomAtRest });
-  await expect(page.getByRole('menuitem', { name: 'Open…' })).toBeHidden();
+  await expect(page.getByRole('menuitem', { name: 'Open project folder…' })).toBeHidden();
   await fire(page, 'history', { kind: 'inline', state: 'open' });
   await expect.poll(async () => (await look()).pressed).toBe('true');
   await fire(page, 'history', { kind: 'toggle' });
   await expect.poll(async () => (await historyAsks(page)).at(-1)).toEqual({ type: 'history', action: 'close' });
 
-  // Gone by the shell's word; File › History… is the tile's call and
-  // brings it back. (With the page up, File's press puts it away before
-  // the menu opens: the test below.)
+  // Gone by the shell's word; the tile brings it back. (With the page up,
+  // a press of Open's chevron puts it away before the menu opens: the
+  // test below.)
   await fire(page, 'history', { kind: 'inline', state: 'closed' });
   await expect.poll(look).toEqual(rest);
   const before = (await historyAsks(page)).length;
-  await page.getByRole('button', { name: 'File', exact: true }).click();
-  await page.getByRole('menuitem', { name: 'History…' }).click();
+  await page.getByRole('button', { name: 'History', exact: true }).click();
   await expect.poll(() => historyAsks(page)).toHaveLength(before + 1);
   expect((await historyAsks(page)).at(-1)).toEqual({ type: 'history', action: 'open', inline: roomAtRest });
   await fire(page, 'history', { kind: 'inline', state: 'open' });
@@ -445,7 +416,7 @@ test('the History tile toggles the History page in the room: pressed by the shel
   expect(await historyAsks(page)).toHaveLength(before + 1);
 });
 
-test('with the History page in the room, File, Export and the rail put it away on the press, before anything opens under it', async ({ page }) => {
+test('with the History page in the room, the recent papers, Export and the rail put it away on the press, before anything opens under it', async ({ page }) => {
   await inPlassApp(page);
   await openRewind(page, '= Rewind\n\nThe first version.\n');
   const tile = page.locator('#history-tile');
@@ -474,13 +445,14 @@ test('with the History page in the room, File, Export and the rail put it away o
     await page.keyboard.press('Escape');
   };
 
-  // File: the close on the press, then its menu.
+  // Open's chevron (the recent papers): the close on the press, then its
+  // menu.
   await up();
-  await page.getByRole('button', { name: 'File', exact: true }).click();
-  await expect(page.locator('#tb-menu-file')).toBeVisible();
+  await page.getByRole('button', { name: 'Recent papers', exact: true }).click();
+  await expect(page.locator('#tb-menu-recent-papers')).toBeVisible();
   expect(await closes()).toEqual([[]]);
   await down();
-  await expect(page.locator('#tb-menu-file')).toBeHidden();
+  await expect(page.locator('#tb-menu-recent-papers')).toBeHidden();
 
   // Export, the same.
   await up();
@@ -502,11 +474,11 @@ test('with the History page in the room, File, Export and the rail put it away o
   await down();
   await expect(page.locator('#document-settings')).toHaveCount(0);
 
-  // From the keyboard: Enter on the File tile.
+  // From the keyboard: Enter on the chevron.
   await up();
-  await page.getByRole('button', { name: 'File', exact: true }).focus();
+  await page.getByRole('button', { name: 'Recent papers', exact: true }).focus();
   await page.keyboard.press('Enter');
-  await expect(page.locator('#tb-menu-file')).toBeVisible();
+  await expect(page.locator('#tb-menu-recent-papers')).toBeVisible();
   expect(await closes()).toHaveLength(5);
   expect((await closes())[4]).toEqual([]);
   await down();
@@ -521,8 +493,8 @@ test('with the History page in the room, File, Export and the rail put it away o
 
   // Down, the presses send nothing.
   const asked = (await historyAsks(page)).length;
-  await page.getByRole('button', { name: 'File', exact: true }).click();
-  await expect(page.locator('#tb-menu-file')).toBeVisible();
+  await page.getByRole('button', { name: 'Recent papers', exact: true }).click();
+  await expect(page.locator('#tb-menu-recent-papers')).toBeVisible();
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Headings', exact: true }).click();
   await page.keyboard.press('Escape');

@@ -21,7 +21,8 @@ rail*; its record is `docs/zen-rail-1100.png` and
 `docs/zen-rail-1500.png`). The History tile (branch `ux/history-tile`,
 later the same evening) puts the shell's History window in the bar,
 right after the name pill, in Plass.app and in Knuth.app alike (below,
-*The History tile*). Run
+*The History tile*). The File tile became Open, split, with New window
+beside it (2026-10-17, below, *Open and New window*). Run
 it from the worktree with `npm run app` (after `npx vite build`); the
 record is `docs/zen-draft-1100.png` and `docs/zen-draft-1500.png`, the
 shell from the checkout at 1100 and 1500 px wide at the top of a paper,
@@ -33,6 +34,42 @@ traffic lights are the window's own and are not in them —
 session does not have; their room is the empty 88 px at the bar's left,
 which the File tile sits 12 px past).
 
+## Open and New window
+
+Taylor, 2026-10-17, redesigning Knuth's File menu, for all three
+Claerbout apps (Knuth, Plass, ManimLive): they liked Export's split tile
+(a main button and a small side button for the options); "Check for
+updates" is already in the app's own menu; New window should be its own
+button; the recent documents should be the dropdown itself, not a
+submenu; no Save item; History is redundant beside the History tile.
+For Knuth, autosave became a switch, with Save only while it is off; for
+Plass, "no need for an autosave switch": Plass always saves as you type,
+so it has no Save control at all, and ⌘S still saves.
+
+So the bar's first tile is **Open**, split like Export (`#open-split`,
+`src/toolbar.ts`): the folder half opens a paper (Open… ⌘O), the 18 px
+chevron half (`Recent papers`) drops a menu that lists the recent
+papers straight away (eight, loaded each time it opens), then Open
+project folder…, then what applies in one place only: Get Plass for
+your Mac › in a Mac browser tab, and in Plass.app an Install update row
+that shows only while the shell has a newer build to offer (its quiet
+look after launch; checking is the shell's Plass › Check for Updates…).
+Right after it, **New window** (`#new-window`), a bar tile with a window
+and a plus, opens a blank paper in a new window (`?new=1`, as File › New
+document did). Then the name pill, History (Plass.app) and Export, as
+before; the pill gives way, never a tile.
+
+Open is the main action, not Save: with saving automatic, Save would be
+a button that does nothing most of the time, and a first save already
+has its way in (the name pill's rename asks for the folder, and ⌘S).
+Knuth's bar has the same split in the same place (`knuth/src/main.ts`);
+what differs is Knuth's Autosave row at the menu's foot and its Save
+button in the pill while autosave is off, neither of which Plass has.
+The page no longer asks the shell for an update check
+(`checkForUpdate` is gone from `src/claerbout.ts`); `tests/toolbar.spec.ts`
+holds the menu and the update row, `tests/frame.spec.ts` the bar's
+boxes.
+
 ## The History tile
 
 Taylor asked where the autosave record's page is opened from, was told
@@ -41,7 +78,8 @@ on the topbar beside the address". So the bar has a History tile right
 after the name pill (the address: the document's name with its folder)
 and before Export, in Plass.app only, and Knuth's bar has the same tile
 in the same place before its session pill (knuth `ux/history-tile`,
-its `docs/ZEN-DRAFT.md`). The File menu keeps its History… item.
+its `docs/ZEN-DRAFT.md`). The File menu kept its History… item until
+the menu went (2026-10-17, above).
 
 **The tile** (`#history-tile`, `src/toolbar.ts`): a bar tile like File,
 `.tb-tile` — 32 × 32, 9 px corners, an 18 px glyph at the File tile's
@@ -943,7 +981,9 @@ where the File tile stands over the rail's column):
   as before: New document, Open… ⌘O, Recent papers ›, Save ⌘S, Get Plass
   for your Mac › (a Mac browser tab), Check for updates… (Plass.app).
   The name stayed `File` because that is what the menu holds; Taylor
-  said "open" for this spot, and the glyph reads as open.
+  said "open" for this spot, and the glyph reads as open. (Since
+  2026-10-17 it is Open, split, with New window beside it: *Open and New
+  window*, above.)
 - **The name pill** — Knuth's (the third pass): the document's name, its
   save dot (red unsaved, green saved) and the folder it lives in (home
   as ~; in a tab, a project folder's name or nothing), 42 px, Zen's
@@ -1021,8 +1061,9 @@ are the same.
   530 px of the 740), so it could come out as a fifth group; it stays
   behind ⋯ until Taylor says.
 - **Code** (3) and **Document** (3) stay in Extras: occasional tools.
-- **Recent papers**, **Get Plass**, **Check for updates** stay under
-  File, as they were.
+- **Recent papers** and **Get Plass** stay under File, as they were.
+  (Since 2026-10-17 under Open's chevron, and Check for updates is the
+  shell's menu's alone.)
 - **Focus mode** stays in the plain-text sheet's corner (⌘⇧F).
 - The keymap-only commands (undo/redo, inline code ⌘`, headings 4–6,
   list Enter/Tab) have no tile, as before.
@@ -1058,8 +1099,9 @@ are the same.
    Knuth keeps its 8 px edge at the right; with the scroll rail's
    gutter, Plass's panel no longer claims Knuth's box (above).
 10. **The frame's shade (the rail is 44 now), Alignment on the rail,
-    the rail as a drag region, 'File' or 'Open', the Insert ▸ glyph**:
-    as the second pass left them.
+    the rail as a drag region, the Insert ▸ glyph**: as the second pass
+    left them. ('File' or 'Open' is DECIDED: Open, split, 2026-10-17,
+    above.)
 11. **The glass over the paper.** Every menu now opens over the white
     paper, so the step at the paper's edge is gone; the glass reads
     #28272b there (94 % opaque), a shade lighter than over the frame.

@@ -330,7 +330,7 @@ test('the frame is Zen\'s: a dark edge all round one panel of paper, its sheets 
   expect(await appRegion(page, '#toolbar')).toBe('drag');
   expect(await appRegion(page, '#rail')).not.toBe('drag');
   for (const selector of ['#doc-pod', '#toolbar .tb-tile', '.view-switch']) expect(await appRegion(page, selector)).toBe('no-drag');
-  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await page.getByRole('button', { name: 'Recent papers', exact: true }).click();
   expect(await appRegion(page, '.tb-menu:not([hidden])')).toBe('no-drag');
 });
 
@@ -691,12 +691,12 @@ test('a burst of typing past the last page is paper: the shadow is drawn round t
 
 /** Knuth's bar, as knuth main has it since c6875a4 ("The bar as tall as
  *  the rail is wide", 2026-10-02), measured in the same shell at 1100 px:
- *  44 px tall (the traffic lights' band, the rail's width), the File tile
- *  32 px with an 18 px glyph, 6 px down, the name pill 30 px tall 7 px
+ *  44 px tall (the traffic lights' band, the rail's width), the Open tile
+ *  (then File) 32 px with an 18 px glyph, 6 px down, the name pill 30 px tall 7 px
  *  down, 9 px rounded, #232326 with a white 8 % hairline, 10 px padding
  *  and 9 px gaps; the name 15 px STIX Two Text letterspaced 1.35 px, the
  *  folder 12 px sans; 6 px between the bar's items, 8 px at its right
- *  end. In a tab the File tile is 6 px in, over the rail's tiles. */
+ *  end. In a tab the Open tile is 6 px in, over the rail's tiles. */
 const bar = (page: Page) =>
   page.evaluate(() => {
     const toolbar = document.getElementById('toolbar')!;
@@ -720,15 +720,22 @@ const bar = (page: Page) =>
     };
   });
 
-test('the bar is Knuth\'s: the File tile, the name pill with its save dot and its folder, Export beside it', async ({ page }) => {
+test('the bar is Knuth\'s: Open with its recent papers, New window, the name pill with its save dot and its folder, Export beside it', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
   await openTyp(page, '= Notes\n\nA short paper.\n', 'notes.typ');
   const b = await bar(page);
   expect(b.bar).toMatchObject({ y: 0, height: 44, gap: '6px', 'padding-right': '8px' });
   expect(b.file).toEqual({ x: 6, y: 6, width: 32, height: 32 });
   expect(b.glyph).toMatchObject({ width: 18, height: 18 });
+  // Open is split as Export is: the recent papers' chevron 18 px wide past
+  // a 1 px seam, then New window a bar tile, then the pill. No Save: Plass
+  // saves as you type (Taylor, 2026-10-17).
+  const recent = await page.getByRole('button', { name: 'Recent papers', exact: true }).boundingBox();
+  expect(recent).toEqual({ x: 39, y: 6, width: 18, height: 32 });
+  expect(await page.getByRole('button', { name: 'New window', exact: true }).boundingBox()).toEqual({ x: 63, y: 6, width: 32, height: 32 });
+  await expect(page.locator('#toolbar').getByRole('button', { name: /^Save\b/ })).toHaveCount(0);
   expect(b.pod).toMatchObject({
-    x: 44, y: 7, height: 30,
+    x: 101, y: 7, height: 30,
     'border-radius': '9px', 'background-color': 'rgb(35, 35, 38)', 'border-top-width': '1px', 'border-top-color': 'rgba(255, 255, 255, 0.08)',
     'padding-left': '10px', gap: '9px', 'max-width': '550px',
   });
@@ -806,7 +813,7 @@ test('in Plass.app the pill shows the folder the shell knows the file by, home a
   expect(folder.x + folder.width).toBeLessThanOrEqual(long.pod.x + long.pod.width - 11);
 });
 
-test('in Plass.app the History tile stands right after the name pill, a bar tile like File, and nothing else in the bar moves', async ({ page, context }) => {
+test('in Plass.app the History tile stands right after the name pill, a bar tile like Open, and nothing else in the bar moves', async ({ page, context }) => {
   // A browser tab first: no History tile (the shell's controls are the
   // shell's), and the bar's boxes as the test above holds them.
   const name = 'notes.typ';
@@ -848,7 +855,7 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
   await openTyp(page, '= Notes\n\nA short paper.\n', name);
   const tab = await boxes(page);
   expect(tab.history).toBeNull();
-  expect(tab.order).toEqual(['File', 'doc-pod', 'export-split']);
+  expect(tab.order).toEqual(['open-split', 'new-window', 'doc-pod', 'export-split']);
 
   // Plass.app (the shell's bridge; the `document` report answered with no
   // path, so the pill holds the same name alone and is the tab's width).
@@ -876,9 +883,9 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
   }, name)).toBe(true);
   await settleLocal(app);
   const b = await boxes(app);
-  expect(b.order).toEqual(['File', 'doc-pod', 'history-tile', 'export-split']);
+  expect(b.order).toEqual(['open-split', 'new-window', 'doc-pod', 'history-tile', 'export-split']);
   // The tile: the bar's gap past the pill, 32 px square 6 px down, 9 px
-  // corners, an 18 px glyph, the File tile's soft ink; one of the page's
+  // corners, an 18 px glyph, the Open tile's soft ink; one of the page's
   // controls in the bar's drag band.
   expect(b.history).toEqual({ x: b.pod!.x + b.pod!.width + 6, y: 6, width: 32, height: 32 });
   expect(b.tile).toMatchObject({ radius: '9px', glyph: { width: 18, height: 18 }, label: 'History', title: 'History (⇧⌘H)', caption: 'History', keys: 'Shift+Meta+H', popup: null, region: 'no-drag' });
@@ -889,7 +896,7 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
   expect(b.tile!.svg).toBe(
     '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12a8 8 0 1 1 2.34 5.66M2.2 9.8 5 12.6l2.8-2.8"></path><polyline points="13 7.5 13 12 16.5 14"></polyline></svg>',
   );
-  // Nothing else moves: the bar, the File tile and the pill are the tab's
+  // Nothing else moves: the bar, the Open tile and the pill are the tab's
   // to the pixel, the right end too; Export moves on by the tile and the
   // gap, 38 px, and keeps its box.
   expect(b.bar).toEqual(tab.bar);
@@ -913,7 +920,7 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
     if (width === 480) expect(short.pod!.width).toBe(240);
     else expect(short.pod!.width).toBeLessThanOrEqual(width / 2);
     expect(short.pod).toEqual(shortTab.pod);
-    expect(short.widths).toEqual([32, 32, 32, 18]);
+    expect(short.widths).toEqual([32, 18, 32, 32, 32, 18]);
     expect(short.history!.x).toBe(short.pod!.x + short.pod!.width + 6);
     expect(short.exportTile!.x + 32).toBeLessThanOrEqual(width - 8);
   }

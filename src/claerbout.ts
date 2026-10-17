@@ -20,9 +20,11 @@
 //   main.ts openLaunched). No page can focus another window; the shell
 //   can, on that window's own request.
 // - The app updating itself (the shell's update.js): `update` requests
-//   check the site for a newer build (and, with action 'install', install
-//   it), and `update` events report the shell's own check after launch and
-//   the install's steps, until the app relaunches into the new build.
+//   with action 'install' install the site's newer build, and `update`
+//   events report the shell's own check after launch and the install's
+//   steps, until the app relaunches into the new build. (The page asks no
+//   check of its own since 2026-10-17: that is the shell's Plass › Check
+//   for Updates….)
 // - Which file this window holds (`document`, with the shell's autosave
 //   record; knuth's docs/AUTOSAVE.md). The shell keeps a git record of
 //   every project a window is on, and for that it needs the window's file
@@ -53,7 +55,7 @@
 //   The page never registers `beforeunload` in the shell: Electron would
 //   refuse the close without a word, and block ⌘Q with it.
 // - The History page in the room (shell 0.2.3). The History tile beside
-//   the name, File › History… and the shell's View › History… toggle the
+//   the name and the shell's View › History… toggle the
 //   shell's History page over this window's panel, the room (#scroll),
 //   not a window of its own (Taylor, 2026-10-02: "instead of a new
 //   window, i just want it to open in the same window in the main area"):
@@ -250,22 +252,16 @@ export function takeLaunchFile(): Promise<LaunchFile> | null {
 }
 
 /** A step of Plass.app updating itself, as the shell reports it: `state`
- *  is one of current, available, development, unsupported, failed (a
- *  check's answers), then downloading, unpacking, completing, installing,
- *  ready (an install's events). */
+ *  is available (the shell's look at the site after launch found a newer
+ *  build), then downloading, unpacking, completing, installing, ready (an
+ *  install's events), or failed. Checking is the shell's own menu item
+ *  (Plass › Check for Updates…), not the page's. */
 export interface UpdateStep {
   state: string;
   text?: string;
   percent?: number | null;
   latest?: { version?: string | null; build?: string; built?: string | null };
   current?: { version?: string | null; build?: string | null; built?: string | null };
-}
-
-/** Ask the shell to compare this build with the site's; null outside it. */
-export function checkForUpdate(): Promise<UpdateStep | null> {
-  const shell = bridge();
-  if (!shell) return Promise.resolve(null);
-  return shell.request({ type: 'update' }).then((reply) => (reply ?? null) as UpdateStep | null, () => null);
 }
 
 /** Have the shell download the site's build, swap it in and relaunch;

@@ -349,13 +349,16 @@ prompted.
   keeps a by-path route for that one file.~~ Answered under step 1: the
   shell drops the path on the page and the page holds a real handle.
 - ~~Whether Plass wants the page's download button at all, or stays with
-  the install line only, as today.~~ Answered 2026-09-30 (`2429264`): File
-  → Get Plass for your Mac offers both. And since 2026-10-01 the installed
-  app updates itself (shell 0.2.0, `update.js`): File → Check for updates…
-  inside Plass.app compares this build with the site's `app/latest.json`
-  and installs a newer one, relaunching; the shell also checks quietly
-  after launch and the item then reads Install update. `src/claerbout.ts`
-  has the three calls (`checkForUpdate`, `installUpdate`, `onUpdate`).
+  the install line only, as today.~~ Answered 2026-09-30 (`2429264`): Get
+  Plass for your Mac (File then; since 2026-10-17 the foot of Open's
+  recent papers) offers both. And since 2026-10-01 the installed app
+  updates itself (shell 0.2.0, `update.js`): the shell's Plass › Check for
+  Updates… compares this build with the site's `app/latest.json` and
+  installs a newer one, relaunching; the shell also checks quietly after
+  launch, and the recent papers' menu then ends with Install update.
+  (Until 2026-10-17 the page's File menu had a Check for updates… of its
+  own; it went, the shell's menu having one.) `src/claerbout.ts` has the
+  two calls (`installUpdate`, `onUpdate`).
 - ~~Fullscreen as a menu role is enough, or the page needs to ask for it.~~
   Both work, checked 2026-10-01 in the shell from the checkout:
   `document.fullscreenEnabled` is true in the window and
@@ -392,10 +395,10 @@ prompted.
   drag region natively, so a click on the bar's empty part does not
   reach the page's outside-click menu closer. Since 2026-10-02 (the Zen
   draft, `docs/ZEN-DRAFT.md`) the bar holds only the paper's way in and
-  out — File, the name with its save dot, (in Plass.app, since the
-  evening of 2026-10-02) the History tile, Export — padded by
-  `env(titlebar-area-x)` on the left, so the File tile sits beside the
-  lights; the tools are on a narrow rail down the left under the bar,
+  out — Open (File until 2026-10-17), New window, the name with its save
+  dot, (in Plass.app, since the evening of 2026-10-02) the History tile,
+  Export — padded by `env(titlebar-area-x)` on the left, so the Open tile
+  sits beside the lights; the tools are on a narrow rail down the left under the bar,
   which is no drag region (it scrolls); the bar and the rail are the
   frame, which edges one rounded panel by 8 px all round. Since the third
   pass the bar is Knuth's (the name pill carries the folder, from the
@@ -486,8 +489,7 @@ prompted.
   DECIDED 2026-10-02, with the view (the shell's `history.js`, its README
   under "The history view"; knuth's `docs/mockups/history.md`): Plass
   answers the two events the shell sends every window on the project, and
-  File › History… and the History tile in the bar ask for the History
-  window.
+  the History tile in the bar asks for the History window.
   - **`save {id, reason: 'rewind'}`**, before the rewind writes anything
     (`onShellSave` in `src/claerbout.ts`): the file manager's
     `saveForShell` writes through ⌘S's write (the queue autosave writes
@@ -528,12 +530,12 @@ prompted.
     as for any change outside Plass, with "Rewound to … under unsaved
     edits" and Overwrite disk; a rewind to a commit that lacks the file
     keeps the editor's copy, unsaved, with Save to a folder….
-  - **File › History…** (⇧⌘H beside it; the shell's View › History…
-    holds the keys) and **the History tile** in the bar right after the
-    name pill (since the evening of 2026-10-02: "i think it belongs as a
+  - **The History tile** (⇧⌘H, the shell's View › History…, does the
+    same; File › History… did too until the File menu went, 2026-10-17)
+    in the bar right after the name pill (since the evening of 2026-10-02: "i think it belongs as a
     tile on the topbar beside the address", Taylor; Knuth's bar has the
     same tile, the same glyph, `docs/ZEN-DRAFT.md`), in Plass.app only,
-    toggle the shell's History page **in the room** of the same window,
+    toggles the shell's History page **in the room** of the same window,
     not a window of its own (later the same evening: "instead of a new
     window, i just want it to open in the same window in the main area").
     The room is the panel that is the paper, `#scroll`: under the bar,
@@ -594,7 +596,7 @@ prompted.
     silent, records that typing in "rewind from", reloads the paper and
     leaves "plass: rewind from" and "plass: rewind to" on the record;
     Escape puts the page away, the tile un-presses and the paper shows;
-    up again, a press of the File tile puts it away before its menu
+    up again, a press of Open's chevron puts it away before its menu
     opens (`tests/rewind.spec.ts` presses Export, the rail and the keys). All
     of it ships with the shell tag that brings the view; under v0.2.0
     nothing sends the events.

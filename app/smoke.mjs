@@ -308,29 +308,30 @@ if (corners.top || corners.shadow[0] !== '12px' || bottomWrong || leftWrong) {
 // built stylesheet must keep the unprefixed backdrop-filter, the one
 // Chromium reads. The minifier once kept only a hand-written -webkit-
 // line, and the paper showed through the File menu, its text readable.
-await page.click('#toolbar .tb-tile');
+// (The recent papers' menu, Open's chevron, since 2026-10-17.)
+await page.click('#toolbar [aria-label="Recent papers"]');
 const glass = await page.evaluate(() => {
   const menu = document.querySelector('.tb-menu:not([hidden])');
   return menu ? getComputedStyle(menu).backdropFilter : null;
 });
 await page.keyboard.press('Escape');
-if (!glass || glass === 'none') await fail(`the File menu draws no blur (backdrop-filter: ${glass})`);
+if (!glass || glass === 'none') await fail(`the recent papers' menu draws no blur (backdrop-filter: ${glass})`);
 
 // A shell that hides the title bar (app/plass.json, titleBarStyle; the
 // shell's README) publishes the lights' room to the page as the Window
 // Controls Overlay, and the bar pads its row by it on the left, where
-// its File tile then sits. Plass.app is built on a tag of the shell,
+// its Open tile then sits. Plass.app is built on a tag of the shell,
 // which carries the key only from its next tag: the check is for a shell
 // that has it.
 // Knuth's bar, as knuth main has it since c6875a4 ("The bar as tall as
 // the rail is wide", 2026-10-02), measured in the same shell: the bar the
 // lights' band (44 px at rest on macOS 26, the rail's width; app/plass.json
 // puts the lights at {14, 15}, so the band is 2·15 plus the OS's lights,
-// 46 on a macOS 15 runner), the File tile 32 px square 12 px past the
+// 46 on a macOS 15 runner), the Open tile 32 px square 12 px past the
 // lights' room and centred on the band (6 px down on 44), the name pill
 // 30 px tall centred on the band (7 px down on 44), then the History tile (Plass.app's
 // and Knuth.app's, the shell's History window) the bar's 6 px gap past
-// it, 32 px square 6 px down like File, and Export the same gap past
+// it, 32 px square 6 px down like Open, and Export the same gap past
 // that.
 const hidesTitleBar = process.platform === 'darwin' && fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('titleBarStyle');
 if (hidesTitleBar) {
@@ -361,13 +362,13 @@ if (hidesTitleBar) {
   if (bar.height !== bar.barHeight || bar.barHeight < 44 || bar.barHeight > 48) await fail(`the lights' room is ${bar.height}px tall, the bar ${bar.barHeight}px (Knuth's is the band: 44 on macOS 26, 46 on 15)`);
   const tileY = (bar.barHeight - 32) / 2;
   const pillY = (bar.barHeight - 30) / 2;
-  if (bar.padding !== bar.x + 12 || bar.file.x !== bar.x + 12) await fail(`the File tile is at ${bar.file.x}px, the bar padded ${bar.padding}px, the lights' room ${bar.x}px (Knuth's tile is 12 px past it)`);
-  if (bar.file.width !== 32 || bar.file.height !== 32 || bar.file.y !== tileY) await fail(`the File tile is ${JSON.stringify(bar.file)} (Knuth's is 32 px square, centred: ${tileY} px down)`);
+  if (bar.padding !== bar.x + 12 || bar.file.x !== bar.x + 12) await fail(`the Open tile is at ${bar.file.x}px, the bar padded ${bar.padding}px, the lights' room ${bar.x}px (Knuth's tile is 12 px past it)`);
+  if (bar.file.width !== 32 || bar.file.height !== 32 || bar.file.y !== tileY) await fail(`the Open tile is ${JSON.stringify(bar.file)} (Knuth's is 32 px square, centred: ${tileY} px down)`);
   if (bar.pod.height !== 30 || bar.pod.y !== pillY) await fail(`the name pill is ${JSON.stringify(bar.pod)} (Knuth's is 30 px tall, centred: ${pillY} px down)`);
   const besidePill = bar.pod.x + bar.pod.width + 6;
   if (!bar.history || bar.history.x !== besidePill || bar.history.y !== tileY || bar.history.width !== 32 || bar.history.height !== 32) await fail(`the History tile is ${JSON.stringify(bar.history)}, not 32 px square at (${besidePill}, ${tileY}), the bar's gap past the pill ${JSON.stringify(bar.pod)}`);
   else if (bar.exportTile.x !== bar.history.x + 38 || bar.exportTile.y !== tileY) await fail(`Export is ${JSON.stringify(bar.exportTile)}, not the bar's gap past the History tile ${JSON.stringify(bar.history)}`);
-  console.log(`smoke: the bar at ${await page.evaluate(() => innerWidth)} px: File ${JSON.stringify(bar.file)}, the pill ${JSON.stringify(bar.pod)}, History ${JSON.stringify(bar.history)}, Export ${JSON.stringify(bar.exportTile)}`);
+  console.log(`smoke: the bar at ${await page.evaluate(() => innerWidth)} px: Open ${JSON.stringify(bar.file)}, the pill ${JSON.stringify(bar.pod)}, History ${JSON.stringify(bar.history)}, Export ${JSON.stringify(bar.exportTile)}`);
 }
 
 // The folder beside the name: the shell answers the page's report of its
@@ -453,8 +454,8 @@ if (keepsRecord) {
 } else console.log('smoke: the shell keeps no autosave record; not checked');
 
 // A rewind (the shell's history view, its README; docs/CLAERBOUT-SHELL.md):
-// the History tile beside the name (one toggle with File › History…, which
-// tests/rewind.spec.ts clicks) lays the shell's History page over the room
+// the History tile beside the name (one toggle with the shell's View ›
+// History…) lays the shell's History page over the room
 // — the panel that is the paper, #scroll — at its box (CSS px × the zoom,
 // in DIP), pressed while it is up, and the page follows the room when the
 // window grows; on a shell from before the room (0.2.1, 0.2.2) it opens
@@ -465,7 +466,7 @@ if (keepsRecord) {
 // reload its paper to the opening text, in place, saying so. The record
 // gains "plass: rewind from <tip>" and "plass: rewind to <sha>". Escape in
 // the page puts it away (a note the rewind left first), and the tile
-// un-presses; up again, a press of the File tile puts it away before its
+// un-presses; up again, a press of the Open tile puts it away before its
 // menu opens. A shell without the view is said and skipped.
 const hasHistory = keepsRecord && fs.readFileSync(shellMain, 'utf8').includes('history.js');
 const inRoom = hasHistory && fs.readFileSync(shellMain, 'utf8').includes('addChildView');
@@ -566,20 +567,20 @@ if (hasHistory) {
       if (kept > 1) await fail(`${kept} inline History pages are alive after one was put away`);
     };
     // The view is above anything the page draws in the room, so whatever
-    // opens there puts it away first: the File tile, pressed with the page
-    // up, closes it on the press, and its menu opens over the paper, not
+    // opens there puts it away first: Open's chevron (the recent papers),
+    // pressed with the page up, closes it on the press, and its menu opens over the paper, not
     // under the view (tests/rewind.spec.ts has Export and the rail too).
     putAwayByFile = async () => {
       await page.click('#history-tile');
       if (!(await historyView())) await fail('the History tile laid no History page over the room the second time');
       for (let i = 0; i < 40 && (await pressed()) !== 'true'; i++) await page.waitForTimeout(100);
-      await page.click('#toolbar [aria-label="File"]');
+      await page.click('#toolbar [aria-label="Recent papers"]');
       const up = async () => (await views()).some((v) => v.visible);
       for (let i = 0; i < 40 && (await up()); i++) await page.waitForTimeout(100);
-      if (await up()) await fail(`the File tile opened its menu under the History page (${JSON.stringify(await views())})`);
+      if (await up()) await fail(`the recent papers opened their menu under the History page (${JSON.stringify(await views())})`);
       for (let i = 0; i < 20 && (await pressed()) !== 'false'; i++) await page.waitForTimeout(100);
-      if ((await pressed()) !== 'false') await fail('the History tile stayed pressed after the File tile put the History page away');
-      if (!(await page.evaluate(() => !document.getElementById('tb-menu-file').hidden))) await fail('the File tile opened no menu once the History page went');
+      if ((await pressed()) !== 'false') await fail('the History tile stayed pressed after the recent papers put the History page away');
+      if (!(await page.evaluate(() => !document.getElementById('tb-menu-recent-papers').hidden))) await fail('the recent papers opened no menu once the History page went');
       await page.keyboard.press('Escape');
     };
   } else {
@@ -628,7 +629,7 @@ if (hasHistory) {
   if (inRoom) {
     console.log('smoke: history: Escape put it away, the tile un-pressed, the paper shown, the page kept hidden for the next open');
     await putAwayByFile();
-    console.log('smoke: history: the File tile put it away on the press and opened its menu over the paper');
+    console.log('smoke: history: the recent papers put it away on the press and opened their menu over the paper');
   }
 } else console.log('smoke: the shell has no history view; the rewind is not checked');
 

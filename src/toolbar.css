@@ -1,5 +1,6 @@
 /* Zen's shape. The bar beside the traffic lights holds the paper's way in
-   and out: the File tile, the name pill with its save dot and its folder
+   and out: the Open tile (its recent papers on a chevron beside it), the
+   New window tile, the name pill with its save dot and its folder
    (Knuth's bar, style.css), in Plass.app the History tile right after it
    (the shell's History page in the room, pressed while it is up; Knuth's
    bar has the same tile in the same place, with the same glyph), the
@@ -8,7 +9,7 @@
    Controls Overlay the shell publishes when it hides the title bar) and
    by nothing else: nothing in the bar centres on the paper any more.
    With no lights' room — a browser, the PWA, a native title bar — the
-   File tile stands over the rail's column of tiles instead, 6 px in
+   Open tile stands over the rail's column of tiles instead, 6 px in
    ((44 − 32) / 2: the env() fallback undoes 6 px of the 12). The rail
    down the left holds the tools in the bar's old groups under
    hairlines, with the occasional ones behind Extras; its menus fly out
@@ -19,7 +20,7 @@
   padding-inline: calc(12px + env(titlebar-area-x, -6px)) var(--edge);
 }
 
-/* The bar's tiles — File, History (Plass.app) and Export: bare, the
+/* The bar's tiles — Open, New window, History (Plass.app) and Export: bare, the
    rail's size (Knuth's, c6875a4). History is the bar's gap past the pill,
    and Export the gap past it; nothing else in the bar moves for it. */
 #toolbar .tb-tile {
@@ -43,8 +44,9 @@
   background: rgba(255, 255, 255, 0.08);
 }
 
-/* Export, split: the download half (PDF, one click) and a narrow chevron
-   half for the other formats, one tile's outline between them. */
+/* Open and Export, split: the main half (Open…, one click; PDF, one
+   click) and a narrow chevron half for the menu (the recent papers; the
+   other formats), one tile's outline between them. */
 #toolbar .tb-split {
   flex: none;
   display: flex;

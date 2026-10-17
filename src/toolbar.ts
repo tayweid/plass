@@ -1,8 +1,9 @@
 // Zen's shape: the paper's way in and out in the bar beside the traffic
-// lights (File, the name with its save dot and folder — Knuth's bar —
-// then, in Plass.app, History, and Export), the tools on a rail down the
-// left in the bar's old groups, the occasional ones behind Extras. Menus
-// preserve the editor selection and keep geometry reads off typing.
+// lights (Open with its recent papers, New window, the name with its save
+// dot and folder — Knuth's bar — then, in Plass.app, History, and
+// Export), the tools on a rail down the left in the bar's old groups, the
+// occasional ones behind Extras. Menus preserve the editor selection and
+// keep geometry reads off typing.
 
 import './toolbar.css';
 import { TextSelection } from 'prosemirror-state';
@@ -23,7 +24,7 @@ import { editBibliography } from './citations';
 import { toggleSettingsPanel } from './settings';
 import { placeFlyout } from './flyout';
 import { isPwaInstalled, onPwaInstallState, requestPwaInstall } from './pwa-install';
-import { checkForUpdate, closeHistory, installUpdate, isNativeShell, moveHistory, onHistoryView, onUpdate, openHistory } from './claerbout';
+import { closeHistory, installUpdate, isNativeShell, moveHistory, onHistoryView, onUpdate, openHistory } from './claerbout';
 import type { TypesetStats } from './typeset-plugin';
 import { DEFAULT_DOC_NAME, type FileManager } from './file-manager';
 
@@ -70,6 +71,8 @@ const ICONS: Record<string, string> = {
   // The solution block's own mark: its red rule beside the text.
   solution: '<line x1="5" y1="4" x2="5" y2="20" stroke="#d9433a" stroke-width="2.8"/><line x1="10" y1="8" x2="20" y2="8"/><line x1="10" y1="12" x2="20" y2="12"/><line x1="10" y1="16" x2="16" y2="16"/>',
   open: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+  // A window (its title band under the top edge) with a plus in it.
+  newwindow: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="8.5" x2="21" y2="8.5"/><line x1="12" y1="11.5" x2="12" y2="17.5"/><line x1="9" y1="14.5" x2="15" y2="14.5"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   list: '<circle cx="4" cy="6" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="4" cy="18" r="1.2" fill="currentColor"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>',
@@ -337,10 +340,27 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     button.setAttribute('aria-expanded', 'false');
     return button;
   };
-  // The bar, left to right: File, the name, History (Plass.app, below),
-  // Export — the paper's way in and out, beside the traffic lights.
-  const fileBtn = trigger(container, 'File', icon('open'));
-  fileBtn.classList.add('tb-tile');
+  // The bar, left to right: Open, New window, the name, History (Plass.app,
+  // below), Export — the paper's way in and out, beside the traffic lights.
+  // Open is a split tile like Export: the folder half opens a paper (⌘O),
+  // the chevron half lists the recent ones (Taylor, 2026-10-17, for every
+  // Claerbout app; knuth/src/main.ts has the same tile). No Save anywhere:
+  // Plass saves as you type, and ⌘S still saves (a first save asks for the
+  // folder, as the name pill's rename does).
+  const openSplit = document.createElement('span');
+  openSplit.className = 'tb-split';
+  openSplit.id = 'open-split';
+  container.append(openSplit);
+  const openBtn = glyphButton(openSplit, 'Open', icon('open'));
+  openBtn.classList.add('tb-tile');
+  openBtn.title = 'Open… (⌘O)';
+  openBtn.setAttribute('aria-keyshortcuts', 'Meta+O');
+  const recentBtn = trigger(openSplit, 'Recent papers', icon('chevron'));
+  recentBtn.classList.add('tb-tile', 'tb-split-more');
+  const newBtn = glyphButton(container, 'New window', icon('newwindow'));
+  newBtn.classList.add('tb-tile');
+  newBtn.id = 'new-window';
+  newBtn.title = 'New window — a blank paper';
   container.append(titleBar);
   // Export is a split tile: the download half saves the PDF on one
   // click (⌘E), the chevron half opens the other formats.
@@ -468,10 +488,9 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   insert.element.classList.add('tb-menu-extras');
   const extras = createMenu('Extras', extrasBtn);
   extras.element.classList.add('tb-menu-extras');
-  const fileMenu = createMenu('File', fileBtn);
+  const recent = createMenu('Recent papers', recentBtn);
   const exports = createMenu('Export', exportBtn);
-  const recent = createMenu('Recent', fileBtn, fileMenu);
-  const get = createMenu('Get Plass', fileBtn, fileMenu);
+  const get = createMenu('Get Plass', recentBtn, recent);
 
   document.addEventListener('mousedown', (e) => {
     if (openMenu && !openMenu.element.contains(e.target as Node) && !openMenu.anchor.contains(e.target as Node)) closeMenu();
@@ -801,25 +820,24 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   item(documentRow, 'Bibliography', () => editBibliography(view, (m) => fm.notify(m)), {
     title: 'Edit bibliography', enabled: () => !sourceActive, glyph: icon('book'),
   });
-  item(fileMenu.element, 'New document', () => {
+  openBtn.addEventListener('click', () => { closeMenu(); void fm.open(); });
+  newBtn.addEventListener('click', () => {
+    closeMenu();
     const url = new URL(location.href);
     url.searchParams.set('new', '1');
     window.open(url.toString(), '_blank');
-  }, { title: 'New document — opens in a new window' });
-  item(fileMenu.element, 'Open…', () => void fm.open(), { title: 'Open… (⌘O)', shortcut: '⌘O' });
-  item(fileMenu.element, 'Recent papers', () => {}, { title: 'Your papers', submenu: recent });
-  item(fileMenu.element, 'Save', () => void fm.save(), { shortcut: '⌘S' });
+  });
   // Plass.app: the shell's History page, the record of this document's
   // folder with a rewind to any point of it, in this window's room — the
   // panel that is the paper (#scroll), under the bar and right of the
   // rail — not a window of its own (Taylor, 2026-10-02: "instead of a new
   // window, i just want it to open in the same window in the main
-  // area"). Three ways in, one toggle: the History tile in the bar right
+  // area"). Two ways in, one toggle: the History tile in the bar right
   // after the name pill ("i think it belongs as a tile on the topbar
-  // beside the address", a bar tile like File, with the same river glyph
-  // as Knuth's), this item, and the shell's View › History… (⇧⌘H, the
-  // shell's menu takes the keys), which asks the page to do what the tile
-  // does (`toggle`), since the room's box is the page's to send. The shell
+  // beside the address", with the same glyph as Knuth's; the File menu's
+  // History… item went with the menu, 2026-10-17), and the shell's
+  // View › History… (⇧⌘H, the shell's menu takes the keys), which asks
+  // the page to do what the tile does (`toggle`), since the room's box is the page's to send. The shell
   // lays its page over the box and says when it comes and goes (Escape and
   // the page's own close tile put it away too, and a reload of this page);
   // the tile is pressed exactly while it is up, from that word alone,
@@ -832,7 +850,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   // reach it as ever. A document with no record gets the page saying why;
   // a shell from before the room (0.2.1, 0.2.2) opens its History window
   // instead, as it did; a shell without the view answers null, and the
-  // item and the tile go.
+  // tile goes.
   if (isNativeShell()) {
     const historyTile = glyphButton(container, 'History', HISTORY_GLYPH);
     historyTile.id = 'history-tile';
@@ -841,7 +859,6 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     historyTile.setAttribute('aria-keyshortcuts', 'Shift+Meta+H');
     historyTile.setAttribute('aria-pressed', 'false');
     titleBar.after(historyTile);
-    const ways: HTMLElement[] = [historyTile];
     const room = document.getElementById('scroll')!;
     const roomBox = () => {
       const r = room.getBoundingClientRect();
@@ -855,8 +872,8 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
       }
       void openHistory(roomBox()).then((how) => {
         if (how) return;
-        for (const way of ways) way.hidden = true;
-        fm.notify('This Plass.app has no history view — File → Check for updates…');
+        historyTile.hidden = true;
+        fm.notify('This Plass.app has no history view — Plass → Check for Updates…');
       });
     };
     onHistoryView((event) => {
@@ -888,9 +905,10 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     new ResizeObserver(follow).observe(room);
     // The page is the shell's, above everything this one draws in the
     // room, so whatever opens or acts there puts it away first, as Knuth's
-    // bar does: the File and Export tiles (their menus drop over the room)
-    // and the rail (its tiles edit the paper under the page; its flyouts
-    // and Document settings open over the room). On the press, before the
+    // bar does: the Open and Export tiles (their menus drop over the
+    // room; Open's picker comes up over it) and the rail (its tiles edit
+    // the paper under the page; its flyouts and Document settings open
+    // over the room). On the press, before the
     // click opens anything, and on the keys that press a tile or open its
     // menu, for a bar the focus came back to. The History tile is the
     // toggle itself; the HUD and the scroll rail are hidden while the page
@@ -898,12 +916,11 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     const putAway = () => { if (shown) closeHistory(); };
     const presses = (e: KeyboardEvent) => e.key === 'Enter' || e.key === ' '
       || (['ArrowDown', 'ArrowUp', 'ArrowRight'].includes(e.key) && (e.target as Element).classList.contains('tb-menu-trigger'));
-    for (const way of [fileBtn, pdfBtn, exportBtn, rail]) {
+    for (const way of [openBtn, recentBtn, pdfBtn, exportBtn, rail]) {
       way.addEventListener('pointerdown', putAway, true);
       way.addEventListener('keydown', (e) => { if (presses(e)) putAway(); }, true);
     }
     historyTile.addEventListener('click', () => { closeMenu(); showHistory(); });
-    ways.push(item(fileMenu.element, 'History…', showHistory, { shortcut: '⇧⌘H', title: 'The record of this document\u2019s folder, and a rewind to any point of it (⇧⌘H)' }));
   }
   item(documentRow, 'Markdown & shortcuts', () => showHelp(fm), { title: 'Markdown & shortcuts', glyph: '<span class="ico tico">?</span>' });
   const installButton = item(documentRow, 'Install Plass', () => void requestPwaInstall((message) => fm.notify(message)), {
@@ -913,44 +930,48 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   installButton.setAttribute('aria-label', 'Install Plass');
   installButton.hidden = isNativeShell() || isPwaInstalled();
   onPwaInstallState((installed) => { installButton.hidden = isNativeShell() || installed; });
+  // Open's side half: the recent papers straight away, not a submenu
+  // (Taylor, 2026-10-17), loaded each time it opens; then the way to open
+  // a whole project folder, and at the foot what applies in one place
+  // only — the Mac app from a Mac browser tab, the app's own update in
+  // Plass.app.
+  heading(recent.element, 'Recent papers');
+  const recentEntries = document.createElement('div');
+  recentEntries.setAttribute('role', 'group');
+  recentEntries.setAttribute('aria-label', 'Recent papers');
+  recent.element.append(recentEntries);
+  divider(recent.element);
+  item(recent.element, 'Open project folder…', () => void fm.openFolder('open'));
   // The Mac app, from a browser tab on a Mac: every deploy publishes it
   // beside this page, so the download and the install line are this
   // page's version. Inside Plass.app there is nothing to get.
   const mac = /Mac/.test(navigator.platform) && navigator.maxTouchPoints < 2;
   if (mac && !isNativeShell()) {
-    divider(fileMenu.element);
-    item(fileMenu.element, 'Get Plass for your Mac', () => {}, { title: 'Plass.app: the download, or the install line', submenu: get });
+    divider(recent.element);
+    item(recent.element, 'Get Plass for your Mac', () => {}, { title: 'Plass.app: the download, or the install line', submenu: get });
   }
-  // Inside Plass.app: the app updating itself (the shell's update.js;
-  // also Plass menu → Check for Updates…). The shell looks at the site
-  // after launch and says when it has a newer build; the item then offers
-  // the install, whose steps show as notices until the app relaunches.
+  // Inside Plass.app: the app updating itself (the shell's update.js). The
+  // shell looks at the site after launch and says when it has a newer
+  // build; the item shows only then, and offers the install, whose steps
+  // show as notices until the app relaunches. Checking is the shell's own
+  // Plass › Check for Updates… (Taylor, 2026-10-17: it is in the app's
+  // menu, so not in this one).
   if (isNativeShell()) {
-    divider(fileMenu.element);
+    const updateFoot = document.createElement('div');
+    updateFoot.hidden = true;
+    recent.element.append(updateFoot);
+    divider(updateFoot);
     let offered: string | null = null;
-    const updateItem = item(fileMenu.element, 'Check for updates…', () => {
-      if (offered) {
-        setLabel('Updating…');
-        installUpdate();
-        return;
-      }
-      setLabel('Checking…');
-      void checkForUpdate().then((step) => {
-        const when = step?.latest?.built ? ` (built ${step.latest.built.slice(0, 10)})` : '';
-        if (step?.state === 'available') {
-          offered = step.latest?.build ?? 'new';
-          setLabel(`Install update${when}`);
-          fm.notify(`A new Plass is available${when} — File → Install update`);
-        } else {
-          setLabel('Check for updates…');
-          if (step?.state === 'current') fm.notify(`Plass is up to date${step.current?.build ? ` (build ${step.current.build})` : ''}`);
-          else if (step?.state === 'development') fm.notify('Running from a checkout: nothing to update');
-          else fm.notify(step?.text ? `Could not check for updates: ${step.text}` : 'Could not check for updates');
-        }
-      });
-    }, { title: 'Plass.app: compare this build with the site\u2019s and install a newer one' });
+    const updateItem = item(updateFoot, 'Install update', () => {
+      if (!offered) return;
+      setLabel('Updating…');
+      installUpdate();
+    }, { title: 'Plass.app: install the site\u2019s newer build and relaunch' });
     const label = updateItem.querySelector('.tb-menu-label');
-    const setLabel = (text: string) => { if (label) label.textContent = text; };
+    const setLabel = (text: string) => {
+      if (label) label.textContent = text;
+      updateFoot.hidden = false;
+    };
     onUpdate((step) => {
       const when = step.latest?.built ? ` (built ${step.latest.built.slice(0, 10)})` : '';
       switch (step.state) {
@@ -970,7 +991,8 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
           fm.notify(step.text ?? 'Plass relaunches now');
           break;
         case 'failed':
-          setLabel(offered ? `Install update${when}` : 'Check for updates…');
+          if (offered) setLabel(`Install update${when}`);
+          else updateFoot.hidden = true;
           fm.notify(`Could not update Plass: ${step.text ?? 'unknown error'}`);
           break;
         default:
@@ -979,10 +1001,6 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     });
   }
 
-  const back = (menu: Menu) => {
-    item(menu.element, '‹ File', () => showMenu(fileMenu, true));
-    divider(menu.element);
-  };
   heading(exports.element, 'Export');
   const exportPdfNow = () => {
     void import('./pdf').then(({ exportPdf }) =>
@@ -1005,7 +1023,8 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   item(exports.element, 'Markdown (.md)', () => void fm.exportMdCopy(), { title: 'Export a .md copy' });
   item(exports.element, 'Typst (.typ)', () => void fm.exportCopy(), { title: 'Export a .typ copy' });
   item(exports.element, 'LaTeX (.tex)', () => fm.exportTexCopy(), { title: 'Export a .tex copy (vanilla LaTeX for journals)' });
-  back(get);
+  item(get.element, '‹ Recent papers', () => showMenu(recent, true));
+  divider(get.element);
   heading(get.element, 'Plass for your Mac');
   const getHint = (text: string) => {
     const hint = document.createElement('div');
@@ -1030,14 +1049,6 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     title: 'Install Plass from the browser (a window without the browser’s chrome; still the browser)',
   });
   onPwaInstallState((installed) => { pwaItem.hidden = installed; });
-  back(recent);
-  heading(recent.element, 'Recent papers');
-  const recentEntries = document.createElement('div');
-  recentEntries.setAttribute('role', 'group');
-  recentEntries.setAttribute('aria-label', 'Recent papers');
-  recent.element.append(recentEntries);
-  divider(recent.element);
-  item(recent.element, 'Open project folder…', () => void fm.openFolder('open'));
   let recentRequest = 0;
   recent.refresh = () => {
     const request = ++recentRequest;

@@ -99,13 +99,13 @@ test('installed app state removes the redundant Install action', async ({ page }
   await expect(install).toBeHidden();
 });
 
-test('a Mac browser tab offers Plass.app under File → Get Plass', async ({ page }) => {
+test('a Mac browser tab offers Plass.app at the foot of the recent papers', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'platform', { configurable: true, value: 'MacIntel' });
     Object.defineProperty(navigator, 'maxTouchPoints', { configurable: true, value: 0 });
   });
   await page.goto('/?new=1');
-  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await page.getByRole('button', { name: 'Recent papers', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Get Plass for your Mac' }).click();
   const menu = page.getByRole('menu', { name: 'Get Plass', exact: true });
   await expect(menu).toBeVisible();
@@ -120,6 +120,6 @@ test('a tab that is not on a Mac has no Get Plass item', async ({ page }) => {
     Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Linux x86_64' });
   });
   await page.goto('/?new=1');
-  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await page.getByRole('button', { name: 'Recent papers', exact: true }).click();
   await expect(page.getByRole('menuitem', { name: 'Get Plass for your Mac' })).toHaveCount(0);
 });

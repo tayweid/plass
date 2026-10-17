@@ -56,8 +56,8 @@ test('the bar, the rail and the open menus fit a narrow window with a long filen
 
   // The bar holds the paper's way in and out; the rail, every tool.
   const barButtons = page.locator('#toolbar button:visible');
-  await expect(barButtons).toHaveCount(3);
-  for (const name of ['File', 'Export PDF', 'Export']) {
+  await expect(barButtons).toHaveCount(5);
+  for (const name of ['Open', 'Recent papers', 'New window', 'Export PDF', 'Export']) {
     await expect(page.locator('#toolbar').getByRole('button', { name, exact: true })).toBeVisible();
   }
   const railButtons = page.locator('#rail button:visible');
@@ -230,7 +230,7 @@ test('menus open, navigate, and close from the keyboard', async ({ page }) => {
 
 test('a mouse click after Escape leaves no ring or caption on the tile Escape went back to', async ({ page }) => {
   await page.goto('/?new=1');
-  for (const name of ['Headings', 'File']) {
+  for (const name of ['Headings', 'Recent papers']) {
     const tile = page.getByRole('button', { name, exact: true });
     const caption = tile.locator('.lbl');
     const opacity = () => caption.evaluate((el) => getComputedStyle(el).opacity);
@@ -312,4 +312,74 @@ test('Lists reports and changes spacing for the nearest nested list', async ({ p
     const outer = window.view.state.doc.firstChild!;
     return [outer.attrs.tight, outer.firstChild!.lastChild!.attrs.tight];
   })).toEqual([true, true]);
+});
+
+test('Open is a split tile: the folder half is Open… (⌘O), the chevron lists the recent papers straight away, and New window opens a blank paper', async ({ page, context }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!(window as unknown as { __fm?: unknown }).__fm);
+  // A paper opened from a folder of the origin's storage is a recent one.
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(`recent-${Math.random().toString(36).slice(2)}`, { create: true });
+    const h = await dir.getFileHandle('Seminar notes.typ', { create: true });
+    const w = await h.createWritable();
+    await w.write('= Seminar\n\nNotes.\n');
+    await w.close();
+    await (window as unknown as { __fm: { loadHandle(h: FileSystemFileHandle, d: FileSystemDirectoryHandle): Promise<unknown> } }).__fm.loadHandle(h, dir);
+  });
+  const bar = page.locator('#toolbar');
+  await expect(bar.getByRole('button', { name: 'Open', exact: true })).toHaveAttribute('title', 'Open… (⌘O)');
+  await bar.getByRole('button', { name: 'Recent papers', exact: true }).click();
+  const menu = page.getByRole('menu', { name: 'Recent papers', exact: true });
+  await expect(menu).toBeVisible();
+  // The papers themselves, first, with no submenu to go through; then a
+  // whole folder. No Save, no autosave switch, no History…, no update
+  // check: Plass saves as you type, and the rest live elsewhere.
+  await expect(menu.getByRole('menuitem').first()).toHaveText(/^recent-[a-z0-9]+\/Seminar notes\.typ$/);
+  await expect(menu.getByRole('menuitem', { name: 'Open project folder…' })).toBeVisible();
+  for (const gone of [/^Save/, /Autosave/, /History/, /update/i, /New document/, /^Open…$/]) {
+    await expect(menu.getByRole('menuitem', { name: gone })).toHaveCount(0);
+  }
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+
+  const opened = context.waitForEvent('page');
+  await bar.getByRole('button', { name: 'New window', exact: true }).click();
+  const other = await opened;
+  expect(new URL(other.url()).searchParams.get('new')).toBe('1');
+  await other.close();
+});
+
+test('in Plass.app the recent papers end with the app’s update only while the shell offers one', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as any;
+    w.__shell = [];
+    w.__listeners = {} as Record<string, Array<(detail: unknown) => void>>;
+    w.__fire = (event: string, detail: unknown) => (w.__listeners[event] ?? []).forEach((listener: (d: unknown) => void) => listener(detail));
+    w.claerbout = {
+      request: async (message: { type: string }) => {
+        w.__shell.push(message);
+        return message.type === 'document' ? { path: null } : null;
+      },
+      on: (event: string, listener: (detail: unknown) => void) => {
+        (w.__listeners[event] ??= []).push(listener);
+        return () => {};
+      },
+      pathOf: () => '',
+    };
+  });
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!(window as unknown as { __fm?: unknown }).__fm);
+  const chevron = page.locator('#toolbar').getByRole('button', { name: 'Recent papers', exact: true });
+  const menu = page.getByRole('menu', { name: 'Recent papers', exact: true });
+  await chevron.click();
+  await expect(menu.getByRole('menuitem', { name: /update/i })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  // The shell's look at the site after launch found a newer build.
+  await page.evaluate(() => (window as any).__fire('update', { state: 'available', latest: { build: 'abc123', built: '2026-10-17T10:00:00Z' } }));
+  await chevron.click();
+  const install = menu.getByRole('menuitem', { name: 'Install update (built 2026-10-17)' });
+  await expect(install).toBeVisible();
+  await install.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__shell.filter((m: { type: string }) => m.type === 'update'))).toEqual([{ type: 'update', action: 'install' }]);
 });
