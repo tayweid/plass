@@ -544,6 +544,20 @@ FIXTURES.push({
       text: edge(4, ['> Quote with code. ' + FILLER.trim(), '>', '> ```', '> let x = 1', '> let y = 2', '> let z = 3', '> ```', '>', '> Closing. ' + FILLER.repeat(2).trim(), '']),
     },
   );
+  // A table that opens a page: Typst drops the spacing above it and its
+  // frame starts at the margin. The page landed it a margin-top higher
+  // (8.27 px at 12.5 pt) and page 2 held a line more than Typst's; the
+  // sweep disagreed from 48 to 80 words of lead-in at the top level and
+  // from 40 to 80 in a quote. A page gap before a table carries the
+  // table's margin-top now (style.css).
+  const table = ['| A | B |', '| --- | --- |', '| 1 | 2 |', '| 3 | 4 |'];
+  FIXTURES.push(
+    { name: 'table-edge.md', text: edge(64, ['Quote with a table. ' + FILLER.trim(), '', ...table, '', 'Closing. ' + FILLER.repeat(2).trim(), '']) },
+    {
+      name: 'quote-table-edge.md',
+      text: edge(64, ['> Quote with a table. ' + FILLER.trim(), '>', ...table.map((line) => '> ' + line), '>', '> Closing. ' + FILLER.repeat(2).trim(), '']),
+    },
+  );
   FIXTURES.push(
     { name: 'math-edge-bottom.md', text: edge(69, ['$$ \\int_0^1 f(x) \\, dx = F(1) - F(0) $$', '']) },
     { name: 'math-edge-top.md', text: edge(82, [frac, '']) },

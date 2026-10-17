@@ -140,15 +140,22 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      0.55 em are a July raster calibration). The abstract's first line is
      2.55 px higher than in print (its painted "Abstract" label and 0.75 em
      margin). The paragraph after the bibliography is 1.61 px higher (the
-     compiled list's box and its 0.75 em padding). A table that opens a
-     page lands its margin-top above the margin (`blockTopAdjustPx` takes
-     the margin off the box's top, but the margin is above the box): the
-     paragraph after it is 23.27 px higher than its print (8.28 px for a
-     table a page break parts from the paragraph before it in a quote),
-     so a page that starts with a table holds more than Typst's. A table
-     put at a page bottom by a sweep disagrees at page 3, in a quote or
-     not, from 48 to 80 words of lead-in (found while fixing the quote's
-     children, not fixed).
+     compiled list's box and its 0.75 em padding).
+   - Fixed 2026-10-16: a table that opens a page lands its frame (its box)
+     at the top margin, where Typst puts it. `blockTopAdjustPx` took the
+     table's margin-top off the box, but the margin is above the box, and
+     once a page gap came between a paragraph and the table the
+     paragraph's margin no longer collapsed into the table's, so the table
+     sat 8.27 or 23.27 px above the margin at 12.5 pt (8.28 px in a quote),
+     depending on whether the last pass had broken there, and a page that
+     starts with a table held more than Typst's. A page gap before a table
+     carries the table's margin-top now (style.css), so the table's place
+     in the unbroken flow is the same with the gap or without, and a table
+     after an explicit page break has none. A sweep of a table put at a
+     page bottom (40 to 90 words of lead-in, in a quote or not) disagreed
+     at page 3 in 38 of 52 documents and agrees in all now. Audit
+     fixtures: `table-edge.md`, `quote-table-edge.md`; spec:
+     `tests/margin-drift.spec.ts`.
    - Fixed 2026-10-16: inside a quote Typst spaces a block 2.4 em above
      and 1.8 em below (the quote's show-set reaches its content), where
      the page used paragraph spacing: a list after a quote's paragraph

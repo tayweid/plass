@@ -1525,7 +1525,8 @@ body {
    in an item of a list in it, ends its margin lower; it keeps that margin
    when a page gap comes between them, so the gap is sized against the
    same box (the page top drops the spacing with the margin). A table's
-   margin-top collapses with the paragraph's, so the table moves its own.
+   margin-top collapses with the paragraph's, so the table moves its own
+   (a page gap between them carries it, as below).
    Below, a list, a grid or a table is 1.8em from a paragraph, the same as
    the quote's own spacing when it closes the quote; a code block's share
    is smaller, so it takes the quote's in full only there. Exact beside
@@ -1546,7 +1547,7 @@ body {
   margin-bottom: calc(var(--par-margin, 0.9em) + var(--quote-below, 0.0828em));
 }
 
-.ProseMirror blockquote:not([data-kind='solution']) > :is(p, p + .ts-pagegap) + table {
+.ProseMirror blockquote:not([data-kind='solution']) > :is(p + table, p + .ts-pagegap:has(+ table)) {
   margin-top: var(--quote-table-mt, 2.079em);
 }
 
@@ -1556,8 +1557,9 @@ body {
 
 /* A table that opens a quote is padded like the paragraph the quote's
    padding is calibrated with (its frame is its box), as an equation is
-   below; a page gap that opens the quote before it is a widget. */
-.ProseMirror blockquote:not([data-kind='solution']) > :is(table:first-child, .ts-pagegap:first-child + table) {
+   below; a page gap that opens the quote before it carries that margin,
+   as it carries every table's (below). */
+.ProseMirror blockquote:not([data-kind='solution']) > :is(table:first-child, .ts-pagegap:first-child:has(+ table)) {
   margin-top: var(--par-cap-slack, 0.4962em);
 }
 
@@ -2467,6 +2469,32 @@ body {
   table-layout: auto;
   font-size: 1em;
   line-height: inherit;
+}
+
+/* A page gap before a table carries the table's margin-top, so the margin
+   collapses with the block above as it does with no gap there: the
+   table's place in the unbroken flow, which the paginator recovers by
+   taking the gaps out, is the same either way. With the margin on the
+   table, the paragraph's margin-bottom stopped collapsing into it once a
+   gap came between them, and the table landed that margin (15 px at
+   12.5 pt) from where the paginator put it. The table's box, its Typst
+   frame, starts where the gap ends: at the page's top margin (Typst drops
+   the spacing above a table that opens a page). */
+.ProseMirror .ts-pagegap:has(+ table) {
+  margin-top: var(--table-mt, 1.396em);
+}
+
+.ProseMirror .ts-pagegap + table {
+  margin-top: 0;
+}
+
+/* A table after an explicit page break always opens a page: no margin-top
+   at all, as a paragraph there has none. The paginator lands that page
+   from the break's own place, which is zero height: the margin above it
+   collapses through it, and a margin of the gap's would add what it has
+   over that (8.27 px after a paragraph at 12.5 pt). */
+.ProseMirror :is(.ts-pagebreak, .ts-numrestart) + :is(table, .ts-pagegap:has(+ table)) {
+  margin-top: 0;
 }
 
 .ProseMirror table[data-font-size='0.9em'] { font-size: 0.9em; --table-scale: 0.9; }

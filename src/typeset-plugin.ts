@@ -1998,8 +1998,10 @@ class TypesetView {
   /**
    * How far below the page's top margin a block's painted box must start
    * for its Typst frame to begin AT the margin (negative: above it). Text
-   * blocks land their cap top there (`pageTopAdjustEm`); a table drops its
-   * margin-top; a container (list, quote) drops its own painted top
+   * blocks land their cap top there (`pageTopAdjustEm`); a table's box is
+   * its frame (its margin-top is above the box: on the page gap before it,
+   * style.css, or inside the editor's padding on the first page,
+   * `applyTopAdjust`); a container (list, quote) drops its own painted top
    * spacing and lands its first text block like a paragraph — Typst starts
    * a page with the item's or quote's first line at the margin, not with
    * the container's box. `parent` and `index` place `node` (a display
@@ -2014,7 +2016,7 @@ class TypesetView {
     // like a paragraph.
     if (node.type.name === 'grid' || node.type.name === 'grid_row') return pageTopAdjustEm(s, 'paragraph') * F;
     if (node.type.name === 'code_block') return pageTopAdjustEm(s, 'code') * F;
-    if (node.type.name === 'table') return -tableMarginsEm(s).top * F;
+    if (node.type.name === 'table') return 0;
     if (node.type.name === 'math_display') return -displayMathPadEm(s, parent, index).top * F;
     const dropEm =
       node.type.name === 'blockquote' ? (node.attrs.kind === 'solution' ? 0 : quoteBoxEm(s).padTop) : containerPageTopDropEm(node.type.name);
@@ -2053,8 +2055,12 @@ class TypesetView {
     const host = this.view.dom.parentElement;
     if (!host) return;
     const s = getSettings(this.view.state);
-    const adj = this.blockTopAdjustPx(firstPrintedBlock(this.view.state.doc, 0), s, this.bodyPx());
-    host.style.paddingTop = `${(s.marginTop * 96 + adj).toFixed(2)}px`;
+    const first = firstPrintedBlock(this.view.state.doc, 0);
+    const F = this.bodyPx();
+    // The adjustment places the block's box; a table's margin-top is above
+    // its box, inside this padding (no page gap carries it here).
+    const ownMargin = first?.type.name === 'table' ? tableMarginsEm(s).top * F : 0;
+    host.style.paddingTop = `${(s.marginTop * 96 + this.blockTopAdjustPx(first, s, F) - ownMargin).toFixed(2)}px`;
   }
 
   /** Key of the last published geometry variables (null: never, or the

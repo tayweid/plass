@@ -367,3 +367,101 @@ for (const parIndent of [false, true]) {
     for (let i = 1; i < d.length; i++) expect(Math.abs(d[i].drift - d[i - 1].drift), `${d[i].kind}: ${JSON.stringify(d)}`).toBeLessThan(1 / 64 + 0.003);
   });
 }
+
+/** Every paragraph outside a table cell on a document of `blocks`, at
+ *  12.5 pt with 1 in margins, against Typst's baseline nearest it on the
+ *  same page, both from page 1's first paragraph; and each table's box,
+ *  px from its sheet's top. */
+async function pagedDrift(page: Page, blocks: unknown[], parIndent = false) {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean(window.view));
+  await page.evaluate(
+    ({ blocks, parIndent }) => {
+      const { state } = window.view;
+      const tr = state.tr.replaceWith(
+        0,
+        state.doc.content.size,
+        blocks.map((b) => state.schema.nodeFromJSON(b)),
+      );
+      tr.setDocAttribute('settings', { ...state.doc.attrs.settings, sizePt: 12.5, parIndent, marginTop: 1, marginRight: 1, marginBottom: 1, marginLeft: 1 });
+      window.view.dispatch(tr);
+    },
+    { blocks, parIndent },
+  );
+  await settleLocal(page, 0);
+  const dom = await page.evaluate(() => {
+    const sheets = [...document.querySelectorAll('#pages .page-box')].map((el) => el.getBoundingClientRect().top);
+    const at = (el: Element) => {
+      const top = el.getBoundingClientRect().top;
+      const i = sheets.findLastIndex((sheet) => sheet <= top + 0.5);
+      return { page: i, top: top - sheets[i] };
+    };
+    return {
+      sheets: sheets.length,
+      rows: [...window.view.dom.querySelectorAll<HTMLElement>('p')].filter((el) => !el.closest('td, th')).map((el) => ({ text: el.textContent ?? '', ...at(el) })),
+      tables: [...window.view.dom.querySelectorAll('table')].map(at),
+    };
+  });
+  const svg = await page.evaluate(() => window.__tableProofSvg());
+  if (!svg) throw new Error('Typst compile failed');
+  const pages = typstBaselines(svg).map((ys) => ys.filter((y) => y >= 96 && y <= 11 * 96 - 96));
+  expect(dom.sheets, 'page count').toBe(pages.length);
+  const offset = pages[0][0] - dom.rows[0].top;
+  const rows = dom.rows.map(({ text, page: i, top }) => {
+    const at = top + offset;
+    const printed = pages[i].reduce((best, y) => (Math.abs(y - at) < Math.abs(best - at) ? y : best));
+    return { text, page: i, drift: at - printed };
+  });
+  return { rows, tables: dom.tables };
+}
+
+// A table that opens a page: Typst drops the spacing above it, and its
+// frame (the table's box) starts at the top margin. The page landed the
+// box a whole margin-top higher (`blockTopAdjustPx` took the table's
+// margin off a box the margin is above), and once a page gap came between
+// a paragraph and the table the paragraph's margin no longer collapsed
+// into the table's, so where the table sat depended on whether the last
+// pass had broken there: 8.27 px or 23.27 px above the margin at 12.5 pt
+// (a quote's table 8.28 px), and everything after it on the page as high.
+// A page gap before a table carries the table's margin-top now
+// (style.css): the table's place in the unbroken flow is the same with the
+// gap or without, and its box lands where the gap ends.
+const pageTopTables: Array<{ name: string; parIndent?: boolean; blocks: () => unknown[] }> = [
+  {
+    name: 'after a paragraph',
+    blocks: () => [...Array.from({ length: 21 }, (_, i) => p(`Paragraph ${i + 1} is a single short line.`)), p('Before the table.'), table(['A1', 'B1'], ['A2', 'B2']), p('After the table.'), p('The last paragraph.')],
+  },
+  {
+    name: 'after a paragraph, classic',
+    parIndent: true,
+    blocks: () => [...Array.from({ length: 33 }, (_, i) => p(`Paragraph ${i + 1} is a single short line.`)), p('Before the table.'), table(['A1', 'B1'], ['A2', 'B2']), p('After the table.'), p('The last paragraph.')],
+  },
+  {
+    name: 'in a quote, after its paragraph',
+    blocks: () => [
+      ...Array.from({ length: 20 }, (_, i) => p(`Paragraph ${i + 1} is a single short line.`)),
+      quote(p('Quoted before the table.'), table(['A1', 'B1'], ['A2', 'B2']), p('Quoted after the table.')),
+      p('After the quote.'),
+    ],
+  },
+  {
+    name: 'after a list',
+    blocks: () => [...Array.from({ length: 21 }, (_, i) => p(`Paragraph ${i + 1} is a single short line.`)), ul(li(p('An item.'))), table(['A1', 'B1'], ['A2', 'B2']), p('After the table.')],
+  },
+  {
+    name: 'after a page break',
+    blocks: () => [p('Before the break.'), { type: 'page_break' }, table(['A1', 'B1'], ['A2', 'B2']), p('After the table.')],
+  },
+];
+for (const c of pageTopTables) {
+  test(`a table that opens a page lands its frame at the top margin: ${c.name}`, async ({ page }) => {
+    test.setTimeout(90_000);
+    const { rows, tables } = await pagedDrift(page, c.blocks(), c.parIndent);
+    expect(tables[0].page, JSON.stringify(tables)).toBe(1);
+    // The box at the margin, within the page gap's painted hundredths.
+    expect(Math.abs(tables[0].top - 96), JSON.stringify(tables)).toBeLessThan(1 / 32);
+    // Every line on both pages on its print; a table's margins are still
+    // four-decimal lengths, truncated (ROADMAP).
+    for (const row of rows) expect(Math.abs(row.drift), `${row.text}: ${JSON.stringify(rows)}`).toBeLessThan(1 / 32);
+  });
+}
