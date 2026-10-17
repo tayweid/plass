@@ -461,10 +461,11 @@ test('with the History page in the room, the recent papers, Export and the rail 
   expect(await closes()).toEqual([[], []]);
   await down();
 
-  // The rail: a flyout (Headings) and Document settings.
+  // The rail: a tile that acts at once (Table, editing the paper under
+  // the page) and Document settings.
   await up();
-  await page.getByRole('button', { name: 'Headings', exact: true }).click();
-  await expect(page.locator('#tb-menu-headings')).toBeVisible();
+  await page.locator('#rail').getByRole('button', { name: 'Table', exact: true }).click();
+  await expect(page.locator('.ProseMirror table')).toHaveCount(1);
   expect(await closes()).toEqual([[], [], []]);
   await down();
   await up();
@@ -496,8 +497,9 @@ test('with the History page in the room, the recent papers, Export and the rail 
   await page.getByRole('button', { name: 'Recent papers', exact: true }).click();
   await expect(page.locator('#tb-menu-recent-papers')).toBeVisible();
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: 'Headings', exact: true }).click();
-  await page.keyboard.press('Escape');
+  await page.locator('#rail-drawer').click();
+  await expect(page.locator('html')).toHaveClass(/\brail-open\b/);
+  await page.locator('#rail-drawer').click();
   expect(await historyAsks(page)).toHaveLength(asked);
 });
 

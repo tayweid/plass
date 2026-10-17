@@ -1,4 +1,14 @@
+import type { Page } from 'playwright/test';
 import { expect, test } from './fixture';
+
+/** Install Plass is a row of the rail's drawer, in its Document group. */
+const installRow = (page: Page) =>
+  page.locator('#rail').getByRole('group', { name: 'Document', exact: true }).getByRole('button', { name: 'Install Plass', exact: true });
+
+async function openDrawer(page: Page) {
+  await page.locator('#rail-drawer').click();
+  await expect(page.locator('html')).toHaveClass(/\brail-open\b/);
+}
 
 test('manifest has a stable install identity and reachable icons', async ({ request }) => {
   const response = await request.get('/manifest.webmanifest');
@@ -70,8 +80,8 @@ test('Install Plass uses the browser installation prompt when offered', async ({
     window.dispatchEvent(event);
   });
 
-  await page.getByRole('button', { name: 'Extras', exact: true }).click();
-  await page.getByRole('menuitem', { name: 'Install Plass' }).click();
+  await openDrawer(page);
+  await installRow(page).click();
   await expect(page.locator('html')).toHaveAttribute('data-install-prompted', 'yes');
 });
 
@@ -85,15 +95,17 @@ test('Install Plass explains Safari installation when no prompt is available', a
   });
   await page.goto('/?new=1');
 
-  await page.getByRole('button', { name: 'Extras', exact: true }).click();
-  await page.getByRole('menuitem', { name: 'Install Plass' }).click();
+  await openDrawer(page);
+  await installRow(page).click();
   await expect(page.locator('#toast')).toContainText('File → Add to Dock');
 });
 
 test('installed app state removes the redundant Install action', async ({ page }) => {
   await page.goto('/?new=1');
-  await page.getByRole('button', { name: 'Extras', exact: true }).click();
-  const install = page.getByRole('menuitem', { name: 'Install Plass' });
+  // A drawer row: not among the rail's tiles at rest.
+  const install = installRow(page);
+  await expect(install).toBeHidden();
+  await openDrawer(page);
   await expect(install).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new Event('appinstalled')));
   await expect(install).toBeHidden();

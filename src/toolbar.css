@@ -240,6 +240,139 @@
   transform: translateY(-50%);
 }
 
+/* The rail's tools (toolbar.ts, Taylor 2026-10-17). At rest: the tiles
+   that are hard to type in markdown, one group under each hairline; a
+   group of drawer-only tools (Basics, Keys) is not drawn, and no heading
+   or hint shows. */
+.tb-rail-head,
+.tb-hint,
+#rail .tb-drawer-only {
+  display: none;
+}
+
+:root:not(.rail-open) .tb-rail-group:not(:has(> .tb-btn:not(.tb-drawer-only):not([hidden]))) {
+  display: none;
+}
+
+.tb-rail-group + .tb-rail-group::before {
+  content: '';
+  flex: none;
+  width: 18px;
+  height: 1px;
+  margin: 3px 0;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Open (the foot's All tools switch): the rail widens (--rail, style.css)
+   and pushes the page over, and every tool is a row — its glyph, its
+   name, and its markdown and keys at the right — under its group's
+   heading, Basics first. It is the markdown cheat sheet, clickable. */
+:root.rail-open #rail {
+  align-items: stretch;
+  padding-inline: 8px;
+}
+
+:root.rail-open .tb-rail-groups {
+  align-items: stretch;
+  gap: 1px;
+}
+
+:root.rail-open .tb-rail-group {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+}
+
+:root.rail-open .tb-rail-group + .tb-rail-group {
+  margin-top: 8px;
+}
+
+:root.rail-open .tb-rail-group + .tb-rail-group::before {
+  content: none;
+}
+
+:root.rail-open .tb-basics {
+  order: -1;
+}
+
+:root.rail-open .tb-rail-head {
+  display: block;
+  padding: 6px 8px 3px;
+  font: 600 10.5px/1 var(--sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(240, 238, 233, 0.4);
+}
+
+:root.rail-open #rail .tb-rail-group .tb-btn {
+  display: flex;
+  width: auto;
+  min-width: 0;
+  height: 28px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 8px;
+  border-radius: 7px;
+}
+
+:root.rail-open #rail .tb-rail-group .tb-btn[hidden] {
+  display: none;
+}
+
+:root.rail-open #rail .tb-rail-group .tb-btn .ico {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+}
+
+:root.rail-open #rail .tb-rail-group .tb-btn .tico {
+  font-size: 13px;
+  line-height: 16px;
+  min-width: 16px;
+}
+
+:root.rail-open #rail .tb-rail-group .tb-btn .lbl {
+  position: static;
+  transform: none;
+  opacity: 1;
+  visibility: visible;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  font: 13px var(--sans);
+  color: inherit;
+}
+
+:root.rail-open #rail .tb-rail-group .tb-btn .lbl {
+  flex: none;
+}
+
+:root.rail-open .tb-hint {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-left: auto;
+  padding-left: 8px;
+  font: 11px var(--mono);
+  color: rgba(157, 184, 214, 0.85);
+  white-space: nowrap;
+}
+
+:root.rail-open #rail .tb-rail-group .tb-btn:disabled .lbl {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* The foot's tiles in a row at the drawer's left. */
+:root.rail-open .tb-rail-foot {
+  flex-direction: row;
+  align-items: center;
+  padding-left: 4px;
+}
+
 
 .tb-menu {
   position: fixed;
@@ -265,7 +398,7 @@
   display: none;
 }
 
-/* The glyph panels: Extras, and the Insert flyout (one row of it). */
+/* The glyph panels (the block pill's Align and Cell panels). */
 .tb-menu-extras {
   width: 318px;
   padding: 10px;

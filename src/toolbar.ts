@@ -71,12 +71,19 @@ const ICONS: Record<string, string> = {
   // The solution block's own mark: its red rule beside the text.
   solution: '<line x1="5" y1="4" x2="5" y2="20" stroke="#d9433a" stroke-width="2.8"/><line x1="10" y1="8" x2="20" y2="8"/><line x1="10" y1="12" x2="20" y2="12"/><line x1="10" y1="16" x2="16" y2="16"/>',
   open: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
-  // A window (its title band under the top edge) with a plus in it.
-  newwindow: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="8.5" x2="21" y2="8.5"/><line x1="12" y1="11.5" x2="12" y2="17.5"/><line x1="9" y1="14.5" x2="15" y2="14.5"/>',
+  // A page, its corner folded, with a solid + badge at its foot: a new
+  // document (Taylor, 2026-10-17; Knuth's and ManimLive's are the same).
+  newwindow: '<path d="M12 21H7a2 2 0 0 1-2-2V4.5a2 2 0 0 1 2-2h5.5L17 7v3.5"/><path d="M12.5 2.5V7H17"/><path fill="currentColor" stroke="none" fill-rule="evenodd" d="M22.5 17a5.5 5.5 0 1 1-11 0a5.5 5.5 0 1 1 11 0ZM16.15 13.9v2.25H13.9v1.7h2.25v2.25h1.7v-2.25h2.25v-1.7h-2.25V13.9Z"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   list: '<circle cx="4" cy="6" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="4" cy="18" r="1.2" fill="currentColor"/><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>',
-  chevron: '<polyline points="7 10 12 15 17 10"/>',
+  // ManimLive's chevron (maniml shell), 12 by 6: Taylor liked its size.
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  numlist: '<path d="M3 4.5 4.5 3.8V9"/><path d="M3.2 14.6c.3-.8 2.6-1 2.6.4 0 1-2.6 2-2.6 3.5h2.8"/><line x1="9" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="9" y1="18" x2="21" y2="18"/>',
+  looselist: '<circle cx="4" cy="5" r="1.2" fill="currentColor"/><circle cx="4" cy="19" r="1.2" fill="currentColor"/><line x1="8" y1="5" x2="21" y2="5"/><line x1="8" y1="19" x2="21" y2="19"/><polyline points="12.5 9.5 14.5 7.8 16.5 9.5"/><polyline points="12.5 14.5 14.5 16.2 16.5 14.5"/>',
+  // The rail's All tools switch: a panel with its side column and a
+  // chevron pointing out of it.
+  drawer: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/><polyline points="13.5 9.5 16 12 13.5 14.5"/>',
   sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
   code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
   comment: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/>',
@@ -218,7 +225,19 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   const folderText = document.createElement('span');
   folderText.dir = 'ltr';
   folder.append(folderText);
-  titleBar.append(fileLabel, dot, folder);
+  // Save…, Knuth's chip at the pill's end (knuth/src/main.ts, #doc-save),
+  // only while the paper has no file yet: Plass saves as you type once it
+  // has one. It is ⌘S: the picker asks where the paper lives.
+  const saveChip = document.createElement('button');
+  saveChip.type = 'button';
+  saveChip.className = 'doc-save';
+  saveChip.id = 'doc-save';
+  saveChip.textContent = 'Save…';
+  saveChip.title = 'Save… — pick where it lives (⌘S)';
+  saveChip.hidden = true;
+  saveChip.addEventListener('mousedown', (e) => e.preventDefault());
+  saveChip.addEventListener('click', () => void fm.save());
+  titleBar.append(fileLabel, dot, folder, saveChip);
   let documentPath: string | null = null;
   const repaintFolder = () => {
     const where = documentPath ? documentPath.slice(0, documentPath.lastIndexOf('/')) || '/' : null;
@@ -238,24 +257,6 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   const railFoot = document.createElement('div');
   railFoot.className = 'tb-rail-foot';
   rail.append(railGroups, railFoot);
-  const railGroup = (name: string) => {
-    if (railGroups.childElementCount) {
-      const rule = document.createElement('div');
-      rule.className = 'tb-rule';
-      rule.setAttribute('role', 'separator');
-      railGroups.append(rule);
-    }
-    const group = document.createElement('div');
-    group.className = 'tb-rail-group';
-    group.setAttribute('role', 'group');
-    group.setAttribute('aria-label', name);
-    railGroups.append(group);
-    return group;
-  };
-  const textGroup = railGroup('Text');
-  const insertGroup = railGroup('Insert');
-  const blocksGroup = railGroup('Blocks');
-  const moreGroup = railGroup('More');
   // A short window cuts the groups: a fade at the cut edge says the rest
   // is a scroll away (toolbar.css). Read on scroll and resize only.
   const railCue = () => {
@@ -269,6 +270,8 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   let captionButton: HTMLButtonElement | null = null;
   const attachCaption = (button: HTMLButtonElement) => {
     const show = () => {
+      // The open drawer labels its rows itself: no caption beside them.
+      if (button.closest('#rail') && document.documentElement.classList.contains('rail-open')) return;
       captionButton?.classList.remove('tb-caption-active');
       captionButton = button;
       button.classList.add('tb-caption-active');
@@ -374,21 +377,34 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   const exportBtn = trigger(exportSplit, 'Export', icon('chevron'));
   exportBtn.classList.add('tb-tile', 'tb-split-more');
   exportBtn.title = 'Export as .md, .typ or .tex';
-  // The rail, top to bottom, in the bar's old groups; the Blocks, once a
-  // row inside Extras, are tiles of their own.
-  const formatBtn = trigger(textGroup, 'Headings', '<span class="ico tico">H1</span>');
-  const styleBtn = trigger(textGroup, 'Text style', '<span class="ico tico"><b>B</b></span>');
-  const listBtn = trigger(textGroup, 'Lists', icon('list'));
-  const figureBtn = glyphButton(insertGroup, 'Insert figure', icon('image'));
-  const mathBtn = glyphButton(insertGroup, 'Inline math', '<span class="ico tico">Σ</span>');
-  const noteBtn = glyphButton(insertGroup, 'Footnote', '<span class="ico tico">†</span>');
-  const insertBtn = trigger(insertGroup, 'Insert', icon('plus'));
-  insertBtn.title = 'Insert — table, grid, display equation, title block, page break';
-  const extrasBtn = trigger(moreGroup, 'Extras', '<span class="ico tico">⋯</span>');
+  // The drawer's switch: the rail opens into every tool, labelled, with
+  // its markdown and its keys, pushing the page over (--rail, style.css;
+  // the paper refits as the panel narrows). Remembered per browser.
+  const drawerBtn = glyphButton(railFoot, 'All tools', icon('drawer'));
+  drawerBtn.id = 'rail-drawer';
+  drawerBtn.setAttribute('aria-pressed', 'false');
+  const setDrawer = (open: boolean) => {
+    document.documentElement.classList.toggle('rail-open', open);
+    drawerBtn.setAttribute('aria-pressed', String(open));
+    drawerBtn.title = open ? 'Fewer tools' : 'All tools — with their markdown and keys';
+    try {
+      localStorage.setItem('typeset-rail-open', open ? '1' : '0');
+    } catch {
+      /* no storage: the drawer simply forgets */
+    }
+  };
+  drawerBtn.addEventListener('click', () => {
+    closeMenu();
+    setDrawer(!document.documentElement.classList.contains('rail-open'));
+  });
+  let drawerWasOpen = false;
+  try {
+    drawerWasOpen = localStorage.getItem('typeset-rail-open') === '1';
+  } catch {
+    /* no storage */
+  }
+  setDrawer(drawerWasOpen);
   const settingsBtn = glyphButton(railFoot, 'Document settings', icon('sliders'));
-  // The formatting tools rest while the text is the truth (the Blocks
-  // tiles rest through their own refresh, below).
-  for (const button of [formatBtn, styleBtn, listBtn, figureBtn, mathBtn, noteBtn]) button.classList.add('tb-rests');
   const sourceBtn = document.createElement('button');
   sourceBtn.type = 'button';
   sourceBtn.className = 'tb-btn tb-source view-switch';
@@ -481,13 +497,6 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     }
     return menu;
   };
-  const format = createMenu('Headings', formatBtn);
-  const textStyle = createMenu('Text style', styleBtn);
-  const lists = createMenu('Lists', listBtn);
-  const insert = createMenu('Insert', insertBtn);
-  insert.element.classList.add('tb-menu-extras');
-  const extras = createMenu('Extras', extrasBtn);
-  extras.element.classList.add('tb-menu-extras');
   const recent = createMenu('Recent papers', recentBtn);
   const exports = createMenu('Export', exportBtn);
   const get = createMenu('Get Plass', recentBtn, recent);
@@ -627,17 +636,10 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   };
   const refresh = () => refreshItems.forEach((update) => update());
   const refreshRail = () => refreshTiles.forEach((update) => update());
-  format.refresh = refresh;
-  textStyle.refresh = refresh;
-  lists.refresh = refresh;
-  insert.refresh = refresh;
-  extras.refresh = refresh;
   const runCmd = (command: Command) => () => {
     command(view.state, view.dispatch, view);
     view.focus();
   };
-  const commandItem = (parent: HTMLElement, label: string, command: Command, options: ItemOptions = {}) =>
-    item(parent, label, runCmd(command), { editing: true, enabled: () => command(view.state), ...options });
   const ancestor = (...names: string[]) => {
     const { $from } = view.state.selection;
     for (let depth = $from.depth; depth > 0; depth--) {
@@ -645,54 +647,126 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     }
     return null;
   };
-  const extraGroup = (menu: Menu, name: string) => {
+  // The rail's tools (Taylor, 2026-10-17). At rest the rail holds what is
+  // hard to type in markdown: Insert (image, table, grid, math, footnote),
+  // the Blocks, alignment, the code block, the bibliography. Its foot's
+  // All tools switch opens it into every tool, labelled, with its markdown
+  // and keys (Basics, the rest of Insert and Code, Document, Keys): the
+  // markdown cheat sheet and the old Headings, Text style, Lists, Insert
+  // and Extras menus in one list. Each tool is one button: a tile at rest
+  // (its name the hover caption), a row with its hint when open.
+  type ToolOptions = ItemOptions & { hint?: string; rest?: boolean };
+  const section = (name: string) => {
     const group = document.createElement('div');
-    group.className = 'tb-extra-section';
+    group.className = 'tb-rail-group';
     group.setAttribute('role', 'group');
     group.setAttribute('aria-label', name);
-    const label = document.createElement('span');
-    label.className = 'tb-extra-heading';
-    label.textContent = name;
-    const row = document.createElement('div');
-    row.className = 'tb-extra-row';
-    group.append(label, row);
-    menu.element.append(group);
-    return row;
+    const head = document.createElement('div');
+    head.className = 'tb-rail-head';
+    head.setAttribute('aria-hidden', 'true');
+    head.textContent = name;
+    group.append(head);
+    railGroups.append(group);
+    return group;
   };
-  const insertRow = extraGroup(insert, 'Insert');
-  const alignmentRow = extraGroup(extras, 'Alignment');
-  const codeRow = extraGroup(extras, 'Code');
-  const documentRow = extraGroup(extras, 'Document');
-  const textColumn = format.element;
-  for (const level of [null, 1, 2, 3]) {
-    const command = level ? setBlockType(schema.nodes.heading, { level }) : setBlockType(schema.nodes.paragraph);
-    const current = () => {
-      const node = view.state.selection.$from.parent;
-      return level ? node.type === schema.nodes.heading && node.attrs.level === level : node.type === schema.nodes.paragraph;
-    };
-    commandItem(textColumn, level ? `Heading ${level}` : 'Body text', command, {
-      title: level ? `Heading ${level} (⌘⌥${level})` : 'Body text (⌘⌥0)',
-      shortcut: `⌘⌥${level ?? 0}`,
-      checked: current,
-      // The already-selected style remains available and visibly checked.
-      enabled: () => command(view.state) || current(),
-    });
-  }
-  for (const [name, label, shortcut, title] of [
-    ['strong', 'Bold', '⌘B', 'Bold (⌘B) — or type **text**'],
-    ['em', 'Italic', '⌘I', 'Italic (⌘I) — or type *text*'],
-    ['strike', 'Strikethrough', '⌘⇧X', 'Strikethrough (⌘⇧X) — or type ~~text~~'],
-  ]) {
-    const mark = schema.marks[name];
-    commandItem(textStyle.element, label, toggleMark(mark), {
-      title, shortcut,
-      checked: () => {
-        const { selection, storedMarks, doc } = view.state;
-        return selection.empty ? !!mark.isInSet(storedMarks ?? selection.$from.marks()) : doc.rangeHasMark(selection.from, selection.to, mark);
-      },
-    });
-  }
+  const tool = (group: HTMLElement, label: string, run: () => void, options: ToolOptions) => {
+    const button = item(group, label, run, { tile: true, ...options });
+    if (options.hint) {
+      const hint = document.createElement('span');
+      hint.className = 'tb-hint';
+      hint.textContent = options.hint;
+      button.append(hint);
+    }
+    if (!options.rest) button.classList.add('tb-drawer-only');
+    return button;
+  };
+  const commandTool = (group: HTMLElement, label: string, command: Command, options: ToolOptions) =>
+    tool(group, label, runCmd(command), { editing: true, enabled: () => command(view.state), ...options });
+  const tico = (text: string) => `<span class="ico tico">${text}</span>`;
 
+  const insertGroup = section('Insert');
+  const blocksGroup = section('Blocks');
+  const layoutGroup = section('Layout');
+  const codeGroup = section('Code');
+  const documentGroup = section('Document');
+  const basicsGroup = section('Basics');
+  basicsGroup.classList.add('tb-basics');
+  const keysGroup = section('Keys');
+
+  // INSERT
+  commandTool(insertGroup, 'Image', insertFigureCmd, { rest: true, glyph: icon('image'), hint: 'paste · ⌘⌥I', title: 'Insert figure (⌘⌥I) — or paste/drop an image' });
+  tool(insertGroup, 'Table', () => insertStructuredTable(view), { rest: true, editing: true, glyph: icon('table'), hint: '⌘⌥T', title: 'Insert table (⌘⌥T)' });
+  tool(insertGroup, 'Grid', () => insertGrid(view), { rest: true, editing: true, glyph: icon('grid'), hint: 'side by side', title: 'Side-by-side grid — any blocks in columns; Grid layout sets the split' });
+  commandTool(insertGroup, 'Inline math', insertMath(false), { rest: true, glyph: tico('Σ'), hint: '$x^2$ · ⌘M', title: 'Inline math (⌘M) — or type $x^2$' });
+  commandTool(insertGroup, 'Footnote', insertFootnote, { rest: true, glyph: tico('†'), hint: '^[note] · ⌘⌥F', title: 'Footnote (⌘⌥F) — or type ^[' });
+  commandTool(insertGroup, 'Display equation', insertMath(true), { glyph: tico('∑'), hint: '$$ · ⌘⇧M', title: 'Display equation (⌘⇧M)' });
+  tool(insertGroup, 'Reference or cite', () => {
+    const { state, dispatch } = view;
+    const { $from } = state.selection;
+    const before = $from.parent.textBetween(Math.max(0, $from.parentOffset - 1), $from.parentOffset, '￼', '￼');
+    dispatch(state.tr.insertText(before && /[\w.]/.test(before) ? ' @' : '@').scrollIntoView());
+    view.focus();
+  }, { editing: true, glyph: tico('@'), hint: '@', title: 'Reference or cite — type @: the picker lists equations, figures, tables, sections and works' });
+  tool(insertGroup, 'Title block', () => {
+    const { state, dispatch } = view;
+    const existing = state.doc.firstChild;
+    if (existing && ['doc_title', 'doc_authors', 'doc_date', 'abstract'].includes(existing.type.name)) {
+      dispatch(state.tr.setSelection(TextSelection.create(state.doc, 1)).scrollIntoView());
+      view.focus();
+      return;
+    }
+    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const nodes = [
+      schema.nodes.doc_title.create(null, [schema.text('Title')]),
+      schema.nodes.doc_authors.create(null, [schema.text('Author Name')]),
+      schema.nodes.doc_date.create(null, [schema.text(today)]),
+      schema.nodes.abstract.create(null, [schema.nodes.paragraph.create(null, [schema.text('Abstract text.')])]),
+    ];
+    let tr = state.tr.insert(0, nodes);
+    tr = tr.setSelection(TextSelection.create(tr.doc, 1, 1 + 'Title'.length));
+    dispatch(tr.scrollIntoView());
+    view.focus();
+  }, { editing: true, glyph: tico('T'), hint: 'title · authors', title: 'Title block — title, authors, date, abstract' });
+  tool(insertGroup, 'Page break', () => {
+    const { state, dispatch } = view;
+    const { $from } = state.selection;
+    const pos = $from.after($from.depth > 0 ? 1 : 0);
+    dispatch(state.tr.insert(pos, schema.nodes.page_break.create()).scrollIntoView());
+    view.focus();
+  }, { editing: true, glyph: icon('pagebreak'), hint: '⌘⏎', title: 'Page break (⌘⏎)' });
+
+  // BLOCKS
+  const setBlockKind = (kind: 'solution' | null) => {
+    const { state } = view;
+    const { $from, $to } = state.selection;
+    for (let d = $from.sharedDepth($to.pos); d > 0; d--) {
+      const node = $from.node(d);
+      if (node.type === schema.nodes.blockquote) {
+        if ((node.attrs.kind ?? null) !== kind) view.dispatch(state.tr.setNodeMarkup($from.before(d), undefined, { ...node.attrs, kind }));
+        view.focus();
+        return;
+      }
+    }
+    wrapIn(schema.nodes.blockquote, { kind })(state, view.dispatch);
+    view.focus();
+  };
+  tool(blocksGroup, 'Block quote', () => setBlockKind(null), {
+    rest: true, editing: true, glyph: icon('quote'), hint: '> text · ⌃>', title: 'Block quote (⌃>) — or type > at a line start',
+    checked: () => !!ancestor('blockquote') && !ancestor('blockquote')!.attrs.kind,
+  });
+  tool(blocksGroup, 'Solution', () => setBlockKind('solution'), {
+    rest: true, editing: true, glyph: icon('solution'), hint: 'red, ruled', title: 'Solution block — red text with a red rule on the left',
+    checked: () => ancestor('blockquote')?.attrs.kind === 'solution',
+  });
+  commandTool(blocksGroup, 'Comment', insertEditorComment, {
+    rest: true, glyph: icon('comment'), hint: 'never printed', title: 'Editorial comment — a note on the page and in the file, never printed',
+  });
+  commandTool(blocksGroup, 'Remove quote', lift, {
+    rest: true, glyph: icon('paragraph'), hint: 'body text', title: 'Plain body text — lift out of the quote or solution block',
+    enabled: () => !!ancestor('blockquote') && lift(view.state),
+  });
+
+  // LAYOUT
   const selectedParagraphs = () => {
     const { state } = view;
     const { from, to } = state.selection;
@@ -715,111 +789,81 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     view.focus();
   };
   const alignmentEnabled = () => selectedParagraphs().length > 0;
-  for (const [label, align, title] of [
-    ['Justified', null, 'Align left (justified body text)'],
-    ['Center', 'center', 'Center text'],
-    ['Right', 'right', 'Align right'],
+  for (const [label, align, title, hint] of [
+    ['Justified', null, 'Align left (justified body text)', 'the default'],
+    ['Center', 'center', 'Center text', ''],
+    ['Right', 'right', 'Align right', ''],
   ] as const) {
-    item(alignmentRow, label, () => setAlign(align), {
-      title, editing: true, enabled: alignmentEnabled,
+    tool(layoutGroup, label, () => setAlign(align), {
+      rest: true, title, hint, editing: true, enabled: alignmentEnabled,
       glyph: icon(align === 'center' ? 'aligncenter' : align === 'right' ? 'alignright' : 'alignleft'),
       checked: () => alignmentEnabled() && selectedParagraphs().every(({ node }) => (node.attrs.align ?? null) === align),
     });
   }
-  commandItem(lists.element, 'Bulleted list', wrapInList(schema.nodes.bullet_list), {
-    title: 'Bulleted list (⌘⇧8) — or type - at a line start', shortcut: '⌘⇧8',
+
+  // CODE
+  commandTool(codeGroup, 'Code block', setBlockType(schema.nodes.code_block, { params: '' }), {
+    rest: true, glyph: icon('code'), hint: '```', title: 'Code block — monospaced source listing',
   });
-  commandItem(lists.element, 'Numbered list', wrapInList(schema.nodes.ordered_list), {
-    title: 'Numbered list (⌘⇧9) — or type 1. at a line start', shortcut: '⌘⇧9',
+  commandTool(codeGroup, 'Raw Typst block', setBlockType(schema.nodes.code_block, { params: 'typst-raw' }), {
+    glyph: tico('#'), hint: '```typst', title: 'Raw Typst block — kept in the file as Typst, shown and printed as code, never run',
   });
-  commandItem(lists.element, 'Loose list spacing', toggleListSpacing, {
-    title: 'Item spacing (⌘⇧7) — tight, or loose with paragraph spacing between items', shortcut: '⌘⇧7',
-    checked: () => ancestor('bullet_list', 'ordered_list')?.attrs.tight === false,
-  });
-  const setBlockKind = (kind: 'solution' | null) => {
-    const { state } = view;
-    const { $from, $to } = state.selection;
-    for (let d = $from.sharedDepth($to.pos); d > 0; d--) {
-      const node = $from.node(d);
-      if (node.type === schema.nodes.blockquote) {
-        if ((node.attrs.kind ?? null) !== kind) view.dispatch(state.tr.setNodeMarkup($from.before(d), undefined, { ...node.attrs, kind }));
-        view.focus();
-        return;
-      }
-    }
-    wrapIn(schema.nodes.blockquote, { kind })(state, view.dispatch);
-    view.focus();
-  };
-  item(blocksGroup, 'Block quote', () => setBlockKind(null), {
-    title: 'Block quote (⌃>) — or type > at a line start', editing: true, tile: true,
-    glyph: icon('quote'),
-    checked: () => !!ancestor('blockquote') && !ancestor('blockquote')!.attrs.kind,
-  });
-  item(blocksGroup, 'Solution', () => setBlockKind('solution'), {
-    title: 'Solution block — red text with a red rule on the left', editing: true, tile: true,
-    glyph: icon('solution'),
-    checked: () => ancestor('blockquote')?.attrs.kind === 'solution',
-  });
-  commandItem(blocksGroup, 'Comment', insertEditorComment, {
-    title: 'Editorial comment — a note on the page and in the file, never printed',
-    glyph: icon('comment'), tile: true,
-  });
-  commandItem(blocksGroup, 'Remove quote', lift, {
-    title: 'Plain body text — lift out of the quote or solution block',
-    glyph: icon('paragraph'), tile: true,
-    enabled: () => !!ancestor('blockquote') && lift(view.state),
+  tool(codeGroup, 'Inline raw Typst', () => void import('./inline-raw').then(({ insertTypstInline }) => insertTypstInline(view)), {
+    editing: true, glyph: tico('#·'), hint: 'kept verbatim', title: 'Inline raw Typst — kept in the file verbatim, shown and printed as inline code, never run',
   });
 
-  const directCommand = (button: HTMLButtonElement, command: Command, title: string) => {
-    button.title = title;
-    button.addEventListener('click', () => { closeMenu(); runCmd(command)(); });
-  };
-  directCommand(figureBtn, insertFigureCmd, 'Insert figure (⌘⌥I) — or paste/drop an image');
-  directCommand(mathBtn, insertMath(false), 'Inline math (⌘M) — or type $x^2$; ⌘⇧M for display');
-  directCommand(noteBtn, insertFootnote, 'Footnote (⌘⌥F) — or type ^[');
-  item(insertRow, 'Table', () => insertStructuredTable(view), { title: 'Insert table (⌘⌥T)', shortcut: '⌘⌥T', editing: true, glyph: icon('table') });
-  item(insertRow, 'Grid', () => insertGrid(view), { title: 'Side-by-side grid — any blocks in columns; Grid layout sets the split', editing: true, glyph: icon('grid') });
-  commandItem(insertRow, 'Display equation', insertMath(true), { title: 'Display equation (⌘⇧M)', shortcut: '⌘⇧M', glyph: '<span class="ico tico">∑</span>' });
-  item(insertRow, 'Title block', () => {
-    const { state, dispatch } = view;
-    const existing = state.doc.firstChild;
-    if (existing && ['doc_title', 'doc_authors', 'doc_date', 'abstract'].includes(existing.type.name)) {
-      dispatch(state.tr.setSelection(TextSelection.create(state.doc, 1)).scrollIntoView());
-      view.focus();
-      return;
+  // DOCUMENT
+  tool(documentGroup, 'Bibliography', () => editBibliography(view, (m) => fm.notify(m)), {
+    rest: true, glyph: icon('book'), hint: '```bibtex', title: 'Edit bibliography', enabled: () => !sourceActive,
+  });
+  tool(documentGroup, 'Demo document', () => {
+    if (confirm('Replace the current document with the demo? (Save yours first if it matters.)')) {
+      void import('./demo-doc').then(({ demoDoc }) => fm.newDoc(demoDoc(), 'Demo'));
     }
-    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-    const nodes = [
-      schema.nodes.doc_title.create(null, [schema.text('Title')]),
-      schema.nodes.doc_authors.create(null, [schema.text('Author Name')]),
-      schema.nodes.doc_date.create(null, [schema.text(today)]),
-      schema.nodes.abstract.create(null, [schema.nodes.paragraph.create(null, [schema.text('Abstract text.')])]),
-    ];
-    let tr = state.tr.insert(0, nodes);
-    tr = tr.setSelection(TextSelection.create(tr.doc, 1, 1 + 'Title'.length));
-    dispatch(tr.scrollIntoView());
-    view.focus();
-  }, { title: 'Title block — title, authors, date, abstract', editing: true, glyph: '<span class="ico tico">T</span>' });
-  item(insertRow, 'Page break', () => {
-    const { state, dispatch } = view;
-    const { $from } = state.selection;
-    const pos = $from.after($from.depth > 0 ? 1 : 0);
-    dispatch(state.tr.insert(pos, schema.nodes.page_break.create()).scrollIntoView());
-    view.focus();
-  }, { title: 'Page break (⌘⏎)', shortcut: '⌘⏎', editing: true, glyph: icon('pagebreak') });
-  commandItem(codeRow, 'Code block', setBlockType(schema.nodes.code_block, { params: '' }), {
-    title: 'Code block — monospaced source listing', glyph: icon('code'),
+  }, { glyph: tico('?'), hint: 'a tour', title: 'Open the demo document — what Plass does, written in Plass' });
+
+  // BASICS: what markdown writes plainly, so the rail at rest leaves it out.
+  for (const level of [null, 1, 2, 3]) {
+    const command = level ? setBlockType(schema.nodes.heading, { level }) : setBlockType(schema.nodes.paragraph);
+    const current = () => {
+      const node = view.state.selection.$from.parent;
+      return level ? node.type === schema.nodes.heading && node.attrs.level === level : node.type === schema.nodes.paragraph;
+    };
+    commandTool(basicsGroup, level ? `Heading ${level}` : 'Body text', command, {
+      glyph: tico(level ? `H${level}` : '¶'),
+      hint: level ? `${'#'.repeat(level)} · ⌘⌥${level}` : '⌘⌥0',
+      title: level ? `Heading ${level} (⌘⌥${level})` : 'Body text (⌘⌥0)',
+      checked: current,
+      enabled: () => command(view.state) || current(),
+    });
+  }
+  for (const [name, label, hint, glyph] of [
+    ['strong', 'Bold', '**text** · ⌘B', tico('<b>B</b>')],
+    ['em', 'Italic', '*text* · ⌘I', tico('<i>I</i>')],
+    ['strike', 'Strikethrough', '~~text~~ · ⌘⇧X', tico('<s>S</s>')],
+    ['code', 'Inline code', '`code` · ⌘`', tico('`')],
+  ]) {
+    const mark = schema.marks[name];
+    commandTool(basicsGroup, label, toggleMark(mark), {
+      glyph, hint, title: `${label} (${hint.split(' · ')[1]})`,
+      checked: () => {
+        const { selection, storedMarks, doc } = view.state;
+        return selection.empty ? !!mark.isInSet(storedMarks ?? selection.$from.marks()) : doc.rangeHasMark(selection.from, selection.to, mark);
+      },
+    });
+  }
+  commandTool(basicsGroup, 'Bulleted list', wrapInList(schema.nodes.bullet_list), { glyph: icon('list'), hint: '- item · ⌘⇧8', title: 'Bulleted list (⌘⇧8)' });
+  commandTool(basicsGroup, 'Numbered list', wrapInList(schema.nodes.ordered_list), { glyph: icon('numlist'), hint: '1. item · ⌘⇧9', title: 'Numbered list (⌘⇧9)' });
+  commandTool(basicsGroup, 'Loose list spacing', toggleListSpacing, {
+    glyph: icon('looselist'), hint: '⌘⇧7', title: 'Item spacing (⌘⇧7) — tight, or loose with paragraph spacing between items',
+    checked: () => ancestor('bullet_list', 'ordered_list')?.attrs.tight === false,
   });
-  commandItem(codeRow, 'Raw Typst block', setBlockType(schema.nodes.code_block, { params: 'typst-raw' }), {
-    title: 'Raw Typst block — kept in the file as Typst, shown and printed as code, never run', glyph: '<span class="ico tico">#</span>',
-  });
-  item(codeRow, 'Inline raw Typst', () => void import('./inline-raw').then(({ insertTypstInline }) => insertTypstInline(view)), {
-    title: 'Inline raw Typst — kept in the file verbatim, shown and printed as inline code, never run', editing: true,
-    glyph: '<span class="ico tico">#·</span>',
-  });
-  item(documentRow, 'Bibliography', () => editBibliography(view, (m) => fm.notify(m)), {
-    title: 'Edit bibliography', enabled: () => !sourceActive, glyph: icon('book'),
-  });
+
+  // KEYS: the paper's way in and out, as rows of the cheat sheet.
+  tool(keysGroup, 'Open', () => void fm.open(), { glyph: icon('open'), hint: '⌘O', title: 'Open… (⌘O)' });
+  tool(keysGroup, 'Save', () => void fm.save(), { glyph: icon('download'), hint: '⌘S', title: 'Save (⌘S)' });
+  tool(keysGroup, 'Export PDF', () => exportPdfNow(), { glyph: icon('download'), hint: '⌘E', title: 'Export PDF (⌘E)' });
+  tool(keysGroup, 'Plain text view', () => actions.toggleSource(), { glyph: icon('code'), hint: '⌘/', title: 'Switch between the page and plain text (⌘/)' });
   openBtn.addEventListener('click', () => { closeMenu(); void fm.open(); });
   newBtn.addEventListener('click', () => {
     closeMenu();
@@ -858,7 +902,11 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     historyTile.title = 'History (⇧⌘H)';
     historyTile.setAttribute('aria-keyshortcuts', 'Shift+Meta+H');
     historyTile.setAttribute('aria-pressed', 'false');
-    titleBar.after(historyTile);
+    // Inside the name pill, at its far right after the folder (Taylor,
+    // 2026-10-17; Knuth's pill holds it the same way): the paper's record
+    // beside the paper's name.
+    titleBar.append(historyTile);
+    titleBar.classList.add('has-history');
     const room = document.getElementById('scroll')!;
     const roomBox = () => {
       const r = room.getBoundingClientRect();
@@ -873,6 +921,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
       void openHistory(roomBox()).then((how) => {
         if (how) return;
         historyTile.hidden = true;
+        titleBar.classList.remove('has-history');
         fm.notify('This Plass.app has no history view — Plass → Check for Updates…');
       });
     };
@@ -922,12 +971,10 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     }
     historyTile.addEventListener('click', () => { closeMenu(); showHistory(); });
   }
-  item(documentRow, 'Markdown & shortcuts', () => showHelp(fm), { title: 'Markdown & shortcuts', glyph: '<span class="ico tico">?</span>' });
-  const installButton = item(documentRow, 'Install Plass', () => void requestPwaInstall((message) => fm.notify(message)), {
-    title: 'Install Plass as an app', glyph: icon('install'),
+  const installButton = tool(documentGroup, 'Install Plass', () => void requestPwaInstall((message) => fm.notify(message)), {
+    glyph: icon('install'), hint: 'its own window', title: 'Install Plass as an app',
   });
   installButton.classList.add('pwa-install');
-  installButton.setAttribute('aria-label', 'Install Plass');
   installButton.hidden = isNativeShell() || isPwaInstalled();
   onPwaInstallState((installed) => { installButton.hidden = isNativeShell() || installed; });
   // Open's side half: the recent papers straight away, not a submenu
@@ -1097,6 +1144,8 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
       if (!fm.saved) fileLabel.title = 'Click to name and save — you pick the folder your paper lives in';
       else fileLabel.title = dirty ? `${name} — unsaved changes` : `${name} — click to rename`;
       dot.title = !fm.saved ? 'Not saved yet — ⌘S picks its folder' : dirty ? 'Unsaved changes' : 'Saved';
+      if (saveChip.hidden === !fm.saved) saveChip.hidden = fm.saved;
+      titleBar.classList.toggle('has-save', !fm.saved);
       repaintFolder();
     },
     setPath(path) {
@@ -1106,49 +1155,3 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   };
 }
 
-/** A small cheat-sheet of the markdown syntax and shortcuts. */
-function showHelp(fm: FileManager) {
-  document.querySelector('.help-overlay')?.remove();
-  const overlay = document.createElement('div');
-  overlay.className = 'bib-editor-overlay help-overlay';
-  overlay.innerHTML = `
-    <div class="bib-editor help-panel" role="dialog" aria-label="Markdown and shortcuts">
-      <div class="bib-editor-head"><span>Markdown &amp; shortcuts</span></div>
-      <div class="help-grid">
-        <code># ## ###</code><span>headings (⌘⌥1–3 · ⌘⌥0 back to text)</span>
-        <code>**bold** *italic* ~~strike~~ \`code\`</code><span>inline styles (⌘B / ⌘I / ⌘⇧X / ⌘\`)</span>
-        <code>- item · 1. item</code><span>bulleted · numbered list (⌘⇧8 / ⌘⇧9); ⌘⇧7 tight or loose items; Tab / ⇧Tab to nest</span>
-        <code>&gt; quote · \`\`\`</code><span>block quote · code block</span>
-        <code>$x^2$ · $$</code><span>inline math · display equation (⌘M / ⌘⇧M)</span>
-        <code>@</code><span>reference or cite — picker lists equations, figures, tables, sections, works</span>
-        <code>^[note] · \\footnote{…}</code><span>footnotes (⌘⌥F); ] or Enter exits</span>
-        <code>⌘⌥T · ⌘⌥I · ⌘⏎</code><span>insert table · insert figure · page break</span>
-        <code>⌘O ⌘S</code><span>open · save (first save picks the paper's folder)</span>
-        <code>⌘E</code><span>export PDF (the arrow beside Export: Markdown, Typst, LaTeX)</span>
-        <code>⌘/</code><span>switch between the page and plain text</span>
-      </div>
-      <div class="bib-editor-foot">
-        <span class="bib-editor-hint"><kbd>Esc</kbd> to close</span>
-        <span class="bib-editor-actions">
-          <button type="button" class="help-demo">Open demo document</button>
-          <button type="button" class="bib-save help-close">Done</button>
-        </span>
-      </div>
-    </div>`;
-  const close = () => overlay.remove();
-  overlay.querySelector('.help-close')!.addEventListener('click', close);
-  overlay.querySelector('.help-demo')!.addEventListener('click', () => {
-    if (confirm('Replace the current document with the demo? (Save yours first if it matters.)')) {
-      close();
-      void import('./demo-doc').then(({ demoDoc }) => fm.newDoc(demoDoc(), 'Demo'));
-    }
-  });
-  overlay.addEventListener('mousedown', (e) => {
-    if (!(e.target as HTMLElement).closest('.help-panel')) close();
-  });
-  overlay.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') close();
-  });
-  document.body.appendChild(overlay);
-  (overlay.querySelector('.help-close') as HTMLElement).focus();
-}

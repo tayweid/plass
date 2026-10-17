@@ -71,8 +71,7 @@ test('insert a grid from the toolbar, tab between cells, set the split from Grid
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, [p]));
   });
   await page.click('.ProseMirror p');
-  await page.getByRole('button', { name: 'Insert', exact: true }).click();
-  await page.getByRole('menuitem', { name: 'Grid', exact: true }).click();
+  await page.locator('#rail').getByRole('button', { name: 'Grid', exact: true }).click();
   await expect(page.locator('.ProseMirror .ts-grid')).toHaveCount(1);
   await expect(page.getByRole('toolbar', { name: 'Grid controls' })).toBeVisible();
   await page.keyboard.type('Left cell');
@@ -205,10 +204,10 @@ test('adding a row focuses it and its cells accept figures and caption-following
   const rightCell = secondRow.locator('.ts-grid-cell').nth(1);
   await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 2 of 2');
   await expect(rightCell).toHaveAttribute('data-grid-empty', 'true');
-  // A numbered figure comes from Insert (the pill's Image tile puts a
-  // plain image in the cell).
+  // A numbered figure comes from the rail's Image tile (the pill's Image
+  // tile puts a plain image in the cell).
   const chooser = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: 'Insert figure', exact: true }).click();
+  await page.locator('#rail').getByRole('button', { name: 'Image', exact: true }).click();
   await (await chooser).setFiles({
     name: 'grid-figure.svg',
     mimeType: 'image/svg+xml',
@@ -255,7 +254,7 @@ test('an imported inline image explains how to add text below it in the same gri
   // the rest of the cell's text.
   await rightCell.locator('.ts-inline-image img').click();
   const chooser = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: 'Insert figure', exact: true }).click();
+  await page.locator('#rail').getByRole('button', { name: 'Image', exact: true }).click();
   await (await chooser).setFiles({ name: 'replacement.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(svg, 'base64') });
   await chooseFolderIfAsked(page);
   await expect(rightCell.locator('.ts-figure')).toHaveCount(1);

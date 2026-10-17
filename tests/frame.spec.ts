@@ -813,7 +813,7 @@ test('in Plass.app the pill shows the folder the shell knows the file by, home a
   expect(folder.x + folder.width).toBeLessThanOrEqual(long.pod.x + long.pod.width - 11);
 });
 
-test('in Plass.app the History tile stands right after the name pill, a bar tile like Open, and nothing else in the bar moves', async ({ page, context }) => {
+test('in Plass.app the History tile sits inside the name pill at its right end, and nothing left of the pill moves', async ({ page, context }) => {
   // A browser tab first: no History tile (the shell's controls are the
   // shell's), and the bar's boxes as the test above holds them.
   const name = 'notes.typ';
@@ -883,12 +883,16 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
   }, name)).toBe(true);
   await settleLocal(app);
   const b = await boxes(app);
-  expect(b.order).toEqual(['open-split', 'new-window', 'doc-pod', 'history-tile', 'export-split']);
-  // The tile: the bar's gap past the pill, 32 px square 6 px down, 9 px
-  // corners, an 18 px glyph, the Open tile's soft ink; one of the page's
-  // controls in the bar's drag band.
-  expect(b.history).toEqual({ x: b.pod!.x + b.pod!.width + 6, y: 6, width: 32, height: 32 });
-  expect(b.tile).toMatchObject({ radius: '9px', glyph: { width: 18, height: 18 }, label: 'History', title: 'History (⇧⌘H)', caption: 'History', keys: 'Shift+Meta+H', popup: null, region: 'no-drag' });
+  // The bar's order is the tab's: History is the pill's, not a bar tile.
+  expect(b.order).toEqual(['open-split', 'new-window', 'doc-pod', 'export-split']);
+  expect(await app.evaluate(() => document.getElementById('doc-pod')!.lastElementChild?.id)).toBe('history-tile');
+  await expect(app.locator('#doc-pod')).toHaveClass(/\bhas-history\b/);
+  // The tile: at the pill's right end (its 10 px inset less 6), centred
+  // in the pill's 30 px, 24 px square with 6 px corners and a 16 px glyph,
+  // the Open tile's soft ink; one of the page's controls in the bar's
+  // drag band.
+  expect(b.history).toEqual({ x: b.pod!.x + b.pod!.width - 5 - 24, y: b.pod!.y + 3, width: 24, height: 24 });
+  expect(b.tile).toMatchObject({ radius: '6px', glyph: { width: 16, height: 16 }, label: 'History', title: 'History (⇧⌘H)', caption: 'History', keys: 'Shift+Meta+H', popup: null, region: 'no-drag' });
   expect(b.tile!.color).toBe(b.fileColor);
   // The standard history icon, a clock face with a counter-clockwise arrow
   // round its left side — the one string Knuth's bar draws too
@@ -896,19 +900,20 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
   expect(b.tile!.svg).toBe(
     '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12a8 8 0 1 1 2.34 5.66M2.2 9.8 5 12.6l2.8-2.8"></path><polyline points="13 7.5 13 12 16.5 14"></polyline></svg>',
   );
-  // Nothing else moves: the bar, the Open tile and the pill are the tab's
-  // to the pixel, the right end too; Export moves on by the tile and the
-  // gap, 38 px, and keeps its box.
+  // Nothing left of the pill moves: the bar, the Open tile and the pill's
+  // left edge are the tab's to the pixel. The pill grows by the tile and
+  // its gap less the 6 px it reaches into the inset (27 px), and Export
+  // moves on by as much and keeps its box.
   expect(b.bar).toEqual(tab.bar);
   expect(b.file).toEqual(tab.file);
-  expect(b.pod).toEqual(tab.pod);
-  expect(b.exportTile).toEqual({ ...tab.exportTile!, x: tab.exportTile!.x + 38 });
-  expect(b.exportTile!.x).toBe(b.history!.x + 32 + 6);
+  expect({ ...b.pod!, width: 0 }).toEqual({ ...tab.pod!, width: 0 });
+  expect(b.pod!.width).toBeCloseTo(tab.pod!.width + 27, 1);
+  expect(b.exportTile).toEqual({ ...tab.exportTile!, x: b.exportTile!.x });
+  expect(b.exportTile!.x - tab.exportTile!.x).toBeCloseTo(27, 1);
 
   // A short bar: the pill gives way, never a tile. With a long name the
   // pill is no wider than half the window (at 480, a phone-width tab, it is
-  // cut to that; at 740, the app's narrowest window, the name's own cap is
-  // the narrower), the same width as without the tile, and the three tiles
+  // cut to that), the name leaves the tile its room, and the bar's tiles
   // keep 32 px inside the bar's 8 px right edge.
   for (const width of [740, 480]) {
     for (const p of [page, app]) {
@@ -916,12 +921,21 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
       await p.evaluate((n) => (window as unknown as Hooks).__fm.rename(n), long);
       await expect(p.locator('#file-name')).toHaveText(long);
     }
-    const [short, shortTab] = [await boxes(app), await boxes(page)];
+    const short = await boxes(app);
     if (width === 480) expect(short.pod!.width).toBe(240);
     else expect(short.pod!.width).toBeLessThanOrEqual(width / 2);
-    expect(short.pod).toEqual(shortTab.pod);
-    expect(short.widths).toEqual([32, 18, 32, 32, 32, 18]);
-    expect(short.history!.x).toBe(short.pod!.x + short.pod!.width + 6);
+    expect(short.widths).toEqual([32, 18, 32, 24, 32, 18]);
+    // The tile's end: the pill's border and inset less the 6 px it reaches
+    // in (a phone-width pill's inset is 8 px). A name at its 40ch cap
+    // leaves the half-window pill some slack at 740: the tile is inside
+    // the pill's end there, never past it; at 480 the name gives way and
+    // the tile is at the end.
+    const inset = await app.locator('#doc-pod').evaluate((el) => parseFloat(getComputedStyle(el).paddingRight));
+    const end = short.pod!.x + short.pod!.width - 1 - inset + 6;
+    expect(short.history!.x + short.history!.width).toBeLessThanOrEqual(end + 0.05);
+    if (width === 480) expect(short.history!.x + short.history!.width).toBeCloseTo(end, 1);
+    const nameBox = (await app.locator('#file-name').boundingBox())!;
+    expect(nameBox.x + nameBox.width).toBeLessThanOrEqual(short.history!.x);
     expect(short.exportTile!.x + 32).toBeLessThanOrEqual(width - 8);
   }
 });
@@ -1464,17 +1478,20 @@ test('the rail and the panels it opens keep off the bar; a short window says the
   expect(bounds.y + bounds.height).toBeLessThanOrEqual(800 - 8);
   await page.keyboard.press('Escape');
   await expect(panel).toHaveCount(0);
-  // So do the flyouts.
-  await page.getByRole('button', { name: 'Extras', exact: true }).click();
-  const extras = (await page.getByRole('menu', { name: 'Extras', exact: true }).boundingBox())!;
-  expect(extras.y).toBeGreaterThan(barBottom);
-  await page.keyboard.press('Escape');
+  // So does the open drawer: its rows start below the bar.
+  await page.locator('#rail-drawer').click();
+  await expect(page.locator('html')).toHaveClass(/\brail-open\b/);
+  const rows = page.locator('#rail .tb-rail-group .tb-btn:visible');
+  for (const row of [await rows.first().boundingBox(), (await page.locator('#rail').boundingBox())]) expect(row!.y).toBeGreaterThanOrEqual(barBottom);
+  await page.locator('#rail-drawer').click();
+  await expect(page.locator('html')).not.toHaveClass(/\brail-open\b/);
 
   // A tall window shows every tool; a short one cuts the tool groups, and
-  // a fade at the cut says which way the rest is. Document settings and
-  // the view switch are pinned below the groups, as Zen pins its bottom
-  // icons: whole and inside the window at any height (at 1100×560 the cut
-  // once fell just past Extras and took Document settings with it).
+  // a fade at the cut says which way the rest is. The foot (All tools,
+  // Document settings and the view switch) is pinned below the groups, as
+  // Zen pins its bottom icons: whole and inside the window at any height
+  // (at 1100×560 the cut once fell just past the last group and took
+  // Document settings with it).
   const cue = () => page.evaluate(() => {
     const groups = document.querySelector('.tb-rail-groups')!;
     return { above: groups.classList.contains('tb-more-above'), below: groups.classList.contains('tb-more-below') };
@@ -1482,8 +1499,9 @@ test('the rail and the panels it opens keep off the bar; a short window says the
   const pinned = () => page.evaluate(() => {
     const groups = document.querySelector('.tb-rail-groups')!;
     const cut = groups.getBoundingClientRect().bottom;
-    return ['Document settings', 'Plain text view'].map((name) => {
-      const tile = document.querySelector(`#rail [aria-label="${name}"]`)!;
+    return ['All tools', 'Document settings', 'Plain text view'].map((name) => {
+      // (The drawer has a Plain text view row too, not drawn at rest.)
+      const tile = [...document.querySelectorAll(`#rail [aria-label="${name}"]`)].find((el) => el.checkVisibility())!;
       const bounds = tile.getBoundingClientRect();
       return { name, scrolls: groups.contains(tile), belowCut: bounds.top >= cut, inWindow: bounds.bottom <= innerHeight - 8 };
     });
@@ -1502,7 +1520,8 @@ test('the rail and the panels it opens keep off the bar; a short window says the
   const target = await page.evaluate(() => {
     const groups = document.querySelector('.tb-rail-groups')!;
     const fade = groups.getBoundingClientRect().bottom - 28;
-    const tiles = [...groups.querySelectorAll<HTMLButtonElement>('.tb-btn:not(:disabled)')];
+    // The tiles Tab reaches: enabled and drawn (the drawer's rows are not).
+    const tiles = [...groups.querySelectorAll<HTMLButtonElement>('.tb-btn:not(:disabled)')].filter((tile) => tile.checkVisibility());
     const index = tiles.findIndex((tile) => tile.getBoundingClientRect().bottom > fade);
     return { name: tiles[index].getAttribute('aria-label')!, tabs: index };
   });

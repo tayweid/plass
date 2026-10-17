@@ -216,20 +216,35 @@ test('the visible view switch and the shortcut toggle from either view', async (
   await expect(btn).toBeVisible();
   await expect(btn).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#source .cm-content')).toBeFocused();
-  // Formatting tools rest while the text is the truth: the six direct
-  // tiles, the Blocks tiles, Settings; the Insert and Extras flyouts stay
-  // open for what still applies.
-  await expect(page.locator('#rail .tb-rests:disabled')).toHaveCount(6);
-  await expect(page.getByRole('button', { name: 'Block quote', exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Comment', exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Insert', exact: true })).toBeEnabled();
+  // Editing tools rest while the text is the truth: every tile of the
+  // rail's groups (Insert, Blocks, Layout, Code, the bibliography) and
+  // Settings; the drawer switch and the bar's way out stay live.
+  const rail = page.locator('#rail');
+  const tiles = rail.locator('.tb-rail-groups .tb-btn:visible');
+  await expect(tiles).toHaveCount(14);
+  await expect(rail.locator('.tb-rail-groups .tb-btn:visible:disabled')).toHaveCount(14);
+  await expect(rail.getByRole('button', { name: 'Block quote', exact: true })).toBeDisabled();
+  await expect(rail.getByRole('button', { name: 'Comment', exact: true })).toBeDisabled();
+  await expect(rail.getByRole('button', { name: 'Table', exact: true })).toBeDisabled();
+  await expect(rail.getByRole('button', { name: 'Grid', exact: true })).toBeDisabled();
+  await expect(rail.getByRole('button', { name: 'Bibliography', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Document settings', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Document settings', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: 'Extras', exact: true }).click();
-  await expect(page.getByTitle('Insert table (⌘⌥T)', { exact: true })).toBeDisabled();
-  await expect(page.getByTitle('Side-by-side grid — any blocks in columns; Grid layout sets the split', { exact: true })).toBeDisabled();
-  await expect(page.getByTitle('Edit bibliography', { exact: true })).toBeDisabled();
-  await expect(page.getByTitle('Markdown & shortcuts', { exact: true })).toBeEnabled();
+  await expect(page.locator('#rail-drawer')).toBeEnabled();
+  // Open, the drawer rests its editing rows too, and keeps what still
+  // applies: the demo, the paper's way in and out, the view switch.
+  await page.locator('#rail-drawer').click();
+  await expect(page.locator('html')).toHaveClass(/\brail-open\b/);
+  for (const name of ['Heading 1', 'Bold', 'Bulleted list', 'Display equation', 'Page break', 'Raw Typst block', 'Inline raw Typst']) {
+    await expect(rail.getByRole('button', { name, exact: true })).toBeDisabled();
+  }
+  const keys = rail.getByRole('group', { name: 'Keys', exact: true });
+  for (const name of ['Open', 'Save', 'Export PDF', 'Plain text view']) {
+    await expect(keys.getByRole('button', { name, exact: true })).toBeEnabled();
+  }
+  await expect(rail.getByRole('button', { name: 'Demo document', exact: true })).toBeEnabled();
+  await page.locator('#rail-drawer').click();
+  await expect(page.locator('html')).not.toHaveClass(/\brail-open\b/);
   await expect(page.locator('#toolbar').getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
   await expect(page.locator('#toolbar').getByRole('button', { name: 'Export', exact: true })).toBeEnabled();
   await page.keyboard.press('Escape');
@@ -238,8 +253,9 @@ test('the visible view switch and the shortcut toggle from either view', async (
   await page.keyboard.press('ControlOrMeta+/');
   await expect(btn).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('.ProseMirror[contenteditable="true"]')).toBeFocused();
-  expect(await page.locator('#rail .tb-rests:disabled').count()).toBe(0);
-  await expect(page.getByRole('button', { name: 'Block quote', exact: true })).toBeEnabled();
+  for (const name of ['Block quote', 'Table', 'Grid', 'Bibliography']) {
+    await expect(rail.getByRole('button', { name, exact: true })).toBeEnabled();
+  }
   await expect(page.getByRole('button', { name: 'Document settings', exact: true })).toBeEnabled();
   // And from the page view.
   await page.keyboard.press('ControlOrMeta+/');

@@ -118,6 +118,12 @@
   --ink-below: 0.25em;
 }
 
+/* The rail open into every tool (toolbar.ts, the foot's All tools
+   switch): it pushes the page over, and the paper refits. */
+:root.rail-open {
+  --rail: 264px;
+}
+
 :root.has-rail {
   --edge-right: var(--gutter);
 }
@@ -221,7 +227,7 @@ body {
    pill's own cut every name short by the difference.) */
 #toolbar .name {
   flex: none;
-  max-width: min(40ch, calc(100% - var(--pod-gap) - 6px));
+  max-width: min(40ch, calc(100% - var(--pod-gap) - 6px - var(--folder-room, 0px) - var(--save-room, 0px) - var(--history-room, 0px)));
   font: 15px/1.5 var(--serif);
   letter-spacing: 0.09em;
   color: rgba(252, 252, 251, 0.8);
@@ -253,6 +259,61 @@ body {
   background: rgba(110, 165, 118, 0.9);
 }
 
+/* Save…, at the pill's end, only while the paper has no file yet
+   (toolbar.ts): Knuth's quiet chip, lit on hover; it never gives way
+   when the pill is short, and the name leaves it its room. */
+.doc-save {
+  flex: none;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(240, 238, 233, 0.55);
+  font: 12px/1 var(--sans);
+  cursor: pointer;
+}
+
+.doc-save:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.doc-save[hidden] {
+  display: none;
+}
+
+/* History (Plass.app), inside the pill at its far right, after the
+   folder: a small tile of the pill's own height less its inset. */
+#toolbar .doc-pod #history-tile {
+  flex: none;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  margin-right: -6px;
+  border-radius: 6px;
+}
+
+#toolbar .doc-pod #history-tile .ico {
+  width: 16px;
+  height: 16px;
+}
+
+/* The name leaves the folder's gap (the folder itself shrinks to
+   nothing first, its gap does not), the Save chip and the History tile
+   their room. */
+#toolbar .doc-pod:has(> #doc-folder:not([hidden])) {
+  --folder-room: var(--pod-gap);
+}
+
+#toolbar .doc-pod.has-save {
+  --save-room: calc(48px + var(--pod-gap));
+}
+
+#toolbar .doc-pod.has-history {
+  --history-room: calc(18px + var(--pod-gap));
+}
+
 /* The folder: the file's, home as ~ (the whole path in its title). It
    alone shrinks, and it ellipsizes from its start: right-to-left in the
    pill, the path itself left-to-right inside (its span's dir), so the
@@ -281,6 +342,10 @@ body {
 @container bar (max-width: 759px) {
   #doc-folder {
     display: none;
+  }
+
+  #toolbar .doc-pod:has(> #doc-folder:not([hidden])) {
+    --folder-room: 0px;
   }
 }
 
@@ -858,26 +923,6 @@ body {
 
 .file-menu-recent span {
   color: var(--ink-soft);
-}
-
-/* help cheat-sheet */
-.help-panel {
-  width: min(560px, calc(100vw - 48px));
-}
-
-.help-grid {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 7px 16px;
-  font: 12.5px var(--sans);
-  color: var(--ink);
-  padding: 4px 2px;
-}
-
-.help-grid code {
-  font: 12px var(--mono);
-  color: var(--accent);
-  white-space: nowrap;
 }
 
 /* The panel: Zen's inset panel, and the paper itself. One elevated panel
