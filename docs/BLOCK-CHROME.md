@@ -69,9 +69,10 @@ Nothing here may move a line break, a block height or a page start.
    the empty margin, when they fit there.
 4. Grid add and delete row or column act at the caret's row or column,
    as they do in tables. Grid cells merge across, never down
-   (2026-10-16, `grid.cell(colspan:)`): Columns › Merge with cell right
-   (or Merge cells, when a selection spans cells of one row) and Split
-   cell. A column added through a merged cell widens it; deleting one of
+   (2026-10-16, `grid.cell(colspan:)`): the actions pill's Merge cells,
+   when a selection spans cells of one row, and Split cell (the same
+   tile) in a merged cell; a nested table's Grid › Grid columns keeps
+   Merge with cell right. A column added through a merged cell widens it; deleting one of
    its columns narrows it and keeps its content, as in a table.
 5. The grid's Image tile inserts a plain inline image at 100% of the cell
    width (how exam answer boxes are written). Numbered figures still come
@@ -82,7 +83,8 @@ Nothing here may move a line break, a block height or a page start.
 
 - **Layer**: one `#block-chrome` inside `#scroll`, after `#paper`. A
   `.block-track` spans the block, and the pill inside it is
-  `position: sticky`. The pill rides down a tall block as the page scrolls
+  in a `position: sticky` stack with the actions pill under it (6 px
+  apart). The stack rides down a tall block as the page scrolls
   and stops at the block's end. There is no scroll handler.
 - **Place**: in the left margin beside the block, never over text. Full
   (margin ≥ 60 px): 40 px wide, 32 px tiles, 14 px from the text. Compact
@@ -91,10 +93,18 @@ Nothing here may move a line break, a block height or a page start.
   of it; the pill takes that place whether or not the grid is selected,
   so Escape never moves it. Collapsed (< 46 px): one ⋯ tile
   opening the same items as a menu.
-- **Tiles**: table: Rows · Columns · Align (its glyph shows the caret
-  cell's value) · Cell │ Table settings; grid: Rows · Columns · Align ·
-  Image │ Grid layout. A table in a grid cell owns the pill and adds one
-  Grid tile. Align is the same panel for both (Across: left / center /
+- **Tiles** (2026-10-17, Taylor: one immediate button, no menu): table:
+  Add row (below; hovering the tile, or focusing it, slides out a small
+  flyout toward the page, "+ Row above", one click too; the tile never
+  moves) · Add column (right; its flyout: "+ Column left") · Align (its glyph shows the caret cell's value)
+  · Cell │ Table settings; grid: Add row · Add column · Align · Image │
+  Grid layout. A table in a grid cell owns the pill and adds one Grid
+  tile. The **actions pill** under it: Delete row · Delete column (red,
+  the add icons with an × where the + was) · Merge cells, lit only when
+  a selection can merge, which reads Split cell in a merged cell. Header
+  row and the caret column's width (Fit / Share / Fixed, and its amount)
+  are in Table settings; Select row / column went with the menus. The
+  collapsed ⋯ menu still holds everything as rows and submenus. Align is the same panel for both (Across: left / center /
   right; Down: top / middle / bottom), on a table's selected cells
   ("Align selected cells …") or a grid's caret cell ("Align this cell
   …", `grid.cell(align:)` since 2026-10-15).
@@ -161,7 +171,7 @@ Nothing here may move a line break, a block height or a page start.
 - **⌘⏎ / ⇧⌘⏎** in a table or grid cell (innermost: a table in a grid gets
   a table row) add a row below / above. The keymap is registered before
   the editing keymap, whose ⌘⏎ is the page break; outside cells ⌘⏎ is
-  unchanged. Rows menus show the chords.
+  unchanged.
 - **↓** from a grid's last row / **↑** from its first, when the caret
   motion finds no line: `exitGridVertically` steps out, making a
   paragraph when the grid ends the document (the table's

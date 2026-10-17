@@ -36,14 +36,10 @@ async function installTable(page: Page, merged = false) {
   await expect.poll(() => firstCellHoldsSelection(page)).toBe(true);
 }
 
-/** The block pill's tiles and what they open (src/block-chrome.ts). */
+/** The block pill's tiles, the actions pill's under it, and what they open
+ *  (src/block-chrome.ts). */
 const tile = (page: Page, id: string) => page.locator(`.block-pill [data-tile="${id}"]`);
-const columnsMenu = async (page: Page) => {
-  await tile(page, 'cols').click();
-  const menu = page.getByRole('menu', { name: 'Columns' });
-  await expect(menu).toBeVisible();
-  return menu;
-};
+const action = (page: Page, id: string) => page.locator(`.bc-actions [data-tile="${id}"]`);
 const panel = async (page: Page, id: 'table' | 'cell' | 'align') => {
   await tile(page, id).click();
   const dialog = page.getByRole('dialog', { name: id === 'table' ? 'Table settings' : id === 'cell' ? 'Cell fill and rules' : /^Align/ });
@@ -64,11 +60,18 @@ const attrs = (page: Page) => page.evaluate(() => window.view.state.doc.firstChi
 test('table layout controls set widths and padding while keeping rich content and the caret', async ({ page }) => {
   await installTable(page);
   const caret = await page.evaluate(() => window.view.state.selection.toJSON());
-  const cols = await columnsMenu(page);
-  await expect(cols.locator('[data-value="auto"]')).toHaveAttribute('aria-checked', 'true');
-  await cols.locator('[data-value="fr"]').click();
+  // The caret's column: Table settings' This column, Fit / Share / Fixed
+  // and the amount beside (off while the column fits its content).
+  const settings = await panel(page, 'table');
+  const sizing = settings.getByRole('radiogroup', { name: 'Selected column sizing' });
+  const weight = settings.getByRole('spinbutton', { name: 'Column width amount' });
+  const unit = settings.locator('.pfield:has([aria-label="Column width amount"]) .unit');
+  await expect(sizing.locator('[data-value="auto"]')).toHaveAttribute('aria-checked', 'true');
+  await expect(weight).toBeDisabled();
+  await sizing.locator('[data-value="fr"]').click();
   expect(await widths(page)).toEqual(['1fr', '2fr', '90pt']);
-  const weight = cols.getByRole('spinbutton', { name: 'Column share weight' });
+  await expect(weight).toHaveValue('1');
+  await expect(unit).toHaveText('parts');
   await weight.fill('3.5');
   await weight.press('Enter');
   await expect(weight).toBeFocused();
@@ -80,15 +83,15 @@ test('table layout controls set widths and padding while keeping rich content an
   expect(await widths(page)).toEqual(['1fr', '2fr', '90pt']);
   await weight.press('ControlOrMeta+Shift+z');
   await expect(weight).toHaveValue('3.5');
-  await cols.locator('[data-value="pt"]').click();
-  await expect(cols.locator('[data-value="pt"]')).toHaveAttribute('aria-checked', 'true');
-  const points = cols.getByRole('spinbutton', { name: 'Column width in points' });
-  await points.fill('58.5');
-  await points.press('Enter');
+  await sizing.locator('[data-value="pt"]').click();
+  await expect(sizing.locator('[data-value="pt"]')).toHaveAttribute('aria-checked', 'true');
+  expect(await widths(page)).toEqual(['72pt', '2fr', '90pt']);
+  await expect(unit).toHaveText('pt');
+  await weight.fill('58.5');
+  await weight.press('Enter');
   expect(await widths(page)).toEqual(['58.5pt', '2fr', '90pt']);
 
   // Padding: the presets, and a Custom pt field showing the inset in force.
-  const settings = await panel(page, 'table');
   const padding = settings.getByRole('spinbutton', { name: 'Cell padding in points' });
   const density = settings.getByRole('radiogroup', { name: 'Table cell density' });
   await padding.fill('9');
@@ -130,7 +133,7 @@ test('fill and vertical alignment apply to selected cells and stay in sync acros
     return { fill: cell.attrs.fill, valign: cell.attrs.valign };
   })).toEqual({ fill: 'gray-dark', valign: 'middle' });
 
-  // Another cell: the panels and the Columns menu describe it.
+  // Another cell: the panels and Table settings' This column describe it.
   await page.locator('.ProseMirror table tr').first().locator('td').nth(1).click();
   cell = await panel(page, 'cell');
   const fills = cell.getByRole('radiogroup', { name: 'Selected cells fill' });
@@ -138,9 +141,9 @@ test('fill and vertical alignment apply to selected cells and stay in sync acros
   align = await panel(page, 'align');
   const vertical = align.getByRole('radiogroup', { name: 'Selected cells vertical alignment' });
   await expect(vertical.locator('[aria-checked="true"]')).toHaveCount(0);
-  const cols = await columnsMenu(page);
-  await expect(cols.locator('[data-value="fr"]')).toHaveAttribute('aria-checked', 'true');
-  await expect(cols.getByRole('spinbutton', { name: 'Column share weight' })).toHaveValue('2');
+  const settings = await panel(page, 'table');
+  await expect(settings.getByRole('radiogroup', { name: 'Selected column sizing' }).locator('[data-value="fr"]')).toHaveAttribute('aria-checked', 'true');
+  await expect(settings.getByRole('spinbutton', { name: 'Column width amount' })).toHaveValue('2');
   await page.keyboard.press('Escape');
 
   // Both cells: a mixed fill checks nothing and says so.
@@ -160,27 +163,32 @@ test('fill and vertical alignment apply to selected cells and stay in sync acros
 
 test('column insertion and deletion preserve logical width entries through merged cells and undo', async ({ page }) => {
   await installTable(page, true);
-  let cols = await columnsMenu(page);
-  await expect(cols.locator('[data-value="mixed"]')).toHaveAttribute('aria-checked', 'true');
-  await cols.getByRole('menuitem', { name: 'Add column after', exact: true }).click();
+  // The merged cell covers an auto and a 2fr column: its sizing is mixed,
+  // so no choice is checked and the amount says so.
+  let settings = await panel(page, 'table');
+  await expect(settings.getByRole('radiogroup', { name: 'Selected column sizing' }).locator('[aria-checked="true"]')).toHaveCount(0);
+  await expect(settings.getByRole('spinbutton', { name: 'Column width amount' })).toHaveAttribute('placeholder', 'Mixed');
+  await page.keyboard.press('Escape');
+  await tile(page, 'addcol').click();
   expect(await widths(page)).toEqual(['auto', '2fr', 'auto', '90pt']);
   await page.keyboard.press('ControlOrMeta+z');
   expect(await widths(page)).toEqual(['auto', '2fr', '90pt']);
-  cols = await columnsMenu(page);
-  await cols.getByRole('menuitem', { name: 'Add column before', exact: true }).click();
+  // Column left: the Add column tile's flyout, shown on hover.
+  await tile(page, 'addcol').hover();
+  await tile(page, 'addcolleft').click();
   expect(await widths(page)).toEqual(['auto', 'auto', '2fr', '90pt']);
   await page.keyboard.press('ControlOrMeta+z');
   expect(await widths(page)).toEqual(['auto', '2fr', '90pt']);
-  cols = await columnsMenu(page);
-  await cols.getByRole('menuitem', { name: 'Delete selected column', exact: true }).click();
+  await action(page, 'delcol').click();
   expect(await widths(page)).toEqual(['2fr', '90pt']);
   expect(await page.evaluate(() => window.view.state.doc.firstChild!.firstChild!.firstChild!.attrs.colspan)).toBe(1);
   await page.keyboard.press('ControlOrMeta+z');
   expect(await widths(page)).toEqual(['auto', '2fr', '90pt']);
   expect(await page.evaluate(() => window.view.state.doc.firstChild!.firstChild!.firstChild!.attrs.colspan)).toBe(2);
-  cols = await columnsMenu(page);
-  await cols.locator('[data-value="pt"]').click();
-  const points = cols.getByRole('spinbutton', { name: 'Column width in points' });
+  settings = await panel(page, 'table');
+  await settings.getByRole('radiogroup', { name: 'Selected column sizing' }).locator('[data-value="pt"]').click();
+  expect(await widths(page)).toEqual(['72pt', '72pt', '90pt']);
+  const points = settings.getByRole('spinbutton', { name: 'Column width amount' });
   await points.fill('50');
   await points.press('Enter');
   expect(await widths(page)).toEqual(['50pt', '50pt', '90pt']);

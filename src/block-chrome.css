@@ -44,9 +44,18 @@
   }
 }
 
-.block-pill {
+/* The pill and the actions pill under it ride down a tall block as one. */
+.block-stack {
   position: sticky;
   top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+
+:is(.block-pill, .bc-actions) {
+  position: relative;
   pointer-events: auto;
   box-sizing: border-box;
   display: flex;
@@ -71,13 +80,13 @@
 
 /* Calm while typing: the first keystroke dims it; a hover, the focus, an
    open flyout, or the caret in another cell bring it back. */
-.block-pill.is-dim:not(:hover):not(:focus-within):not(.is-open) {
+:is(.block-pill, .bc-actions).is-dim:not(:hover):not(:focus-within):not(.is-open) {
   opacity: 0.45;
 }
 
 /* Tiles: the rail's. min-width 0 and padding 0, or the app's global
    .tb-btn (min-width 40, padding 0 8) would make every tile 40 wide. */
-.block-pill .tb-btn {
+:is(.block-pill, .bc-actions) .tb-btn {
   position: relative;
   flex: none;
   min-width: 0;
@@ -91,41 +100,41 @@
   cursor: default;
 }
 
-.block-pill .tb-btn .ico {
+:is(.block-pill, .bc-actions) .tb-btn .ico {
   width: 18px;
   height: 18px;
 }
 
-.block-pill .tb-btn .tico {
+:is(.block-pill, .bc-actions) .tb-btn .tico {
   font: 600 15px/18px var(--sans);
   min-width: 18px;
 }
 
-.block-pill .tb-btn:hover:not(:disabled),
-.block-pill .tb-btn:focus-visible {
+:is(.block-pill, .bc-actions) .tb-btn:hover:not(:disabled),
+:is(.block-pill, .bc-actions) .tb-btn:focus-visible {
   color: #fff;
   background: rgba(255, 255, 255, 0.08);
 }
 
-.block-pill .tb-btn[aria-expanded='true'] {
+:is(.block-pill, .bc-actions) .tb-btn[aria-expanded='true'] {
   color: #fff;
   background: rgba(255, 255, 255, 0.14);
 }
 
-.block-pill .tb-btn:focus-visible {
+:is(.block-pill, .bc-actions) .tb-btn:focus-visible {
   outline: 2px solid #9db8d6;
   outline-offset: 2px;
 }
 
-.block-pill .tb-btn:disabled {
+:is(.block-pill, .bc-actions) .tb-btn:disabled {
   opacity: 0.25;
 }
 
-.block-pill .tb-btn:disabled .ico {
+:is(.block-pill, .bc-actions) .tb-btn:disabled .ico {
   transform: none;
 }
 
-.block-pill .tb-rule {
+:is(.block-pill, .bc-actions) .tb-rule {
   width: 20px;
   height: 1px;
   margin: 3px auto;
@@ -134,53 +143,147 @@
 
 /* Captions: to the tile's right; a pill hugging a narrow centred block
    opens them to the LEFT, into the empty margin, instead of over it. */
-.block-pill .tb-btn .lbl {
+:is(.block-pill, .bc-actions) .tb-btn .lbl {
   left: calc(100% + 10px);
   top: 50%;
   transform: translateY(-50%);
 }
 
-.block-pill .tb-btn .lbl kbd {
+:is(.block-pill, .bc-actions) .tb-btn .lbl kbd {
   margin-left: 8px;
   font: 11px var(--sans);
   color: var(--bar-ink-soft);
 }
 
-.block-pill.is-hug .tb-btn .lbl {
+:is(.block-pill, .bc-actions).is-hug .tb-btn .lbl {
   left: auto;
   right: calc(100% + 10px);
 }
 
-.block-pill .tb-btn:disabled .lbl {
+:is(.block-pill, .bc-actions) .tb-btn:disabled .lbl {
   visibility: hidden;
 }
 
+/* The add tiles' other direction: a small flyout beside the tile (to
+   the page side; into the margin when the pill hugs), shown while the
+   pointer is on the tile or the flyout, or the focus is in either. The
+   tile never moves; a transparent bridge spans the gap so the pointer
+   can cross to the flyout. It stands in for the tile's caption. */
+.bc-alt-host {
+  position: relative;
+  flex: none;
+}
+
+:is(.block-pill, .bc-actions) .tb-btn.bc-alt {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 8px);
+  z-index: 2;
+  width: auto;
+  height: 30px;
+  padding: 0 10px 0 6px;
+  gap: 6px;
+  border: 1px solid var(--bar-hairline);
+  border-radius: 9px;
+  background: var(--bar-glass);
+  backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 10px 24px rgba(0, 0, 0, 0.24);
+  color: var(--bar-ink);
+  white-space: nowrap;
+  transform: translateY(-50%);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.1s ease, visibility 0s linear 0.1s;
+}
+
+:is(.block-pill, .bc-actions) .tb-btn.bc-alt::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  right: 100%;
+  width: 12px;
+}
+
+:is(.block-pill, .bc-actions) .tb-btn.bc-alt:hover:not(:disabled),
+:is(.block-pill, .bc-actions) .tb-btn.bc-alt:focus-visible {
+  color: #fff;
+  background: rgb(52, 51, 56);
+}
+
+.bc-alt-word {
+  font: 500 12px/1 var(--sans);
+}
+
+.bc-alt-host:is(:hover, :focus-within) > .tb-btn.bc-alt:not(:disabled) {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.1s ease;
+}
+
+.bc-alt-host:is(:hover, :focus-within) > .tb-btn:not(.bc-alt) > .lbl {
+  visibility: hidden;
+}
+
+:is(.block-pill, .bc-actions).is-hug .tb-btn.bc-alt {
+  left: auto;
+  right: calc(100% + 8px);
+}
+
+:is(.block-pill, .bc-actions).is-hug .tb-btn.bc-alt::before {
+  right: auto;
+  left: 100%;
+}
+
+/* Deletes are red, as Table settings' Delete table is. */
+:is(.block-pill, .bc-actions) .tb-btn.bc-danger {
+  color: #e8877c;
+}
+
+:is(.block-pill, .bc-actions) .tb-btn.bc-danger:hover:not(:disabled),
+:is(.block-pill, .bc-actions) .tb-btn.bc-danger:focus-visible {
+  color: #ff8f86;
+  background: rgba(232, 135, 124, 0.14);
+}
+
 /* Compact (a 46–60 px margin): 34 wide, 28 px tiles. */
-.block-pill.is-compact {
+:is(.block-pill, .bc-actions).is-compact {
   width: 34px;
   padding: 2px;
   border-radius: 11px;
 }
 
-.block-pill.is-compact .tb-btn {
+:is(.block-pill, .bc-actions).is-compact .tb-btn {
   width: 28px;
   height: 28px;
   border-radius: 8px;
 }
 
-.block-pill.is-compact .tb-btn .ico {
+:is(.block-pill, .bc-actions).is-compact .tb-btn .ico {
   width: 16px;
   height: 16px;
 }
 
+/* The add tiles' flyout keeps its own size (the compact tile size would
+   squeeze its word over the tile beside it). */
+:is(.block-pill, .bc-actions).is-compact .tb-btn.bc-alt {
+  width: auto;
+  height: 30px;
+  border-radius: 9px;
+}
+
+:is(.block-pill, .bc-actions)[hidden] {
+  display: none;
+}
+
 /* Collapsed (a margin under 46 px): one ⋯ tile. */
-.block-pill.is-collapsed {
+:is(.block-pill, .bc-actions).is-collapsed {
   width: 28px;
   padding: 0;
   border-radius: 9px;
 }
 
-.block-pill.is-collapsed .tb-btn {
+:is(.block-pill, .bc-actions).is-collapsed .tb-btn {
   width: 26px;
   height: 26px;
   border-radius: 8px;
@@ -197,11 +300,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .block-pill .tb-btn:active > .ico {
+  :is(.block-pill, .bc-actions) .tb-btn:active > .ico {
     transform: none;
   }
 
-  .block-pill .tb-btn:hover .ico {
+  :is(.block-pill, .bc-actions) .tb-btn:hover .ico {
     transform: none;
   }
 }

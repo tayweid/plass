@@ -84,6 +84,12 @@ const ICONS: Record<string, string> = {
   // line; a bin.
   rows: '<rect x="3" y="4.5" width="18" height="6.5" rx="1.5"/><line x1="12" y1="14.5" x2="12" y2="20.5"/><line x1="9" y1="17.5" x2="15" y2="17.5"/>',
   cols: '<rect x="4.5" y="3" width="6.5" height="18" rx="1.5"/><line x1="14.5" y1="12" x2="20.5" y2="12"/><line x1="17.5" y1="9" x2="17.5" y2="15"/>',
+  rowsabove: '<rect x="3" y="13" width="18" height="6.5" rx="1.5"/><line x1="12" y1="3.5" x2="12" y2="9.5"/><line x1="9" y1="6.5" x2="15" y2="6.5"/>',
+  colsleft: '<rect x="13" y="3" width="6.5" height="18" rx="1.5"/><line x1="3.5" y1="12" x2="9.5" y2="12"/><line x1="6.5" y1="9" x2="6.5" y2="15"/>',
+  delrow: '<rect x="3" y="4.5" width="18" height="6.5" rx="1.5"/><line x1="9.5" y1="15" x2="14.5" y2="20"/><line x1="14.5" y1="15" x2="9.5" y2="20"/>',
+  delcol: '<rect x="4.5" y="3" width="6.5" height="18" rx="1.5"/><line x1="15" y1="9.5" x2="20" y2="14.5"/><line x1="20" y1="9.5" x2="15" y2="14.5"/>',
+  merge: '<rect x="3" y="6" width="18" height="12" rx="2"/><polyline points="6.5 10 9 12 6.5 14"/><polyline points="17.5 10 15 12 17.5 14"/>',
+  splitcell: '<rect x="3" y="6" width="18" height="12" rx="2"/><line x1="12" y1="6" x2="12" y2="18"/><polyline points="8.5 10 6.2 12 8.5 14"/><polyline points="15.5 10 17.8 12 15.5 14"/>',
   cell: '<path d="M12 12V3.5H5.5a2 2 0 0 0-2 2V12z" fill="currentColor" fill-opacity=".45" stroke="none"/><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><line x1="12" y1="3.5" x2="12" y2="20.5"/><line x1="3.5" y1="12" x2="20.5" y2="12"/>',
   valigntop: '<line x1="4" y1="4" x2="20" y2="4"/><rect x="8" y="7" width="8" height="10" rx="1.5"/>',
   valignmid: '<line x1="4" y1="12" x2="7" y2="12"/><line x1="17" y1="12" x2="20" y2="12"/><rect x="8" y="7" width="8" height="10" rx="1.5"/>',

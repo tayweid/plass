@@ -86,6 +86,10 @@ const where = (page: Page) => page.evaluate(() => {
 
 const pill = (page: Page) => page.locator('.block-pill');
 const tile = (page: Page, id: string) => page.locator(`.block-pill [data-tile="${id}"]`);
+/** Walks the pill's roving focus `n` tiles down. */
+const down = async (page: Page, n: number) => {
+  for (let i = 0; i < n; i++) await page.keyboard.press('ArrowDown');
+};
 const pageBreaks = (page: Page) => page.evaluate(() => {
   let n = 0;
   window.view.state.doc.descendants((node) => { if (node.type.name === 'page_break') n++; });
@@ -116,7 +120,7 @@ test.describe('the block keyboard', () => {
     // still shows the cell it will act at.
     await expect(table.locator('.ts-cell-active')).toHaveCount(0);
     await expect(page.getByRole('toolbar', { name: 'Table controls' })).toBeVisible();
-    await expect(tile(page, 'rows')).toBeEnabled();
+    await expect(tile(page, 'addrow')).toBeEnabled();
 
     await page.keyboard.press('Escape');
     expect((await where(page)).json).toEqual(before.json);
@@ -149,8 +153,11 @@ test.describe('the block keyboard', () => {
     await page.keyboard.press('Escape');
     const selected = await where(page);
     expect(selected.node).toBe('table');
+    // Add row below, its Row above · Add column right, its Column left ·
+    // Align · Cell │ Table settings (End would go on into the actions pill
+    // under it).
     await page.keyboard.press('Tab');
-    await page.keyboard.press('End');
+    await down(page, 6);
     await expect(tile(page, 'table')).toBeFocused();
     await page.keyboard.press('Enter');
     const styles = page.locator('.bc-flyout [role="radiogroup"][aria-label="Table rule style"] [role="radio"][aria-checked="false"]');
@@ -185,8 +192,11 @@ test.describe('the block keyboard', () => {
     expect(selected.node).toBe('grid');
     // The selected grid carries the paper scale for its outline.
     expect(await page.locator('.ProseMirror .ts-grid').first().evaluate((g) => (g as HTMLElement).style.getPropertyValue('--ps'))).not.toBe('');
+    // Add row below, its Row above · Add column right, its Column left ·
+    // Align · Image │ Grid layout.
     await page.keyboard.press('Tab');
-    await page.keyboard.press('End');
+    await down(page, 6);
+    await expect(tile(page, 'grid')).toBeFocused();
     await page.keyboard.press('Enter');
     const gutters = page.locator('.bc-flyout [role="radiogroup"][aria-label="Space between cells"] [role="radio"][aria-checked="false"]');
     await expect(gutters.first()).toBeVisible();
@@ -225,7 +235,7 @@ test.describe('the block keyboard', () => {
     const table = page.locator('.ProseMirror table').nth(nested + 1);
     await expect(table).toHaveClass(/ProseMirror-selectednode/);
     await expect(page.locator('.ProseMirror .ts-grid-cell-active')).toHaveCount(1);
-    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(6);
+    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(8);
     await page.keyboard.press('Escape');
     expect((await where(page)).json).toEqual(before.json);
   });
@@ -239,29 +249,27 @@ test.describe('the block keyboard', () => {
     const selected = await where(page);
     expect(selected.node).toBe('grid');
     await page.keyboard.press('Tab');
-    await expect(tile(page, 'rows')).toBeFocused();
-    await expect(tile(page, 'rows')).toHaveAttribute('tabindex', '0');
-    // Roving focus, then back: the editor has the focus and the block is
+    await expect(tile(page, 'addrow')).toBeFocused();
+    await expect(tile(page, 'addrow')).toHaveAttribute('tabindex', '0');
+    // Roving focus (into the tile's Row above flyout, shown while the focus
+    // is on the tile), then back: the editor has the focus and the block is
     // still selected.
     await page.keyboard.press('ArrowDown');
-    await expect(tile(page, 'cols')).toBeFocused();
+    await expect(tile(page, 'addrowabove')).toBeFocused();
+    await expect(tile(page, 'addrowabove')).toBeVisible();
     await page.keyboard.press('Shift+Tab');
     expect(await page.evaluate(() => window.view.hasFocus())).toBe(true);
     expect((await where(page)).json).toEqual(selected.json);
     // Again, and Escape from the pill does the same.
     await page.keyboard.press('Tab');
-    await expect(tile(page, 'rows')).toBeFocused();
+    await expect(tile(page, 'addrow')).toBeFocused();
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.view.hasFocus())).toBe(true);
     expect((await where(page)).json).toEqual(selected.json);
-    // Rows › Add row below from the pill: the row goes under the
-    // remembered cell's row and the caret lands in it, in its column.
+    // Add row below from the pill: the row goes under the remembered
+    // cell's row and the caret lands in it, in its column.
     await page.keyboard.press('Tab');
-    await page.keyboard.press('Enter');
-    const rows = page.getByRole('menu', { name: 'Rows' });
-    await expect(rows).toBeVisible();
-    await expect(rows.getByRole('menuitem', { name: 'Add row below' })).toBeEnabled();
-    await rows.getByRole('menuitem', { name: 'Add row below' }).focus();
+    await expect(tile(page, 'addrow')).toBeFocused();
     await page.keyboard.press('Enter');
     const after = await gridRows(page, 0);
     expect(after).toHaveLength(before.length + 1);
@@ -269,18 +277,16 @@ test.describe('the block keyboard', () => {
     expect((await where(page)).cell).toMatchObject({ kind: 'grid', row: 1, col: 1, text: '' });
   });
 
-  test('the Rows menu names the row chords', async ({ page }) => {
+  test('the add-row tile names the row chord', async ({ page }) => {
     await openSheet(page);
     await caretIn(page, { table: 0, row: 2, col: 1 });
-    await tile(page, 'rows').click();
-    const rows = page.getByRole('menu', { name: 'Rows' });
-    await expect(rows.getByRole('menuitem', { name: 'Add row below' }).locator('.mi-kbd')).toHaveText('⌘⏎');
-    await expect(rows.getByRole('menuitem', { name: 'Add row above' }).locator('.mi-kbd')).toHaveText('⇧⌘⏎');
-    await page.keyboard.press('Escape');
+    // Row above, the tile's flyout, says its direction in a word.
+    await expect(tile(page, 'addrow').locator('.lbl kbd')).toHaveText('⌘⏎');
+    await expect(tile(page, 'addrowabove').locator('.bc-alt-word')).toHaveText('Row above');
     await caretIn(page, { grid: 0, cell: 0 });
-    await tile(page, 'rows').click();
-    await expect(rows.getByRole('menuitem', { name: 'Add row below' }).locator('.mi-kbd')).toHaveText('⌘⏎');
-    await expect(rows.getByRole('menuitem', { name: 'Add row above' }).locator('.mi-kbd')).toHaveText('⇧⌘⏎');
+    await expect(page.getByRole('toolbar', { name: 'Grid controls' })).toBeVisible();
+    await expect(tile(page, 'addrow').locator('.lbl kbd')).toHaveText('⌘⏎');
+    await expect(tile(page, 'addcolleft').locator('.bc-alt-word')).toHaveText('Column left');
   });
 
   test('⌘⏎ / ⇧⌘⏎ add a row in a table cell with the caret in it, and no page break', async ({ page }) => {
@@ -350,31 +356,29 @@ test.describe('the block keyboard', () => {
     expect(await pageBreaks(page)).toBe(breaks + 1);
   });
 
-  test('add row / column from the menus put the caret in the new row / column', async ({ page }) => {
+  test('the add tiles put the caret in the new row / column', async ({ page }) => {
     await openSheet(page);
     await caretIn(page, { table: 0, row: 2, col: 1 });
-    await tile(page, 'rows').click();
-    await page.getByRole('menu', { name: 'Rows' }).getByRole('menuitem', { name: 'Add row above' }).click();
+    // Row above and Column left are the flyouts of their tiles, shown on
+    // hover.
+    await tile(page, 'addrow').hover();
+    await tile(page, 'addrowabove').click();
     expect((await where(page)).cell).toMatchObject({ kind: 'table', row: 2, col: 1, text: '' });
     await caretIn(page, { table: 0, row: 3, col: 1 });
-    await tile(page, 'rows').click();
-    await page.getByRole('menu', { name: 'Rows' }).getByRole('menuitem', { name: 'Add row below' }).click();
+    await tile(page, 'addrow').click();
     expect((await where(page)).cell).toMatchObject({ kind: 'table', row: 4, col: 1, text: '' });
     await caretIn(page, { table: 0, row: 3, col: 1 });
-    await tile(page, 'cols').click();
-    await page.getByRole('menu', { name: 'Columns' }).getByRole('menuitem', { name: 'Add column before' }).click();
+    await tile(page, 'addcol').hover();
+    await tile(page, 'addcolleft').click();
     expect((await where(page)).cell).toMatchObject({ kind: 'table', row: 3, col: 1, text: '' });
     await caretIn(page, { table: 0, row: 3, col: 2 });
-    await tile(page, 'cols').click();
-    await page.getByRole('menu', { name: 'Columns' }).getByRole('menuitem', { name: 'Add column after' }).click();
+    await tile(page, 'addcol').click();
     expect((await where(page)).cell).toMatchObject({ kind: 'table', row: 3, col: 3, text: '' });
     // A grid does the same.
     await caretIn(page, { grid: 0, cell: 1 });
-    await tile(page, 'cols').click();
-    await page.getByRole('menu', { name: 'Columns' }).getByRole('menuitem', { name: 'Add column after' }).click();
+    await tile(page, 'addcol').click();
     expect((await where(page)).cell).toMatchObject({ kind: 'grid', row: 0, col: 2, text: '' });
-    await tile(page, 'rows').click();
-    await page.getByRole('menu', { name: 'Rows' }).getByRole('menuitem', { name: 'Add row below' }).click();
+    await tile(page, 'addrow').click();
     expect((await where(page)).cell).toMatchObject({ kind: 'grid', row: 1, col: 2, text: '' });
   });
 

@@ -92,6 +92,8 @@ async function installPaginationTable(
 /** The block pill beside the table (src/block-chrome.ts) and the menu or
  *  panel one of its tiles opens: Rows, Columns, Align, Cell, Table settings. */
 const pillTile = (page: import('playwright/test').Page, id: string) => page.locator(`.block-pill [data-tile="${id}"]`);
+/** A tile of the actions pill under the block pill (delete row, delete column, merge or split). */
+const actionTile = (page: import('playwright/test').Page, id: string) => page.locator(`.bc-actions [data-tile="${id}"]`);
 const tableSettings = (page: import('playwright/test').Page) => page.getByRole('dialog', { name: 'Table settings' });
 const cellPanel = (page: import('playwright/test').Page) => page.getByRole('dialog', { name: 'Cell fill and rules' });
 
@@ -670,19 +672,15 @@ test('contextual controls mutate native structure and retain rich content', asyn
   await page.locator('.ProseMirror td').first().click();
   const controls = page.getByRole('toolbar', { name: 'Table controls' });
   await expect(controls).toBeVisible();
-  const rows = page.getByRole('menu', { name: 'Rows' });
-  const cols = page.getByRole('menu', { name: 'Columns' });
 
-  await pillTile(page, 'rows').click();
-  await rows.getByRole('menuitem', { name: 'Add row below' }).click();
+  await pillTile(page, 'addrow').click();
   await expect(page.locator('.ProseMirror table tr')).toHaveCount(3);
   await page.keyboard.press('ControlOrMeta+z');
   await expect(page.locator('.ProseMirror table tr')).toHaveCount(2);
   await page.keyboard.press('ControlOrMeta+Shift+z');
   await expect(page.locator('.ProseMirror table tr')).toHaveCount(3);
 
-  await pillTile(page, 'cols').click();
-  await cols.getByRole('menuitem', { name: 'Add column after' }).click();
+  await pillTile(page, 'addcol').click();
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).childCount)).toBe(3);
   await page.keyboard.press('ControlOrMeta+z');
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).childCount)).toBe(2);
@@ -692,8 +690,8 @@ test('contextual controls mutate native structure and retain rich content', asyn
   await firstCell.click();
   await secondCell.click({ modifiers: ['Shift'] });
   await expect.poll(() => page.evaluate(() => window.view.state.selection.constructor.name)).toBe('CellSelection');
-  await pillTile(page, 'cell').click();
-  await cellPanel(page).getByRole('menuitem', { name: 'Merge selected cells' }).click();
+  await expect(actionTile(page, 'merge')).toHaveAttribute('aria-label', 'Merge cells');
+  await actionTile(page, 'merge').click();
   const mergedShape = await page.evaluate(() => {
     const cell = window.view.state.doc.child(0).child(0).child(0);
     const types: string[] = [];
@@ -707,16 +705,16 @@ test('contextual controls mutate native structure and retain rich content', asyn
   expect(mergedShape.paragraphs).toBeGreaterThanOrEqual(3);
   expect(mergedShape.types).toEqual(expect.arrayContaining(['math_inline', 'citation']));
 
-  await cellPanel(page).getByRole('menuitem', { name: 'Split merged cell' }).click();
+  // The same tile splits the merged cell.
+  await expect(actionTile(page, 'merge')).toHaveAttribute('aria-label', 'Split cell');
+  await actionTile(page, 'merge').click();
   expect(await page.evaluate(() => window.view.state.doc.child(0).child(0).child(0).attrs.colspan)).toBe(1);
 
   await page.locator('.ProseMirror table tr').nth(1).locator('td').first().click();
-  await pillTile(page, 'rows').click();
-  await rows.getByRole('menuitemcheckbox', { name: 'Toggle selected row as header' }).click();
-  expect(await page.evaluate(() => window.view.state.doc.child(0).child(1).child(0).type.name)).toBe('table_header');
-
   await pillTile(page, 'table').click();
   const settings = tableSettings(page);
+  await settings.getByRole('radiogroup', { name: 'Header row' }).locator('[data-value="on"]').click();
+  expect(await page.evaluate(() => window.view.state.doc.child(0).child(1).child(0).type.name)).toBe('table_header');
   await settings.getByRole('radiogroup', { name: 'Table rule style' }).locator('[data-value="grid"]').click();
   await expect(page.locator('.ProseMirror table')).toHaveClass(/ts-table-grid/);
   await settings.getByRole('radiogroup', { name: 'Table text size' }).locator('[data-value="0.85em"]').click();

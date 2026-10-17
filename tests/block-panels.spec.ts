@@ -3,7 +3,8 @@ import { expect, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // The block pill's settings panels (src/block-chrome.ts, spec §5): Table
-// settings (style, text size, padding, columns, caption, label, delete) and
+// settings (style, text size, padding, header row, the caret's column,
+// columns, caption, label, delete) and
 // Grid layout (split presets + Custom, gutter presets + Custom, unwrap); the
 // on-page caption as the way into Table settings; refusals in the app toast.
 
@@ -323,12 +324,13 @@ test.describe('the block panels', () => {
       const el = document.activeElement as HTMLElement;
       return el.getAttribute('aria-label') ?? el.closest('[role="radiogroup"]')?.getAttribute('aria-label') ?? el.textContent;
     });
+    // (The column's amount field is off while the column fits its content.)
     const order: Array<string | null> = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 7; i++) {
       await page.keyboard.press('Tab');
       order.push(await focusedName());
     }
-    expect(order).toEqual(['Table text size', 'Table cell density', 'Cell padding in points', 'Caption', 'Label']);
+    expect(order).toEqual(['Table text size', 'Table cell density', 'Cell padding in points', 'Header row', 'Selected column sizing', 'Caption', 'Label']);
     await page.keyboard.press('Shift+Tab');
     await expect(panel.getByLabel('Caption')).toBeFocused();
     await page.keyboard.press('ControlOrMeta+a');

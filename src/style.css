@@ -3556,7 +3556,8 @@ body {
    the block pill beside a table or grid (block-chrome.css). */
 .tb-menu,
 .settings-panel,
-.block-pill {
+.block-pill,
+.bc-actions {
   --bar-glass: rgba(27, 26, 30, 0.94);
   --bar-ink: rgba(240, 238, 233, 0.9);
   --bar-ink-soft: rgba(240, 238, 233, 0.5);

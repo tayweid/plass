@@ -173,6 +173,12 @@ interface TileSpec {
   flyout?: FlyoutId;
   action?: () => void;
   popup?: 'menu' | 'dialog';
+  /** Deletes: painted red. */
+  danger?: boolean;
+  /** The other direction (a row above, a column left), a one-click
+   *  button in a small flyout beside the tile while the pointer is on
+   *  either or the focus is in them; the tile itself never moves. */
+  alt?: { id: string; glyph: string; caption: string; word: string; kbd?: string; action: () => void };
 }
 
 const ALIGN_NAME: Record<string, string> = { left: 'Left', center: 'Center', right: 'Right', decimal: 'Decimal' };
@@ -254,7 +260,11 @@ class BlockChrome {
   private readonly paper: HTMLElement;
   private readonly layer: HTMLElement;
   private readonly track: HTMLElement;
+  /** The sticky column that rides down a tall block: the pill and, under
+   *  it, the actions pill (delete row, delete column, merge or split). */
+  private readonly stack: HTMLElement;
   private readonly pill: HTMLElement;
+  private readonly actions: HTMLElement;
   private readonly position: HTMLElement;
   private readonly hint: HTMLElement;
   private ctx: BlockContext | null = null;
@@ -289,24 +299,33 @@ class BlockChrome {
     this.track = document.createElement('div');
     this.track.className = 'block-track';
     this.track.hidden = true;
+    this.stack = document.createElement('div');
+    this.stack.className = 'block-stack';
     this.pill = document.createElement('div');
     this.pill.className = 'block-pill';
     this.pill.setAttribute('role', 'toolbar');
     this.pill.setAttribute('aria-orientation', 'vertical');
+    this.actions = document.createElement('div');
+    this.actions.className = 'bc-actions';
+    this.actions.setAttribute('role', 'toolbar');
+    this.actions.setAttribute('aria-orientation', 'vertical');
     this.position = document.createElement('span');
     this.position.className = 'bc-position bc-hidden';
     this.position.setAttribute('aria-live', 'polite');
     this.hint = document.createElement('span');
     this.hint.className = 'bc-hint bc-hidden';
     this.hint.setAttribute('aria-live', 'polite');
-    this.track.append(this.pill);
+    this.stack.append(this.pill, this.actions);
+    this.track.append(this.stack);
     this.layer.append(this.track);
     this.scroll.append(this.layer);
 
     // The pill's background and padding are not the paper: a press there
     // keeps the editor's selection and places no caret (paper-caret.ts).
-    this.pill.addEventListener('mousedown', (e) => e.preventDefault());
-    this.pill.addEventListener('keydown', (e) => this.pillKey(e));
+    for (const el of [this.pill, this.actions]) {
+      el.addEventListener('mousedown', (e) => e.preventDefault());
+      el.addEventListener('keydown', (e) => this.pillKey(e));
+    }
     this.pill.addEventListener('click', (e) => {
       const tile = (e.target as Element).closest<HTMLButtonElement>('.tb-btn');
       if (tile && !tile.disabled) this.press(tile, e.detail === 0);
@@ -320,6 +339,12 @@ class BlockChrome {
     current = this;
     setPillFocuser(() => this.focusPill());
     this.update(view, null);
+  }
+
+  /** A state class (dim, hug, compact, open) on both pills. */
+  private pillClass(name: string, on: boolean): void {
+    this.pill.classList.toggle(name, on);
+    this.actions.classList.toggle(name, on);
   }
 
   // -- state ---------------------------------------------------------------
@@ -345,7 +370,7 @@ class BlockChrome {
     if (entered || parentChanged) {
       this.closeFlyout();
       this.endRun();
-      this.pill.classList.remove('is-dim');
+      this.pillClass('is-dim', false);
       // Hidden until placed beside its new block (it fades in there).
       this.track.hidden = true;
       this.build();
@@ -361,8 +386,8 @@ class BlockChrome {
       this.syncTiles();
     }
     const typed = !!prev && prev.doc !== state.doc && !structural;
-    if (moved) this.pill.classList.remove('is-dim');
-    else if (typed && !this.pill.classList.contains('is-dim')) this.pill.classList.add('is-dim');
+    if (moved) this.pillClass('is-dim', false);
+    else if (typed && !this.pill.classList.contains('is-dim')) this.pillClass('is-dim', true);
     // Every keystroke of a run counts, not just the one that stepped back:
     // the pill hugs again only after a real pause.
     if (typed && (this.hug || this.stepped) && mayWiden(ctx.node)) this.typing();
@@ -383,7 +408,7 @@ class BlockChrome {
       if (this.frame) cancelAnimationFrame(this.frame);
       this.frame = 0;
       this.track.classList.add('is-typing');
-      this.pill.classList.remove('is-hug');
+      this.pillClass('is-hug', false);
       this.hug = false;
       this.closeFlyout();
     }
@@ -421,7 +446,7 @@ class BlockChrome {
     this.frame = 0;
     this.track.hidden = true;
     this.placed = false;
-    this.pill.classList.remove('is-dim');
+    this.pillClass('is-dim', false);
     setText(this.position, '');
     setText(this.hint, '');
   }
@@ -440,16 +465,27 @@ class BlockChrome {
   // -- the tiles -------------------------------------------------------------
 
   private tileSpecs(layout: Layout): Array<TileSpec | '|'> {
-    const rows: TileSpec = { id: 'rows', glyph: icon('rows'), caption: 'Rows', flyout: 'rows', popup: 'menu' };
-    const cols: TileSpec = { id: 'cols', glyph: icon('cols'), caption: 'Columns', flyout: 'cols', popup: 'menu' };
     if (layout === 'collapsed') {
       const kind = this.ctx?.kind === 'grid' ? 'Grid' : 'Table';
       return [{ id: 'more', glyph: '<span class="ico tico">⋯</span>', caption: `${kind} controls`, flyout: 'more', popup: 'menu' }];
     }
-    if (layout === 'grid') {
+    // Adding is one click: the tile adds below (right); its flyout,
+    // shown on hover, above (left). Delete and merge are the actions pill's.
+    const grid = layout === 'grid';
+    const row = (where: 'above' | 'below') => () => this.act(grid ? () => this.atCell(() => insertGridRowAt(this.view, where)) : () => this.run(insertTableRow(where)));
+    const col = (where: 'left' | 'right') => () => this.act(grid ? () => this.atCell(() => insertGridColumnAt(this.view, where)) : () => this.run(insertTableColumn(where)));
+    const addRow: TileSpec = {
+      id: 'addrow', glyph: icon('rows'), caption: 'Add row below', kbd: '⌘⏎', action: row('below'),
+      alt: { id: 'addrowabove', glyph: icon('rowsabove'), caption: 'Add row above', word: 'Row above', kbd: '⇧⌘⏎', action: row('above') },
+    };
+    const addCol: TileSpec = {
+      id: 'addcol', glyph: icon('cols'), caption: 'Add column right', action: col('right'),
+      alt: { id: 'addcolleft', glyph: icon('colsleft'), caption: 'Add column left', word: 'Column left', action: col('left') },
+    };
+    if (grid) {
       return [
-        { ...rows, flyout: 'gridrows' },
-        { ...cols, flyout: 'gridcols' },
+        addRow,
+        addCol,
         { id: 'align', glyph: icon('alignleft'), caption: 'Align · Left', flyout: 'align', popup: 'dialog' },
         { id: 'image', glyph: icon('image'), caption: 'Image in cell', action: () => this.insertImage() },
         '|',
@@ -457,8 +493,8 @@ class BlockChrome {
       ];
     }
     const table: Array<TileSpec | '|'> = [
-      rows,
-      cols,
+      addRow,
+      addCol,
       { id: 'align', glyph: icon('alignleft'), caption: 'Align · Left', flyout: 'align', popup: 'dialog' },
       { id: 'cell', glyph: icon('cell'), caption: 'Cell fill and rules', flyout: 'cell', popup: 'dialog' },
       '|',
@@ -466,6 +502,37 @@ class BlockChrome {
     ];
     if (layout === 'nested') table.push('|', { id: 'gridparent', glyph: icon('grid'), caption: 'Grid…', flyout: 'gridparent', popup: 'menu' });
     return table;
+  }
+
+  /** The actions pill under the pill: what the old Rows and Columns menus
+   *  held besides adding. Merge reads Split in a merged cell (syncTiles). */
+  private actionSpecs(layout: Layout): TileSpec[] {
+    if (layout === 'collapsed') return [];
+    const grid = layout === 'grid';
+    return [
+      {
+        id: 'delrow', glyph: icon('delrow'), caption: 'Delete row', danger: true,
+        action: () => this.act(grid ? () => this.atCell(() => deleteGridRowAt(this.view)) : () => this.run(deleteSelectedRows)),
+      },
+      {
+        id: 'delcol', glyph: icon('delcol'), caption: 'Delete column', danger: true,
+        action: () => this.act(grid ? () => this.atCell(() => deleteGridColumnAt(this.view)) : () => this.run(deleteSelectedColumns)),
+      },
+      { id: 'merge', glyph: icon('merge'), caption: 'Merge cells', action: () => this.act(() => this.run(this.mergeCommand())) },
+    ];
+  }
+
+  /** Split where the caret's cell is merged, else merge the selection. */
+  private mergeCommand(): Command {
+    const state = this.cellState();
+    if (this.ctx?.kind === 'grid') return splitGridCell(state) ? splitGridCell : mergeGridCells;
+    return splitCell(state) ? splitCell : mergeCells;
+  }
+
+  /** A tile that acts at once: any open flyout closes first. */
+  private act(action: () => unknown): void {
+    this.closeFlyout();
+    action();
   }
 
   private layoutFor(ctx: BlockContext): Layout {
@@ -494,8 +561,44 @@ class BlockChrome {
     }
     this.layout = layout;
     this.tiles.clear();
-    const parts: Node[] = [];
     let first = true;
+    const tile = (id: string, glyph: string, caption: string, kbd?: string) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'tb-btn';
+      button.dataset.tile = id;
+      button.tabIndex = first ? 0 : -1;
+      first = false;
+      button.setAttribute('aria-label', caption);
+      button.innerHTML = `${glyph}<span class="lbl">${caption}${kbd ? `<kbd>${kbd}</kbd>` : ''}</span>`;
+      this.tiles.set(id, button);
+      return button;
+    };
+    const make = (spec: TileSpec): HTMLElement => {
+      const button = tile(spec.id, spec.glyph, spec.caption, spec.kbd);
+      if (spec.popup) {
+        button.setAttribute('aria-haspopup', spec.popup);
+        button.setAttribute('aria-expanded', 'false');
+      }
+      if (spec.flyout) button.dataset.flyout = spec.flyout;
+      if (spec.danger) button.classList.add('bc-danger');
+      if (spec.action) button.addEventListener('click', spec.action);
+      if (!spec.alt) return button;
+      // The alt follows its tile in the tab order; its word is its label.
+      const alt = tile(spec.alt.id, spec.alt.glyph, spec.alt.caption, spec.alt.kbd);
+      alt.classList.add('bc-alt');
+      alt.querySelector('.lbl')!.remove();
+      const word = document.createElement('span');
+      word.className = 'bc-alt-word';
+      word.textContent = spec.alt.word;
+      alt.append(word);
+      alt.addEventListener('click', spec.alt.action);
+      const host = document.createElement('div');
+      host.className = 'bc-alt-host';
+      host.append(button, alt);
+      return host;
+    };
+    const parts: Node[] = [];
     for (const spec of this.tileSpecs(layout)) {
       if (spec === '|') {
         const rule = document.createElement('div');
@@ -504,23 +607,12 @@ class BlockChrome {
         parts.push(rule);
         continue;
       }
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'tb-btn';
-      button.dataset.tile = spec.id;
-      button.tabIndex = first ? 0 : -1;
-      first = false;
-      button.setAttribute('aria-label', spec.caption);
-      if (spec.popup) {
-        button.setAttribute('aria-haspopup', spec.popup);
-        button.setAttribute('aria-expanded', 'false');
-      }
-      button.innerHTML = `${spec.glyph}<span class="lbl">${spec.caption}${spec.kbd ? `<kbd>${spec.kbd}</kbd>` : ''}</span>`;
-      if (spec.flyout) button.dataset.flyout = spec.flyout;
-      if (spec.action) button.addEventListener('click', spec.action);
-      this.tiles.set(spec.id, button);
-      parts.push(button);
+      parts.push(make(spec));
     }
+    const actions = this.actionSpecs(layout).map(make);
+    this.actions.replaceChildren(...actions);
+    this.actions.hidden = !actions.length;
+    setAttr(this.actions, 'aria-label', kind === 'grid' ? 'Grid row and column actions' : 'Table row and column actions');
     parts.push(this.position, this.hint);
     this.pill.replaceChildren(...parts);
     this.pill.classList.toggle('is-collapsed', layout === 'collapsed');
@@ -550,11 +642,43 @@ class BlockChrome {
       setAttr(align, 'aria-label', `Align · ${name}`);
       setText(align.querySelector('.lbl')!, `Align · ${name}`);
     }
-    for (const id of ['rows', 'cols', 'align', 'cell']) {
+    for (const id of ['align', 'cell']) {
       const tile = this.tiles.get(id);
       if (!tile) continue;
       const disabled = ctx.kind === 'table' ? !inTable : !place;
       if (tile.disabled !== disabled) tile.disabled = disabled;
+    }
+    // A grid holds twelve columns at most, and keeps one row and column.
+    const enabled: Record<string, boolean> = ctx.kind === 'grid'
+      ? {
+          addrow: !!place, addrowabove: !!place,
+          addcol: !!place && place.columns < 12, addcolleft: !!place && place.columns < 12,
+          delrow: !!place && place.rows > 1, delcol: !!place && place.columns > 1,
+          // Merge waits for a selection across cells (the old menu's
+          // "merge with cell right" stays in Grid columns for a nested table).
+          merge: (gridSelectionSpansCells(state) && mergeGridCells(state)) || splitGridCell(state),
+        }
+      : {
+          addrow: insertTableRow('below')(state), addrowabove: insertTableRow('above')(state),
+          addcol: insertTableColumn('right')(state), addcolleft: insertTableColumn('left')(state),
+          delrow: deleteSelectedRows(state), delcol: deleteSelectedColumns(state),
+          merge: mergeCells(state) || splitCell(state),
+        };
+    for (const [id, on] of Object.entries(enabled)) {
+      const tile = this.tiles.get(id);
+      if (tile && tile.disabled === on) tile.disabled = !on;
+    }
+    const merge = this.tiles.get('merge');
+    if (merge) {
+      const split = ctx.kind === 'grid' ? splitGridCell(state) : splitCell(state);
+      const caption = split ? 'Split cell' : 'Merge cells';
+      if (merge.dataset.glyph !== caption) {
+        merge.dataset.glyph = caption;
+        merge.querySelector('svg')?.remove();
+        merge.insertAdjacentHTML('afterbegin', icon(split ? 'splitcell' : 'merge'));
+      }
+      setAttr(merge, 'aria-label', caption);
+      setText(merge.querySelector('.lbl')!, caption);
     }
     const image = this.tiles.get('image');
     if (image) {
@@ -646,7 +770,7 @@ class BlockChrome {
     const contentBottom = toScroll(this.paper.getBoundingClientRect().bottom);
     // Shown before it is read (the same frame: nothing paints between).
     if (this.track.hidden) this.track.hidden = false;
-    const pillHeight = this.pill.offsetHeight;
+    const pillHeight = this.stack.offsetHeight;
     // Decision 3: hug a narrow centred block, never further left than the
     // margin place, and never over text: the block's caption counts where
     // the pill reaches down beside it, and a pill longer than the block
@@ -673,8 +797,8 @@ class BlockChrome {
     const height = Math.max(pillHeight, Math.min(bottom - top, contentBottom - trackTop));
     // Measured only outside a typing run (schedule), so the run is over.
     this.track.classList.remove('is-typing');
-    this.pill.classList.toggle('is-compact', mode !== 'full');
-    this.pill.classList.toggle('is-hug', hug);
+    this.pillClass('is-compact', mode !== 'full');
+    this.pillClass('is-hug', hug);
     this.hug = hug;
     const style = this.track.style;
     const want = { left: `${(left - panel.left).toFixed(2)}px`, top: `${trackTop.toFixed(2)}px`, width: `${width}px`, height: `${height.toFixed(2)}px` };
@@ -743,6 +867,9 @@ class BlockChrome {
     const go = (i: number) => {
       for (const t of this.tiles.values()) t.tabIndex = -1;
       tiles[i].tabIndex = 0;
+      // An add tile's flyout is hidden (unfocusable) until the focus is in
+      // its host: the host's tile takes the focus first, then the flyout.
+      if (tiles[i].classList.contains('bc-alt')) (tiles[i].previousElementSibling as HTMLElement | null)?.focus();
       tiles[i].focus();
     };
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -793,8 +920,8 @@ class BlockChrome {
     this.flyout = { id, el, tile, sync, cleanup, parent, side: 'end' };
     tile.setAttribute('aria-expanded', 'true');
     tile.setAttribute('aria-controls', el.id);
-    this.pill.classList.add('is-open');
-    this.pill.classList.remove('is-dim');
+    this.pillClass('is-open', true);
+    this.pillClass('is-dim', false);
     this.placeOpen();
     if (focus) this.focusables()[0]?.focus();
   }
@@ -819,7 +946,7 @@ class BlockChrome {
     open.el.remove();
     open.tile.setAttribute('aria-expanded', 'false');
     open.tile.removeAttribute('aria-controls');
-    this.pill.classList.remove('is-open');
+    this.pillClass('is-open', false);
     if (restoreFocus && open.tile.isConnected) open.tile.focus({ preventScroll: true });
   }
 
@@ -984,7 +1111,7 @@ class BlockChrome {
     if (!tiles.length) return false;
     for (const t of this.tiles.values()) t.tabIndex = -1;
     tiles[0].tabIndex = 0;
-    this.pill.classList.remove('is-dim');
+    this.pillClass('is-dim', false);
     tiles[0].focus({ preventScroll: true });
     return true;
   }
@@ -1431,18 +1558,6 @@ class BlockChrome {
         return '';
       }
     });
-    this.divider(builder);
-    this.item(builder, 'Merge cells', () => this.run(mergeCells), {
-      name: 'Merge selected cells', keepOpen: true, enabled: () => mergeCells(state()),
-    });
-    const how = document.createElement('div');
-    how.className = 'tb-menu-hint bc-howto';
-    how.textContent = 'Drag or ⇧-click across cells first';
-    builder.el.append(how);
-    builder.syncs.push(() => { how.hidden = mergeCells(state()); });
-    this.item(builder, 'Split cell', () => this.run(splitCell), {
-      name: 'Split merged cell', keepOpen: true, visible: () => splitCell(state()),
-    });
     return builder;
   }
 
@@ -1722,6 +1837,45 @@ class BlockChrome {
     padding.append(locked);
     builder.syncs.push(() => { locked.hidden = !insetLocked(); });
 
+    // HEADER: whether the caret's row is a header row (repeated on every
+    // page the table breaks across).
+    const cells = () => this.cellState();
+    const header = this.panelSection(builder, 'Header row');
+    this.segmented(builder, header, 'Header row', [['off', 'Off'], ['on', 'On']],
+      () => (selectedRowIsHeader(cells()) ? 'on' : 'off'),
+      (value) => { if ((value === 'on') !== selectedRowIsHeader(cells())) this.run(toggleHeaderRow); },
+      () => !toggleHeaderRow(cells()));
+
+    // THIS COLUMN: the caret's column's width, Fit (to its content), a
+    // Share of the rest, or Fixed points, with its amount beside.
+    const width = () => selectedColumnWidth(cells());
+    const modeOf = (w: string) => (w === 'auto' || w === 'mixed' ? w : w.endsWith('fr') ? 'fr' : 'pt');
+    const mode = () => { const w = width(); return w ? modeOf(w.width) : null; };
+    const amount = () => { const w = width(); const m = mode(); return w && (m === 'fr' || m === 'pt') ? Number.parseFloat(w.width) : null; };
+    const column = this.panelSection(builder, 'This column', { column: true });
+    this.segmented(builder, column, 'Selected column sizing', [['auto', 'Fit'], ['fr', 'Share'], ['pt', 'Fixed']],
+      () => { const m = mode(); return m === 'mixed' ? null : m; },
+      (value) => this.run(setSelectedColumnWidth(value === 'auto' ? 'auto' : value === 'fr' ? '1fr' : '72pt')),
+      () => !width());
+    const amountField = this.pillField(builder, column, {
+      name: 'Column width amount',
+      lead: 'Amount',
+      unit: 'pt',
+      number: { min: 0, max: 1440, step: 'any' },
+      value: () => { const n = amount(); return n === null ? '' : String(n); },
+      placeholder: () => (mode() === 'mixed' ? 'Mixed' : '—'),
+      checked: () => amount() !== null,
+      disabled: () => amount() === null,
+      commit: (text) => {
+        const n = Number(text);
+        const m = mode();
+        if (!text || !Number.isFinite(n) || n <= 0 || (m !== 'fr' && m !== 'pt')) return false;
+        return this.run(setSelectedColumnWidth(`${n}${m}`), false);
+      },
+    });
+    const amountUnit = amountField.parentElement!.querySelector('.unit')!;
+    builder.syncs.push(() => setText(amountUnit, mode() === 'fr' ? 'parts' : 'pt'));
+
     // COLUMNS: what the widths are; the way back to automatic.
     const columns = this.panelSection(builder, 'Columns', { column: true });
     columns.classList.add('bp-cols');
@@ -1741,7 +1895,7 @@ class BlockChrome {
       const widths = attrs().columnWidths;
       const set = Array.isArray(widths) && widths.length > 0;
       setText(state, set ? 'Custom widths' : 'Automatic widths');
-      setText(how, set ? 'Set per column in Columns ›' : 'Set a column’s width in Columns ›');
+      setText(how, set ? 'Set per column under This column' : 'Set a column’s width under This column');
       reset.hidden = !set;
     });
 
@@ -2008,6 +2162,8 @@ class BlockChrome {
     this.item(builder, 'Columns', () => this.reopen('cols', 'more'), { submenu: true });
     this.item(builder, 'Align…', () => this.reopen('align', 'more'), { dialog: true });
     this.item(builder, 'Cell…', () => this.reopen('cell', 'more'), { dialog: true });
+    this.item(builder, 'Merge cells', () => this.run(mergeCells), { name: 'Merge selected cells', visible: () => !splitCell(this.cellState()), enabled: () => mergeCells(this.cellState()) });
+    this.item(builder, 'Split cell', () => this.run(splitCell), { name: 'Split merged cell', visible: () => splitCell(this.cellState()) });
     this.divider(builder);
     this.item(builder, 'Table settings…', () => this.reopen('table', 'more'), { dialog: true });
     if (ctx.parentGrid) this.item(builder, 'Grid', () => this.reopen('gridparent', 'more'), { submenu: true });

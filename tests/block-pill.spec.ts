@@ -3,9 +3,10 @@ import { expect, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
 // The block pill (src/block-chrome.ts): the controls of the table or grid
-// the caret is in, in the page's margin beside it. It runs the tables' own
-// commands and the grids' caret commands, keeps the editor's selection, and
-// does nothing for a keystroke but dim.
+// the caret is in, in the page's margin beside it, with the actions pill
+// (delete row, delete column, merge or split) under it. It runs the tables'
+// own commands and the grids' caret commands, keeps the editor's selection,
+// and does nothing for a keystroke but dim.
 
 declare global {
   interface Window {
@@ -68,6 +69,13 @@ async function caretIn(page: Page, target: { table: number; row: number; col: nu
 
 const pill = (page: Page) => page.locator('.block-pill');
 const tile = (page: Page, id: string) => page.locator(`.block-pill [data-tile="${id}"]`);
+/** A tile of the actions pill under the pill. */
+const action = (page: Page, id: string) => page.locator(`.bc-actions [data-tile="${id}"]`);
+/** Rows added below the caret's, one click each: twelve make the sheet's
+ *  first table taller than the pill and the actions pill under it. */
+const addRows = async (page: Page, n = 12) => {
+  for (let i = 0; i < n; i++) await tile(page, 'addrow').click();
+};
 const tableAt = (page: Page, index: number) => page.evaluate((i) => {
   const el = document.querySelectorAll('.ProseMirror table')[i];
   const view = window.view;
@@ -112,10 +120,16 @@ test.describe('the block pill', () => {
     await openSheet(page);
     await caretIn(page, { table: 0, row: 2, col: 1 });
     await expect(page.getByRole('toolbar', { name: 'Table controls' })).toBeVisible();
-    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(5);
+    // Add row below (and its Row above) · Add column right (and its Column
+    // left) · Align · Cell │ Table settings, and under them Delete row ·
+    // Delete column · Merge.
+    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(7);
+    await expect(page.getByRole('toolbar', { name: 'Table row and column actions' }).locator('.tb-btn')).toHaveCount(3);
     const geometry = () => page.evaluate(() => {
       const r = (e: Element) => e.getBoundingClientRect();
       const p = r(document.querySelector('.block-pill')!);
+      // The pill and the actions pill under it: the stack that covers nothing.
+      const stack = r(document.querySelector('.block-stack')!);
       const table = r(document.querySelectorAll('.ProseMirror table')[0]);
       const editor = document.getElementById('editor')!;
       const s = r(document.getElementById('stack')!).width / document.getElementById('stack')!.offsetWidth;
@@ -129,23 +143,20 @@ test.describe('the block pill', () => {
         range.selectNodeContents(t);
         for (const rect of range.getClientRects()) texts.push({ rect, text: t.textContent });
       }
-      const hit = texts.filter(({ rect: t }) => t.right > p.left && t.left < p.right && t.bottom > p.top && t.top < p.bottom).map((t) => t.text);
+      const hit = texts.filter(({ rect: t }) => t.right > stack.left && t.left < stack.right && t.bottom > stack.top && t.top < stack.bottom).map((t) => t.text);
       return { p: p.toJSON(), table: table.toJSON(), textLeft, hit, hug: document.querySelector('.block-pill')!.classList.contains('is-hug') };
     });
-    // A short table: the pill is longer than the table and its caption, so
-    // it stays in the margin (compact at this window: 8 px from the text)
+    // A short table: the pill and the actions pill are longer than the
+    // table and its caption, so they stay in the margin (compact at this window: 8 px from the text)
     // rather than hang beside the prose below; level with the table's top.
     let geo = await geometry();
     expect(geo.hug).toBe(false);
     expect(Math.abs(geo.p.right - (geo.textLeft - 8))).toBeLessThan(1);
     expect(Math.abs(geo.p.top - geo.table.top)).toBeLessThan(1);
     expect(geo.hit).toEqual([]);
-    // Grown taller than the pill, the centred table is hugged: 8 px clear
-    // of its left edge, over no text.
-    for (let i = 0; i < 4; i++) {
-      await tile(page, 'rows').click();
-      await page.getByRole('menu', { name: 'Rows' }).getByRole('menuitem', { name: 'Add row below' }).click();
-    }
+    // Grown taller than both, the centred table is hugged: 8 px clear of
+    // its left edge, over no text.
+    await addRows(page);
     await expect(pill(page)).toHaveClass(/is-hug/);
     geo = await geometry();
     expect(Math.abs(geo.p.right - (geo.table.left - 8))).toBeLessThan(1);
@@ -154,8 +165,10 @@ test.describe('the block pill', () => {
     // A grid spans the text column: the pill sits in the margin.
     await caretIn(page, { grid: 0, cell: 1 });
     await expect(page.getByRole('toolbar', { name: 'Grid controls' })).toBeVisible();
-    // Rows · Columns · Align · Image │ Grid layout (docs/BLOCK-CHROME.md).
-    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(5);
+    // Add row below (and above) · Add column right (and left) · Align ·
+    // Image │ Grid layout (docs/BLOCK-CHROME.md).
+    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(7);
+    await expect(page.getByRole('toolbar', { name: 'Grid row and column actions' })).toBeVisible();
     await expect(pill(page)).not.toHaveClass(/is-hug/);
     // Out of the block: gone.
     await page.evaluate(() => {
@@ -170,11 +183,8 @@ test.describe('the block pill', () => {
   test('typing that widens a hugged table never runs it under the pill', async ({ page }) => {
     await openSheet(page);
     await caretIn(page, { table: 0, row: 2, col: 1 });
-    // Taller than the pill, so it hugs (as above).
-    for (let i = 0; i < 4; i++) {
-      await tile(page, 'rows').click();
-      await page.getByRole('menu', { name: 'Rows' }).getByRole('menuitem', { name: 'Add row below' }).click();
-    }
+    // Taller than the pill and the actions pill, so it hugs (as above).
+    await addRows(page);
     await expect(pill(page)).toHaveClass(/is-hug/);
     // The Weather column is auto: typing widens the centred table to the
     // left before any placement runs (placements wait for a pause).
@@ -204,10 +214,7 @@ test.describe('the block pill', () => {
   test('a typing run keeps the pill in the margin until it pauses, reading nothing', async ({ page }) => {
     await openSheet(page);
     await caretIn(page, { table: 0, row: 2, col: 1 });
-    for (let i = 0; i < 4; i++) {
-      await tile(page, 'rows').click();
-      await page.getByRole('menu', { name: 'Rows' }).getByRole('menuitem', { name: 'Add row below' }).click();
-    }
+    await addRows(page);
     await caretIn(page, { table: 0, row: 2, col: 1 });
     await page.evaluate(() => new Promise((r) => setTimeout(r, 600)));
     await expect(pill(page)).toHaveClass(/is-hug/);
@@ -260,48 +267,51 @@ test.describe('the block pill', () => {
     expect(after).toBeGreaterThan(0);
   });
 
-  test('the Rows and Columns menus run the table commands without taking the selection', async ({ page }) => {
+  test('the add tiles, the actions pill and Table settings run the table commands without taking the focus', async ({ page }) => {
     await openSheet(page);
     await caretIn(page, { table: 0, row: 2, col: 1 });
-    const before = await page.evaluate(() => window.view.state.selection.toJSON());
-    await tile(page, 'rows').click();
-    const rows = page.getByRole('menu', { name: 'Rows' });
-    await expect(rows).toBeVisible();
-    expect(await page.evaluate(() => window.view.state.selection.toJSON())).toEqual(before);
-    await expect(rows.getByRole('menuitemcheckbox', { name: 'Toggle selected row as header' })).toHaveAttribute('aria-checked', 'false');
-    await rows.getByRole('menuitem', { name: 'Add row below' }).click();
-    await expect(rows).toBeHidden();
+    // One click adds a row below; the editor keeps the focus.
+    await tile(page, 'addrow').click();
+    expect(await page.evaluate(() => window.view.hasFocus())).toBe(true);
     let t = await tableAt(page, 0);
     expect(t.rows).toHaveLength(6);
     expect(t.rows[3].map((c) => c.text).join('')).toBe('');
     expect(t.rows[3].every((c) => c.type === 'table_cell')).toBe(true);
+    // And the actions pill's Delete row takes it out again.
+    await action(page, 'delrow').click();
+    expect(await page.evaluate(() => window.view.hasFocus())).toBe(true);
+    expect((await tableAt(page, 0)).rows).toHaveLength(5);
 
     await caretIn(page, { table: 0, row: 2, col: 1 });
-    await tile(page, 'cols').click();
-    const cols = page.getByRole('menu', { name: 'Columns' });
-    await cols.getByRole('menuitem', { name: 'Add column after' }).click();
+    await tile(page, 'addcol').click();
     t = await tableAt(page, 0);
     expect(t.rows[0]).toHaveLength(5);
     expect(t.rows[0][2].text).toBe('');
 
+    // The header row and the caret column's width: Table settings.
+    await caretIn(page, { table: 0, row: 2, col: 1 });
+    await tile(page, 'table').click();
+    const settings = page.getByRole('dialog', { name: 'Table settings' });
+    await expect(settings.getByRole('radiogroup', { name: 'Header row' }).locator('[data-value="off"]')).toHaveAttribute('aria-checked', 'true');
     // Width: a fixed width at the caret's column, then a share typed in its
     // field (Enter applies and keeps the field).
-    await caretIn(page, { table: 0, row: 2, col: 1 });
-    await tile(page, 'cols').click();
-    await expect(cols.locator('[data-value="auto"]')).toHaveAttribute('aria-checked', 'true');
-    await cols.locator('[data-value="pt"]').click();
+    const sizing = settings.getByRole('radiogroup', { name: 'Selected column sizing' });
+    await expect(sizing.locator('[data-value="auto"]')).toHaveAttribute('aria-checked', 'true');
+    await sizing.locator('[data-value="pt"]').click();
     t = await tableAt(page, 0);
     expect(t.columnWidths?.[1]).toBe('72pt');
-    await expect(cols.locator('[data-value="pt"]')).toHaveAttribute('aria-checked', 'true');
-    const share = cols.getByLabel('Column share weight');
+    await expect(sizing.locator('[data-value="pt"]')).toHaveAttribute('aria-checked', 'true');
+    await sizing.locator('[data-value="fr"]').click();
+    expect((await tableAt(page, 0)).columnWidths?.[1]).toBe('1fr');
+    const share = settings.getByLabel('Column width amount');
     await share.fill('2');
     await share.press('Enter');
     t = await tableAt(page, 0);
     expect(t.columnWidths?.[1]).toBe('2fr');
     await expect(share).toBeFocused();
-    await expect(cols.getByRole('menuitem', { name: 'Reset all columns to automatic' })).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Reset to automatic' })).toBeVisible();
     await share.press('Escape');
-    await expect(cols).toBeHidden();
+    await expect(settings).toBeHidden();
     expect(await caretCellText(page)).toBe('Rain');
   });
 
@@ -331,36 +341,37 @@ test.describe('the block pill', () => {
     expect(t.rows[2][2].fill).toBe('yellow');
     expect(t.rules[2]).toBe('heavy');
     await expect(cell.getByRole('radio', { name: 'Yellow' })).toHaveAttribute('aria-checked', 'true');
-    await expect(cell.getByRole('menuitem', { name: 'Merge selected cells' })).toBeDisabled();
-    await expect(cell.getByRole('menuitem', { name: 'Split merged cell' })).toBeHidden();
+    // Merging is the actions pill's, and waits for a selection across cells.
+    await expect(cell.getByRole('menuitem')).toHaveCount(0);
+    await expect(action(page, 'merge')).toHaveAttribute('aria-label', 'Merge cells');
+    await expect(action(page, 'merge')).toBeDisabled();
   });
 
   test('grid rows and columns are added and deleted at the caret', async ({ page }) => {
     await openSheet(page);
     const before = await gridAt(page, 0);
     await caretIn(page, { grid: 0, cell: 1 });
-    await tile(page, 'cols').click();
-    await page.getByRole('menu', { name: 'Columns' }).getByRole('menuitem', { name: 'Add column before' }).click();
+    // Column left: the Add column tile's flyout, shown on hover.
+    await tile(page, 'addcol').hover();
+    await tile(page, 'addcolleft').click();
     let g = await gridAt(page, 0);
     expect(g.columns).toHaveLength(4);
     expect(g.rows[0][1]).toBe('');
     expect(g.rows[0][2]).toBe(before.rows[0][1]);
     expect(await caretCellText(page)).toBe('');
-    await tile(page, 'cols').click();
-    await page.getByRole('menu', { name: 'Columns' }).getByRole('menuitem', { name: 'Delete selected column' }).click();
+    await action(page, 'delcol').click();
     g = await gridAt(page, 0);
     expect(g.rows).toEqual(before.rows);
     expect(g.columns).toEqual(before.columns);
 
     await caretIn(page, { grid: 0, cell: 2 });
-    await tile(page, 'rows').click();
-    await page.getByRole('menu', { name: 'Rows' }).getByRole('menuitem', { name: 'Add row above' }).click();
+    await tile(page, 'addrow').hover();
+    await tile(page, 'addrowabove').click();
     g = await gridAt(page, 0);
     expect(g.rows).toHaveLength(before.rows.length + 1);
     expect(g.rows[0].join('')).toBe('');
     expect(g.rows.slice(1)).toEqual(before.rows);
-    await tile(page, 'rows').click();
-    await page.getByRole('menu', { name: 'Rows' }).getByRole('menuitem', { name: 'Delete selected row' }).click();
+    await action(page, 'delrow').click();
     expect((await gridAt(page, 0)).rows).toEqual(before.rows);
   });
 
@@ -368,7 +379,7 @@ test.describe('the block pill', () => {
     await openSheet(page);
     const nested = await page.evaluate(() => [...document.querySelectorAll('.ProseMirror table')].findIndex((t) => t.closest('.ts-grid')));
     await caretIn(page, { table: nested + 1, row: 2, col: 1 });
-    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(6);
+    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(8);
     await expect(tile(page, 'gridparent')).toBeVisible();
     const gi = await page.evaluate(() => [...document.querySelectorAll('.ProseMirror .ts-grid')].findIndex((g) => g.querySelector('table')));
     const rowsBefore = (await gridAt(page, gi)).rows.length;
@@ -486,26 +497,43 @@ test.describe('the block pill', () => {
     await expect(tile(page, 'more').locator('.lbl')).toHaveText('Table controls');
   });
 
-  test('the keyboard walks the pill and its menus and hands the caret back', async ({ page }) => {
+  test('the keyboard walks the pill, the actions pill and a panel, and hands the caret back', async ({ page }) => {
     await openSheet(page);
     await caretIn(page, { table: 0, row: 2, col: 1 });
     const before = await page.evaluate(() => window.view.state.selection.toJSON());
-    await tile(page, 'rows').focus();
+    await tile(page, 'addrow').focus();
+    // Down into the tile's Row above flyout, shown while the focus is in
+    // either, then on to Add column and back up into Row above.
     await page.keyboard.press('ArrowDown');
-    await expect(tile(page, 'cols')).toBeFocused();
+    await expect(tile(page, 'addrowabove')).toBeFocused();
+    await expect(tile(page, 'addrowabove')).toBeVisible();
+    await page.keyboard.press('ArrowDown');
+    await expect(tile(page, 'addcol')).toBeFocused();
+    // Once its fade has hidden it again, Row above still takes the focus.
+    await page.waitForTimeout(300);
+    await page.keyboard.press('ArrowUp');
+    await expect(tile(page, 'addrowabove')).toBeFocused();
+    await expect(tile(page, 'addrowabove')).toBeVisible();
+    // The walk goes on into the actions pill: End is its last tile the
+    // caret's cell can take (Merge waits for a selection across cells).
     await page.keyboard.press('End');
+    await expect(action(page, 'delcol')).toBeFocused();
+    await page.keyboard.press('ArrowUp');
+    await expect(action(page, 'delrow')).toBeFocused();
+    await page.keyboard.press('ArrowUp');
     await expect(tile(page, 'table')).toBeFocused();
     await page.keyboard.press('Home');
-    await expect(tile(page, 'rows')).toBeFocused();
+    await expect(tile(page, 'addrow')).toBeFocused();
+    // → opens a tile's panel with the focus in it; Escape gives it back.
+    for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowDown');
+    await expect(tile(page, 'align')).toBeFocused();
     await page.keyboard.press('ArrowRight');
-    const rows = page.getByRole('menu', { name: 'Rows' });
-    await expect(rows).toBeVisible();
-    await expect(rows.getByRole('menuitem', { name: 'Add row above' })).toBeFocused();
-    await page.keyboard.press('ArrowDown');
-    await expect(rows.getByRole('menuitem', { name: 'Add row below' })).toBeFocused();
+    const align = page.getByRole('dialog', { name: /Align/ });
+    await expect(align).toBeVisible();
+    await expect(align.locator(':focus')).toHaveCount(1);
     await page.keyboard.press('Escape');
-    await expect(rows).toBeHidden();
-    await expect(tile(page, 'rows')).toBeFocused();
+    await expect(align).toBeHidden();
+    await expect(tile(page, 'align')).toBeFocused();
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.view.hasFocus())).toBe(true);
     expect(await page.evaluate(() => window.view.state.selection.toJSON())).toEqual(before);

@@ -51,12 +51,10 @@ async function chooseFolderIfAsked(page: Page) {
   await page.locator('.toast-action', { hasText: 'Choose folder' }).click({ timeout: 1500 }).catch(() => {});
 }
 
-/** The block pill's tiles and the menus / panel they open (src/block-chrome.ts). */
+/** The block pill's tiles, the actions pill's under it (delete row, delete
+ *  column, merge or split), and the panel they open (src/block-chrome.ts). */
 const tile = (page: Page, id: string) => page.locator(`.block-pill [data-tile="${id}"]`);
-async function menuItem(page: Page, tileId: 'rows' | 'cols', name: string) {
-  await tile(page, tileId).click();
-  await page.getByRole('menu', { name: tileId === 'rows' ? 'Rows' : 'Columns' }).getByRole('menuitem', { name, exact: true }).click();
-}
+const action = (page: Page, id: string) => page.locator(`.bc-actions [data-tile="${id}"]`);
 async function gridLayout(page: Page) {
   await tile(page, 'grid').click();
   const panel = page.getByRole('dialog', { name: 'Grid layout' });
@@ -101,11 +99,11 @@ test('insert a grid from the toolbar, tab between cells, set the split from Grid
   expect(style).toContain('--grid-cols: 2fr 1fr');
   // Columns and rows are added and deleted at the caret's.
   await cells.nth(1).click();
-  await menuItem(page, 'cols', 'Add column after');
+  await tile(page, 'addcol').click();
   await expect(page.locator('.ProseMirror .ts-grid')).toHaveAttribute('data-columns', '2 1 1');
   await expect(page.locator('.ProseMirror .ts-grid-row').first().locator('.ts-grid-cell')).toHaveCount(3);
   await page.locator('.ProseMirror .ts-grid-row').nth(1).locator('.ts-grid-cell').first().click();
-  await menuItem(page, 'rows', 'Delete selected row');
+  await action(page, 'delrow').click();
   await expect(page.locator('.ProseMirror .ts-grid-row')).toHaveCount(1);
   const typ = await page.evaluate(async () => {
     const { docToTyp } = await import('/src/typ-serializer.ts');
@@ -126,7 +124,7 @@ test('adding a row focuses it and its cells accept figures and caption-following
   await openTyp(page, HEAD('paper: "us-letter", margin: 1.25in') + '#grid(columns: (1fr, 1fr), gutter: 1em, [First row], [])');
   const grid = page.locator('.ProseMirror .ts-grid');
   await grid.locator('.ts-grid-cell').first().locator('p').click();
-  await menuItem(page, 'rows', 'Add row below');
+  await tile(page, 'addrow').click();
   const secondRow = grid.locator('.ts-grid-row').nth(1);
   await expect(secondRow.locator('.ts-grid-cell').first()).toHaveClass(/ts-grid-cell-active/);
   await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 1 of 2');
@@ -227,7 +225,7 @@ test('adding a row focuses it and its cells accept figures and caption-following
   // Adding a column at the caret moves the caret into it; the cells keep
   // their content and logical places, though earlier rows gain nodes and
   // shift this cell's document position.
-  await menuItem(page, 'cols', 'Add column after');
+  await tile(page, 'addcol').click();
   await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 3 of 3');
   await page.keyboard.press('Shift+Tab');
   await expect(page.locator('.grid-toolbar-position')).toHaveText('Row 2 of 2 · Column 2 of 3');
@@ -440,11 +438,14 @@ test('merging across: the pill merges and splits cells, a merged cell spans its 
     return { left: r.left, right: r.right };
   });
 
-  // Merge the long cell with the one to its right: one cell over the first
-  // two columns and the gutter between them, its text after the long one's.
+  // Merge the long cell with the one to its right (selected across both):
+  // one cell over the first two columns and the gutter between them, its
+  // text after the long one's. Merge waits for the selection.
   await cellsOf(0).nth(0).locator('p').first().click();
-  await menuItem(page, 'cols', 'Merge with the cell to the right');
-  await page.keyboard.press('Escape');
+  await expect(action(page, 'merge')).toBeDisabled();
+  await cellsOf(0).nth(1).locator('p').click({ modifiers: ['Shift'] });
+  await expect(action(page, 'merge')).toHaveAttribute('aria-label', 'Merge cells');
+  await action(page, 'merge').click();
   await expect(cellsOf(0)).toHaveCount(2);
   const merged = cellsOf(0).nth(0);
   await expect(merged.locator('p')).toHaveCount(2);
@@ -490,18 +491,21 @@ test('merging across: the pill merges and splits cells, a merged cell spans its 
   // A column added through the merged cell (from the cell below it)
   // widens it; deleting that column narrows it again.
   await cellsOf(1).nth(1).locator('p').click();
-  await menuItem(page, 'cols', 'Add column before');
+  // Column left: the Add column tile's flyout, shown on hover.
+  await tile(page, 'addcol').hover();
+  await tile(page, 'addcolleft').click();
   await expect(cellsOf(1)).toHaveCount(4);
   await expect(cellsOf(0)).toHaveCount(2);
   await expect(merged).toHaveCSS('grid-column-start', 'span 3');
-  await menuItem(page, 'cols', 'Delete selected column');
+  await action(page, 'delcol').click();
   await expect(cellsOf(1)).toHaveCount(3);
   await expect(merged).toHaveCSS('grid-column-start', 'span 2');
 
-  // Split: the first cell keeps the content, the second is empty again.
+  // Split (the merge tile, in a merged cell): the first cell keeps the
+  // content, the second is empty again.
   await merged.locator('p').first().click();
-  await menuItem(page, 'cols', 'Split merged cell');
-  await page.keyboard.press('Escape');
+  await expect(action(page, 'merge')).toHaveAttribute('aria-label', 'Split cell');
+  await action(page, 'merge').click();
   await expect(cellsOf(0)).toHaveCount(3);
   await expect(cellsOf(0).nth(0).locator('p')).toHaveCount(2);
   await expect(cellsOf(0).nth(1)).toHaveText('');
