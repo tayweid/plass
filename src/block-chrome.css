@@ -197,7 +197,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .block-pill .tb-btn:active {
+  .block-pill .tb-btn:active > .ico {
     transform: none;
   }
 

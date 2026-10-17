@@ -351,7 +351,7 @@ if (hidesTitleBar) {
       file: box(toolbar.querySelector('.tb-tile')),
       pod: box(document.getElementById('doc-pod')),
       history: document.getElementById('history-tile') && box(document.getElementById('history-tile')),
-      exportTile: box([...toolbar.querySelectorAll('.tb-tile')].find((el) => el.getAttribute('aria-label') === 'Export')),
+      exportTile: box([...toolbar.querySelectorAll('.tb-tile')].find((el) => el.getAttribute('aria-label') === 'Export PDF')),
     };
   });
   if (!bar.visible || bar.x <= 0) await fail(`the shell hides the title bar but the page sees no overlay (${JSON.stringify(bar)})`);
