@@ -1466,7 +1466,7 @@ body {
 }
 
 .ProseMirror blockquote:not([data-kind='solution']) > :is(ul, ol):last-child {
-  margin-bottom: calc(0.9em + var(--quote-below, 0.0828em));
+  margin-bottom: calc(var(--block-margin, 0.9em) + var(--quote-below, 0.0828em));
 }
 
 /* A display equation that opens or closes a quote (either kind): inside
@@ -1492,11 +1492,13 @@ body {
    counter-reset that starts the labels at the list's start); the fallbacks
    are New Computer Modern's values. Markers are painted out of flow, so the
    body measure is exactly Typst's: a bullet at the column's left edge, an
-   enum label at its right (Typst's number-align: end), "9." under "10.". */
+   enum label at its right (Typst's number-align: end), "9." under "10.".
+   The margin is the fixed 0.9em in layout units (--block-margin,
+   settings.ts), in both paragraph modes. */
 .ProseMirror ul,
 .ProseMirror ol {
   padding-left: var(--list-indent-1, 1.278em);
-  margin: 0 0 0.9em;
+  margin: 0 0 var(--block-margin, 0.9em);
   list-style: none;
 }
 
@@ -1585,8 +1587,11 @@ body {
   white-space: nowrap;
 }
 
+/* A tight list's item pitch is the leading + 0.25em (`listSpacingEm`):
+   the 0.25em in layout units (--list-item-gap, settings.ts). As an em
+   length it was truncated, 1/96 px short an item at 12.5 pt. */
 .ProseMirror li > p {
-  margin-bottom: 0.25em;
+  margin-bottom: var(--list-item-gap, 0.25em);
 }
 
 /* Inside an item, a paragraph followed by another block is spaced from it
@@ -1611,7 +1616,7 @@ body {
    after it — the next outer item follows at the item spacing. */
 .ProseMirror li > ul,
 .ProseMirror li > ol {
-  margin: 0.9em 0 0;
+  margin: var(--block-margin, 0.9em) 0 0;
 }
 
 .ProseMirror code {
@@ -1941,7 +1946,7 @@ body {
 /* ---------- figures ---------- */
 
 .ts-figure {
-  margin: 0 0 0.9em;
+  margin: 0 0 var(--block-margin, 0.9em);
   padding: 0.4em 0 0.2em;
   position: relative;
   text-align: center;
@@ -2253,7 +2258,7 @@ body {
 
 .ProseMirror .ts-abstract {
   padding: 0 1.8em;
-  margin: 0 0 0.9em;
+  margin: 0 0 var(--block-margin, 0.9em);
 }
 
 /* The label is painted, not stored — the exporter emits it. */
@@ -2792,7 +2797,7 @@ body {
 
 .ts-bibliography {
   position: relative;
-  margin: 0 0 0.9em;
+  margin: 0 0 var(--block-margin, 0.9em);
   font-size: 1em;
 }
 
