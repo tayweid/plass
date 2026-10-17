@@ -225,7 +225,7 @@ test.describe('the block keyboard', () => {
     const table = page.locator('.ProseMirror table').nth(nested + 1);
     await expect(table).toHaveClass(/ProseMirror-selectednode/);
     await expect(page.locator('.ProseMirror .ts-grid-cell-active')).toHaveCount(1);
-    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(6);
+    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(8);
     await page.keyboard.press('Escape');
     expect((await where(page)).json).toEqual(before.json);
   });
@@ -239,29 +239,25 @@ test.describe('the block keyboard', () => {
     const selected = await where(page);
     expect(selected.node).toBe('grid');
     await page.keyboard.press('Tab');
-    await expect(tile(page, 'rows')).toBeFocused();
-    await expect(tile(page, 'rows')).toHaveAttribute('tabindex', '0');
+    await expect(tile(page, 'addrow')).toBeFocused();
+    await expect(tile(page, 'addrow')).toHaveAttribute('tabindex', '0');
     // Roving focus, then back: the editor has the focus and the block is
     // still selected.
     await page.keyboard.press('ArrowDown');
-    await expect(tile(page, 'cols')).toBeFocused();
+    await expect(tile(page, 'addcol')).toBeFocused();
     await page.keyboard.press('Shift+Tab');
     expect(await page.evaluate(() => window.view.hasFocus())).toBe(true);
     expect((await where(page)).json).toEqual(selected.json);
     // Again, and Escape from the pill does the same.
     await page.keyboard.press('Tab');
-    await expect(tile(page, 'rows')).toBeFocused();
+    await expect(tile(page, 'addrow')).toBeFocused();
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.view.hasFocus())).toBe(true);
     expect((await where(page)).json).toEqual(selected.json);
-    // Rows › Add row below from the pill: the row goes under the
+    // Add row below from the pill, its first tile: the row goes under the
     // remembered cell's row and the caret lands in it, in its column.
     await page.keyboard.press('Tab');
-    await page.keyboard.press('Enter');
-    const rows = page.getByRole('menu', { name: 'Rows' });
-    await expect(rows).toBeVisible();
-    await expect(rows.getByRole('menuitem', { name: 'Add row below' })).toBeEnabled();
-    await rows.getByRole('menuitem', { name: 'Add row below' }).focus();
+    await expect(tile(page, 'addrow')).toBeEnabled();
     await page.keyboard.press('Enter');
     const after = await gridRows(page, 0);
     expect(after).toHaveLength(before.length + 1);

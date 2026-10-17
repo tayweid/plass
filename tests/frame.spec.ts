@@ -737,8 +737,11 @@ test('the bar is Knuth\'s: the File tile, the name pill with its save dot and it
   expect(b.mark).toMatchObject({ width: 6, height: 6 });
   // A file in a tab has no path: the name alone.
   expect(b.folder.shown).toBe(false);
-  // Export sits beside the pill.
-  const exportTile = await page.getByRole('button', { name: 'Export', exact: true }).boundingBox();
+  // Export sits beside the pill: its PDF half a bar tile, the chevron
+  // half 18 px wide past a 1 px seam.
+  const exportTile = await page.getByRole('button', { name: 'Export PDF', exact: true }).boundingBox();
+  const formats = await page.locator('#toolbar').getByRole('button', { name: 'Export', exact: true }).boundingBox();
+  expect(formats).toMatchObject({ x: exportTile!.x + 33, y: 6, width: 18, height: 32 });
   expect(exportTile!.x).toBe(b.pod.x + b.pod.width + 6);
   expect(exportTile).toMatchObject({ y: 6, width: 32, height: 32 });
 
@@ -823,7 +826,7 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
         file: box(toolbar.querySelector('.tb-tile')),
         pod: box(document.getElementById('doc-pod')),
         history: box(tile),
-        exportTile: box([...toolbar.querySelectorAll('.tb-tile')].find((el) => el.getAttribute('aria-label') === 'Export') ?? null),
+        exportTile: box([...toolbar.querySelectorAll('.tb-tile')].find((el) => el.getAttribute('aria-label') === 'Export PDF') ?? null),
         order: [...toolbar.children].filter((el) => getComputedStyle(el).display !== 'none').map((el) => el.id || el.getAttribute('aria-label')),
         widths: tiles.map((el) => el.getBoundingClientRect().width),
         tile: tile && {
@@ -845,7 +848,7 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
   await openTyp(page, '= Notes\n\nA short paper.\n', name);
   const tab = await boxes(page);
   expect(tab.history).toBeNull();
-  expect(tab.order).toEqual(['File', 'doc-pod', 'Export']);
+  expect(tab.order).toEqual(['File', 'doc-pod', 'export-split']);
 
   // Plass.app (the shell's bridge; the `document` report answered with no
   // path, so the pill holds the same name alone and is the tab's width).
@@ -873,7 +876,7 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
   }, name)).toBe(true);
   await settleLocal(app);
   const b = await boxes(app);
-  expect(b.order).toEqual(['File', 'doc-pod', 'history-tile', 'Export']);
+  expect(b.order).toEqual(['File', 'doc-pod', 'history-tile', 'export-split']);
   // The tile: the bar's gap past the pill, 32 px square 6 px down, 9 px
   // corners, an 18 px glyph, the File tile's soft ink; one of the page's
   // controls in the bar's drag band.
@@ -910,7 +913,7 @@ test('in Plass.app the History tile stands right after the name pill, a bar tile
     if (width === 480) expect(short.pod!.width).toBe(240);
     else expect(short.pod!.width).toBeLessThanOrEqual(width / 2);
     expect(short.pod).toEqual(shortTab.pod);
-    expect(short.widths).toEqual([32, 32, 32]);
+    expect(short.widths).toEqual([32, 32, 32, 18]);
     expect(short.history!.x).toBe(short.pod!.x + short.pod!.width + 6);
     expect(short.exportTile!.x + 32).toBeLessThanOrEqual(width - 8);
   }

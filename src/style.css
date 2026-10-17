@@ -327,7 +327,7 @@ body {
   border-radius: 999px;
   color: rgba(235, 233, 228, 0.6);
   cursor: pointer;
-  transition: color 0.12s, background 0.12s, transform 0.08s;
+  transition: color 0.12s, background 0.12s;
 }
 
 .tb-btn:hover {
@@ -335,8 +335,20 @@ body {
   background: rgba(255, 255, 255, 0.12);
 }
 
-.tb-btn:active {
-  transform: scale(0.92);
+/* The press shrinks the glyph, never the button: a button that shrank
+   under the pointer let a press near its edge end outside it, and the
+   browser sent that click to the bar instead (a lost click). */
+.tb-btn > .ico {
+  transition: transform 0.08s;
+}
+
+.tb-btn:active > .ico {
+  transform: scale(0.88);
+}
+
+.tb-btn .tico.tico-italic {
+  font-style: italic;
+  font-family: var(--serif);
 }
 
 .tb-btn.active {

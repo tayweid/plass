@@ -212,14 +212,17 @@ test('the visible view switch and the shortcut toggle from either view', async (
   const btn = page.locator('.tb-source');
   await expect(btn).toBeVisible();
   await expect(btn).toHaveAttribute('aria-pressed', 'false');
+  // What the caret's block already rules out (a list tile in a heading)
+  // rests before and after: the switch adds and removes the rest.
+  const ruledOut = await page.locator('#rail .tb-rests:disabled').count();
   await btn.click();
   await expect(btn).toBeVisible();
   await expect(btn).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#source .cm-content')).toBeFocused();
-  // Formatting tools rest while the text is the truth: the six direct
+  // Formatting tools rest while the text is the truth: the eight direct
   // tiles, the Blocks tiles, Settings; the Insert and Extras flyouts stay
   // open for what still applies.
-  await expect(page.locator('#rail .tb-rests:disabled')).toHaveCount(6);
+  await expect(page.locator('#rail .tb-rests:disabled')).toHaveCount(8);
   await expect(page.getByRole('button', { name: 'Block quote', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Comment', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Insert', exact: true })).toBeEnabled();
@@ -230,14 +233,15 @@ test('the visible view switch and the shortcut toggle from either view', async (
   await expect(page.getByTitle('Side-by-side grid — any blocks in columns; Grid layout sets the split', { exact: true })).toBeDisabled();
   await expect(page.getByTitle('Edit bibliography', { exact: true })).toBeDisabled();
   await expect(page.getByTitle('Markdown & shortcuts', { exact: true })).toBeEnabled();
-  await expect(page.getByTitle('Export — PDF, .md, .typ, .tex', { exact: true })).toBeEnabled();
+  await expect(page.locator('#toolbar').getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+  await expect(page.locator('#toolbar').getByRole('button', { name: 'Export', exact: true })).toBeEnabled();
   await page.keyboard.press('Escape');
   await page.locator('#source .cm-content').focus();
   // The shortcut from inside CodeMirror (it must not swallow it).
   await page.keyboard.press('ControlOrMeta+/');
   await expect(btn).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('.ProseMirror[contenteditable="true"]')).toBeFocused();
-  expect(await page.locator('#rail .tb-rests:disabled').count()).toBe(0);
+  expect(await page.locator('#rail .tb-rests:disabled').count()).toBe(ruledOut);
   await expect(page.getByRole('button', { name: 'Block quote', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Document settings', exact: true })).toBeEnabled();
   // And from the page view.
@@ -505,13 +509,12 @@ test('PDF export from the source runs on the parsed text', async ({ page }) => {
     const sv = window.__sourceView;
     sv.setText(sv.text()!.trimEnd() + '\n\n# Written in the source\n\nA paragraph the page view never saw.\n');
   });
-  await page.getByTitle('Export — PDF, .md, .typ, .tex', { exact: true }).click();
   const result = await page.evaluate(async () => {
     const toast = document.getElementById('toast')!;
     const messages: string[] = [];
     const observer = new MutationObserver(() => messages.push(toast.textContent ?? ''));
     observer.observe(toast, { childList: true, characterData: true, subtree: true });
-    (document.querySelector('[title="Export PDF via Typst"]') as HTMLElement).click();
+    (document.querySelector('#toolbar [aria-label="Export PDF"]') as HTMLElement).click();
     const deadline = Date.now() + 25_000;
     while (Date.now() < deadline && !messages.some((m) => m.startsWith('Exported '))) {
       await new Promise((r) => setTimeout(r, 100));

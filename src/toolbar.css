@@ -43,6 +43,30 @@
   background: rgba(255, 255, 255, 0.08);
 }
 
+/* Export, split: the download half (PDF, one click) and a narrow chevron
+   half for the other formats, one tile's outline between them. */
+#toolbar .tb-split {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+#toolbar .tb-split > .tb-tile:first-child {
+  border-radius: 9px 3px 3px 9px;
+}
+
+#toolbar .tb-split > .tb-split-more {
+  width: 18px;
+  min-width: 18px;
+  border-radius: 3px 9px 9px 3px;
+}
+
+#toolbar .tb-split > .tb-split-more .ico {
+  width: 14px;
+  height: 14px;
+}
+
 #toolbar .tb-tile[aria-expanded='true'],
 #toolbar .tb-tile[aria-pressed='true'] {
   color: #fff;

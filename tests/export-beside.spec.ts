@@ -26,8 +26,7 @@ test('PDF export writes into the project folder when one is attached', async ({ 
     const observer = new MutationObserver(() => messages.push(toast.textContent ?? ''));
     observer.observe(toast, { childList: true, characterData: true, subtree: true });
 
-    (document.querySelector('[title="Export — PDF, .md, .typ, .tex"]') as HTMLElement).click();
-    (document.querySelector('[title="Export PDF via Typst"]') as HTMLElement).click();
+    (document.querySelector('#toolbar [aria-label="Export PDF"]') as HTMLElement).click();
 
     const deadline = Date.now() + 25_000;
     while (Date.now() < deadline && !messages.some((m) => m.startsWith('Exported '))) {
@@ -55,8 +54,7 @@ test('PDF export downloads when there is no folder and no file handle', async ({
   await page.goto('/?new=1');
   const download = page.waitForEvent('download');
   await page.evaluate(() => {
-    (document.querySelector('[title="Export — PDF, .md, .typ, .tex"]') as HTMLElement).click();
-    (document.querySelector('[title="Export PDF via Typst"]') as HTMLElement).click();
+    (document.querySelector('#toolbar [aria-label="Export PDF"]') as HTMLElement).click();
   });
   expect((await download).suggestedFilename()).toBe('Plass.pdf');
 });
@@ -85,7 +83,7 @@ test('.md, .typ and .tex exports write into the project folder when one is attac
     const observer = new MutationObserver(() => messages.push(toast.textContent ?? ''));
     observer.observe(toast, { childList: true, characterData: true, subtree: true });
 
-    (document.querySelector('[title="Export — PDF, .md, .typ, .tex"]') as HTMLElement).click();
+    (document.querySelector('#toolbar [aria-label="Export"]') as HTMLElement).click();
     (document.querySelector('[title="Export a .md copy"]') as HTMLElement).click();
     (document.querySelector('[title="Export a .typ copy"]') as HTMLElement).click();
     (document.querySelector('[title="Export a .tex copy (vanilla LaTeX for journals)"]') as HTMLElement).click();

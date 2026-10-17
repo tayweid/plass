@@ -313,7 +313,7 @@ test('the History tile beside the name asks Plass.app for the History page in th
   await expect(old.locator('#toast')).toContainText('This Plass.app has no history view');
   await expect(old.locator('#history-tile')).toBeHidden();
   const pod = (await old.locator('#doc-pod').boundingBox())!;
-  const exportTile = (await old.getByRole('button', { name: 'Export', exact: true }).boundingBox())!;
+  const exportTile = (await old.getByRole('button', { name: 'Export PDF', exact: true }).boundingBox())!;
   expect(exportTile.x).toBe(pod.x + pod.width + 6);
   await old.getByRole('button', { name: 'File', exact: true }).click();
   await expect(old.getByRole('menuitem', { name: 'Open…' })).toBeVisible();
@@ -489,10 +489,10 @@ test('with the History page in the room, File, Export and the rail put it away o
   expect(await closes()).toEqual([[], []]);
   await down();
 
-  // The rail: a flyout (Headings) and Document settings.
+  // The rail: a flyout (Insert) and Document settings.
   await up();
-  await page.getByRole('button', { name: 'Headings', exact: true }).click();
-  await expect(page.locator('#tb-menu-headings')).toBeVisible();
+  await page.getByRole('button', { name: 'Insert', exact: true }).click();
+  await expect(page.locator('#tb-menu-insert')).toBeVisible();
   expect(await closes()).toEqual([[], [], []]);
   await down();
   await up();
@@ -524,7 +524,7 @@ test('with the History page in the room, File, Export and the rail put it away o
   await page.getByRole('button', { name: 'File', exact: true }).click();
   await expect(page.locator('#tb-menu-file')).toBeVisible();
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: 'Headings', exact: true }).click();
+  await page.getByRole('button', { name: 'Insert', exact: true }).click();
   await page.keyboard.press('Escape');
   expect(await historyAsks(page)).toHaveLength(asked);
 });

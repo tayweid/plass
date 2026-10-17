@@ -699,3 +699,12 @@ prompted.
   the shell pops (caught, not shown). The deploy's `CLAERBOUT_TAG` moves to
   v0.2.13 with this; under an older shell the smoke test fails at that
   step and the app job stops, the site deploying as before.
+- ~~A click on Plass.app in the back only brought it forward.~~ FIXED
+  2026-10-16, shell 0.2.15. macOS spends the first click on an inactive
+  window on activating it unless the window accepts first mouse, so a
+  bar or rail button pressed while coming back from another app did
+  nothing until pressed again (Taylor: "often it requires two clicks").
+  The shell's document and History windows set `acceptFirstMouse`. The
+  deploy's `CLAERBOUT_TAG` moves to v0.2.15, which also brings 0.2.14's
+  Make <Name> the Default Editor… (no item here: plass.json has no
+  `defaultFor`).
