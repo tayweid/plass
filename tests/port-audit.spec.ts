@@ -579,9 +579,9 @@ async function openText(page: Page, name: string, text: string) {
       { timeout: 30_000, intervals: [250, 500, 1000] },
     )
     .toMatch(/port|none/);
-  // Every inline formula has settled: its Typst width arrived, or the
-  // compiler said it will not (the report lists those). Pagination can go
-  // quiet while formulas still sit at KaTeX's width.
+  // Every formula, inline and display, has settled: its Typst ink arrived,
+  // or the compiler said it will not (the report lists those). Pagination
+  // can go quiet while formulas still sit at KaTeX's box.
   await expect
     .poll(() => page.evaluate(() => window.__mathInk().pending ?? 0), { timeout: 90_000, intervals: [250, 500, 1000] })
     .toBe(0);
