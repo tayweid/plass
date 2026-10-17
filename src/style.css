@@ -346,11 +346,6 @@ body {
   transform: scale(0.88);
 }
 
-.tb-btn .tico.tico-italic {
-  font-style: italic;
-  font-family: var(--serif);
-}
-
 .tb-btn.active {
   color: var(--accent);
 }

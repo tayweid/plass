@@ -6,7 +6,7 @@ declare global {
   }
 }
 
-test('Bold and Italic are one-click tiles; Strikethrough lives in Extras; the selection survives', async ({ page }) => {
+test('Text style menu toggles strikethrough and preserves the selection', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const { state } = window.view;
@@ -16,39 +16,26 @@ test('Bold and Italic are one-click tiles; Strikethrough lives in Extras; the se
   });
   await page.click('.ProseMirror');
   await page.keyboard.press('ControlOrMeta+a');
+
+  const textStyle = page.getByRole('button', { name: 'Text style', exact: true });
+  const menu = page.getByRole('menu', { name: 'Text style', exact: true });
+  const strikeBtn = page.locator('button[title^="Strikethrough"]');
   const selection = await page.evaluate(() => window.view.state.selection.toJSON());
-
-  // One click each, pressed while the selection carries the mark, and the
-  // selection survives (the tiles swallow mousedown).
-  const bold = page.locator('#rail').getByRole('button', { name: 'Bold', exact: true });
-  const italic = page.locator('#rail').getByRole('button', { name: 'Italic', exact: true });
-  const marks = () => page.evaluate(() => {
-    const names = new Set<string>();
-    window.view.state.doc.descendants((node) => { for (const mark of node.marks) names.add(mark.type.name); });
-    return [...names].sort();
-  });
-  await bold.click();
-  expect(await marks()).toEqual(['strong']);
-  await expect(bold).toHaveAttribute('aria-pressed', 'true');
-  await italic.click();
-  expect(await marks()).toEqual(['em', 'strong']);
-  expect(await page.evaluate(() => window.view.state.selection.toJSON())).toEqual(selection);
-  await bold.click();
-  await italic.click();
-  expect(await marks()).toEqual([]);
-  await expect(bold).toHaveAttribute('aria-pressed', 'false');
-
-  // Strikethrough, the occasional one, is in Extras.
-  const extras = page.getByRole('button', { name: 'Extras', exact: true });
-  const menu = page.getByRole('menu', { name: 'Extras', exact: true });
-  const strikeBtn = menu.locator('button[title^="Strikethrough"]');
-  await extras.click();
+  await textStyle.click();
   await expect(menu).toBeVisible();
+  const items = menu.locator('button:not(:disabled)');
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(items.nth(1)).toBeFocused();
+  expect(await page.evaluate(() => window.view.state.selection.toJSON())).toEqual(selection);
   await strikeBtn.click();
   await expect(page.locator('.ProseMirror s')).toHaveText('cut this phrase');
   await expect(menu).toBeHidden();
   expect(await page.evaluate(() => window.view.state.selection.toJSON())).toEqual(selection);
-  await extras.click();
+
+  // Same button un-toggles (the selection survives the click because the
+  // toolbar swallows mousedown).
+  await textStyle.click();
   await strikeBtn.click();
   await expect(page.locator('.ProseMirror s')).toHaveCount(0);
 
@@ -60,7 +47,7 @@ test('Bold and Italic are one-click tiles; Strikethrough lives in Extras; the se
 test('the bar, the rail and the open menus fit a narrow window with a long filename', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto('/?new=1');
-  await expect(page.getByRole('button', { name: 'Heading level', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Headings', exact: true })).toBeVisible();
   await page.evaluate(async () => {
     const fm = window.__fm as unknown as { rename(name: string): Promise<void> };
     await fm.rename('A very long manuscript title with tables and side-by-side grids');
@@ -74,8 +61,8 @@ test('the bar, the rail and the open menus fit a narrow window with a long filen
     await expect(page.locator('#toolbar').getByRole('button', { name, exact: true })).toBeVisible();
   }
   const railButtons = page.locator('#rail button:visible');
-  await expect(railButtons).toHaveCount(16);
-  for (const name of ['Heading level', 'Bold', 'Italic', 'Bulleted list', 'Numbered list', 'Insert figure', 'Inline math', 'Footnote', 'Insert', 'Block quote', 'Solution', 'Comment', 'Remove quote', 'Extras', 'Document settings', 'Plain text view']) {
+  await expect(railButtons).toHaveCount(14);
+  for (const name of ['Headings', 'Text style', 'Lists', 'Insert figure', 'Inline math', 'Footnote', 'Insert', 'Block quote', 'Solution', 'Comment', 'Remove quote', 'Extras', 'Document settings', 'Plain text view']) {
     await expect(page.locator('#rail').getByRole('button', { name, exact: true })).toBeVisible();
   }
   for (const button of [...(await barButtons.all()), ...(await railButtons.all())]) {
@@ -114,7 +101,7 @@ test('the bar, the rail and the open menus fit a narrow window with a long filen
     await expect(menu).toBeHidden();
   };
   await flyout('Insert', ['Insert']);
-  await flyout('Extras', ['Text', 'Alignment', 'Code', 'Document']);
+  await flyout('Extras', ['Alignment', 'Code', 'Document']);
 });
 
 test('the Insert flyout keeps glyph controls with hover captions', async ({ page }) => {
@@ -197,8 +184,8 @@ test('the plain text switch stays visible in the lower-left corner in either vie
 
 test('menus open, navigate, and close from the keyboard', async ({ page }) => {
   await page.goto('/?new=1');
-  const headings = page.getByRole('button', { name: 'File', exact: true });
-  const menu = page.getByRole('menu', { name: 'File', exact: true });
+  const headings = page.getByRole('button', { name: 'Headings', exact: true });
+  const menu = page.getByRole('menu', { name: 'Headings', exact: true });
   await headings.focus();
   await page.keyboard.press('ArrowDown');
   await expect(menu).toBeVisible();
@@ -220,16 +207,13 @@ test('menus open, navigate, and close from the keyboard', async ({ page }) => {
   await expect(menu).toBeHidden();
   await expect(headings).toBeFocused();
 
-  // A rail tile's flyout also opens to the right.
-  const insert = page.getByRole('button', { name: 'Insert', exact: true });
-  const insertMenu = page.getByRole('menu', { name: 'Insert', exact: true });
-  await insert.focus();
+  // A rail tile's flyout also opens to the right and closes back to the left.
   await page.keyboard.press('ArrowRight');
-  await expect(insertMenu).toBeVisible();
-  await expect(insertMenu.locator('button:not(:disabled)').first()).toBeFocused();
-  await page.keyboard.press('Escape');
-  await expect(insertMenu).toBeHidden();
-  await expect(insert).toBeFocused();
+  await expect(menu).toBeVisible();
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await expect(menu).toBeHidden();
+  await expect(headings).toBeFocused();
 
   await page.getByRole('button', { name: 'Extras', exact: true }).click();
   const extras = page.getByRole('menu', { name: 'Extras', exact: true });
@@ -246,7 +230,7 @@ test('menus open, navigate, and close from the keyboard', async ({ page }) => {
 
 test('a mouse click after Escape leaves no ring or caption on the tile Escape went back to', async ({ page }) => {
   await page.goto('/?new=1');
-  for (const name of ['Insert', 'File']) {
+  for (const name of ['Headings', 'File']) {
     const tile = page.getByRole('button', { name, exact: true });
     const caption = tile.locator('.lbl');
     const opacity = () => caption.evaluate((el) => getComputedStyle(el).opacity);
@@ -268,7 +252,7 @@ test('a mouse click after Escape leaves no ring or caption on the tile Escape we
   }
 });
 
-test('the Heading tile steps a whole-document selection up a size per click, and Extras aligns it', async ({ page }) => {
+test('Headings and Extras apply headings and alignment to a whole-document selection', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const { state } = window.view;
@@ -280,21 +264,16 @@ test('the Heading tile steps a whole-document selection up a size per click, and
   });
   await page.click('.ProseMirror');
   await page.keyboard.press('ControlOrMeta+a');
-  const tile = page.locator('#rail').getByRole('button', { name: 'Heading level', exact: true });
-  const glyph = tile.locator('.tico');
-  await expect(glyph).toHaveText('¶');
-  await expect(tile).toHaveAttribute('title', 'Body text · click for Heading 3 (⌘⌥0–3)');
-  // Body → H3 → H2 → H1 → body, one click each.
-  for (const level of [3, 2, 1]) {
-    await tile.click();
-    await expect(page.locator(`.ProseMirror h${level}`)).toHaveText(['First paragraph.', 'Second paragraph.']);
-    await expect(glyph).toHaveText(`H${level}`);
-  }
-  await expect(tile).toHaveAttribute('title', 'Heading 1 · click for Body text (⌘⌥0–3)');
-  await tile.click();
-  await expect(glyph).toHaveText('¶');
-  await expect(page.locator('.ProseMirror > p').filter({ hasText: /paragraph\./ })).toHaveText(['First paragraph.', 'Second paragraph.']);
+  const headings = page.getByRole('button', { name: 'Headings', exact: true });
+  await headings.click();
+  const heading = page.getByTitle('Heading 2 (⌘⌥2)', { exact: true });
+  await expect(heading).toBeEnabled();
+  await heading.click();
+  await expect(page.locator('.ProseMirror h2')).toHaveText(['First paragraph.', 'Second paragraph.']);
 
+  await headings.click();
+  await page.getByTitle('Body text (⌘⌥0)', { exact: true }).click();
+  await expect(page.locator('.ProseMirror > p').filter({ hasText: /paragraph\./ })).toHaveText(['First paragraph.', 'Second paragraph.']);
   await page.getByRole('button', { name: 'Extras', exact: true }).click();
   const center = page.getByTitle('Center text', { exact: true });
   await expect(center).toBeEnabled();
@@ -308,32 +287,7 @@ test('the Heading tile steps a whole-document selection up a size per click, and
   })).toEqual(['center', 'center']);
 });
 
-test('the list tiles toggle: wrap, switch kind, lift out', async ({ page }) => {
-  await page.goto('/?new=1');
-  await page.evaluate(() => {
-    const { state } = window.view;
-    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, state.schema.nodes.paragraph.create(null, state.schema.text('An item.'))));
-  });
-  await page.locator('.ProseMirror p', { hasText: 'An item.' }).click();
-  const bullets = page.locator('#rail').getByRole('button', { name: 'Bulleted list', exact: true });
-  const numbers = page.locator('#rail').getByRole('button', { name: 'Numbered list', exact: true });
-  const kind = () => page.evaluate(() => {
-    const { $from } = window.view.state.selection;
-    return $from.depth > 1 ? $from.node($from.depth - 2).type.name : $from.parent.type.name;
-  });
-  await bullets.click();
-  expect(await kind()).toBe('bullet_list');
-  await expect(bullets).toHaveAttribute('aria-pressed', 'true');
-  await numbers.click();
-  expect(await kind()).toBe('ordered_list');
-  await expect(numbers).toHaveAttribute('aria-pressed', 'true');
-  await expect(bullets).toHaveAttribute('aria-pressed', 'false');
-  await numbers.click();
-  expect(await kind()).toBe('paragraph');
-  await expect(numbers).toHaveAttribute('aria-pressed', 'false');
-});
-
-test('Extras reports and changes spacing for the nearest nested list', async ({ page }) => {
+test('Lists reports and changes spacing for the nearest nested list', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const { state } = window.view;
@@ -347,12 +301,12 @@ test('Extras reports and changes spacing for the nearest nested list', async ({ 
     window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, outer));
   });
   await page.locator('.ProseMirror ol p').click();
-  const extras = page.getByRole('button', { name: 'Extras', exact: true });
-  await extras.click();
-  const spacing = page.getByTitle('Loose list spacing (⌘⇧7) — paragraph spacing between items, or tight', { exact: true });
+  const lists = page.getByRole('button', { name: 'Lists', exact: true });
+  await lists.click();
+  const spacing = page.getByTitle('Item spacing (⌘⇧7) — tight, or loose with paragraph spacing between items', { exact: true });
   await expect(spacing).toHaveAttribute('aria-checked', 'true');
   await spacing.click();
-  await extras.click();
+  await lists.click();
   await expect(spacing).toHaveAttribute('aria-checked', 'false');
   expect(await page.evaluate(() => {
     const outer = window.view.state.doc.firstChild!;

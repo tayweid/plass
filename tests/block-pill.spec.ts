@@ -112,7 +112,7 @@ test.describe('the block pill', () => {
     await openSheet(page);
     await caretIn(page, { table: 0, row: 2, col: 1 });
     await expect(page.getByRole('toolbar', { name: 'Table controls' })).toBeVisible();
-    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(7);
+    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(5);
     const geometry = () => page.evaluate(() => {
       const r = (e: Element) => e.getBoundingClientRect();
       const p = r(document.querySelector('.block-pill')!);
@@ -142,7 +142,10 @@ test.describe('the block pill', () => {
     expect(geo.hit).toEqual([]);
     // Grown taller than the pill, the centred table is hugged: 8 px clear
     // of its left edge, over no text.
-    for (let i = 0; i < 9; i++) await tile(page, 'addrow').click();
+    for (let i = 0; i < 4; i++) {
+      await tile(page, 'rows').click();
+      await page.getByRole('menu', { name: 'Rows' }).getByRole('menuitem', { name: 'Add row below' }).click();
+    }
     await expect(pill(page)).toHaveClass(/is-hug/);
     geo = await geometry();
     expect(Math.abs(geo.p.right - (geo.table.left - 8))).toBeLessThan(1);
@@ -151,9 +154,8 @@ test.describe('the block pill', () => {
     // A grid spans the text column: the pill sits in the margin.
     await caretIn(page, { grid: 0, cell: 1 });
     await expect(page.getByRole('toolbar', { name: 'Grid controls' })).toBeVisible();
-    // + row · + column · Rows · Columns · Align · Image │ Grid layout
-    // (docs/BLOCK-CHROME.md).
-    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(7);
+    // Rows · Columns · Align · Image │ Grid layout (docs/BLOCK-CHROME.md).
+    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(5);
     await expect(pill(page)).not.toHaveClass(/is-hug/);
     // Out of the block: gone.
     await page.evaluate(() => {
@@ -169,7 +171,10 @@ test.describe('the block pill', () => {
     await openSheet(page);
     await caretIn(page, { table: 0, row: 2, col: 1 });
     // Taller than the pill, so it hugs (as above).
-    for (let i = 0; i < 9; i++) await tile(page, 'addrow').click();
+    for (let i = 0; i < 4; i++) {
+      await tile(page, 'rows').click();
+      await page.getByRole('menu', { name: 'Rows' }).getByRole('menuitem', { name: 'Add row below' }).click();
+    }
     await expect(pill(page)).toHaveClass(/is-hug/);
     // The Weather column is auto: typing widens the centred table to the
     // left before any placement runs (placements wait for a pause).
@@ -199,7 +204,10 @@ test.describe('the block pill', () => {
   test('a typing run keeps the pill in the margin until it pauses, reading nothing', async ({ page }) => {
     await openSheet(page);
     await caretIn(page, { table: 0, row: 2, col: 1 });
-    for (let i = 0; i < 9; i++) await tile(page, 'addrow').click();
+    for (let i = 0; i < 4; i++) {
+      await tile(page, 'rows').click();
+      await page.getByRole('menu', { name: 'Rows' }).getByRole('menuitem', { name: 'Add row below' }).click();
+    }
     await caretIn(page, { table: 0, row: 2, col: 1 });
     await page.evaluate(() => new Promise((r) => setTimeout(r, 600)));
     await expect(pill(page)).toHaveClass(/is-hug/);
@@ -360,7 +368,7 @@ test.describe('the block pill', () => {
     await openSheet(page);
     const nested = await page.evaluate(() => [...document.querySelectorAll('.ProseMirror table')].findIndex((t) => t.closest('.ts-grid')));
     await caretIn(page, { table: nested + 1, row: 2, col: 1 });
-    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(8);
+    await expect(page.locator('.block-pill .tb-btn')).toHaveCount(6);
     await expect(tile(page, 'gridparent')).toBeVisible();
     const gi = await page.evaluate(() => [...document.querySelectorAll('.ProseMirror .ts-grid')].findIndex((g) => g.querySelector('table')));
     const rowsBefore = (await gridAt(page, gi)).rows.length;
@@ -488,9 +496,6 @@ test.describe('the block pill', () => {
     await page.keyboard.press('End');
     await expect(tile(page, 'table')).toBeFocused();
     await page.keyboard.press('Home');
-    await expect(tile(page, 'addrow')).toBeFocused();
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('ArrowDown');
     await expect(tile(page, 'rows')).toBeFocused();
     await page.keyboard.press('ArrowRight');
     const rows = page.getByRole('menu', { name: 'Rows' });

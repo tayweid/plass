@@ -19,8 +19,8 @@ import { goToNextCell } from 'prosemirror-tables';
 import { enterInTable, exitTableVertically, tabInTable } from './table-editor';
 import { enterInList } from './list-enter';
 import { exitGridVertically, tabInGrid } from './grid-editor';
-import { Slice, type MarkType, type Node as PMNode, type NodeType } from 'prosemirror-model';
-import type { Command, EditorState } from 'prosemirror-state';
+import { Slice, type MarkType } from 'prosemirror-model';
+import type { Command } from 'prosemirror-state';
 import { schema } from './schema';
 import { insertMath, mathDisplayRule, mathInlineRule } from './math';
 import { eqRefRule } from './equations';
@@ -238,57 +238,6 @@ export const toggleListSpacing: Command = (state, dispatch) => {
   return false;
 };
 
-/** The list tiles and keys toggle: in a list of this kind the item lifts
- *  out of it, in a list of the other kind that list changes kind (its
- *  pitch kept), and anywhere else the selection is wrapped in one. */
-export const toggleList = (type: NodeType): Command => (state, dispatch) => {
-  const { $from } = state.selection;
-  for (let d = $from.depth; d > 0; d--) {
-    const node = $from.node(d);
-    if (node.type !== schema.nodes.bullet_list && node.type !== schema.nodes.ordered_list) continue;
-    if (node.type === type) return liftListItem(schema.nodes.list_item)(state, dispatch);
-    if (dispatch) dispatch(state.tr.setNodeMarkup($from.before(d), type, { tight: node.attrs.tight }));
-    return true;
-  }
-  return wrapInList(type)(state, dispatch);
-};
-
-/** The heading level the Headings tile steps to: each press makes the
- *  block one size bigger, body → H3 → H2 → H1, and H1 goes back to body
- *  text (a level past 3, from the keys, steps to 3). */
-export function nextHeadingLevel(level: number | null): number | null {
-  if (level === null) return 3;
-  if (level === 1) return null;
-  return Math.min(level - 1, 3);
-}
-
-/** The level the selection's first text block shows: a heading's level,
- *  null for body text, undefined for anything else (a code block, a
- *  caption). A whole-document selection reads its first block. */
-export function headingLevelAt(state: EditorState): number | null | undefined {
-  const { from, to, $from } = state.selection;
-  let block: PMNode | null = $from.parent.isTextblock ? $from.parent : null;
-  if (!block) {
-    state.doc.nodesBetween(from, to, (node) => {
-      if (block) return false;
-      if (node.isTextblock) block = node;
-      return !block;
-    });
-  }
-  const node = block as PMNode | null;
-  if (node?.type === schema.nodes.heading) return node.attrs.level as number;
-  return node?.type === schema.nodes.paragraph ? null : undefined;
-}
-
-export const cycleHeading: Command = (state, dispatch) => {
-  const level = headingLevelAt(state);
-  if (level === undefined) return false;
-  const next = nextHeadingLevel(level);
-  return next === null
-    ? setBlockType(schema.nodes.paragraph)(state, dispatch)
-    : setBlockType(schema.nodes.heading, { level: next })(state, dispatch);
-};
-
 export function buildKeymap(): Plugin {
   const backToParagraph: Command = setBlockType(schema.nodes.paragraph);
   const keys: Record<string, Command> = {
@@ -301,8 +250,8 @@ export function buildKeymap(): Plugin {
     'Mod-`': toggleMark(schema.marks.code),
     'Mod-m': insertMath(false),
     'Shift-Mod-m': insertMath(true),
-    'Shift-Mod-8': toggleList(schema.nodes.bullet_list),
-    'Shift-Mod-9': toggleList(schema.nodes.ordered_list),
+    'Shift-Mod-8': wrapInList(schema.nodes.bullet_list),
+    'Shift-Mod-9': wrapInList(schema.nodes.ordered_list),
     'Shift-Mod-7': toggleListSpacing,
     'Mod-Alt-0': backToParagraph,
     'Mod-Alt-1': setBlockType(schema.nodes.heading, { level: 1 }),

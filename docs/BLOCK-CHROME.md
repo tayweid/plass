@@ -91,11 +91,9 @@ Nothing here may move a line break, a block height or a page start.
   of it; the pill takes that place whether or not the grid is selected,
   so Escape never moves it. Collapsed (< 46 px): one ⋯ tile
   opening the same items as a menu.
-- **Tiles**: table: + Row · + Column · Rows · Columns · Align (its glyph
-  shows the caret cell's value) · Cell │ Table settings; grid: + Row ·
-  + Column · Rows · Columns · Align · Image │ Grid layout. + Row adds a
-  row below the caret's and + Column one right of it, in one click
-  (2026-10-16); the collapsed ⋯ menu lists both first. A table in a grid cell owns the pill and adds one
+- **Tiles**: table: Rows · Columns · Align (its glyph shows the caret
+  cell's value) · Cell │ Table settings; grid: Rows · Columns · Align ·
+  Image │ Grid layout. A table in a grid cell owns the pill and adds one
   Grid tile. Align is the same panel for both (Across: left / center /
   right; Down: top / middle / bottom), on a table's selected cells
   ("Align selected cells …") or a grid's caret cell ("Align this cell

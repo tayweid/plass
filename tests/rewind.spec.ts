@@ -489,10 +489,10 @@ test('with the History page in the room, File, Export and the rail put it away o
   expect(await closes()).toEqual([[], []]);
   await down();
 
-  // The rail: a flyout (Insert) and Document settings.
+  // The rail: a flyout (Headings) and Document settings.
   await up();
-  await page.getByRole('button', { name: 'Insert', exact: true }).click();
-  await expect(page.locator('#tb-menu-insert')).toBeVisible();
+  await page.getByRole('button', { name: 'Headings', exact: true }).click();
+  await expect(page.locator('#tb-menu-headings')).toBeVisible();
   expect(await closes()).toEqual([[], [], []]);
   await down();
   await up();
@@ -524,7 +524,7 @@ test('with the History page in the room, File, Export and the rail put it away o
   await page.getByRole('button', { name: 'File', exact: true }).click();
   await expect(page.locator('#tb-menu-file')).toBeVisible();
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: 'Insert', exact: true }).click();
+  await page.getByRole('button', { name: 'Headings', exact: true }).click();
   await page.keyboard.press('Escape');
   expect(await historyAsks(page)).toHaveLength(asked);
 });
