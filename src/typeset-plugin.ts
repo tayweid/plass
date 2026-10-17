@@ -760,13 +760,16 @@ class TypesetView {
         });
         return out;
       });
-      // Ink statuses of the document's inline formulas (tests wait for
-      // none pending before measuring).
+      // Ink statuses of the document's formulas, inline and display (tests
+      // wait for none pending before measuring). Display equations were
+      // left out: a test could measure one still at KaTeX's box (91 px for
+      // a 51 px frame), and under load the audit's math-edge-top compiled
+      // the page that way and differed.
       (w as unknown as { __mathInk: () => Record<string, number> }).__mathInk = () => {
         const st = getSettings(this.view.state);
         const counts: Record<string, number> = {};
         this.view.state.doc.descendants((n) => {
-          if (n.type.name !== 'math_inline' || !(n.attrs.src as string).trim()) return true;
+          if ((n.type.name !== 'math_inline' && n.type.name !== 'math_display') || !(n.attrs.src as string).trim()) return true;
           const status = inkStatus(inkKeyFor(n, st));
           counts[status] = (counts[status] ?? 0) + 1;
           return false;
