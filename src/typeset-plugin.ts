@@ -46,22 +46,29 @@ import { caretBox } from './caret-box';
 import { getSettings, layoutPx, PAGE_GAP, pageSize, parMarginPx, parseMathMacros, type DocSettings } from './settings';
 import {
   abstractBoxEm,
+  afterQuoteTopEm,
   bibliographyBoxEm,
   displayMathPadEm,
+  equationBlockSpacingEm,
   escapeTyp,
   expandMacrosWith,
   figureBoxEm,
+  headingBlockSpacingEm,
   headingBoxEm,
   headingRunPadTopEm,
   headingScale,
   pageBottomInsetEm,
   pageTopAdjustEm,
   parMarginEm,
+  QUOTE_SPACING_EM,
   quoteBoxEm,
+  quoteChildSpacingEm,
+  quotePadAfterEm,
   tableMarginsEm,
 } from './typ-serializer';
 import {
   containerPageTopDropEm,
+  DISPLAY_MATH_PAD_EM,
   footnoteEmptyFrameAction,
   footnoteEntryCost,
   footnoteEntryFit,
@@ -82,7 +89,7 @@ import { eqKey } from './equations';
 import { getInk, inkKey, inkKeyFor, inkStatus } from './math-ink';
 import { parseTypstSvg } from './safe-svg';
 import { recordLayoutPerf } from './layout/perf';
-import { COMMON_PORT_KEYS, effectiveFont, parityMetrics, cssFontStack, footnoteFrameInsetsEm } from './font-registry';
+import { COMMON_PORT_KEYS, RAW_FONT, codeBlockMetricsEm, effectiveFont, parityMetrics, cssFontStack, footnoteFrameInsetsEm } from './font-registry';
 import {
   appendLineDecorations,
   blockSpacerDecoration,
@@ -1999,8 +2006,10 @@ class TypesetView {
   /**
    * How far below the page's top margin a block's painted box must start
    * for its Typst frame to begin AT the margin (negative: above it). Text
-   * blocks land their cap top there (`pageTopAdjustEm`); a table drops its
-   * margin-top; a container (list, quote) drops its own painted top
+   * blocks land their cap top there (`pageTopAdjustEm`); a table's box is
+   * its frame (its margin-top is above the box: on the page gap before it,
+   * style.css, or inside the editor's padding on the first page,
+   * `applyTopAdjust`); a container (list, quote) drops its own painted top
    * spacing and lands its first text block like a paragraph — Typst starts
    * a page with the item's or quote's first line at the margin, not with
    * the container's box. `parent` and `index` place `node` (a display
@@ -2015,7 +2024,7 @@ class TypesetView {
     // like a paragraph.
     if (node.type.name === 'grid' || node.type.name === 'grid_row') return pageTopAdjustEm(s, 'paragraph') * F;
     if (node.type.name === 'code_block') return pageTopAdjustEm(s, 'code') * F;
-    if (node.type.name === 'table') return -tableMarginsEm(s).top * F;
+    if (node.type.name === 'table') return 0;
     if (node.type.name === 'math_display') return -displayMathPadEm(s, parent, index).top * F;
     // The abstract's painted label is its first line, a paragraph line
     // whose frame is the bold capitals' (`abstractBoxEm`): its padding is
@@ -2033,13 +2042,18 @@ class TypesetView {
       first = first.firstChild;
     }
     const innerKind = first && first !== node ? this.unitKindOf(first) : null;
+    // A table that opens a quote is padded like a paragraph there
+    // (style.css), its frame being its box.
+    const quotedTable = first?.type.name === 'table' && firstParent?.type.name === 'blockquote' && firstParent.attrs.kind !== 'solution';
     const inner = innerKind
       ? pageTopAdjustEm(s, innerKind) * F
       : first?.type.name === 'code_block' && first !== node
         ? pageTopAdjustEm(s, 'code') * F
         : first?.type.name === 'math_display' && first !== node
           ? -displayMathPadEm(s, firstParent, 0).top * F
-          : 0;
+          : quotedTable && first !== node
+            ? pageTopAdjustEm(s, 'paragraph') * F
+            : 0;
     return -dropEm * F + inner;
   }
 
@@ -2056,8 +2070,12 @@ class TypesetView {
     const host = this.view.dom.parentElement;
     if (!host) return;
     const s = getSettings(this.view.state);
-    const adj = this.blockTopAdjustPx(firstPrintedBlock(this.view.state.doc, 0), s, this.bodyPx());
-    host.style.paddingTop = `${(s.marginTop * 96 + adj).toFixed(2)}px`;
+    const first = firstPrintedBlock(this.view.state.doc, 0);
+    const F = this.bodyPx();
+    // The adjustment places the block's box; a table's margin-top is above
+    // its box, inside this padding (no page gap carries it here).
+    const ownMargin = first?.type.name === 'table' ? tableMarginsEm(s).top * F : 0;
+    host.style.paddingTop = `${(s.marginTop * 96 + this.blockTopAdjustPx(first, s, F) - ownMargin).toFixed(2)}px`;
   }
 
   /** Key of the last published geometry variables (null: never, or the
@@ -2166,6 +2184,46 @@ class TypesetView {
     const bibliography = bibliographyBoxEm(s);
     root.setProperty('--bib-top', `${(bibliography.padTop * exactPx).toFixed(6)}px`);
     root.setProperty('--bib-below', `${(bibliography.below * exactPx).toFixed(6)}px`);
+    // A block inside a quote takes the quote's spacing (`quoteChildSpacingEm`):
+    // the paragraph before a list or a grid ends its margin that much lower
+    // (`--quote-par-mb`), before a code block by the raw text's share
+    // (`--quote-par-mb-code`), and a table after a paragraph moves its own
+    // margin-top down instead (it collapses with the paragraph's). Below,
+    // a list, a grid or a table adds `--quote-below` (the same 1.8em as the
+    // quote's), a code block its share of it (`--quote-code-mb`) or, closing
+    // the quote, all of it (`--quote-code-last-mb`). Each in layout units,
+    // rounded from the box edge it continues.
+    const child = quoteChildSpacingEm(s);
+    const codeChild = quoteChildSpacingEm(s, RAW_FONT.scale);
+    const code = codeBlockMetricsEm(s);
+    const codeEnd = code.padTopEm + code.marginBottomEm;
+    const codePad = layoutPx(code.padTopEm * exactPx);
+    root.setProperty('--quote-par-mb', `${layoutPx((parMarginEm(s) + child.above) * exactPx)}px`);
+    root.setProperty('--quote-par-mb-code', `${layoutPx((parMarginEm(s) + codeChild.above) * exactPx)}px`);
+    root.setProperty('--quote-table-mt', `${layoutPx((table.top + child.above) * exactPx)}px`);
+    root.setProperty('--quote-table-mb', `${layoutPx((table.bottom + quote.below) * exactPx)}px`);
+    root.setProperty('--quote-code-mb', `${layoutPx((codeEnd + codeChild.below) * exactPx) - codePad}px`);
+    root.setProperty('--quote-code-last-mb', `${layoutPx((codeEnd + quote.below) * exactPx) - codePad}px`);
+    // A quote beside a block whose spacing is explicit too (a heading, a
+    // display equation, another quote): Typst keeps the larger spacing,
+    // where the boxes would add the quote's to the other's. A quote after
+    // one takes a smaller padding (`quotePadAfterEm`); a heading or an
+    // equation after a quote moves its top (`afterQuoteTopEm`): a heading
+    // by its padding, a part below zero as its margin-top, rounded like a
+    // run's follower; an equation by its padding, which its box rounds.
+    const eq = equationBlockSpacingEm(s);
+    for (let level = 1; level <= 3; level++) {
+      const spacing = headingBlockSpacingEm(s, level);
+      root.setProperty(`--quote-pad-after-h${level}`, `${layoutPx(quotePadAfterEm(spacing.below) * exactPx)}px`);
+      const b = boxes[level - 1];
+      const padEm = headingBoxEm(level).padTop + afterQuoteTopEm(s, spacing.above);
+      const pad = layoutPx(padEm * exactPx + b.lh + b.mb) - b.mbPx - b.line;
+      root.setProperty(`--after-quote-pad-${level}`, `${Math.max(0, pad)}px`);
+      root.setProperty(`--after-quote-mt-${level}`, `${Math.min(0, pad)}px`);
+    }
+    root.setProperty('--quote-pad-after-eq', `${layoutPx(quotePadAfterEm(eq.below) * exactPx)}px`);
+    root.setProperty('--quote-pad-after-quote', `${layoutPx(quotePadAfterEm(QUOTE_SPACING_EM.below) * exactPx)}px`);
+    root.setProperty('--after-quote-math-pad', `${((DISPLAY_MATH_PAD_EM + afterQuoteTopEm(s, eq.above)) * exactPx).toFixed(4)}px`);
     // A paragraph box's edge-to-frame slack, the padding of an equation
     // that opens (top) or closes (bottom) a quote.
     root.setProperty('--par-cap-slack', `${(-pageTopAdjustEm(s, 'paragraph') * F).toFixed(4)}px`);

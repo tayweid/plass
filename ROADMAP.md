@@ -171,32 +171,47 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      sits 3.3 px high (not measured), and a bibliography right after a
      heading gets the two spacings' sum where Typst keeps the larger
      (unchecked).
-   - Blocks the page lays out off their print, found while putting their
-     margins in layout units (2026-10-16, 12.5 pt, spaced, against the
-     audit's SVG; none is in an audit fixture). Inside a quote, Typst
-     spaces a list 2.4 em above and 1.8 em below (the quote's block
-     spacing reaches its children), where the page uses paragraph
-     spacing: a list after a quote's paragraph prints 11.38 px (0.683 em)
-     lower, a paragraph after a list inside a quote 1.38 px lower. And the
-     environment fingerprint's document (tests/environment-fingerprint.
-     spec.ts: an H1, a long paragraph, an H2 + H3 run, a quote, a code
-     block, then 30 paragraphs) disagrees at page 2: Typst moves page 1's
-     last paragraph from its fifth line on to page 2, the page keeps it
-     whole (the same before and after the layout-unit work; not
-     diagnosed).
+   - Fixed 2026-10-16: a table that opens a page lands its frame (its box)
+     at the top margin, where Typst puts it. `blockTopAdjustPx` took the
+     table's margin-top off the box, but the margin is above the box, and
+     once a page gap came between a paragraph and the table the
+     paragraph's margin no longer collapsed into the table's, so the table
+     sat 8.27 or 23.27 px above the margin at 12.5 pt (8.28 px in a quote),
+     depending on whether the last pass had broken there, and a page that
+     starts with a table held more than Typst's. A page gap before a table
+     carries the table's margin-top now (style.css), so the table's place
+     in the unbroken flow is the same with the gap or without, and a table
+     after an explicit page break has none. A sweep of a table put at a
+     page bottom (40 to 90 words of lead-in, in a quote or not) disagreed
+     at page 3 in 38 of 52 documents and agrees in all now. Audit
+     fixtures: `table-edge.md`, `quote-table-edge.md`; spec:
+     `tests/margin-drift.spec.ts`.
+   - Fixed 2026-10-16: inside a quote Typst spaces a block 2.4 em above
+     and 1.8 em below (the quote's show-set reaches its content), where
+     the page used paragraph spacing: a list after a quote's paragraph
+     printed 11.38 px lower, a list nested in a quoted item the same, a
+     grid and a table the same, a code block 1.23 px higher (its em is the
+     raw text's 0.8). The page adds the difference
+     (`quoteChildSpacingEm`). And a quote beside a heading, an equation or
+     another quote kept the sum of the two explicit spacings where Typst
+     keeps the larger (`quotePadAfterEm`, `afterQuoteTopEm`): the
+     environment fingerprint's document had a quote 3.98 px short after
+     its H3 and kept a paragraph whole on page 1 that Typst breaks; in
+     classic mode a heading after a quote was 16 px low. Audit fixtures:
+     `fingerprint.md`, `quote-list-edge.md`, `quote-nested-list-edge.md`,
+     `quote-code-edge.md`. Still the sum, exact only beside a paragraph: a
+     block inside a quote next to a heading, an equation or another such
+     block (a list then a code block: 2 px).
    - Spacing found off by a sweep of quotes and solutions at line heights
-     1.3 and 1.8 and with indented paragraphs (2026-10-16), none of it the
-     quote's: at `linestretch: 1.8` a document that opens with a level-1
-     heading puts a line more on page 1 than Typst (the same paragraphs
-     without the heading agree), so the heading's spacing is off there
-     (found before heading frames were made exact the same day; recheck).
-     A quote's neighbour with explicit spacing of its own (a heading, an
-     equation or another quote) gets the sum of the two spacings where
-     Typst keeps the larger, and a table or code block at a quote's edge
-     keeps its own box (`quoteBoxEm` is exact for paragraph-like edges).
-     The sweep's other finding, the gap over a display equation after an
-     indented paragraph, is fixed (`equationBlockSpacingEm` reads
-     `parMarginEm`).
+     1.3 and 1.8 and with indented paragraphs (2026-10-16): at
+     `linestretch: 1.8` a document that opens with a level-1 heading puts
+     a line more on page 1 than Typst (the same paragraphs without the
+     heading agree), so the heading's spacing is off there (found before
+     heading frames were made exact the same day; recheck). The sweep's
+     other findings are fixed: the gap over a display equation after an
+     indented paragraph (`equationBlockSpacingEm` reads `parMarginEm`),
+     and a quote beside explicit spacing or opening or closing with a
+     table or a code block (above).
 6. **Live coauthoring, Overleaf's way** (horizon, 2026-10-11; one design
    for Plass and Knuth, Knuth's `docs/ROADMAP.md` carries the same
    entry, and `docs/COAUTHOR.md` there is the git-only design it

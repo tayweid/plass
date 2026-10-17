@@ -247,8 +247,12 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   to the exact model (`--hN-pad`/`--hN-mb`, `publishGeometryVars`), its
   line box measured. Block spacing that
   Typst drops at a page top must live in the PREVIOUS block's margin-bottom
-  or be dropped by `blockTopAdjustPx` (tables: `tableMarginsEm`; a list or
-  quote at a page top lands by its first text block's cap top). A heading
+  or be dropped by `blockTopAdjustPx` (a list or quote at a page top lands
+  by its first text block's cap top). A block's own margin-top must not
+  change where it sits when a page gap comes before it: a table's
+  (`tableMarginsEm`) moves onto the gap, where it collapses with the
+  margin above as it does with no gap, and the table's box, its frame,
+  lands at the margin. A heading
   right after a heading gets Typst's spacing for the pair, the larger of
   the two headings' (both explicit, weakness 3), not the editor's sum: the
   follower's padding comes from `headingRunPadTopEm`, published by
@@ -258,7 +262,13 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   1.8): the box adds what the paragraphs beside it leave over
   (`quoteBoxEm`, published by `publishGeometryVars`), a padding-top the
   page top drops and an addition to its last child's margin-bottom; a
-  solution block is Auto spacing, a paragraph run. Line k of
+  solution block is Auto spacing, a paragraph run. The quote sets its
+  spacing as a show-set its content inherits: a list, a nested list, a
+  grid, a table or a code block inside it (at the raw text's size) is
+  2.4em and 1.8em from a paragraph beside it (`quoteChildSpacingEm`).
+  Beside a heading, an equation or another quote the larger of the two
+  explicit spacings holds, not their sum (`quotePadAfterEm`,
+  `afterQuoteTopEm`). Line k of
   a paragraph is at the paragraph's top plus k line-heights (never the
   caret box: Chrome rounds its height, and Typst's line pitch is exact).
   The body's line height is a length, `calc(var(--doc-line) * 1em)`:
