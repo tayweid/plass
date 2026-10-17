@@ -329,10 +329,10 @@ if (!glass || glass === 'none') await fail(`the recent papers' menu draws no blu
 // puts the lights at {14, 15}, so the band is 2·15 plus the OS's lights,
 // 46 on a macOS 15 runner), the Open tile 32 px square 12 px past the
 // lights' room and centred on the band (6 px down on 44), the name pill
-// 30 px tall centred on the band (7 px down on 44), then the History tile (Plass.app's
-// and Knuth.app's, the shell's History window) the bar's 6 px gap past
-// it, 32 px square 6 px down like Open, and Export the same gap past
-// that.
+// 30 px tall centred on the band (7 px down on 44), holding at its far
+// right the History tile (Plass.app's and Knuth.app's, since 2026-10-17),
+// 24 px square and centred in it, and Export the bar's 6 px gap past the
+// pill.
 const hidesTitleBar = process.platform === 'darwin' && fs.existsSync(shellMain) && fs.readFileSync(shellMain, 'utf8').includes('titleBarStyle');
 if (hidesTitleBar) {
   const bar = await page.evaluate(() => {
@@ -365,9 +365,14 @@ if (hidesTitleBar) {
   if (bar.padding !== bar.x + 12 || bar.file.x !== bar.x + 12) await fail(`the Open tile is at ${bar.file.x}px, the bar padded ${bar.padding}px, the lights' room ${bar.x}px (Knuth's tile is 12 px past it)`);
   if (bar.file.width !== 32 || bar.file.height !== 32 || bar.file.y !== tileY) await fail(`the Open tile is ${JSON.stringify(bar.file)} (Knuth's is 32 px square, centred: ${tileY} px down)`);
   if (bar.pod.height !== 30 || bar.pod.y !== pillY) await fail(`the name pill is ${JSON.stringify(bar.pod)} (Knuth's is 30 px tall, centred: ${pillY} px down)`);
-  const besidePill = bar.pod.x + bar.pod.width + 6;
-  if (!bar.history || bar.history.x !== besidePill || bar.history.y !== tileY || bar.history.width !== 32 || bar.history.height !== 32) await fail(`the History tile is ${JSON.stringify(bar.history)}, not 32 px square at (${besidePill}, ${tileY}), the bar's gap past the pill ${JSON.stringify(bar.pod)}`);
-  else if (bar.exportTile.x !== bar.history.x + 38 || bar.exportTile.y !== tileY) await fail(`Export is ${JSON.stringify(bar.exportTile)}, not the bar's gap past the History tile ${JSON.stringify(bar.history)}`);
+  // History inside the pill at its far right (2026-10-17): a 24 px tile
+  // centred in the pill, 5 px in from its right edge (the pill's 10 px
+  // padding less the tile's 6 px pull, and its 1 px border); Export the
+  // bar's gap past the pill.
+  const pillRight = bar.pod.x + bar.pod.width;
+  const historyY = bar.pod.y + (bar.pod.height - 24) / 2;
+  if (!bar.history || bar.history.width !== 24 || bar.history.height !== 24 || Math.abs(bar.history.x + 24 + 5 - pillRight) > 0.5 || Math.abs(bar.history.y - historyY) > 0.5) await fail(`the History tile is ${JSON.stringify(bar.history)}, not 24 px square at the pill's right end ${JSON.stringify(bar.pod)}`);
+  else if (bar.exportTile.x !== pillRight + 6 || bar.exportTile.y !== tileY) await fail(`Export is ${JSON.stringify(bar.exportTile)}, not the bar's gap past the pill ${JSON.stringify(bar.pod)}`);
   console.log(`smoke: the bar at ${await page.evaluate(() => innerWidth)} px: Open ${JSON.stringify(bar.file)}, the pill ${JSON.stringify(bar.pod)}, History ${JSON.stringify(bar.history)}, Export ${JSON.stringify(bar.exportTile)}`);
 }
 
