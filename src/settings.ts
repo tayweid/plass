@@ -287,9 +287,8 @@ export function applySettings(state: EditorState) {
   const parMargin = parMarginPx(s);
   root.setProperty('--par-margin', `${parMargin}px`);
   // The same 0.9em where a block keeps it in both paragraph modes (a list's
-  // margin-bottom and a nested list's margin-top, figures, the abstract,
-  // the bibliography) and a tight list item's 0.25em (`listSpacingEm`), in
-  // layout units for the same reason.
+  // margin-bottom and a nested list's margin-top) and a tight list item's
+  // 0.25em (`listSpacingEm`), in layout units for the same reason.
   root.setProperty('--block-margin', `${layoutPx(0.9 * bodyPx)}px`);
   root.setProperty('--list-item-gap', `${layoutPx(0.25 * bodyPx)}px`);
   root.setProperty('--par-indent', s.parIndent ? '1.5em' : '0em');
