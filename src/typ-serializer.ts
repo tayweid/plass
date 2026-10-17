@@ -214,6 +214,24 @@ export function figureBoxEm(s: DocSettings): { padTop: number; captionTop: numbe
   return { padTop: slack, captionTop: FIGURE_GAP_EM - slack };
 }
 
+/**
+ * The editor's abstract box, body em (style.css `.ts-abstract`). The export
+ * prints the label as a paragraph of its own, `#align(center, text(weight:
+ * 600)[Abstract])`, then the abstract's paragraphs in `#pad(x: 1.8em)`, all
+ * at paragraph spacing; the page paints the label (`::before`) as a
+ * paragraph line with the paragraph margin under it. Weight 600 is the bold
+ * face on both sides, and a line of bold text has the bold capitals' frame
+ * (the parity header gives only `strong` the regular edge), taller than a
+ * paragraph line's by the difference of the cap heights (New Computer
+ * Modern: 0.003em, 0.05 px at 12.5 pt): a padding over the label, or where
+ * the bold capitals are the shorter, a margin-top below zero.
+ */
+export function abstractBoxEm(s: DocSettings): { padTop: number; marginTop: number } {
+  const m = parityMetrics(s.font);
+  const taller = m.boldExtent - m.extent;
+  return { padTop: Math.max(0, taller), marginTop: Math.min(0, taller) };
+}
+
 /** A heading level's text size as a ratio of the body size (levels 4–6
  * print like 3). The port lays headings out at this scale, bold. */
 export function headingScale(level: number): number {

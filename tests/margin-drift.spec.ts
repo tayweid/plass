@@ -275,20 +275,31 @@ for (const parIndent of [false, true]) {
   });
 }
 
-test("the abstract's margin lands the paragraph after it on the print", async ({ page }) => {
-  test.setTimeout(90_000);
-  const d = await blocksDrift(page, [
-    p('Before the abstract.'),
-    { type: 'abstract', content: [p('The abstract, one line.'), p('Its second paragraph.')] },
-    p('After the abstract.'),
-    p('The last paragraph.'),
-  ]);
-  // Its last paragraph to the next one: the 0.9em margin, 15 px (it was
-  // 14.984375). The abstract's top keeps its own calibration (ROADMAP).
-  const last = d.findLastIndex((row) => row.kind.startsWith('abstract'));
-  expect(Math.abs(d[last + 1].drift - d[last].drift), JSON.stringify(d)).toBeLessThan(1 / 128 + 0.002);
-  expect(Math.abs(d[last + 2].drift - d[last + 1].drift), JSON.stringify(d)).toBeLessThan(0.003);
-});
+for (const parIndent of [false, true]) {
+  test(`${parIndent ? 'classic' : 'spaced'}: the abstract's label, its paragraphs and the paragraph after it land on the print`, async ({ page }) => {
+    test.setTimeout(90_000);
+    const d = await blocksDrift(
+      page,
+      [
+        p('Before the abstract.'),
+        { type: 'abstract', content: [p('The abstract, one line.'), p('Its second paragraph.')] },
+        p('After the abstract.'),
+        p('The last paragraph.'),
+      ],
+      parIndent,
+    );
+    // The export prints the label as a bold paragraph of its own and the
+    // abstract's paragraphs after it, all at paragraph spacing; the bold
+    // capitals make the label's frame 0.05 px taller than a paragraph
+    // line's (`abstractBoxEm`). The painted label had a 0.75em margin under
+    // it: the abstract's first line was 2.55 px higher than its print
+    // (12.45 px lower with indented paragraphs, and the 0.9em margin after
+    // the abstract put the next paragraph 15 px lower again).
+    for (let i = 1; i < d.length; i++) {
+      expect(Math.abs(d[i].drift - d[i - 1].drift), `${d[i].kind}: ${JSON.stringify(d)}`).toBeLessThan(1 / 128 + 0.002);
+    }
+  });
+}
 
 const RECT_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"><rect width="120" height="80" fill="#38786d"/></svg>';
 const figure = (caption: string) => ({

@@ -2280,9 +2280,15 @@ body {
   margin: 0 0 0.7em;
 }
 
+/* The export prints the label as a paragraph of its own and the abstract
+   in `#pad(x: 1.8em)`, all at paragraph spacing (`abstractBoxEm`,
+   typ-serializer.ts): the label is a paragraph line with the paragraph
+   margin under it, and the abstract ends with a paragraph's margin (none
+   with indented paragraphs). The bold label's frame is taller than a
+   paragraph line's by the cap heights' difference: the padding over it. */
 .ProseMirror .ts-abstract {
-  padding: 0 1.8em;
-  margin: 0 0 var(--block-margin, 0.9em);
+  padding: var(--abstract-pad, 0px) 1.8em 0;
+  margin: var(--abstract-mt, 0px) 0 var(--par-margin, 0.9em);
 }
 
 /* The label is painted, not stored — the exporter emits it. */
@@ -2291,7 +2297,7 @@ body {
   display: block;
   text-align: center;
   font-weight: 600;
-  margin-bottom: 0.75em;
+  margin-bottom: var(--par-margin, 0.9em);
 }
 
 .ProseMirror .ts-abstract p:last-child {

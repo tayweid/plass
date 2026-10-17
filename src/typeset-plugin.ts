@@ -45,6 +45,7 @@ import { atPaperSize, fitPaper, paperPass, paperScale, type PaperCaret } from '.
 import { caretBox } from './caret-box';
 import { getSettings, layoutPx, PAGE_GAP, pageSize, parMarginPx, parseMathMacros, type DocSettings } from './settings';
 import {
+  abstractBoxEm,
   displayMathPadEm,
   escapeTyp,
   expandMacrosWith,
@@ -2012,6 +2013,10 @@ class TypesetView {
     if (node.type.name === 'code_block') return pageTopAdjustEm(s, 'code') * F;
     if (node.type.name === 'table') return -tableMarginsEm(s).top * F;
     if (node.type.name === 'math_display') return -displayMathPadEm(s, parent, index).top * F;
+    // The abstract's painted label is its first line, a paragraph line
+    // whose frame is the bold capitals' (`abstractBoxEm`): its padding is
+    // inside the frame, a margin below zero moves the box up with it.
+    if (node.type.name === 'abstract') return (pageTopAdjustEm(s, 'paragraph') + abstractBoxEm(s).marginTop) * F;
     const dropEm =
       node.type.name === 'blockquote' ? (node.attrs.kind === 'solution' ? 0 : quoteBoxEm(s).padTop) : containerPageTopDropEm(node.type.name);
     let first: PMNode | null = node;
@@ -2144,6 +2149,11 @@ class TypesetView {
     root.setProperty('--fig-pad', `${figurePad}px`);
     root.setProperty('--fig-caption-mt', `${layoutPx((figure.padTop + figure.captionTop) * exactPx) - figurePad}px`);
     root.setProperty('--fig-gap', `${(figure.padTop + figure.captionTop) * exactPx}px`);
+    // The abstract's label (style.css): the bold capitals' frame over a
+    // paragraph line's, in layout units.
+    const abstract = abstractBoxEm(s);
+    root.setProperty('--abstract-pad', `${layoutPx(abstract.padTop * exactPx)}px`);
+    root.setProperty('--abstract-mt', `${layoutPx(abstract.marginTop * exactPx)}px`);
     // A paragraph box's edge-to-frame slack, the padding of an equation
     // that opens (top) or closes (bottom) a quote.
     root.setProperty('--par-cap-slack', `${(-pageTopAdjustEm(s, 'paragraph') * F).toFixed(4)}px`);
