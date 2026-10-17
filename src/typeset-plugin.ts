@@ -43,7 +43,7 @@ import { loadPrimitives, primitives } from './layout/primitives';
 import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdict } from './environment-check';
 import { atPaperSize, fitPaper, paperPass, paperScale, type PaperCaret } from './paper-scale';
 import { caretBox } from './caret-box';
-import { getSettings, layoutPx, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
+import { getSettings, layoutPx, PAGE_GAP, pageSize, parMarginPx, parseMathMacros, type DocSettings } from './settings';
 import {
   displayMathPadEm,
   escapeTyp,
@@ -53,6 +53,7 @@ import {
   headingScale,
   pageBottomInsetEm,
   pageTopAdjustEm,
+  parMarginEm,
   quoteBoxEm,
   tableMarginsEm,
 } from './typ-serializer';
@@ -2115,11 +2116,19 @@ class TypesetView {
       }
     }
     // A quote (style.css): its padding-top (a part below zero as its
-    // margin-top) and what its last child adds to its margin-bottom.
+    // margin-top) and what its last child adds to its margin-bottom, in
+    // layout units. The quote's content is whole lines, so its last
+    // child's margin (`--par-margin` + `--quote-below`) is rounded from
+    // the quote's top: its end falls within 1/128 px of the model, where
+    // rounding each edge on its own put both on the same side (+0.015 px
+    // a quote at 12.5 pt; the four-decimal lengths were truncated, 0.017
+    // px short).
     const quote = quoteBoxEm(s);
-    root.setProperty('--quote-pad', `${(quote.padTop * F).toFixed(4)}px`);
-    root.setProperty('--quote-mt', `${(quote.marginTop * F).toFixed(4)}px`);
-    root.setProperty('--quote-below', `${(quote.below * F).toFixed(4)}px`);
+    const parMargin = parMarginPx(s);
+    const quotePad = layoutPx(quote.padTop * exactPx);
+    root.setProperty('--quote-pad', `${quotePad}px`);
+    root.setProperty('--quote-mt', `${layoutPx(quote.marginTop * exactPx)}px`);
+    root.setProperty('--quote-below', `${layoutPx((quote.padTop + quote.below + parMarginEm(s)) * exactPx) - quotePad - parMargin}px`);
     // A paragraph box's edge-to-frame slack, the padding of an equation
     // that opens (top) or closes (bottom) a quote.
     root.setProperty('--par-cap-slack', `${(-pageTopAdjustEm(s, 'paragraph') * F).toFixed(4)}px`);

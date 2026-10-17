@@ -55,11 +55,6 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      no home for it.
    - Citations: linking picker entries to local PDFs when keys match
      filenames.
-   - Each paragraph starts 1/64 px higher on the page than in print,
-     cumulatively (measured 2026-10-16 against the audit's SVG): Chrome
-     lays the paragraph spacing out in 1/64 px units, and the paginator
-     reads paragraph tops from the DOM, so it inherits the drift (about
-     0.2 px over a page of short paragraphs).
    - Page bottoms at the layout unit. Since 2026-10-16 headings are exact
      too (their frame is the bold cap height, every spacing is a gap
      between frames, heading boxes are snapped to 1/64 px) and the fit
@@ -78,15 +73,26 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      1/128 px, the same each time for the same formula), and at a size
      where 0.9 em is no whole 1/64 px (11, 12, 13, 14 pt) so does each
      paragraph gap (12 pt: 1/160 px a gap, 0.13 px by the 22nd); only
-     per-block margins would take that out. Still truncated as these
-     were: a list item's 0.25em margin; the fixed 0.9em margins of quotes,
-     lists, figures, the abstract and the bibliography; the code block's
-     published lengths. And the line box, which no margin can absorb: at
-     10 and 13 pt Chrome lays every line 1/64 px short (19.984375 and
-     25.984375 px at line spacing 1.5), 0.6 px by a 10 pt page's 40th
-     line, and at 12.5 pt with line spacing 1.3 1/192 px long (measured
-     2026-10-16). Line height stays a ratio because inline atoms inherit
-     it, so publishing it in px is a design question.
+     per-block margins would take that out. The other blocks' em lengths
+     followed the same day (same spec): a tight list item's 0.25em margin
+     (1/96 px short an item at 12.5 pt; now the nearest layout unit, 1/192
+     px long), the fixed 0.9em margin of a list, a nested list, figures,
+     the abstract and the bibliography (`--block-margin`, 1/64 px short
+     each), a quote's padding and spacing below (rounded from the quote's
+     top: 0.001 px a quote, it was 0.017 short) and a code block's padding
+     and margin (rounded from its top; a spaced block was 1/64 px short).
+     A code line's pitch is the nearest layout unit to Typst's raw line, so
+     each line keeps that difference (12.5 pt: 1/370 px long, 11 pt: 1/143
+     short); per-block margins again would take it out. Still published
+     with four decimals, so truncated, and not measured: a table's margins
+     (`--table-mt`/`--table-mb`), the footnote lengths, `--par-cap-slack`
+     and `--par-inset` (an equation at a quote's edge), and the front
+     matter's em margins (title, authors, date). And the line box, which
+     no margin can absorb: at 10 and 13 pt Chrome lays every line 1/64 px
+     short (19.984375 and 25.984375 px at line spacing 1.5), 0.6 px by a
+     10 pt page's 40th line, and at 12.5 pt with line spacing 1.3 1/192 px
+     long (measured 2026-10-16). Line height stays a ratio because inline
+     atoms inherit it, so publishing it in px is a design question.
    - The page paints heading ink lower than the print does: Chrome's
      baseline of an H1 is 2.8 px below Typst's, an H2's 1.5 px, an H3's
      1.8 px, while body lines are 0.65 px above (measured 2026-10-16 at
@@ -110,10 +116,39 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      0.3 % small.
    - Classic (indented) paragraphs: headings and display equations print at
      the page's gap since 2026-10-16 (the spacing above them carried the
-     spaced mode's 0.9 em margin). Other blocks with a fixed 0.9 em margin
-     in style.css (quotes, ordered lists, figures, the abstract, the
-     bibliography) have not been checked against the print in classic
-     mode.
+     spaced mode's 0.9 em margin). The blocks with a fixed 0.9 em margin
+     carry it the same way (measured 2026-10-16 at 12.5 pt against the
+     audit's SVG): Typst spaces a list, a nested list, a figure, the
+     abstract and the bibliography from their neighbours by the leading
+     alone in classic mode, and the page adds 0.9 em, so the line after a
+     list (or the first line of a nested list, or the line after any of
+     the others) is 15 px lower on the page than in print, and a classic
+     page holding lists breaks later than Typst's. Quotes and code blocks
+     agree (their boxes read the mode's paragraph spacing). Not changed
+     yet: classic spacing is to be written up first. The fix publishes
+     those margins from `parMarginEm` (0 in classic mode), and a tight
+     list's last item would then need its 0.25 em margin dropped too
+     (today it collapses into the list's 0.9 em).
+   - Blocks the page lays out off their print, found while putting their
+     margins in layout units (2026-10-16, 12.5 pt, spaced, against the
+     audit's SVG; none is in an audit fixture). A figure (a 120×80 image
+     at 20 % width, one-line caption) is 8.3 px taller than Typst's: the
+     caption's line is 5 px lower, and the paragraph after it 3.3 px lower
+     again (the figure's 0.2 em padding-bottom; its 0.4 em, 0.2 em and
+     0.55 em are a July raster calibration). The abstract's first line is
+     2.55 px higher than in print (its painted "Abstract" label and 0.75 em
+     margin). The paragraph after the bibliography is 1.61 px higher (the
+     compiled list's box and its 0.75 em padding). Inside a quote, Typst
+     spaces a list 2.4 em above and 1.8 em below (the quote's block
+     spacing reaches its children), where the page uses paragraph
+     spacing: a list after a quote's paragraph prints 11.38 px (0.683 em)
+     lower, a paragraph after a list inside a quote 1.38 px lower. And the
+     environment fingerprint's document (tests/environment-fingerprint.
+     spec.ts: an H1, a long paragraph, an H2 + H3 run, a quote, a code
+     block, then 30 paragraphs) disagrees at page 2: Typst moves page 1's
+     last paragraph from its fifth line on to page 2, the page keeps it
+     whole (the same before and after the layout-unit work; not
+     diagnosed).
    - Spacing found off by a sweep of quotes and solutions at line heights
      1.3 and 1.8 and with indented paragraphs (2026-10-16), none of it the
      quote's: at `linestretch: 1.8` a document that opens with a level-1
