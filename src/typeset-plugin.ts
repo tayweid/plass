@@ -585,6 +585,19 @@ function isPageGapSpec(spec: unknown): boolean {
   return kind === 'line-page-gap' || kind === 'block-page-gap' || kind === 'row-page-gap';
 }
 
+/** A formula as Typst prints it ("Π𝐴,𝐵,𝐶"): the text layer of its
+ *  compiled ink, or undefined while that is still compiling. */
+function inkText(key: string): string | undefined {
+  const ink = getInk(key);
+  if (!ink) return undefined;
+  const text = [...parseTypstSvg(ink.svg).querySelectorAll('.tsel')]
+    .map((t) => t.textContent ?? '')
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text || undefined;
+}
+
 class TypesetView {
   /** Whether the caret is being followed: ProseMirror scrolled it into
    *  view since it last moved (a keystroke, an arrow, a command), not a
@@ -2503,17 +2516,7 @@ class TypesetView {
     // ink cache holds Typst's own SVG for each formula — its text layer IS
     // that rendering. Absent ink (still compiling) falls back to the
     // unknown-atom heuristic.
-    const inkText = (src: string, bold: boolean): string | undefined => {
-      const ink = getInk(inkKey(src, false, settings, bold));
-      if (!ink) return undefined;
-      const div = parseTypstSvg(ink.svg);
-      const text = [...div.querySelectorAll('.tsel')]
-        .map((t) => t.textContent ?? '')
-        .join('')
-        .replace(/\s+/g, ' ')
-        .trim();
-      return text || undefined;
-    };
+    const formulaText = (src: string, bold: boolean) => inkText(inkKey(src, false, settings, bold));
     // Citation order and footnote numbering are whole-document walks; a
     // live pass over an atom-free paragraph must not pay for them, so both
     // resolve lazily on the first atom that needs them.
@@ -2540,7 +2543,7 @@ class TypesetView {
           // same context the exporter's `*…*` run and the ink use.
           const bold = child.marks.some((m) => m.type.name === 'strong');
           const mi = '#mi(`' + expandMacrosWith(child.attrs.src as string, macros) + '`)';
-          return { markup: bold ? `#strong[${mi}]` : mi, text: inkText(child.attrs.src as string, bold) };
+          return { markup: bold ? `#strong[${mi}]` : mi, text: formulaText(child.attrs.src as string, bold) };
         }
         // Raw Typst passes through verbatim — it IS Typst markup. Its
         // printed text is unknown (usually none: rules, spacers), so the
@@ -2893,7 +2896,10 @@ class TypesetView {
     // From here on synchronous: the paper at its own size throughout.
     return atPaperSize(() => {
       const t1 = performance.now();
-      const typst = auditSvg(svg, state.doc, settings, this.atomResolver());
+      // Display math prints its ink's glyphs: a grid cell joined onto an
+      // equation beside it ends where they begin.
+      const printed = (node: PMNode) => (node.type.name === 'math_display' ? inkText(inkKeyFor(node, settings)) : undefined);
+      const typst = auditSvg(svg, state.doc, settings, this.atomResolver(), printed);
       const analyzeMs = performance.now() - t1;
       // The local paginator's answer for the document as painted: a
       // prediction-only pass, identical to the one that installed the pages.
