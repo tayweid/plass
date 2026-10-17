@@ -1099,14 +1099,16 @@ function showHelp(fm: FileManager) {
       <div class="bib-editor-head"><span>Markdown &amp; shortcuts</span></div>
       <div class="help-grid">
         <code># ## ###</code><span>headings (⌘⌥1–3 · ⌘⌥0 back to text)</span>
-        <code>**bold** *italic* \`code\`</code><span>inline styles (⌘B / ⌘I / ⌘\`)</span>
-        <code>- item · 1. item</code><span>lists (Tab / ⇧Tab to nest)</span>
+        <code>**bold** *italic* ~~strike~~ \`code\`</code><span>inline styles (⌘B / ⌘I / ⌘⇧X / ⌘\`)</span>
+        <code>- item · 1. item</code><span>bulleted · numbered list (⌘⇧8 / ⌘⇧9); ⌘⇧7 tight or loose items; Tab / ⇧Tab to nest</span>
         <code>&gt; quote · \`\`\`</code><span>block quote · code block</span>
         <code>$x^2$ · $$</code><span>inline math · display equation (⌘M / ⌘⇧M)</span>
         <code>@</code><span>reference or cite — picker lists equations, figures, tables, sections, works</span>
         <code>^[note] · \\footnote{…}</code><span>footnotes (⌘⌥F); ] or Enter exits</span>
         <code>⌘⌥T · ⌘⌥I · ⌘⏎</code><span>insert table · insert figure · page break</span>
         <code>⌘O ⌘S</code><span>open · save (first save picks the paper's folder)</span>
+        <code>⌘E</code><span>export PDF (the arrow beside Export: Markdown, Typst, LaTeX)</span>
+        <code>⌘/</code><span>switch between the page and plain text</span>
       </div>
       <div class="bib-editor-foot">
         <span class="bib-editor-hint"><kbd>Esc</kbd> to close</span>
