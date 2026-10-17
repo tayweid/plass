@@ -252,7 +252,7 @@ export function parSpacingEm(s: DocSettings): number {
 /** A paragraph's margin-bottom on the page, body em (`--par-margin`,
  *  settings.ts): classic (indented) paragraphs flow with no extra gap, so
  *  their spacing is the leading. */
-function parMarginEm(s: DocSettings): number {
+export function parMarginEm(s: Pick<DocSettings, 'parIndent'>): number {
   return s.parIndent ? 0 : 0.9;
 }
 
