@@ -53,45 +53,49 @@ function typstBaselines(svg: string): number[][] {
 
 /** One paragraph of 40 sentences at a top margin of `marginTop` in; with
  *  `bold`, three words of every sentence strong, which puts a bold word on
- *  every line, the last one ("draft.") included. */
-async function paragraphAt(page: Page, marginTop: number, bold = false) {
+ *  every line, the last one ("draft.") included; with `code`, the same
+ *  three words inline code. `type` is the size and line spacing. */
+async function paragraphAt(page: Page, marginTop: number, mark: 'strong' | 'code' | null = null, type: { sizePt?: number; lineHeight?: number } = {}) {
   await page.goto('/?new=1');
-  await page.evaluate(({ sentence, marginTop, bold }) => {
+  await page.evaluate(({ sentence, marginTop, mark, type }) => {
     const { state } = window.view;
     const { schema } = state;
-    const strong = schema.marks.strong.create();
-    const parts = bold
+    const marked = mark && schema.marks[mark].create();
+    const parts = marked
       ? Array.from({ length: 40 }, () => sentence.split(/(committee|proposal|draft)/)).flat().filter(Boolean)
       : [sentence.repeat(40)];
     const nodes = parts.map((part, i) => {
       const text = i === parts.length - 1 ? part.trimEnd() : part;
-      return /^(committee|proposal|draft)$/.test(text) ? schema.text(text, [strong]) : schema.text(text);
+      return marked && /^(committee|proposal|draft)$/.test(text) ? schema.text(text, [marked]) : schema.text(text);
     });
     const tr = state.tr.replaceWith(0, state.doc.content.size, schema.nodes.paragraph.create(null, nodes));
-    tr.setDocAttribute('settings', { ...state.doc.attrs.settings, marginTop, marginRight: 1, marginBottom: 1, marginLeft: 1 });
+    tr.setDocAttribute('settings', { ...state.doc.attrs.settings, ...type, marginTop, marginRight: 1, marginBottom: 1, marginLeft: 1 });
     window.view.dispatch(tr);
-  }, { sentence: SENTENCE, marginTop, bold });
+  }, { sentence: SENTENCE, marginTop, mark, type });
   await settleLocal(page, 0);
 }
 
 /** The painted line tops, by sheet (a word whose caret top moved starts a
- *  line), and whether each line holds bold: a fragment of a strong run's
- *  box on it, the tail of a hyphenated bold word included. */
+ *  line; a word in inline code is not read, its caret is the mono face's),
+ *  and whether each line holds bold: a fragment of a strong run's box on
+ *  it, the tail of a hyphenated bold word included. */
 async function paintedLines(page: Page) {
   return page.evaluate(() => {
     const view = window.view;
     const sheets = [...document.querySelectorAll<HTMLElement>('#pages .page-box')].map((el) => el.getBoundingClientRect().top);
     const out: Array<Array<{ top: number; bold: boolean }>> = sheets.map(() => []);
-    const text = view.state.doc.textContent;
     let last = Number.NEGATIVE_INFINITY;
-    for (const m of text.matchAll(/\S+/g)) {
-      const top = view.coordsAtPos(1 + m.index!, 1).top;
-      if (Math.abs(top - last) > 2) {
-        const k = sheets.findLastIndex((s) => top >= s);
-        out[k].push({ top: top - sheets[k], bold: false });
+    view.state.doc.descendants((node, pos) => {
+      if (!node.isText || node.marks.some((m) => m.type.name === 'code')) return;
+      for (const m of node.text!.matchAll(/\S+/g)) {
+        const top = view.coordsAtPos(pos + m.index!, 1).top;
+        if (Math.abs(top - last) > 2) {
+          const k = sheets.findLastIndex((s) => top >= s);
+          out[k].push({ top: top - sheets[k], bold: false });
+        }
+        last = top;
       }
-      last = top;
-    }
+    });
     const boldTops = [...view.dom.querySelectorAll('strong')].flatMap((el) => [...el.getClientRects()].map((r) => r.top));
     out.forEach((lines, k) => {
       for (const line of lines) line.bold = boldTops.some((top) => Math.abs(top - sheets[k] - line.top) < 3);
@@ -109,7 +113,7 @@ async function paintedLines(page: Page) {
 for (const bold of [false, true]) {
   test(`Typst pitches body lines${bold ? ' holding bold' : ''} at the line height the page paints`, async ({ page }) => {
     test.setTimeout(90_000);
-    await paragraphAt(page, 1, bold);
+    await paragraphAt(page, 1, bold ? 'strong' : null);
     const svg = await page.evaluate(() => window.__tableProofSvg());
     if (!svg) throw new Error('Typst compile failed');
     const painted = await paintedLines(page);
@@ -128,6 +132,61 @@ for (const bold of [false, true]) {
     }
   });
 }
+
+// Chrome lays a `line-height: <number>` line box at the font size rounded
+// to a layout unit (1/64 px), times the number, floored. At 10 pt (13.333
+// px, laid as 13.328125) a line spacing of 1.5 made every line box
+// 19.984375 px against Typst's 20, and at 13 pt 25.984375 against 26: the
+// page's lines crept up against the print, 0.6 px by a 10 pt page's 40th
+// line, and every offered spacing at 10 and 13 pt lost 1/64 px or more a
+// line. The body's line height is a length now (style.css), which Chrome
+// lays at the nearest layout unit: exact where Typst's pitch is a whole
+// number of units (1.5 at every offered size), within 1/128 px a line
+// elsewhere. 12.5 pt at 1.3 was already the nearest, 21.671875 against
+// 21.6667 (0.2 px by the 40th line): no uniform line box does better.
+for (const [sizePt, lineHeight] of [
+  [10, 1.5],
+  [13, 1.5],
+  [10, 1.3],
+  [13, 1.8],
+  [12.5, 1.3],
+]) {
+  test(`at ${sizePt} pt, line spacing ${lineHeight}, every line box is the layout unit nearest Typst's pitch`, async ({ page }) => {
+    test.setTimeout(90_000);
+    await paragraphAt(page, 1, null, { sizePt, lineHeight });
+    const svg = await page.evaluate(() => window.__tableProofSvg());
+    if (!svg) throw new Error('Typst compile failed');
+    const painted = (await paintedLines(page))[0].map((l) => l.top);
+    const contentBottomPt = 11 * 72 - 72;
+    const typst = typstBaselines(svg)[0].filter((y) => y <= contentBottomPt).map((y) => (y * 4) / 3);
+    expect(typst.length).toBe(painted.length);
+    expect(painted.length).toBeGreaterThanOrEqual(25);
+    // Typst pitches the line height exactly (the SVG prints 0.001 pt).
+    const pitch = (typst.at(-1)! - typst[0]) / (typst.length - 1);
+    expect(pitch).toBeCloseTo((lineHeight * sizePt * 4) / 3, 3);
+    const unit = Math.round(pitch * 64) / 64;
+    const boxes = painted.slice(1).map((top, k) => top - painted[k]);
+    expect([...new Set(boxes)]).toEqual([unit]);
+    // The lines leave the print by that rounding and no more.
+    const offsets = typst.map((y, k) => y - painted[k]);
+    const drift = offsets.at(-1)! - offsets[0];
+    expect(Math.abs(drift), offsets.map((o) => o.toFixed(4)).join(' ')).toBeLessThanOrEqual((painted.length - 1) * Math.abs(unit - pitch) + 0.005);
+  });
+}
+
+// Inline code is out of the line box (`line-height: 0`). Had it inherited
+// the body's length, the mono face's box (ascent less descent 0.55 em of
+// its size, against the body face's 0.84 em) would sit lower on the line
+// and hang below it, every line holding code 2 px taller at 13 pt
+// (tests/inline-code-line.spec.ts for every other place code sits).
+test('a body line holding inline code is the same layout unit', async ({ page }) => {
+  test.setTimeout(90_000);
+  await paragraphAt(page, 1, 'code', { sizePt: 13, lineHeight: 1.5 });
+  const painted = (await paintedLines(page))[0].map((l) => l.top);
+  expect(painted.length).toBeGreaterThanOrEqual(25);
+  const boxes = painted.slice(1).map((top, k) => top - painted[k]);
+  expect([...new Set(boxes)]).toEqual([26]);
+});
 
 // Where the page bottom falls a fraction of a pixel from a line, the page
 // breaks where Typst does. At a top margin of 1.0266 in the 35th line fits
@@ -150,7 +209,7 @@ for (const { marginTop, startsPage2, bold } of [
 ]) {
   test(`a page bottom at a ${marginTop} in top margin breaks where Typst breaks it${bold ? ', bold on every line' : ''}`, async ({ page }) => {
     test.setTimeout(90_000);
-    await paragraphAt(page, marginTop, bold);
+    await paragraphAt(page, marginTop, bold ? 'strong' : null);
     const report = await page.evaluate(() => window.__audit());
     if (!report) throw new Error('port audit: Typst compile failed');
     expect(report.pages.agree, JSON.stringify(report.pages.firstDiff)).toBe(true);

@@ -1261,7 +1261,15 @@ body {
   position: relative; /* positioning context for footnote bodies */
   font-family: var(--doc-font, var(--serif));
   font-size: var(--doc-size, 12.5pt);
-  line-height: var(--doc-line, 1.5);
+  /* A length, not the number: Chrome lays a length line height at the
+     nearest layout unit (1/64 px), but a number at the font size rounded to
+     a layout unit times the number, floored, and at 10 and 13 pt that left
+     every line box 1/64 px or more short of Typst's pitch (13.333 px is
+     13.328125, and 1.5 times it 19.984375). The computed value is still
+     the exact pitch, which is what the paginator reads (`blockLineHeight`).
+     Inline code, inline raw and a formula's placeholder are out of the
+     line box whatever it is (`line-height: 0`, `.ProseMirror code`). */
+  line-height: calc(var(--doc-line, 1.5) * 1em);
   color: var(--ink);
   /* The oracle owns layout: no browser justification, no browser hyphens. */
   text-align: left;
@@ -3092,6 +3100,8 @@ body {
   top: var(--eqnum-center, 50%);
   transform: translateY(-50%);
   font-size: 0.95em;
+  /* Its own size's line, not the body's length (.ProseMirror). */
+  line-height: var(--doc-line, 1.5);
   color: #333;
   pointer-events: none;
 }

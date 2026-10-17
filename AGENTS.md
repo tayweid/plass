@@ -261,6 +261,11 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   solution block is Auto spacing, a paragraph run. Line k of
   a paragraph is at the paragraph's top plus k line-heights (never the
   caret box: Chrome rounds its height, and Typst's line pitch is exact).
+  The body's line height is a length, `calc(var(--doc-line) * 1em)`:
+  Chrome lays a length line height at the nearest 1/64 px and reports the
+  exact one, but a number at the font size rounded to 1/64 px times the
+  number, floored (every line 1/64 px short at 10 and 13 pt). Inline code
+  and raw inherit none of it (`line-height: 0`, above).
   Block measures are fractional (`getBoundingClientRect`, never
   `clientWidth`): a 5.5in page less 0.6in margins is 412.8px.
 - Headings are port-laid like paragraphs (bold base face, level scale,
