@@ -1493,12 +1493,14 @@ body {
    are New Computer Modern's values. Markers are painted out of flow, so the
    body measure is exactly Typst's: a bullet at the column's left edge, an
    enum label at its right (Typst's number-align: end), "9." under "10.".
-   The margin is the fixed 0.9em in layout units (--block-margin,
-   settings.ts), in both paragraph modes. */
+   A list is spaced from its neighbours as a paragraph is (Typst's Auto
+   spacing), so its margin is the paragraph's (--par-margin, settings.ts):
+   0.9em, none with indented paragraphs, where Typst spaces it by the
+   leading alone. */
 .ProseMirror ul,
 .ProseMirror ol {
   padding-left: var(--list-indent-1, 1.278em);
-  margin: 0 0 var(--block-margin, 0.9em);
+  margin: 0 0 var(--par-margin, 0.9em);
   list-style: none;
 }
 
@@ -1603,8 +1605,8 @@ body {
 
 /* A loose list (blank lines between its items in the file): Typst spaces
    the items by paragraph spacing instead of the list's item pitch. The
-   last item keeps the tight margin so the spacing after the list is the
-   same either way. */
+   last item has no margin in either kind (below), so the spacing after
+   the list is the same either way. */
 .ProseMirror ul[data-tight='0'] > li:not(:last-child) > p:last-child,
 .ProseMirror ol[data-tight='0'] > li:not(:last-child) > p:last-child {
   margin-bottom: var(--par-margin, 0.9em);
@@ -1616,7 +1618,25 @@ body {
    after it — the next outer item follows at the item spacing. */
 .ProseMirror li > ul,
 .ProseMirror li > ol {
-  margin: var(--block-margin, 0.9em) 0 0;
+  margin: var(--par-margin, 0.9em) 0 0;
+}
+
+/* The 0.25em is spacing between items, and Typst puts none after a list's
+   last one: the list ends at its last line, and the spacing after it is
+   the list's own. (It used to collapse into the list's 0.9em; with
+   indented paragraphs that margin is none, and the 0.25em was left.) A
+   nested list that ends an item before the last carries the outer list's
+   item spacing instead, a loose list's paragraph spacing. */
+.ProseMirror li:last-child > p:last-child {
+  margin-bottom: 0;
+}
+
+.ProseMirror li:not(:last-child) > :is(ul, ol):last-child {
+  margin-bottom: var(--list-item-gap, 0.25em);
+}
+
+.ProseMirror :is(ul, ol)[data-tight='0'] > li:not(:last-child) > :is(ul, ol):last-child {
+  margin-bottom: var(--par-margin, 0.9em);
 }
 
 .ProseMirror code {

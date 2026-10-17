@@ -116,19 +116,23 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      0.3 % small.
    - Classic (indented) paragraphs: headings and display equations print at
      the page's gap since 2026-10-16 (the spacing above them carried the
-     spaced mode's 0.9 em margin). The blocks with a fixed 0.9 em margin
-     carry it the same way (measured 2026-10-16 at 12.5 pt against the
-     audit's SVG): Typst spaces a list, a nested list, a figure, the
-     abstract and the bibliography from their neighbours by the leading
-     alone in classic mode, and the page adds 0.9 em, so the line after a
-     list (or the first line of a nested list, or the line after any of
-     the others) is 15 px lower on the page than in print, and a classic
-     page holding lists breaks later than Typst's. Quotes and code blocks
-     agree (their boxes read the mode's paragraph spacing). Not changed
-     yet: classic spacing is to be written up first. The fix publishes
-     those margins from `parMarginEm` (0 in classic mode), and a tight
-     list's last item would then need its 0.25 em margin dropped too
-     (today it collapses into the list's 0.9 em).
+     spaced mode's 0.9 em margin). Lists followed the same day: Typst
+     spaces a list and a nested list from their neighbours by the leading
+     alone in classic mode, as it spaces a paragraph, and the page added
+     0.9 em, so the line after a list, the first line of a nested list and
+     a heading after a list were 15 px lower than in print, and a classic
+     page holding lists broke later than Typst's (audit fixture
+     `lists-classic.md`: 7 pages against 6, from page 3). A list's margins
+     are the paragraph's now (`--par-margin`), its last item has no 0.25 em
+     (that collapsed into the 0.9 em), and a nested list that ends an item
+     before the last carries the outer list's item spacing: a loose list's
+     is paragraph spacing, which the page had at the tight 0.25 em in
+     either mode (spaced, the next item was 10.8 px higher than print).
+     Still at the fixed 0.9 em in classic mode: a figure, the abstract and
+     the bibliography (the line after each 15 px lower than print; their
+     own boxes are the next item), and a list that ends a quote (its
+     margin there is the quote rule's; the quote item below). Quotes and
+     code blocks agree.
    - Blocks the page lays out off their print, found while putting their
      margins in layout units (2026-10-16, 12.5 pt, spaced, against the
      audit's SVG; none is in an audit fixture). A figure (a 120×80 image

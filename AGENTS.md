@@ -275,7 +275,11 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   the document's `#set list(spacing:)`), loose (blank lines between items
   in either format) = paragraph spacing, exported as a set/restore pair
   around the list; a paragraph followed by another block inside an item
-  is at paragraph spacing.
+  is at paragraph spacing. A list (and a nested list) is spaced from its
+  neighbours as a paragraph is: its margins are `--par-margin`, none with
+  indented paragraphs. The item gap is between items only: the last item
+  has none, and a nested list that ends an item before the last carries
+  the outer list's item spacing.
   Enter on an empty item exits the list (`src/list-enter.ts`): the
   paragraph and whatever blocks follow it in the item leave the list one
   level up, cutting it in half, and a lifted sub-list of the second

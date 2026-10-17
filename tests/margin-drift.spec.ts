@@ -213,6 +213,46 @@ test('a tight list item is the nearest layout unit to its pitch, and a list, a n
   for (const [i, row] of d.entries()) expect(Math.abs(row.drift - gaps[i] * item), `${row.kind}: ${JSON.stringify(d)}`).toBeLessThan(0.003);
 });
 
+// A list is spaced from its neighbours as a paragraph is (Typst's Auto
+// spacing): in classic mode by the leading alone, so a list's margin, and a
+// nested list's above it, is the paragraph's, none there. A tight item's
+// 0.25em is spacing between items: where a list ends there is none, and a
+// nested list that ends an item before the last carries the outer list's
+// item spacing, a loose list's paragraph spacing. In classic mode the page
+// put the line after a list, the first line of a nested list and a heading
+// after a list 15 px lower than the print; in either mode a loose list's
+// item after one ending in a nested list was at the tight item spacing
+// (spaced 10.8 px higher than the print, classic 4.2 px lower).
+for (const parIndent of [false, true]) {
+  test(`${parIndent ? 'classic' : 'spaced'}: a list's end, a nested list and a loose list's items land on the print`, async ({ page }) => {
+    test.setTimeout(90_000);
+    const loose = (...items: unknown[]) => ({ ...ul(...items), attrs: { tight: false } });
+    const d = await blocksDrift(
+      page,
+      [
+        p('Before the lists.'),
+        ul(li(p('One.')), li(p('Two.'), ul(li(p('Two a.')), li(p('Two b.')))), li(p('Three.'))),
+        p('After the first list.'),
+        ol(li(p('First.')), li(p('Second.'), ul(li(p('Second a.'))))),
+        p('After the second list.'),
+        loose(li(p('Loose one.'), ul(li(p('Loose one a.')))), li(p('Loose two.'))),
+        p('After the loose list.'),
+        ul(li(p('The last item.'))),
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'A heading' }] },
+        p('After the heading.'),
+      ],
+      parIndent,
+    );
+    const item = layoutPx(0.25 * BODY_PX) - 0.25 * BODY_PX;
+    // Tight item gaps above each paragraph: Before, One, Two, Two a, Two b,
+    // Three, After, First, Second, Second a, After, Loose one, Loose one a,
+    // Loose two, After, The last item, After the heading.
+    const gaps = [0, 0, 1, 1, 2, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4];
+    expect(d).toHaveLength(gaps.length);
+    for (const [i, row] of d.entries()) expect(Math.abs(row.drift - gaps[i] * item), `${row.kind}: ${JSON.stringify(d)}`).toBeLessThan(0.003);
+  });
+}
+
 for (const parIndent of [false, true]) {
   test(`${parIndent ? 'classic' : 'spaced'}: a quote's spacing ends within a layout unit of the print`, async ({ page }) => {
     test.setTimeout(90_000);

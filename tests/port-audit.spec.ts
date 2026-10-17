@@ -176,6 +176,53 @@ FIXTURES.push({
 });
 
 FIXTURES.push({
+  // Lists with indented (classic) paragraphs: spaced from their neighbours
+  // by the leading alone, as a paragraph is (the page added 0.9em after
+  // every list and over every nested list, and broke a page later than
+  // Typst from page 3). Tight lists, a nested list in the middle and at the
+  // end, an enum, a loose list whose first item ends in a nested list,
+  // headings after them.
+  name: 'lists-classic.md',
+  text: [
+    '---',
+    'indent: true',
+    '---',
+    '',
+    '# Classic lists',
+    '',
+    ...Array.from({ length: 4 }, (_, k) => [
+      FILLER.repeat(3).trimEnd(),
+      '',
+      FILLER.repeat(2).trimEnd(),
+      '',
+      '- ' + FILLER.trimEnd(),
+      '- ' + FILLER.repeat(2).trimEnd(),
+      '  - ' + FILLER.trimEnd(),
+      '  - ' + FILLER.trimEnd(),
+      '- ' + FILLER.trimEnd(),
+      '',
+      FILLER.repeat(2).trimEnd(),
+      '',
+      '1. ' + FILLER.trimEnd(),
+      '2. ' + FILLER.repeat(2).trimEnd(),
+      '    - ' + FILLER.trimEnd(),
+      '',
+      FILLER.trimEnd(),
+      '',
+      '- ' + FILLER.trimEnd(),
+      '  - ' + FILLER.trimEnd(),
+      '',
+      '- ' + FILLER.trimEnd(),
+      '',
+      `## Section ${k + 1}`,
+      '',
+      FILLER.repeat(2).trimEnd(),
+      '',
+    ]).flat(),
+  ].join('\n'),
+});
+
+FIXTURES.push({
   // Numbered lists that start past 1: each prints from its start, its label
   // column as wide as its last label (9 to 10, 98 to 100, 2026), a list
   // from 0, a nested list with its own start, one long enough to cross a
