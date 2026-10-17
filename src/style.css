@@ -1261,7 +1261,14 @@ body {
   position: relative; /* positioning context for footnote bodies */
   font-family: var(--doc-font, var(--serif));
   font-size: var(--doc-size, 12.5pt);
-  line-height: var(--doc-line, 1.5);
+  /* A length, not the number: Chrome lays a length line height at the
+     nearest layout unit (1/64 px), but a number at the font size rounded to
+     a layout unit times the number, floored, and at 10 and 13 pt that left
+     every line box 1/64 px or more short of Typst's pitch (13.333 px is
+     13.328125, and 1.5 times it 19.984375). The computed value is still
+     the exact pitch, which is what the paginator reads (`blockLineHeight`).
+     Inline code keeps the number (below). */
+  line-height: calc(var(--doc-line, 1.5) * 1em);
   color: var(--ink);
   /* The oracle owns layout: no browser justification, no browser hyphens. */
   text-align: left;
@@ -1625,6 +1632,22 @@ body {
   padding: 0.1em 0.2em;
   margin: 0 -0.2em;
   border-radius: 3px;
+}
+
+/* Inline code, inline raw and a formula's placeholder keep the document's
+   line spacing as a number, on their own size. The body's line height is a
+   length (.ProseMirror), and inherited as one it centers the mono face's
+   box on the whole line height: that face's ascent less descent is 0.55 em
+   of its size against the body face's 0.84, so the box sat lower than the
+   line's and hung below it, 2 px taller lines at 10 pt. Where an ancestor
+   sets its own line height (a heading, the title, a code block, a table,
+   a footnote) they inherit it, as they always have. */
+.ProseMirror :where(code, .ts-inline-raw, .math-placeholder) {
+  line-height: var(--doc-line, 1.5);
+}
+
+.ProseMirror :where(h1, h2, h3, h4, h5, h6, .ts-doctitle, pre, table, .fn-body) :where(code, .ts-inline-raw, .math-placeholder) {
+  line-height: inherit;
 }
 
 /* Code blocks — plain fences and islands alike — mirror Typst's raw block:
@@ -3044,6 +3067,8 @@ body {
   top: var(--eqnum-center, 50%);
   transform: translateY(-50%);
   font-size: 0.95em;
+  /* Its own size's line, not the body's length (.ProseMirror). */
+  line-height: var(--doc-line, 1.5);
   color: #333;
   pointer-events: none;
 }

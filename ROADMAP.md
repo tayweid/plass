@@ -73,7 +73,22 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      did (a list item's 0.25em margin; every 0.9em margin, a paragraph's
      and a display equation's, at 12.5 pt too: 14.984375 px, measured
      2026-10-16, so a spaced page's paragraphs drift up by 1/64 px a
-     gap); each could be published snapped the same way.
+     gap); each could be published snapped the same way. The body's line
+     box is the layout unit nearest Typst's pitch since 2026-10-16
+     (tests/line-pitch.spec.ts): Chrome lays `line-height: 1.5` at the
+     font size rounded to 1/64 px times 1.5, floored, so at 10 and 13 pt
+     every line box was 1/64 px or more short at every offered spacing
+     (19.984375 and 25.984375 px at 1.5), 0.6 px by a 10 pt page's 40th
+     line. The line height is a length now (`calc(var(--doc-line) *
+     1em)`), which Chrome rounds to the nearest unit, and inline code keeps
+     the ratio, so no inline box changes. Exact where Typst's pitch is a
+     whole number of units (1.5 at every size; 1.65 and 1.8 at 10 and 12.5
+     pt); elsewhere each line keeps its rounding, at most 1/128 px (12.5 pt
+     at 1.3: 21.671875 against 21.6667, 0.2 px by the 40th line), which
+     only boxes that differ line by line could take out. Inline code grows
+     its line, as before: a table row by 2-3 px at every spacing (the cell's
+     line height is a length, which the mono face's box inherits and hangs
+     below), a body line by 0.55 px at 10 pt and line spacing 1.3.
    - The page paints heading ink lower than the print does: Chrome's
      baseline of an H1 is 2.8 px below Typst's, an H2's 1.5 px, an H3's
      1.8 px, while body lines are 0.65 px above (measured 2026-10-16 at
