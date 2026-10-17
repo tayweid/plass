@@ -497,12 +497,13 @@ FIXTURES.push({
     FILLER.repeat(1).trimEnd() +
     // Short cells side by side: Typst's text layer joins lines that share
     // a baseline with no separator ("Beside.Third.", "abc", a one-line
-    // cell and its neighbour's first line); the matcher splits them back.
+    // cell and its neighbour's first line); the matcher splits them back,
+    // around a code block and an island too ("let x = 1;Beside it.#text…").
     '\n  ],\n)\n\n#grid(\n  columns: (2fr, 1fr, 1fr),\n  gutter: 1em,\n  [\n    ' +
     FILLER.repeat(1).trimEnd() +
     '\n  ],\n  [\n    Beside.\n  ],\n  [\n    Third.\n  ],\n  [\n    a\n  ],\n  [\n    b\n  ],\n  [\n    c\n  ],\n  [\n    One line.\n  ],\n  grid.cell(colspan: 2)[\n    ' +
     FILLER.repeat(1).trimEnd() +
-    '\n  ],\n)\n\n' +
+    '\n  ],\n  [\n    ```\n    let x = 1;\n    ```\n  ],\n  [\n    Beside it.\n  ],\n  [\n    #text(fill: red)[Kept.]\n  ],\n)\n\n' +
     Array.from({ length: 4 }, () => FILLER.repeat(4).trimEnd()).join('\n\n') +
     '\n\n#grid(\n  columns: (1fr, 1fr),\n  gutter: 1em,\n' +
     Array.from({ length: 6 }, (_, i) => `  ${i === 3 ? 'grid.cell(align: right + bottom)' : ''}[\n    ` + FILLER.repeat(2 + (i % 2)).trimEnd() + '\n  ],').join('\n') +
@@ -558,6 +559,25 @@ FIXTURES.push({
 // a data-URL image, labeled and unnumbered equations, a table with math in
 // a .table div, comments at the top level and nested, a page break, a
 // {=typst} block, a {=bibtex} fence, footnotes, a strike and a {++ ++} mark.
+// Markdown grid cells whose lines share a baseline around blocks the
+// matcher does not lay out: text then a display equation (matched by its
+// ink's glyphs), an equation then text, a code block then text.
+{
+  const row = (cells: string[]) =>
+    '::: {.columns gutter=1em}\n' + cells.map((c) => '::: {.column width=50%}\n' + c + '\n:::').join('\n') + '\n:::';
+  FIXTURES.push({
+    name: 'grid-joins.md',
+    text: [
+      '# Grid joins',
+      FILLER.repeat(2).trimEnd(),
+      row(['Beside.', '$$ x^2 + y^2 = z^2 $$']),
+      row(['$$ a + b = c $$', 'Beside it.']),
+      row(['```\nlet x = 1;\n```', 'After the code.']),
+      FILLER.repeat(3).trimEnd(),
+    ].join('\n\n') + '\n',
+  });
+}
+
 FIXTURES.push({ name: 'guide.md', text: readFileSync(new URL('./fixtures/md/guide.md', import.meta.url), 'utf8') });
 
 // tests/environment-fingerprint.spec.ts's document. A quote right after a

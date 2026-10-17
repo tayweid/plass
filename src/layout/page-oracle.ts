@@ -58,6 +58,11 @@ export interface Unit {
   inner?: Unit[];
   /** An inner unit's cell: its index in the grid row. */
   cell?: number;
+  /** The text an opaque block is known to print, whitespace collapsed: a
+   * code block (an island too) its text verbatim, display math the glyphs
+   * of its compiled ink. A grid cell whose last line is joined onto it may
+   * end where this text begins. */
+  lead?: string;
 }
 
 export interface PagedLine extends SvgLine {
@@ -105,8 +110,12 @@ function extractPages(svg: string, yTolPt: number, pageHPt: number): PagedLine[]
   return out;
 }
 
+/** What a block the matcher does not lay out prints, when the caller knows
+ *  (display math: its ink's text layer). */
+export type PrintedText = (node: PMNode) => string | undefined;
+
 /** Build the document's unit list (blocks in reading order). */
-export function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
+export function buildUnits(doc: PMNode, resolveAtom: AtomResolver, printedText?: PrintedText): Unit[] {
   const units: Unit[] = [];
   const push = (node: PMNode, pos: number, marker: boolean | string = false, target: Unit[] = units) => {
     const units = target;
@@ -172,7 +181,9 @@ export function buildUnits(doc: PMNode, resolveAtom: AtomResolver): Unit[] {
         units.push({ kind: 'opaque', pos: rowPos, type: 'grid_row', inner });
       });
     } else {
-      units.push({ kind: 'opaque', pos, type: node.type.name });
+      const printed = node.type.name === 'code_block' ? node.textContent : printedText?.(node);
+      const lead = printed?.replace(/\s+/g, ' ').trim();
+      units.push({ kind: 'opaque', pos, type: node.type.name, ...(lead ? { lead } : {}) });
     }
   };
   // Editorial comments are not printed: the compile omits them, so the
@@ -256,6 +267,10 @@ export function stripListMarker(text: string, marker: boolean | string | undefin
 export interface Anchor {
   text: string;
   marker?: boolean | string;
+  /** `text` is a block's whole printed text (a code block's, an
+   * equation's: a Unit's `lead`), which may wrap anywhere: a line matches
+   * when it starts with that text or holds the start of it. */
+  lead?: boolean;
 }
 
 /**
@@ -269,6 +284,7 @@ export interface Anchor {
 export function matchesAnchor(lineText: string, anchor: Anchor | null): boolean {
   if (!anchor) return false;
   const text = stripListMarker(lineText.replace(/\s+/g, ' ').trim(), anchor.marker);
+  if (anchor.lead) return text !== '' && (text.startsWith(anchor.text) || anchor.text.startsWith(text));
   return text === anchor.text || text.startsWith(anchor.text + ' ') || text.startsWith(anchor.text);
 }
 
@@ -329,6 +345,7 @@ function analyze(
   doc: PMNode,
   settings: DocSettings,
   resolveAtom: AtomResolver,
+  printedText?: PrintedText,
   audit?: UnitAudit[],
   marginals?: Marginal[],
 ): PageOracleEntry {
@@ -353,18 +370,12 @@ function analyze(
     else all.push(l);
   }
 
-  const units = buildUnits(doc, resolveAtom);
+  const units = buildUnits(doc, resolveAtom, printedText);
   const lines = stripFootnoteLines(all, footnoteHeads(doc));
   const matched = matchPageStarts(units, lines, audit);
   return { ...matched, pageCount };
 }
 
-/**
- * Walk the document's units against the per-page text lines and record
- * the (block, line-or-row) that starts every page. Pure: exported so the
- * matcher's unit rules (paragraph lines, opaque resync, table rows) are
- * testable without a compiled SVG.
- */
 export interface UnitAudit {
   pos: number;
   type: string;
@@ -374,7 +385,33 @@ export interface UnitAudit {
   reason?: string;
 }
 
+/**
+ * Walk the document's units against the per-page text lines and record
+ * the (block, line-or-row) that starts every page. Pure: exported so the
+ * matcher's unit rules (paragraph lines, opaque resync, table rows) are
+ * testable without a compiled SVG.
+ */
 export function matchPageStarts(units: Unit[], typstLines: PagedLine[], audit?: UnitAudit[]): PageOracleEntry {
+  const entry = walkUnits(units, typstLines, audit);
+  if (audit) noteUnreached(units, audit);
+  return entry;
+}
+
+/** A text block the walk never reached is a failure, never a silent gap
+ * in the audit: the text layer ran out before it, or a resync ran past it. */
+function noteUnreached(units: Unit[], audit: UnitAudit[]) {
+  const seen = new Set(audit.map((a) => a.pos));
+  const visit = (u: Unit) => {
+    if ((u.kind === 'exact' || u.kind === 'table') && !seen.has(u.pos)) {
+      audit.push({ pos: u.pos, type: u.type, status: 'fail', reason: 'not reached: no Typst lines were left for it' });
+    }
+    u.inner?.forEach(visit);
+  };
+  units.forEach(visit);
+  audit.sort((a, b) => a.pos - b.pos);
+}
+
+function walkUnits(units: Unit[], typstLines: PagedLine[], audit?: UnitAudit[]): PageOracleEntry {
   // A grid row's joined baseline run is split in place (below): a copy.
   const lines = typstLines.slice();
   const pageStarts: PageStart[] = [];
@@ -412,35 +449,32 @@ export function matchPageStarts(units: Unit[], typstLines: PagedLine[], audit?: 
     }
     return undefined;
   };
+  /** A unit's anchor: its first two known words, with its marker. A grid
+   * row prints its first cell first, so its anchor is the first block in it
+   * that prints known text, a code block or an equation included. */
+  const anchorOf = (u: Unit): Anchor | null => {
+    if (u.inner) {
+      for (const v of u.inner) {
+        if (v.lead) return { text: v.lead, lead: true };
+        const anchor = anchorOf(v);
+        if (anchor) return anchor;
+      }
+      return null;
+    }
+    const words = firstSpec(u)?.tokens.filter((t) => t.text).slice(0, 2) ?? [];
+    if (!words.length) return null;
+    // A row's cells merge without a separator in the text layer.
+    const joiner = u.kind === 'table' && words[1] && !words[1].spaceBefore ? '' : ' ';
+    return { text: words.map((t) => t.text).join(joiner), marker: u.marker };
+  };
   const anchorFrom = (list: Unit[], idx: number, fallback: Anchor | null): Anchor | null => {
     for (let j = idx; j < list.length; j++) {
-      const u = list[j];
-      const spec = firstSpec(u);
-      if (spec) {
-        const words = spec.tokens.filter((t) => t.text).slice(0, 2);
-        if (words.length) {
-          const joiner = u.kind === 'table' && words[1] && !words[1].spaceBefore ? '' : ' ';
-          return { text: words.map((t) => t.text).join(joiner), marker: u.marker };
-        }
-      }
+      const anchor = anchorOf(list[j]);
+      if (anchor) return anchor;
     }
     return fallback;
   };
-  const anchorFor = (idx: number): Anchor | null => {
-    for (let j = idx; j < units.length; j++) {
-      const u = units[j];
-      const spec = firstSpec(u);
-      if (spec) {
-        const words = spec.tokens.filter((t) => t.text).slice(0, 2);
-        if (words.length) {
-          // A row's cells merge without a separator in the text layer.
-          const joiner = u.kind === 'table' && words[1] && !words[1].spaceBefore ? '' : ' ';
-          return { text: words.map((t) => t.text).join(joiner), marker: u.marker };
-        }
-      }
-    }
-    return null;
-  };
+  const anchorFor = (idx: number): Anchor | null => anchorFrom(units, idx, null);
 
   /** Match one table row (or its repeated header) starting at `cursor`;
    * every line it consumes must sit on one page — a row split across pages
@@ -531,29 +565,76 @@ export function matchPageStarts(units: Unit[], typstLines: PagedLine[], audit?: 
       // can carry the next cell's first ("Beside.Third.", "abc" for cells
       // a | b | c). A text block (or a table's last row) may therefore end
       // mid-line when what is left starts a later cell; that rest becomes
-      // the line the next block is matched on.
+      // the line the next block is matched on. A block whose text is not
+      // predicted (a code block, an island, display math) or that failed to
+      // match can end mid-line the same way: see consumeTo.
       const rowStart = cursor;
+      const rowPage = lines[cursor].page;
       const after = anchorFor(ui + 1);
       const inner = unit.inner;
+      /** The first block from `from` on with text to anchor on, or -1. */
+      const ownerFrom = (from: number) => {
+        for (let j = from; j < inner.length; j++) if (anchorOf(inner[j])) return j;
+        return -1;
+      };
+      /** Block j may end mid-line when the rest starts a later cell: with
+       * that cell's anchor, or with a code block's text (all of it, or as
+       * much as fits the line: raw text wraps anywhere a narrow cell makes
+       * it); blocks that print nothing known are passed over. */
+      const tailOf = (j: number) => {
+        const later = inner.findIndex((v, k) => k > j && v.cell !== inner[j].cell);
+        for (let k = later < 0 ? inner.length : later; k < inner.length; k++) {
+          const lead = inner[k].lead;
+          const anchor = lead ? { text: lead, lead: true } : anchorOf(inner[k]);
+          if (anchor) return (rest: string) => matchesAnchor(rest, anchor);
+        }
+        return undefined;
+      };
+      /** Whether block j matches exactly with line `at` read as `text`. */
+      const matchesAt = (j: number, at: number, text: string) => {
+        const v = inner[j];
+        const spec = v.kind === 'exact' ? v.spec : v.rows?.[0];
+        if (!spec) return false;
+        const slice = [{ ...lines[at], text: stripListMarker(text, v.marker) }, ...lines.slice(at + 1)];
+        const tail = v.kind === 'exact' || v.rows?.length === 1 ? tailOf(j) : undefined;
+        return matchParagraph(spec, slice, 0, undefined, tail).status === 'ok';
+      };
       for (let ii = 0; ii < inner.length && cursor < lines.length; ii++) {
         const u = inner[ii];
         const next = anchorFrom(inner, ii + 1, after);
-        const laterCell = inner.findIndex((v, j) => j > ii && v.cell !== u.cell);
-        const beside = laterCell < 0 ? null : anchorFrom(inner, laterCell, null);
-        const tail = beside ? (rest: string) => matchesAnchor(rest, beside) : undefined;
+        const tail = tailOf(ii);
         /** Note the lines a match consumed; a rest stays on the line for the next block. */
         const took = (res: { next: number; rest?: string }) => {
           for (let k = 0; k < res.next; k++) notePage(cursor + k, unit, cursor + k - rowStart);
           cursor += res.next;
           if (res.rest !== undefined) lines[cursor] = { ...lines[cursor], text: res.rest };
         };
+        /** Consume this block's lines up to the next block with text: the
+         * first line, `atLeast` on, that starts with its anchor. When that
+         * block sits in a later cell its first line may instead be joined
+         * onto this block's last ("let x = 1;Beside."); if it does not match
+         * on the anchor's line, the first split on this row's page where it
+         * does (a later line, or a point inside one) is taken instead. */
         const consumeTo = (anchor: Anchor | null, atLeast: number) => {
-          let consumed = 0;
-          while (cursor < lines.length && !(consumed >= atLeast && matchesAnchor(lines[cursor].text, anchor))) {
-            notePage(cursor, unit, cursor - rowStart);
-            cursor++;
-            consumed++;
+          let end = cursor;
+          while (end < lines.length && !(end - cursor >= atLeast && matchesAnchor(lines[end].text, anchor))) end++;
+          let rest: string | undefined;
+          const owner = ownerFrom(ii + 1);
+          if (owner >= 0 && inner[owner].cell !== u.cell && !(end < lines.length && matchesAt(owner, end, lines[end].text))) {
+            search: for (let at = cursor; at < lines.length && lines[at].page === rowPage; at++) {
+              const text = lines[at].text;
+              for (let p = at - cursor >= atLeast ? 0 : 1; p < text.length; p++) {
+                const candidate = text.slice(p);
+                if (matchesAnchor(candidate, anchor) && matchesAt(owner, at, candidate)) {
+                  end = at;
+                  if (p > 0) rest = candidate;
+                  break search;
+                }
+              }
+            }
           }
+          for (; cursor < end; cursor++) notePage(cursor, unit, cursor - rowStart);
+          if (rest !== undefined) lines[cursor] = { ...lines[cursor], text: rest };
         };
         if (u.kind === 'exact' && u.spec) {
           const slice = lines.slice(cursor).map((l, i) => (i === 0 ? { ...l, text: stripListMarker(l.text, u.marker) } : l));
@@ -639,10 +720,10 @@ export interface SvgAudit {
  * going past disagreements. The port audit (tests/port-audit.spec.ts) is
  * the only caller; nothing in the edit loop compiles.
  */
-export function auditSvg(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver): SvgAudit {
+export function auditSvg(svg: string, doc: PMNode, settings: DocSettings, resolveAtom: AtomResolver, printedText?: PrintedText): SvgAudit {
   const units: UnitAudit[] = [];
   const marginals: Marginal[] = [];
-  const entry = analyze(svg, doc, settings, resolveAtom, units, marginals);
+  const entry = analyze(svg, doc, settings, resolveAtom, printedText, units, marginals);
   return {
     status: entry.status,
     reason: entry.reason,

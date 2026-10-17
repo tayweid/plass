@@ -290,4 +290,88 @@ import { buildTableUnit, matchPageStarts, type PagedLine } from './page-oracle';
   check('the last cell of a row takes no rest', last.audit.some((a) => a.status === 'fail'));
 }
 
+// --- Grid rows: a block with no predicted text joined to the next cell ------
+// A code block (or an island, or display math) is consumed up to the next
+// block's anchor. When that block sits in a later cell its first line can be
+// joined onto the code's last ("let x = 1;Beside."): the split is taken only
+// where the next block then matches exactly, and only when the anchor's own
+// line does not already match it.
+{
+  const code = (text: string) => schema.nodes.grid_cell.create(null, schema.nodes.code_block.create(null, schema.text(text)));
+  const cell = (text: string) => schema.nodes.grid_cell.create(null, paragraph(text));
+  const row = (...cells: ReturnType<typeof cell>[]) =>
+    schema.nodes.grid.create({ columns: cells.map(() => 1), gutter: 1 }, schema.nodes.grid_row.create(null, cells));
+  const line = (text: string, y = 0, page = 0): PagedLine => ({ page, y, yFrac: 0.5, text });
+  const run = (doc: ReturnType<typeof schema.nodes.doc.create>, lines: PagedLine[]) => {
+    const audit: import('./page-oracle').UnitAudit[] = [];
+    const result = matchPageStarts(buildUnits(doc, noAtoms), lines, audit);
+    return { result, audit };
+  };
+
+  const joined = schema.nodes.doc.create(null, [row(code('let x = 1;'), cell('Beside.')), paragraph('After the grid.')]);
+  const split = run(joined, [line('let x = 1;Beside.'), line('After the grid.', 30)]);
+  check(
+    'a code cell joined to the next cell hands it the rest of the line',
+    split.result.status === 'ok' && split.audit.length === 2 && split.audit.every((a) => a.status === 'ok'),
+  );
+
+  // "1" sits inside the code too, but the code's line is its own: the
+  // anchor's line matches, so nothing is split.
+  const one = schema.nodes.doc.create(null, [row(code('x = 1'), cell('1')), paragraph('After the grid.')]);
+  const apart = run(one, [line('x = 1'), line('1', 2), line('After the grid.', 30)]);
+  check('a code line that merely contains the next cell\'s text is not split', apart.audit.every((a) => a.status === 'ok') && apart.audit.length === 2);
+  const together = run(one, [line('x = 11'), line('After the grid.', 30)]);
+  check('the same cells joined split at the right point', together.audit.every((a) => a.status === 'ok') && together.audit.length === 2);
+
+  // The mirror: a text cell joined onto a code cell ends where the code's
+  // first words begin, and the code hands the cell after it the rest.
+  const mirror = schema.nodes.doc.create(null, [row(cell('Beside.'), code('let x = 1;'), cell('Third.')), paragraph('After the grid.')]);
+  const around = run(mirror, [line('Beside.let x = 1;Third.'), line('After the grid.', 30)]);
+  check('a text cell joined onto a code cell splits before the code', around.result.status === 'ok' && around.audit.length === 3 && around.audit.every((a) => a.status === 'ok'));
+  const notCode = run(mirror, [line('Beside.let y = 2;Third.'), line('After the grid.', 30)]);
+  check('a rest that is not the code\'s first words fails closed', notCode.audit[0].status === 'fail');
+
+  // A row whose first cell is code is found by the code's text: the row
+  // before it must stop there, not run on to the later cell's words.
+  const twoRows = schema.nodes.doc.create(null, [
+    row(cell('Beside.'), code('let x = 1;')),
+    row(code('let y = 2;'), cell('Beside it.')),
+    paragraph('After the grid.'),
+  ]);
+  const rows = run(twoRows, [line('Beside.let x = 1;'), line('let y = 2;Beside it.', 30), line('After the grid.', 60)]);
+  check('a row that opens with code anchors on the code\'s text', rows.result.status === 'ok' && rows.audit.length === 3 && rows.audit.every((a) => a.status === 'ok'));
+  check(
+    'a block\'s printed text matches a line that holds its start',
+    matchesAnchor('#text(fill: red)', { text: '#text(fill: red)[Kept.]', lead: true }) &&
+      matchesAnchor('let x = 1;Beside.', { text: 'let x = 1;', lead: true }) &&
+      !matchesAnchor('let', { text: '#text(fill: red)', lead: true }) &&
+      !matchesAnchor(' ', { text: 'let', lead: true }),
+  );
+
+  // A cell that fails to match still hands the next cell its joined line.
+  const failed = run(schema.nodes.doc.create(null, [row(cell('Expected.'), cell('Beside.')), paragraph('After the grid.')]), [
+    line('Printed.Beside.'),
+    line('After the grid.', 30),
+  ]);
+  check(
+    'a failed cell resyncs inside its joined line',
+    failed.audit.length === 3 && failed.audit[0].status === 'fail' && failed.audit[1].status === 'ok' && failed.audit[2].status === 'ok',
+  );
+}
+
+// --- Blocks the walk never reached are failures, never silent gaps ----------
+{
+  const line = (text: string): PagedLine => ({ page: 0, y: 0, yFrac: 0.5, text });
+  const doc = schema.nodes.doc.create(null, [paragraph('One.'), paragraph('Two.'), paragraph('Three.')]);
+  const audit: import('./page-oracle').UnitAudit[] = [];
+  matchPageStarts(buildUnits(doc, noAtoms), [line('One.')], audit);
+  check(
+    'blocks after the text layer runs out are reported as not reached',
+    audit.length === 3 && audit[0].status === 'ok' && audit.slice(1).every((a) => a.status === 'fail' && /not reached/.test(a.reason ?? '')),
+  );
+  const whole: import('./page-oracle').UnitAudit[] = [];
+  matchPageStarts(buildUnits(doc, noAtoms), [line('One.'), line('Two.'), line('Three.')], whole);
+  check('a fully matched document reports no unreached block', whole.length === 3 && whole.every((a) => a.status === 'ok'));
+}
+
 console.log('all page-oracle tests passed');
