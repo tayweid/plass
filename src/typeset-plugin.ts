@@ -43,7 +43,7 @@ import { loadPrimitives, primitives } from './layout/primitives';
 import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdict } from './environment-check';
 import { atPaperSize, fitPaper, paperPass, paperScale, type PaperCaret } from './paper-scale';
 import { caretBox } from './caret-box';
-import { getSettings, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
+import { getSettings, layoutPx, PAGE_GAP, pageSize, parseMathMacros, type DocSettings } from './settings';
 import {
   displayMathPadEm,
   escapeTyp,
@@ -2093,13 +2093,12 @@ class TypesetView {
     // published in whole 1/64 px, chosen so the box's bottom and its
     // margin's end fall within 1/128 px of the exact model; the line box is
     // measured (line-height stays a ratio, which inline atoms inherit).
-    const snap = (px: number) => Math.round(px * 64) / 64;
     const exactPx = (s.sizePt * 4) / 3;
     const lines = headingLineBoxesPx(s.sizePt);
     const boxes = lines.map((line, i) => {
       const em = headingBoxEm(i + 1);
       const [pad, lh, mb] = [em.padTop * exactPx, em.line * exactPx, em.marginBottom * exactPx];
-      return { line, lh, mb, padPx: snap(pad + lh) - line, mbPx: snap(pad + lh + mb) - snap(pad + lh) };
+      return { line, lh, mb, padPx: layoutPx(pad + lh) - line, mbPx: layoutPx(pad + lh + mb) - layoutPx(pad + lh) };
     });
     boxes.forEach((b, i) => {
       root.setProperty(`--h${i + 1}-pad`, `${b.padPx}px`);
@@ -2110,7 +2109,7 @@ class TypesetView {
     for (let prev = 1; prev <= 3; prev++) {
       for (let level = 1; level <= 3; level++) {
         const b = boxes[level - 1];
-        const pad = snap(headingRunPadTopEm(s, prev, level) * exactPx + b.lh + b.mb) - b.mbPx - b.line;
+        const pad = layoutPx(headingRunPadTopEm(s, prev, level) * exactPx + b.lh + b.mb) - b.mbPx - b.line;
         root.setProperty(`--heading-run-pad-${prev}-${level}`, `${Math.max(0, pad)}px`);
         root.setProperty(`--heading-run-mt-${prev}-${level}`, `${Math.min(0, pad)}px`);
       }
