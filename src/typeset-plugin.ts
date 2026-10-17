@@ -45,9 +45,12 @@ import { atPaperSize, fitPaper, paperPass, paperScale, type PaperCaret } from '.
 import { caretBox } from './caret-box';
 import { getSettings, layoutPx, PAGE_GAP, pageSize, parMarginPx, parseMathMacros, type DocSettings } from './settings';
 import {
+  abstractBoxEm,
+  bibliographyBoxEm,
   displayMathPadEm,
   escapeTyp,
   expandMacrosWith,
+  figureBoxEm,
   headingBoxEm,
   headingRunPadTopEm,
   headingScale,
@@ -1983,8 +1986,10 @@ class TypesetView {
     if (node.type.name === 'heading') return `h${Math.min(3, node.attrs.level as number)}` as 'h1' | 'h2' | 'h3';
     if (node.type.name === 'paragraph') return 'paragraph';
     // Front-matter blocks are paragraph-class boxes (title's larger text
-    // scales its ascender the same way Typst does).
-    if (['doc_title', 'doc_authors', 'doc_date'].includes(node.type.name)) return 'paragraph';
+    // scales its ascender the same way Typst does), and a figure's box is
+    // at its top: its padding is the paragraph's cap slack over the image,
+    // where Typst's frame starts (`figureBoxEm`).
+    if (['doc_title', 'doc_authors', 'doc_date', 'figure'].includes(node.type.name)) return 'paragraph';
     return null;
   }
 
@@ -2009,6 +2014,13 @@ class TypesetView {
     if (node.type.name === 'code_block') return pageTopAdjustEm(s, 'code') * F;
     if (node.type.name === 'table') return -tableMarginsEm(s).top * F;
     if (node.type.name === 'math_display') return -displayMathPadEm(s, parent, index).top * F;
+    // The abstract's painted label is its first line, a paragraph line
+    // whose frame is the bold capitals' (`abstractBoxEm`): its padding is
+    // inside the frame, a margin below zero moves the box up with it.
+    if (node.type.name === 'abstract') return (pageTopAdjustEm(s, 'paragraph') + abstractBoxEm(s).marginTop) * F;
+    // Typst drops the bibliography title's spacing at a page top: the
+    // title's frame at the margin, above it the box's padding.
+    if (node.type.name === 'bibliography') return -bibliographyBoxEm(s).padTop * F;
     const dropEm =
       node.type.name === 'blockquote' ? (node.attrs.kind === 'solution' ? 0 : quoteBoxEm(s).padTop) : containerPageTopDropEm(node.type.name);
     let first: PMNode | null = node;
@@ -2129,6 +2141,28 @@ class TypesetView {
     root.setProperty('--quote-pad', `${quotePad}px`);
     root.setProperty('--quote-mt', `${layoutPx(quote.marginTop * exactPx)}px`);
     root.setProperty('--quote-below', `${layoutPx((quote.padTop + quote.below + parMarginEm(s)) * exactPx) - quotePad - parMargin}px`);
+    // A figure (style.css): the paragraph's cap slack over its image, and
+    // the caption's margin-top, in layout units, the caption's rounded from
+    // the figure's top; the gap itself for a figure whose image height is
+    // Typst's (`.fig-sized`), which rounds the caption's margin with it. As
+    // the July calibration (0.4em, 0.55em, a 0.2em padding-bottom) the box
+    // put the caption 5 px lower than its print and the paragraph after the
+    // figure 8.3 px lower at 12.5 pt.
+    const figure = figureBoxEm(s);
+    const figurePad = layoutPx(figure.padTop * exactPx);
+    root.setProperty('--fig-pad', `${figurePad}px`);
+    root.setProperty('--fig-caption-mt', `${layoutPx((figure.padTop + figure.captionTop) * exactPx) - figurePad}px`);
+    root.setProperty('--fig-gap', `${(figure.padTop + figure.captionTop) * exactPx}px`);
+    // The abstract's label (style.css): the bold capitals' frame over a
+    // paragraph line's, in layout units.
+    const abstract = abstractBoxEm(s);
+    root.setProperty('--abstract-pad', `${layoutPx(abstract.padTop * exactPx)}px`);
+    root.setProperty('--abstract-mt', `${layoutPx(abstract.marginTop * exactPx)}px`);
+    // The bibliography (style.css): the compiled list's spacing above and
+    // below its frame, exact, for its edges to be rounded from its top.
+    const bibliography = bibliographyBoxEm(s);
+    root.setProperty('--bib-top', `${(bibliography.padTop * exactPx).toFixed(6)}px`);
+    root.setProperty('--bib-below', `${(bibliography.below * exactPx).toFixed(6)}px`);
     // A paragraph box's edge-to-frame slack, the padding of an equation
     // that opens (top) or closes (bottom) a quote.
     root.setProperty('--par-cap-slack', `${(-pageTopAdjustEm(s, 'paragraph') * F).toFixed(4)}px`);
@@ -3287,12 +3321,14 @@ class TypesetView {
     };
     /** The Typst frame ends ABOVE the painted box's bottom by this much
      *  (pageBottomInsetEm): the last line's descent and half-leading for
-     *  text blocks, a container's last text block's, a display equation's
-     *  padding-bottom (its frame is the content box, and Typst trims the
-     *  equation's `below` at a region's end; a paragraph's inset where it
-     *  closes a quote), nothing for the kinds with no calibration (figures,
-     *  tables). Fit tests compare frame bottoms against the page bottom —
-     *  the counterpart of adjFor, which lands frame TOPS at the page top. */
+     *  text blocks (a figure's caption among them: its frame ends at the
+     *  caption's last baseline), a container's last text block's, a
+     *  display equation's padding-bottom (its frame is the content box, and
+     *  Typst trims the equation's `below` at a region's end; a paragraph's
+     *  inset where it closes a quote), nothing for the kinds with no
+     *  calibration (tables). Fit tests compare frame bottoms against the
+     *  page bottom — the counterpart of adjFor, which lands frame TOPS at
+     *  the page top. */
     const bottomInsetFor = (pos: number): number => {
       const $at = view.state.doc.resolve(pos);
       let n = view.state.doc.nodeAt(pos);
@@ -3306,7 +3342,7 @@ class TypesetView {
       }
       if (!n) return 0;
       // A grid row's cells end one paragraph inset below their frames.
-      if (n.type.name === 'grid_row' || n.type.name === 'paragraph') return pageBottomInsetEm(s, 'paragraph') * F;
+      if (n.type.name === 'grid_row' || n.type.name === 'paragraph' || n.type.name === 'figure') return pageBottomInsetEm(s, 'paragraph') * F;
       if (n.type.name === 'code_block') return pageBottomInsetEm(s, 'code') * F;
       if (n.type.name === 'math_display') return displayMathPadEm(s, parent, index).bottom * F;
       if (n.type.name === 'heading') {

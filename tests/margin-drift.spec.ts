@@ -1,4 +1,4 @@
-import { codeBlockMetricsEm } from '../src/font-registry';
+import { codeBlockMetricsEm, parityMetrics } from '../src/font-registry';
 import { expect, test, type Page } from './fixture';
 import { settleLocal } from './settle';
 
@@ -144,32 +144,60 @@ test('at 12 pt the paragraph margin is the nearest layout unit to Typst spacing'
 
 /** Every paragraph's drift on a page of `blocks` (ProseMirror JSON), at
  *  12.5 pt with 1 in margins: its first line's top against the nearest of
- *  Typst's baselines, both from the first top-level paragraph's. */
-async function blocksDrift(page: Page, blocks: unknown[], parIndent = false): Promise<Array<{ kind: string; drift: number }>> {
+ *  Typst's baselines, both from the first top-level paragraph's. A
+ *  figure's caption is a row too (`caption`, its first line). With `bib`
+ *  (a .bib source) the bibliography's compiled list is waited for, and
+ *  each of its baselines is a row (`bib`): placed as a line top, so the
+ *  same offset maps it. */
+async function blocksDrift(page: Page, blocks: unknown[], parIndent = false, bib?: string): Promise<Array<{ kind: string; drift: number }>> {
   await page.goto('/?new=1');
   await page.waitForFunction(() => Boolean(window.view));
   await page.evaluate(
-    ({ blocks, parIndent }) => {
+    ({ blocks, parIndent, bib }) => {
       const { state } = window.view;
       const tr = state.tr.replaceWith(
         0,
         state.doc.content.size,
         blocks.map((b) => state.schema.nodeFromJSON(b)),
       );
+      if (bib) tr.setDocAttribute('bib', { name: 'references.bib', content: bib });
       tr.setDocAttribute('settings', { ...state.doc.attrs.settings, sizePt: 12.5, parIndent, marginTop: 1, marginRight: 1, marginBottom: 1, marginLeft: 1 });
       window.view.dispatch(tr);
     },
-    { blocks, parIndent },
+    { blocks, parIndent, bib },
   );
+  await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('.ts-figure img')].every((img) => img.complete && img.naturalWidth > 0));
+  if (bib) await page.waitForFunction(() => document.querySelector('.ts-bibliography.bib-has-ink'), null, { timeout: 40_000 });
   await settleLocal(page, 0);
-  const rows = await page.evaluate(() => {
+  // A paragraph's Typst baseline below its line box's top (its cap slack
+  // and the cap height): a compiled baseline in the page becomes a line top.
+  const m = parityMetrics('New Computer Modern');
+  const baselineInBox = (1.5 / 2 + (m.cssA - m.cssD) / 2 - m.typAsc + m.extent) * BODY_PX;
+  const { rows, inkSvg, inkTop } = await page.evaluate(() => {
     const sheet = document.querySelector('#pages .page-box')!.getBoundingClientRect().top;
-    return [...window.view.dom.querySelectorAll<HTMLElement>('p')].map((el) => {
+    const rows = [...window.view.dom.querySelectorAll<HTMLElement>('p, figcaption')].map((el) => {
       const parent = el.parentElement!;
-      const kind = parent === window.view.dom ? 'p' : parent.tagName === 'LI' ? 'li' : parent.tagName === 'BLOCKQUOTE' ? 'quote' : 'abstract';
+      const kind =
+        el.tagName === 'FIGCAPTION'
+          ? 'caption'
+          : parent === window.view.dom
+            ? 'p'
+            : parent.tagName === 'LI'
+              ? 'li'
+              : parent.tagName === 'BLOCKQUOTE'
+                ? 'quote'
+                : 'abstract';
       return { kind, text: el.textContent ?? '', top: el.getBoundingClientRect().top - sheet };
     });
+    const ink = document.querySelector('.ts-bibliography .bib-ink svg');
+    return { rows, inkSvg: ink?.outerHTML ?? null, inkTop: ink ? ink.getBoundingClientRect().top - sheet : 0 };
   });
+  if (inkSvg) {
+    // The fragment's own page: its baselines from its top (in px already).
+    const [own] = typstBaselines(inkSvg);
+    const at = rows.findIndex((row) => row.top > inkTop);
+    rows.splice(at < 0 ? rows.length : at, 0, ...own.map((y, i) => ({ kind: 'bib', text: `baseline ${i + 1}`, top: inkTop + y - baselineInBox })));
+  }
   const svg = await page.evaluate(() => window.__tableProofSvg());
   if (!svg) throw new Error('Typst compile failed');
   const pages = typstBaselines(svg);
@@ -287,17 +315,106 @@ for (const parIndent of [false, true]) {
   });
 }
 
-test("the abstract's margin lands the paragraph after it on the print", async ({ page }) => {
-  test.setTimeout(90_000);
-  const d = await blocksDrift(page, [
-    p('Before the abstract.'),
-    { type: 'abstract', content: [p('The abstract, one line.'), p('Its second paragraph.')] },
-    p('After the abstract.'),
-    p('The last paragraph.'),
-  ]);
-  // Its last paragraph to the next one: the 0.9em margin, 15 px (it was
-  // 14.984375). The abstract's top keeps its own calibration (ROADMAP).
-  const last = d.findLastIndex((row) => row.kind.startsWith('abstract'));
-  expect(Math.abs(d[last + 1].drift - d[last].drift), JSON.stringify(d)).toBeLessThan(1 / 128 + 0.002);
-  expect(Math.abs(d[last + 2].drift - d[last + 1].drift), JSON.stringify(d)).toBeLessThan(0.003);
+for (const parIndent of [false, true]) {
+  test(`${parIndent ? 'classic' : 'spaced'}: the abstract's label, its paragraphs and the paragraph after it land on the print`, async ({ page }) => {
+    test.setTimeout(90_000);
+    const d = await blocksDrift(
+      page,
+      [
+        p('Before the abstract.'),
+        { type: 'abstract', content: [p('The abstract, one line.'), p('Its second paragraph.')] },
+        p('After the abstract.'),
+        p('The last paragraph.'),
+      ],
+      parIndent,
+    );
+    // The export prints the label as a bold paragraph of its own and the
+    // abstract's paragraphs after it, all at paragraph spacing; the bold
+    // capitals make the label's frame 0.05 px taller than a paragraph
+    // line's (`abstractBoxEm`). The painted label had a 0.75em margin under
+    // it: the abstract's first line was 2.55 px higher than its print
+    // (12.45 px lower with indented paragraphs, and the 0.9em margin after
+    // the abstract put the next paragraph 15 px lower again).
+    for (let i = 1; i < d.length; i++) {
+      expect(Math.abs(d[i].drift - d[i - 1].drift), `${d[i].kind}: ${JSON.stringify(d)}`).toBeLessThan(1 / 128 + 0.002);
+    }
+  });
+}
+
+const RECT_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"><rect width="120" height="80" fill="#38786d"/></svg>';
+const figure = (caption: string) => ({
+  type: 'figure',
+  attrs: { src: `data:image/svg+xml;base64,${Buffer.from(RECT_SVG).toString('base64')}`, widthPct: 20 },
+  content: [{ type: 'text', text: caption }],
 });
+
+for (const parIndent of [false, true]) {
+  test(`${parIndent ? 'classic' : 'spaced'}: a figure's caption and the paragraph after it land on the print`, async ({ page }) => {
+    test.setTimeout(90_000);
+    const d = await blocksDrift(
+      page,
+      [
+        p('Before the figures.'),
+        figure('A one-line caption.'),
+        p('Between the figures.'),
+        figure('A caption long enough to wrap: the Knuth Plass algorithm evaluates a complete paragraph and preserves globally optimal line endings.'),
+        p('The last paragraph.'),
+      ],
+      parIndent,
+    );
+    expect(d.map((row) => row.kind.split(' ')[0])).toEqual(['p', 'caption', 'p', 'caption', 'p']);
+    // Typst prints a figure as one block at paragraph spacing, its frame
+    // from the image's top to the caption's last baseline, the caption
+    // 0.65em below the image (`figureBoxEm`); the image is 20 % of the
+    // column, its height by its ratio. Each figure is rounded from its
+    // top, so its caption's line and the paragraph after it move by less
+    // than a layout unit. The July box put the caption 5 px lower than its
+    // print and the paragraph after it 8.3 px lower (spaced; 23.3 px with
+    // indented paragraphs, its 0.9em margin besides), and Chrome's own
+    // image height was 1/80 px short.
+    for (let i = 1; i < d.length; i++) {
+      expect(Math.abs(d[i].drift - d[i - 1].drift), `${d[i].kind}: ${JSON.stringify(d)}`).toBeLessThan(1 / 128 + 0.002);
+    }
+  });
+}
+
+const BIB = `@article{knuth81,
+  author = {Knuth, Donald E. and Plass, Michael F.},
+  title = {Breaking Paragraphs into Lines},
+  journal = {Software: Practice and Experience},
+  year = {1981},
+}
+
+@book{lamport94, author = {Lamport, Leslie}, title = {{LaTeX}: A Document Preparation System}, year = {1994}}
+`;
+
+for (const parIndent of [false, true]) {
+  test(`${parIndent ? 'classic' : 'spaced'}: the bibliography's compiled list and the paragraph after it land on the print`, async ({ page }) => {
+    test.setTimeout(120_000);
+    const cite = (key: string) => ({ type: 'citation', attrs: { key } });
+    const d = await blocksDrift(
+      page,
+      [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Before the list, citing ' }, cite('knuth81'), { type: 'text', text: ' and ' }, cite('lamport94'), { type: 'text', text: '.' }] },
+        { type: 'bibliography' },
+        p('After the list.'),
+        p('The last paragraph.'),
+      ],
+      parIndent,
+      BIB,
+    );
+    expect(d.filter((row) => row.kind.startsWith('bib')).length).toBeGreaterThan(2);
+    // Typst prints the title as a level-1 heading (its spacing above is the
+    // heading's) and the entries at paragraph spacing below their last
+    // baseline (`bibliographyBoxEm`). The page shows the list compiled on a
+    // page of its own, from the title's frame top to the last baseline; its
+    // edges are rounded from the box's top, so the title's line, each
+    // entry's and the paragraph after the list land within a layout unit of
+    // the print. The 0.75em padding put the list 2.34 px higher than its
+    // print at 12.5 pt and the paragraph after it 1.25 px higher (14.08 px
+    // lower with indented paragraphs).
+    for (let i = 1; i < d.length; i++) {
+      expect(Math.abs(d[i].drift - d[i - 1].drift), `${d[i].kind}: ${JSON.stringify(d)}`).toBeLessThan(1 / 128 + 0.002);
+    }
+  });
+}
