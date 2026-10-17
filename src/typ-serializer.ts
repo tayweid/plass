@@ -401,9 +401,14 @@ export function parityRules(s: DocSettings): string {
     out += `#show heading.where(level: ${level}): set block(above: ${pt(above)}, below: ${pt(below)})\n`;
     out += `#show heading.where(level: ${level}): set par(leading: ${pt((1.25 - m.boldExtent) * h.hs)})\n`;
   }
-  // Inline raw: pin Typst's defaults so editor code spans (same font file,
-  // same ratio) have identical advance widths.
-  out += `#show raw.where(block: false): set text(font: "DejaVu Sans Mono", size: ${pt(0.8)})\n`;
+  // Inline raw: pin Typst's font so editor code spans (same font file)
+  // have identical advance widths. The size is Typst's own, 0.8em of the
+  // text around it, as the page sets it (`.ProseMirror code`) and the port
+  // measures it: pinned to 0.8 times the body size, raw in a table set
+  // smaller, a footnote entry or a heading printed at the wrong width, and
+  // in a table at 0.8em or a footnote its top edge rose above the line's
+  // and grew it.
+  out += `#show raw.where(block: false): set text(font: "DejaVu Sans Mono")\n`;
   // Display math: the editor shows Typst's own ink inside 0.5em padding.
   const { above: eqAbove, below: eqBelow } = equationBlockSpacingEm(s);
   out += `#show math.equation.where(block: true): set block(above: ${pt(eqAbove)}, below: ${pt(eqBelow)})\n`;
