@@ -463,6 +463,38 @@ FIXTURES.push({
 // {=typst} block, a {=bibtex} fence, footnotes, a strike and a {++ ++} mark.
 FIXTURES.push({ name: 'guide.md', text: readFileSync(new URL('./fixtures/md/guide.md', import.meta.url), 'utf8') });
 
+// tests/environment-fingerprint.spec.ts's document. A quote right after a
+// heading: both spacings are explicit and Typst keeps the larger (the
+// quote's 2.4em), where the page added the quote's padding to the
+// heading's spacing; 3.98 px short after the third-level heading, so page
+// 1 held the whole of a paragraph Typst breaks after its fourth line.
+{
+  const sentence = 'The committee reconvened after lunch to weigh the revised proposal against the earlier draft. ';
+  FIXTURES.push({
+    name: 'fingerprint.md',
+    text: [
+      '# Fingerprint',
+      '',
+      sentence.repeat(6).trim(),
+      '',
+      '## Second level',
+      '',
+      '### Third level',
+      '',
+      '> ' + sentence.trim(),
+      '',
+      '```',
+      'print("hi")',
+      'x = 1',
+      '```',
+      '',
+      'Inline `code` and text.',
+      '',
+      ...Array.from({ length: 30 }, () => [sentence.repeat(5).trim(), '']).flat(),
+    ].join('\n'),
+  });
+}
+
 FIXTURES.push({
   name: 'table-bare.md',
   text: ['| Item | Value |', '| --- | --- |', ...Array.from({ length: TABLE_ROWS - 1 }, (_, i) => `| Row ${i + 1} | ${i + 1} |`), ''].join('\n'),
@@ -493,6 +525,25 @@ FIXTURES.push({
       ...Array.from({ length: 6 }, () => [FILLER.repeat(4).trim(), '']).flat(),
     ].join('\n');
   const frac = '$$ \\frac{a+b}{c} = d $$';
+  // A block inside a quote takes the quote's spacing (Typst's quote sets
+  // it as a show-set its content inherits): a list, a list nested in an
+  // item, a code block are 2.4em below the paragraph before them and 1.8em
+  // above the one after. Spaced as paragraphs, the list was 11.38 px
+  // higher than its print at 12.5 pt and the page held a line more.
+  FIXTURES.push(
+    {
+      name: 'quote-list-edge.md',
+      text: edge(32, ['> Quote with a list. ' + FILLER.trim(), '>', '> - Item a. ' + FILLER.trim(), '> - Item b.', '>', '> Closing. ' + FILLER.repeat(2).trim(), '']),
+    },
+    {
+      name: 'quote-nested-list-edge.md',
+      text: edge(36, ['> - Item a. ' + FILLER.trim(), '>   - Sub a. ' + FILLER.trim(), '> - Item b.', '>', '> Closing. ' + FILLER.repeat(2).trim(), '']),
+    },
+    {
+      name: 'quote-code-edge.md',
+      text: edge(4, ['> Quote with code. ' + FILLER.trim(), '>', '> ```', '> let x = 1', '> let y = 2', '> let z = 3', '> ```', '>', '> Closing. ' + FILLER.repeat(2).trim(), '']),
+    },
+  );
   FIXTURES.push(
     { name: 'math-edge-bottom.md', text: edge(69, ['$$ \\int_0^1 f(x) \\, dx = F(1) - F(0) $$', '']) },
     { name: 'math-edge-top.md', text: edge(82, [frac, '']) },

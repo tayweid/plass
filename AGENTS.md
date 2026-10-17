@@ -251,7 +251,13 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   1.8): the box adds what the paragraphs beside it leave over
   (`quoteBoxEm`, published by `publishGeometryVars`), a padding-top the
   page top drops and an addition to its last child's margin-bottom; a
-  solution block is Auto spacing, a paragraph run. Line k of
+  solution block is Auto spacing, a paragraph run. The quote sets its
+  spacing as a show-set its content inherits: a list, a nested list, a
+  grid, a table or a code block inside it (at the raw text's size) is
+  2.4em and 1.8em from a paragraph beside it (`quoteChildSpacingEm`).
+  Beside a heading, an equation or another quote the larger of the two
+  explicit spacings holds, not their sum (`quotePadAfterEm`,
+  `afterQuoteTopEm`). Line k of
   a paragraph is at the paragraph's top plus k line-heights (never the
   caret box: Chrome rounds its height, and Typst's line pitch is exact).
   Block measures are fractional (`getBoundingClientRect`, never

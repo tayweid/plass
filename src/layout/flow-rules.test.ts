@@ -32,7 +32,20 @@ import {
   stickyFinish,
   stickyRelayoutCheckpoint,
 } from './flow-rules';
-import { QUOTE_SPACING_EM, blockFrameSlackEm, displayMathPadEm, pageBottomInsetEm, pageTopAdjustEm, quoteBoxEm } from '../typ-serializer';
+import {
+  QUOTE_SPACING_EM,
+  afterQuoteTopEm,
+  blockFrameSlackEm,
+  displayMathPadEm,
+  equationBlockSpacingEm,
+  headingBlockSpacingEm,
+  pageBottomInsetEm,
+  pageTopAdjustEm,
+  parSpacingEm,
+  quoteBoxEm,
+  quoteChildSpacingEm,
+  quotePadAfterEm,
+} from '../typ-serializer';
 import { DEFAULT_SETTINGS } from '../settings';
 import { schema } from '../schema';
 
@@ -744,6 +757,35 @@ function content(): FlowItem {
   assert.ok(quoteBoxEm({ ...DEFAULT_SETTINGS, lineHeight: 1.8 }).below < 0);
   assert.equal(quoteBoxEm({ ...DEFAULT_SETTINGS, lineHeight: 3 }).padTop, 0);
   console.log('  ok  quoteBoxEm: a quote is 2.4em above and 1.8em below a paragraph, at every line height');
+}
+
+{
+  // A block inside a quote takes the quote's spacing (its show-set reaches
+  // the content), at the block's own size: the editor paints paragraph
+  // spacing around it and adds the difference, so beside a paragraph it is
+  // 2.4em and 1.8em of its own size, frame to frame. Beside a heading, an
+  // equation or another quote, both spacings are explicit and Typst keeps
+  // the larger: the quote's padding after one, and what a heading or an
+  // equation after a quote adds, make the pair's gap exactly that.
+  for (const lineHeight of [1.3, 1.5, 1.8]) {
+    for (const parIndent of [false, true]) {
+      const s = { ...DEFAULT_SETTINGS, lineHeight, parIndent };
+      const par = parSpacingEm(s);
+      for (const scale of [1, 0.8]) {
+        const c = quoteChildSpacingEm(s, scale);
+        assert.ok(Math.abs(par + c.above - QUOTE_SPACING_EM.above * scale) < 1e-9);
+        assert.ok(Math.abs(par + c.below - QUOTE_SPACING_EM.below * scale) < 1e-9);
+      }
+      const q = quoteBoxEm(s);
+      const explicit = [1, 2, 3].map((level) => headingBlockSpacingEm(s, level)).concat(equationBlockSpacingEm(s));
+      for (const { above, below } of explicit) {
+        assert.ok(Math.abs(below + quotePadAfterEm(below) - Math.max(below, QUOTE_SPACING_EM.above)) < 1e-9);
+        assert.ok(Math.abs(above + q.below + afterQuoteTopEm(s, above) - Math.max(above, QUOTE_SPACING_EM.below)) < 1e-9);
+      }
+      assert.ok(Math.abs(QUOTE_SPACING_EM.below + quotePadAfterEm(QUOTE_SPACING_EM.below) - QUOTE_SPACING_EM.above) < 1e-9);
+    }
+  }
+  console.log('  ok  quoteChildSpacingEm, quotePadAfterEm, afterQuoteTopEm: a quote\'s spacing inside it and beside explicit spacing');
 }
 
 {

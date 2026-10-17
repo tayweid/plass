@@ -190,6 +190,51 @@ export function quoteBoxEm(s: DocSettings): { padTop: number; marginTop: number;
   return { padTop: Math.max(0, top), marginTop: Math.min(0, top), below: QUOTE_SPACING_EM.below - par };
 }
 
+/**
+ * The spacing of a block inside a quote, over the paragraph spacing the
+ * editor's boxes paint around it, body em. Typst's quote sets its 2.4em
+ * and 1.8em as a show-set rule (`QuoteElem::show_set`, model/quote.rs),
+ * a style the quote's content inherits, so every block in it whose own
+ * spacing is Auto (a list, a code block, a table, a grid; at any depth,
+ * a list nested in an item too) is 2.4em below the block before it and
+ * 1.8em above the one after, explicit spacing that wins over a paragraph's
+ * (weakness 3 against 4, flow/collect.rs `block`). Its em is the block's
+ * own text size: a code block's is the raw text's 0.8 (`scale`). Paragraph
+ * spacing is `par.spacing`, which the quote leaves alone, and headings and
+ * display equations set their own in the parity header. At a flow's edge
+ * the spacing is trimmed and the quote's own takes over (`quoteBoxEm`).
+ * Exact beside a paragraph; the editor adds `above` to the gap before the
+ * block and `below` to the gap after it (style.css).
+ */
+export function quoteChildSpacingEm(s: DocSettings, scale = 1): { above: number; below: number } {
+  const par = parSpacingEm(s);
+  return { above: QUOTE_SPACING_EM.above * scale - par, below: QUOTE_SPACING_EM.below * scale - par };
+}
+
+/**
+ * A quote's padding-top, body em, after a block whose spacing below is
+ * explicit too: a heading (`headingBlockSpacingEm`), a display equation
+ * (`equationBlockSpacingEm`) or another quote (`QUOTE_SPACING_EM.below`),
+ * each measured to a paragraph's frame, where the quote's first line sits
+ * under its padding. Typst keeps the larger of the two spacings, not
+ * their sum (weakness 3 both, distribute.rs `keep_spacing`); where the
+ * other is the larger, the quote adds nothing.
+ */
+export function quotePadAfterEm(prevBelowEm: number): number {
+  return Math.max(0, QUOTE_SPACING_EM.above - prevBelowEm);
+}
+
+/**
+ * What a block whose spacing above is explicit (a heading, a display
+ * equation: `aboveEm`, measured from a paragraph's frame) adds to its top
+ * after a quote, body em; negative, it takes away. The quote's last child
+ * already ends 1.8em from a paragraph's frame (`quoteBoxEm(s).below` over
+ * paragraph spacing), and Typst keeps the larger of the two spacings.
+ */
+export function afterQuoteTopEm(s: DocSettings, aboveEm: number): number {
+  return Math.max(QUOTE_SPACING_EM.below, aboveEm) - aboveEm - quoteBoxEm(s).below;
+}
+
 /** A heading level's text size as a ratio of the body size (levels 4–6
  * print like 3). The port lays headings out at this scale, bold. */
 export function headingScale(level: number): number {

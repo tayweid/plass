@@ -1420,6 +1420,55 @@ body {
   margin-top: var(--quote-mt, 0);
 }
 
+/* A quote beside a heading, a display equation or another quote (an
+   editorial comment between them prints nothing): both spacings are
+   explicit, and Typst keeps the larger, not their sum. A quote after one
+   takes a smaller padding (quotePadAfterEm); a heading after a quote
+   moves its padding, a part below zero as its margin-top (as a heading
+   run's follower), and an equation its padding (afterQuoteTopEm). The
+   plugin publishes them. A page gap between the two is a sibling, so a
+   pair broken across pages keeps the plain boxes, whose spacing the page
+   top drops anyway. A solution block's spacing is Auto: the plain boxes
+   are exact beside it. */
+.ProseMirror :is(h1, h1 + .editor-comment) + blockquote:not([data-kind='solution']) {
+  padding-top: var(--quote-pad-after-h1, 0.392em);
+  margin-top: 0;
+}
+.ProseMirror :is(h2, h2 + .editor-comment) + blockquote:not([data-kind='solution']) {
+  padding-top: var(--quote-pad-after-h2, 0.805em);
+  margin-top: 0;
+}
+.ProseMirror :is(h3, h4, h5, h6, :is(h3, h4, h5, h6) + .editor-comment) + blockquote:not([data-kind='solution']) {
+  padding-top: var(--quote-pad-after-h3, 0.922em);
+  margin-top: 0;
+}
+.ProseMirror :is(.math-display, .math-display + .editor-comment) + blockquote:not([data-kind='solution']) {
+  padding-top: var(--quote-pad-after-eq, 0.504em);
+  margin-top: 0;
+}
+.ProseMirror
+  :is(blockquote:not([data-kind='solution']), blockquote:not([data-kind='solution']) + .editor-comment)
+  + blockquote:not([data-kind='solution']) {
+  padding-top: var(--quote-pad-after-quote, 0.6em);
+  margin-top: 0;
+}
+
+.ProseMirror :is(blockquote:not([data-kind='solution']), blockquote:not([data-kind='solution']) + .editor-comment) + h1 {
+  padding-top: var(--after-quote-pad-1, 0.156em);
+  margin-top: var(--after-quote-mt-1, 0);
+}
+.ProseMirror :is(blockquote:not([data-kind='solution']), blockquote:not([data-kind='solution']) + .editor-comment) + h2 {
+  padding-top: var(--after-quote-pad-2, 1.34em);
+  margin-top: var(--after-quote-mt-2, 0);
+}
+.ProseMirror :is(blockquote:not([data-kind='solution']), blockquote:not([data-kind='solution']) + .editor-comment) + :is(h3, h4, h5, h6) {
+  padding-top: var(--after-quote-pad-3, 1.33em);
+  margin-top: var(--after-quote-mt-3, 0);
+}
+.ProseMirror :is(blockquote:not([data-kind='solution']), blockquote:not([data-kind='solution']) + .editor-comment) + .math-display {
+  --math-pad-top: var(--after-quote-math-pad, 0.496em);
+}
+
 /* Solution block — the export's #block(stroke: (left: 2pt + red), inset:
    (left: 1em)) with red text. Vertical box = a plain paragraph run: Auto
    block spacing above/below (par spacing, so margin-bottom tracks
@@ -1459,14 +1508,66 @@ body {
 
 /* A quote's last child carries the quote's spacing below (--quote-below,
    negative where paragraph spacing is the larger, line height 1.8) on top
-   of its own margin: exact for a paragraph, a list or an equation boxed
-   as a paragraph (below); other kinds keep their own. */
+   of its own margin: exact for a paragraph, a list, a grid, a table, a
+   code block (below) or an equation boxed as a paragraph (below). */
 .ProseMirror blockquote:not([data-kind='solution']) > :is(p, .math-display):last-child {
   margin-bottom: calc(var(--par-margin, 0.9em) + var(--quote-below, 0.0828em));
 }
 
-.ProseMirror blockquote:not([data-kind='solution']) > :is(ul, ol):last-child {
-  margin-bottom: calc(var(--block-margin, 0.9em) + var(--quote-below, 0.0828em));
+/* Inside a quote, a block the print leaves to Auto spacing (a list, a
+   grid, a table, a code block) takes the quote's own: Typst's quote sets
+   2.4em above and 1.8em below as a show-set rule its content inherits,
+   explicit spacing that wins over a paragraph's, at the block's own size
+   (a code block's em is the raw text's 0.8). The boxes keep their
+   paragraph-spacing geometry and add the difference
+   (quoteChildSpacingEm, published by the plugin in layout units). Above,
+   the paragraph before a list, a grid or a code block, in the quote or
+   in an item of a list in it, ends its margin lower; it keeps that margin
+   when a page gap comes between them, so the gap is sized against the
+   same box (the page top drops the spacing with the margin). A table's
+   margin-top collapses with the paragraph's, so the table moves its own.
+   Below, a list, a grid or a table is 1.8em from a paragraph, the same as
+   the quote's own spacing when it closes the quote; a code block's share
+   is smaller, so it takes the quote's in full only there. Exact beside
+   paragraphs; beside a heading, an equation or another such block the
+   page keeps its plain spacing (ROADMAP). A solution block is a plain
+   block (Auto spacing), but a quote's spacing reaches inside it. */
+:is(.ProseMirror blockquote:not([data-kind='solution']), .ProseMirror blockquote:not([data-kind='solution']) :is(blockquote, li))
+  > p:has(+ :is(ul, ol, .ts-grid), + .ts-pagegap + :is(ul, ol, .ts-grid)) {
+  margin-bottom: var(--quote-par-mb, 1.583em);
+}
+
+:is(.ProseMirror blockquote:not([data-kind='solution']), .ProseMirror blockquote:not([data-kind='solution']) :is(blockquote, li))
+  > p:has(+ pre, + .ts-pagegap + pre) {
+  margin-bottom: var(--quote-par-mb-code, 1.103em);
+}
+
+.ProseMirror blockquote:not([data-kind='solution']) > :is(ul, ol, .ts-grid) {
+  margin-bottom: calc(var(--par-margin, 0.9em) + var(--quote-below, 0.0828em));
+}
+
+.ProseMirror blockquote:not([data-kind='solution']) > :is(p, p + .ts-pagegap) + table {
+  margin-top: var(--quote-table-mt, 2.079em);
+}
+
+.ProseMirror blockquote:not([data-kind='solution']) > table {
+  margin-bottom: var(--quote-table-mb, 1.304em);
+}
+
+/* A table that opens a quote is padded like the paragraph the quote's
+   padding is calibrated with (its frame is its box), as an equation is
+   below; a page gap that opens the quote before it is a widget. */
+.ProseMirror blockquote:not([data-kind='solution']) > :is(table:first-child, .ts-pagegap:first-child + table) {
+  margin-top: var(--par-cap-slack, 0.4962em);
+}
+
+/* The code block's own em is the raw text's, so these are published in px. */
+.ProseMirror blockquote:not([data-kind='solution']) > pre {
+  margin-bottom: var(--quote-code-mb, 0.649em);
+}
+
+.ProseMirror blockquote:not([data-kind='solution']) > pre:last-child {
+  margin-bottom: var(--quote-code-last-mb, 1.099em);
 }
 
 /* A display equation that opens or closes a quote (either kind): inside

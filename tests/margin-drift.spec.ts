@@ -161,12 +161,26 @@ async function blocksDrift(page: Page, blocks: unknown[], parIndent = false): Pr
     },
     { blocks, parIndent },
   );
+  // An equation's box is its Typst frame once its ink is on the page.
+  const equations = blocks.filter((b) => (b as { type: string }).type === 'math_display').length;
+  if (equations) await page.waitForFunction((n) => document.querySelectorAll('.math-display.math-ink').length === n, equations);
   await settleLocal(page, 0);
   const rows = await page.evaluate(() => {
     const sheet = document.querySelector('#pages .page-box')!.getBoundingClientRect().top;
     return [...window.view.dom.querySelectorAll<HTMLElement>('p')].map((el) => {
       const parent = el.parentElement!;
-      const kind = parent === window.view.dom ? 'p' : parent.tagName === 'LI' ? 'li' : parent.tagName === 'BLOCKQUOTE' ? 'quote' : 'abstract';
+      const kind =
+        parent === window.view.dom
+          ? 'p'
+          : parent.tagName === 'LI'
+            ? 'li'
+            : parent.tagName === 'BLOCKQUOTE'
+              ? 'quote'
+              : parent.tagName === 'TD' || parent.tagName === 'TH'
+                ? 'cell'
+                : parent.classList.contains('ts-grid-cell')
+                  ? 'grid'
+                  : 'abstract';
       return { kind, text: el.textContent ?? '', top: el.getBoundingClientRect().top - sheet };
     });
   });
@@ -189,6 +203,15 @@ const ul = (...items: unknown[]) => ({ type: 'bullet_list', attrs: { tight: true
 const ol = (...items: unknown[]) => ({ type: 'ordered_list', attrs: { tight: true, order: 1 }, content: items });
 const quote = (...content: unknown[]) => ({ type: 'blockquote', content });
 const code = (text: string) => ({ type: 'code_block', content: [{ type: 'text', text }] });
+const heading = (level: number, text: string) => ({ type: 'heading', attrs: { level }, content: [{ type: 'text', text }] });
+const equation = (src: string) => ({ type: 'math_display', attrs: { src } });
+const cell = (text: string) => ({ type: 'table_cell', content: [p(text)] });
+const table = (...rows: string[][]) => ({ type: 'table', content: rows.map((row) => ({ type: 'table_row', content: row.map(cell) })) });
+const grid = (...cells: string[]) => ({
+  type: 'grid',
+  attrs: { columns: cells.map(() => 1), gutter: 1 },
+  content: [{ type: 'grid_row', content: cells.map((text) => ({ type: 'grid_cell', content: [p(text)] })) }],
+});
 const BODY_PX = (12.5 * 4) / 3;
 const layoutPx = (px: number) => Math.round(px * 64) / 64;
 
@@ -261,3 +284,86 @@ test("the abstract's margin lands the paragraph after it on the print", async ({
   expect(Math.abs(d[last + 1].drift - d[last].drift), JSON.stringify(d)).toBeLessThan(1 / 128 + 0.002);
   expect(Math.abs(d[last + 2].drift - d[last + 1].drift), JSON.stringify(d)).toBeLessThan(0.003);
 });
+
+// Typst's quote sets its 2.4em above and 1.8em below as a show-set rule,
+// a style the quote's content inherits: every block inside it whose own
+// spacing is Auto (a list, a list nested in an item, a grid, a table, a
+// code block) is 2.4em below the paragraph before it and 1.8em above the
+// one after, at the block's own size (a code block's em is the raw
+// text's). The page spaced them as paragraphs: a list 11.38 px higher
+// than its print at 12.5 pt, a code block 1.23 px lower. Each paragraph's
+// line is checked against the print from the one before it: each box edge
+// is rounded to the layout unit on its own, and a code line keeps its
+// pitch's residual. A table cell's line is left out (the cell's text sits
+// 1.46 px off its print at the top level too, the whole table on it).
+for (const parIndent of [false, true]) {
+  test(`${parIndent ? 'classic' : 'spaced'}: a list in a quote is spaced as the quote spaces itself, an item's nested list too`, async ({ page }) => {
+    test.setTimeout(90_000);
+    const d = await blocksDrift(
+      page,
+      [
+        p('Before the quote.'),
+        quote(p('Quote with a list.'), ul(li(p('Item a.'), ul(li(p('Sub a.')))), li(p('Item b.'))), p('Closing the quote.')),
+        p('Between the quotes.'),
+        quote(ul(li(p('An opening item.'))), p('Middle.'), ul(li(p('A closing item.')))),
+        p('The last paragraph.'),
+      ],
+      parIndent,
+    );
+    expect(d).toHaveLength(11);
+    for (let i = 1; i < d.length; i++) expect(Math.abs(d[i].drift - d[i - 1].drift), `${d[i].kind}: ${JSON.stringify(d)}`).toBeLessThan(1 / 64 + 0.003);
+  });
+
+  test(`${parIndent ? 'classic' : 'spaced'}: a grid, a table and a code block in a quote are spaced as the quote spaces itself`, async ({ page }) => {
+    test.setTimeout(90_000);
+    const d = (
+      await blocksDrift(
+        page,
+        [
+          p('Before the quote.'),
+          quote(p('Then a grid.'), grid('G1', 'G2'), p('Then a table.'), table(['A1', 'B1'], ['A2', 'B2']), p('Then code.'), code('let x = 1\nlet y = 2'), p('Closing the quote.')),
+          p('Between the quotes.'),
+          quote(table(['C1', 'D1']), p('Middle.'), code('let z = 3')),
+          p('The last paragraph.'),
+        ],
+        parIndent,
+      )
+    ).filter((row) => !row.kind.startsWith('cell'));
+    expect(d).toHaveLength(10);
+    const metrics = codeBlockMetricsEm({ font: 'New Computer Modern', lineHeight: 1.5, parIndent });
+    const line = Math.abs(layoutPx(metrics.lineEm * BODY_PX) - metrics.lineEm * BODY_PX);
+    for (let i = 1; i < d.length; i++) expect(Math.abs(d[i].drift - d[i - 1].drift), `${d[i].kind}: ${JSON.stringify(d)}`).toBeLessThan(1 / 64 + 2 * line + 0.003);
+  });
+
+  // A quote's spacing and a heading's, an equation's or another quote's
+  // are all explicit: Typst keeps the larger of the two, where the page
+  // added the quote's padding to the gap the block before it paints (a
+  // quote after a third-level heading was 3.98 px short at 12.5 pt and
+  // moved a page break; classic, a heading after a quote 16 px long).
+  test(`${parIndent ? 'classic' : 'spaced'}: a quote beside a heading, an equation or another quote keeps the larger spacing`, async ({ page }) => {
+    test.setTimeout(90_000);
+    const d = await blocksDrift(
+      page,
+      [
+        p('Before the headings.'),
+        heading(1, 'First level'),
+        quote(p('After a first-level heading.')),
+        heading(2, 'Second level'),
+        quote(p('After a second-level heading.')),
+        heading(3, 'Third level'),
+        quote(p('After a third-level heading.')),
+        heading(3, 'After a quote'),
+        p('Under the heading.'),
+        quote(p('A quote.')),
+        quote(p('Another quote right after it.')),
+        equation('x^2 + y^2 = z^2'),
+        quote(p('After an equation.')),
+        equation('a = b'),
+        p('The last paragraph.'),
+      ],
+      parIndent,
+    );
+    expect(d).toHaveLength(9);
+    for (let i = 1; i < d.length; i++) expect(Math.abs(d[i].drift - d[i - 1].drift), `${d[i].kind}: ${JSON.stringify(d)}`).toBeLessThan(1 / 64 + 0.003);
+  });
+}
