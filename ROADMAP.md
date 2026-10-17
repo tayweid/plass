@@ -118,27 +118,50 @@ Evaluate every item against "Typst on rails" (CLAUDE.md) before scope.
      the page's gap since 2026-10-16 (the spacing above them carried the
      spaced mode's 0.9 em margin). The blocks with a fixed 0.9 em margin
      carry it the same way (measured 2026-10-16 at 12.5 pt against the
-     audit's SVG): Typst spaces a list, a nested list, a figure, the
-     abstract and the bibliography from their neighbours by the leading
-     alone in classic mode, and the page adds 0.9 em, so the line after a
-     list (or the first line of a nested list, or the line after any of
-     the others) is 15 px lower on the page than in print, and a classic
-     page holding lists breaks later than Typst's. Quotes and code blocks
-     agree (their boxes read the mode's paragraph spacing). Not changed
+     audit's SVG): Typst spaces a list and a nested list from their
+     neighbours by the leading alone in classic mode, and the page adds
+     0.9 em, so the line after a list (or the first line of a nested list)
+     is 15 px lower on the page than in print, and a classic page holding
+     lists breaks later than Typst's. Quotes and code blocks agree (their
+     boxes read the mode's paragraph spacing), and so do figures, the
+     abstract and the bibliography since their boxes were derived (below).
+     Not changed
      yet: classic spacing is to be written up first. The fix publishes
      those margins from `parMarginEm` (0 in classic mode), and a tight
      list's last item would then need its 0.25 em margin dropped too
      (today it collapses into the list's 0.9 em).
+   - Figures, the abstract and the bibliography are laid out at their
+     Typst frames since 2026-10-16, in both paragraph modes
+     (tests/margin-drift.spec.ts, and the audit's figure-edge fixtures, a
+     figure at page 1's bottom and at page 2's top). A figure's box was a
+     July raster calibration, 8.3 px taller than the print at 12.5 pt (the
+     caption 5 px low); it is a paragraph's at both edges now, the caption
+     0.65 em (Typst's figure gap) below the image, and an image at a share
+     of the column is given Typst's height (`figureBoxEm`; the paginator
+     lands a figure by its image and fits it by its caption's baseline).
+     The abstract's painted label is a paragraph line with the bold
+     capitals' frame (`abstractBoxEm`; the abstract's first line was 2.55
+     px high). The bibliography's compiled list is placed by its frame,
+     from the title's frame top to the last baseline (`bibliographyBoxEm`;
+     the list was 2.3 px high, the paragraph after it 1.2 to 1.6 px). Each
+     lands within 1/128 px of the print. Found, not fixed: a figure without
+     a width keeps the browser's natural size and its 6 in height cap,
+     which Typst does not share (unchecked; Typst sizes a raster by its
+     DPI). The bibliography moves whole between pages where Typst breaks
+     it between entries, and near a page's end the audit disagrees (a
+     sweep of its position: 21 of 36 documents, the same before and after
+     the frame work; part of it may be the audit's reading, which cannot
+     name a page start inside the list). The list compiles at the
+     editor's `clientWidth`, a whole pixel (a half-letter column of 412.8
+     px compiles at 413). The front matter's margins (title 0.6 em of its
+     size, authors 1 em, date 0.7 em) are not the paragraph margin the
+     export spaces them by, so by the box model an abstract after a date
+     sits 3.3 px high (not measured), and a bibliography right after a
+     heading gets the two spacings' sum where Typst keeps the larger
+     (unchecked).
    - Blocks the page lays out off their print, found while putting their
      margins in layout units (2026-10-16, 12.5 pt, spaced, against the
-     audit's SVG; none is in an audit fixture). A figure (a 120×80 image
-     at 20 % width, one-line caption) is 8.3 px taller than Typst's: the
-     caption's line is 5 px lower, and the paragraph after it 3.3 px lower
-     again (the figure's 0.2 em padding-bottom; its 0.4 em, 0.2 em and
-     0.55 em are a July raster calibration). The abstract's first line is
-     2.55 px higher than in print (its painted "Abstract" label and 0.75 em
-     margin). The paragraph after the bibliography is 1.61 px higher (the
-     compiled list's box and its 0.75 em padding). Inside a quote, Typst
+     audit's SVG; none is in an audit fixture). Inside a quote, Typst
      spaces a list 2.4 em above and 1.8 em below (the quote's block
      spacing reaches its children), where the page uses paragraph
      spacing: a list after a quote's paragraph prints 11.38 px (0.683 em)
