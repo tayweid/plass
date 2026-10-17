@@ -6,6 +6,11 @@ will have.
 
 Try it in your browser: **<https://plass.tayweid.io>**
 
+<p align="center">
+  <img src="docs/images/page.png" width="560"
+       alt="A page in Plass: a title, justified paragraphs, a numbered equation, and a footnote at the foot of the page">
+</p>
+
 ## Why
 
 Writing tools come in two kinds. LaTeX and Typst make beautiful pages, but
@@ -66,8 +71,19 @@ Older `.typ` documents still open and save as Typst.
   margins, type size, line spacing, page numbers, running headers and
   footers, section numbers.
 
+Click a formula to change it. You type LaTeX; the page shows what Typst
+will print.
+
+![Editing a display equation: LaTeX in a box below the formula, with its label](docs/images/math.png)
+
+Click into a table and its controls appear in the margin beside it.
+
+![Editing a table: the caret in a cell, a column of controls to the left of the table](docs/images/table.png)
+
 **Plain text** (⌘/, the `<>` at the bottom of the rail) shows the same
 document as Markdown text, for when you'd rather just type.
+
+![The same document as Markdown text](docs/images/plain-text.png)
 
 ## What Plass won't do
 
@@ -118,7 +134,8 @@ npm run dev      # http://localhost:5199
 
 [CONTRIBUTING.md](./CONTRIBUTING.md) has the checks to run before a push.
 [PORT.md](./PORT.md) and [PAGE-PORT.md](./PAGE-PORT.md) explain how the
-layout copies Typst's. [ROADMAP.md](./ROADMAP.md) is what's next.
+layout copies Typst's. [ROADMAP.md](./ROADMAP.md) is what's next. `npm run screenshots` (with
+the dev server running) retakes the pictures in this README.
 
 ## The name
 
