@@ -227,7 +227,14 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   runs from the frame, so there the equation is boxed like a paragraph
   (`displayMathPadEm`: the paragraph's cap slack above, inset below). Inline content
   raised off the baseline (a footnote marker) gets `line-height: 0`:
-  Typst's baseline shift never grows a line.
+  Typst's baseline shift never grows a line. So do inline code, inline
+  raw and a formula's placeholder: Typst's raw frame (the mono face's
+  0.7598 top edge at 0.8em) is under every certified body face's cap
+  height, while the mono face's box, at any line height it inherits,
+  hangs below the line (a table row 2-3 px taller). Inline raw prints at
+  Typst's own 0.8em of the text around it, as the page and the port size
+  it (never 0.8 of the body size: a smaller table, a footnote entry or a
+  heading printed it at the wrong width and height).
   The paginator fits Typst FRAMES, not browser boxes: a frame runs from
   the cap top (`pageTopAdjustEm` below the box top) to the last baseline
   (`pageBottomInsetEm` above the box bottom), footnote entries included
@@ -254,6 +261,11 @@ Plass (Knuth–Plass line breaking); pronounced like "class".
   solution block is Auto spacing, a paragraph run. Line k of
   a paragraph is at the paragraph's top plus k line-heights (never the
   caret box: Chrome rounds its height, and Typst's line pitch is exact).
+  The body's line height is a length, `calc(var(--doc-line) * 1em)`:
+  Chrome lays a length line height at the nearest 1/64 px and reports the
+  exact one, but a number at the font size rounded to 1/64 px times the
+  number, floored (every line 1/64 px short at 10 and 13 pt). Inline code
+  and raw inherit none of it (`line-height: 0`, above).
   Block measures are fractional (`getBoundingClientRect`, never
   `clientWidth`): a 5.5in page less 0.6in margins is 412.8px.
 - Headings are port-laid like paragraphs (bold base face, level scale,

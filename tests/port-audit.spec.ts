@@ -311,6 +311,56 @@ FIXTURES.push({
     '',
   ].join('\n'),
 });
+
+// Inline code and inline raw never grow a line, on the page or in print:
+// a long table with code in every row, at the body's size and at 0.8em,
+// and prose at 10 pt and line spacing 1.3 with code on every line, in
+// list items, a quote, footnote entries and a wrapping heading. The page's
+// code box hung below the line and grew each row by 2-3 px, each body
+// line by 0.55 px; in print, raw sized from the body grew the smaller
+// table's rows and set a heading's code at the wrong width.
+{
+  const CODE_FILLER = 'The Knuth Plass algorithm evaluates `a_complete` paragraph and preserves `globally_optimal` line endings while `editing` without visible jitter. ';
+  const codeTable = (div: string) => [
+    '# A long table with code',
+    '',
+    'An introductory paragraph sits above the table.',
+    '',
+    ...(div ? [div, ''] : []),
+    '| Item | Value |',
+    '| --- | --- |',
+    ...Array.from({ length: TABLE_ROWS - 1 }, (_, i) => `| Row \`${i + 1}\` | value \`v${i + 1}\` |`),
+    '',
+    ...(div ? [':::', ''] : []),
+    'A closing paragraph follows the table. ' + FILLER.repeat(3).trimEnd(),
+    '',
+  ].join('\n');
+  FIXTURES.push(
+    { name: 'code-table.md', text: codeTable('') },
+    { name: 'code-table-small.md', text: codeTable('::: {.table font-size=0.8em}') },
+    {
+      name: 'code-lines.md',
+      text: [
+        '---',
+        'fontsize: 10pt',
+        'linestretch: 1.3',
+        '---',
+        '',
+        '# Code on every line, and `inline_code` in a heading long enough to wrap onto a second line',
+        '',
+        ...Array.from({ length: 8 }, (_, i) => CODE_FILLER.repeat(5).trimEnd() + ` A remark.[^${i + 1}] ` + CODE_FILLER.repeat(2).trimEnd() + '\n'),
+        '- ' + CODE_FILLER.repeat(2).trimEnd(),
+        '- ' + CODE_FILLER.repeat(1).trimEnd(),
+        '',
+        '> ' + CODE_FILLER.repeat(3).trimEnd(),
+        '',
+        ...Array.from({ length: 6 }, () => CODE_FILLER.repeat(4).trimEnd() + '\n'),
+        ...Array.from({ length: 8 }, (_, i) => `[^${i + 1}]: Footnote ${i + 1} with \`code_in_it\`. ` + CODE_FILLER.repeat(1 + (i % 2)).trimEnd()),
+      ].join('\n'),
+    },
+  );
+}
+
 const TYP_HEAD = (page: string, extra = '') =>
   `#set page(${page})\n#set par(justify: true, leading: 10.215pt, spacing: 21.465pt)\n#set list(spacing: 13.34pt)\n#set enum(spacing: 13.34pt)\n${extra}#set text(font: "New Computer Modern", size: 12.5pt)\n\n`;
 const NOTES = Array.from({ length: 8 }, (_, i) => FILLER.repeat(3).trimEnd() + ` A remark.#footnote[Note ${i + 1}. ${FILLER.repeat(i % 2 ? 2 : 1).trimEnd()}] ` + FILLER.repeat(2).trimEnd()).join('\n\n');
