@@ -2998,8 +2998,8 @@ body {
 /* The Typst ink svg is a block, centered: inline, it sat on a text
    baseline with the line's strut below it, and the block came out taller
    than Typst's equation frame (by 6px and more; a one-letter formula was
-   a whole line tall). The node view trims the svg's page rounding with a
-   margin, so the content box is exactly the frame (math.ts). */
+   a whole line tall). Its margins trim the svg's page rounding, so the
+   content box is exactly the frame (`.math-display.math-ink > svg`). */
 .math-display > svg {
   display: block;
   margin-inline: auto;
@@ -3021,6 +3021,38 @@ body {
   syntax: '<length>';
   inherits: true;
   initial-value: 0px;
+}
+
+/* The box's edges in layout units. Chrome holds a length in 1/64 px and
+   truncates each one to it: the two paddings, the frame and the 0.9em
+   margin each came out up to 1/64 px short, and the paragraph after an
+   equation painted 0.02-0.03 px higher than its print at 12.5 pt, more
+   with every equation on the page. Each edge is rounded from the exact
+   model instead (the padding, the number's room above the ink
+   `--eq-top`, the frame `--eq-frame`, the padding, the margin; the node
+   view's), so it falls within 1/128 px of where Typst puts it below the
+   box's top. The svg's height (`--eq-svg-h`) is in layout units already;
+   its margin-bottom gives back what the svg's whole-point page has past
+   the frame. */
+.math-display.math-ink {
+  --eq-top: 0px;
+  padding-top: round(var(--math-pad-top), 1px / 64);
+  padding-bottom: calc(
+    round(var(--math-pad-top) + var(--eq-frame) + var(--math-pad-bottom), 1px / 64) -
+      round(var(--math-pad-top) + var(--eq-frame), 1px / 64)
+  );
+  margin-bottom: calc(
+    round(var(--math-pad-top) + var(--eq-frame) + var(--math-pad-bottom) + 0.9em, 1px / 64) -
+      round(var(--math-pad-top) + var(--eq-frame) + var(--math-pad-bottom), 1px / 64)
+  );
+}
+
+.math-display.math-ink > svg {
+  margin-top: calc(round(var(--math-pad-top) + var(--eq-top), 1px / 64) - round(var(--math-pad-top), 1px / 64));
+  margin-bottom: calc(
+    round(var(--math-pad-top) + var(--eq-frame), 1px / 64) - round(var(--math-pad-top) + var(--eq-top), 1px / 64) -
+      var(--eq-svg-h)
+  );
 }
 
 .math-display {

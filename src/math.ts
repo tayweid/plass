@@ -14,7 +14,7 @@ import type { Mark } from 'prosemirror-model';
 import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
 import { wrapAligned } from './math-src';
-import { getSettings, parseMathMacros } from './settings';
+import { getSettings, layoutPx, parseMathMacros } from './settings';
 import { forgetInk, getInk, inkDeferredReason, inkKey, inkStatus, isBoldMath, onInk, requestInk } from './math-ink';
 import { scheduleTypeset } from './typeset-plugin';
 import { mountTypstSvg } from './safe-svg';
@@ -157,20 +157,25 @@ export class MathView implements NodeView {
       const svg = this.dom.querySelector('svg');
       if (svg) {
         svg.style.width = `${ink.widthPx.toFixed(2)}px`;
-        const heightPx = +ink.heightPx.toFixed(2);
-        svg.style.height = `${heightPx}px`;
-        if (!this.display) svg.style.verticalAlign = `${(-ink.descentPx).toFixed(2)}px`;
-        else {
+        if (!this.display) {
+          svg.style.height = `${ink.heightPx.toFixed(2)}px`;
+          svg.style.verticalAlign = `${(-ink.descentPx).toFixed(2)}px`;
+        } else {
           // The block is the equation's Typst frame (vertical parity): the
           // svg (a block, so no line strut below it) gives back what its
           // page added by rounding up, which is blank ink-free space. A
           // numbered equation's frame holds its number too: the room the
-          // number takes above the ink is a margin over the svg.
+          // number takes above the ink is a margin over the svg. style.css
+          // places every edge from these, in layout units; the svg's height
+          // is in layout units so the edges below it land where computed.
+          const height = layoutPx(ink.heightPx);
           const withNumber = numbered && ink.numberedFrameHeightPx !== undefined;
-          const frame = withNumber ? ink.numberedFrameHeightPx! : ink.frameHeightPx ?? heightPx;
+          const frame = withNumber ? ink.numberedFrameHeightPx! : ink.frameHeightPx ?? height;
           const top = withNumber ? ink.numberedInkTopPx ?? 0 : 0;
-          svg.style.marginTop = `${top.toFixed(3)}px`;
-          svg.style.marginBottom = `${(frame - top - heightPx).toFixed(3)}px`;
+          svg.style.height = `${height}px`;
+          this.dom.style.setProperty('--eq-svg-h', `${height}px`);
+          this.dom.style.setProperty('--eq-frame', `${frame.toFixed(4)}px`);
+          this.dom.style.setProperty('--eq-top', `${top.toFixed(4)}px`);
           // Center the painted equation number on the frame (as Typst
           // does): the CSS adds the padding above it, which depends on
           // where the equation sits (style.css).
