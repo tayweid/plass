@@ -488,8 +488,8 @@ body {
 }
 
 /* The view switch (toolbar.ts), on the page at the panel's lower left,
-   the HUD's corner opposite and its quiet frosted chip: the console glyph
-   and its word, Plain text on the page, Paper in the text. */
+   the HUD's corner opposite and its quiet frosted chip: the source glyph
+   alone, its name in its title. */
 .view-switch {
   position: fixed;
   left: calc(var(--rail) + 10px);
@@ -497,9 +497,10 @@ body {
   z-index: 50;
   display: flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  width: 26px;
   height: 22px;
-  padding: 0 8px 0 6px;
+  padding: 0;
   border: 0;
   border-radius: 7px;
   font: 11px var(--sans);

@@ -7,10 +7,11 @@
 
 import './toolbar.css';
 import { TextSelection } from 'prosemirror-state';
-import { lift, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
+import { setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
+import { liftTarget } from 'prosemirror-transform';
 import type { Command, EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
-import type { Node as PMNode } from 'prosemirror-model';
+import { NodeRange, type Node as PMNode } from 'prosemirror-model';
 import { wrapInList } from 'prosemirror-schema-list';
 import { schema } from './schema';
 import { cycleHeading, headingLevelAt, nextHeadingLevel, toggleListSpacing } from './editing';
@@ -390,7 +391,13 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   drawerBtn.id = 'rail-drawer';
   drawerBtn.setAttribute('aria-pressed', 'false');
   const setDrawer = (open: boolean) => {
-    document.documentElement.classList.toggle('rail-open', open);
+    // The frame the drawer opens or shuts, nothing in the rail fades: a
+    // row's label turns back into a hover caption as it shuts, and its
+    // fade would show it for a frame or two outside the narrowing rail.
+    const root = document.documentElement;
+    root.classList.add('rail-switching');
+    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('rail-switching')));
+    root.classList.toggle('rail-open', open);
     drawerBtn.setAttribute('aria-pressed', String(open));
     drawerBtn.title = open ? 'Fewer tools' : 'All tools — with their markdown and keys';
     try {
@@ -415,14 +422,15 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   bibBtn.title = 'Edit bibliography — or write a ```bibtex block';
   const settingsBtn = glyphButton(railFoot, 'Document settings', icon('sliders'));
   // The view switch, on the page at its lower left (the HUD's corner
-  // opposite): a quiet chip, Plain text on the page, Paper in the text.
+  // opposite): a quiet chip with the source glyph and no word; its name
+  // (Plain text on the page, Paper in the text) is its title.
   const sourceBtn = document.createElement('button');
   sourceBtn.type = 'button';
   sourceBtn.className = 'tb-source view-switch';
   sourceBtn.setAttribute('aria-label', 'Plain text view');
   sourceBtn.setAttribute('aria-pressed', 'false');
   sourceBtn.title = 'Switch to plain text (⌘/)';
-  sourceBtn.innerHTML = `${icon('terminal')}<span class="view-switch-label" aria-hidden="true">Plain text</span>`;
+  sourceBtn.innerHTML = icon('code');
   sourceBtn.addEventListener('mousedown', (e) => e.preventDefault());
   sourceBtn.addEventListener('click', () => { closeMenu(); actions.toggleSource(); });
   document.body.append(sourceBtn);
@@ -762,23 +770,41 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     wrapIn(schema.nodes.blockquote, { kind })(state, view.dispatch);
     view.focus();
   };
-  tool(blocksGroup, 'Block quote', () => setBlockKind(null), {
+  // A pressed Quote or Solution tile, pressed again, takes the whole block
+  // away (its paragraphs back to body text), and so does a pressed Code
+  // block (Taylor, 2026-10-17: no separate Remove button).
+  const unwrapQuote = () => {
+    const { state } = view;
+    const { $from } = state.selection;
+    for (let d = $from.depth; d > 0; d--) {
+      if ($from.node(d).type !== schema.nodes.blockquote) continue;
+      const range = new NodeRange(state.doc.resolve($from.before(d) + 1), state.doc.resolve($from.after(d) - 1), d);
+      const target = liftTarget(range);
+      if (target !== null) view.dispatch(state.tr.lift(range, target).scrollIntoView());
+      break;
+    }
+    view.focus();
+  };
+  const quoteKind = () => {
+    const quote = ancestor('blockquote');
+    return quote ? ((quote.attrs.kind as string | null) ?? 'quote') : null;
+  };
+  tool(blocksGroup, 'Block quote', () => (quoteKind() === 'quote' ? unwrapQuote() : setBlockKind(null)), {
     rest: true, editing: true, glyph: icon('quote'), hint: '> text · ⌃>', title: 'Block quote (⌃>) — or type > at a line start',
-    checked: () => !!ancestor('blockquote') && !ancestor('blockquote')!.attrs.kind,
+    checked: () => quoteKind() === 'quote',
   });
-  tool(blocksGroup, 'Solution', () => setBlockKind('solution'), {
+  tool(blocksGroup, 'Solution', () => (quoteKind() === 'solution' ? unwrapQuote() : setBlockKind('solution')), {
     rest: true, editing: true, glyph: icon('solution'), hint: 'red, ruled', title: 'Solution block — red text with a red rule on the left',
-    checked: () => ancestor('blockquote')?.attrs.kind === 'solution',
+    checked: () => quoteKind() === 'solution',
   });
   commandTool(blocksGroup, 'Comment', insertEditorComment, {
     rest: true, glyph: icon('comment'), hint: 'never printed', title: 'Editorial comment — a note on the page and in the file, never printed',
   });
-  commandTool(blocksGroup, 'Code block', setBlockType(schema.nodes.code_block, { params: '' }), {
-    rest: true, glyph: icon('terminal'), hint: '```', title: 'Code block — monospaced source listing',
-  });
-  commandTool(blocksGroup, 'Remove quote', lift, {
-    rest: true, glyph: icon('paragraph'), hint: 'body text', title: 'Plain body text — lift out of the quote or solution block',
-    enabled: () => !!ancestor('blockquote') && lift(view.state),
+  const inCode = () => view.state.selection.$from.parent.type === schema.nodes.code_block && !view.state.selection.$from.parent.attrs.params;
+  const toggleCode: Command = (state, dispatch) =>
+    inCode() ? setBlockType(schema.nodes.paragraph)(state, dispatch) : setBlockType(schema.nodes.code_block, { params: '' })(state, dispatch);
+  commandTool(blocksGroup, 'Code block', toggleCode, {
+    rest: true, glyph: icon('terminal'), hint: '```', title: 'Code block — monospaced source listing', checked: inCode,
   });
 
   // LAYOUT
@@ -1176,7 +1202,6 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
       closeMenu();
       sourceBtn.setAttribute('aria-pressed', String(active));
       sourceBtn.title = active ? 'Switch to paper (⌘/)' : 'Switch to plain text (⌘/)';
-      sourceBtn.querySelector('.view-switch-label')!.textContent = active ? 'Paper' : 'Plain text';
       settingsBtn.disabled = active;
       bibBtn.disabled = active;
       for (const button of rail.querySelectorAll<HTMLButtonElement>('.tb-rests')) button.disabled = active;

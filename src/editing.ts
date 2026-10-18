@@ -274,6 +274,28 @@ export const cycleHeading: Command = (state, dispatch) => {
     : setBlockType(schema.nodes.heading, { level: next })(state, dispatch);
 };
 
+/** ↓ on the last line of a quote, a solution or a code block that ends
+ *  the document: a plain line under it, the caret in it (Taylor,
+ *  2026-10-17: without it the only way out was the plain-text view). */
+const exitBlockDown: Command = (state, dispatch, view) => {
+  const { selection } = state;
+  if (!(selection instanceof TextSelection) || !selection.empty) return false;
+  const { $from } = selection;
+  if ($from.depth < 1) return false;
+  const block = $from.node(1);
+  if (block.type !== schema.nodes.blockquote && block.type !== schema.nodes.code_block) return false;
+  if ($from.index(0) !== state.doc.childCount - 1) return false;
+  // The caret's text block is the block's last (a quote's last paragraph).
+  for (let d = 1; d < $from.depth; d++) if ($from.index(d) !== $from.node(d).childCount - 1) return false;
+  if (view && !view.endOfTextblock('down')) return false;
+  if (dispatch) {
+    const end = state.doc.content.size;
+    const tr = state.tr.insert(end, schema.nodes.paragraph.create());
+    dispatch(tr.setSelection(TextSelection.create(tr.doc, end + 1)).scrollIntoView());
+  }
+  return true;
+};
+
 export function buildKeymap(): Plugin {
   const backToParagraph: Command = setBlockType(schema.nodes.paragraph);
   const keys: Record<string, Command> = {
@@ -324,7 +346,7 @@ export function buildKeymap(): Plugin {
     'ArrowRight': skipFootnote(1),
     'ArrowLeft': skipFootnote(-1),
     'ArrowUp': chainCommands(verticalCaret(-1), exitTableVertically(-1), exitGridVertically(-1)),
-    'ArrowDown': chainCommands(verticalCaret(1), exitTableVertically(1), exitGridVertically(1)),
+    'ArrowDown': chainCommands(verticalCaret(1), exitTableVertically(1), exitGridVertically(1), exitBlockDown),
     'Mod-Alt-t': (_state, dispatch, view) => {
       if (dispatch && view) {
         void import('./table-editor').then(({ insertStructuredTable }) => insertStructuredTable(view));

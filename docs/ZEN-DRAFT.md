@@ -1012,16 +1012,19 @@ know how to write in markdown") it holds, at rest, top to bottom:
   justified → center → right.
 - *Insert*: Image ⌘⌥I, Table ⌘⌥T, Grid, Inline math ⌘M, Footnote ⌘⌥F.
 - *Blocks*: Block quote ⌃>, Solution, Comment, Code block (ManimLive's
-  console glyph), Remove quote; Quote and Solution light
-  (`aria-pressed`) when the caret is in one, Remove quote is enabled
-  inside a quote. They refresh on every state change (cheaply: an
-  ancestor walk and a dry-run `lift`, no geometry), and only write an
-  attribute when it changes, so the typing path publishes nothing.
+  console glyph). Quote, Solution and Code light (`aria-pressed`) when
+  the caret is in one, and a lit tile pressed again takes the block away
+  (its text back to body text; there is no Remove button). They refresh
+  on every state change (cheaply: an ancestor walk, no geometry), and
+  only write an attribute when it changes, so the typing path publishes
+  nothing. ⏎ stays in the block; ↓ on the last line of a quote, solution
+  or code block that ends the paper makes a plain line under it.
 - Pinned at the bottom: **Bibliography**, then **Document settings**,
   whose panel flies out to the right.
 
 The **Plain text / Paper** switch ⌘/ is not on the rail: it is a quiet
-chip on the page at its lower left, the HUD's corner opposite.
+chip on the page at its lower left, the HUD's corner opposite, the
+source glyph (< >) alone with its name in its title.
 
 **All tools** opens the rail into a drawer (`html.rail-open`, `--rail`
 264 px, remembered per browser): it pushes the page over (the paper

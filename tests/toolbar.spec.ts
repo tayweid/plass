@@ -54,7 +54,7 @@ const RAIL_AT_REST = [
   'All tools',
   'Heading level', 'Alignment',
   'Image', 'Table', 'Grid', 'Inline math', 'Footnote',
-  'Block quote', 'Solution', 'Comment', 'Code block', 'Remove quote',
+  'Block quote', 'Solution', 'Comment', 'Code block',
   'Bibliography', 'Document settings',
 ];
 
@@ -222,20 +222,47 @@ test('the view switch is a chip at the panel’s lower left in either view, clea
       left: s.left - panel.left,
       bottom: panel.bottom - s.bottom,
       clearOfHud: !hudShown || s.right <= h.left || s.left >= h.right || s.bottom <= h.top || s.top >= h.bottom,
-      label: document.querySelector('.view-switch-label')!.textContent,
+      title: (document.querySelector('.view-switch') as HTMLElement).title,
     };
   });
-  await expect.poll(place).toEqual({ left: 10, bottom: 10, clearOfHud: true, label: 'Plain text' });
+  // The source glyph alone: no word on the chip, its name in its title.
+  expect(await switcher.evaluate((el) => ({ text: el.textContent, glyph: el.querySelector('svg')!.innerHTML })))
+    .toEqual({ text: '', glyph: '<polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline>' });
+  await expect.poll(place).toEqual({ left: 10, bottom: 10, clearOfHud: true, title: 'Switch to plain text (⌘/)' });
   await switcher.click();
   await expect(page.locator('#source .cm-content')).toHaveCount(1);
   await expect(switcher).toHaveAttribute('aria-pressed', 'true');
-  await expect.poll(place).toEqual({ left: 10, bottom: 10, clearOfHud: true, label: 'Paper' });
+  await expect.poll(place).toEqual({ left: 10, bottom: 10, clearOfHud: true, title: 'Switch to paper (⌘/)' });
   await switcher.click();
   await expect(switcher).toHaveAttribute('aria-pressed', 'false');
   // The open drawer pushes the panel over; the switch goes with it.
   await openDrawer(page);
   await expect.poll(() => page.locator('#scroll').evaluate((el) => el.getBoundingClientRect().left)).toBeCloseTo(264, 0);
-  await expect.poll(place).toEqual({ left: 10, bottom: 10, clearOfHud: true, label: 'Plain text' });
+  await expect.poll(place).toEqual({ left: 10, bottom: 10, clearOfHud: true, title: 'Switch to plain text (⌘/)' });
+});
+
+test('shutting the drawer shows no caption on the way: the rows’ labels do not fade out beside the rail', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!window.view);
+  await openDrawer(page);
+  // Each frame after the switch is pressed: every rail label shown (its
+  // opacity above nothing). Shut, a label is a hover caption, and its
+  // fade-out once drew the rows' glass boxes outside the narrowed rail.
+  const shown = await page.evaluate(async () => {
+    (document.getElementById('rail-drawer') as HTMLElement).click();
+    const out: number[] = [];
+    for (let f = 0; f < 10; f++) {
+      await new Promise((r) => requestAnimationFrame(r));
+      // (All tools' own caption, under the pointer that pressed it, is a
+      // hover caption and stays.)
+      out.push([...document.querySelectorAll('#rail .tb-rail-groups .lbl')].filter((el) => {
+        const cs = getComputedStyle(el);
+        return cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity) > 0.02 && el.getBoundingClientRect().width > 0;
+      }).length);
+    }
+    return out;
+  });
+  expect(shown).toEqual(Array(10).fill(0));
 });
 
 test('menus open, navigate, and close from the keyboard', async ({ page }) => {

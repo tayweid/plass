@@ -257,6 +257,12 @@
 /* All tools, at the top under its own hairline; open or shut it keeps
    its place (the rail's 6 px inset either way), so it closes where it
    opened. */
+:root.rail-switching #rail *,
+:root.rail-switching #rail *::before,
+:root.rail-switching #rail *::after {
+  transition: none !important;
+}
+
 .tb-rail-top {
   flex: none;
   display: flex;

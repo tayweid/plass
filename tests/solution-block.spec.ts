@@ -114,7 +114,7 @@ test('solution block paginates locally and agrees with Typst', async ({ page }) 
   expect(report?.pages.agree, JSON.stringify(report?.pages)).toBe(true);
 });
 
-test('Extras menu wraps into a solution, re-kinds, and lifts back out', async ({ page }) => {
+test('the rail wraps into a solution, re-kinds, and the pressed tile lifts back out', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const { state } = window.view;
@@ -130,12 +130,10 @@ test('Extras menu wraps into a solution, re-kinds, and lifts back out', async ({
   // The Blocks tiles on the rail (once a row inside Extras).
   const solutionBtn = page.locator('#rail button[title^="Solution block"]');
   const quoteBtn = page.locator('#rail button[title^="Block quote"]');
-  const plainBtn = page.locator('#rail button[title^="Plain body text"]');
 
-  await expect(plainBtn).toBeDisabled();
+  await expect(solutionBtn).toHaveAttribute('aria-pressed', 'false');
   await solutionBtn.click();
   await expect(solutionBtn).toHaveAttribute('aria-pressed', 'true');
-  await expect(plainBtn).toBeEnabled();
   await expect(page.locator('.ProseMirror blockquote[data-kind="solution"] p')).toHaveText('Solution body.');
   await expect(page.locator('.ProseMirror > p', { hasText: 'Solution body.' })).toHaveCount(0);
 
@@ -146,11 +144,64 @@ test('Extras menu wraps into a solution, re-kinds, and lifts back out', async ({
   await expect(page.locator('.ProseMirror blockquote:not([data-kind]) p')).toHaveText('Solution body.');
   await expect(page.locator('.ProseMirror blockquote[data-kind="solution"]')).toHaveCount(0);
 
-  // And back to a solution, then lifted out to body text.
+  // And back to a solution, then out to body text by pressing the pressed
+  // tile again (there is no separate Remove button).
   await solutionBtn.click();
   await expect(page.locator('.ProseMirror blockquote[data-kind="solution"]')).toHaveCount(1);
-  await plainBtn.click();
-  await expect(plainBtn).toBeDisabled();
+  await solutionBtn.click();
+  await expect(solutionBtn).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('.ProseMirror blockquote')).toHaveCount(0);
   await expect(page.locator('.ProseMirror > p', { hasText: 'Solution body.' })).toHaveCount(1);
+});
+
+test('↓ on the last line of a quote or a code block that ends the paper makes a plain line under it; ⏎ stays in the block', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!window.view);
+  const shape = () => page.evaluate(() => {
+    const blocks: string[] = [];
+    window.view.state.doc.forEach((node) => blocks.push(node.type.name));
+    return { blocks, caret: window.view.state.selection.$from.parent.type.name };
+  });
+  for (const kind of ['quote', 'code'] as const) {
+    await page.evaluate((kind) => {
+      const { state } = window.view;
+      const s = state.schema;
+      const block = kind === 'code'
+        ? s.nodes.code_block.create(null, s.text('x = 1'))
+        : s.nodes.blockquote.create(null, s.nodes.paragraph.create(null, s.text('Quoted.')));
+      window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, [s.nodes.paragraph.create(null, s.text('Before.')), block]));
+    }, kind);
+    await page.locator(kind === 'code' ? '.ProseMirror pre' : '.ProseMirror blockquote p').click();
+    await page.keyboard.press('End');
+    if (kind === 'code') {
+      // ⏎ is a new line in the code, as ever.
+      await page.keyboard.press('Enter');
+      expect(await page.evaluate(() => window.view.state.doc.lastChild!.textContent)).toBe('x = 1\n');
+      await page.keyboard.press('Backspace');
+    }
+    await page.keyboard.press('ArrowDown');
+    expect(await shape()).toEqual({ blocks: ['paragraph', kind === 'code' ? 'code_block' : 'blockquote', 'paragraph'], caret: 'paragraph' });
+    await page.keyboard.type('After.');
+    expect(await page.evaluate(() => window.view.state.doc.lastChild!.textContent)).toBe('After.');
+  }
+});
+
+test('a pressed Code block tile, pressed again, turns the code back into body text', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, state.schema.nodes.paragraph.create(null, state.schema.text('let x = 1'))));
+  });
+  await page.click('.ProseMirror p');
+  const code = page.locator('#rail').getByRole('button', { name: 'Code block', exact: true });
+  await code.click();
+  await expect(code).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.ProseMirror pre')).toHaveText('let x = 1');
+  await code.click();
+  await expect(code).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('.ProseMirror pre')).toHaveCount(0);
+  expect(await page.evaluate(() => {
+    const first = window.view.state.doc.firstChild!;
+    return [first.type.name, first.textContent];
+  })).toEqual(['paragraph', 'let x = 1']);
 });
