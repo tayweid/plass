@@ -457,6 +457,14 @@ function leafOf(node: PMNode, el: Element | null, last: boolean): { node: PMNode
     n = last ? n.lastChild : n.firstChild;
     e = last ? e.lastElementChild : e.firstElementChild;
   }
+  // A paragraph containing only an image has the image's frame, not a
+  // text line's cap/baseline insets. Subtracting those insets shortened
+  // graph cells by a full leading and placed their ink above adjacent
+  // tables; repeated graph rows could hide an entire printed page.
+  if (n?.type === schema.nodes.paragraph && n.childCount === 1 && n.firstChild?.type === schema.nodes.image) {
+    const image = e?.querySelector<HTMLImageElement>('.ts-inline-image img');
+    if (image?.naturalHeight) return { node: n.firstChild, el: image };
+  }
   return n && e ? { node: n, el: e } : null;
 }
 

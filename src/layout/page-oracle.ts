@@ -363,7 +363,11 @@ function analyze(
   // sits well clear (a header's bottom at 0.7 × the margin, a footer's
   // top past 0.7 × the margin below the content).
   const topFrac = (settings.marginTop * 72 - 0.5 * settings.sizePt) / pageHPt;
-  const bottomFrac = 1 - (settings.marginBottom * 72 - 0.5 * settings.sizePt) / pageHPt;
+  // At the bottom the frame ends at the baseline, so a body's text-box
+  // top cannot overhang the margin. Extending that boundary by half a
+  // font size swallowed page numbers with narrow (0.3in) margins and
+  // falsely matched them as body text at the next page's grid row.
+  const bottomFrac = 1 - (settings.marginBottom * 72) / pageHPt;
   const all: PagedLine[] = [];
   for (const l of raw) {
     if (l.yFrac < topFrac || l.yFrac > bottomFrac) marginals?.push({ page: l.page, text: l.text });
