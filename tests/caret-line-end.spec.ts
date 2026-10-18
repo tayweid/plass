@@ -67,25 +67,49 @@ const centre = (page: Page, y: number) =>
 test("the rail's caret mark at a line end is on its line's page", async ({ page }) => {
   test.setTimeout(90_000);
   await demo(page);
-  const end = (await lineEnds(page)).find((e) => e.page === 2);
-  expect(end, 'a line end on page 2').toBeTruthy();
   // The mark moves in the frame after a selection that moved without an
-  // edit (scroll-rail.ts, `selection`).
+  // edit (scroll-rail.ts, `selection`); on a busy runner that frame can come
+  // late, so the mark is read once it has held still for three frames.
   const mark = (pos: number) =>
     page.evaluate(async (pos) => {
       const { view } = window as unknown as Hooks;
       const TS = view.state.selection.constructor as typeof import('prosemirror-state').TextSelection;
       view.dispatch(view.state.tr.setSelection(TS.create(view.state.doc, pos)));
-      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
       const el = document.querySelector<HTMLElement>('#scrollrail .sr-caret')!;
-      return { f: parseFloat(el.style.getPropertyValue('--f')), label: el.getAttribute('aria-label') ?? '' };
+      const read = () => ({ f: parseFloat(el.style.getPropertyValue('--f')), label: el.getAttribute('aria-label') ?? '' });
+      const frame = () => new Promise((done) => requestAnimationFrame(done));
+      await frame();
+      await frame();
+      let last = read();
+      for (let still = 0, n = 0; still < 3 && n < 120; n++) {
+        await frame();
+        const now = read();
+        still = now.f === last.f && now.label === last.label ? still + 1 : 0;
+        last = now;
+      }
+      return last;
     }, pos);
-  const before = await mark(end!.pos - 1);
-  expect((await caretState(page)).atLineEnd, 'one before the line end is mid-line').toBe(false);
-  const atEnd = await mark(end!.pos);
+  // The demo can still reflow after its first settled pass (a late load
+  // moves its page starts): the three marks are taken again whenever the
+  // line end they were taken at is no longer one once they are read.
+  let end: { pos: number; y: number; page: number } | undefined;
+  let before = { f: 0, label: '' };
+  let atEnd = before;
+  let after = before;
+  let atEndState = { atLineEnd: false, empty: false };
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await settleLocal(page);
+    end = (await lineEnds(page)).find((e) => e.page === 2);
+    expect(end, 'a line end on page 2').toBeTruthy();
+    before = await mark(end!.pos - 1);
+    expect((await caretState(page)).atLineEnd, 'one before the line end is mid-line').toBe(false);
+    atEnd = await mark(end!.pos);
+    atEndState = await caretState(page);
+    after = await mark(end!.pos + 1);
+    if ((await lineEnds(page)).some((e) => e.pos === end!.pos && e.page === 2)) break;
+  }
   // The case: side 1 measures nothing at the line end.
-  expect(await caretState(page)).toMatchObject({ atLineEnd: true, empty: true });
-  const after = await mark(end!.pos + 1);
+  expect(atEndState).toMatchObject({ atLineEnd: true, empty: true });
   for (const m of [before, atEnd, after]) expect(m.label).toMatch(/, page 2$/);
   // The line end is on the line of the letter before it; the start of the
   // next line, one further, is below.
