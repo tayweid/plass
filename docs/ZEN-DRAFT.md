@@ -1002,22 +1002,26 @@ The rest of the bar is empty: drag region.
 **The rail** (44 px wide, 32 px tiles, under the bar down the left edge,
 `nav#rail`; not a drag region, since it scrolls). Since 2026-10-17
 (Taylor: "the main things to show are the ones that most people don't
-know how to write in markdown") it holds, at rest, top to bottom under
-hairlines:
+know how to write in markdown") it holds, at rest, top to bottom:
 
+- **All tools** (`#rail-drawer`) at the top under its own hairline, in
+  the same place open or shut, so the drawer closes where it opened.
+- *Text*: two stepping tiles. **Heading level** shows the caret's level
+  (¶, H1, H2, H3) and each press steps it a size up, body → H3 → H2 → H1
+  → body; **Alignment** shows the paragraph's alignment and steps
+  justified → center → right.
 - *Insert*: Image ⌘⌥I, Table ⌘⌥T, Grid, Inline math ⌘M, Footnote ⌘⌥F.
-- *Blocks*: Block quote ⌃>, Solution, Comment, Remove quote; Quote and
-  Solution light (`aria-pressed`) when the caret is in one, Remove quote
-  is enabled inside a quote. They refresh on every state change
-  (cheaply: an ancestor walk and a dry-run `lift`, no geometry), and
-  only write an attribute when it changes, so the typing path publishes
-  nothing.
-- *Layout*: Justified, Center, Right.
-- *Code*: Code block. *Document*: Bibliography.
-- Pinned at the bottom, as Zen pins its bottom icons: **All tools**
-  (`#rail-drawer`), **Document settings**, whose panel flies out to the
-  right, and the **Plain text / Paper** switch ⌘/, lit while the text
-  is the truth.
+- *Blocks*: Block quote ⌃>, Solution, Comment, Code block (ManimLive's
+  console glyph), Remove quote; Quote and Solution light
+  (`aria-pressed`) when the caret is in one, Remove quote is enabled
+  inside a quote. They refresh on every state change (cheaply: an
+  ancestor walk and a dry-run `lift`, no geometry), and only write an
+  attribute when it changes, so the typing path publishes nothing.
+- Pinned at the bottom: **Bibliography**, then **Document settings**,
+  whose panel flies out to the right.
+
+The **Plain text / Paper** switch ⌘/ is not on the rail: it is a quiet
+chip on the page at its lower left, the HUD's corner opposite.
 
 **All tools** opens the rail into a drawer (`html.rail-open`, `--rail`
 264 px, remembered per browser): it pushes the page over (the paper
@@ -1026,7 +1030,7 @@ markdown and keys, under its group's heading: *Basics* first (body
 text, headings # ## ###, bold, italic, strikethrough, inline code,
 bulleted and numbered lists, loose spacing), then Insert (adding
 Display equation $$, Reference or cite @, Title block, Page break),
-Blocks, Layout, Code (adding Raw Typst block and inline raw Typst),
+Blocks, Layout (justified, center, right), Code (raw Typst block and inline raw Typst),
 Document (adding Demo document and, in a browser, Install Plass) and
 *Keys* (Open ⌘O, Save ⌘S, Export PDF ⌘E, Plain text ⌘/). It is the
 markdown cheat sheet, clickable, and it replaced the Headings, Text

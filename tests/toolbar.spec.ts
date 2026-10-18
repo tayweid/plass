@@ -6,7 +6,7 @@ declare global {
   }
 }
 
-/** Open the rail's drawer (its foot's All tools switch). */
+/** Open the rail's drawer (the All tools switch at its top). */
 async function openDrawer(page: import('playwright/test').Page) {
   const drawer = page.locator('#rail-drawer');
   await drawer.click();
@@ -47,13 +47,15 @@ test('the drawer’s Strikethrough row toggles the mark and preserves the select
   await expect(page.locator('.ProseMirror s')).toHaveText('cut this phrase');
 });
 
+/** The rail at rest, top to bottom: All tools over its hairline; Text
+ *  (the two stepping tiles), Insert and Blocks; the foot's Bibliography
+ *  and Document settings. The view switch is on the page, not the rail. */
 const RAIL_AT_REST = [
+  'All tools',
+  'Heading level', 'Alignment',
   'Image', 'Table', 'Grid', 'Inline math', 'Footnote',
-  'Block quote', 'Solution', 'Comment', 'Remove quote',
-  'Justified', 'Center', 'Right',
-  'Code block',
-  'Bibliography',
-  'All tools', 'Document settings', 'Plain text view',
+  'Block quote', 'Solution', 'Comment', 'Code block', 'Remove quote',
+  'Bibliography', 'Document settings',
 ];
 
 test('the bar, the rail and the open drawer fit a narrow window with a long filename', async ({ page }) => {
@@ -78,7 +80,19 @@ test('the bar, the rail and the open drawer fit a narrow window with a long file
   for (const name of RAIL_AT_REST) {
     await expect(page.locator('#rail').getByRole('button', { name, exact: true })).toBeVisible();
   }
-  for (const button of [...(await barButtons.all()), ...(await railButtons.all())]) {
+  // In that order, down the rail.
+  const order = await railButtons.evaluateAll((els) =>
+    els.map((el) => [el.getAttribute('aria-label'), el.getBoundingClientRect().top] as const).sort((a, b) => a[1] - b[1]).map(([name]) => name));
+  expect(order).toEqual(RAIL_AT_REST);
+  // The groups at rest: Text, Insert and Blocks; Layout, Code and
+  // Document are the drawer's alone.
+  const restGroups = await page.locator('#rail .tb-rail-groups > .tb-rail-group:visible').evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
+  expect(restGroups).toEqual(['Text', 'Insert', 'Blocks']);
+  await expect(page.locator('#rail .tb-rail-foot button:visible')).toHaveCount(2);
+  await expect(page.locator('#rail .tb-rail-top button:visible')).toHaveCount(1);
+  const viewSwitch = page.getByRole('button', { name: 'Plain text view', exact: true });
+  await expect(viewSwitch).toBeVisible();
+  for (const button of [...(await barButtons.all()), ...(await railButtons.all()), viewSwitch]) {
     const bounds = await button.boundingBox();
     expect(bounds).not.toBeNull();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
@@ -96,6 +110,9 @@ test('the bar, the rail and the open drawer fit a narrow window with a long file
   for (const name of ['Basics', 'Insert', 'Blocks', 'Layout', 'Code', 'Document', 'Keys']) {
     await expect(page.locator('#rail').getByRole('group', { name, exact: true }).locator('.tb-rail-head')).toBeVisible();
   }
+  // The stepping tiles are the rail's at rest: the drawer lists each level
+  // and alignment instead.
+  await expect(page.locator('#rail').getByRole('group', { name: 'Text', exact: true })).toBeHidden();
   const rows = page.locator('#rail .tb-rail-group button:visible');
   expect(await rows.count()).toBeGreaterThan(RAIL_AT_REST.length);
   for (const row of await rows.all()) {
@@ -186,6 +203,41 @@ test('the plain text switch stays visible in the lower-left corner in either vie
   }
 });
 
+test('the view switch is a chip at the panel’s lower left in either view, clear of the HUD, beside the open drawer too', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!window.view);
+  const switcher = page.getByRole('button', { name: 'Plain text view', exact: true });
+  // On the page, not in the rail, and no rail tile: no hover caption.
+  expect(await switcher.evaluate((el) => ({ inRail: !!el.closest('#rail'), parent: el.parentElement!.tagName, tile: el.classList.contains('tb-btn') })))
+    .toEqual({ inRail: false, parent: 'BODY', tile: false });
+  await expect(switcher.locator('.lbl')).toHaveCount(0);
+  const place = () => page.evaluate(() => {
+    const s = document.querySelector('.view-switch')!.getBoundingClientRect();
+    const panel = document.getElementById('scroll')!.getBoundingClientRect();
+    const hud = document.getElementById('hud')!;
+    const h = hud.getBoundingClientRect();
+    const hudShown = getComputedStyle(hud).display !== 'none' && h.width > 0;
+    return {
+      left: s.left - panel.left,
+      bottom: panel.bottom - s.bottom,
+      clearOfHud: !hudShown || s.right <= h.left || s.left >= h.right || s.bottom <= h.top || s.top >= h.bottom,
+      label: document.querySelector('.view-switch-label')!.textContent,
+    };
+  });
+  await expect.poll(place).toEqual({ left: 10, bottom: 10, clearOfHud: true, label: 'Plain text' });
+  await switcher.click();
+  await expect(page.locator('#source .cm-content')).toHaveCount(1);
+  await expect(switcher).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(place).toEqual({ left: 10, bottom: 10, clearOfHud: true, label: 'Paper' });
+  await switcher.click();
+  await expect(switcher).toHaveAttribute('aria-pressed', 'false');
+  // The open drawer pushes the panel over; the switch goes with it.
+  await openDrawer(page);
+  await expect.poll(() => page.locator('#scroll').evaluate((el) => el.getBoundingClientRect().left)).toBeCloseTo(264, 0);
+  await expect.poll(place).toEqual({ left: 10, bottom: 10, clearOfHud: true, label: 'Plain text' });
+});
+
 test('menus open, navigate, and close from the keyboard', async ({ page }) => {
   await page.goto('/?new=1');
   const exportBtn = page.locator('#toolbar').getByRole('button', { name: 'Export', exact: true });
@@ -258,7 +310,7 @@ test('a mouse click after Escape leaves no ring or caption on the tile Escape we
   }
 });
 
-test('the drawer’s heading rows and the rail’s alignment tiles apply to a whole-document selection', async ({ page }) => {
+test('the drawer’s heading rows and the rail’s alignment tile apply to a whole-document selection', async ({ page }) => {
   await page.goto('/?new=1');
   await page.evaluate(() => {
     const { state } = window.view;
@@ -281,14 +333,14 @@ test('the drawer’s heading rows and the rail’s alignment tiles apply to a wh
   await rail.getByRole('button', { name: 'Body text', exact: true }).click();
   await expect(page.locator('.ProseMirror > p').filter({ hasText: /paragraph\./ })).toHaveText(['First paragraph.', 'Second paragraph.']);
 
-  // Alignment is a rail tile at rest.
+  // Alignment is one stepping tile at rest: justified, then center.
   await page.locator('#rail-drawer').click();
   await expect(page.locator('html')).not.toHaveClass(/\brail-open\b/);
-  const center = rail.getByRole('button', { name: 'Center', exact: true });
-  await expect(center).toBeVisible();
-  await expect(center).toHaveAttribute('title', 'Center text');
-  await expect(center).toBeEnabled();
-  await center.click();
+  const align = rail.getByRole('button', { name: 'Alignment', exact: true });
+  await expect(align).toBeVisible();
+  await expect(align).toHaveAttribute('title', 'Justified · click for Center');
+  await expect(align).toBeEnabled();
+  await align.click();
   expect(await page.evaluate(() => {
     const attrs: unknown[] = [];
     window.view.state.doc.forEach((node) => {
@@ -296,8 +348,116 @@ test('the drawer’s heading rows and the rail’s alignment tiles apply to a wh
     });
     return attrs;
   })).toEqual(['center', 'center']);
-  await expect(center).toHaveAttribute('aria-pressed', 'true');
+  await expect(align).toHaveAttribute('data-align', 'center');
+  // The drawer's rows read the same selection.
+  await openDrawer(page);
+  await expect(rail.getByRole('button', { name: 'Center', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(rail.getByRole('button', { name: 'Justified', exact: true })).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('the Heading level tile shows the caret block’s level and steps body → H3 → H2 → H1 → body', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const { paragraph, heading } = state.schema.nodes;
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, [
+      heading.create({ level: 2 }, state.schema.text('A section')),
+      paragraph.create(null, state.schema.text('Some words.')),
+    ]));
+  });
+  const tile = page.locator('#heading-cycle');
+  const glyph = tile.locator('.tico');
+  await expect(tile).toHaveAttribute('aria-label', 'Heading level');
+  // The glyph follows the caret.
+  await page.locator('.ProseMirror h2').click();
+  await expect(glyph).toHaveText('H2');
+  await expect(tile.locator('.lbl')).toHaveText('Heading 2 · click for Heading 1');
+  await page.locator('.ProseMirror > p', { hasText: 'Some words.' }).click();
+  await expect(glyph).toHaveText('¶');
+  await expect(tile.locator('.lbl')).toHaveText('Body text · click for Heading 3');
+  await expect(tile).toHaveAttribute('title', 'Body text · click for Heading 3 (⌘⌥0–3)');
+  await expect(tile).toBeEnabled();
+
+  // Each press one size bigger, and H1 back to body text; the caret stays
+  // in the block.
+  const block = () => page.evaluate(() => {
+    const { $from } = window.view.state.selection;
+    return { type: $from.parent.type.name, level: $from.parent.attrs.level ?? null, text: $from.parent.textContent };
+  });
+  for (const [want, shown] of [[3, 'H3'], [2, 'H2'], [1, 'H1'], [null, '¶']] as const) {
+    await tile.click();
+    expect(await block()).toEqual({ type: want === null ? 'paragraph' : 'heading', level: want, text: 'Some words.' });
+    await expect(glyph).toHaveText(shown);
+  }
+  await expect(page.locator('.ProseMirror h2')).toHaveText('A section');
+
+  // Hidden while the drawer is open, which lists each level instead.
+  await openDrawer(page);
+  await expect(tile).toBeHidden();
+  await expect(page.locator('#rail').getByRole('button', { name: 'Heading 3', exact: true })).toBeVisible();
+});
+
+test('the Alignment tile steps a paragraph justified → center → right → justified and rests in a heading', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const { paragraph, heading } = state.schema.nodes;
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, [
+      heading.create({ level: 1 }, state.schema.text('A title')),
+      paragraph.create(null, state.schema.text('Some words.')),
+    ]));
+  });
+  const tile = page.locator('#align-cycle');
+  await expect(tile).toHaveAttribute('aria-label', 'Alignment');
+  await page.locator('.ProseMirror > p', { hasText: 'Some words.' }).click();
+  await expect(tile).toBeEnabled();
+  await expect(tile).toHaveAttribute('data-align', 'null');
+  await expect(tile.locator('.lbl')).toHaveText('Justified · click for Center');
+  const align = () => page.evaluate(() => window.view.state.doc.child(1).attrs.align ?? null);
+  for (const [want, caption] of [
+    ['center', 'Center · click for Right'],
+    ['right', 'Right · click for Justified'],
+    [null, 'Justified · click for Center'],
+  ] as const) {
+    await tile.click();
+    expect(await align()).toBe(want);
+    await expect(tile).toHaveAttribute('data-align', String(want));
+    await expect(tile.locator('.lbl')).toHaveText(caption);
+    await expect(tile).toHaveAttribute('title', caption);
+    await expect(tile.locator('svg')).toHaveCount(1);
+  }
+  // A heading is no paragraph: the tile rests.
+  await page.locator('.ProseMirror h1').click();
+  await expect(tile).toBeDisabled();
+  await page.locator('.ProseMirror > p', { hasText: 'Some words.' }).click();
+  await expect(tile).toBeEnabled();
+});
+
+test('All tools keeps its box at the rail’s top, open or shut', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => !!window.view);
+  const drawer = page.locator('#rail-drawer');
+  const box = () => drawer.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  });
+  const railTop = (await page.locator('#rail').boundingBox())!.y;
+  const shut = await box();
+  expect(shut.x).toBe(6);
+  // Above every tool group, the first thing in the rail.
+  const groupsTop = await page.locator('#rail .tb-rail-groups').evaluate((el) => el.getBoundingClientRect().top);
+  expect(shut.y).toBeGreaterThanOrEqual(railTop);
+  expect(shut.y + shut.height).toBeLessThanOrEqual(groupsTop);
+  for (const button of await page.locator('#rail button:visible').all()) {
+    expect((await button.boundingBox())!.y).toBeGreaterThanOrEqual(shut.y);
+  }
+  await openDrawer(page);
+  await expect.poll(() => page.locator('#rail').evaluate((el) => el.getBoundingClientRect().width)).toBe(264);
+  expect(await box()).toEqual(shut);
+  await drawer.click();
+  await expect(page.locator('html')).not.toHaveClass(/\brail-open\b/);
+  await expect.poll(() => page.locator('#rail').evaluate((el) => el.getBoundingClientRect().width)).toBe(44);
+  expect(await box()).toEqual(shut);
 });
 
 test('the drawer’s Loose list spacing row reports and changes spacing for the nearest nested list', async ({ page }) => {

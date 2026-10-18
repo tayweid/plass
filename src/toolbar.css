@@ -254,6 +254,42 @@
   display: none;
 }
 
+/* All tools, at the top under its own hairline; open or shut it keeps
+   its place (the rail's 6 px inset either way), so it closes where it
+   opened. */
+.tb-rail-top {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.tb-rail-top::after {
+  content: '';
+  width: 18px;
+  height: 1px;
+  margin: 3px 0;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+:root.rail-open .tb-rail-top {
+  align-items: flex-start;
+}
+
+:root.rail-open .tb-rail-top::after {
+  align-self: stretch;
+  width: auto;
+  margin: 3px 2px;
+}
+
+/* The Text group's stepping tiles (heading level, alignment) are the
+   rail's at rest; the open drawer lists each level and alignment. */
+:root.rail-open .tb-rail-group.tb-cycles,
+:root.rail-open #rail .tb-rail-group .tb-btn.tb-rest-only {
+  display: none;
+}
+
 .tb-rail-group + .tb-rail-group::before {
   content: '';
   flex: none;
@@ -269,7 +305,7 @@
    heading, Basics first. It is the markdown cheat sheet, clickable. */
 :root.rail-open #rail {
   align-items: stretch;
-  padding-inline: 8px;
+  padding-inline: 6px;
 }
 
 :root.rail-open .tb-rail-groups {
@@ -370,7 +406,6 @@
 :root.rail-open .tb-rail-foot {
   flex-direction: row;
   align-items: center;
-  padding-left: 4px;
 }
 
 

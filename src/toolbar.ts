@@ -13,7 +13,7 @@ import type { EditorView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { wrapInList } from 'prosemirror-schema-list';
 import { schema } from './schema';
-import { toggleListSpacing } from './editing';
+import { cycleHeading, headingLevelAt, nextHeadingLevel, toggleListSpacing } from './editing';
 import { insertMath } from './math';
 import { insertFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
@@ -84,6 +84,8 @@ const ICONS: Record<string, string> = {
   // The rail's All tools switch: a panel with its side column and a
   // chevron pointing out of it.
   drawer: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/><polyline points="13.5 9.5 16 12 13.5 14.5"/>',
+  // ManimLive's console glyph (maniml viewer), the code block's.
+  terminal: '<path d="m5 8 4 4-4 4"/><path d="M12 16h7"/>',
   sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
   code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
   comment: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/>',
@@ -256,7 +258,11 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   railGroups.className = 'tb-rail-groups';
   const railFoot = document.createElement('div');
   railFoot.className = 'tb-rail-foot';
-  rail.append(railGroups, railFoot);
+  // All tools at the top, under its own hairline, in the same place open
+  // or shut, so the drawer closes where it opened.
+  const railTop = document.createElement('div');
+  railTop.className = 'tb-rail-top';
+  rail.append(railTop, railGroups, railFoot);
   // A short window cuts the groups: a fade at the cut edge says the rest
   // is a scroll away (toolbar.css). Read on scroll and resize only.
   const railCue = () => {
@@ -380,7 +386,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   // The drawer's switch: the rail opens into every tool, labelled, with
   // its markdown and its keys, pushing the page over (--rail, style.css;
   // the paper refits as the panel narrows). Remembered per browser.
-  const drawerBtn = glyphButton(railFoot, 'All tools', icon('drawer'));
+  const drawerBtn = glyphButton(railTop, 'All tools', icon('drawer'));
   drawerBtn.id = 'rail-drawer';
   drawerBtn.setAttribute('aria-pressed', 'false');
   const setDrawer = (open: boolean) => {
@@ -404,18 +410,22 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     /* no storage */
   }
   setDrawer(drawerWasOpen);
+  // The foot: the bibliography, then Document settings at the very bottom.
+  const bibBtn = glyphButton(railFoot, 'Bibliography', icon('book'));
+  bibBtn.title = 'Edit bibliography — or write a ```bibtex block';
   const settingsBtn = glyphButton(railFoot, 'Document settings', icon('sliders'));
+  // The view switch, on the page at its lower left (the HUD's corner
+  // opposite): a quiet chip, Plain text on the page, Paper in the text.
   const sourceBtn = document.createElement('button');
   sourceBtn.type = 'button';
-  sourceBtn.className = 'tb-btn tb-source view-switch';
+  sourceBtn.className = 'tb-source view-switch';
   sourceBtn.setAttribute('aria-label', 'Plain text view');
   sourceBtn.setAttribute('aria-pressed', 'false');
   sourceBtn.title = 'Switch to plain text (⌘/)';
-  sourceBtn.innerHTML = `${icon('code')}<span class="lbl view-switch-label" aria-hidden="true">Plain text</span>`;
-  attachCaption(sourceBtn);
+  sourceBtn.innerHTML = `${icon('terminal')}<span class="view-switch-label" aria-hidden="true">Plain text</span>`;
   sourceBtn.addEventListener('mousedown', (e) => e.preventDefault());
   sourceBtn.addEventListener('click', () => { closeMenu(); actions.toggleSource(); });
-  railFoot.append(sourceBtn);
+  document.body.append(sourceBtn);
   // The tiles swallow mousedown (the editor keeps its selection), so a
   // mouse click moves no focus: a tile that Escape handed the focus back
   // to would keep its ring and its caption beside the panel the click
@@ -684,6 +694,8 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     tool(group, label, runCmd(command), { editing: true, enabled: () => command(view.state), ...options });
   const tico = (text: string) => `<span class="ico tico">${text}</span>`;
 
+  const textGroup = section('Text');
+  textGroup.classList.add('tb-cycles');
   const insertGroup = section('Insert');
   const blocksGroup = section('Blocks');
   const layoutGroup = section('Layout');
@@ -761,6 +773,9 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   commandTool(blocksGroup, 'Comment', insertEditorComment, {
     rest: true, glyph: icon('comment'), hint: 'never printed', title: 'Editorial comment — a note on the page and in the file, never printed',
   });
+  commandTool(blocksGroup, 'Code block', setBlockType(schema.nodes.code_block, { params: '' }), {
+    rest: true, glyph: icon('terminal'), hint: '```', title: 'Code block — monospaced source listing',
+  });
   commandTool(blocksGroup, 'Remove quote', lift, {
     rest: true, glyph: icon('paragraph'), hint: 'body text', title: 'Plain body text — lift out of the quote or solution block',
     enabled: () => !!ancestor('blockquote') && lift(view.state),
@@ -795,16 +810,50 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     ['Right', 'right', 'Align right', ''],
   ] as const) {
     tool(layoutGroup, label, () => setAlign(align), {
-      rest: true, title, hint, editing: true, enabled: alignmentEnabled,
+      title, hint, editing: true, enabled: alignmentEnabled,
       glyph: icon(align === 'center' ? 'aligncenter' : align === 'right' ? 'alignright' : 'alignleft'),
       checked: () => alignmentEnabled() && selectedParagraphs().every(({ node }) => (node.attrs.align ?? null) === align),
     });
   }
 
-  // CODE
-  commandTool(codeGroup, 'Code block', setBlockType(schema.nodes.code_block, { params: '' }), {
-    rest: true, glyph: icon('code'), hint: '```', title: 'Code block — monospaced source listing',
+  // TEXT, at rest: two tiles that show the caret's heading level and
+  // alignment and step through them on each press (Taylor, 2026-10-17);
+  // the drawer lists each level and alignment as its own row instead.
+  const headingTile = tool(textGroup, 'Heading level', runCmd(cycleHeading), { rest: true, glyph: tico('¶'), editing: true, enabled: () => cycleHeading(view.state) });
+  headingTile.id = 'heading-cycle';
+  const headingGlyph = headingTile.querySelector<HTMLElement>('.tico')!;
+  const headingLabel = headingTile.querySelector<HTMLElement>('.lbl')!;
+  const levelName = (level: number | null) => (level === null ? 'Body text' : `Heading ${level}`);
+  refreshTiles.push(() => {
+    const level = headingLevelAt(view.state) ?? null;
+    const glyph = level === null ? '¶' : `H${level}`;
+    if (headingGlyph.textContent !== glyph) headingGlyph.textContent = glyph;
+    const caption = `${levelName(level)} · click for ${levelName(nextHeadingLevel(level))}`;
+    if (headingLabel.textContent !== caption) headingLabel.textContent = caption;
+    setAttr(headingTile, 'title', `${caption} (⌘⌥0–3)`);
   });
+  const ALIGNS = [null, 'center', 'right'] as const;
+  const alignName = (align: (typeof ALIGNS)[number]) => (align === 'center' ? 'Center' : align === 'right' ? 'Right' : 'Justified');
+  const alignGlyph = (align: (typeof ALIGNS)[number]) => icon(align === 'center' ? 'aligncenter' : align === 'right' ? 'alignright' : 'alignleft');
+  const currentAlign = () => (selectedParagraphs()[0]?.node.attrs.align ?? null) as (typeof ALIGNS)[number];
+  const nextAlign = () => ALIGNS[(ALIGNS.indexOf(currentAlign()) + 1) % ALIGNS.length];
+  const alignTile = tool(textGroup, 'Alignment', () => setAlign(nextAlign()), { rest: true, glyph: alignGlyph(null), editing: true, enabled: alignmentEnabled });
+  alignTile.id = 'align-cycle';
+  const alignLabel = alignTile.querySelector<HTMLElement>('.lbl')!;
+  refreshTiles.push(() => {
+    const align = currentAlign();
+    if (alignTile.dataset.align !== String(align)) {
+      alignTile.dataset.align = String(align);
+      alignTile.querySelector('svg')?.remove();
+      alignTile.insertAdjacentHTML('afterbegin', alignGlyph(align));
+    }
+    const caption = `${alignName(align)} · click for ${alignName(nextAlign())}`;
+    if (alignLabel.textContent !== caption) alignLabel.textContent = caption;
+    setAttr(alignTile, 'title', caption);
+  });
+  for (const tile of [headingTile, alignTile]) tile.classList.add('tb-rest-only');
+
+  // CODE
   commandTool(codeGroup, 'Raw Typst block', setBlockType(schema.nodes.code_block, { params: 'typst-raw' }), {
     glyph: tico('#'), hint: '```typst', title: 'Raw Typst block — kept in the file as Typst, shown and printed as code, never run',
   });
@@ -813,9 +862,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   });
 
   // DOCUMENT
-  tool(documentGroup, 'Bibliography', () => editBibliography(view, (m) => fm.notify(m)), {
-    rest: true, glyph: icon('book'), hint: '```bibtex', title: 'Edit bibliography', enabled: () => !sourceActive,
-  });
+  bibBtn.addEventListener('click', () => { closeMenu(); editBibliography(view, (m) => fm.notify(m)); });
   tool(documentGroup, 'Demo document', () => {
     if (confirm('Replace the current document with the demo? (Save yours first if it matters.)')) {
       void import('./demo-doc').then(({ demoDoc }) => fm.newDoc(demoDoc(), 'Demo'));
@@ -1131,6 +1178,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
       sourceBtn.title = active ? 'Switch to paper (⌘/)' : 'Switch to plain text (⌘/)';
       sourceBtn.querySelector('.view-switch-label')!.textContent = active ? 'Paper' : 'Plain text';
       settingsBtn.disabled = active;
+      bibBtn.disabled = active;
       for (const button of rail.querySelectorAll<HTMLButtonElement>('.tb-rests')) button.disabled = active;
       refreshRail();
       refresh();

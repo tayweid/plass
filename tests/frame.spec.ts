@@ -1487,30 +1487,39 @@ test('the rail and the panels it opens keep off the bar; a short window says the
   await expect(page.locator('html')).not.toHaveClass(/\brail-open\b/);
 
   // A tall window shows every tool; a short one cuts the tool groups, and
-  // a fade at the cut says which way the rest is. The foot (All tools,
-  // Document settings and the view switch) is pinned below the groups, as
-  // Zen pins its bottom icons: whole and inside the window at any height
-  // (at 1100×560 the cut once fell just past the last group and took
-  // Document settings with it).
+  // a fade at the cut says which way the rest is. All tools is pinned
+  // above the groups and the foot (Bibliography, Document settings) below
+  // them, as Zen pins its bottom icons: whole and inside the window at any
+  // height (at 1100×560 the cut once fell just past the last group and
+  // took Document settings with it). The view switch is on the page, at
+  // the panel's lower left, inside the window too.
   const cue = () => page.evaluate(() => {
     const groups = document.querySelector('.tb-rail-groups')!;
     return { above: groups.classList.contains('tb-more-above'), below: groups.classList.contains('tb-more-below') };
   });
   const pinned = () => page.evaluate(() => {
     const groups = document.querySelector('.tb-rail-groups')!;
-    const cut = groups.getBoundingClientRect().bottom;
-    return ['All tools', 'Document settings', 'Plain text view'].map((name) => {
-      // (The drawer has a Plain text view row too, not drawn at rest.)
-      const tile = [...document.querySelectorAll(`#rail [aria-label="${name}"]`)].find((el) => el.checkVisibility())!;
+    const { top, bottom } = groups.getBoundingClientRect();
+    const place = (tile: Element) => {
       const bounds = tile.getBoundingClientRect();
-      return { name, scrolls: groups.contains(tile), belowCut: bounds.top >= cut, inWindow: bounds.bottom <= innerHeight - 8 };
-    });
+      return { scrolls: groups.contains(tile), aboveCut: bounds.bottom <= top, belowCut: bounds.top >= bottom, inWindow: bounds.top >= 0 && bounds.bottom <= innerHeight - 8 };
+    };
+    // (The drawer has a Plain text view row too, not drawn at rest.)
+    const tile = (name: string) => [...document.querySelectorAll(`#rail [aria-label="${name}"]`)].find((el) => el.checkVisibility())!;
+    return {
+      top: place(tile('All tools')),
+      foot: ['Bibliography', 'Document settings'].map((name) => ({ name, ...place(tile(name)) })),
+      viewSwitch: place(document.querySelector('.view-switch')!).inWindow,
+    };
   });
   await expect.poll(cue).toEqual({ above: false, below: false });
   for (const height of [560, 480, 360]) {
     await page.setViewportSize({ width: 1100, height });
     await expect.poll(cue).toEqual({ above: false, below: true });
-    for (const tile of await pinned()) expect(tile).toEqual({ name: tile.name, scrolls: false, belowCut: true, inWindow: true });
+    const p = await pinned();
+    expect(p.top).toEqual({ scrolls: false, aboveCut: true, belowCut: false, inWindow: true });
+    for (const tile of p.foot) expect(tile).toEqual({ name: tile.name, scrolls: false, aboveCut: false, belowCut: true, inWindow: true });
+    expect(p.viewSwitch).toBe(true);
   }
 
   // A tile Tab reaches under the fade scrolls clear of it (the groups'
@@ -1525,7 +1534,7 @@ test('the rail and the panels it opens keep off the bar; a short window says the
     const index = tiles.findIndex((tile) => tile.getBoundingClientRect().bottom > fade);
     return { name: tiles[index].getAttribute('aria-label')!, tabs: index };
   });
-  await page.locator('#rail .tb-btn').first().focus();
+  await page.locator('#rail .tb-rail-groups .tb-btn:visible:not(:disabled)').first().focus();
   for (let i = 0; i < target.tabs; i++) await page.keyboard.press('Tab');
   await expect(page.locator(`#rail [aria-label="${target.name}"]`)).toBeFocused();
   const clear = await page.evaluate(() => {

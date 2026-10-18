@@ -487,6 +487,42 @@ body {
   display: none;
 }
 
+/* The view switch (toolbar.ts), on the page at the panel's lower left,
+   the HUD's corner opposite and its quiet frosted chip: the console glyph
+   and its word, Plain text on the page, Paper in the text. */
+.view-switch {
+  position: fixed;
+  left: calc(var(--rail) + 10px);
+  bottom: calc(var(--edge) + 10px);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border: 0;
+  border-radius: 7px;
+  font: 11px var(--sans);
+  color: #6f6d68;
+  background: rgba(252, 252, 251, 0.82);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+  opacity: 0.7;
+  cursor: pointer;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.view-switch:hover,
+.view-switch:focus-visible {
+  opacity: 1;
+  color: #1a1a1a;
+}
+
+.view-switch .ico {
+  width: 14px;
+  height: 14px;
+}
+
 #hud:hover {
   opacity: 1;
 }

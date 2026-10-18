@@ -217,12 +217,14 @@ test('the visible view switch and the shortcut toggle from either view', async (
   await expect(btn).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#source .cm-content')).toBeFocused();
   // Editing tools rest while the text is the truth: every tile of the
-  // rail's groups (Insert, Blocks, Layout, Code, the bibliography) and
+  // rail's groups (Text, Insert, Blocks) and the foot's Bibliography and
   // Settings; the drawer switch and the bar's way out stay live.
   const rail = page.locator('#rail');
   const tiles = rail.locator('.tb-rail-groups .tb-btn:visible');
-  await expect(tiles).toHaveCount(14);
-  await expect(rail.locator('.tb-rail-groups .tb-btn:visible:disabled')).toHaveCount(14);
+  await expect(tiles).toHaveCount(12);
+  await expect(rail.locator('.tb-rail-groups .tb-btn:visible:disabled')).toHaveCount(12);
+  await expect(rail.getByRole('button', { name: 'Heading level', exact: true })).toBeDisabled();
+  await expect(rail.getByRole('button', { name: 'Alignment', exact: true })).toBeDisabled();
   await expect(rail.getByRole('button', { name: 'Block quote', exact: true })).toBeDisabled();
   await expect(rail.getByRole('button', { name: 'Comment', exact: true })).toBeDisabled();
   await expect(rail.getByRole('button', { name: 'Table', exact: true })).toBeDisabled();
@@ -253,7 +255,7 @@ test('the visible view switch and the shortcut toggle from either view', async (
   await page.keyboard.press('ControlOrMeta+/');
   await expect(btn).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('.ProseMirror[contenteditable="true"]')).toBeFocused();
-  for (const name of ['Block quote', 'Table', 'Grid', 'Bibliography']) {
+  for (const name of ['Heading level', 'Block quote', 'Table', 'Grid', 'Bibliography']) {
     await expect(rail.getByRole('button', { name, exact: true })).toBeEnabled();
   }
   await expect(page.getByRole('button', { name: 'Document settings', exact: true })).toBeEnabled();
