@@ -303,9 +303,10 @@ steps cite by heading where line numbers will have drifted):
   fallback). `tests/port-audit.spec.ts:320` writes the `comments.md`
   fixture's page break as a ```` ```typst ```` fence, which has always
   reopened as an island (the `.md` twin never exercised the seam).
-- `CLAUDE.md` is git-ignored and stale (2026-09-30); `AGENTS.md` is the
-  committed instruction file and the one subagents in a worktree see.
-  Doc edits go to `AGENTS.md`; Taylor refreshes `CLAUDE.md` locally.
+- The instruction file is `CLAUDE.md`, git-ignored and kept only on disk
+  (since 2026-10-17, when the committed `AGENTS.md` it duplicated left
+  the repository); worktrees under `.claude/worktrees/` read it from the
+  checkout above them. Doc edits go to `CLAUDE.md`.
 - Course corpus (`~/Projects/econ-0100`, `~/Projects/ECON_0100`; 942
   files): 873 HTML comments, all at column 0; no `:::`; no citations or
   bibliographies; no abstracts; 38 `*_sols.typ` use bare `#image("data:…")`

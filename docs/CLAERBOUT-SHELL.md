@@ -315,7 +315,7 @@ the built app once step 5 packages one.
 
 DONE 2026-09-30, the evening of the first release on the new app
 (`app/Sources`, `app/build.sh`, `app/Info.plist`, the self-test harness
-with them; AGENTS.md, ROADMAP.md and README describe the shell as it is).
+with them; ROADMAP.md and README describe the shell as it is).
 `grants.json` is read by nothing and left where it is. Release note:
 recents ask for their folder once, since Chromium's storage starts empty.
 
