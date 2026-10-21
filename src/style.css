@@ -4026,3 +4026,21 @@ body {
     border-left: 2px solid #ccc;
   }
 }
+
+/* The caret beside a table where no line can hold one (gap-caret.ts): a
+   text caret standing in the room above (below) the table, at its left
+   edge, blinking as the native one does. Out of the editable DOM and out
+   of flow: paint only. */
+.gap-caret {
+  position: absolute;
+  width: 1.5px;
+  background: var(--ink);
+  pointer-events: none;
+  z-index: 2;
+  animation: gap-caret-blink 1.06s steps(1, end) infinite;
+}
+
+@keyframes gap-caret-blink {
+  0%, 55% { opacity: 1; }
+  55.01%, 100% { opacity: 0; }
+}

@@ -28,6 +28,7 @@ import { exitFigure } from './figures';
 import { exitFootnote, footnoteCloseRule, footnoteOpenRules, insertFootnote, skipFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
 import { paperScale } from './paper-scale';
+import { landBeside } from './gap-caret';
 
 /**
  * `**bold**`, `_em_`, `` `code` `` style mark input rules.
@@ -164,6 +165,13 @@ function verticalCaret(dir: -1 | 1): Command {
       if (found.inside === -1) continue;
       let pos = Math.max(0, Math.min(found.pos, state.doc.content.size));
       if (pos === sel.head) continue;
+      // A place between blocks beside a table (the caret's column missed
+      // a centred table, or a cell's): the place's own caret, or the table.
+      const beside = landBeside(view, state.doc.resolve(pos), dir, gx);
+      if (beside) {
+        if (dispatch) dispatch(state.tr.setSelection(beside).scrollIntoView());
+        return true;
+      }
       let target: { top: number; bottom: number };
       try {
         target = view.coordsAtPos(pos, 1);

@@ -10,6 +10,7 @@ import { schema } from './schema';
 import { isNativeShell, onShellReload, onShellSave, onShellZoom, reportDocument, resizeWindow, rewoundText, takeLaunchFile, unsavedReporter } from './claerbout';
 import { openInAnotherWindow } from './open-files';
 import { migrateLegacyTableGeometry } from './typ-parser';
+import { gapCaretPlugin } from './gap-caret';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
 import { breakSpaceInput } from './break-space';
 import { collapseSpaces } from './collapse-spaces';
@@ -149,6 +150,9 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
     plugins: [
       // Before the keymaps: the popup must see Enter/Tab/arrows first.
       refAutocomplete(),
+      // The caret beside a table where no line can hold one (gap-caret.ts):
+      // its keys and typing come before the input rules and the keymaps.
+      gapCaretPlugin(),
       buildInputRules(),
       // Before the editing keymap: its Mod-Enter is the page break.
       editorCommentKeymap(),
