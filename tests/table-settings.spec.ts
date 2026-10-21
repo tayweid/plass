@@ -42,7 +42,7 @@ const tile = (page: Page, id: string) => page.locator(`.block-pill [data-tile="$
 const action = (page: Page, id: string) => page.locator(`.bc-actions [data-tile="${id}"]`);
 const panel = async (page: Page, id: 'table' | 'cell' | 'align') => {
   await tile(page, id).click();
-  const dialog = page.getByRole('dialog', { name: id === 'table' ? 'Table settings' : id === 'cell' ? 'Cell fill and rules' : /^Align/ });
+  const dialog = page.getByRole('dialog', { name: id === 'table' ? 'Table settings' : id === 'cell' ? 'Cell fill, rules and borders' : /^Align/ });
   await expect(dialog).toBeVisible();
   return dialog;
 };

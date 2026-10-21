@@ -2754,7 +2754,7 @@ body {
 }
 
 .ProseMirror table.ts-table-booktabs tr:first-child th {
-  box-shadow: inset 0 -0.05em 0 var(--ink);
+  box-shadow: inset 0 -0.05em 0 var(--ink), var(--cell-borders);
 }
 
 /* Cell fill presets (table-fills.ts): the same colours Typst prints. */
@@ -2783,21 +2783,61 @@ body {
 
 /* plain preset: no rules at all */
 
+/* Cell borders (table-borders.ts): the light rule's 0.05em on the sides a
+   cell names, centred on the cell boundary as Typst strokes it: half
+   inside the cell, half outside (an offset shadow, which shows only
+   outside the box). Every cell carries the four sides as variables, a
+   transparent nothing unless named, and every rule above that sets a
+   cell's box-shadow ends with them, so a row rule, the booktabs header
+   rule or the editing ghost lines keep the borders. A grid table draws
+   none: its 1pt strokes win in Typst. */
+.ProseMirror table :is(td, th),
+.ProseMirror .ts-table-hdr {
+  --cb-w: 0.025em;
+  --cb-t: 0 0 transparent;
+  --cb-r: 0 0 transparent;
+  --cb-b: 0 0 transparent;
+  --cb-l: 0 0 transparent;
+  --cell-borders: var(--cb-t), var(--cb-r), var(--cb-b), var(--cb-l);
+}
+
+/* :where keeps this under the row rules' and the header rule's
+   specificity: those set the cell's shadow with the borders in it. */
+.ProseMirror table:not(.ts-table-grid) :where(td, th, .ts-table-hdr)[data-border] {
+  box-shadow: var(--cell-borders);
+}
+
+.ProseMirror table:not(.ts-table-grid) :is(td, th, .ts-table-hdr):is([data-border~='top'], [data-border='all']) {
+  --cb-t: 0 calc(-1 * var(--cb-w)) 0 var(--ink), inset 0 var(--cb-w) 0 var(--ink);
+}
+
+.ProseMirror table:not(.ts-table-grid) :is(td, th, .ts-table-hdr):is([data-border~='right'], [data-border='all']) {
+  --cb-r: var(--cb-w) 0 0 var(--ink), inset calc(-1 * var(--cb-w)) 0 0 var(--ink);
+}
+
+.ProseMirror table:not(.ts-table-grid) :is(td, th, .ts-table-hdr):is([data-border~='bottom'], [data-border='all']) {
+  --cb-b: 0 var(--cb-w) 0 var(--ink), inset 0 calc(-1 * var(--cb-w)) 0 var(--ink);
+}
+
+.ProseMirror table:not(.ts-table-grid) :is(td, th, .ts-table-hdr):is([data-border~='left'], [data-border='all']) {
+  --cb-l: calc(-1 * var(--cb-w)) 0 0 var(--ink), inset var(--cb-w) 0 0 var(--ink);
+}
+
 /* Row rule presets (table-rules.ts): the rule under a row, replacing the
    style preset's at that boundary. Grid tables keep their cell strokes. */
 .ProseMirror table:not(.ts-table-grid) tr[data-rule='light'] > th,
 .ProseMirror table:not(.ts-table-grid) tr[data-rule='light'] > td {
-  box-shadow: inset 0 -0.05em 0 var(--ink);
+  box-shadow: inset 0 -0.05em 0 var(--ink), var(--cell-borders);
 }
 
 .ProseMirror table:not(.ts-table-grid) tr[data-rule='heavy'] > th,
 .ProseMirror table:not(.ts-table-grid) tr[data-rule='heavy'] > td {
-  box-shadow: inset 0 -0.08em 0 var(--ink);
+  box-shadow: inset 0 -0.08em 0 var(--ink), var(--cell-borders);
 }
 
 .ProseMirror table:not(.ts-table-grid) tr[data-rule='none'] > th,
 .ProseMirror table:not(.ts-table-grid) tr[data-rule='none'] > td {
-  box-shadow: none;
+  box-shadow: var(--cell-borders);
 }
 
 .ProseMirror th p,
@@ -2992,7 +3032,7 @@ body {
   --g-r: inset calc(-1 * var(--ghost)) 0 0 var(--cell-line);
   --g-b: inset 0 calc(-1 * var(--ghost)) 0 var(--cell-line);
   --g-l: 0 0 transparent;
-  box-shadow: var(--g-t), var(--g-r), var(--g-b), var(--g-l);
+  box-shadow: var(--g-t), var(--g-r), var(--g-b), var(--g-l), var(--cell-borders);
 }
 
 .ProseMirror table.ts-table-editing.ts-table-plain tr > :is(td, th).ts-cell-col0,

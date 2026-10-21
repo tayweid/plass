@@ -1072,3 +1072,17 @@
     display: none;
   }
 }
+
+/* Border tiles (table-border-commands.ts): four sides, then All, Outside,
+   None, at the rule tiles' size, wrapping four to a row. Pressed = the
+   edge is drawn all along the selection (the blue ring, as a rule tile's
+   checked one). */
+.bc-flyout .bordertile svg {
+  width: 18px;
+  height: 16px;
+  color: rgba(240, 238, 233, 0.9);
+}
+
+.bc-flyout .bordertile[aria-pressed='true'] {
+  box-shadow: 0 0 0 1.5px #9db8d6;
+}

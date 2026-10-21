@@ -37,6 +37,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { NodeSelection, Plugin, PluginKey, type Command, type EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { redo, undo } from 'prosemirror-history';
+import { selectionAllBordered, selectionEdgeOn, selectionUnbordered, setCellBorders, type BorderAction } from './table-border-commands';
 import { CellSelection, deleteTable, isInTable, mergeCells, selectedRect, setCellAttr, splitCell, toggleHeaderRow } from 'prosemirror-tables';
 import { schema } from './schema';
 import { icon } from './toolbar';
@@ -496,7 +497,7 @@ class BlockChrome {
       addRow,
       addCol,
       { id: 'align', glyph: icon('alignleft'), caption: 'Align · Left', flyout: 'align', popup: 'dialog' },
-      { id: 'cell', glyph: icon('cell'), caption: 'Cell fill and rules', flyout: 'cell', popup: 'dialog' },
+      { id: 'cell', glyph: icon('cell'), caption: 'Cell fill, rules and borders', flyout: 'cell', popup: 'dialog' },
       '|',
       { id: 'table', glyph: icon('table'), caption: 'Table settings', flyout: 'table', popup: 'dialog' },
     ];
@@ -1132,7 +1133,7 @@ class BlockChrome {
       case 'rows': return this.rowsMenu(b('tb-menu bc-menu', 'menu', 'Rows'), parent);
       case 'cols': return this.colsMenu(b('tb-menu bc-menu bc-colsmenu', 'menu', 'Columns'), parent);
       case 'align': return this.alignPanel(b('tb-menu tb-menu-extras bc-panel bc-alignpanel', 'dialog', 'Align'), parent);
-      case 'cell': return this.cellPanel(b('tb-menu tb-menu-extras bc-panel bc-cellpanel', 'dialog', 'Cell fill and rules'), parent);
+      case 'cell': return this.cellPanel(b('tb-menu tb-menu-extras bc-panel bc-cellpanel', 'dialog', 'Cell fill, rules and borders'), parent);
       case 'table': return this.tableSettings(b('tb-menu block-panel bc-tablesettings', 'dialog', 'Table settings'), parent);
       case 'grid':
       case 'gridlayout': return this.gridLayout(b('tb-menu block-panel bc-gridlayout', 'dialog', 'Grid layout'), parent);
@@ -1554,6 +1555,49 @@ class BlockChrome {
     this.note(builder, rules, () => {
       try {
         return isInTable(state()) && selectedRect(state()).table.attrs.style === 'grid' ? 'Grid style rules every cell' : '';
+      } catch {
+        return '';
+      }
+    });
+    // Borders (table-border-commands.ts): the selection's edges, as a
+    // spreadsheet sets them. Each glyph is the selection as a 2×2 of faint
+    // cells with the lines the tile draws in full.
+    const borders = this.section(builder, 'Border', 'Borders on the selected cells');
+    borders.classList.add('bc-rules', 'bc-borders');
+    const edge = (d: string) => `<path d="${d}" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="square"/>`;
+    const faint = '<path d="M2 2h14v12H2zM9 2v12M2 8h14" stroke="currentColor" stroke-opacity=".3" stroke-width=".8" fill="none" stroke-dasharray="1.4 1.2"/>';
+    const glyphs: Record<BorderAction, string> = {
+      top: edge('M2 2h14'),
+      bottom: edge('M2 14h14'),
+      left: edge('M2 2v12'),
+      right: edge('M16 2v12'),
+      all: edge('M2 2h14v12H2zM9 2v12M2 8h14'),
+      outside: edge('M2 2h14v12H2z'),
+      none: '',
+    };
+    const checkedOf = (action: BorderAction): boolean | null =>
+      action === 'all' ? selectionAllBordered(state()) : action === 'none' ? selectionUnbordered(state()) : action === 'outside' ? null : selectionEdgeOn(state(), action);
+    for (const [action, name] of [['top', 'Top'], ['bottom', 'Bottom'], ['left', 'Left'], ['right', 'Right'], ['all', 'All'], ['outside', 'Outside'], ['none', 'None']] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ruletile bordertile';
+      button.setAttribute('aria-pressed', 'false');
+      button.setAttribute('aria-label', `${name} border`);
+      button.dataset.value = action;
+      button.innerHTML = `<svg viewBox="0 0 18 16" aria-hidden="true">${faint}${glyphs[action]}</svg>`;
+      this.caption(builder, button, name);
+      button.addEventListener('mousedown', (e) => e.preventDefault());
+      button.addEventListener('click', () => this.run(setCellBorders(action)));
+      builder.syncs.push(() => {
+        setAttr(button, 'aria-pressed', String(checkedOf(action) === true));
+        const disabled = !setCellBorders(action)(state());
+        if (button.disabled !== disabled) button.disabled = disabled;
+      });
+      borders.append(button);
+    }
+    this.note(builder, borders, () => {
+      try {
+        return isInTable(state()) && selectedRect(state()).table.attrs.style === 'grid' ? 'Grid style boxes every cell' : '';
       } catch {
         return '';
       }

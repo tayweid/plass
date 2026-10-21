@@ -146,14 +146,17 @@ test('a fill reads true under the pointer, and a Plain table shows ghost edges o
   await filled.hover();
   await page.waitForTimeout(150);
   expect(await filled.evaluate((td) => getComputedStyle(td).backgroundColor)).toBe(before);
-  // Computed box-shadow lists the four slots in order: top, right, bottom, left.
+  // Computed box-shadow lists the four slots in order: top, right, bottom,
+  // left, then the four cell-border slots (table-borders.ts), empty here.
   const slots = (text: string) => page.locator('.ProseMirror td', { hasText: text }).evaluate((td) => {
     const list = getComputedStyle(td).boxShadow;
-    return { list: list === 'none' ? [] : list.split(/,(?![^(]*\))/).map((x) => x.trim()), table: getComputedStyle(td.closest('table')!).boxShadow, outline: getComputedStyle(td).outlineStyle };
+    const all = list === 'none' ? [] : list.split(/,(?![^(]*\))/).map((x) => x.trim());
+    const empty = /^rgba\(0, 0, 0, 0\) 0px 0px 0px 0px$/;
+    return { list: all.slice(0, 4), borders: all.slice(4).every((x) => empty.test(x)), table: getComputedStyle(td.closest('table')!).boxShadow, outline: getComputedStyle(td).outlineStyle };
   });
   // (The cell's shadow transitions: poll past it.)
   await caretIn(page, 'Before.');
-  await expect.poll(() => slots('B')).toEqual({ list: [], table: 'none', outline: 'none' });
+  await expect.poll(() => slots('B')).toEqual({ list: [], borders: true, table: 'none', outline: 'none' });
   await caretIn(page, 'D');
   await page.waitForTimeout(150);
   // Each cell draws its right and bottom edge, a row's first cell its left,
@@ -167,6 +170,7 @@ test('a fill reads true under the pointer, and a Plain table shows ghost edges o
   for (const c of [A, B, C, D]) {
     expect(c.outline).toBe('none');
     expect(c.table).toBe('none');
+    expect(c.borders).toBe(true);
     expect(c.list).toHaveLength(4);
     expect(c.list[1]).toMatch(right);
     expect(c.list[2]).toMatch(bottom);
@@ -204,9 +208,12 @@ test('a Plain table keeps its ghost edges on rule rows, and a rowspan in column 
   await caretIn(page, 'a2');
   await expect(page.locator('.ProseMirror table')).toHaveClass(/ts-table-editing/);
   await page.waitForTimeout(150);
+  // The four ghost slots; the four cell-border slots after them are empty.
   const slots = (text: string) => page.locator('.ProseMirror :is(td, th)', { hasText: new RegExp(`^${text}$`) }).evaluate((td) => {
     const list = getComputedStyle(td).boxShadow;
-    return list === 'none' ? [] : list.split(/,(?![^(]*\))/).map((x) => x.trim());
+    const all = list === 'none' ? [] : list.split(/,(?![^(]*\))/).map((x) => x.trim());
+    const empty = /^rgba\(0, 0, 0, 0\) 0px 0px 0px 0px$/;
+    return all.slice(4).every((x) => empty.test(x)) ? all.slice(0, 4) : all;
   });
   const none = /^rgba\(0, 0, 0, 0\) 0px 0px 0px 0px$/;
   const top = / 0px [\d.]+px 0px 0px inset$/, right = / -[\d.]+px 0px 0px 0px inset$/;

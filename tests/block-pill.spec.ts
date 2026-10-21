@@ -333,7 +333,7 @@ test.describe('the block pill', () => {
     await expect(align).toBeHidden();
 
     await tile(page, 'cell').click();
-    const cell = page.getByRole('dialog', { name: 'Cell fill and rules' });
+    const cell = page.getByRole('dialog', { name: 'Cell fill, rules and borders' });
     await expect(cell.getByRole('radio', { name: 'None', exact: true }).first()).toHaveAttribute('aria-checked', 'true');
     await cell.getByRole('radio', { name: 'Yellow' }).click();
     await cell.getByRole('radio', { name: 'Heavy' }).click();

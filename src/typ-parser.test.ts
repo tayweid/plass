@@ -649,6 +649,27 @@ function firstDiff(a: string, b: string): string {
   check('a non-preset fill keeps the table as a raw island', other.child(0).type.name === 'code_block' && other.child(0).attrs.params === 'typst-raw', other.child(0).type.name);
 }
 
+// --- 19e2. cell borders (table-borders.ts) ---
+{
+  const { table, table_row, table_cell, paragraph, doc: docType } = schema.nodes;
+  const cell = (text: string, attrs: Record<string, unknown> = {}) => table_cell.create(attrs, paragraph.create(null, text ? schema.text(text) : undefined));
+  const build = (style: string) => docType.create(null, [table.create({ style }, [
+    table_row.create(null, [cell(''), cell('Col', { align: 'decimal', border: 'bottom' })]),
+    table_row.create(null, [cell('Row', { border: 'top left' }), cell('3.25', { align: 'decimal', border: 'all' })]),
+    table_row.create(null, [cell('x'), cell('10.5', { align: 'decimal', border: 'right' })]),
+  ])]);
+  const out = docToTyp(build('plain'));
+  check('borders export as the cells\' strokes', out.includes('table.cell(colspan: 2, align: right, stroke: (bottom: 0.05em))[Col]') && out.includes('table.cell(stroke: (top: 0.05em, left: 0.05em))[Row]'), out);
+  check('a decimal cell\'s halves each keep the outer sides', out.includes('inset: (right: 0pt), stroke: (top: 0.05em, bottom: 0.05em, left: 0.05em))[3]') && out.includes('inset: (left: 0pt), stroke: (top: 0.05em, right: 0.05em, bottom: 0.05em))[.25]'), out);
+  const back = typToDoc(out).doc;
+  check('borders read back onto the same cells', JSON.stringify(back.toJSON()) === JSON.stringify(build('plain').toJSON()), JSON.stringify(back.firstChild!.toJSON()));
+  check('a bordered table round-trips byte-identically', docToTyp(back) === out, firstDiff(docToTyp(back), out));
+  const grid = docToTyp(build('grid'));
+  check('a grid table writes no borders (its strokes win)', !/table\.cell\([^)]*stroke/.test(grid), grid);
+  const other = typToDoc(out.replace('stroke: (bottom: 0.05em)', 'stroke: (bottom: 2pt + red)')).doc;
+  check('a stroke the exporter never writes keeps the table as a raw island', other.child(0).type.name === 'code_block' && other.child(0).attrs.params === 'typst-raw', other.child(0).type.name);
+}
+
 // --- 19f. the citation style rides on the bibliography line ---
 {
   const bib = JSON.stringify('@article{k, author = {Knuth, Donald E.}, title = {A}, year = {1981}}');

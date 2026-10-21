@@ -97,6 +97,8 @@ export function tableBreakWidget(view: EditorView, spec: TableBreakSpec): HTMLEl
       if (headerCell) {
         const fill = headerCell.dataset.fill;
         if (fill) hdr.dataset.fill = fill;
+        const border = headerCell.dataset.border;
+        if (border) hdr.dataset.border = border;
         const align = headerCell.style.textAlign;
         if (align) hdr.style.textAlign = align;
         const alignLast = headerCell.style.textAlignLast;

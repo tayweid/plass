@@ -1,4 +1,5 @@
 import { Schema, type Node as PMNode, type NodeSpec } from 'prosemirror-model';
+import { normalizeBorder } from './table-borders';
 import { schema as base } from 'prosemirror-schema-basic';
 import { addListNodes } from 'prosemirror-schema-list';
 import { tableNodes } from 'prosemirror-tables';
@@ -272,6 +273,15 @@ const tables = tableNodes({
       getFromDOM: (dom) => (dom as HTMLElement).getAttribute('data-fill') ?? '',
       setDOMAttr: (value, attrs) => {
         if (value) attrs['data-fill'] = value;
+      },
+    },
+    // Border sides (table-borders.ts): '' none, 'all', or sides in
+    // top-right-bottom-left order joined by spaces ('top left').
+    border: {
+      default: '',
+      getFromDOM: (dom) => normalizeBorder((dom as HTMLElement).getAttribute('data-border') ?? ''),
+      setDOMAttr: (value, attrs) => {
+        if (value) attrs['data-border'] = value;
       },
     },
   },

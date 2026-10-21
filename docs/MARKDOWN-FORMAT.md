@@ -346,6 +346,7 @@ attributes on a `.table` div around the table:
 | `decimal` | columns whose `---:` should line up on the decimal point, as column numbers separated by spaces | `decimal="1 3"` |
 | `rules` | the rule under row N: `light`, `heavy`, `none` | `rules="0:heavy 3:none"` |
 | `fills` | `gray`, `gray-dark`, `yellow` or `blue`, for a row `rN` or a cell `rNcM` | `fills="r0:gray r2c1:yellow"` |
+| `borders` | lines on a cell's sides: `all`, or sides joined by `+` (`top`, `right`, `bottom`, `left`), for a cell `rNcM`, a row `rN`, or a block of cells `rA-BcC-D`. Light rules; not drawn in a `grid` table, which boxes every cell already | `borders="r2-3c2-3:all r0c1:bottom+left"` |
 | `valign` | `top`, `middle` or `bottom`, for the whole table or a cell `rNcM` | `valign=middle` |
 | `aligns` | the alignment of one cell, different from its column's: `left`, `center`, `right`, `decimal`, or `default` (no alignment of its own, like `---`) | `aligns="r2c1:center"` |
 | `spans` | a merged cell, as columns×rows, given at its top-left cell | `spans="r3c0:2x1"` |

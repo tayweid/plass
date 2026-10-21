@@ -95,7 +95,7 @@ const pillTile = (page: import('playwright/test').Page, id: string) => page.loca
 /** A tile of the actions pill under the block pill (delete row, delete column, merge or split). */
 const actionTile = (page: import('playwright/test').Page, id: string) => page.locator(`.bc-actions [data-tile="${id}"]`);
 const tableSettings = (page: import('playwright/test').Page) => page.getByRole('dialog', { name: 'Table settings' });
-const cellPanel = (page: import('playwright/test').Page) => page.getByRole('dialog', { name: 'Cell fill and rules' });
+const cellPanel = (page: import('playwright/test').Page) => page.getByRole('dialog', { name: 'Cell fill, rules and borders' });
 
 test('rich table cells edit directly, navigate with Tab, and undo without flattening', async ({ page }) => {
   await installRichTable(page);

@@ -538,6 +538,47 @@ console.log('grammar example');
   check('the plan\'s literal span over "3.25" keeps the text, with a warning', asPlanned.child(2).childCount === 3 && warnings.some((w) => w.includes('"r2c0:2x1" would cover')), warnings.join('; '));
 }
 
+// ---------- borders ----------
+
+console.log('borders');
+{
+  // The payoff matrix: lines round the four payoffs, a range each way.
+  const b = (text: string, border = '') => td([text, border ? { border } : {}]);
+  const t = table([
+    tr([b(''), b(''), b('Col'), b('')]),
+    tr([b(''), b(''), b('L'), b('R')]),
+    tr([b('Row'), b('U'), b('3, 3', 'all'), b('0, 5', 'all')]),
+    tr([b(''), b('D'), b('5, 0', 'all'), b('1, 1', 'all')]),
+  ], { style: 'plain' });
+  const r = trip(t);
+  check('a rectangle of one border is one range', kv(r.attrs).borders === 'r2-3c2-3:all', show(r.attrs));
+  check('the range reads back onto every cell', same(r.back.toJSON(), t.toJSON()), show(r.back.toJSON()));
+  check('no warnings either way', !r.writeWarnings.length && !r.readWarnings.length, [...r.writeWarnings, ...r.readWarnings].join('; '));
+}
+{
+  const t = table([
+    tr([th(['A', { border: 'bottom' }]), th(['B', { border: 'bottom' }]), th(['C', { border: 'top left' }])]),
+    tr([td(['1', { colspan: 2, border: 'all' }]), td(['2', { border: 'right' }])]),
+  ], { style: 'plain' });
+  const r = trip(t);
+  check('sides join with +; a row run is a range; a span is said at its origin', kv(r.attrs).borders === 'r0c0-1:bottom r0c2:top+left r1c0:all r1c2:right', show(r.attrs));
+  check('sides read back', same(r.back.toJSON(), t.toJSON()), show(r.back.toJSON()));
+}
+{
+  const base = table([tr([td('1'), td('2'), td('3')]), tr([td(['a', { colspan: 2 }]), td('c')])], { style: 'plain' });
+  const warnings: string[] = [];
+  const got = applyTableDivAttrs(base, { id: '', classes: ['table'], keyvals: [
+    ['borders', 'r0:top r0c1:all r1c0-2:bottom+left+top r1c1:all r5c0:all r0c0:diagonal r0c0'],
+  ] }, (w) => warnings.push(w));
+  const attr = (r: number, c: number) => got.child(r).child(c).attrs.border;
+  check('a whole row takes the value; a later cell entry wins', attr(0, 0) === 'top' && attr(0, 1) === 'all' && attr(0, 2) === 'top', show(got.toJSON()));
+  check('a range reaches a span by its origin, sides made canonical', attr(1, 0) === 'top bottom left' && attr(1, 1) === 'top bottom left', show(got.toJSON()));
+  const has = (s: string) => warnings.some((w) => w.includes(s));
+  check('a covered position warns', has('"r1c1:all" names a position a span covers'), warnings.join('; '));
+  check('a row outside the table warns', has('"r5c0:all" is outside the table'), warnings.join('; '));
+  check('a word that is not a side warns', has('"r0c0:diagonal" is not understood') && has('"r0c0" is not understood'), warnings.join('; '));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

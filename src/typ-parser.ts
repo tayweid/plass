@@ -21,6 +21,7 @@ import { beforeAfterNode, createQuoteState, feedGlyph, lastVisible, smartQuote, 
 import { densityFromInsetPt, type TableDensity } from './table-density';
 import { parseRowRuleArg } from './table-rules';
 import { cellFillFromTypst, type CellFill } from './table-fills';
+import { borderFromStroke, borderSides, borderValue } from './table-borders';
 import { normalizeTableColumns } from './table-geometry';
 import { parseBibTeX } from './bibtex';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
@@ -316,9 +317,11 @@ function fuseDecimalColumns(table: PMNode, logicalDecimals: number[]): PMNode {
           });
           const after = cellIdx >= 0 && cellIdx + 1 < row.childCount ? row.child(cellIdx + 1) : null;
           const joined = (cell.textContent + (after ? after.textContent : '')).trim();
+          // The halves' borders, joined (each lost its inner side).
+          const border = borderValue([...(borderSides(String(cell.attrs.border || '')) ?? []), ...(borderSides(String(after?.attrs.border || '')) ?? [])]);
           cells.push(
             cell.type.create(
-              { ...cell.attrs, colspan: 1, align: 'decimal' },
+              { ...cell.attrs, colspan: 1, align: 'decimal', border },
               [schema.nodes.paragraph.create(null, joined ? [schema.text(joined)] : [])],
             ),
           );
@@ -887,6 +890,8 @@ interface ParsedCell {
   align: string | null;
   valign: string | null;
   fill: CellFill;
+  /** Border sides (table-borders.ts), '' for none. */
+  border: string;
 }
 
 interface CellAlignment {
@@ -1206,7 +1211,7 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
   if (arg.startsWith('[')) {
     const end = matchBracket(arg, 0);
     if (end !== arg.length - 1) return null;
-    return { content: arg.slice(1, end), colspan: 1, rowspan: 1, header, align: null, valign: null, fill: '' };
+    return { content: arg.slice(1, end), colspan: 1, rowspan: 1, header, align: null, valign: null, fill: '', border: '' };
   }
   if (arg.startsWith('table.cell(')) {
     const argsStart = 'table.cell('.length;
@@ -1227,6 +1232,14 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
       if (!preset) return null;
       fill = preset;
     }
+    // A stroke is a border the exporter writes or the table is not native.
+    let border = '';
+    const strokeArg = splitTopArgs(a).find((part) => /^stroke\s*:/.test(part));
+    if (strokeArg) {
+      const value = borderFromStroke(strokeArg.slice(strokeArg.indexOf(':') + 1));
+      if (!value) return null;
+      border = value;
+    }
     return {
       content: arg.slice(bracket + 1, end),
       colspan: parseInt(/colspan:\s*(\d+)/.exec(a)?.[1] ?? '1', 10),
@@ -1235,6 +1248,7 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
       align: alignment?.align ?? null,
       valign: alignment?.valign ?? null,
       fill,
+      border,
     };
   }
   return null;
@@ -1419,7 +1433,7 @@ export function parseTable(src: string): PMNode | null {
       const alignment = alignments?.[col % alignments.length];
       rowCells.push(
         type.create({ colspan: c.colspan, rowspan: c.rowspan, align: c.align ?? alignment?.align ?? null,
-          valign: c.valign ?? alignment?.valign ?? null, fill: c.fill || (!rows.length ? firstRowFill : '') }, content),
+          valign: c.valign ?? alignment?.valign ?? null, fill: c.fill || (!rows.length ? firstRowFill : ''), border: c.border }, content),
       );
       for (let k = col; k < Math.min(columns, col + c.colspan); k++) {
         if (c.rowspan > 1) pending[k] += c.rowspan - 1;

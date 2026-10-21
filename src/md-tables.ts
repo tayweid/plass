@@ -9,7 +9,7 @@
 //   ::: {#tbl:x .table caption="Results" style=grid density=compact inset=9pt
 //        columns="auto 1fr 2fr" font-size=0.85em decimal="2" rules="1:light 3:none"
 //        fills="r0:gray-dark r3c1:yellow" valign="r1c2:middle" spans="r2c0:2x1"
-//        aligns="r2c1:center"}
+//        aligns="r2c1:center" borders="r2-3c2-3:all r0c1:bottom+left"}
 //   | Name | Score | Note |
 //   ...
 //   :::
@@ -32,6 +32,7 @@ import { schema } from './schema';
 import { normalizeInsetPt, normalizeTableColumns } from './table-geometry';
 import { CELL_FILL_TYPST } from './table-fills';
 import { ROW_RULE_STROKE } from './table-rules';
+import { borderMd, borderSides, borderValue, normalizeBorder } from './table-borders';
 import { TABLE_DENSITY_INSET_PT } from './table-density';
 
 /** A pandoc attribute block, `{#id .class key=value}`, in pandoc's own
@@ -65,7 +66,7 @@ const VALIGNS = ['top', 'middle', 'bottom'];
 const ALIGNS = ['left', 'center', 'right', 'decimal'];
 
 /** The attribute keys, in the order the writer emits them. */
-const KEYS = ['caption', 'style', 'density', 'inset', 'columns', 'font-size', 'decimal', 'rules', 'fills', 'valign', 'spans', 'aligns'];
+const KEYS = ['caption', 'style', 'density', 'inset', 'columns', 'font-size', 'decimal', 'rules', 'fills', 'borders', 'valign', 'spans', 'aligns'];
 
 /** A font size the reader accepts: a positive em length, as the `.typ`
  *  reader accepts `text(size: …em, table(…))`. */
@@ -236,6 +237,31 @@ export function tableDivAttrs(table: PMNode, warnTo: Warn = noWarn): DivAttrs | 
     else row.forEach((cell, i) => values[i] && fills.push(`r${r}c${cell.col}:${values[i]}`));
   }
   if (fills.length) put('fills', fills.join(' '));
+
+  // Borders (table-borders.ts): each run of plain cells with one value
+  // that fills a rectangle is said once, as a range (`r2-3c2-3:all`).
+  const borderOf = (cell: GridCell) => normalizeBorder(cell.node.attrs.border);
+  const cellAt = new Map(grid.cells.map((cell) => [`${cell.row},${cell.col}`, cell]));
+  const said = new Set<GridCell>();
+  const borders: string[] = [];
+  for (const cell of grid.cells) {
+    const value = borderOf(cell);
+    if (!value || said.has(cell)) continue;
+    const joins = (c: GridCell | undefined): c is GridCell =>
+      !!c && c.colspan === 1 && c.rowspan === 1 && !said.has(c) && borderOf(c) === value;
+    let w = 1;
+    let h = 1;
+    if (joins(cell)) {
+      while (joins(cellAt.get(`${cell.row},${cell.col + w}`))) w++;
+      const rowJoins = (r: number) => Array.from({ length: w }, (_, c) => cellAt.get(`${r},${cell.col + c}`)).every(joins);
+      while (cell.row + h < grid.height && rowJoins(cell.row + h)) h++;
+    }
+    for (let r = 0; r < h; r++) for (let c = 0; c < w; c++) said.add(cellAt.get(`${cell.row + r},${cell.col + c}`) ?? cell);
+    const rows = h > 1 ? `${cell.row}-${cell.row + h - 1}` : `${cell.row}`;
+    const cols = w > 1 ? `${cell.col}-${cell.col + w - 1}` : `${cell.col}`;
+    borders.push(`r${rows}c${cols}:${borderMd(value)}`);
+  }
+  if (borders.length) put('borders', borders.join(' '));
 
   // One vertical alignment shared by every cell is said once for the table.
   const valignOf = (cell: GridCell): string => {
@@ -795,6 +821,31 @@ export function applyTableDivAttrs(table: PMNode, attrs: DivAttrs, warnTo: Warn 
     }
     const e = located('valign', entry, (v) => VALIGNS.includes(v));
     if (e && atOrigin('valign', entry, e.at)) set(e.at, 'valign', e.value);
+  }
+  // Borders: a cell, a row (`r2:`), or a rectangle (`r2-3c2-3:`), every
+  // cell whose origin is inside it; a later entry wins over an earlier.
+  for (const entry of entries('borders')) {
+    const parts = pair(entry);
+    const m = parts && /^r(\d+)(?:-(\d+))?(?:c(\d+)(?:-(\d+))?)?$/.exec(parts[0]);
+    const sides = parts ? borderSides(parts[1]) : null;
+    if (!parts || !m || !sides?.size) {
+      bad('borders', entry);
+      continue;
+    }
+    const r0 = +m[1];
+    const r1 = m[2] === undefined ? r0 : +m[2];
+    const c0 = m[3] === undefined ? 0 : +m[3];
+    const c1 = m[3] === undefined ? grid.width - 1 : m[4] === undefined ? c0 : +m[4];
+    if (r1 < r0 || c1 < c0 || r1 >= grid.height || c1 >= grid.width) {
+      bad('borders', entry, 'is outside the table');
+      continue;
+    }
+    const single = r0 === r1 && c0 === c1 && m[3] !== undefined;
+    if (single && !atOrigin('borders', entry, { row: r0, col: c0 })) continue;
+    for (const cell of grid.cells) {
+      if (covered.has(key(cell))) continue;
+      if (cell.row >= r0 && cell.row <= r1 && cell.col >= c0 && cell.col <= c1) set(cell, 'border', borderValue(sides));
+    }
   }
   for (const entry of entries('aligns')) {
     const e = located('aligns', entry, (v) => v === 'default' || ALIGNS.includes(v));

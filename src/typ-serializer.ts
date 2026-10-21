@@ -16,6 +16,7 @@ import { RAW_FONT, codeBlockMetricsEm, effectiveFont, parityMetrics } from './fo
 import { TABLE_DENSITY_INSET_PT, type TableDensity } from './table-density';
 import { rowRuleArg, type RowRule } from './table-rules';
 import { CELL_FILL_TYPST, type CellFill } from './table-fills';
+import { borderSides, borderStrokeArg, borderValue } from './table-borders';
 import type { CitationStyle } from './citation-styles';
 import { commentToTyp } from './editor-comments-format';
 import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config';
@@ -1094,6 +1095,16 @@ function blockToTyp(node: PMNode, indent = ''): string {
           const valign = (cell.attrs.valign as string) || null;
           const fill = ((cell.attrs.fill as CellFill) || '') as CellFill;
           const fillArg = fill ? `fill: ${CELL_FILL_TYPST[fill]}` : '';
+          // Borders: never on a grid table, whose 1pt strokes would win
+          // (table-borders.ts).
+          const border = style === 'grid' ? '' : ((cell.attrs.border as string) || '');
+          const strokeArg = borderStrokeArg(border);
+          /** A decimal half's border: the cell's, less the inner side. */
+          const halfStroke = (drop: 'left' | 'right') => {
+            const sides = borderSides(border) ?? new Set();
+            sides.delete(drop);
+            return borderStrokeArg(borderValue(sides));
+          };
 
           const inDecimal = decimalCols.includes(col) && colspan === 1;
           if (inDecimal) {
@@ -1104,14 +1115,17 @@ function blockToTyp(node: PMNode, indent = ''): string {
               const intPart = numM[1] ?? '';
               const fracPart = numM[2] ?? '';
               const rs = (rowspan > 1 ? `, rowspan: ${rowspan}` : '') + (fillArg ? `, ${fillArg}` : '');
-              cells.push(`table.cell(align: ${aligned('right', valign)}, inset: (right: 0pt)${rs})[${escapeTyp(intPart)}]`);
-              cells.push(`table.cell(align: ${aligned('left', valign)}, inset: (left: 0pt)${rs})[${escapeTyp(fracPart)}]`);
+              const intStroke = halfStroke('right');
+              const fracStroke = halfStroke('left');
+              cells.push(`table.cell(align: ${aligned('right', valign)}, inset: (right: 0pt)${rs}${intStroke ? `, ${intStroke}` : ''})[${escapeTyp(intPart)}]`);
+              cells.push(`table.cell(align: ${aligned('left', valign)}, inset: (left: 0pt)${rs}${fracStroke ? `, ${fracStroke}` : ''})[${escapeTyp(fracPart)}]`);
             } else {
               // Headers, empties, and non-numeric content span the pair.
               const args = [`colspan: 2`];
               if (rowspan > 1) args.push(`rowspan: ${rowspan}`);
               args.push(`align: ${aligned(isHeader ? 'center' : 'right', valign)}`);
               if (fillArg) args.push(fillArg);
+              if (strokeArg) args.push(strokeArg);
               cells.push(`table.cell(${args.join(', ')})${body}`);
             }
             return;
@@ -1125,6 +1139,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
             args.push(`align: ${aligned(align, valign)}`);
           }
           if (fillArg) args.push(fillArg);
+          if (strokeArg) args.push(strokeArg);
           cells.push(args.length ? `table.cell(${args.join(', ')})${body}` : body);
         });
         if (allHeader) hasHeader = true;
