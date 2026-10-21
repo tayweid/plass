@@ -1035,7 +1035,7 @@ bulleted and numbered lists, loose spacing), then Insert (adding
 Display equation $$, Reference or cite @, Title block, Page break),
 Blocks, Layout (justified, center, right), Code (raw Typst block and inline raw Typst),
 Document (adding Demo document and, in a browser, Install Plass) and
-*Keys* (Open ⌘O, Save ⌘S, Export PDF ⌘E, Plain text ⌘/). It is the
+*Keys* (Open ⌘O, Save ⌘S, Export PDF ⌘P, Plain text ⌘/). It is the
 markdown cheat sheet, clickable, and it replaced the Headings, Text
 style, Lists, Insert and Extras menus and the Markdown & shortcuts
 dialog.

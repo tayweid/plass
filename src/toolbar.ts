@@ -373,14 +373,14 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   newBtn.title = 'New window — a blank paper';
   container.append(titleBar);
   // Export is a split tile: the download half saves the PDF on one
-  // click (⌘E), the chevron half opens the other formats.
+  // click (⌘P, or ⌘E), the chevron half opens the other formats.
   const exportSplit = document.createElement('span');
   exportSplit.className = 'tb-split';
   exportSplit.id = 'export-split';
   container.append(exportSplit);
   const pdfBtn = glyphButton(exportSplit, 'Export PDF', icon('download'));
   pdfBtn.classList.add('tb-tile');
-  pdfBtn.title = 'Export PDF (⌘E)';
+  pdfBtn.title = 'Export PDF (⌘P)';
   const exportBtn = trigger(exportSplit, 'Export', icon('chevron'));
   exportBtn.classList.add('tb-tile', 'tb-split-more');
   exportBtn.title = 'Export as .md, .typ or .tex';
@@ -935,7 +935,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   // KEYS: the paper's way in and out, as rows of the cheat sheet.
   tool(keysGroup, 'Open', () => void fm.open(), { glyph: icon('open'), hint: '⌘O', title: 'Open… (⌘O)' });
   tool(keysGroup, 'Save', () => void fm.save(), { glyph: icon('download'), hint: '⌘S', title: 'Save (⌘S)' });
-  tool(keysGroup, 'Export PDF', () => exportPdfNow(), { glyph: icon('download'), hint: '⌘E', title: 'Export PDF (⌘E)' });
+  tool(keysGroup, 'Export PDF', () => exportPdfNow(), { glyph: icon('download'), hint: '⌘P', title: 'Export PDF (⌘P)' });
   tool(keysGroup, 'Plain text view', () => actions.toggleSource(), { glyph: icon('code'), hint: '⌘/', title: 'Switch between the page and plain text (⌘/)' });
   openBtn.addEventListener('click', () => { closeMenu(); void fm.open(); });
   newBtn.addEventListener('click', () => {
@@ -1134,9 +1134,13 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     );
   };
   pdfBtn.addEventListener('click', () => { closeMenu(); exportPdfNow(); });
+  // ⌘P is Print everywhere on a Mac, and Plass's print is the PDF, so it
+  // runs the export in place of the browser's print dialog; ⌘E stays.
   document.addEventListener('keydown', (e) => {
-    if (e.key.toLowerCase() !== 'e' || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.repeat) return;
+    const key = e.key.toLowerCase();
+    if ((key !== 'p' && key !== 'e') || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
     e.preventDefault();
+    if (e.repeat) return;
     closeMenu();
     exportPdfNow();
   });

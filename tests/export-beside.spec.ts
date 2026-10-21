@@ -59,6 +59,22 @@ test('PDF export downloads when there is no folder and no file handle', async ({
   expect((await download).suggestedFilename()).toBe('Plass.pdf');
 });
 
+// ⌘P is the download button: the PDF, never the browser's print dialog.
+test('⌘P exports the PDF like the download button', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.locator('#editor .ProseMirror').first().click();
+  // Caught on the way down, read once the event has been handled: it is
+  // the event's own defaultPrevented, whoever stops it on the way up.
+  await page.evaluate(() => {
+    const w = window as typeof window & { __cmdP?: KeyboardEvent };
+    window.addEventListener('keydown', (e) => { if (e.key === 'p') w.__cmdP = e; }, { capture: true });
+  });
+  const download = page.waitForEvent('download');
+  await page.keyboard.press('Meta+p');
+  expect((await download).suggestedFilename()).toBe('Plass.pdf');
+  expect(await page.evaluate(() => (window as typeof window & { __cmdP?: KeyboardEvent }).__cmdP?.defaultPrevented)).toBe(true);
+});
+
 test('.md, .typ and .tex exports write into the project folder when one is attached', async ({ page }) => {
   await page.goto('/?new=1');
   let downloads = 0;
