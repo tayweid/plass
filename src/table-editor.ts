@@ -240,7 +240,7 @@ export const resetTableColumnWidths: Command = (state, dispatch) => {
 
 /** One attribute of every selected cell (each merged cell once): the
  *  shared value, or 'mixed'; null outside a table. */
-export function selectedCellsAttr(state: EditorState, name: 'align' | 'valign' | 'fill'): string | null {
+export function selectedCellsAttr(state: EditorState, name: 'align' | 'valign' | 'fill' | 'borderColor'): string | null {
   if (!isInTable(state)) return null;
   try {
     const rect = selectedRect(state);

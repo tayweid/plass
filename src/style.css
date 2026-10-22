@@ -2711,6 +2711,27 @@ body {
   text-align: left;
 }
 
+/* Line colours (table-borders.ts): every line a table draws is
+   --line-ink, the ink unless the table names a colour; a cell's borders are
+   --cb-ink, the table's unless the cell names one. The same colours Typst
+   prints: red #c00000 (the solution red), blue #1f5fbf, gray luma(150). */
+.ProseMirror table {
+  --line-ink: var(--ink);
+}
+
+.ProseMirror table[data-line-color='red'] { --line-ink: #c00000; }
+.ProseMirror table[data-line-color='blue'] { --line-ink: #1f5fbf; }
+.ProseMirror table[data-line-color='gray'] { --line-ink: #969696; }
+
+.ProseMirror table :is(td, th),
+.ProseMirror .ts-table-hdr {
+  --cb-ink: var(--line-ink);
+}
+
+.ProseMirror table :is(td, th, .ts-table-hdr)[data-border-color='red'] { --cb-ink: #c00000; }
+.ProseMirror table :is(td, th, .ts-table-hdr)[data-border-color='blue'] { --cb-ink: #1f5fbf; }
+.ProseMirror table :is(td, th, .ts-table-hdr)[data-border-color='gray'] { --cb-ink: #969696; }
+
 /* Rules are paint only. Typst draws a stroke centered on the cell
    boundary and charges the layout nothing for it; a CSS border would add
    its width to every row and the table, and the page would drift from the
@@ -2733,7 +2754,7 @@ body {
 
 .ProseMirror table.ts-table-grid th,
 .ProseMirror table.ts-table-grid td {
-  box-shadow: 0 0 0 0.5pt var(--ink), inset 0 0 0 0.5pt var(--ink);
+  box-shadow: 0 0 0 0.5pt var(--line-ink), inset 0 0 0 0.5pt var(--line-ink);
 }
 
 /* booktabs preset: horizontal rules only — the academic look. The top
@@ -2750,11 +2771,11 @@ body {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  box-shadow: inset 0 0.08em 0 var(--ink), inset 0 -0.08em 0 var(--ink);
+  box-shadow: inset 0 0.08em 0 var(--line-ink), inset 0 -0.08em 0 var(--line-ink);
 }
 
 .ProseMirror table.ts-table-booktabs tr:first-child th {
-  box-shadow: inset 0 -0.05em 0 var(--ink), var(--cell-borders);
+  box-shadow: inset 0 -0.05em 0 var(--line-ink), var(--cell-borders);
 }
 
 /* Cell fill presets (table-fills.ts): the same colours Typst prints. */
@@ -2808,31 +2829,31 @@ body {
 }
 
 .ProseMirror table:not(.ts-table-grid) :is(td, th, .ts-table-hdr):is([data-border~='top'], [data-border='all']) {
-  --cb-t: 0 calc(-1 * var(--cb-w)) 0 var(--ink), inset 0 var(--cb-w) 0 var(--ink);
+  --cb-t: 0 calc(-1 * var(--cb-w)) 0 var(--cb-ink), inset 0 var(--cb-w) 0 var(--cb-ink);
 }
 
 .ProseMirror table:not(.ts-table-grid) :is(td, th, .ts-table-hdr):is([data-border~='right'], [data-border='all']) {
-  --cb-r: var(--cb-w) 0 0 var(--ink), inset calc(-1 * var(--cb-w)) 0 0 var(--ink);
+  --cb-r: var(--cb-w) 0 0 var(--cb-ink), inset calc(-1 * var(--cb-w)) 0 0 var(--cb-ink);
 }
 
 .ProseMirror table:not(.ts-table-grid) :is(td, th, .ts-table-hdr):is([data-border~='bottom'], [data-border='all']) {
-  --cb-b: 0 var(--cb-w) 0 var(--ink), inset 0 calc(-1 * var(--cb-w)) 0 var(--ink);
+  --cb-b: 0 var(--cb-w) 0 var(--cb-ink), inset 0 calc(-1 * var(--cb-w)) 0 var(--cb-ink);
 }
 
 .ProseMirror table:not(.ts-table-grid) :is(td, th, .ts-table-hdr):is([data-border~='left'], [data-border='all']) {
-  --cb-l: calc(-1 * var(--cb-w)) 0 0 var(--ink), inset var(--cb-w) 0 0 var(--ink);
+  --cb-l: calc(-1 * var(--cb-w)) 0 0 var(--cb-ink), inset var(--cb-w) 0 0 var(--cb-ink);
 }
 
 /* Row rule presets (table-rules.ts): the rule under a row, replacing the
    style preset's at that boundary. Grid tables keep their cell strokes. */
 .ProseMirror table:not(.ts-table-grid) tr[data-rule='light'] > th,
 .ProseMirror table:not(.ts-table-grid) tr[data-rule='light'] > td {
-  box-shadow: inset 0 -0.05em 0 var(--ink), var(--cell-borders);
+  box-shadow: inset 0 -0.05em 0 var(--line-ink), var(--cell-borders);
 }
 
 .ProseMirror table:not(.ts-table-grid) tr[data-rule='heavy'] > th,
 .ProseMirror table:not(.ts-table-grid) tr[data-rule='heavy'] > td {
-  box-shadow: inset 0 -0.08em 0 var(--ink), var(--cell-borders);
+  box-shadow: inset 0 -0.08em 0 var(--line-ink), var(--cell-borders);
 }
 
 .ProseMirror table:not(.ts-table-grid) tr[data-rule='none'] > th,
@@ -2945,24 +2966,24 @@ body {
    the repeated row is the row the exporter's midrule sits under. */
 .ProseMirror table.ts-table-booktabs tr.ts-table-break > td::before {
   top: 0;
-  border-top: 0.08em solid var(--ink);
+  border-top: 0.08em solid var(--line-ink);
 }
 
 .ProseMirror table.ts-table-booktabs tr.ts-table-break .ts-table-gap::after {
   bottom: 0;
-  border-bottom: 0.08em solid var(--ink);
+  border-bottom: 0.08em solid var(--line-ink);
 }
 
 .ProseMirror table.ts-table-booktabs tr.ts-table-break-midrule > td::after {
   bottom: 0;
-  border-bottom: 0.05em solid var(--ink);
+  border-bottom: 0.05em solid var(--line-ink);
 }
 
 /* grid: only the header copy carries cell strokes. Its box spans the
    full column width, and its ring matches the real cells. The spacer
    cells themselves must never draw lines through the page margins. */
 .ProseMirror table.ts-table-grid tr.ts-table-break .ts-table-hdr {
-  box-shadow: 0 0 0 0.5pt var(--ink), inset 0 0 0 0.5pt var(--ink);
+  box-shadow: 0 0 0 0.5pt var(--line-ink), inset 0 0 0 0.5pt var(--line-ink);
 }
 
 /* prosemirror-tables cell-selection highlight: square, so adjacent cells
@@ -3051,11 +3072,11 @@ body {
 }
 
 .ProseMirror table.ts-table-editing.ts-table-plain tr[data-rule='light'] > :is(td, th) {
-  --g-b: inset 0 -0.05em 0 var(--ink);
+  --g-b: inset 0 -0.05em 0 var(--line-ink);
 }
 
 .ProseMirror table.ts-table-editing.ts-table-plain tr[data-rule='heavy'] > :is(td, th) {
-  --g-b: inset 0 -0.08em 0 var(--ink);
+  --g-b: inset 0 -0.08em 0 var(--line-ink);
 }
 
 /* The page-break filler row spans the bottom margin, the page number and

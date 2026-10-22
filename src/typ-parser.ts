@@ -21,7 +21,7 @@ import { beforeAfterNode, createQuoteState, feedGlyph, lastVisible, smartQuote, 
 import { densityFromInsetPt, type TableDensity } from './table-density';
 import { parseRowRuleArg } from './table-rules';
 import { cellFillFromTypst, type CellFill } from './table-fills';
-import { borderFromStroke, borderSides, borderValue } from './table-borders';
+import { borderFromStroke, borderSides, borderValue, parseColoredStroke } from './table-borders';
 import { normalizeTableColumns } from './table-geometry';
 import { parseBibTeX } from './bibtex';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
@@ -890,8 +890,9 @@ interface ParsedCell {
   align: string | null;
   valign: string | null;
   fill: CellFill;
-  /** Border sides (table-borders.ts), '' for none. */
+  /** Border sides (table-borders.ts), '' for none, and their colour. */
   border: string;
+  borderColor: string;
 }
 
 interface CellAlignment {
@@ -1211,7 +1212,7 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
   if (arg.startsWith('[')) {
     const end = matchBracket(arg, 0);
     if (end !== arg.length - 1) return null;
-    return { content: arg.slice(1, end), colspan: 1, rowspan: 1, header, align: null, valign: null, fill: '', border: '' };
+    return { content: arg.slice(1, end), colspan: 1, rowspan: 1, header, align: null, valign: null, fill: '', border: '', borderColor: '' };
   }
   if (arg.startsWith('table.cell(')) {
     const argsStart = 'table.cell('.length;
@@ -1234,11 +1235,13 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
     }
     // A stroke is a border the exporter writes or the table is not native.
     let border = '';
+    let borderColor = '';
     const strokeArg = splitTopArgs(a).find((part) => /^stroke\s*:/.test(part));
     if (strokeArg) {
       const value = borderFromStroke(strokeArg.slice(strokeArg.indexOf(':') + 1));
       if (!value) return null;
-      border = value;
+      border = value.border;
+      borderColor = value.color;
     }
     return {
       content: arg.slice(bracket + 1, end),
@@ -1249,6 +1252,7 @@ function parseCellArg(arg: string, header: boolean): ParsedCell | null {
       valign: alignment?.valign ?? null,
       fill,
       border,
+      borderColor,
     };
   }
   return null;
@@ -1324,6 +1328,9 @@ export function parseTable(src: string): PMNode | null {
   let insetPt: number | null = null;
   let firstRowFill: CellFill = '';
   let hlines = 0;
+  // Line colours (table-borders.ts): what the grid stroke, the preset's
+  // rules and the row rules are drawn in; null until one is seen.
+  const colors = new Set<string>();
   const userHlines: string[] = [];
   const customParams: string[] = [];
   const cells: ParsedCell[] = [];
@@ -1347,6 +1354,9 @@ export function parseTable(src: string): PMNode | null {
       else customParams.push(arg);
     } else if (/^stroke\s*:\s*none$/.test(arg)) {
       strokeNone = true;
+    } else if (/^stroke\s*:/.test(arg) && parseColoredStroke(arg.slice(arg.indexOf(':') + 1))?.weight === '1pt' && parseColoredStroke(arg.slice(arg.indexOf(':') + 1))?.color) {
+      // A grid's default stroke written out in a colour.
+      colors.add(parseColoredStroke(arg.slice(arg.indexOf(':') + 1))!.color);
     } else if (/^inset\s*:\s*(?:\d+(?:\.\d+)?|\.\d+)pt$/.test(arg)) {
       if (geometry?.key === 'inset') {
         const preset = densityFromInsetPt(geometry.pt);
@@ -1360,7 +1370,14 @@ export function parseTable(src: string): PMNode | null {
       // Explicit-position rules (y:) are user midrules — carried in params;
       // bare rules are the style preset's own.
       if (/[(,]\s*y\s*:/.test(arg)) userHlines.push(arg);
-      else hlines++;
+      else {
+        // A preset rule: its stroke, in a colour or the ink.
+        const m = /^table\.hline\(\s*stroke\s*:\s*(.+)\)$/.exec(arg);
+        const stroke = m ? parseColoredStroke(m[1]) : null;
+        if (m && !stroke) return null;
+        if (stroke) colors.add(stroke.color);
+        hlines++;
+      }
     } else if (arg.startsWith('table.vline(')) {
       // Column rules with an explicit position round-trip via params.
       if (/[(,]\s*x\s*:/.test(arg)) userHlines.push(arg);
@@ -1433,7 +1450,7 @@ export function parseTable(src: string): PMNode | null {
       const alignment = alignments?.[col % alignments.length];
       rowCells.push(
         type.create({ colspan: c.colspan, rowspan: c.rowspan, align: c.align ?? alignment?.align ?? null,
-          valign: c.valign ?? alignment?.valign ?? null, fill: c.fill || (!rows.length ? firstRowFill : ''), border: c.border }, content),
+          valign: c.valign ?? alignment?.valign ?? null, fill: c.fill || (!rows.length ? firstRowFill : ''), border: c.border, borderColor: c.borderColor }, content),
       );
       for (let k = col; k < Math.min(columns, col + c.colspan); k++) {
         if (c.rowspan > 1) pending[k] += c.rowspan - 1;
@@ -1455,6 +1472,7 @@ export function parseTable(src: string): PMNode | null {
   for (const arg of userHlines) {
     const rowRule = parseRowRuleArg(arg);
     if (rowRule && rowRule.index >= 0 && rowRule.index < rows.length) {
+      if (rowRule.rule !== 'none') colors.add(rowRule.color);
       const row = rows[rowRule.index];
       rows[rowRule.index] = row.type.create({ ...row.attrs, rule: rowRule.rule }, row.content);
     } else remainingHlines.push(arg);
@@ -1477,8 +1495,17 @@ export function parseTable(src: string): PMNode | null {
       (hasHeader && !replaced.has(1) ? 1 : 0);
     if (hlines !== expected) return null;
   }
+  // One colour for every line the table draws, or the table is not native.
+  if (colors.size > 1) return null;
+  const lineColor = [...colors][0] ?? '';
+  // A cell's borders in the table's colour have no colour of their own.
+  const finalRows = !lineColor ? rows : rows.map((row) => {
+    const cells: PMNode[] = [];
+    row.forEach((c) => cells.push(c.attrs.borderColor === lineColor ? c.type.create({ ...c.attrs, borderColor: '' }, c.content, c.marks) : c));
+    return row.type.create(row.attrs, cells);
+  });
   try {
-    return table.create({ style, params, density, columnWidths, insetPt }, rows);
+    return table.create({ style, params, density, columnWidths, insetPt, lineColor }, finalRows);
   } catch {
     return null;
   }

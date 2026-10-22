@@ -99,6 +99,8 @@ export function tableBreakWidget(view: EditorView, spec: TableBreakSpec): HTMLEl
         if (fill) hdr.dataset.fill = fill;
         const border = headerCell.dataset.border;
         if (border) hdr.dataset.border = border;
+        const borderColor = headerCell.dataset.borderColor;
+        if (borderColor) hdr.dataset.borderColor = borderColor;
         const align = headerCell.style.textAlign;
         if (align) hdr.style.textAlign = align;
         const alignLast = headerCell.style.textAlignLast;

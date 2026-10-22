@@ -16,7 +16,7 @@ import { RAW_FONT, codeBlockMetricsEm, effectiveFont, parityMetrics } from './fo
 import { TABLE_DENSITY_INSET_PT, type TableDensity } from './table-density';
 import { rowRuleArg, type RowRule } from './table-rules';
 import { CELL_FILL_TYPST, type CellFill } from './table-fills';
-import { borderSides, borderStrokeArg, borderValue } from './table-borders';
+import { borderSides, borderStrokeArg, borderValue, coloredStroke } from './table-borders';
 import type { CitationStyle } from './citation-styles';
 import { commentToTyp } from './editor-comments-format';
 import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config';
@@ -1039,6 +1039,9 @@ function blockToTyp(node: PMNode, indent = ''): string {
       // table.cell(colspan/rowspan), style presets via stroke/hline —
       // Typst's grid model matches PM's.
       const style = (node.attrs.style as string) || 'grid';
+      // Every line's colour (table-borders.ts): the style's strokes and
+      // rules, the row rules, and the borders a cell gives no colour.
+      const lineColor = (node.attrs.lineColor as string) || '';
       let columns = 0;
       const firstRow = node.child(0);
       firstRow?.forEach((cell) => {
@@ -1098,12 +1101,13 @@ function blockToTyp(node: PMNode, indent = ''): string {
           // Borders: never on a grid table, whose 1pt strokes would win
           // (table-borders.ts).
           const border = style === 'grid' ? '' : ((cell.attrs.border as string) || '');
-          const strokeArg = borderStrokeArg(border);
+          const borderColor = (cell.attrs.borderColor as string) || lineColor;
+          const strokeArg = borderStrokeArg(border, borderColor);
           /** A decimal half's border: the cell's, less the inner side. */
           const halfStroke = (drop: 'left' | 'right') => {
             const sides = borderSides(border) ?? new Set();
             sides.delete(drop);
-            return borderStrokeArg(borderValue(sides));
+            return borderStrokeArg(borderValue(sides), borderColor);
           };
 
           const inDecimal = decimalCols.includes(col) && colspan === 1;
@@ -1152,7 +1156,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
       const rowRules: string[] = [];
       node.forEach((row, _off, i) => {
         const rule = (row.attrs.rule as RowRule) || '';
-        if (rule) rowRules.push(rowRuleArg(i, rule));
+        if (rule) rowRules.push(rowRuleArg(i, rule, lineColor));
       });
       const customAll = [((node.attrs.params as string) || '').trim(), ...rowRules].filter(Boolean).join(',\n');
       const userRules: string[] = [...rowRules];
@@ -1215,6 +1219,8 @@ function blockToTyp(node: PMNode, indent = ''): string {
       // unless a custom key overrides it (stroke overrides the preset
       // stroke; the booktabs rules stay unless the style itself changes).
       if (style !== 'grid' && !customHas('stroke')) params.push('  stroke: none,');
+      // A grid's strokes are Typst's default 1pt, written out in a colour.
+      else if (style === 'grid' && lineColor && !customHas('stroke')) params.push(`  stroke: ${coloredStroke('1pt', lineColor)},`);
       if (customExpanded) {
         const block = customExpanded
           .split('\n')
@@ -1226,12 +1232,13 @@ function blockToTyp(node: PMNode, indent = ''): string {
         // Each preset rule yields to an explicit table.hline at its own
         // boundary (the card cycles them light/heavy/none via y: rules).
         const hasY = (y: number) => new RegExp(`table\\.hline\\(\\s*y\\s*:\\s*${y}[,)]`).test(customAll);
-        if (!hasY(0)) rows.unshift('  table.hline(stroke: 0.08em),');
+        const heavy = `  table.hline(stroke: ${coloredStroke('0.08em', lineColor)}),`;
+        if (!hasY(0)) rows.unshift(heavy);
         if (hasHeader && !hasY(1)) {
           const idx = rows.findIndex((r) => r.includes('table.header('));
-          rows.splice(idx + 1, 0, '  table.hline(stroke: 0.05em),');
+          rows.splice(idx + 1, 0, `  table.hline(stroke: ${coloredStroke('0.05em', lineColor)}),`);
         }
-        if (!hasY(node.childCount)) rows.push('  table.hline(stroke: 0.08em),');
+        if (!hasY(node.childCount)) rows.push(heavy);
       }
       for (const rule of userRules) params.push(`  ${rule},`);
       let tableCall = `table(\n${params.join('\n')}\n${rows.join('\n')}\n)`;

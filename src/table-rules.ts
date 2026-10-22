@@ -6,6 +6,8 @@
 // imported back from exactly that form. Paint only, in the page and in
 // the print: a stroke charges the layout nothing.
 
+import { coloredStroke, parseColoredStroke, type LineColor } from './table-borders';
+
 export type RowRule = '' | 'light' | 'heavy' | 'none';
 
 export const ROW_RULE_STROKE: Record<Exclude<RowRule, ''>, string> = { light: '0.05em', heavy: '0.08em', none: 'none' };
@@ -19,18 +21,24 @@ export function rowRuleFromStroke(stroke: string): Exclude<RowRule, ''> | null {
   return null;
 }
 
-/** A serialized row rule at the boundary below row `index` (0-based). */
-export function rowRuleArg(index: number, rule: Exclude<RowRule, ''>): string {
-  return `table.hline(y: ${index + 1}, stroke: ${ROW_RULE_STROKE[rule]})`;
+/** A serialized row rule at the boundary below row `index` (0-based), in
+ *  the table's line colour (table-borders.ts). */
+export function rowRuleArg(index: number, rule: Exclude<RowRule, ''>, color = ''): string {
+  const stroke = rule === 'none' ? 'none' : coloredStroke(ROW_RULE_STROKE[rule], color);
+  return `table.hline(y: ${index + 1}, stroke: ${stroke})`;
 }
 
-const ROW_RULE_RE = /^table\.hline\(\s*y\s*:\s*(\d+)\s*,\s*stroke\s*:\s*([\w.]+)\s*\)$/;
+const ROW_RULE_RE = /^table\.hline\(\s*y\s*:\s*(\d+)\s*,\s*stroke\s*:\s*(.+)\)$/;
 
-/** The row index and rule a serialized argument denotes, if it is one. */
-export function parseRowRuleArg(arg: string): { index: number; rule: Exclude<RowRule, ''> } | null {
+/** The row index, rule and colour a serialized argument denotes, if it is
+ *  one. */
+export function parseRowRuleArg(arg: string): { index: number; rule: Exclude<RowRule, ''>; color: LineColor } | null {
   const m = ROW_RULE_RE.exec(arg.trim());
   if (!m) return null;
-  const rule = rowRuleFromStroke(m[2]);
-  if (!rule) return null;
-  return { index: parseInt(m[1], 10) - 1, rule };
+  const index = parseInt(m[1], 10) - 1;
+  if (m[2].trim() === 'none') return { index, rule: 'none', color: '' };
+  const stroke = parseColoredStroke(m[2]);
+  const rule = stroke ? rowRuleFromStroke(stroke.weight) : null;
+  if (!stroke || !rule) return null;
+  return { index, rule, color: stroke.color };
 }

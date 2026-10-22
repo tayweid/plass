@@ -326,11 +326,11 @@ test.describe('the block panels', () => {
     });
     // (The column's amount field is off while the column fits its content.)
     const order: Array<string | null> = [];
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < 8; i++) {
       await page.keyboard.press('Tab');
       order.push(await focusedName());
     }
-    expect(order).toEqual(['Table text size', 'Table cell density', 'Cell padding in points', 'Header row', 'Selected column sizing', 'Caption', 'Label']);
+    expect(order).toEqual(['Table line colour', 'Table text size', 'Table cell density', 'Cell padding in points', 'Header row', 'Selected column sizing', 'Caption', 'Label']);
     await page.keyboard.press('Shift+Tab');
     await expect(panel.getByLabel('Caption')).toBeFocused();
     await page.keyboard.press('ControlOrMeta+a');

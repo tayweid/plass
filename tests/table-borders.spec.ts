@@ -213,3 +213,64 @@ test('borders are paint only: no cell or block moves', async ({ page }) => {
   expect(await boxes()).toEqual(before);
   expect(await page.locator('.ProseMirror td[data-border="all"]').count()).toBe(9);
 });
+
+test('line colours: a red border from the cell panel, gray lines from Table settings, drawn in those colours', async ({ page }) => {
+  await openMd(page, MATRIX);
+  await cell(page, '3, 3').click();
+  const panel = await openCellPanel(page);
+  await panel.getByRole('radio', { name: 'Red border colour' }).click();
+  const attrs = () =>
+    page.evaluate(() => {
+      let out: Record<string, unknown> = {};
+      window.view.state.doc.descendants((node) => {
+        if (node.type.name === 'table') {
+          out = { line: node.attrs.lineColor, cells: {} as Record<string, string> };
+          node.descendants((c) => {
+            if (c.type.name === 'table_cell' && c.attrs.borderColor) (out.cells as Record<string, string>)[c.textContent] = c.attrs.borderColor as string;
+            return c.type.name !== 'table_cell';
+          });
+          return false;
+        }
+        return true;
+      });
+      return out;
+    });
+  expect(await attrs()).toEqual({ line: '', cells: { '3, 3': 'red' } });
+  await page.keyboard.press('Escape');
+  await page.locator('.block-pill [data-tile="table"]').click();
+  const settings = page.getByRole('dialog', { name: 'Table settings' });
+  await expect(settings).toBeVisible();
+  await settings.getByRole('radio', { name: 'Gray' }).click();
+  expect(await attrs()).toEqual({ line: 'gray', cells: { '3, 3': 'red' } });
+
+  // Off the table, so no ghost edges: the pixels on each payoff's left edge.
+  await page.locator('.ProseMirror p', { hasText: 'Before the matrix.' }).click();
+  const leftEdge = async (text: string) => {
+    const box = (await cell(page, text).boundingBox())!;
+    const shot = (await page.screenshot()).toString('base64');
+    return page.evaluate(async ({ b64, x, y }) => {
+      const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const g = canvas.getContext('2d')!;
+      g.drawImage(bitmap, 0, 0);
+      const dpr = bitmap.width / innerWidth;
+      // The most saturated (red) and the darkest pixel across the edge.
+      let red = 0;
+      let dark = 255;
+      for (let d = -3; d <= 3; d++) {
+        const [r, gr, b] = g.getImageData(Math.round((x + d / 2) * dpr), Math.round(y * dpr), 1, 1).data;
+        red = Math.max(red, r - Math.max(gr, b));
+        dark = Math.min(dark, Math.round((r + gr + b) / 3));
+      }
+      return { red, dark };
+    }, { b64: shot, x: box.x, y: box.y + box.height / 4 });
+  };
+  const red = await leftEdge('3, 3');
+  expect(red.red).toBeGreaterThan(60);
+  // Gray: a line, but neither red nor ink-black.
+  const gray = await leftEdge('5, 0');
+  expect(gray.red).toBeLessThan(20);
+  expect(gray.dark).toBeLessThan(235);
+  expect(gray.dark).toBeGreaterThan(60);
+});

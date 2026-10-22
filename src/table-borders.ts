@@ -54,26 +54,88 @@ export function normalizeBorder(value: unknown): string {
 /** The Markdown word for a border value: `all`, or sides joined by `+`. */
 export const borderMd = (value: string) => value.split(' ').join('+');
 
-/** The `stroke:` argument a bordered cell exports. */
-export function borderStrokeArg(value: string): string {
+/** The `stroke:` argument a bordered cell exports, in `color`. */
+export function borderStrokeArg(value: string, color: string = ''): string {
   const sides = borderSides(value);
   if (!sides?.size) return '';
-  if (sides.size === 4) return `stroke: ${CELL_BORDER_STROKE}`;
-  return `stroke: (${BORDER_SIDES.filter((s) => sides.has(s)).map((s) => `${s}: ${CELL_BORDER_STROKE}`).join(', ')})`;
+  const stroke = coloredStroke(CELL_BORDER_STROKE, color);
+  if (sides.size === 4) return `stroke: ${stroke}`;
+  return `stroke: (${BORDER_SIDES.filter((s) => sides.has(s)).map((s) => `${s}: ${stroke}`).join(', ')})`;
 }
 
-/** The border value a `stroke:` argument's expression denotes, if the
- *  exporter could have written it; null for any other stroke. */
-export function borderFromStroke(expr: string): string | null {
-  const e = expr.replace(/\s+/g, '');
-  if (e === CELL_BORDER_STROKE) return 'all';
-  const m = /^\((.*)\)$/.exec(e);
+/** The border value and colour a `stroke:` argument's expression denotes,
+ *  if the exporter could have written it (one colour for every side);
+ *  null for any other stroke. */
+export function borderFromStroke(expr: string): { border: string; color: LineColor } | null {
+  const e = expr.trim();
+  const whole = parseColoredStroke(e);
+  if (whole) return whole.weight === CELL_BORDER_STROKE ? { border: 'all', color: whole.color } : null;
+  const m = /^\(([\s\S]*)\)$/.exec(e);
   if (!m) return null;
   const sides = new Set<BorderSide>();
-  for (const part of m[1].split(',').filter(Boolean)) {
-    const kv = /^(top|right|bottom|left):(.+)$/.exec(part);
-    if (!kv || kv[2] !== CELL_BORDER_STROKE) return null;
+  let color: LineColor | null = null;
+  for (const part of splitTop(m[1])) {
+    const kv = /^\s*(top|right|bottom|left)\s*:([\s\S]+)$/.exec(part);
+    const stroke = kv ? parseColoredStroke(kv[2]) : null;
+    if (!kv || !stroke || stroke.weight !== CELL_BORDER_STROKE) return null;
+    if (color !== null && stroke.color !== color) return null;
+    color = stroke.color;
     sides.add(kv[1] as BorderSide);
   }
-  return sides.size ? borderValue(sides) : null;
+  return sides.size ? { border: borderValue(sides), color: color ?? '' } : null;
+}
+
+/** A dictionary's entries, split at its top-level commas. */
+function splitTop(s: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') depth--;
+    else if (c === ',' && depth === 0) {
+      out.push(s.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(s.slice(start));
+  return out.filter((p) => p.trim());
+}
+
+// Line colours (Taylor, 2026-10-21): a preset palette, as the fills are.
+// A table's colour is every line it draws (its style's strokes and rules,
+// its row rules, and its borders); a cell's border colour is that cell's
+// borders only, over the table's. '' is the ink. Red is the solution
+// colour (typ-serializer.ts SOLUTION_COLOR, style.css --solution-red).
+
+export type LineColor = '' | 'red' | 'blue' | 'gray';
+
+export const LINE_COLOR_TYPST: Record<Exclude<LineColor, ''>, string> = {
+  red: 'rgb("#c00000")',
+  blue: 'rgb("#1f5fbf")',
+  gray: 'luma(150)',
+};
+
+// The page paints the same colours (style.css `[data-line-color]`):
+// red #c00000, blue #1f5fbf, gray #969696 (= luma(150)).
+
+export const LINE_COLORS = Object.keys(LINE_COLOR_TYPST) as Array<Exclude<LineColor, ''>>;
+
+export const normalizeLineColor = (value: unknown): LineColor =>
+  typeof value === 'string' && (LINE_COLORS as string[]).includes(value) ? (value as LineColor) : '';
+
+/** A stroke at `weight` in `color` ('' the ink, Typst's default black). */
+export const coloredStroke = (weight: string, color: LineColor | string) =>
+  color && color in LINE_COLOR_TYPST ? `${weight} + ${LINE_COLOR_TYPST[color as Exclude<LineColor, ''>]}` : weight;
+
+/** The weight and colour of a stroke the exporter writes (`0.05em`,
+ *  `0.05em + rgb("#c00000")`); null for any other. */
+export function parseColoredStroke(expr: string): { weight: string; color: LineColor } | null {
+  const e = expr.replace(/\s+/g, '');
+  const m = /^([\d.]+(?:em|pt))(?:\+(.+))?$/.exec(e);
+  if (!m) return null;
+  if (!m[2]) return { weight: m[1], color: '' };
+  for (const color of LINE_COLORS) if (LINE_COLOR_TYPST[color].replace(/\s+/g, '') === m[2]) return { weight: m[1], color };
+  return null;
 }

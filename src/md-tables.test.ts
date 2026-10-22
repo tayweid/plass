@@ -579,6 +579,22 @@ console.log('borders');
   check('a word that is not a side warns', has('"r0c0:diagonal" is not understood') && has('"r0c0" is not understood'), warnings.join('; '));
 }
 
+console.log('line colours');
+{
+  const b = (text: string, attrs: Record<string, unknown> = {}) => td([text, attrs]);
+  const t = table([
+    tr([b('x'), b('y')]),
+    tr([b('3, 3', { border: 'all', borderColor: 'red' }), b('0, 5', { border: 'all' })]),
+    tr([b('5, 0', { border: 'all', borderColor: 'red' }), b('1, 1', { border: 'all', borderColor: 'blue' })]),
+  ], { style: 'plain', lineColor: 'gray' });
+  const r = trip(t);
+  check('the table colour and the cells\' border colours', kv(r.attrs)['line-color'] === 'gray' && kv(r.attrs)['border-colors'] === 'r1-2c0:red r2c1:blue', show(r.attrs));
+  check('colours read back', same(r.back.toJSON(), t.toJSON()), show(r.back.toJSON()));
+  const warnings: string[] = [];
+  applyTableDivAttrs(t, { id: '', classes: ['table'], keyvals: [['line-color', 'green'], ['border-colors', 'r0c0:pink']] }, (w) => warnings.push(w));
+  check('a colour off the palette warns', warnings.some((w) => w.includes('line-color: "green"')) && warnings.some((w) => w.includes('"r0c0:pink" is not understood')), warnings.join('; '));
+}
+
 declare const process: { exitCode?: number };
 if (failures) {
   console.error(`\n${failures} failure(s)`);

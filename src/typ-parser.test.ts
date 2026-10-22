@@ -670,6 +670,30 @@ function firstDiff(a: string, b: string): string {
   check('a stroke the exporter never writes keeps the table as a raw island', other.child(0).type.name === 'code_block' && other.child(0).attrs.params === 'typst-raw', other.child(0).type.name);
 }
 
+// --- 19e3. line colours (table-borders.ts) ---
+{
+  const { table, table_row, table_cell, table_header, paragraph, doc: docType } = schema.nodes;
+  const cell = (text: string, attrs: Record<string, unknown> = {}, type = table_cell) => type.create(attrs, paragraph.create(null, text ? schema.text(text) : undefined));
+  const build = (style: string, lineColor: string) => docType.create(null, [table.create({ style, lineColor }, [
+    table_row.create(null, [cell('A', {}, table_header), cell('B', {}, table_header)]),
+    table_row.create({ rule: 'light' }, [cell('1', { border: 'all', borderColor: 'red' }), cell('2', { border: 'left' })]),
+    table_row.create(null, [cell('3'), cell('4')]),
+  ])]);
+  for (const style of ['booktabs', 'plain', 'grid']) {
+    const doc = build(style, 'gray');
+    const out = docToTyp(doc);
+    const back = typToDoc(out).doc;
+    // A grid writes no borders (its strokes win), so none come back.
+    const want = style === 'grid' ? build(style, 'gray').firstChild!.toJSON() : doc.firstChild!.toJSON();
+    if (style === 'grid') for (const row of want.content) for (const c of row.content) Object.assign(c.attrs, { border: '', borderColor: '' });
+    check(`${style}: a gray table with a red cell reads back`, JSON.stringify(back.firstChild!.toJSON()) === JSON.stringify(want), firstDiff(JSON.stringify(back.firstChild!.toJSON()), JSON.stringify(want)));
+    check(`${style}: and writes the same Typst`, docToTyp(back) === out, firstDiff(docToTyp(back), out));
+  }
+  const booktabs = docToTyp(build('booktabs', 'gray'));
+  check('the preset rules, the row rule and the borders carry the colours', booktabs.includes('table.hline(stroke: 0.08em + luma(150))') && booktabs.includes('table.hline(y: 2, stroke: 0.05em + luma(150))') && booktabs.includes('table.cell(stroke: 0.05em + rgb("#c00000"))[1]') && booktabs.includes('table.cell(stroke: (left: 0.05em + luma(150)))[2]'), booktabs);
+  check('a grid writes its 1pt stroke in the colour', docToTyp(build('grid', 'blue')).includes('stroke: 1pt + rgb("#1f5fbf"),'));
+}
+
 // --- 19f. the citation style rides on the bibliography line ---
 {
   const bib = JSON.stringify('@article{k, author = {Knuth, Donald E.}, title = {A}, year = {1981}}');

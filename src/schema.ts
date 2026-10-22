@@ -1,5 +1,5 @@
 import { Schema, type Node as PMNode, type NodeSpec } from 'prosemirror-model';
-import { normalizeBorder } from './table-borders';
+import { normalizeBorder, normalizeLineColor } from './table-borders';
 import { schema as base } from 'prosemirror-schema-basic';
 import { addListNodes } from 'prosemirror-schema-list';
 import { tableNodes } from 'prosemirror-tables';
@@ -284,6 +284,14 @@ const tables = tableNodes({
         if (value) attrs['data-border'] = value;
       },
     },
+    // The borders' colour preset (table-borders.ts): '' the table's.
+    borderColor: {
+      default: '',
+      getFromDOM: (dom) => normalizeLineColor((dom as HTMLElement).getAttribute('data-border-color') ?? ''),
+      setDOMAttr: (value, attrs) => {
+        if (value) attrs['data-border-color'] = value;
+      },
+    },
   },
 });
 
@@ -540,6 +548,8 @@ const nodes = listNodes
       density: { default: '' },
       columnWidths: { default: null },
       insetPt: { default: null },
+      // Every line's colour preset (table-borders.ts): '' the ink.
+      lineColor: { default: '' },
     },
     parseDOM: [
       {
@@ -553,6 +563,7 @@ const nodes = listNodes
           density: (el as HTMLElement).getAttribute('data-density') || '',
           columnWidths: columnsFromDOM(el as HTMLElement),
           insetPt: (el as HTMLElement).hasAttribute('data-inset-pt') ? normalizeInsetPt(Number((el as HTMLElement).getAttribute('data-inset-pt'))) : null,
+          lineColor: normalizeLineColor((el as HTMLElement).getAttribute('data-line-color')),
         }),
       },
     ],
@@ -567,6 +578,7 @@ const nodes = listNodes
         'data-density': (node.attrs.density as string) || null,
         'data-column-widths': node.attrs.columnWidths ? JSON.stringify(node.attrs.columnWidths) : null,
         'data-inset-pt': normalizeInsetPt(node.attrs.insetPt),
+        'data-line-color': (node.attrs.lineColor as string) || null,
         style: normalizeInsetPt(node.attrs.insetPt) !== null ? `--cell-inset:${node.attrs.insetPt}pt` : null,
         class: `ts-table-${node.attrs.style}`,
       },

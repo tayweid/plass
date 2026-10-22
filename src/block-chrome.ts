@@ -1602,6 +1602,36 @@ class BlockChrome {
         return '';
       }
     });
+    // The selected cells' border colour: the table's line colour (the
+    // slashed swatch), or red, blue or gray of their own.
+    const colors = this.section(builder, 'Color', 'Border colour of the selected cells');
+    colors.classList.add('swatches');
+    const gridTable = () => {
+      try {
+        return selectedRect(state()).table.attrs.style === 'grid';
+      } catch {
+        return false;
+      }
+    };
+    for (const [value, name, color] of [['', 'Table’s', ''], ['red', 'Red', '#c00000'], ['blue', 'Blue', '#1f5fbf'], ['gray', 'Gray', '#969696']] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = value ? 'swatch' : 'swatch none';
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-label', `${name} border colour`);
+      button.dataset.value = value;
+      if (color) button.style.background = color;
+      this.caption(builder, button, name);
+      button.addEventListener('mousedown', (e) => e.preventDefault());
+      button.addEventListener('click', () => this.run(setCellAttr('borderColor', value)));
+      builder.syncs.push(() => {
+        setAttr(button, 'aria-checked', String(selectedCellsAttr(state(), 'borderColor') === value));
+        const disabled = !isInTable(state()) || gridTable();
+        if (button.disabled !== disabled) button.disabled = disabled;
+      });
+      colors.append(button);
+    }
+    this.note(builder, colors, () => (selectedCellsAttr(state(), 'borderColor') === 'mixed' ? 'Mixed' : ''));
     return builder;
   }
 
@@ -1841,6 +1871,11 @@ class BlockChrome {
       builder.syncs.push(() => setAttr(button, 'aria-checked', String((attrs().style || 'booktabs') === value)));
       style.append(button);
     }
+
+    // LINES: the colour of every line the table draws (table-borders.ts).
+    const lines = this.panelSection(builder, 'Lines');
+    this.segmented(builder, lines, 'Table line colour', [['', 'Ink'], ['red', 'Red'], ['blue', 'Blue'], ['gray', 'Gray']],
+      () => String(attrs().lineColor ?? ''), (value) => write({ lineColor: value }));
 
     // TEXT SIZE: 100 … 75 %.
     const size = this.panelSection(builder, 'Text size');

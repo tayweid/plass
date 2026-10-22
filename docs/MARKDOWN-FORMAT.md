@@ -339,6 +339,7 @@ attributes on a `.table` div around the table:
 | `#tbl:name` | the label, for `@tbl:name` | `#tbl:prices` |
 | `caption` | the caption | `caption="Prices by region"` |
 | `style` | `booktabs` (the default), `grid`, `plain` | `style=grid` |
+| `line-color` | the colour of every line the table draws (its style's rules, row rules and borders): `red`, `blue` or `gray`; the default is black | `line-color=gray` |
 | `density` | cell padding: `compact` or `roomy` | `density=compact` |
 | `inset` | cell padding, in points | `inset=9pt` |
 | `columns` | column widths: `auto`, `Nfr` or `Npt`, separated by spaces | `columns="auto 1fr 2fr"` |
@@ -347,6 +348,7 @@ attributes on a `.table` div around the table:
 | `rules` | the rule under row N: `light`, `heavy`, `none` | `rules="0:heavy 3:none"` |
 | `fills` | `gray`, `gray-dark`, `yellow` or `blue`, for a row `rN` or a cell `rNcM` | `fills="r0:gray r2c1:yellow"` |
 | `borders` | lines on a cell's sides: `all`, or sides joined by `+` (`top`, `right`, `bottom`, `left`), for a cell `rNcM`, a row `rN`, or a block of cells `rA-BcC-D`. Light rules; not drawn in a `grid` table, which boxes every cell already | `borders="r2-3c2-3:all r0c1:bottom+left"` |
+| `border-colors` | a cell's border colour, over the table's: `red`, `blue` or `gray`, positioned as `borders` is | `border-colors="r2c2:red"` |
 | `valign` | `top`, `middle` or `bottom`, for the whole table or a cell `rNcM` | `valign=middle` |
 | `aligns` | the alignment of one cell, different from its column's: `left`, `center`, `right`, `decimal`, or `default` (no alignment of its own, like `---`) | `aligns="r2c1:center"` |
 | `spans` | a merged cell, as columns×rows, given at its top-left cell | `spans="r3c0:2x1"` |
