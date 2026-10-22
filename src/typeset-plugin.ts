@@ -1061,7 +1061,6 @@ class TypesetView {
     const frag = document.createDocumentFragment();
     // In the spread a segment moves with its page (paper-scale.ts): each
     // is one page's, cut at the gaps.
-    const size = pageSize(getSettings(this.view.state));
     for (const block of blocks) {
       const r = block.getBoundingClientRect();
       const cuts: Array<[number, number]> = [];
@@ -1075,7 +1074,7 @@ class TypesetView {
         if (a - y > 0.5) {
           const seg = document.createElement('div');
           const top = y - origin.top;
-          const shift = spreadShift(sheetAt(top, size.h), size.w, size.h);
+          const shift = spreadShift(sheetAt(top));
           seg.style.top = `${(top + shift.dy).toFixed(2)}px`;
           seg.style.left = `${(r.left - origin.left + shift.dx).toFixed(2)}px`;
           seg.style.height = `${(a - y).toFixed(2)}px`;

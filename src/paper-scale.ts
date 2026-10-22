@@ -160,17 +160,25 @@ export function atPaperSize<T>(read: () => T): T {
 // The spread: two pages side by side (Taylor, 2026-10-21, for half sheets
 // above all). The layout is untouched: the pages are laid out stacked, as
 // ever, and every measure reads them so (atPaperSize). Only the drawing
-// moves: the editor is cut into columns one sheet and its gap tall
-// (`column-height`), two to a row (`column-wrap`), so page k's text lands
-// in column k, and the painter draws sheet k at row ⌊k/2⌋, side k mod 2
-// (`spreadShift`). The columns' cuts fall on the sheets' boundaries: the
-// editor's first line is pushed down by a margin in the flow, not by the
-// editor's padding, so the flow's y is the stack's. A sheet an editorial
-// comment grew breaks that period, so a paper with comments is drawn
-// stacked (main.ts renderPages says so).
+// moves: the editor is cut into columns one row tall (`column-height`),
+// two to a row (`column-wrap`), so page k's text lands in column k, and
+// the painter draws sheet k at row ⌊k/2⌋, side k mod 2 (`spreadShift`).
+// The editor's first line is pushed down by a margin in the flow, not by
+// the editor's padding, so the flow's y is the stack's.
+//
+// A row is as tall as the longest sheet and the gap: a browser's columns
+// are all one height, so every row is (Taylor, 2026-10-21: sheets an
+// editorial comment grew keep their length; the rows are spaced by the
+// longest). Each page break then grows by the difference between its page
+// and the longest (`markSpreadGaps`), so page k's text starts at
+// the head of column k, k rows of the longest sheet down the flow; a
+// footnote's body, placed in the stacked layout, moves down by what the
+// breaks above it grew.
 
 let spread = false;
 let spreadMoved = false;
+let spreadPages: readonly Sheet[] = [];
+let spreadPageW = 0;
 const spreadListeners = new Set<(on: boolean) => void>();
 
 /** Call `listener` when the paper goes side by side or back (what draws
@@ -200,18 +208,76 @@ export function setSpread(on: boolean): void {
   for (const listener of spreadListeners) listener(on);
 }
 
-/** Where sheet k's drawing moves in the spread, from where it is laid out
- *  stacked (at k·(H+G)): right by a page and its gap for an odd page, and
- *  up to its pair's row. Zero when the paper is stacked. */
-export function spreadShift(k: number, pageW: number, pageH: number): { dx: number; dy: number } {
-  if (!spread) return { dx: 0, dy: 0 };
-  const period = pageH + PAGE_GAP;
-  return { dx: (k % 2) * (pageW + PAGE_GAP), dy: (Math.floor(k / 2) - k) * period };
+/** The sheets as laid out stacked (the painter's, main.ts renderPages)
+ *  and the page width, which the spread places. */
+export function setSpreadPages(pages: readonly Sheet[], pageW: number): void {
+  spreadPages = pages;
+  spreadPageW = pageW;
+  stack?.style.setProperty('--spread-row', `${spreadRow()}px`);
 }
 
-/** The sheet a stacked layout y is on (stack px), for spreadShift. */
-export function sheetAt(y: number, pageH: number): number {
-  return Math.max(0, Math.floor(y / (pageH + PAGE_GAP)));
+/** A row of the spread: the longest sheet and the gap. */
+function spreadRow(): number {
+  return spreadPages.reduce((h, p) => Math.max(h, p.height), 0) + PAGE_GAP;
+}
+
+/** The spread's rows, as sheets: each as tall as its longer page. */
+export function spreadRows(): Sheet[] {
+  const row = spreadRow();
+  const rows: Sheet[] = [];
+  for (let k = 0; k < spreadPages.length; k += 2) {
+    rows.push({ top: (k / 2) * row, height: Math.max(spreadPages[k].height, spreadPages[k + 1]?.height ?? 0) });
+  }
+  return rows;
+}
+
+/** Where sheet k's drawing moves in the spread, from where it is laid out
+ *  stacked: right by a page and its gap for an odd page, and to its pair's
+ *  row. Zero when the paper is stacked. */
+export function spreadShift(k: number): { dx: number; dy: number } {
+  const sheet = spreadPages[k];
+  if (!spread || !sheet) return { dx: 0, dy: 0 };
+  return { dx: (k % 2) * (spreadPageW + PAGE_GAP), dy: Math.floor(k / 2) * spreadRow() - sheet.top };
+}
+
+/** The sheet a stacked layout y is on (stack px): the last that starts at
+ *  or above it. */
+export function sheetAt(y: number): number {
+  let k = 0;
+  while (k + 1 < spreadPages.length && spreadPages[k + 1].top <= y) k++;
+  return k;
+}
+
+/** Grow each page break and move each footnote body for the spread's rows
+ *  (above). Runs where the pages are read stacked (inside a pass, after
+ *  the painter). A break is the page's it follows: the n-th break the
+ *  n-th page's, when there is one per page boundary, else the page its
+ *  top is on. */
+export function markSpreadGaps(root: HTMLElement): void {
+  const pages = spreadPages;
+  const longest = pages.reduce((h, p) => Math.max(h, p.height), 0);
+  const gaps = [...root.querySelectorAll<HTMLElement>('.ts-pagegap')];
+  const origin = stack?.getBoundingClientRect().top ?? 0;
+  const pageOf = (el: HTMLElement, i: number) =>
+    gaps.length === pages.length - 1 ? i : sheetAt(el.getBoundingClientRect().top - origin);
+  // The difference goes into the break's own height, not a padding: a
+  // browser moves a box's end padding whole into the next column when it
+  // does not fit, and the page's text would start that much low. A table
+  // break's gap (before its repeated header) takes it.
+  gaps.forEach((gap, i) => {
+    const extra = longest - (pages[pageOf(gap, i)]?.height ?? longest);
+    const boxes = gap.tagName === 'TR' ? [...gap.querySelectorAll<HTMLElement>('.ts-table-gap')] : [gap];
+    for (const box of boxes) box.style.setProperty('--spread-height', `${((parseFloat(box.style.height) || 0) + extra).toFixed(2)}px`);
+  });
+  // A footnote body is placed at its sheet's foot in the stacked layout
+  // (its top is the editor's); the breaks above it add their padding.
+  const editorTop = parseFloat(getComputedStyle(root.parentElement ?? root).getPropertyValue('--editor-top')) || 0;
+  for (const body of root.querySelectorAll<HTMLElement>('.fn-body')) {
+    const k = sheetAt((parseFloat(body.style.top) || 0) + editorTop);
+    let above = 0;
+    for (let j = 0; j < k; j++) above += longest - pages[j].height;
+    body.style.setProperty('--spread-extra-above', `${above.toFixed(2)}px`);
+  }
 }
 
 /** Fit the stack to the panel's width and the clip box to the drawn

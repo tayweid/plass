@@ -17,7 +17,6 @@ import { breakSpaceInput } from './break-space';
 import { collapseSpaces } from './collapse-spaces';
 import { listIndent } from './list-indent';
 import { printPageAt, typesetPlugin, type PageInfo, type TypesetStats } from './typeset-plugin';
-import { stackHeight } from './layout/page-geometry';
 import { MathView } from './math';
 import { demoDoc } from './demo-doc';
 import { buildToolbar, type Toolbar } from './toolbar';
@@ -34,12 +33,12 @@ import { GridCellView, gridPlugin } from './grid-editor';
 import { blockKeys } from './block-keys';
 import { EditorCommentView, editorCommentKeymap, editorCommentPaste } from './editor-comments';
 import { refAutocomplete } from './ref-autocomplete';
-import { PAGE_GAP, applySettings, formatPageNumber, getSettings, pageSize, runningPageFormat, runningText, type DocSettings } from './settings';
+import { applySettings, formatPageNumber, getSettings, pageSize, runningPageFormat, runningText, type DocSettings } from './settings';
 import { FileManager } from './file-manager';
 import { resetCompilerCircuit } from './compiler-circuit';
 import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
 import { describeVerdict } from './environment-check';
-import { attachPaper, paperScale, paperSheets, setSpread, spreadOn, spreadShift, zoomedWindow } from './paper-scale';
+import { atPaperSize, attachPaper, markSpreadGaps, paperScale, paperSheets, setSpread, setSpreadPages, spreadOn, spreadRows, spreadShift, zoomedWindow } from './paper-scale';
 import { attachScrollRail, type ScrollRail } from './scroll-rail';
 import { attachPaperCaret } from './paper-caret';
 import { FROM_DISK, reloadTransaction } from './reload-in-place';
@@ -239,8 +238,7 @@ onShellZoom((step) => {
 
 let pageCount = 0;
 let pageSignature = '';
-/** Two pages side by side (paper-scale.ts setSpread), as the writer asked,
- *  and whether a paper with comments has said it waits. */
+/** Two pages side by side (paper-scale.ts setSpread), as the writer asked. */
 const SPREAD_KEY = 'plass-spread';
 let spreadWanted = (() => {
   try {
@@ -249,7 +247,6 @@ let spreadWanted = (() => {
     return false;
   }
 })();
-let spreadRefused = false;
 let lastPageInfo: PageInfo | null = null;
 // The scroll rail in the frame's gutter (scroll-rail.ts), made once the
 // view exists: it reads its marks from each settled pass's pages.
@@ -258,22 +255,19 @@ let scrollRail: ScrollRail | null = null;
 /** Paint the page boxes + numbers behind the editor. */
 function renderPages(info: PageInfo, settled: boolean) {
   lastPageInfo = info;
-  // The spread (two pages side by side, paper-scale.ts) needs every sheet
-  // one period apart: a sheet an editorial comment grew draws it stacked.
-  const grown = info.pages.some((p) => Math.abs(p.height - info.pageH) > 0.5);
-  if (spreadWanted && grown && !spreadRefused) {
-    spreadRefused = true;
-    fileManager.notify('Two pages side by side waits while the paper has comments: it is drawn stacked');
-  }
-  if (!grown) spreadRefused = false;
-  setSpread(spreadWanted && !grown);
+  // The spread (two pages side by side, paper-scale.ts): rows of two, each
+  // as tall as the longest sheet; sheets an editorial comment grew keep
+  // their length.
+  setSpread(spreadWanted);
   const pageW = pageSize(getSettings(view.state)).w;
-  const at = (k: number) => spreadShift(k, pageW, info.pageH);
+  setSpreadPages(info.pages, pageW);
+  if (spreadOn()) markSpreadGaps(view.dom);
+  const at = (k: number) => spreadShift(k);
   // Sheets are the print pages grown by the editorial comments they hold
-  // (page-geometry.ts): never `k * (pageH + gap)`. In the spread, rows of
-  // two.
-  const rows = spreadOn() ? info.pages.filter((_, k) => k % 2 === 0).map((p, r) => ({ ...p, top: r * (info.pageH + PAGE_GAP) })) : info.pages;
-  stackEl.style.height = `${stackHeight(rows)}px`;
+  // (page-geometry.ts): never `k * (pageH + gap)`.
+  const rows = spreadOn() ? spreadRows() : info.pages;
+  const lastRow = rows[rows.length - 1];
+  stackEl.style.height = `${lastRow ? lastRow.top + lastRow.height : 0}px`;
   pageCount = info.count;
   const s = getSettings(view.state);
   // A numbering-restart marker splits the document: roman front matter,
@@ -639,7 +633,11 @@ toolbar = buildToolbar(toolbarEl, railEl, view, fileManager, {
     // The layout is the same either way: the pages repaint where they go.
     setSpread(spreadWanted);
     pageSignature = '';
-    if (lastPageInfo) renderPages(lastPageInfo, true);
+    // Painted as a pass paints: the breaks' padding is read stacked.
+    if (lastPageInfo) {
+      const info = lastPageInfo;
+      atPaperSize(() => renderPages(info, true));
+    }
   },
 });
 setFigureFileManager(fileManager);

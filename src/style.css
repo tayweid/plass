@@ -4134,7 +4134,7 @@ body {
   padding-top: 0 !important;
   column-count: 2;
   column-gap: calc(var(--page-margin-right, 1in) + 6px + var(--page-margin-left, 1in));
-  column-height: calc(var(--page-h, 11in) + 6px);
+  column-height: var(--spread-row, calc(var(--page-h, 11in) + 6px));
   column-wrap: wrap;
   column-fill: auto;
   row-gap: 0;
@@ -4142,4 +4142,20 @@ body {
 
 #stack.spread:not(.source-mode) > #editor > .ProseMirror {
   margin-top: var(--editor-top, 0px);
+}
+
+/* A page break in the spread grows by how much shorter its page is than
+   the longest (paper-scale.ts markSpreadGaps), so the next page's text
+   starts at its column's head; a table break grows its gap, before the
+   repeated header. In its height, not a padding: a box's end padding goes
+   whole to the next column when it does not fit. Only a break the painter
+   has measured (a break drawn since keeps its own height until the pass's
+   end). A footnote body moves down by what the breaks above it grew. */
+#stack.spread:not(.source-mode) div.ts-pagegap[style*='--spread-height'],
+#stack.spread:not(.source-mode) tr.ts-pagegap .ts-table-gap[style*='--spread-height'] {
+  height: var(--spread-height) !important;
+}
+
+#stack.spread:not(.source-mode) .fn-body {
+  margin-top: var(--spread-extra-above, 0px);
 }

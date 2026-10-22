@@ -140,18 +140,52 @@ test('typing in the spread keeps every line on a sheet; stacked again, the same 
   expect([stacked.boxes[0][0], stacked.boxes[0][2], stacked.boxes[0][3]]).toEqual([before.boxes[0][0], before.boxes[0][2], before.boxes[0][3]]);
 });
 
-test('a paper with an editorial comment stays stacked, and says so', async ({ page }) => {
+test('editorial comments: a grown sheet keeps its length, the next row starts below the longest sheet', async ({ page }) => {
   await halfSheets(page);
   await page.evaluate(() => {
     const { state } = window.view;
     const s = state.schema;
-    window.view.dispatch(state.tr.insert(0, s.nodes.editor_comment.create(null, s.text('A note to self.'))));
+    const note = (t: string) => s.nodes.editor_comment.create(null, s.text(t));
+    // One note on page 1, a longer one further on.
+    const tr = state.tr.insert(state.doc.child(0).nodeSize, note('A note to self.'));
+    tr.insert(tr.doc.content.size - tr.doc.lastChild!.nodeSize, note('A longer note to self that runs over several lines of the comment strip, so its sheet grows more than the first one does. '.repeat(3)));
+    // A footnote on a page after the first note: its body moves with the
+    // breaks above it.
+    let at = -1;
+    tr.doc.descendants((n, pos) => {
+      if (at < 0 && n.isTextblock && n.textContent.startsWith('P8.')) at = pos + n.nodeSize - 1;
+      return at < 0;
+    });
+    tr.insert(at, s.nodes.footnote.create(null, s.text('A footnote further on.')));
+    window.view.dispatch(tr);
   });
   await settleLocal(page);
+  const stacked = await sheetsAndText(page);
+  const heights = stacked.boxes.map((b) => b[3]);
+  expect(new Set(heights).size).toBeGreaterThan(1);
   await toggleSpread(page);
-  await expect(page.locator('#toast')).toContainText('side by side waits');
-  const boxes = (await sheetsAndText(page)).boxes;
-  expect(boxes[1][0]).toBe(boxes[0][0]);
+  await page.screenshot({ path: process.env.SPREAD_SHOT3 ?? 'test-results/spread-comments.png' });
+  const spread = await sheetsAndText(page);
+  // Each sheet keeps its own length (drawn at the spread's scale: two
+  // sheets share the panel's width).
+  const ratio = (hs: number[]) => hs.map((h) => Math.round((h / Math.min(...hs)) * 100) / 100);
+  const drawn = spread.boxes.map((b) => b[3]);
+  expect(ratio(drawn)).toEqual(ratio(heights));
+  // Every row starts the longest sheet and the gap below the one above.
+  const scale = await page.evaluate(() => document.querySelector('#stack')!.getBoundingClientRect().width / (document.querySelector('#stack') as HTMLElement).offsetWidth);
+  const longest = Math.max(...drawn);
+  const rowTops = spread.boxes.filter((_, k) => k % 2 === 0).map((b) => b[1]);
+  for (let r = 1; r < rowTops.length; r++) expect(Math.abs(rowTops[r] - rowTops[r - 1] - (longest + 6 * scale))).toBeLessThanOrEqual(1.5);
+  // Pairs share a top; every line, the notes' included, on a sheet.
+  expect(spread.boxes[1][1]).toBe(spread.boxes[0][1]);
+  expect(spread.stray).toBe(0);
+  expect(spread.perSheet).toEqual(stacked.perSheet);
+  const notesOn = await page.evaluate(() => {
+    const boxes = [...document.querySelectorAll('#pages .page-box')].map((b) => b.getBoundingClientRect());
+    const notes = [...document.querySelectorAll('.fn-body')].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0);
+    return notes.length > 0 && notes.every((r) => boxes.some((b) => r.left >= b.left - 1 && r.right <= b.right + 1 && r.top >= b.top - 1 && r.bottom <= b.bottom + 1));
+  });
+  expect(notesOn).toBe(true);
 });
 
 test('a footnote, a split table and a solution block in the spread: all on their sheets', async ({ page }) => {
