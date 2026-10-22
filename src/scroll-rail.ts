@@ -52,7 +52,7 @@
 import type { EditorView } from 'prosemirror-view';
 import type { PageInfo } from './typeset-plugin';
 import { stackHeight } from './layout/page-geometry';
-import { paperScale } from './paper-scale';
+import { paperScale, spreadOn } from './paper-scale';
 import { caretBox } from './caret-box';
 
 /** px either side of a mark, in the rail, within which the pointer takes it. */
@@ -199,7 +199,9 @@ export function attachScrollRail(view: EditorView, panel: HTMLElement, stack: HT
   /* ---------- the gutter: there or not ---------- */
 
   function wanted(): boolean {
-    if (source || !info) return false;
+    // The rail places its marks down one stack of pages: the spread
+    // (two side by side, paper-scale.ts) goes without it.
+    if (source || !info || spreadOn()) return false;
     // At the gutter's width whether or not it is showing: the gutter's
     // 12 px over the edge's 8 are taken off while it is not there.
     const widen = on ? 0 : css('--gutter') - css('--edge');

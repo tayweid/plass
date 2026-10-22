@@ -64,6 +64,8 @@
 // reads nothing of the page but the scroll offset, and lays nothing out
 // but that box.
 
+import { PAGE_GAP } from './settings';
+
 /** A sheet in the stack, in the layout's px (layout/page-geometry.ts). */
 type Sheet = { readonly top: number; readonly height: number };
 
@@ -129,18 +131,87 @@ export function zoomedWindow(step: 1 | -1 | 0): { width: number; height: number;
 
 /** Run a synchronous geometry read on the paper at its own size. Nested
  *  calls share the outer one's identity transform. Never spans an await:
- *  the transform is back before the function returns. */
+ *  the transform is back before the function returns. In the spread (two
+ *  pages side by side, below) the read also sees the pages stacked, as
+ *  everything that measures them expects: the spread is the drawing's,
+ *  never the layout's. */
 export function atPaperSize<T>(read: () => T): T {
   const el = stack;
   const restore = !!el && depth === 0 && scale !== 1;
+  const outer = !!el && depth === 0;
   if (restore) el!.style.transform = 'scale(1)';
+  if (outer && spread) el!.classList.remove('spread');
   depth++;
   try {
     return read();
   } finally {
     depth--;
+    // The spread as it is now: a read may have turned it on or off.
+    if (outer) el!.classList.toggle('spread', spread);
     if (restore) el!.style.transform = `scale(${scale})`;
+    if (outer && spreadMoved) {
+      spreadMoved = false;
+      for (const listener of spreadListeners) listener(spread);
+    }
   }
+}
+
+// ---------------------------------------------------------------------------
+// The spread: two pages side by side (Taylor, 2026-10-21, for half sheets
+// above all). The layout is untouched: the pages are laid out stacked, as
+// ever, and every measure reads them so (atPaperSize). Only the drawing
+// moves: the editor is cut into columns one sheet and its gap tall
+// (`column-height`), two to a row (`column-wrap`), so page k's text lands
+// in column k, and the painter draws sheet k at row ⌊k/2⌋, side k mod 2
+// (`spreadShift`). The columns' cuts fall on the sheets' boundaries: the
+// editor's first line is pushed down by a margin in the flow, not by the
+// editor's padding, so the flow's y is the stack's. A sheet an editorial
+// comment grew breaks that period, so a paper with comments is drawn
+// stacked (main.ts renderPages says so).
+
+let spread = false;
+let spreadMoved = false;
+const spreadListeners = new Set<(on: boolean) => void>();
+
+/** Call `listener` when the paper goes side by side or back (what draws
+ *  in the layout's px, like the solution rules, draws again). */
+export function onSpread(listener: (on: boolean) => void): () => void {
+  spreadListeners.add(listener);
+  return () => spreadListeners.delete(listener);
+}
+
+/** Whether the paper is drawn two pages side by side. */
+export function spreadOn(): boolean {
+  return spread;
+}
+
+/** Draw the paper two pages side by side, or stacked. */
+export function setSpread(on: boolean): void {
+  if (spread === on) return;
+  spread = on;
+  // Inside a read the class (and the word to the listeners) waits for the
+  // read's end (atPaperSize).
+  if (depth > 0) {
+    spreadMoved = true;
+    return;
+  }
+  stack?.classList.toggle('spread', on);
+  fitPaper();
+  for (const listener of spreadListeners) listener(on);
+}
+
+/** Where sheet k's drawing moves in the spread, from where it is laid out
+ *  stacked (at k·(H+G)): right by a page and its gap for an odd page, and
+ *  up to its pair's row. Zero when the paper is stacked. */
+export function spreadShift(k: number, pageW: number, pageH: number): { dx: number; dy: number } {
+  if (!spread) return { dx: 0, dy: 0 };
+  const period = pageH + PAGE_GAP;
+  return { dx: (k % 2) * (pageW + PAGE_GAP), dy: (Math.floor(k / 2) - k) * period };
+}
+
+/** The sheet a stacked layout y is on (stack px), for spreadShift. */
+export function sheetAt(y: number, pageH: number): number {
+  return Math.max(0, Math.floor(y / (pageH + PAGE_GAP)));
 }
 
 /** Fit the stack to the panel's width and the clip box to the drawn

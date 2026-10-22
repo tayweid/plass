@@ -49,6 +49,8 @@ export interface Toolbar {
 export interface ToolbarActions {
   /** Toggle the source view (SOURCE-VIEW.md). */
   toggleSource: () => void;
+  /** Draw the paper two pages side by side, or stacked (paper-scale.ts). */
+  toggleSpread: () => void;
 }
 
 const insertFigureCmd: Command = (state, dispatch, view) => {
@@ -943,6 +945,7 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   tool(keysGroup, 'Save', () => void fm.save(), { glyph: icon('download'), hint: '⌘S', title: 'Save (⌘S)' });
   tool(keysGroup, 'Export PDF', () => exportPdfNow(), { glyph: icon('download'), hint: '⌘P', title: 'Export PDF (⌘P)' });
   tool(keysGroup, 'Plain text view', () => actions.toggleSource(), { glyph: icon('code'), hint: '⌘/', title: 'Switch between the page and plain text (⌘/)' });
+  tool(keysGroup, 'Two pages side by side', () => actions.toggleSpread(), { glyph: tico('▯▯'), hint: 'view', title: 'Draw the pages two side by side, or one below another' });
   openBtn.addEventListener('click', () => { closeMenu(); void fm.open(); });
   newBtn.addEventListener('click', () => {
     closeMenu();

@@ -27,7 +27,7 @@ import { eqRefRule } from './equations';
 import { exitFigure } from './figures';
 import { exitFootnote, footnoteCloseRule, footnoteOpenRules, insertFootnote, skipFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
-import { paperScale } from './paper-scale';
+import { paperScale, spreadOn } from './paper-scale';
 import { landBeside } from './gap-caret';
 
 /**
@@ -151,13 +151,31 @@ function verticalCaret(dir: -1 | 1): Command {
     // The line pitch as drawn: the probes are client coordinates, and the
     // paper is scaled to the panel's width (paper-scale.ts).
     const lineH = ((el && parseFloat(getComputedStyle(el).lineHeight)) || 24) * paperScale();
-    const yStart = dir < 0 ? c.top : c.bottom;
     // Probe in HALF-line steps — a full step can jump clean over a line
     // whose pitch is smaller than this block's (paragraph lines after a
     // heading). 80 half-steps cover a page gap.
+    let x = gx;
+    let y = dir < 0 ? c.top : c.bottom;
+    // The line the motion starts from: a target must be past it.
+    let ref = { top: c.top, bottom: c.bottom };
+    // Two pages side by side (paper-scale.ts): past the foot of a sheet
+    // the next line is at the head of the next sheet, which may be beside
+    // it, not below; the probe hops there, the same distance in from the
+    // sheet's left edge.
+    const sheets = spreadOn() ? [...document.querySelectorAll('#pages .page-box')].map((b) => b.getBoundingClientRect()) : null;
+    let sheet = sheets ? sheets.findIndex((b) => x >= b.left - 1 && x <= b.right + 1 && c.top >= b.top - 1 && c.top <= b.bottom + 1) : -1;
     for (let step = 1; step <= 80; step++) {
-      const y = yStart + dir * lineH * 0.5 * step;
-      const found = view.posAtCoords({ left: gx, top: y });
+      y += dir * lineH * 0.5;
+      if (sheets && sheet >= 0 && (dir > 0 ? y > sheets[sheet].bottom : y < sheets[sheet].top)) {
+        const next = sheets[sheet + dir];
+        if (!next) break;
+        x += next.left - sheets[sheet].left;
+        y = dir > 0 ? next.top : next.bottom;
+        ref = { top: y, bottom: y };
+        sheet += dir;
+        continue;
+      }
+      const found = view.posAtCoords({ left: x, top: y });
       if (!found) continue;
       // A hit in the gap BETWEEN blocks (inside === -1) is not a caret
       // line — it reports degenerate zero-height coords at the block edge.
@@ -167,7 +185,7 @@ function verticalCaret(dir: -1 | 1): Command {
       if (pos === sel.head) continue;
       // A place between blocks beside a table (the caret's column missed
       // a centred table, or a cell's): the place's own caret, or the table.
-      const beside = landBeside(view, state.doc.resolve(pos), dir, gx);
+      const beside = landBeside(view, state.doc.resolve(pos), dir, x);
       if (beside) {
         if (dispatch) dispatch(state.tr.setSelection(beside).scrollIntoView());
         return true;
@@ -181,13 +199,13 @@ function verticalCaret(dir: -1 | 1): Command {
       // Require a real line box making real vertical progress (skip
       // same-line hits and degenerate geometry).
       if (!(target.bottom > target.top)) continue;
-      if (dir < 0 ? target.top > c.top - lineH * 0.4 : target.bottom < c.bottom + lineH * 0.4) {
+      if (dir < 0 ? target.top > ref.top - lineH * 0.4 : target.bottom < ref.bottom + lineH * 0.4) {
         continue;
       }
       // A probe that fell short of the goal column (snapped to a block
       // edge) loses x. Re-query at the landed LINE's vertical center with
       // the original goal x.
-      const refined = view.posAtCoords({ left: gx, top: (target.top + target.bottom) / 2 });
+      const refined = view.posAtCoords({ left: x, top: (target.top + target.bottom) / 2 });
       if (refined && refined.inside !== -1) {
         const rp = Math.max(0, Math.min(refined.pos, state.doc.content.size));
         if (rp !== sel.head) pos = rp;
@@ -195,6 +213,8 @@ function verticalCaret(dir: -1 | 1): Command {
       if (dispatch) {
         const next = TextSelection.near(state.doc.resolve(pos), dir);
         goalHead = next.head;
+        // The goal column, on the sheet the caret is now on.
+        goalX = x;
         dispatch(state.tr.setSelection(next).scrollIntoView());
       }
       return true;

@@ -41,7 +41,7 @@ import { buildSpec, type AtomResolver, type SpecKind } from './layout/typst-orac
 import { portBreaks, shapedWidthPt } from './layout/port/adapter';
 import { loadPrimitives, primitives } from './layout/primitives';
 import { PROBE_TEXT, judgeEnvironment, measureBrowserRun, type EnvironmentVerdict } from './environment-check';
-import { atPaperSize, fitPaper, paperPass, paperScale, type PaperCaret } from './paper-scale';
+import { atPaperSize, fitPaper, onSpread, paperPass, paperScale, sheetAt, spreadOn, spreadShift, type PaperCaret } from './paper-scale';
 import { caretBox } from './caret-box';
 import { getSettings, layoutPx, PAGE_GAP, pageSize, parMarginPx, parseMathMacros, type DocSettings } from './settings';
 import {
@@ -737,6 +737,9 @@ class TypesetView {
   ) {
     viewRegistry.set(view, this);
     this.measurer = new Measurer(view.dom);
+    // The solution rules draw in the layout's px, moved per page in the
+    // spread: drawn again when it turns on or off.
+    this.unSpread = onSpread(() => atPaperSize(() => this.syncSolutionBars()));
     // The ported Typst line breaker (PORT.md): loads the sidecar WASM +
     // fonts in the background; until ready, liveRun uses the legacy path.
     void this.initializePort().catch((e) => console.warn('exact layout initialization failed', e));
@@ -968,7 +971,9 @@ class TypesetView {
       const $head = state.selection.$head;
       const box = caretBox(this.view, $head.pos);
       let anchor = box.top;
-      if ($head.depth >= 1) {
+      // Two pages side by side (paper-scale.ts): a page gap crossed moves
+      // the caret beside, not down, so its own box is what holds still.
+      if ($head.depth >= 1 && !spreadOn()) {
         const blockPos = $head.before(1);
         const dom = this.view.nodeDOM(blockPos);
         if (dom instanceof HTMLElement) {
@@ -1024,6 +1029,7 @@ class TypesetView {
    * element is a DOM mutation ProseMirror observes, and re-reading it from
    * `update` loops). */
   private solutionRules: HTMLElement | null = null;
+  private unSpread: () => void = () => {};
 
   /**
    * Paint-only: a solution block's left rule must stop at the last line of
@@ -1053,6 +1059,9 @@ class TypesetView {
     }
     const origin = host.getBoundingClientRect();
     const frag = document.createDocumentFragment();
+    // In the spread a segment moves with its page (paper-scale.ts): each
+    // is one page's, cut at the gaps.
+    const size = pageSize(getSettings(this.view.state));
     for (const block of blocks) {
       const r = block.getBoundingClientRect();
       const cuts: Array<[number, number]> = [];
@@ -1065,8 +1074,10 @@ class TypesetView {
       for (const [a, b] of [...cuts, [r.bottom, r.bottom] as [number, number]]) {
         if (a - y > 0.5) {
           const seg = document.createElement('div');
-          seg.style.top = `${(y - origin.top).toFixed(2)}px`;
-          seg.style.left = `${(r.left - origin.left).toFixed(2)}px`;
+          const top = y - origin.top;
+          const shift = spreadShift(sheetAt(top, size.h), size.w, size.h);
+          seg.style.top = `${(top + shift.dy).toFixed(2)}px`;
+          seg.style.left = `${(r.left - origin.left + shift.dx).toFixed(2)}px`;
           seg.style.height = `${(a - y).toFixed(2)}px`;
           frag.appendChild(seg);
         }
@@ -1458,6 +1469,7 @@ class TypesetView {
   }
 
   destroy() {
+    this.unSpread();
     this.solutionRules?.remove();
     this.solutionRules = null;
     this.destroyed = true;
@@ -2088,7 +2100,11 @@ class TypesetView {
     // The adjustment places the block's box; a table's margin-top is above
     // its box, inside this padding (no page gap carries it here).
     const ownMargin = first?.type.name === 'table' ? tableMarginsEm(s).top * F : 0;
-    host.style.paddingTop = `${(s.marginTop * 96 + this.blockTopAdjustPx(first, s, F) - ownMargin).toFixed(2)}px`;
+    const top = `${(s.marginTop * 96 + this.blockTopAdjustPx(first, s, F) - ownMargin).toFixed(2)}px`;
+    host.style.paddingTop = top;
+    // The spread moves this into the flow, as the editor's margin
+    // (paper-scale.ts: the columns' cuts fall on the sheets' boundaries).
+    host.style.setProperty('--editor-top', top);
   }
 
   /** Key of the last published geometry variables (null: never, or the

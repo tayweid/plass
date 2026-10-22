@@ -34,12 +34,12 @@ import { GridCellView, gridPlugin } from './grid-editor';
 import { blockKeys } from './block-keys';
 import { EditorCommentView, editorCommentKeymap, editorCommentPaste } from './editor-comments';
 import { refAutocomplete } from './ref-autocomplete';
-import { applySettings, formatPageNumber, getSettings, runningPageFormat, runningText, type DocSettings } from './settings';
+import { PAGE_GAP, applySettings, formatPageNumber, getSettings, pageSize, runningPageFormat, runningText, type DocSettings } from './settings';
 import { FileManager } from './file-manager';
 import { resetCompilerCircuit } from './compiler-circuit';
 import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
 import { describeVerdict } from './environment-check';
-import { attachPaper, paperScale, paperSheets, zoomedWindow } from './paper-scale';
+import { attachPaper, paperScale, paperSheets, setSpread, spreadOn, spreadShift, zoomedWindow } from './paper-scale';
 import { attachScrollRail, type ScrollRail } from './scroll-rail';
 import { attachPaperCaret } from './paper-caret';
 import { FROM_DISK, reloadTransaction } from './reload-in-place';
@@ -239,15 +239,41 @@ onShellZoom((step) => {
 
 let pageCount = 0;
 let pageSignature = '';
+/** Two pages side by side (paper-scale.ts setSpread), as the writer asked,
+ *  and whether a paper with comments has said it waits. */
+const SPREAD_KEY = 'plass-spread';
+let spreadWanted = (() => {
+  try {
+    return localStorage.getItem(SPREAD_KEY) === '1';
+  } catch {
+    return false;
+  }
+})();
+let spreadRefused = false;
+let lastPageInfo: PageInfo | null = null;
 // The scroll rail in the frame's gutter (scroll-rail.ts), made once the
 // view exists: it reads its marks from each settled pass's pages.
 let scrollRail: ScrollRail | null = null;
 
 /** Paint the page boxes + numbers behind the editor. */
 function renderPages(info: PageInfo, settled: boolean) {
+  lastPageInfo = info;
+  // The spread (two pages side by side, paper-scale.ts) needs every sheet
+  // one period apart: a sheet an editorial comment grew draws it stacked.
+  const grown = info.pages.some((p) => Math.abs(p.height - info.pageH) > 0.5);
+  if (spreadWanted && grown && !spreadRefused) {
+    spreadRefused = true;
+    fileManager.notify('Two pages side by side waits while the paper has comments: it is drawn stacked');
+  }
+  if (!grown) spreadRefused = false;
+  setSpread(spreadWanted && !grown);
+  const pageW = pageSize(getSettings(view.state)).w;
+  const at = (k: number) => spreadShift(k, pageW, info.pageH);
   // Sheets are the print pages grown by the editorial comments they hold
-  // (page-geometry.ts): never `k * (pageH + gap)`.
-  stackEl.style.height = `${stackHeight(info.pages)}px`;
+  // (page-geometry.ts): never `k * (pageH + gap)`. In the spread, rows of
+  // two.
+  const rows = spreadOn() ? info.pages.filter((_, k) => k % 2 === 0).map((p, r) => ({ ...p, top: r * (info.pageH + PAGE_GAP) })) : info.pages;
+  stackEl.style.height = `${stackHeight(rows)}px`;
   pageCount = info.count;
   const s = getSettings(view.state);
   // A numbering-restart marker splits the document: roman front matter,
@@ -302,6 +328,7 @@ function renderPages(info: PageInfo, settled: boolean) {
     s.headerText, s.headerAlign, s.headerFirstPage, s.footerText, s.footerAlign, s.footerFirstPage,
     restartPage, sections.map((h) => `${h.page}=${h.text}`).join('\u0001'),
     info.pages.map((p) => `${p.top.toFixed(2)}+${p.height.toFixed(2)}`).join(','),
+    spreadOn() ? 'spread' : 'stacked',
   ].join(':');
   if (sig !== pageSignature) {
     pageSignature = sig;
@@ -309,10 +336,12 @@ function renderPages(info: PageInfo, settled: boolean) {
     const em = s.sizePt * (4 / 3);
     for (let k = 0; k < info.count; k++) {
       const sheet = info.pages[k];
-      const top = sheet.top;
+      const { dx, dy } = at(k);
+      const top = sheet.top + dy;
       const box = document.createElement('div');
       box.className = 'page-box';
       box.style.top = `${top}px`;
+      if (dx) box.style.left = `${dx}px`;
       box.style.height = `${sheet.height}px`;
       frag.appendChild(box);
       // Typst's header: its block bottom sits header-ascent (30%) above the
@@ -329,6 +358,12 @@ function renderPages(info: PageInfo, settled: boolean) {
             : `${top + sheet.height - (2 / 3) * info.marginBottom - 0.55 * em}px`;
         el.style.textAlign = align;
         el.style.padding = `0 ${info.marginRight}px 0 ${info.marginLeft}px`;
+        if (spreadOn()) {
+          el.style.left = `${dx}px`;
+          el.style.right = 'auto';
+          el.style.width = `${pageW}px`;
+          el.style.boxSizing = 'border-box';
+        }
         el.textContent = text;
         frag.appendChild(el);
       };
@@ -344,7 +379,7 @@ function renderPages(info: PageInfo, settled: boolean) {
       }
     }
     pagesEl.replaceChildren(frag);
-    paperSheets(info.pages);
+    paperSheets(rows);
   }
   if (settled) scrollRail?.pages(info);
   // A page start may have moved the edited table or grid: the block pill
@@ -592,7 +627,21 @@ const fileManager = new FileManager({
 onShellSave((ask) => (ask.reason === 'close' ? fileManager.saveForClose(ask.choose) : fileManager.saveForShell()));
 onShellReload(() => documentPath, (rewound) => void fileManager.reloadFromDisk(rewoundText(rewound)));
 
-toolbar = buildToolbar(toolbarEl, railEl, view, fileManager, { toggleSource: () => void sourceView.toggle() });
+toolbar = buildToolbar(toolbarEl, railEl, view, fileManager, {
+  toggleSource: () => void sourceView.toggle(),
+  toggleSpread: () => {
+    spreadWanted = !spreadWanted;
+    try {
+      localStorage.setItem(SPREAD_KEY, spreadWanted ? '1' : '');
+    } catch {
+      /* a convenience: the toggle works without storage */
+    }
+    // The layout is the same either way: the pages repaint where they go.
+    setSpread(spreadWanted);
+    pageSignature = '';
+    if (lastPageInfo) renderPages(lastPageInfo, true);
+  },
+});
 setFigureFileManager(fileManager);
 setValuesReader(fileManager);
 const stopAssetWatch = startAssetWatch(view);

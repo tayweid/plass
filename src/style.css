@@ -4117,3 +4117,29 @@ body {
   outline: 1px dashed #c00000;
   outline-offset: 1px;
 }
+
+/* The spread: two pages side by side (paper-scale.ts). The stack is two
+   pages and a gap wide; the editor is cut into columns one sheet and its
+   gap tall, two to a row, each a page's text measure apart by its right
+   margin, the gap and the next page's left margin, so page k's text lands
+   in column k over sheet k (drawn at row ⌊k/2⌋, main.ts renderPages). The
+   editor's top padding moves into the flow as its margin, so the columns'
+   cuts fall on the sheets' boundaries. Drawing only: every measure takes
+   the class off first (atPaperSize) and sees the pages stacked. */
+#stack.spread:not(.source-mode) {
+  width: calc(2 * var(--page-w, 8.5in) + 6px);
+}
+
+#stack.spread:not(.source-mode) > #editor {
+  padding-top: 0 !important;
+  column-count: 2;
+  column-gap: calc(var(--page-margin-right, 1in) + 6px + var(--page-margin-left, 1in));
+  column-height: calc(var(--page-h, 11in) + 6px);
+  column-wrap: wrap;
+  column-fill: auto;
+  row-gap: 0;
+}
+
+#stack.spread:not(.source-mode) > #editor > .ProseMirror {
+  margin-top: var(--editor-top, 0px);
+}

@@ -62,6 +62,8 @@ import { Selection, TextSelection } from 'prosemirror-state';
 import type { Node as PMNode } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import type { SourceView } from './source-view';
+import { paperScale, spreadOn } from './paper-scale';
+import { getSettings } from './settings';
 
 /** Elements a press must reach unchanged even on the paper. */
 const CONTROL = 'button, input, textarea, select, a[href], label, [contenteditable], [role="button"], [role="menuitem"]';
@@ -142,8 +144,30 @@ function caretBeside(view: EditorView, x: number, y: number): Selection | null {
   return gap(after) < gap(before) ? after : before;
 }
 
+/** Two pages side by side (paper-scale.ts): the caret nearest a point,
+ *  in the text of the sheet under it (or the nearest sheet), the point
+ *  taken into that sheet's text area. The editor's box spans both columns
+ *  there, so the stacked reading below does not apply. */
+function caretOnSheet(view: EditorView, x: number, y: number): Selection | null {
+  const sheets = [...document.querySelectorAll('#pages .page-box')].map((b) => b.getBoundingClientRect());
+  if (!sheets.length) return null;
+  const dist = (b: DOMRect) => outside(x, b.left, b.right) + outside(y, b.top, b.bottom);
+  const b = sheets.reduce((best, r) => (dist(r) < dist(best) ? r : best));
+  const s = getSettings(view.state);
+  const k = paperScale() * 96;
+  const left = clamp(x, b.left + s.marginLeft * k + 1, b.right - s.marginRight * k - 1);
+  const top = clamp(y, b.top + s.marginTop * k + 1, b.bottom - s.marginBottom * k - 1);
+  const hit = view.posAtCoords({ left, top });
+  if (!hit) return null;
+  return TextSelection.near(view.state.doc.resolve(hit.pos));
+}
+
 /** The caret nearest a point of the paper, in text. */
 function caretAt(view: EditorView, x: number, y: number): Selection {
+  if (spreadOn()) {
+    const onSheet = caretOnSheet(view, x, y);
+    if (onSheet) return onSheet;
+  }
   const { doc } = view.state;
   const box = view.dom.getBoundingClientRect();
   const end = textFrom(doc, doc.content.size, -1) ?? Selection.findFrom(doc.resolve(doc.content.size), -1, true) ?? Selection.atEnd(doc);

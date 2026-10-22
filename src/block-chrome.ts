@@ -43,7 +43,7 @@ import { schema } from './schema';
 import { icon } from './toolbar';
 import { placeFlyout } from './flyout';
 import { notify } from './notify';
-import { onPaperScale, paperScale } from './paper-scale';
+import { onPaperScale, paperScale, spreadOn } from './paper-scale';
 import { pickAndInsertFigure } from './figures';
 import { cellSelectionFor, restoreCell, setPillFocuser } from './block-keys';
 import { normalizeTableColumns, tableInsetPt } from './table-geometry';
@@ -748,8 +748,20 @@ class BlockChrome {
     const s = paperScale() || 1;
     const panel = this.scroll.getBoundingClientRect();
     const editor = this.view.dom.getBoundingClientRect();
-    const textLeft = editor.left + (parseFloat(getComputedStyle(this.view.dom).paddingLeft) || 0) * s;
-    const paperLeft = this.paper.getBoundingClientRect().left;
+    let textLeft = editor.left + (parseFloat(getComputedStyle(this.view.dom).paddingLeft) || 0) * s;
+    let paperLeft = this.paper.getBoundingClientRect().left;
+    // Two pages side by side (paper-scale.ts): the margin is the block's
+    // own sheet's, the right page's for a block on it.
+    if (spreadOn()) {
+      const b = block.getBoundingClientRect();
+      const sheet = [...document.querySelectorAll('#pages .page-box')]
+        .map((el) => el.getBoundingClientRect())
+        .find((r) => b.left >= r.left - 1 && b.left <= r.right && this.blockTop(block) >= r.top - 1 && this.blockTop(block) <= r.bottom);
+      if (sheet) {
+        textLeft += sheet.left - paperLeft;
+        paperLeft = sheet.left;
+      }
+    }
     const margin = textLeft - paperLeft;
     const mode: Mode = margin >= MARGIN_FULL ? 'full' : margin >= MARGIN_COMPACT ? 'compact' : 'collapsed';
     if (mode !== this.mode) {
