@@ -1122,14 +1122,15 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   }
 
   heading(exports.element, 'Export');
-  const exportPdfNow = () => {
+  const exportPdfNow = (perSheet: 1 | 2 = 1) => {
     void import('./pdf').then(({ exportPdf }) =>
       exportPdf(
         fm.currentDoc(),
         fm.name,
         (m) => fm.notify(m),
         (name, blob) => fm.saveBeside(name, blob),
-        (m) => fm.notifyAction(m, { label: 'Try again', run: exportPdfNow }),
+        (m) => fm.notifyAction(m, { label: 'Try again', run: () => exportPdfNow(perSheet) }),
+        { perSheet },
       ),
     );
   };
@@ -1144,6 +1145,9 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     closeMenu();
     exportPdfNow();
   });
+  // Two pages to a sheet, side by side at full size (half Letter on
+  // landscape Letter): print it and cut down the middle.
+  item(exports.element, 'PDF, 2 per sheet', () => exportPdfNow(2), { title: 'Export a PDF with two pages side by side on each sheet (half Letter on landscape Letter)' });
   item(exports.element, 'Markdown (.md)', () => void fm.exportMdCopy(), { title: 'Export a .md copy' });
   item(exports.element, 'Typst (.typ)', () => void fm.exportCopy(), { title: 'Export a .typ copy' });
   item(exports.element, 'LaTeX (.tex)', () => fm.exportTexCopy(), { title: 'Export a .tex copy (vanilla LaTeX for journals)' });

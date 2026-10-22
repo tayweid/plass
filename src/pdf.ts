@@ -13,6 +13,7 @@ import { docToTyp } from './typ-serializer';
 import { ensureMathConverter } from './math-convert';
 import { loadRemoteImage, remoteImageStatus, sanitizeSvgImage } from './remote-images';
 import { FONT_FALLBACK } from './typst-config';
+import { DEFAULT_SETTINGS, pageSize } from './settings';
 import { runCompilerTask } from './typst-worker-client';
 import {
   COMPILER_DEADLINES,
@@ -287,6 +288,44 @@ export const downloadSink: ExportSink = async (fileName, blob) => {
   return fileName;
 };
 
+/** The page count of a PDF Typst wrote: its page tree's `/Count` (an
+ *  outline's `/Count` is in a dictionary of another type), else its page
+ *  objects (`/Type /Page`, which a PDF placed as an image would add to).
+ *  Null when neither is readable (pages packed in an object stream). */
+export function pdfPageCount(data: Uint8Array): number | null {
+  // Latin-1: one character per byte, so the binary streams stay inert.
+  let text = '';
+  for (let i = 0; i < data.length; i += 0x8000) text += String.fromCharCode(...data.subarray(i, i + 0x8000));
+  const tree = /\/Type\s*\/Pages\b[^>]*?\/Count\s+(\d+)|\/Count\s+(\d+)[^>]*?\/Type\s*\/Pages\b/.exec(text);
+  const count = tree ? Number(tree[1] ?? tree[2]) : 0;
+  if (count > 0) return count;
+  const pages = text.match(/\/Type\s*\/Page(?![s\w])/g)?.length ?? 0;
+  return pages || null;
+}
+
+/** Two pages to a sheet (Taylor, 2026-10-21: half-sheets side by side on
+ *  landscape Letter): the document's PDF placed, page by page, on sheets
+ *  twice its page's width, page 1 left and page 2 right, at full size.
+ *  Half Letter goes on landscape Letter, A5 on landscape A4. Typst 0.14
+ *  places a PDF's pages as images, so the pages keep their vector text. */
+export function twoUpSource(path: string, pages: number, widthIn: number, heightIn: number): string {
+  const w = `${+widthIn.toFixed(4)}in`;
+  return [
+    `#set page(width: ${+(2 * widthIn).toFixed(4)}in, height: ${+heightIn.toFixed(4)}in, margin: 0pt)`,
+    `#for i in range(0, ${pages}, step: 2) {`,
+    `  place(top + left, image(${JSON.stringify(path)}, page: i + 1, width: ${w}))`,
+    `  if i + 1 < ${pages} { place(top + left, dx: ${w}, image(${JSON.stringify(path)}, page: i + 2, width: ${w})) }`,
+    `  if i + 2 < ${pages} { pagebreak() }`,
+    '}',
+    '',
+  ].join('\n');
+}
+
+export interface PdfOptions {
+  /** Pages to a sheet: 1 (the document as it is) or 2 (side by side). */
+  perSheet?: 1 | 2;
+}
+
 export async function exportPdf(
   doc: PMNode,
   baseName: string,
@@ -295,6 +334,7 @@ export async function exportPdf(
   // A failure must outlast the ordinary 3.5 s toast: the export can run a
   // minute before failing, long after the writer stopped watching.
   onFail: (m: string) => void = onMsg,
+  options: PdfOptions = {},
 ): Promise<void> {
   // Export is an explicit user action, so it may make one fresh attempt after
   // a background timeout. Another timeout reopens the circuit immediately.
@@ -313,13 +353,23 @@ export async function exportPdf(
 
     onMsg('Typesetting with Typst…');
     const t0 = performance.now();
-    const data = await runCompilerTask<Uint8Array>(
+    let data = await runCompilerTask<Uint8Array>(
       { kind: 'pdf', source: src, assets },
       { timeoutMs: COMPILER_DEADLINES.exportMs, onMessage: onMsg },
     );
+    if (options.perSheet === 2) {
+      const pages = pdfPageCount(data);
+      if (!pages) throw new Error('could not count the pages to put two to a sheet');
+      const size = pageSize(doc.attrs.settings ?? DEFAULT_SETTINGS);
+      onMsg('Putting two pages to a sheet…');
+      data = await runCompilerTask<Uint8Array>(
+        { kind: 'pdf', source: twoUpSource('/document.pdf', pages, size.w / 96, size.h / 96), assets: [{ path: '/document.pdf', data }] },
+        { timeoutMs: COMPILER_DEADLINES.exportMs, onMessage: onMsg },
+      );
+    }
 
     const blob = new Blob([data.buffer as ArrayBuffer], { type: 'application/pdf' });
-    const fileName = `${baseName}.pdf`;
+    const fileName = options.perSheet === 2 ? `${baseName} (2 per sheet).pdf` : `${baseName}.pdf`;
     const where = await sink(fileName, blob);
     if (where === null) {
       onMsg('PDF export cancelled');
