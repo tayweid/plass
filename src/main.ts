@@ -11,6 +11,7 @@ import { isNativeShell, onShellReload, onShellSave, onShellZoom, reportDocument,
 import { openInAnotherWindow } from './open-files';
 import { migrateLegacyTableGeometry } from './typ-parser';
 import { gapCaretPlugin } from './gap-caret';
+import { setValuesReader, valuesPlugin } from './values';
 import { baseKeys, buildInputRules, buildKeymap, copyTextWithoutItsBlock, isolateDocumentReplace } from './editing';
 import { breakSpaceInput } from './break-space';
 import { collapseSpaces } from './collapse-spaces';
@@ -153,6 +154,9 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       // The caret beside a table where no line can hold one (gap-caret.ts):
       // its keys and typing come before the input rules and the keymaps.
       gapCaretPlugin(),
+      // Values from values.json (values.ts): its `{{` picker sees the keys
+      // before the input rules and the keymaps.
+      valuesPlugin(),
       buildInputRules(),
       // Before the editing keymap: its Mod-Enter is the page break.
       editorCommentKeymap(),
@@ -590,6 +594,7 @@ onShellReload(() => documentPath, (rewound) => void fileManager.reloadFromDisk(r
 
 toolbar = buildToolbar(toolbarEl, railEl, view, fileManager, { toggleSource: () => void sourceView.toggle() });
 setFigureFileManager(fileManager);
+setValuesReader(fileManager);
 const stopAssetWatch = startAssetWatch(view);
 import.meta.hot?.dispose(() => {
   stopAssetWatch();

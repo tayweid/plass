@@ -4105,3 +4105,15 @@ body {
   0%, 55% { opacity: 1; }
   55.01%, 100% { opacity: 0; }
 }
+
+/* Values from values.json (values.ts): printed text, so nothing marks a
+   live one but a faint tint under the pointer; one whose key is missing
+   keeps its last text and is outlined, never silently wrong. Paint only. */
+.ProseMirror .ts-value-live:hover {
+  background-color: rgba(48, 92, 138, 0.1);
+}
+
+.ProseMirror .ts-value-missing {
+  outline: 1px dashed #c00000;
+  outline-offset: 1px;
+}

@@ -727,6 +727,12 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     dispatch(state.tr.insertText(before && /[\w.]/.test(before) ? ' @' : '@').scrollIntoView());
     view.focus();
   }, { editing: true, glyph: tico('@'), hint: '@', title: 'Reference or cite — type @: the picker lists equations, figures, tables, sections and works' });
+  // A value from Knuth's values.json (values.ts): the tool types the `{{`
+  // that opens the picker.
+  tool(insertGroup, 'Value', () => {
+    view.dispatch(view.state.tr.insertText('{{').scrollIntoView());
+    view.focus();
+  }, { editing: true, glyph: tico('{}'), hint: '{{', title: 'Value from values.json — type {{: the picker lists what Knuth computed; {{name:2 rounds to two decimals' });
   tool(insertGroup, 'Title block', () => {
     const { state, dispatch } = view;
     const existing = state.doc.firstChild;

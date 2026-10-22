@@ -359,6 +359,29 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     }
     for (let k = 0; k < children.length; k++) {
       const child = children[k];
+      const value = child.isText ? child.marks.find((m: Mark) => m.type.name === 'value') : undefined;
+      if (value) {
+        // A value from values.json (values.ts) is a pandoc span over its
+        // text, `[4.5]{.value name=prices.0}`: one span over every text it
+        // runs over, as a link is, the marks they all share outside it.
+        let end = k;
+        while (end + 1 < children.length && children[end + 1].isText && children[end + 1].marks.some((m: Mark) => m.eq(value))) end++;
+        const run = children.slice(k, end + 1);
+        const shared = marksOf(child).filter((name) => run.every((c) => marksOf(c).includes(name)));
+        moveTo(shared, '', k);
+        const label = inline(
+          node.type.create(
+            node.attrs,
+            run.map((c) => c.mark(c.marks.filter((m: Mark) => m.type.name !== 'value' && !shared.includes(m.type.name)))),
+          ),
+          true,
+        );
+        const kvs: Array<[string, string]> = [['name', value.attrs.name as string]];
+        if (value.attrs.digits !== null && value.attrs.digits !== undefined) kvs.push(['digits', String(value.attrs.digits)]);
+        putWhole(`[${label}]${writeAttrBlock({ id: '', classes: ['value'], kvs })}`);
+        k = end;
+        continue;
+      }
       const link = child.isText ? child.marks.find((m: Mark) => m.type.name === 'link') : undefined;
       if (link) {
         // A link is one `[…](…)` over every text it spans: the marks they

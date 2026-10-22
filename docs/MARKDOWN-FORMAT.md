@@ -433,6 +433,28 @@ Two sources: [@smith2020; @jones2019].
 - A key that is not in the bibliography shows up on the page as a visible
   [?].
 
+## Values from Knuth
+
+Knuth writes the numbers its code computes into `values.json` in the
+document's folder. A value in the text is a pandoc span with the class
+`value`, its key, and the number as text:
+
+```markdown
+The mean price was [5.4]{.value name=prices.0 digits=2} dollars.
+```
+
+- `name` is the key, a dotted path into `values.json`: `prices.0` is the
+  first entry of the list `prices`, `fit.slope` the `slope` of `fit`.
+- `digits` (optional) rounds a number to that many decimals.
+- The text between the brackets is the value. Plass rewrites it whenever
+  `values.json` changes, so the file always holds the latest number, and
+  pandoc or any Markdown reader shows it. The print is that text.
+- A key that is missing from `values.json` (or a list or object there)
+  keeps its last text, outlined on the page.
+
+In Plass, type `{{` to pick a value (`{{slope:2` rounds to two decimals),
+or use the Value tool.
+
 ## Comments
 
 ~~~markdown

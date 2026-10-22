@@ -789,7 +789,7 @@ function inlineToTyp(node: PMNode, tableCell = false, head = true): string {
   return writeLinks(out);
 }
 
-const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code']);
+const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code', 'value']);
 const TABLE_CELL_INLINE = new Set([
   'text',
   'hard_break',

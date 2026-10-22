@@ -1,5 +1,6 @@
 import { Schema, type Node as PMNode, type NodeSpec } from 'prosemirror-model';
 import { normalizeBorder, normalizeLineColor } from './table-borders';
+import { valueMarkSpec } from './values';
 import { schema as base } from 'prosemirror-schema-basic';
 import { addListNodes } from 'prosemirror-schema-list';
 import { tableNodes } from 'prosemirror-tables';
@@ -655,6 +656,8 @@ const marks = base.spec.marks.addToEnd('strike', {
   toDOM() {
     return ['s', 0] as const;
   },
-});
+})
+  // A value from Knuth's values.json (values.ts): text that knows its key.
+  .addToEnd('value', valueMarkSpec);
 
 export const schema = new Schema({ nodes, marks });

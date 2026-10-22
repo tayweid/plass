@@ -56,6 +56,7 @@ import { INPUT_LIMITS, textSizeError } from './input-limits';
 import { printedForm, trimSpaceBeforeMarker } from './collapse-spaces';
 import { createQuoteState, smartenInline, smartenText } from './smart-quotes';
 import { readAttrBlock, type PandocAttrs } from './md-attrs';
+import { VALUE_NAME_RE, digitsOf } from './values';
 import { fencedDivs, type DivMeta } from './md-divs';
 import { captionFromLine, delimiterAlign, readPipeTable } from './md-tables';
 import { bibliographyEntry, readFrontmatter, withoutEntry, type FrontmatterRead, type TextKey } from './md-frontmatter';
@@ -1191,6 +1192,32 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
     imageDest = state.src.charCodeAt(state.pos) === 0x21 && state.src.charCodeAt(state.pos + 1) === 0x5b;
     return false;
   });
+  // A value from values.json (values.ts): `[4.5]{.value name=prices.0}`,
+  // pandoc's bracketed span with the class `value`, its text the label.
+  // Any other span is left to the rules after (a link, or text).
+  md.inline.ruler.before('link', 'plass_value', (state, silent) => {
+    if (state.src.charCodeAt(state.pos) !== 0x5b) return false;
+    const labelEnd = state.md.helpers.parseLinkLabel(state, state.pos, true);
+    if (labelEnd < 0 || state.src.charCodeAt(labelEnd + 1) !== 0x7b) return false;
+    const block = readAttrBlock(state.src, labelEnd + 1);
+    if (!block || !block.attrs.classes.includes('value')) return false;
+    const name = block.attrs.kvs.find(([k]) => k === 'name')?.[1] ?? '';
+    if (!VALUE_NAME_RE.test(name)) return false;
+    if (!silent) {
+      const open = state.push('value_open', 'span', 1);
+      open.meta = { name, digits: digitsOf(block.attrs.kvs.find(([k]) => k === 'digits')?.[1] ?? null) };
+      const pos = state.pos;
+      const max = state.posMax;
+      state.pos = pos + 1;
+      state.posMax = labelEnd;
+      state.md.inline.tokenize(state);
+      state.pos = pos;
+      state.posMax = max;
+      state.push('value_close', 'span', -1);
+    }
+    state.pos = block.end;
+    return true;
+  });
   const parseLinkLabel = md.helpers.parseLinkLabel;
   md.helpers.parseLinkLabel = (state, start, disableNested) => {
     const image = imageDest;
@@ -1586,6 +1613,14 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
           break;
         case 's_open':
           marks = [...marks, schema.marks.strike.create()];
+          break;
+        case 'value_open': {
+          const meta = t.meta as { name: string; digits: number | null };
+          marks = [...marks, schema.marks.value.create({ name: meta.name, digits: meta.digits })];
+          break;
+        }
+        case 'value_close':
+          marks = marks.filter((m) => m.type.name !== 'value');
           break;
         case 'link_close':
           marks = marks.slice(0, -1);
