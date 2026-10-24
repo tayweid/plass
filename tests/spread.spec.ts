@@ -234,3 +234,14 @@ test('a footnote, a split table and a solution block in the spread: all on their
   expect(onSheets.rules).toBeGreaterThan(0);
   expect(onSheets.rulesOn).toBe(true);
 });
+
+test('the paper ends with the last row of sheets: no strip of white under them', async ({ page }) => {
+  await halfSheets(page, 1);
+  await toggleSpread(page);
+  const ends = await page.evaluate(() => {
+    const paper = document.querySelector('#paper')!.getBoundingClientRect();
+    const sheets = [...document.querySelectorAll('#pages .page-box')].map((b) => b.getBoundingClientRect());
+    return { paper: paper.bottom, sheets: Math.max(...sheets.map((r) => r.bottom)) };
+  });
+  expect(Math.abs(ends.paper - ends.sheets)).toBeLessThan(0.5);
+});

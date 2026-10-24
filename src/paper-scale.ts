@@ -311,7 +311,10 @@ export function fitPaper(): void {
   // own.
   const drawn = sheet.getBoundingClientRect();
   const editor = editorEl?.getBoundingClientRect();
-  const editorBottom = editor && editor.height > 0 ? ((editor.bottom - drawn.top) * sheetWidth) / drawn.width : 0;
+  // In the spread (below) the editor's last row of columns ends with the
+  // gap under its sheets, which is no paper: it is taken off.
+  const trailing = spread && depth === 0 ? PAGE_GAP : 0;
+  const editorBottom = editor && editor.height > 0 ? ((editor.bottom - drawn.top) * sheetWidth) / drawn.width - trailing : 0;
   runsOn = editorBottom > sheetHeight;
   const height = runsOn ? editorBottom : sheetHeight;
   const before = scale;
