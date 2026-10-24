@@ -149,7 +149,7 @@ function caretBeside(view: EditorView, x: number, y: number): Selection | null {
  *  taken into that sheet's text area. The editor's box spans both columns
  *  there, so the stacked reading below does not apply. */
 function caretOnSheet(view: EditorView, x: number, y: number): Selection | null {
-  const sheets = [...document.querySelectorAll('#pages .page-box')].map((b) => b.getBoundingClientRect());
+  const sheets = [...document.querySelectorAll('#pages .page-box:not(.page-ghost)')].map((b) => b.getBoundingClientRect());
   if (!sheets.length) return null;
   const dist = (b: DOMRect) => outside(x, b.left, b.right) + outside(y, b.top, b.bottom);
   const b = sheets.reduce((best, r) => (dist(r) < dist(best) ? r : best));

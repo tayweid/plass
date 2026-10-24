@@ -44,7 +44,7 @@ async function toggleSpread(page: Page) {
  *  the layout put on it (by the pages' gaps). */
 const sheetsAndText = (page: Page) =>
   page.evaluate(() => {
-    const boxes = [...document.querySelectorAll('#pages .page-box')].map((b) => b.getBoundingClientRect());
+    const boxes = [...document.querySelectorAll('#pages .page-box:not(.page-ghost)')].map((b) => b.getBoundingClientRect());
     // Every text line's box, by walking the text nodes' client rects.
     const lines: DOMRect[] = [];
     const walker = document.createTreeWalker(window.view.dom, NodeFilter.SHOW_TEXT);
@@ -85,7 +85,7 @@ test('two pages side by side: the sheets in rows of two, every line of text on a
 const caretSheet = (page: Page) =>
   page.evaluate(() => {
     const c = window.view.coordsAtPos(window.view.state.selection.head);
-    return [...document.querySelectorAll('#pages .page-box')].findIndex((b) => {
+    return [...document.querySelectorAll('#pages .page-box:not(.page-ghost)')].findIndex((b) => {
       const r = b.getBoundingClientRect();
       return c.left >= r.left && c.left <= r.right && c.top >= r.top && c.top <= r.bottom;
     });
@@ -98,7 +98,7 @@ test('↓ from a page\'s last line goes to the head of the page beside it, then 
   // on sheet 0.
   await page.evaluate(() => {
     const view = window.view;
-    const sheet = document.querySelector('#pages .page-box')!.getBoundingClientRect();
+    const sheet = document.querySelector('#pages .page-box:not(.page-ghost)')!.getBoundingClientRect();
     let last = 1;
     view.state.doc.descendants((n, pos) => {
       if (!n.isText) return true;
@@ -181,7 +181,7 @@ test('editorial comments: a grown sheet keeps its length, the next row starts be
   expect(spread.stray).toBe(0);
   expect(spread.perSheet).toEqual(stacked.perSheet);
   const notesOn = await page.evaluate(() => {
-    const boxes = [...document.querySelectorAll('#pages .page-box')].map((b) => b.getBoundingClientRect());
+    const boxes = [...document.querySelectorAll('#pages .page-box:not(.page-ghost)')].map((b) => b.getBoundingClientRect());
     const notes = [...document.querySelectorAll('.fn-body')].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0);
     return notes.length > 0 && notes.every((r) => boxes.some((b) => r.left >= b.left - 1 && r.right <= b.right + 1 && r.top >= b.top - 1 && r.bottom <= b.bottom + 1));
   });
@@ -223,7 +223,7 @@ test('a footnote, a split table and a solution block in the spread: all on their
   expect(spread.perSheet).toEqual(stacked.perSheet);
   // The footnote's body and every solution-rule segment are on a sheet.
   const onSheets = await page.evaluate(() => {
-    const boxes = [...document.querySelectorAll('#pages .page-box')].map((b) => b.getBoundingClientRect());
+    const boxes = [...document.querySelectorAll('#pages .page-box:not(.page-ghost)')].map((b) => b.getBoundingClientRect());
     const on = (r: DOMRect) => boxes.some((b) => r.left >= b.left - 1 && r.right <= b.right + 1 && r.top >= b.top - 1 && r.bottom <= b.bottom + 1);
     const notes = [...document.querySelectorAll('.fn-body')].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0);
     const rules = [...document.querySelectorAll('.ts-solution-rules > div')].map((e) => e.getBoundingClientRect());
@@ -240,8 +240,29 @@ test('the paper ends with the last row of sheets: no strip of white under them',
   await toggleSpread(page);
   const ends = await page.evaluate(() => {
     const paper = document.querySelector('#paper')!.getBoundingClientRect();
-    const sheets = [...document.querySelectorAll('#pages .page-box')].map((b) => b.getBoundingClientRect());
+    const sheets = [...document.querySelectorAll('#pages .page-box:not(.page-ghost)')].map((b) => b.getBoundingClientRect());
     return { paper: paper.bottom, sheets: Math.max(...sheets.map((r) => r.bottom)) };
   });
   expect(Math.abs(ends.paper - ends.sheets)).toBeLessThan(0.5);
+});
+
+test('an odd last page has a greyed blank sheet beside it; an even count has none', async ({ page }) => {
+  await halfSheets(page, 1);
+  await toggleSpread(page);
+  const ghost = page.locator('#pages .page-ghost');
+  await expect(ghost).toHaveCount(1);
+  const [sheet, blank] = await page.evaluate(() => [document.querySelector('#pages .page-box:not(.page-ghost)')!, document.querySelector('#pages .page-ghost')!].map((el) => {
+    const r = el.getBoundingClientRect();
+    return { left: r.left, top: r.top, width: r.width, height: r.height, opacity: getComputedStyle(el).opacity };
+  }));
+  expect(blank.top).toBeCloseTo(sheet.top, 0);
+  expect(blank.left).toBeGreaterThan(sheet.left + sheet.width - 1);
+  expect(blank.width).toBeCloseTo(sheet.width, 0);
+  expect(Number(blank.opacity)).toBeLessThan(1);
+  // A press on the blank sheet puts the caret in the text, not nowhere.
+  await page.mouse.click(blank.left + blank.width / 2, blank.top + blank.height / 2);
+  expect(await page.evaluate(() => window.view.hasFocus() && window.view.state.selection.$head.parent.isTextblock)).toBe(true);
+  // Stacked: no blank sheet.
+  await toggleSpread(page);
+  await expect(ghost).toHaveCount(0);
 });

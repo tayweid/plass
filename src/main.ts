@@ -33,7 +33,7 @@ import { GridCellView, gridPlugin } from './grid-editor';
 import { blockKeys } from './block-keys';
 import { EditorCommentView, editorCommentKeymap, editorCommentPaste } from './editor-comments';
 import { refAutocomplete } from './ref-autocomplete';
-import { applySettings, formatPageNumber, getSettings, pageSize, runningPageFormat, runningText, type DocSettings } from './settings';
+import { PAGE_GAP, applySettings, formatPageNumber, getSettings, pageSize, runningPageFormat, runningText, type DocSettings } from './settings';
 import { FileManager } from './file-manager';
 import { resetCompilerCircuit } from './compiler-circuit';
 import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
@@ -371,6 +371,18 @@ function renderPages(info: PageInfo, settled: boolean) {
           chrome(edge, s.pageNumAlign, folio(k));
         }
       }
+    }
+    // An odd last page in the spread has a blank sheet beside it, greyed:
+    // the pair's other half, which the next page will take (paint only;
+    // nothing reads it as a page).
+    if (spreadOn() && info.count % 2 === 1) {
+      const row = rows[rows.length - 1];
+      const ghost = document.createElement('div');
+      ghost.className = 'page-box page-ghost';
+      ghost.style.top = `${row.top}px`;
+      ghost.style.left = `${pageW + PAGE_GAP}px`;
+      ghost.style.height = `${info.pageH}px`;
+      frag.appendChild(ghost);
     }
     pagesEl.replaceChildren(frag);
     paperSheets(rows);

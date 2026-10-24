@@ -4159,3 +4159,9 @@ body {
 #stack.spread:not(.source-mode) .fn-body {
   margin-top: var(--spread-extra-above, 0px);
 }
+
+/* The blank sheet beside an odd last page in the spread (main.ts
+   renderPages): the paper's colour, faded into the frame. */
+.page-box.page-ghost {
+  opacity: 0.35;
+}

@@ -754,7 +754,7 @@ class BlockChrome {
     // own sheet's, the right page's for a block on it.
     if (spreadOn()) {
       const b = block.getBoundingClientRect();
-      const sheet = [...document.querySelectorAll('#pages .page-box')]
+      const sheet = [...document.querySelectorAll('#pages .page-box:not(.page-ghost)')]
         .map((el) => el.getBoundingClientRect())
         .find((r) => b.left >= r.left - 1 && b.left <= r.right && this.blockTop(block) >= r.top - 1 && this.blockTop(block) <= r.bottom);
       if (sheet) {

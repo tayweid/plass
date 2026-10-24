@@ -162,7 +162,7 @@ function verticalCaret(dir: -1 | 1): Command {
     // the next line is at the head of the next sheet, which may be beside
     // it, not below; the probe hops there, the same distance in from the
     // sheet's left edge.
-    const sheets = spreadOn() ? [...document.querySelectorAll('#pages .page-box')].map((b) => b.getBoundingClientRect()) : null;
+    const sheets = spreadOn() ? [...document.querySelectorAll('#pages .page-box:not(.page-ghost)')].map((b) => b.getBoundingClientRect()) : null;
     let sheet = sheets ? sheets.findIndex((b) => x >= b.left - 1 && x <= b.right + 1 && c.top >= b.top - 1 && c.top <= b.bottom + 1) : -1;
     for (let step = 1; step <= 80; step++) {
       y += dir * lineH * 0.5;
