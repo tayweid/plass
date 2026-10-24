@@ -38,7 +38,7 @@ import { FileManager } from './file-manager';
 import { resetCompilerCircuit } from './compiler-circuit';
 import { SOURCE_SESSION_KEY, createSourceView } from './source-view';
 import { describeVerdict } from './environment-check';
-import { atPaperSize, attachPaper, markSpreadGaps, paperScale, paperSheets, setSpread, setSpreadPages, spreadOn, spreadRows, spreadShift, zoomedWindow } from './paper-scale';
+import { atPaperSize, attachPaper, markSpreadGaps, onPaperScale, paperScale, paperSheets, setSpread, setSpreadPages, spreadOn, spreadRow, spreadRows, spreadShift, zoomedWindow } from './paper-scale';
 import { attachScrollRail, type ScrollRail } from './scroll-rail';
 import { attachPaperCaret } from './paper-caret';
 import { FROM_DISK, reloadTransaction } from './reload-in-place';
@@ -266,7 +266,17 @@ function renderPages(info: PageInfo, settled: boolean) {
   // Sheets are the print pages grown by the editorial comments they hold
   // (page-geometry.ts): never `k * (pageH + gap)`.
   const rows = spreadOn() ? spreadRows() : info.pages;
-  const lastRow = rows[rows.length - 1];
+  // The blank pairs that carry the spread's paper to the panel's foot.
+  const fill: Array<{ top: number; height: number }> = [];
+  if (spreadOn() && rows.length) {
+    const reach = (document.getElementById('scroll')?.clientHeight ?? 0) / (paperScale() || 1);
+    let next = rows[rows.length - 1].top + spreadRow();
+    for (let bottom = rows[rows.length - 1].top + rows[rows.length - 1].height; bottom < reach && fill.length < 4; next += spreadRow()) {
+      fill.push({ top: next, height: info.pageH });
+      bottom = next + info.pageH;
+    }
+  }
+  const lastRow = fill[fill.length - 1] ?? rows[rows.length - 1];
   stackEl.style.height = `${lastRow ? lastRow.top + lastRow.height : 0}px`;
   pageCount = info.count;
   const s = getSettings(view.state);
@@ -322,7 +332,7 @@ function renderPages(info: PageInfo, settled: boolean) {
     s.headerText, s.headerAlign, s.headerFirstPage, s.footerText, s.footerAlign, s.footerFirstPage,
     restartPage, sections.map((h) => `${h.page}=${h.text}`).join('\u0001'),
     info.pages.map((p) => `${p.top.toFixed(2)}+${p.height.toFixed(2)}`).join(','),
-    spreadOn() ? 'spread' : 'stacked',
+    spreadOn() ? `spread${fill.length}` : 'stacked',
   ].join(':');
   if (sig !== pageSignature) {
     pageSignature = sig;
@@ -372,20 +382,28 @@ function renderPages(info: PageInfo, settled: boolean) {
         }
       }
     }
-    // An odd last page in the spread has a blank sheet beside it, greyed:
-    // the pair's other half, which the next page will take (paint only;
-    // nothing reads it as a page).
-    if (spreadOn() && info.count % 2 === 1) {
-      const row = rows[rows.length - 1];
-      const ghost = document.createElement('div');
-      ghost.className = 'page-box page-ghost';
-      ghost.style.top = `${row.top}px`;
-      ghost.style.left = `${pageW + PAGE_GAP}px`;
-      ghost.style.height = `${info.pageH}px`;
-      frag.appendChild(ghost);
+    // Blank sheets in the spread, greyed (paint only; nothing reads them
+    // as pages): beside an odd last page, the pair's other half, which the
+    // next page will take; and below the last row while it ends above the
+    // panel's foot, pairs, so the paper runs to the window's edge as the
+    // stacked pages do.
+    const ghost = (left: number, top: number) => {
+      const el = document.createElement('div');
+      el.className = 'page-box page-ghost';
+      el.style.top = `${top}px`;
+      el.style.left = `${left}px`;
+      el.style.height = `${info.pageH}px`;
+      frag.appendChild(el);
+    };
+    if (spreadOn() && info.count % 2 === 1) ghost(pageW + PAGE_GAP, rows[rows.length - 1].top);
+    if (spreadOn()) {
+      for (const row of fill) {
+        ghost(0, row.top);
+        ghost(pageW + PAGE_GAP, row.top);
+      }
     }
     pagesEl.replaceChildren(frag);
-    paperSheets(rows);
+    paperSheets([...rows, ...fill]);
   }
   if (settled) scrollRail?.pages(info);
   // A page start may have moved the edited table or grid: the block pill
@@ -633,6 +651,18 @@ const fileManager = new FileManager({
 onShellSave((ask) => (ask.reason === 'close' ? fileManager.saveForClose(ask.choose) : fileManager.saveForShell()));
 onShellReload(() => documentPath, (rewound) => void fileManager.reloadFromDisk(rewoundText(rewound)));
 
+// The spread's blank pairs reach the panel's foot (renderPages): drawn
+// again when the panel's height or the paper's scale changes.
+{
+  const refill = () => {
+    if (!spreadOn() || !lastPageInfo) return;
+    const info = lastPageInfo;
+    atPaperSize(() => renderPages(info, false));
+  };
+  const scroll = document.getElementById('scroll');
+  if (scroll) new ResizeObserver(refill).observe(scroll);
+  onPaperScale(refill);
+}
 toolbar = buildToolbar(toolbarEl, railEl, view, fileManager, {
   toggleSource: () => void sourceView.toggle(),
   toggleSpread: () => {

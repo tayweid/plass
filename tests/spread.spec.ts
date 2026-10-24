@@ -240,17 +240,19 @@ test('the paper ends with the last row of sheets: no strip of white under them',
   await toggleSpread(page);
   const ends = await page.evaluate(() => {
     const paper = document.querySelector('#paper')!.getBoundingClientRect();
-    const sheets = [...document.querySelectorAll('#pages .page-box:not(.page-ghost)')].map((b) => b.getBoundingClientRect());
+    // Every sheet drawn, the blank ones that carry it to the foot included.
+    const sheets = [...document.querySelectorAll('#pages .page-box')].map((b) => b.getBoundingClientRect());
     return { paper: paper.bottom, sheets: Math.max(...sheets.map((r) => r.bottom)) };
   });
   expect(Math.abs(ends.paper - ends.sheets)).toBeLessThan(0.5);
 });
 
-test('an odd last page has a greyed blank sheet beside it; an even count has none', async ({ page }) => {
+test('an odd last page has a greyed blank sheet beside it; stacked, none', async ({ page }) => {
   await halfSheets(page, 1);
   await toggleSpread(page);
   const ghost = page.locator('#pages .page-ghost');
-  await expect(ghost).toHaveCount(1);
+  // The blank beside page 1 is the first (a pair below may follow it).
+  await expect(ghost.first()).toBeAttached();
   const [sheet, blank] = await page.evaluate(() => [document.querySelector('#pages .page-box:not(.page-ghost)')!, document.querySelector('#pages .page-ghost')!].map((el) => {
     const r = el.getBoundingClientRect();
     return { left: r.left, top: r.top, width: r.width, height: r.height, opacity: getComputedStyle(el).opacity };
@@ -265,4 +267,18 @@ test('an odd last page has a greyed blank sheet beside it; an even count has non
   // Stacked: no blank sheet.
   await toggleSpread(page);
   await expect(ghost).toHaveCount(0);
+});
+
+test('a short spread runs to the panel’s foot with greyed pairs, as the stacked pages do', async ({ page }) => {
+  await halfSheets(page, 1);
+  await toggleSpread(page);
+  const foot = await page.evaluate(() => {
+    const panel = document.querySelector('#scroll')!.getBoundingClientRect();
+    const paper = document.querySelector('#paper')!.getBoundingClientRect();
+    return { panel: panel.bottom, paper: paper.bottom, ghosts: document.querySelectorAll('#pages .page-ghost').length };
+  });
+  // The paper reaches the panel's foot: no band of frame under it.
+  expect(foot.paper).toBeGreaterThanOrEqual(foot.panel - 0.5);
+  // The blank beside page 1, and at least one blank pair below.
+  expect(foot.ghosts).toBeGreaterThanOrEqual(3);
 });

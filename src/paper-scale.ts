@@ -217,7 +217,7 @@ export function setSpreadPages(pages: readonly Sheet[], pageW: number): void {
 }
 
 /** A row of the spread: the longest sheet and the gap. */
-function spreadRow(): number {
+export function spreadRow(): number {
   return spreadPages.reduce((h, p) => Math.max(h, p.height), 0) + PAGE_GAP;
 }
 
