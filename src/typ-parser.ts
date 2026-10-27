@@ -17,7 +17,7 @@ import { TYP_COMMENT_OPEN, readTypComment } from './editor-comments-format';
 import { unwrapAligned } from './math-src';
 import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings, FOOTNOTE_NUMBERINGS, type FootnoteNumbering } from './settings';
 import { trimSpaceBeforeMarker } from './collapse-spaces';
-import { textColorName } from './text-color';
+import { TEXT_COLORS, type TextColorName } from './text-color';
 import { beforeAfterNode, createQuoteState, feedGlyph, lastVisible, smartQuote, type QuoteState } from './smart-quotes';
 import { densityFromInsetPt, type TableDensity } from './table-density';
 import { parseRowRuleArg } from './table-rules';
@@ -1631,6 +1631,18 @@ function typstExprLength(src: string, start: number): number {
   return i - start;
 }
 
+/** The `#text(fill: …)[` at `i` that opens a palette color (text-color.ts),
+ *  with its name, or null. */
+function textColorOpening(src: string, i: number): { name: TextColorName; length: number } | null {
+  for (const name of Object.keys(TEXT_COLORS) as TextColorName[]) {
+    for (const fill of [TEXT_COLORS[name].typst, name]) {
+      const opening = `#text(fill: ${fill})[`;
+      if (src.startsWith(opening, i)) return { name, length: opening.length };
+    }
+  }
+  return null;
+}
+
 // Inline math inside `*…*`/`_…_`/`#strike[…]` carries those marks (Typst
 // emboldens math under strong, so the span must stay one run on export —
 // `*#mi(\`2\`) drinks*`, never `#mi(\`2\`)* drinks*`). Other atoms (raw
@@ -1752,16 +1764,16 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
         continue;
       }
     }
-    // Red text (text-color.ts): `#text(fill: red)[…]`, the palette's names
-    // only; any other fill stays an island.
-    const colored = src.startsWith('#text(', i) ? /^#text\(fill:\s*([a-z]+)\)\[/.exec(src.slice(i, i + 40)) : null;
-    const colorName = colored ? textColorName(colored[1]) : null;
-    if (colored && colorName) {
-      const open = i + colored[0].length - 1;
+    // Red text (text-color.ts): `#text(fill: rgb("#c00000"))[…]` as the
+    // export writes it, or the color's own name (`red`, the first days'
+    // export); any other fill stays an island.
+    const colored = src.startsWith('#text(fill: ', i) ? textColorOpening(src, i) : null;
+    if (colored) {
+      const open = i + colored.length - 1;
       const end = matchBracket(src, open);
       if (end > 0) {
         flush();
-        scanInline(src.slice(open + 1, end), [...marks, schema.marks.color.create({ name: colorName })], out);
+        scanInline(src.slice(open + 1, end), [...marks, schema.marks.color.create({ name: colored.name })], out);
         i = end + 1;
         continue;
       }

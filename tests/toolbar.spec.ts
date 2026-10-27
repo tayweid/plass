@@ -76,8 +76,8 @@ test('the Red text tile at rest toggles the mark over text and math, never a foo
   await expect(run).toHaveCount(1);
   await expect(run).toContainText('the slope');
   await expect(redBtn).toHaveAttribute('aria-pressed', 'true');
-  // Typst's own red, the formula's ink with it; the footnote marker stays.
-  expect(await red.first().evaluate((el) => getComputedStyle(el).color)).toBe('rgb(255, 65, 54)');
+  // The solution block's red, the formula's ink with it; the footnote marker stays.
+  expect(await red.first().evaluate((el) => getComputedStyle(el).color)).toBe('rgb(192, 0, 0)');
   await expect(page.locator('.ProseMirror .ts-color .math-inline')).toHaveCount(1);
   await expect(page.locator('.ProseMirror .ts-color .footnote-ref, .ProseMirror .ts-color sup')).toHaveCount(0);
   expect(await page.evaluate(() => {
@@ -93,7 +93,7 @@ test('the Red text tile at rest toggles the mark over text and math, never a foo
   await page.keyboard.press('ControlOrMeta+Shift+r');
   await expect(run).toHaveCount(1);
 
-  // The file holds a pandoc span, the print a #text(fill: red) run.
+  // The file holds a pandoc span, the print a #text(fill: …) run in the solution block's red.
   const out = await page.evaluate(async () => {
     const { docToMd } = await import('/src/md-serializer.ts');
     const { docToTyp } = await import('/src/typ-serializer.ts');
@@ -102,7 +102,7 @@ test('the Red text tile at rest toggles the mark over text and math, never a foo
   expect(out.md).toContain('[the slope $\\beta_1$ is positive]{.red}[^1]');
   expect(out.md).toContain('[^1]: [a note]{.red}');
   // The print's math is native Typst (`$beta _(1 )$`), spaced by the converter.
-  expect(out.typ).toMatch(/#text\(fill: red\)\[the slope \$[^$]*beta[^$]*\$ is positive\]#footnote\[#text\(fill: red\)\[a note\]\]/);
+  expect(out.typ).toMatch(/#text\(fill: rgb\("#c00000"\)\)\[the slope \$[^$]*beta[^$]*\$ is positive\]#footnote\[#text\(fill: rgb\("#c00000"\)\)\[a note\]\]/);
 });
 
 /** The rail at rest, top to bottom: All tools over its hairline; Text

@@ -1,5 +1,5 @@
-// Red text (Taylor, 2026-10-26): one color, Typst's own `red`, as a mark
-// on text and inline math. Paint only: a fill changes no glyph metric, so
+// Red text (Taylor, 2026-10-26): one color, the solution block's red, as
+// a mark on text and inline math. Paint only: a fill changes no glyph metric, so
 // the layout port and the paginator never see it; Typst shapes a run of
 // its own at every fill change, as the port measures each marked run on
 // its own, so page and print agree by construction. The palette is this
@@ -7,8 +7,10 @@
 //
 // Markdown keeps it as a pandoc span with the class, `[text]{.red}`, so a
 // reader without Plass (pandoc, GitHub) still sees the text; Typst prints
-// `#text(fill: red)[…]` (the PDF, the audit's compile, a legacy `.typ`
-// save, which reads it back); TeX `\textcolor{red}{…}` with xcolor. A
+// `#text(fill: rgb("#c00000"))[…]` (the PDF, the audit's compile, a
+// legacy `.typ` save, which reads it back, Typst's named `red` too, the
+// first days' export); TeX `\textcolor{plassred}{…}`, the color defined
+// from the same hex, with xcolor. A
 // formula in the run is red too: Typst's math inherits the text fill, and
 // the page recolors the ink's black fills and strokes (style.css), the
 // ink's geometry being the same in any fill. Other atoms (a footnote
@@ -21,8 +23,11 @@ import { toggleMark } from 'prosemirror-commands';
 import type { MarkSpec, Node as PMNode } from 'prosemirror-model';
 
 export const TEXT_COLORS = {
-  /** Typst's `red`, `#ff4136`. */
-  red: { css: '#ff4136', typst: 'red', tex: 'red' },
+  /** The solution block's red (Taylor, 2026-10-26: one red in a document;
+   *  `SOLUTION_COLOR` in typ-serializer.ts and `--solution-red` in
+   *  style.css are this value). `typst` is the fill the export writes,
+   *  `tex` the xcolor name the TeX export defines from `css`. */
+  red: { css: '#c00000', typst: 'rgb("#c00000")', tex: 'plassred' },
 } as const;
 export type TextColorName = keyof typeof TEXT_COLORS;
 

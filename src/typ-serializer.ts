@@ -318,12 +318,13 @@ export function headingBoxEm(level: number): { padTop: number; line: number; mar
 // share every gap. The page paints its heading ink about this much lower
 // than the print does.
 /** The solution block's colour — a verified preset, not a free parameter
- * (`style.css`'s `--solution-red` paints the same value in the editor).
+ * (`style.css`'s `--solution-red` paints the same value in the editor,
+ * and the red text mark is the same red: text-color.ts).
  * The block is `#block(width: 100%, stroke: (left: 2pt + red), inset:
  * (left: 1em))` with `#set text(fill: red)` inside: a left inset the CSS
  * mirrors as padding, no vertical inset, Auto block spacing — so its
  * vertical box equals a plain paragraph run and needs no calibration. */
-const SOLUTION_COLOR = 'rgb("#c00000")';
+const SOLUTION_COLOR = TEXT_COLORS.red.typst;
 
 const HEADINGS: Array<{ level: number; hs: number; padTop: number; marginBottom: number; rise: number }> = [
   { level: 1, hs: 1.9, padTop: 0.2, marginBottom: 0.5, rise: 0.1698 },
@@ -835,7 +836,10 @@ function tableCellContentToTyp(cell: PMNode, row: number, column: number): strin
       if (unsupported) {
         throw new Error(`Cannot export ${where}: unsupported ${unsupported} mark; content was not discarded`);
       }
-      if (!child.isText && markNames.length) {
+      // A formula carries the run marks (strong, emphasis, strike, red):
+      // the cell's run wraps it as a paragraph's does, and the reader's
+      // scanner gives it back the same marks.
+      if (!child.isText && markNames.length && !(child.type.name === 'math_inline' && markNames.every((name) => (RUN_MARKS as readonly string[]).includes(name)))) {
         throw new Error(`Cannot export ${where}: marks on ${child.type.name} are not supported`);
       }
       if (markNames.includes('code') && markNames.length > 1) {

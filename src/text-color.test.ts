@@ -1,5 +1,5 @@
 // Red text (text-color.ts): `[text]{.red}` reads as the color mark and
-// writes back; the Typst export wraps the run in `#text(fill: red)[…]` and
+// writes back; the Typst export wraps the run in `#text(fill: rgb("#c00000"))[…]` and
 // reads it back from a legacy .typ; TeX gets \textcolor with xcolor; a
 // formula in the run is red, a footnote marker or a citation never is;
 // and a content block's line head is escaped (Typst reads `- ` at the
@@ -43,7 +43,7 @@ function trip(md: string) {
   return { doc: first.doc, warnings: first.warnings, md1, md2: docToMd(second.doc), doc2: second.doc };
 }
 
-check('the palette is red, Typst\'s #ff4136', Object.keys(TEXT_COLORS).join() === 'red' && TEXT_COLORS.red.css === '#ff4136');
+check('the palette is red, the solution block\'s #c00000', Object.keys(TEXT_COLORS).join() === 'red' && (TEXT_COLORS.red.css as string) === '#c00000' && TEXT_COLORS.red.typst === 'rgb("#c00000")');
 
 // --- Markdown ---
 {
@@ -92,6 +92,26 @@ check('the palette is red, Typst\'s #ff4136', Object.keys(TEXT_COLORS).join() ==
   const t = trip('| a | b |\n|---|---|\n| [red]{.red} | 2 |\n');
   check('red text in a table cell round-trips', reds(t.doc).join('|') === 'red' && t.md1 === t.md2 && t.md1.includes('[red]{.red}'), t.md1);
 }
+{
+  // A formula in a cell carries the run marks (the Checkpoint answer
+  // tables: `[$\\boxtimes$ too few]{.red}`); the cell export refused any
+  // mark on math before, bold included, though the reader gave it back.
+  const md = '| a | b |\n|---|---|\n| [$\\boxtimes$ too few]{.red} | **$x$ word** |\n';
+  const t = trip(md);
+  // (The writer's pipe table is its canonical spacing, `| --- |`.)
+  check('a red formula in a table cell round-trips in Markdown', t.md2 === t.md1 && t.md1.includes('| [$\\boxtimes$ too few]{.red} | **$x$ word** |') && reds(t.doc).join('|') === '<math_inline>| too few', JSON.stringify([t.md1, reds(t.doc)]));
+  let print = '';
+  let file = '';
+  try {
+    print = docToTyp(t.doc, { islands: 'print' });
+    file = docToTyp(t.doc);
+  } catch (e) {
+    check('the cell export accepts a red or bold formula', false, (e as Error).message);
+  }
+  check('and prints the cell as a red run over the formula', /\[#text\(fill: rgb\("#c00000"\)\)\[\$[^$]*\$ too few\]\]/.test(print) && /\[\*\$x \$ word\*\]/.test(print), print.split('\n').filter((l) => /too few|word/.test(l)).join('\n'));
+  const back = typToDoc(file);
+  check('and the legacy .typ reads the cell back the same', back.warnings.length === 0 && docToMd(back.doc) === t.md1, JSON.stringify([back.warnings, docToMd(back.doc)]));
+}
 
 // --- Typst: the print, the audit's compile, the legacy .typ save ---
 {
@@ -99,12 +119,16 @@ check('the palette is red, Typst\'s #ff4136', Object.keys(TEXT_COLORS).join() ==
   const file = docToTyp(doc);
   // One run per mark signature, as strong and emphasis are written
   // (`*a *_*b*_* c*`): Typst shapes the same segments either way.
-  check('the export wraps each run in #text(fill: red)[…], the formula inside', /#text\(fill: red\)\[red \]#text\(fill: red\)\[_word_\]#text\(fill: red\)\[ and #mi\(`x`\)\]/.test(file), file);
+  check('the export wraps each run in #text(fill: red)[…], the formula inside', /#text\(fill: rgb\("#c00000"\)\)\[red \]#text\(fill: rgb\("#c00000"\)\)\[_word_\]#text\(fill: rgb\("#c00000"\)\)\[ and #mi\(`x`\)\]/.test(file), file);
   const print = docToTyp(doc, { islands: 'print' });
-  check('the print form too, with native math', /#text\(fill: red\)\[ and \$x \$\]/.test(print), print);
+  check('the print form too, with native math', /#text\(fill: rgb\("#c00000"\)\)\[ and \$x \$\]/.test(print), print);
   const back = typToDoc(file);
   check('a legacy .typ reads it back as the mark', reds(back.doc).join('|') === 'red |word| and |<math_inline>' && back.warnings.length === 0, JSON.stringify([reds(back.doc), back.warnings]));
   check('and re-exports the same', docToTyp(back.doc) === file, docToTyp(back.doc));
+}
+{
+  const { doc } = typToDoc('A #text(fill: red)[first-days] export reads too.\n');
+  check('Typst\'s named red, the first export\'s spelling, reads as the mark', reds(doc).join('|') === 'first-days' && docToTyp(doc).includes('#text(fill: rgb("#c00000"))[first-days]'), JSON.stringify(reds(doc)));
 }
 {
   const { doc } = typToDoc('Keep #text(fill: blue)[this] as it is.\n');
@@ -112,7 +136,7 @@ check('the palette is red, Typst\'s #ff4136', Object.keys(TEXT_COLORS).join() ==
 }
 {
   const typ = docToTyp(mdToDoc('[- not a list]{.red}\n\n~~= not a heading~~\n\n**- bold**\n').doc);
-  check('a list marker at the head of a red run is escaped', typ.includes('#text(fill: red)[\\- not a list]'), typ);
+  check('a list marker at the head of a red run is escaped', typ.includes('#text(fill: rgb("#c00000"))[\\- not a list]'), typ);
   check('so is a heading marker at the head of a struck run', typ.includes('#strike[\\= not a heading]'), typ);
   check('a strong run needs no escape: its delimiter guards the head', typ.includes('*- bold*'), typ);
 }
@@ -124,14 +148,14 @@ check('the palette is red, Typst\'s #ff4136', Object.keys(TEXT_COLORS).join() ==
   const color = schema.marks.color.create({ name: 'red' });
   const doc = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, [schema.text('b', [color]), schema.nodes.hard_break.create(), schema.text('- c', [color])]));
   const typ = docToTyp(doc);
-  check('a marker after a line break inside the run is escaped', /#text\(fill: red\)\[b\] \\\n#text\(fill: red\)\[\\- c\]/.test(typ), typ.split('\n').filter((l) => /fill: red|^\\- /.test(l)).join('\n'));
+  check('a marker after a line break inside the run is escaped', /#text\(fill: rgb\("#c00000"\)\)\[b\] \\\n#text\(fill: rgb\("#c00000"\)\)\[\\- c\]/.test(typ), typ.split('\n').filter((l) => /fill: red|^\\- /.test(l)).join('\n'));
 }
 
 // --- TeX ---
 {
   const tex = docToTex(mdToDoc('A [red $x$ word]{.red} here.\n').doc);
-  check('TeX gets \\textcolor{red} over text and formula', tex.includes('\\textcolor{red}{red }\\textcolor{red}{$x$}\\textcolor{red}{ word}'), tex);
-  check('and pulls in xcolor', tex.includes('\\usepackage{xcolor}\n'), tex);
+  check('TeX gets \\textcolor{plassred} over text and formula', tex.includes('\\textcolor{plassred}{red }\\textcolor{plassred}{$x$}\\textcolor{plassred}{ word}'), tex);
+  check('and pulls in xcolor, defining the color from the same hex', tex.includes('\\usepackage{xcolor}\n\\definecolor{plassred}{HTML}{C00000}\n'), tex);
   check('a document without red does not', !docToTex(mdToDoc('plain\n').doc).includes('xcolor'));
 }
 

@@ -40,9 +40,8 @@ export function escapeTex(s: string): string {
     .replace(/\u00B7/g, '\\textperiodcentered{}');
 }
 
-/** `t` in the color `child` carries (text-color.ts), if any: xcolor's
- *  name, since the export is semantic — the journal's template has the
- *  last word on the shade. */
+/** `t` in the color `child` carries (text-color.ts): a color the preamble
+ *  defines from the same hex the page and the PDF use. */
 function texColor(child: PMNode, t: string): string {
   const color = textColorName(child.marks.find((m) => m.type.name === 'color')?.attrs.name);
   return color ? `\\textcolor{${TEXT_COLORS[color].tex}}{${t}}` : t;
@@ -412,7 +411,10 @@ export function docToTex(doc: PMNode): string {
   if (usesMultirow) out += '\\usepackage{multirow}\n';
   // normalem: ulem must not hijack \emph into underlining.
   if (usesStrike) out += '\\usepackage[normalem]{ulem}\n';
-  if (usesColor) out += '\\usepackage{xcolor}\n';
+  if (usesColor) {
+    out += '\\usepackage{xcolor}\n';
+    for (const { css, tex } of Object.values(TEXT_COLORS)) out += `\\definecolor{${tex}}{HTML}{${css.slice(1).toUpperCase()}}\n`;
+  }
   if (!s.parIndent) out += '\\usepackage{parskip}\n';
   out += `\\usepackage[${paper},top=${s.marginTop}in,right=${s.marginRight}in,bottom=${s.marginBottom}in,left=${s.marginLeft}in]{geometry}\n`;
   for (const [name, expansion] of Object.entries(macros)) {

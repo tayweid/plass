@@ -430,7 +430,7 @@ body {
 
 /* The Red text tile's glyph, in the color it sets (text-color.ts). */
 .tb-btn .tico-red {
-  color: #ff4136;
+  color: #c00000;
 }
 
 .tb-btn .tico.tex {
@@ -4123,13 +4123,13 @@ body {
   outline-offset: 1px;
 }
 
-/* Red text (text-color.ts): Typst's own red, paint only. A formula in the
-   run is red as well — Typst's math inherits the text fill — so the ink's
+/* Red text (text-color.ts): the solution block's red (--solution-red, the
+   one value), paint only. A formula in the run is red as well — Typst's math inherits the text fill — so the ink's
    black fills and strokes take the run's color (the in-app renderer
    writes `#000` on a glyph group and a rule, Typst's own SVG `#000000`);
    the ink's geometry is the same in any fill. */
 .ProseMirror .ts-color[data-color="red"] {
-  color: #ff4136;
+  color: #c00000;
 }
 
 .ProseMirror .ts-color [fill="#000"],

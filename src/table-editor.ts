@@ -567,6 +567,9 @@ export function exitTableVertically(dir: -1 | 1): Command {
 
 // The editor enforces the same lossless subset as the Typst serializer.
 const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code', 'value', 'color']);
+/** The marks a formula in a cell may carry: the run marks the Typst
+ *  serializer wraps (its RUN_MARKS) and the reader gives back. */
+const TABLE_CELL_MATH_MARKS = new Set(['strong', 'em', 'strike', 'color']);
 const TABLE_CELL_INLINE = new Set(['text', 'hard_break', 'math_inline', 'eq_ref', 'citation']);
 
 const tableIssueCache = new WeakMap<PMNode, string | null>();
@@ -604,7 +607,7 @@ function tableCellIssue(table: PMNode): string | null {
           issue = `${spoken(unsupported)} marks can’t go in a table cell`;
           return false;
         }
-        if (!inline.isText && marks.length) {
+        if (!inline.isText && marks.length && !(inline.type.name === 'math_inline' && marks.every((mark) => TABLE_CELL_MATH_MARKS.has(mark)))) {
           issue = `formatted ${spoken(inline.type.name)}s can’t go in a table cell`;
           return false;
         }
