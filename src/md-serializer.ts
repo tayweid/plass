@@ -32,6 +32,7 @@ import { writeAttrBlock, writeFenceAttrs, readAttrBlock, type PandocAttrs } from
 import { pipeTableMd, tableDivAttrs } from './md-tables';
 import { readFrontmatter, writeFrontmatter, type TextKey } from './md-frontmatter';
 import { readFrontText } from './md-parser';
+import { colorable } from './text-color';
 
 const NAMESPACE = /^(?:eq|fig|sec|tbl):/;
 // A character a citation key may continue with (pandoc: letters, digits,
@@ -359,6 +360,30 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
     }
     for (let k = 0; k < children.length; k++) {
       const child = children[k];
+      const color = colorable(child) ? child.marks.find((m: Mark) => m.type.name === 'color') : undefined;
+      if (color) {
+        // Red text (text-color.ts) is a pandoc span over its run,
+        // `[text]{.red}`: one span over every text and formula it runs
+        // over, a line break between two of them inside it (an atom never
+        // carries it), the marks they all share outside it, as a link's
+        // are; a value inside it is its own span.
+        const continues = (j: number) => j < children.length && colorable(children[j]) && children[j].marks.some((m: Mark) => m.eq(color));
+        let end = k;
+        while (continues(end + 1) || (children[end + 1]?.type.name === 'hard_break' && continues(end + 2))) end++;
+        const run = children.slice(k, end + 1);
+        const shared = marksOf(child).filter((name) => run.every((c) => marksOf(c).includes(name)));
+        moveTo(shared, '', k);
+        const label = inline(
+          node.type.create(
+            node.attrs,
+            run.map((c) => c.mark(c.marks.filter((m: Mark) => !m.eq(color) && !shared.includes(m.type.name)))),
+          ),
+          true,
+        );
+        putWhole(`[${label}]${writeAttrBlock({ id: '', classes: [color.attrs.name as string], kvs: [] })}`);
+        k = end;
+        continue;
+      }
       const value = child.isText ? child.marks.find((m: Mark) => m.type.name === 'value') : undefined;
       if (value) {
         // A value from values.json (values.ts) is a pandoc span over its

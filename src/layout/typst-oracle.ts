@@ -9,6 +9,7 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { escapeTyp } from '../typ-serializer';
+import { TEXT_COLORS, textColorName } from '../text-color';
 import type { ForcedBreak } from './paragraph';
 import { parseTypstSvg } from '../safe-svg';
 
@@ -108,6 +109,8 @@ export function buildSpec(node: PMNode, resolveAtom: AtomResolver): ParagraphSpe
       if (marks.has('strong')) t = `*${t}*`;
       if (marks.has('em')) t = `_${t}_`;
       if (marks.has('strike')) t = `#strike[${t}]`;
+      const color = textColorName(child.marks.find((m) => m.type.name === 'color')?.attrs.name);
+      if (color) t = `#text(fill: ${TEXT_COLORS[color].typst})[${t}]`;
       src += t;
       key += `[${[...marks].sort().join(',')}]${child.text}`;
     } else if (child.type.name === 'hard_break') {

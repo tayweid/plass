@@ -1,6 +1,7 @@
 import { Schema, type Node as PMNode, type NodeSpec } from 'prosemirror-model';
 import { normalizeBorder, normalizeLineColor } from './table-borders';
 import { valueMarkSpec } from './values';
+import { colorMarkSpec } from './text-color';
 import { schema as base } from 'prosemirror-schema-basic';
 import { addListNodes } from 'prosemirror-schema-list';
 import { tableNodes } from 'prosemirror-tables';
@@ -658,6 +659,9 @@ const marks = base.spec.marks.addToEnd('strike', {
   },
 })
   // A value from Knuth's values.json (values.ts): text that knows its key.
-  .addToEnd('value', valueMarkSpec);
+  .addToEnd('value', valueMarkSpec)
+  // Red text (text-color.ts): Typst's `red` on text and inline math,
+  // `[text]{.red}` in Markdown, `#text(fill: red)[…]` in Typst. Paint only.
+  .addToEnd('color', colorMarkSpec);
 
 export const schema = new Schema({ nodes, marks });

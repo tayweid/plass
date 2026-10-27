@@ -134,6 +134,7 @@ plass:
 |---|---|---|
 | a heading | `## Results {#sec:results}` | the label is optional. `{-}` is ignored, because heading numbers are on or off for the whole document |
 | emphasis, strong, strike | `*em*`, `**strong**`, `~~gone~~` | |
+| red text | `[text]{.red}` | a pandoc span with the class `red`: Typst's red (`#ff4136`) on the page and in print, a formula inside it too; pandoc and GitHub show the plain text. The only color. ⌘⇧R, or the rail's Red text |
 | inline code | `` `x = 1` `` | |
 | a link | `[Typst](https://typst.app)` | |
 | a line break | `\` at the end of the line | |

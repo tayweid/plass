@@ -566,7 +566,7 @@ export function exitTableVertically(dir: -1 | 1): Command {
 }
 
 // The editor enforces the same lossless subset as the Typst serializer.
-const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code', 'value']);
+const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code', 'value', 'color']);
 const TABLE_CELL_INLINE = new Set(['text', 'hard_break', 'math_inline', 'eq_ref', 'citation']);
 
 const tableIssueCache = new WeakMap<PMNode, string | null>();

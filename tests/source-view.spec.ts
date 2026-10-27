@@ -221,8 +221,8 @@ test('the visible view switch and the shortcut toggle from either view', async (
   // Settings; the drawer switch and the bar's way out stay live.
   const rail = page.locator('#rail');
   const tiles = rail.locator('.tb-rail-groups .tb-btn:visible');
-  await expect(tiles).toHaveCount(11);
-  await expect(rail.locator('.tb-rail-groups .tb-btn:visible:disabled')).toHaveCount(11);
+  await expect(tiles).toHaveCount(12);
+  await expect(rail.locator('.tb-rail-groups .tb-btn:visible:disabled')).toHaveCount(12);
   await expect(rail.getByRole('button', { name: 'Heading level', exact: true })).toBeDisabled();
   await expect(rail.getByRole('button', { name: 'Alignment', exact: true })).toBeDisabled();
   await expect(rail.getByRole('button', { name: 'Block quote', exact: true })).toBeDisabled();

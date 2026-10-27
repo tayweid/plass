@@ -23,6 +23,7 @@ import { Slice, type MarkType, type Node as PMNode } from 'prosemirror-model';
 import type { Command, EditorState } from 'prosemirror-state';
 import { schema } from './schema';
 import { insertMath, mathDisplayRule, mathInlineRule } from './math';
+import { toggleTextColor } from './text-color';
 import { eqRefRule } from './equations';
 import { exitFigure } from './figures';
 import { exitFootnote, footnoteCloseRule, footnoteOpenRules, insertFootnote, skipFootnote } from './footnotes';
@@ -333,6 +334,7 @@ export function buildKeymap(): Plugin {
     'Mod-b': toggleMark(schema.marks.strong),
     'Mod-i': toggleMark(schema.marks.em),
     'Mod-Shift-x': toggleMark(schema.marks.strike),
+    'Mod-Shift-r': toggleTextColor('red'),
     'Mod-`': toggleMark(schema.marks.code),
     'Mod-m': insertMath(false),
     'Shift-Mod-m': insertMath(true),

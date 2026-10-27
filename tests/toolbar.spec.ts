@@ -47,12 +47,71 @@ test('the drawer’s Strikethrough row toggles the mark and preserves the select
   await expect(page.locator('.ProseMirror s')).toHaveText('cut this phrase');
 });
 
+test('the Red text tile at rest toggles the mark over text and math, never a footnote marker', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const { schema } = state;
+    const paragraph = schema.nodes.paragraph.create(null, [
+      schema.text('the slope '),
+      schema.nodes.math_inline.create({ src: '\\beta_1' }),
+      schema.text(' is positive'),
+      schema.nodes.footnote.create(null, schema.text('a note')),
+    ]);
+    const doc = schema.nodes.doc.create(state.doc.attrs, [paragraph]);
+    window.view.dispatch(state.tr.replaceWith(0, state.doc.content.size, doc.content));
+  });
+  await page.click('.ProseMirror');
+  await page.keyboard.press('ControlOrMeta+a');
+
+  const redBtn = page.locator('#rail').getByRole('button', { name: 'Red text', exact: true });
+  await expect(redBtn).toBeVisible();
+  await expect(redBtn).toHaveAttribute('aria-pressed', 'false');
+  await redBtn.click();
+  // One wrapper over the whole run, the formula inside it (its SVG's own
+  // style text is in the wrapper's text); the footnote marker after it,
+  // the note's text red as Bold would make it.
+  const red = page.locator('.ProseMirror .ts-color[data-color="red"]');
+  const run = red.filter({ hasText: 'is positive' });
+  await expect(run).toHaveCount(1);
+  await expect(run).toContainText('the slope');
+  await expect(redBtn).toHaveAttribute('aria-pressed', 'true');
+  // Typst's own red, the formula's ink with it; the footnote marker stays.
+  expect(await red.first().evaluate((el) => getComputedStyle(el).color)).toBe('rgb(255, 65, 54)');
+  await expect(page.locator('.ProseMirror .ts-color .math-inline')).toHaveCount(1);
+  await expect(page.locator('.ProseMirror .ts-color .footnote-ref, .ProseMirror .ts-color sup')).toHaveCount(0);
+  expect(await page.evaluate(() => {
+    let marked = 0;
+    window.view.state.doc.descendants((n) => { if (n.type.name === 'footnote' && n.marks.some((m) => m.type.name === 'color')) marked++; return true; });
+    return marked;
+  })).toBe(0);
+
+  // The same tile un-toggles; the keymap drives the same mark.
+  await redBtn.click();
+  await expect(red).toHaveCount(0);
+  await expect(redBtn).toHaveAttribute('aria-pressed', 'false');
+  await page.keyboard.press('ControlOrMeta+Shift+r');
+  await expect(run).toHaveCount(1);
+
+  // The file holds a pandoc span, the print a #text(fill: red) run.
+  const out = await page.evaluate(async () => {
+    const { docToMd } = await import('/src/md-serializer.ts');
+    const { docToTyp } = await import('/src/typ-serializer.ts');
+    return { md: docToMd(window.view.state.doc), typ: docToTyp(window.view.state.doc, { islands: 'print' }) };
+  });
+  expect(out.md).toContain('[the slope $\\beta_1$ is positive]{.red}[^1]');
+  expect(out.md).toContain('[^1]: [a note]{.red}');
+  // The print's math is native Typst (`$beta _(1 )$`), spaced by the converter.
+  expect(out.typ).toMatch(/#text\(fill: red\)\[the slope \$[^$]*beta[^$]*\$ is positive\]#footnote\[#text\(fill: red\)\[a note\]\]/);
+});
+
 /** The rail at rest, top to bottom: All tools over its hairline; Text
- *  (the two stepping tiles), Insert and Blocks; the foot's Bibliography
- *  and Document settings. The view switch is on the page, not the rail. */
+ *  (the two stepping tiles and Red text), Insert and Blocks; the foot's
+ *  Bibliography and Document settings. The view switch is on the page,
+ *  not the rail. */
 const RAIL_AT_REST = [
   'All tools',
-  'Heading level', 'Alignment',
+  'Heading level', 'Alignment', 'Red text',
   'Image', 'Table', 'Grid', 'Inline math', 'Footnote',
   'Block quote', 'Solution', 'Comment', 'Code block',
   'Bibliography', 'Document settings',

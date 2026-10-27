@@ -16,6 +16,7 @@ import { wrapInList } from 'prosemirror-schema-list';
 import { schema } from './schema';
 import { cycleHeading, headingLevelAt, nextHeadingLevel, toggleListSpacing } from './editing';
 import { insertMath } from './math';
+import { toggleTextColor } from './text-color';
 import { insertFootnote } from './footnotes';
 import { pickAndInsertFigure } from './figures';
 import { insertStructuredTable } from './table-editor';
@@ -886,6 +887,19 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
     setAttr(alignTile, 'title', caption);
   });
   for (const tile of [headingTile, alignTile]) tile.classList.add('tb-rest-only');
+  // Red text (text-color.ts): the one color, a mark toggle like Bold. At
+  // rest, its markdown being a pandoc span (`[text]{.red}`), not what one
+  // types; the drawer lists it with the span and its key.
+  {
+    const mark = schema.marks.color;
+    commandTool(textGroup, 'Red text', toggleTextColor('red'), {
+      rest: true, glyph: tico('<span class="tico-red">A</span>'), hint: '[text]{.red} · ⌘⇧R', title: 'Red text (⌘⇧R)',
+      checked: () => {
+        const { selection, storedMarks, doc } = view.state;
+        return selection.empty ? !!mark.isInSet(storedMarks ?? selection.$from.marks()) : doc.rangeHasMark(selection.from, selection.to, mark);
+      },
+    });
+  }
 
   // CODE
   commandTool(codeGroup, 'Raw Typst block', setBlockType(schema.nodes.code_block, { params: 'typst-raw' }), {

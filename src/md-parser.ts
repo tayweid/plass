@@ -57,6 +57,7 @@ import { printedForm, trimSpaceBeforeMarker } from './collapse-spaces';
 import { createQuoteState, smartenInline, smartenText } from './smart-quotes';
 import { readAttrBlock, type PandocAttrs } from './md-attrs';
 import { VALUE_NAME_RE, digitsOf } from './values';
+import { textColorName, type TextColorName } from './text-color';
 import { fencedDivs, type DivMeta } from './md-divs';
 import { captionFromLine, delimiterAlign, readPipeTable } from './md-tables';
 import { bibliographyEntry, readFrontmatter, withoutEntry, type FrontmatterRead, type TextKey } from './md-frontmatter';
@@ -961,6 +962,16 @@ class DisplayItem {
 /** Where a comment left the inline run (the gap it closes). */
 const CUT = Symbol('cut');
 type Item = PMNode | DisplayItem | typeof CUT;
+
+/** A pandoc span the reader turns into marks (`plass_span` below): the
+ *  value and color it names, the attributes it drops, and once read, the
+ *  marks it added, for its close. */
+type SpanMeta = {
+  value: { name: string; digits: number | null } | null;
+  color: TextColorName | null;
+  extras: string[];
+  added?: Mark[];
+};
 const isNode = (x: Item): x is PMNode => x !== CUT && !(x instanceof DisplayItem);
 const isText = (x: Item | undefined): x is PMNode => x !== undefined && isNode(x) && x.isText;
 
@@ -1192,20 +1203,33 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
     imageDest = state.src.charCodeAt(state.pos) === 0x21 && state.src.charCodeAt(state.pos + 1) === 0x5b;
     return false;
   });
-  // A value from values.json (values.ts): `[4.5]{.value name=prices.0}`,
-  // pandoc's bracketed span with the class `value`, its text the label.
-  // Any other span is left to the rules after (a link, or text).
-  md.inline.ruler.before('link', 'plass_value', (state, silent) => {
+  // The pandoc bracketed spans Plass reads: a value from values.json
+  // (values.ts), `[4.5]{.value name=prices.0}`, the class `value` and its
+  // key, the text its label; and red text (text-color.ts), `[text]{.red}`.
+  // One span may be both. Any other span is left to the rules after (a
+  // link, or text); an attribute neither reads is dropped with a warning.
+  md.inline.ruler.before('link', 'plass_span', (state, silent) => {
     if (state.src.charCodeAt(state.pos) !== 0x5b) return false;
-    const labelEnd = state.md.helpers.parseLinkLabel(state, state.pos, true);
+    // The label may nest brackets: a footnote marker, a link, a span.
+    const labelEnd = state.md.helpers.parseLinkLabel(state, state.pos, false);
     if (labelEnd < 0 || state.src.charCodeAt(labelEnd + 1) !== 0x7b) return false;
     const block = readAttrBlock(state.src, labelEnd + 1);
-    if (!block || !block.attrs.classes.includes('value')) return false;
-    const name = block.attrs.kvs.find(([k]) => k === 'name')?.[1] ?? '';
-    if (!VALUE_NAME_RE.test(name)) return false;
+    if (!block) return false;
+    const { id, classes, kvs } = block.attrs;
+    const name = classes.includes('value') ? kvs.find(([k]) => k === 'name')?.[1] ?? '' : '';
+    const value = VALUE_NAME_RE.test(name) ? { name, digits: digitsOf(kvs.find(([k]) => k === 'digits')?.[1] ?? null) } : null;
+    const color = classes.map(textColorName).find((c) => c) ?? null;
+    if (!value && !color) return false;
     if (!silent) {
-      const open = state.push('value_open', 'span', 1);
-      open.meta = { name, digits: digitsOf(block.attrs.kvs.find(([k]) => k === 'digits')?.[1] ?? null) };
+      const read = new Set<string>([...(value ? ['value'] : []), ...(color ? [color] : [])]);
+      const extras = [
+        ...(id ? [`#${id}`] : []),
+        ...classes.filter((c) => !read.has(c)).map((c) => `.${c}`),
+        ...kvs.filter(([k]) => !(value && (k === 'name' || k === 'digits'))).map(([k]) => `${k}=`),
+      ];
+      const meta: SpanMeta = { value, color, extras };
+      const open = state.push('plass_span_open', 'span', 1);
+      open.meta = meta;
       const pos = state.pos;
       const max = state.posMax;
       state.pos = pos + 1;
@@ -1213,7 +1237,8 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
       state.md.inline.tokenize(state);
       state.pos = pos;
       state.posMax = max;
-      state.push('value_close', 'span', -1);
+      const close = state.push('plass_span_close', 'span', -1);
+      close.meta = meta;
     }
     state.pos = block.end;
     return true;
@@ -1461,12 +1486,12 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
       }
       switch (s.k) {
         case 'math':
-          out.push(schema.nodes.math_inline.create({ src: s.src }, null, atomMarks(marks)));
+          out.push(schema.nodes.math_inline.create({ src: s.src }, null, atomMarks(marks, true)));
           H.seen = true;
           break;
         case 'display':
           if (displays) out.push(new DisplayItem(s));
-          else out.push(schema.nodes.math_inline.create({ src: s.src }, null, atomMarks(marks)));
+          else out.push(schema.nodes.math_inline.create({ src: s.src }, null, atomMarks(marks, true)));
           H.seen = true;
           break;
         case 'code':
@@ -1507,9 +1532,11 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
    *  sits in: strong, emphasis and strike, as the editor gives them to an
    *  atom inside a bolded run and the writer writes it inside the run's
    *  delimiters. Strong emboldens (and widens) Typst math. A link or code
-   *  mark does not apply to an atom. */
-  function atomMarks(marks: readonly Mark[]): Mark[] {
-    return marks.filter((mk) => mk.type.name === 'strong' || mk.type.name === 'em' || mk.type.name === 'strike');
+   *  mark does not apply to an atom; red (text-color.ts) only to a formula
+   *  (`math`), whose ink follows it as Typst's math does the text fill —
+   *  a marker's print never would. */
+  function atomMarks(marks: readonly Mark[], math = false): Mark[] {
+    return marks.filter((mk) => mk.type.name === 'strong' || mk.type.name === 'em' || mk.type.name === 'strike' || (math && mk.type.name === 'color'));
   }
 
   function refNode(key: string, marks: readonly Mark[]): PMNode {
@@ -1614,14 +1641,23 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
         case 's_open':
           marks = [...marks, schema.marks.strike.create()];
           break;
-        case 'value_open': {
-          const meta = t.meta as { name: string; digits: number | null };
-          marks = [...marks, schema.marks.value.create({ name: meta.name, digits: meta.digits })];
+        case 'plass_span_open': {
+          // The marks this span adds are its own (meta is shared with its
+          // close), so a span inside a span of the same kind closes alone.
+          const meta = t.meta as SpanMeta;
+          if (meta.extras.length) warn(`span attributes ${meta.extras.join(' ')} have no Plass form — dropped`);
+          meta.added = [
+            ...(meta.value ? [schema.marks.value.create({ name: meta.value.name, digits: meta.value.digits })] : []),
+            ...(meta.color ? [schema.marks.color.create({ name: meta.color })] : []),
+          ].filter((m) => !m.isInSet(marks));
+          marks = [...marks, ...meta.added];
           break;
         }
-        case 'value_close':
-          marks = marks.filter((m) => m.type.name !== 'value');
+        case 'plass_span_close': {
+          const added = (t.meta as SpanMeta).added ?? [];
+          marks = marks.filter((m) => !added.includes(m));
           break;
+        }
         case 'link_close':
           marks = marks.slice(0, -1);
           if (imageAttrs(children, ti + 1)) warn('link attributes have no Plass form — dropped');

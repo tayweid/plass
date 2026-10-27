@@ -47,7 +47,9 @@ const FILLER =
 const FIXTURES: Array<{ name: string; text: string }> = [
   {
     name: 'prose.md',
-    text: ['# Prose', '', ...Array.from({ length: 14 }, (_, i) => FILLER.repeat(3 + (i % 4)).trimEnd() + '\n')].join('\n'),
+    // Every fourth paragraph opens with a red run (text-color.ts) that
+    // outlasts its first line: a fill is paint, so the breaks must hold.
+    text: ['# Prose', '', ...Array.from({ length: 14 }, (_, i) => (i % 4 === 1 ? `[${FILLER.trimEnd()}]{.red} ` : '') + FILLER.repeat(3 + (i % 4)).trimEnd() + '\n')].join('\n'),
   },
   {
     name: 'structure.md',
@@ -70,7 +72,7 @@ const FIXTURES: Array<{ name: string; text: string }> = [
       ...Array.from({ length: 8 }, () => FILLER.repeat(4).trimEnd() + '\n'),
       '### Math and notes',
       '',
-      'Inline math $x^2 + y^2 = z^2$ sits in the run.[^1] ' + FILLER.repeat(3).trimEnd(),
+      'Inline math [$x^2 + y^2 = z^2$ sits red]{.red} in the run.[^1] ' + FILLER.repeat(3).trimEnd(),
       '',
       '$$ \\int_0^1 f(x) \\, dx = F(1) - F(0) $$',
       '',

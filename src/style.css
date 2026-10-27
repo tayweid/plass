@@ -428,6 +428,11 @@ body {
   text-align: center;
 }
 
+/* The Red text tile's glyph, in the color it sets (text-color.ts). */
+.tb-btn .tico-red {
+  color: #ff4136;
+}
+
 .tb-btn .tico.tex {
   font-size: 14px;
   letter-spacing: 0.02em;
@@ -4116,6 +4121,25 @@ body {
 .ProseMirror .ts-value-missing {
   outline: 1px dashed #c00000;
   outline-offset: 1px;
+}
+
+/* Red text (text-color.ts): Typst's own red, paint only. A formula in the
+   run is red as well — Typst's math inherits the text fill — so the ink's
+   black fills and strokes take the run's color (the in-app renderer
+   writes `#000` on a glyph group and a rule, Typst's own SVG `#000000`);
+   the ink's geometry is the same in any fill. */
+.ProseMirror .ts-color[data-color="red"] {
+  color: #ff4136;
+}
+
+.ProseMirror .ts-color [fill="#000"],
+.ProseMirror .ts-color [fill="#000000"] {
+  fill: currentColor;
+}
+
+.ProseMirror .ts-color [stroke="#000"],
+.ProseMirror .ts-color [stroke="#000000"] {
+  stroke: currentColor;
 }
 
 /* The spread: two pages side by side (paper-scale.ts). The stack is two

@@ -9,6 +9,7 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { normalizeSettings, parseMathMacros, type DocSettings, paperInches } from './settings';
+import { TEXT_COLORS, textColorName } from './text-color';
 
 let macros: Record<string, string> = {};
 let unnumberedEq = new Set<string>();
@@ -39,6 +40,14 @@ export function escapeTex(s: string): string {
     .replace(/\u00B7/g, '\\textperiodcentered{}');
 }
 
+/** `t` in the color `child` carries (text-color.ts), if any: xcolor's
+ *  name, since the export is semantic — the journal's template has the
+ *  last word on the shade. */
+function texColor(child: PMNode, t: string): string {
+  const color = textColorName(child.marks.find((m) => m.type.name === 'color')?.attrs.name);
+  return color ? `\\textcolor{${TEXT_COLORS[color].tex}}{${t}}` : t;
+}
+
 function inlineToTex(node: PMNode): string {
   let out = '';
   node.forEach((child) => {
@@ -49,9 +58,9 @@ function inlineToTex(node: PMNode): string {
       if (marks.has('strong')) t = `\\textbf{${t}}`;
       if (marks.has('em')) t = `\\emph{${t}}`;
       if (marks.has('strike')) t = `\\sout{${t}}`;
-      out += t;
+      out += texColor(child, t);
     } else if (child.type.name === 'math_inline') {
-      out += `$${child.attrs.src}$`;
+      out += texColor(child, `$${child.attrs.src}$`);
     } else if (child.type.name === 'eq_ref') {
       const label = child.attrs.label as string;
       out += unnumberedEq.has(label)
@@ -367,6 +376,7 @@ export function docToTex(doc: PMNode): string {
   let hasRestart = false;
   let usesMultirow = false;
   let usesStrike = false;
+  let usesColor = false;
   doc.forEach((n) => {
     if (n.type.name === 'doc_title') title = inlineToTex(n);
     else if (n.type.name === 'doc_authors') authors = inlineToTex(n);
@@ -379,6 +389,7 @@ export function docToTex(doc: PMNode): string {
       usesMultirow = true;
     }
     if (n.isText && n.marks.some((m) => m.type.name === 'strike')) usesStrike = true;
+    if (n.isInline && n.marks.some((m) => m.type.name === 'color')) usesColor = true;
     return true;
   });
   unnumberedEq = new Set();
@@ -401,6 +412,7 @@ export function docToTex(doc: PMNode): string {
   if (usesMultirow) out += '\\usepackage{multirow}\n';
   // normalem: ulem must not hijack \emph into underlining.
   if (usesStrike) out += '\\usepackage[normalem]{ulem}\n';
+  if (usesColor) out += '\\usepackage{xcolor}\n';
   if (!s.parIndent) out += '\\usepackage{parskip}\n';
   out += `\\usepackage[${paper},top=${s.marginTop}in,right=${s.marginRight}in,bottom=${s.marginBottom}in,left=${s.marginLeft}in]{geometry}\n`;
   for (const [name, expansion] of Object.entries(macros)) {

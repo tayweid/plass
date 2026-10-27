@@ -41,11 +41,14 @@ const mathViews = new WeakMap<Node, MathView>();
 
 /** The marks a new inline formula inherits from its insertion point: the
  * ones that change Typst's print (strong widens the math) or the ink
- * (strike). Code and link marks do not apply to a formula. */
+ * (strike, red). Code and link marks do not apply to a formula. */
 function inheritedMathMarks(state: EditorState): readonly Mark[] {
   const marks = state.storedMarks ?? state.selection.$from.marks();
-  return marks.filter((m) => m.type.name === 'strong' || m.type.name === 'em' || m.type.name === 'strike');
+  return marks.filter((m) => MATH_MARKS.has(m.type.name));
 }
+
+/** The marks a formula carries (text-color.ts: a red run's formula is red). */
+const MATH_MARKS = new Set(['strong', 'em', 'strike', 'color']);
 
 export class MathView implements NodeView {
   dom: HTMLElement;
@@ -457,7 +460,7 @@ export const mathInlineRule = new InputRule(/\$([^$\s](?:[^$]*[^$\s])?)\$$/, (st
   const marks = state.doc
     .resolve(start)
     .marks()
-    .filter((m) => m.type.name === 'strong' || m.type.name === 'em' || m.type.name === 'strike');
+    .filter((m) => MATH_MARKS.has(m.type.name));
   return state.tr.replaceWith(start, end, schema.nodes.math_inline.create({ src: match[1] }, null, marks));
 });
 

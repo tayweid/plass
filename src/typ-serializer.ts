@@ -19,6 +19,7 @@ import { CELL_FILL_TYPST, type CellFill } from './table-fills';
 import { borderSides, borderStrokeArg, borderValue, coloredStroke } from './table-borders';
 import type { CitationStyle } from './citation-styles';
 import { commentToTyp } from './editor-comments-format';
+import { TEXT_COLORS, textColorName } from './text-color';
 import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config';
 import { convertMath, displayEquation, inlineEquation, mathConverterReady } from './math-convert';
 import { mathPrelude } from './typst-math-prelude';
@@ -690,17 +691,28 @@ function portableTableLabel(label: unknown): string {
 }
 
 /** Marks that wrap a run of inline content on export, outermost last. */
-const RUN_MARKS = ['strong', 'em', 'strike'] as const;
+const RUN_MARKS = ['strong', 'em', 'strike', 'color'] as const;
 
 function runSignature(child: PMNode): string {
   const names = new Set(child.marks.map((m) => m.type.name));
-  return RUN_MARKS.filter((n) => names.has(n)).join(',');
+  return RUN_MARKS.filter((n) => names.has(n))
+    .map((n) => (n === 'color' ? `color=${String(child.marks.find((m) => m.type.name === 'color')!.attrs.name)}` : n))
+    .join(',');
+}
+
+/** Whether a run's text opens a Typst line unguarded: `*` and `_` are
+ *  inline delimiters, but a content block (`#strike[`, `#text(fill: red)[`)
+ *  starts markup afresh, where `- ` is a list item and `= ` a heading. */
+function openLine(sig: string): boolean {
+  return !/\b(?:strong|em)\b/.test(sig);
 }
 
 function wrapRun(t: Piece[], sig: string): Piece[] {
   if (sig.includes('strong')) t = ['*', ...t, '*'];
   if (sig.includes('em')) t = ['_', ...t, '_'];
   if (sig.includes('strike')) t = ['#strike[', ...t, ']'];
+  const color = textColorName(/(?:^|,)color=([^,]+)/.exec(sig)?.[1]);
+  if (color) t = [`#text(fill: ${TEXT_COLORS[color].typst})[`, ...t, ']'];
   return t;
 }
 
@@ -723,8 +735,9 @@ function inlineToTyp(node: PMNode, tableCell = false, head = true): string {
     run = [];
   };
   node.forEach((child) => {
-    // Plain text first on its line could read as markup; a marked run
-    // opens with its own delimiter, a code span with a backtick.
+    // Plain text first on its line could read as markup; a run opening
+    // with `*` or `_` is guarded by its delimiter, a code span by its
+    // backtick, but a content block's opens a line of its own (openLine).
     const atHead = head;
     head = child.type.name === 'hard_break';
     if (child.isText && child.text) {
@@ -741,7 +754,7 @@ function inlineToTyp(node: PMNode, tableCell = false, head = true): string {
           : '`' + child.text + '`');
       } else {
         const pieces = escapePieces(child.text, !tableCell);
-        if (atHead && !s && typeof pieces[0] === 'string') pieces[0] = escapeLineHead(pieces[0]);
+        if (atHead && openLine(s) && typeof pieces[0] === 'string') pieces[0] = escapeLineHead(pieces[0]);
         run.push(...pieces);
       }
       return;
@@ -789,7 +802,7 @@ function inlineToTyp(node: PMNode, tableCell = false, head = true): string {
   return writeLinks(out);
 }
 
-const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code', 'value']);
+const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code', 'value', 'color']);
 const TABLE_CELL_INLINE = new Set([
   'text',
   'hard_break',
