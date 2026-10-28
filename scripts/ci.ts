@@ -1,9 +1,10 @@
 // `npm run ci`: what GitHub's deploy checks before it publishes (the verify
-// job in .github/workflows/deploy.yml), run here, so a push is green the
-// first time. It stops at the first failure. `--quick` is the pre-push
-// subset (.githooks/pre-push, a minute or two): the checks that failed the
-// deploy most often and cost least — the Claerbout tag, npm audit, the
-// third-party notices, the static checks and the unit suites.
+// and browser-suite jobs in .github/workflows/deploy.yml), run here, so a
+// push is green the first time. It stops at the first failure. `--quick` is
+// the pre-push subset (.githooks/pre-push, a minute or two): the checks that
+// failed the deploy most often and cost least — the Claerbout tag, the
+// Playwright image, npm audit, the third-party notices, the static checks
+// and the unit suites.
 //
 // It checks the files as they are in this folder, uncommitted edits
 // included. The browser suite runs on a free port of its own
@@ -17,29 +18,41 @@
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import process from 'node:process';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const quick = process.argv.includes('--quick');
 
-interface Step {
+type Step = {
   name: string;
-  cmd: string[];
   /** Run with PLASS_TEST_PORT set to a free port (the browser suite). */
   ownPort?: boolean;
   /** Why the step cannot run here, or null when it can. */
   missing?: () => string | null;
-}
+} & (
+  | { cmd: string[]; check?: undefined }
+  /** A check made in this process: why it fails, or null when it passes. */
+  | { check: () => string | null; cmd?: undefined }
+);
 
 const runs = (cmd: string, args: string[]) => spawnSync(cmd, args, { cwd: ROOT, stdio: 'ignore' }).status === 0;
 
+const workflow = readFileSync(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+
 /** The shell tag the deploy's app job clones (deploy.yml's CLAERBOUT_TAG). */
 function claerboutTag(): string {
-  const workflow = readFileSync(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const tag = /CLAERBOUT_TAG:\s*(\S+)/.exec(workflow)?.[1];
   if (!tag) throw new Error('deploy.yml names no CLAERBOUT_TAG');
   return tag;
+}
+
+/** The Playwright version of the image the browser-suite job runs in. */
+function playwrightImageVersion(): string {
+  const version = /mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-noble/.exec(workflow)?.[1];
+  if (!version) throw new Error('deploy.yml names no mcr.microsoft.com/playwright image');
+  return version;
 }
 
 function freePort(): Promise<number> {
@@ -54,10 +67,21 @@ function freePort(): Promise<number> {
 }
 
 const tag = claerboutTag();
+const image = playwrightImageVersion();
+const installedPlaywright: string = createRequire(import.meta.url)('playwright/package.json').version;
 const steps: Step[] = [
   // The app job clones the shell at this tag: it must be on GitHub first
   // (tag claerbout, push the tag, then move CLAERBOUT_TAG).
   { name: `Claerbout ${tag} is on GitHub`, cmd: ['git', 'ls-remote', '--exit-code', '--tags', 'https://github.com/tayweid/claerbout', `refs/tags/${tag}`] },
+  // The browser suite runs in Playwright's image, whose browsers are that
+  // version's: a Playwright bump moves the image tag and its digest too.
+  {
+    name: `Playwright image v${image} is the installed Playwright`,
+    check: () =>
+      image === installedPlaywright
+        ? null
+        : `deploy.yml runs the browser suite in Playwright's v${image} image, but the installed playwright is ${installedPlaywright}: move the image tag and its digest in .github/workflows/deploy.yml`,
+  },
   { name: 'npm audit', cmd: ['npm', 'audit', '--audit-level=moderate'] },
   ...(quick
     ? []
@@ -105,9 +129,15 @@ for (const step of steps) {
   const env = step.ownPort ? { ...process.env, PLASS_TEST_PORT: String(await freePort()) } : process.env;
   console.log(`\n── ${step.name} ──`);
   const start = Date.now();
-  const result = spawnSync(step.cmd[0], step.cmd.slice(1), { cwd: ROOT, stdio: 'inherit', env });
+  let ok: boolean;
+  if (step.check) {
+    const problem = step.check();
+    if (problem) console.log(problem);
+    ok = problem === null;
+  } else {
+    ok = spawnSync(step.cmd[0], step.cmd.slice(1), { cwd: ROOT, stdio: 'inherit', env }).status === 0;
+  }
   const seconds = (Date.now() - start) / 1000;
-  const ok = result.status === 0;
   results.push({ name: step.name, seconds, status: ok ? 'ok' : 'failed' });
   if (!ok) {
     failed = step.name;

@@ -77,28 +77,59 @@ jobs:
       - name: Test the Plass-owned sidecar source
         run: cargo test --locked --manifest-path sidecar/Cargo.toml
       - run: npm run test:layout
-      - name: Resolve the installed Playwright version
-        id: playwright
-        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
-      - name: Cache the Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # The browser suite is the browser-suite job below, in Playwright's
+      # own image; it runs beside this job.
+      - run: npm run build
+      - run: npm run verify:production
+      # The verified site, handed to the Mac app build and to the deploy.
+      - if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          path: ~/.cache/ms-playwright
-          key: ms-playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-      - name: Install the Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 10
-        run: npx --no-install playwright install --with-deps chromium firefox webkit
-      # A cache hit restores the browsers but not the system libraries they
-      # link against: the runner is a fresh VM every run, so the apt step has
-      # to happen either way. Both forms carry a timeout because that install
-      # depends on distribution mirrors, which have stalled for tens of
-      # minutes; failing at ten is better than holding the deploy at thirty.
-      - name: Install the Playwright system libraries
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 10
-        run: npx --no-install playwright install-deps chromium firefox webkit
+          name: site
+          path: dist
+          retention-days: 1
+
+  # The browser suite, in Playwright's own image: the three browsers and
+  # every system library they link against come with the image, pinned by
+  # digest at the Playwright version package-lock.json holds (`npm run ci`
+  # checks that the two agree), so nothing here is installed through apt.
+  # Until 2026-10-27 the verify job installed those libraries on every run
+  # (the runner is a fresh VM each time) from Ubuntu's Azure mirror, under
+  # a ten-minute cap because that mirror had stalled for tens of minutes
+  # before; that day it crawled through two deploys in a row instead, and
+  # the runner image's failover to archive.ubuntu.com fires only when a
+  # mirror times out, never while it trickles. The pull from
+  # mcr.microsoft.com is this job's one download beside npm's, and the
+  # job's own timeout bounds it. `--user 1001` is the runner's account, as
+  # Playwright's GitHub Actions recipe runs the image, so the checkout, the
+  # tool cache and the results stay the runner's files. Chromium gets
+  # `--no-sandbox` from Playwright in any case.
+  browser-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
+      options: --user 1001
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The image records the Playwright its browsers belong to. A lockfile
+      # that moved on without the image fails here by version, not at the
+      # first test's missing executable.
+      - name: Confirm the image holds the installed Playwright's browsers
+        run: |
+          image=$(node -p "JSON.parse(require('fs').readFileSync('/ms-playwright/.docker-info', 'utf8')).driverVersion")
+          installed=$(node -p "require('playwright/package.json').version")
+          echo "image: Playwright $image; installed: $installed"
+          test "$image" = "$installed"
       - run: npm run test:browser
       - name: Port audit (a measurement — reported, never blocking)
         run: npm run audit
@@ -112,15 +143,6 @@ jobs:
           name: browser-test-results
           path: test-results
           retention-days: 7
-      - run: npm run build
-      - run: npm run verify:production
-      # The verified site, handed to the Mac app build and to the deploy.
-      - if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: site
-          path: dist
-          retention-days: 1
 
   # Plass.app: the verified site's page inside the Claerbout shell
   # (docs/CLAERBOUT-SHELL.md), packaged on a Mac and published beside the
@@ -264,9 +286,10 @@ jobs:
           retention-days: 7
 
   deploy:
-    # Runs when the site verified, whether or not the app built.
-    if: ${{ !cancelled() && needs.verify.result == 'success' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-    needs: [verify, app]
+    # Runs when the site verified and the browser suite passed, whether or
+    # not the app built.
+    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.browser-suite.result == 'success' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    needs: [verify, browser-suite, app]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
