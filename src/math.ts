@@ -14,6 +14,7 @@ import type { Mark } from 'prosemirror-model';
 import { InputRule } from 'prosemirror-inputrules';
 import { schema } from './schema';
 import { wrapAligned } from './math-src';
+import { formatValue, lookupValue, ValueMenu, valuesKey } from './values';
 import { getSettings, layoutPx, parseMathMacros } from './settings';
 import { forgetInk, getInk, inkDeferredReason, inkKey, inkStatus, isBoldMath, onInk, requestInk } from './math-ink';
 import { scheduleTypeset } from './typeset-plugin';
@@ -28,11 +29,19 @@ function renderInto(el: HTMLElement, src: string, displayMode: boolean, macros: 
     return;
   }
   try {
-    // KaTeX mutates the macros object (\def support) — hand it a copy.
-    katex.render(src, el, { displayMode, throwOnError: false, macros: { ...macros } });
+    // KaTeX mutates the macros object (\def support) — hand it a copy. A
+    // value in the formula (math-src.ts) previews as its number.
+    katex.render(src, el, { displayMode, throwOnError: false, macros: { ...macros, '\\val': '#2' } });
   } catch {
     el.textContent = src;
   }
+}
+
+/** A value's printed text for the picker's macro, or '' when the key is
+ *  not in the file (the refresh fills it when it is). */
+function lookupValueText(data: unknown, name: string, digits: number | null): string {
+  const value = lookupValue(data, name);
+  return value === undefined ? '' : formatValue(value, digits);
 }
 
 /** NodeView lookup by document element — the editor popover starts and
@@ -380,6 +389,7 @@ export function openMathEditor(view: EditorView, pos: number) {
     if (closed) return;
     closed = true;
     mathEditorOpen = false;
+    valueMenu.close();
     panel.remove();
     // Source unchanged (or already compiled): release the width hold now.
     // A changed source keeps its hold until the new ink settles.
@@ -432,6 +442,47 @@ export function openMathEditor(view: EditorView, pos: number) {
       cancel();
     }
   };
+  // `{{` in the formula picks a value (values.ts), written as the macro
+  // `\val{key}{number}` (math-src.ts) over the `{{query`.
+  let valueQuery: { from: number; to: number } | null = null;
+  const valueMenu = new ValueMenu({
+    values: () => {
+      const st = valuesKey.getState(view.state);
+      return { loaded: !!st?.loaded, data: st?.data ?? null };
+    },
+    pick: (name, digits) => {
+      if (!valueQuery) return;
+      const st = valuesKey.getState(view.state);
+      const value = st?.loaded ? lookupValueText(st.data, name, digits) : '';
+      const macro = `\\val{${name}${digits === null ? '' : `:${digits}`}}{${value}}`;
+      input.setRangeText(macro, valueQuery.from, valueQuery.to, 'end');
+      valueQuery = null;
+      updatePreview();
+      input.focus();
+    },
+  });
+  const findValueQuery = () => {
+    const at = input.selectionStart ?? 0;
+    if (at !== input.selectionEnd) return null;
+    const m = /\{\{([\w.\-:]*)$/.exec(input.value.slice(Math.max(0, at - 80), at));
+    return m ? { from: at - m[0].length, to: at, query: m[1] } : null;
+  };
+  const renderValueMenu = () => {
+    const found = findValueQuery();
+    valueQuery = found && { from: found.from, to: found.to };
+    if (!found) valueMenu.close();
+    else {
+      const r = input.getBoundingClientRect();
+      valueMenu.show(found.query, { left: r.left, bottom: r.bottom });
+    }
+  };
+  input.addEventListener('input', renderValueMenu);
+  input.addEventListener('keydown', (e) => {
+    if (valueMenu.open && valueMenu.handleKey(e)) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  });
   input.addEventListener('keydown', onKeydown);
   labelInput?.addEventListener('keydown', onKeydown);
   // Commit when focus truly leaves the panel (not when tabbing between fields).

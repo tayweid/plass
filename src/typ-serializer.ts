@@ -10,7 +10,7 @@
 import type { Node as PMNode } from 'prosemirror-model';
 import { TableMap } from 'prosemirror-tables';
 import { normalizeSettings, parseMathMacros, type DocSettings, paperInches, DEFAULT_SETTINGS } from './settings';
-import { wrapAligned } from './math-src';
+import { wrapAligned, stripVals } from './math-src';
 import { isPortableCitationKey, parseBibTeX } from './bibtex';
 import { RAW_FONT, codeBlockMetricsEm, effectiveFont, parityMetrics } from './font-registry';
 import { TABLE_DENSITY_INSET_PT, type TableDensity } from './table-density';
@@ -533,9 +533,11 @@ let docBib: { name: string; content: string } | null = null;
 let docBibKeys = new Set<string>();
 let docMacros: Record<string, string> = {};
 
-/** Expand math macros so exported LaTeX compiles anywhere. */
+/** Expand math macros so exported LaTeX compiles anywhere. A value in
+ *  the formula (`\val{key}{text}`, math-src.ts) collapses to its text
+ *  first: the number is what compiles, measures and prints. */
 export function expandMacrosWith(src: string, macros: Record<string, string>): string {
-  let out = src;
+  let out = stripVals(src);
   for (let pass = 0; pass < 10; pass++) {
     let changed = false;
     for (const [name, expansion] of Object.entries(macros)) {

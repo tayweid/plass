@@ -20,10 +20,17 @@
 //
 // Insert: type `{{` and pick a key (with its value beside it); `{{prices.0:2`
 // rounds to two decimals. The rail's Value tool types the `{{`.
+//
+// In a formula (Taylor, 2026-11-06) a value is the macro `\val{key}{text}`
+// (math-src.ts): the key as the span's `name` (`:2` rounds), the number as
+// the second argument, refreshed here as a span's text is; the formula
+// compiles and prints with the macro collapsed to its number. `{{` in the
+// formula editor picks one the same way (math.ts).
 
 import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import type { Mark, MarkSpec, Node as PMNode } from 'prosemirror-model';
+import { valRuns, withValTexts, type ValRun } from './math-src';
 
 /** The file Knuth writes, beside the document. */
 export const VALUES_FILE = 'values.json';
@@ -152,25 +159,53 @@ function valueRuns(doc: PMNode): Array<{ from: number; to: number; mark: Mark; t
   return runs;
 }
 
+/** The formulas in `doc` that hold a value (`\val`, math-src.ts). */
+function mathValRuns(doc: PMNode): Array<{ pos: number; node: PMNode; runs: ValRun[] }> {
+  const out: Array<{ pos: number; node: PMNode; runs: ValRun[] }> = [];
+  doc.descendants((node, pos) => {
+    if (node.type.name !== 'math_inline' && node.type.name !== 'math_display') return !node.isAtom || node.isTextblock || node.isBlock;
+    const runs = valRuns(String(node.attrs.src ?? ''));
+    if (runs.length) out.push({ pos, node, runs });
+    return false;
+  });
+  return out;
+}
+
+/** The value keys `doc` names, in the text and in its formulas, once each. */
+export function valueNames(doc: PMNode): string[] {
+  const names = new Set<string>();
+  for (const run of valueRuns(doc)) names.add(String(run.mark.attrs.name));
+  for (const m of mathValRuns(doc)) for (const run of m.runs) names.add(run.name);
+  return [...names];
+}
+
 function decorate(doc: PMNode, data: unknown, loaded: boolean): DecorationSet {
   const decorations: Decoration[] = [];
-  for (const run of valueRuns(doc)) {
-    const name = run.mark.attrs.name as string;
-    const value = loaded ? lookupValue(data, name) : undefined;
-    const missing = loaded && value === undefined;
-    decorations.push(
-      Decoration.inline(run.from, run.to, {
-        class: missing ? 'ts-value-missing' : 'ts-value-live',
-        title: missing ? `${name}: not in ${VALUES_FILE} — the last value is kept` : `${name} from ${VALUES_FILE}`,
-      }),
-    );
-  }
+  const attrsFor = (names: string[]) => {
+    const missing = loaded ? names.filter((name) => lookupValue(data, name) === undefined) : [];
+    return {
+      class: missing.length ? 'ts-value-missing' : 'ts-value-live',
+      title: missing.length ? `${missing.join(', ')}: not in ${VALUES_FILE} — the last value is kept` : `${names.join(', ')} from ${VALUES_FILE}`,
+    };
+  };
+  for (const run of valueRuns(doc)) decorations.push(Decoration.inline(run.from, run.to, attrsFor([run.mark.attrs.name as string])));
+  for (const m of mathValRuns(doc)) decorations.push(Decoration.node(m.pos, m.pos + m.node.nodeSize, attrsFor(m.runs.map((r) => r.name))));
   return DecorationSet.create(doc, decorations);
 }
 
 /** The transaction that brings every value's text up to date, or null. */
 export function refreshValues(state: EditorState, data: unknown): Transaction | null {
   const tr = state.tr;
+  // Formulas first: an atom's markup keeps its size, so the text runs'
+  // positions hold.
+  for (const m of mathValRuns(state.doc)) {
+    const texts = m.runs.map((run) => {
+      const value = lookupValue(data, run.name);
+      return value === undefined ? run.text : formatValue(value, run.digits) || run.text;
+    });
+    const src = withValTexts(String(m.node.attrs.src), m.runs, texts);
+    if (src !== m.node.attrs.src) tr.setNodeMarkup(m.pos, undefined, { ...m.node.attrs, src });
+  }
   for (const run of valueRuns(state.doc).reverse()) {
     const value = lookupValue(data, run.mark.attrs.name as string);
     if (value === undefined) continue;
@@ -214,57 +249,65 @@ export function insertValue(view: EditorView, active: { from: number; to: number
   return true;
 }
 
-export function valuesPlugin(): Plugin<ValuesState> {
-  let menu: HTMLDivElement | null = null;
-  let items: Array<{ name: string; el: HTMLElement }> = [];
-  let selected = 0;
-  let active: Active | null = null;
-  let digits: number | null = null;
-  let signature = '';
+/** What the picker needs: the values on hand, and what a pick does. */
+export interface ValueMenuHost {
+  values(): { loaded: boolean; data: unknown };
+  pick(name: string, digits: number | null): void;
+}
 
-  const close = () => {
-    menu?.remove();
-    menu = null;
-    items = [];
-    active = null;
-    signature = '';
-  };
+/** The `{{` picker: a list of keys with their values, filtered by what is
+ *  typed after `{{` (`:2` after it rounds), placed under an anchor. The
+ *  editor's plugin and the formula editor (math.ts) each drive one. */
+export class ValueMenu {
+  private menu: HTMLDivElement | null = null;
+  private items: HTMLElement[] = [];
+  private selected = 0;
+  private signature = '';
+  private digits: number | null = null;
 
-  const updateSelection = () => items.forEach((it, i) => it.el.classList.toggle('selected', i === selected));
+  constructor(private readonly host: ValueMenuHost) {}
 
-  const render = (view: EditorView) => {
-    const found = activeQuery(view.state);
-    if (!found) {
-      close();
-      return;
+  get open(): boolean {
+    return this.menu !== null;
+  }
+
+  close(): void {
+    this.menu?.remove();
+    this.menu = null;
+    this.items = [];
+    this.signature = '';
+  }
+
+  /** Show the keys matching `query` (what follows `{{`) at `anchor`. */
+  show(query: string, anchor: { left: number; bottom: number }): void {
+    const [q, dec] = query.split(':');
+    this.digits = dec === undefined ? null : digitsOf(dec);
+    const st = this.host.values();
+    const all = st.loaded && st.data !== null ? flattenValues(st.data) : [];
+    const needle = (q ?? '').toLowerCase();
+    const matches = all.filter((v) => v.name.toLowerCase().includes(needle)).slice(0, 10);
+    const sig = `${query}|${st.loaded}|${matches.map((m) => `${m.name}=${m.value}`).join(',')}`;
+    if (!this.menu) {
+      this.menu = document.createElement('div');
+      this.menu.className = 'ref-menu value-menu';
+      this.menu.setAttribute('role', 'listbox');
+      this.menu.setAttribute('aria-label', 'Values');
+      document.body.appendChild(this.menu);
     }
-    active = found;
-    const [query, dec] = found.query.split(':');
-    digits = dec === undefined ? null : digitsOf(dec);
-    const st = valuesKey.getState(view.state);
-    const all = st?.loaded && st.data !== null ? flattenValues(st.data) : [];
-    const q = (query ?? '').toLowerCase();
-    const matches = all.filter((v) => v.name.toLowerCase().includes(q)).slice(0, 10);
-    const sig = `${found.query}|${st?.loaded}|${matches.map((m) => `${m.name}=${m.value}`).join(',')}`;
-    if (!menu) {
-      menu = document.createElement('div');
-      menu.className = 'ref-menu value-menu';
-      menu.setAttribute('role', 'listbox');
-      menu.setAttribute('aria-label', 'Values');
-      document.body.appendChild(menu);
-    }
-    if (sig !== signature) {
-      signature = sig;
-      selected = 0;
-      items = [];
+    const menu = this.menu;
+    if (sig !== this.signature) {
+      this.signature = sig;
+      this.selected = 0;
+      this.items = [];
       menu.replaceChildren();
       if (!matches.length) {
+        const none = !st.loaded || st.data === null;
         const empty = document.createElement('div');
         empty.className = 'ref-menu-item ref-menu-empty';
-        empty.textContent = !st?.loaded || st.data === null ? `No ${VALUES_FILE} in this document’s folder.` : 'No value by that name.';
+        empty.textContent = none ? `No ${VALUES_FILE} in this document’s folder.` : 'No value by that name.';
         const hint = document.createElement('span');
         hint.className = 'ref-menu-hint';
-        hint.textContent = !st?.loaded || st.data === null ? 'Knuth writes it there when its code runs; open the folder with the document.' : 'Type part of a key; :2 after it rounds to two decimals.';
+        hint.textContent = none ? 'Knuth writes it there when its code runs; open the folder with the document.' : 'Type part of a key; :2 after it rounds to two decimals.';
         empty.append(document.createElement('br'), hint);
         menu.append(empty);
       }
@@ -274,25 +317,81 @@ export function valuesPlugin(): Plugin<ValuesState> {
         el.setAttribute('role', 'option');
         const num = document.createElement('span');
         num.className = 'ref-menu-num';
-        num.textContent = formatValue(v.value, digits);
+        num.textContent = formatValue(v.value, this.digits);
         const label = document.createElement('span');
         label.className = 'ref-menu-label';
         label.textContent = v.name;
+        el.dataset.name = v.name;
         el.append(num, label);
         el.addEventListener('mousedown', (e) => {
           e.preventDefault();
-          if (active) insertValue(view, active, v.name, digits);
-          close();
-          view.focus();
+          this.host.pick(v.name, this.digits);
+          this.close();
         });
         menu.append(el);
-        items.push({ name: v.name, el });
+        this.items.push(el);
       }
-      updateSelection();
+      this.paint();
     }
+    menu.style.left = `${Math.min(anchor.left + window.scrollX, window.innerWidth - 300)}px`;
+    menu.style.top = `${anchor.bottom + 4 + window.scrollY}px`;
+  }
+
+  private paint(): void {
+    this.items.forEach((el, i) => el.classList.toggle('selected', i === this.selected));
+  }
+
+  /** The keys the open menu takes: true when it took `e`. */
+  handleKey(e: KeyboardEvent): boolean {
+    if (!this.menu) return false;
+    if (e.key === 'Escape') {
+      this.close();
+      return true;
+    }
+    if (!this.items.length) return false;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      this.selected = (this.selected + (e.key === 'ArrowDown' ? 1 : this.items.length - 1)) % this.items.length;
+      this.paint();
+      return true;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      const name = this.items[this.selected].dataset.name;
+      if (name !== undefined) this.host.pick(name, this.digits);
+      this.close();
+      return true;
+    }
+    return false;
+  }
+}
+
+export function valuesPlugin(): Plugin<ValuesState> {
+  let active: Active | null = null;
+  let viewRef: EditorView | null = null;
+  const menu = new ValueMenu({
+    values: () => {
+      const st = viewRef ? valuesKey.getState(viewRef.state) : undefined;
+      return { loaded: !!st?.loaded, data: st?.data ?? null };
+    },
+    pick: (name, digits) => {
+      if (viewRef && active) insertValue(viewRef, active, name, digits);
+      viewRef?.focus();
+    },
+  });
+  const close = () => {
+    menu.close();
+    active = null;
+  };
+
+  const render = (view: EditorView) => {
+    viewRef = view;
+    const found = activeQuery(view.state);
+    if (!found) {
+      close();
+      return;
+    }
+    active = found;
     const coords = view.coordsAtPos(found.from);
-    menu.style.left = `${Math.min(coords.left + window.scrollX, window.innerWidth - 300)}px`;
-    menu.style.top = `${coords.bottom + 4 + window.scrollY}px`;
+    menu.show(found.query, coords);
   };
 
   return new Plugin<ValuesState>({
@@ -309,23 +408,9 @@ export function valuesPlugin(): Plugin<ValuesState> {
     props: {
       decorations: (state) => valuesKey.getState(state)?.decorations ?? DecorationSet.empty,
       handleKeyDown(view, e) {
-        if (!menu || !active) return false;
-        if (e.key === 'Escape') {
-          close();
-          return true;
-        }
-        if (!items.length) return false;
-        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-          selected = (selected + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
-          updateSelection();
-          return true;
-        }
-        if (e.key === 'Enter' || e.key === 'Tab') {
-          insertValue(view, active, items[selected].name, digits);
-          close();
-          return true;
-        }
-        return false;
+        if (!menu.open || !active) return false;
+        viewRef = view;
+        return menu.handleKey(e);
       },
     },
     view(view) {

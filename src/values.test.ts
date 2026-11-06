@@ -3,7 +3,9 @@
 // Run: npx tsx src/values.test.ts
 import { EditorState } from 'prosemirror-state';
 import { schema } from './schema';
-import { digitsOf, flattenValues, formatValue, lookupValue, refreshValues } from './values';
+import { digitsOf, flattenValues, formatValue, lookupValue, refreshValues, valueNames } from './values';
+import { stripVals, valRuns, withValTexts } from './math-src';
+import { expandMacrosWith } from './typ-serializer';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = '') {
@@ -61,6 +63,38 @@ console.log('refresh');
   check('the marks stay on the new text, strong included', marked === '[4.5|value][0.123|strong+value][42|value]', marked);
   check('out of the undo history', tr!.getMeta('addToHistory') === false);
   check('nothing to do: no transaction', refreshValues(state.apply(tr!), data) === null);
+}
+
+// A value in a formula: `\val{key}{text}` (math-src.ts).
+{
+  const src = 'Q_d = \\val{a}{100} - \\val{b:2}{2}P + \\val{gone}{7}';
+  const runs = valRuns(src);
+  check('the runs: key, digits, text', runs.map((r) => `${r.name}|${r.digits}|${r.text}`).join(' ') === 'a|null|100 b|2|2 gone|null|7', JSON.stringify(runs));
+  check('the formula collapses to its numbers', stripVals(src) === 'Q_d = 100 - 2P + 7', stripVals(src));
+  check('the macro expander collapses it before any macro', expandMacrosWith(src + ' \\R', { '\\R': '\\mathbb{R}' }) === 'Q_d = 100 - 2P + 7 \\mathbb{R}', expandMacrosWith(src, {}));
+  const rewritten = withValTexts(src, runs, ['120', '1.50', '7']);
+  check('texts replaced in place, the keys kept', rewritten === 'Q_d = \\val{a}{120} - \\val{b:2}{1.50}P + \\val{gone}{7}', rewritten);
+  check('unchanged texts leave the source be', withValTexts(src, runs, runs.map((r) => r.text)) === src);
+
+  const doc = schema.nodes.doc.create(null, [
+    schema.nodes.paragraph.create(null, [
+      schema.text('Demand '),
+      schema.nodes.math_inline.create({ src }),
+      schema.text(' and '),
+      schema.text('9', [schema.marks.value.create({ name: 'a', digits: null })]),
+    ]),
+    schema.nodes.math_display.create({ src: 'P = \\val{p}{3}', label: 'eq', numbered: null }),
+  ]);
+  check('the names, text and formulas, once each', valueNames(doc).join() === 'a,b,gone,p', valueNames(doc).join());
+  const state = EditorState.create({ doc, schema });
+  const tr = refreshValues(state, { a: 120, b: 1.5, p: -4 });
+  const after = tr!.doc;
+  const inline = after.firstChild!.child(1).attrs.src;
+  check('the formula refreshed, the missing key kept', inline === 'Q_d = \\val{a}{120} - \\val{b:2}{1.50}P + \\val{gone}{7}', String(inline));
+  check('the text value beside it refreshed too', after.firstChild!.textContent === 'Demand  and 120', after.firstChild!.textContent);
+  const display = after.child(1);
+  check('a display equation keeps its label, a minus sign as printed', display.attrs.src === 'P = \\val{p}{−4}' && display.attrs.label === 'eq', JSON.stringify(display.attrs));
+  check('nothing to do: no transaction', refreshValues(state.apply(tr!), { a: 120, b: 1.5, p: -4 }) === null);
 }
 
 declare const process: { exitCode?: number };

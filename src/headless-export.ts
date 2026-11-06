@@ -11,7 +11,9 @@ import { schema } from './schema';
 import { mdToDoc, withSidecarBib } from './md-parser';
 import { docToTyp } from './typ-serializer';
 import { FONT_FALLBACK } from './typst-config';
-import { lookupValue, refreshValues } from './values';
+import { lookupValue, refreshValues, valueNames } from './values';
+
+export { valueNames };
 
 export interface HeadlessOpen {
   doc: PMNode;
@@ -32,18 +34,6 @@ export function openMarkdown(text: string, readSidecar: (path: string) => string
     else doc = withSidecarBib(doc, bib).doc;
   }
   return { doc, warnings };
-}
-
-/** The value keys the document names. */
-export function valueNames(doc: PMNode): string[] {
-  const names = new Set<string>();
-  doc.descendants((node) => {
-    if (!node.isText) return true;
-    const mark = node.marks.find((m) => m.type.name === 'value');
-    if (mark) names.add(String(mark.attrs.name));
-    return false;
-  });
-  return [...names];
 }
 
 export interface ValuesApplied {

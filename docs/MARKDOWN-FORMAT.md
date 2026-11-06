@@ -456,6 +456,22 @@ The mean price was [5.4]{.value name=prices.0 digits=2} dollars.
 In Plass, type `{{` to pick a value (`{{slope:2` rounds to two decimals),
 or use the Value tool.
 
+**In a formula** a value is the macro `\val{key}{number}`, the key as the
+span's `name` (`\val{slope:2}{0.12}` rounds) and the number as the second
+argument:
+
+```markdown
+Demand is $Q_d = \val{a}{100} - \val{b}{2} P$.
+```
+
+The number is in the file, so pandoc and any LaTeX reader print it (the
+TeX export defines `\val` as its second argument), and Plass refreshes it
+from `values.json` as it does a value in the text. The formula compiles,
+measures and prints with the macro collapsed to its number. `{{` in the
+formula editor picks a value and writes the macro. Mind the sign: a
+negative number prints as `- \val{b}{−2}`, a minus after a minus, so a
+script writes a magnitude where the formula carries the sign.
+
 **From the command line.** `plass export notes.md` writes `notes.pdf`
 beside the document, read as Plass opens it, with its values brought up
 to date from `values.json` beside it, or from the file `--values` names.

@@ -7,6 +7,7 @@
 // (emitted via filecontents*, so the export stays a single file); booktabs
 // styling maps 1:1, including light/heavy rule weights.
 
+import { VAL_RE } from './math-src';
 import type { Node as PMNode } from 'prosemirror-model';
 import { normalizeSettings, parseMathMacros, type DocSettings, paperInches } from './settings';
 import { TEXT_COLORS, textColorName } from './text-color';
@@ -375,6 +376,7 @@ export function docToTex(doc: PMNode): string {
   let hasRestart = false;
   let usesMultirow = false;
   let usesStrike = false;
+  let usesVal = false;
   let usesColor = false;
   doc.forEach((n) => {
     if (n.type.name === 'doc_title') title = inlineToTex(n);
@@ -388,6 +390,7 @@ export function docToTex(doc: PMNode): string {
       usesMultirow = true;
     }
     if (n.isText && n.marks.some((m) => m.type.name === 'strike')) usesStrike = true;
+    if ((n.type.name === 'math_inline' || n.type.name === 'math_display') && VAL_RE.test(String(n.attrs.src))) usesVal = true;
     if (n.isInline && n.marks.some((m) => m.type.name === 'color')) usesColor = true;
     return true;
   });
@@ -420,6 +423,8 @@ export function docToTex(doc: PMNode): string {
   for (const [name, expansion] of Object.entries(macros)) {
     out += `\\newcommand{\\${name}}{${expansion}}\n`;
   }
+  // A value in a formula (math-src.ts): the macro prints its number.
+  if (usesVal) out += '\\newcommand{\\val}[2]{#2}\n';
   out += '\n';
   if (title) out += `\\title{${title}}\n`;
   if (authors) out += `\\author{${authors}}\n`;

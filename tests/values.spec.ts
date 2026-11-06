@@ -95,3 +95,60 @@ test('{{ opens the picker: a key, :2 for decimals, Enter inserts it; the save wr
   expect(saved).toContain('[4.5]{.value name=prices.0}');
   expect(saved).toContain('Slope [0.123]{.value name=fit.slope digits=3}!');
 });
+
+// A value inside a formula (math-src.ts): `\val{key}{number}` refreshed as
+// the text is, the formula outlined when a key is missing, `{{` in the
+// formula editor picking one, and the macro written to the file.
+const MATH_DOC = `Demand is $Q_d = \\val{a}{0} - \\val{b:2}{0} P$ and supply $Q_s = \\val{gone}{3} P$.
+`;
+
+test('a value in a formula follows values.json, is outlined when missing, and {{ in the formula editor picks one', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean(window.__fm && window.view));
+  await write(page, 'values.json', JSON.stringify({ a: 100, b: 2, qty: 120 }));
+  await write(page, 'paper.md', MATH_DOC);
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    await window.__fm.loadHandle(await root.getFileHandle('paper.md'), root);
+  });
+  await settleLocal(page);
+  const sources = () => page.evaluate(() => {
+    const out: string[] = [];
+    window.view.state.doc.descendants((n) => {
+      if (n.type.name === 'math_inline') out.push(n.attrs.src as string);
+    });
+    return out;
+  });
+  await expect.poll(sources).toEqual(['Q_d = \\val{a}{100} - \\val{b:2}{2.00} P', 'Q_s = \\val{gone}{3} P']);
+  await expect(page.locator('.ProseMirror .math-inline.ts-value-live')).toHaveCount(1);
+  await expect(page.locator('.ProseMirror .math-inline.ts-value-missing')).toHaveCount(1);
+
+  // The file changes: the numbers follow.
+  await write(page, 'values.json', JSON.stringify({ a: 90, b: 1.5, gone: 4, qty: 120 }));
+  await expect.poll(sources, { timeout: 8000 }).toEqual(['Q_d = \\val{a}{90} - \\val{b:2}{1.50} P', 'Q_s = \\val{gone}{4} P']);
+  await expect(page.locator('.ProseMirror .math-inline.ts-value-missing')).toHaveCount(0);
+
+  // `{{` in the formula editor: the picker, Enter writes the macro.
+  await page.locator('.ProseMirror .math-inline').nth(1).click();
+  const editor = page.locator('.math-editor .math-editor-input');
+  await expect(editor).toBeVisible();
+  await editor.press('End');
+  await editor.pressSequentially(' + {{qt');
+  const menu = page.getByRole('listbox', { name: 'Values' });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('option')).toHaveText(['120qty']);
+  await editor.press('Enter');
+  await expect(menu).toBeHidden();
+  await expect(editor).toHaveValue('Q_s = \\val{gone}{4} P + \\val{qty}{120}');
+  await editor.press('Enter');
+  await expect(editor).toHaveCount(0);
+  await expect.poll(sources).toEqual(['Q_d = \\val{a}{90} - \\val{b:2}{1.50} P', 'Q_s = \\val{gone}{4} P + \\val{qty}{120}']);
+
+  await page.evaluate(() => window.__fm.save());
+  const saved = await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    return (await (await root.getFileHandle('paper.md')).getFile()).text();
+  });
+  expect(saved).toContain('$Q_d = \\val{a}{90} - \\val{b:2}{1.50} P$');
+  expect(saved).toContain('$Q_s = \\val{gone}{4} P + \\val{qty}{120}$');
+});
