@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { expect, test } from './fixture';
 import { settleLocal } from './settle';
 
-// PDF, 2 per sheet (src/pdf.ts twoUpSource): the document's pages side by
+// PDF, 2 per sheet (src/pdf-sheets.ts twoUpSource): the document's pages side by
 // side at full size, half Letter on landscape Letter (Taylor, 2026-10-21).
 // The app's own Typst places the PDF's pages as images; the test reads
 // the sheets' count and size back from the file.

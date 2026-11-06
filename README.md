@@ -52,6 +52,12 @@ the network.
 
 Older `.typ` documents still open and save as Typst.
 
+From a terminal, `plass export notes.md` makes the same PDF (with the
+[typst](https://typst.app) command-line tool installed), reading the
+document's values from a `values.json` or the file `--values` names, so
+one document can be printed in many versions by a script. It runs from a
+checkout (below): `npm link` installs the command.
+
 ## What you can write
 
 - **Text**: headings, paragraphs, bold, italic, strikethrough, bulleted
@@ -130,6 +136,7 @@ no accounts, no server and no tracking ([Privacy](./PRIVACY.md)).
 ```sh
 npm ci
 npm run dev      # http://localhost:5199
+npm link         # the `plass` command (plass export notes.md)
 ```
 
 [CONTRIBUTING.md](./CONTRIBUTING.md) has the checks to run before a push.

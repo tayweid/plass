@@ -10,7 +10,7 @@ export default {
     'src/**/*.test.ts',
     'tests/*.spec.ts',
   ],
-  project: ['src/**/*.ts', 'scripts/*.ts', 'tests/*.spec.ts'],
+  project: ['src/**/*.ts', 'cli/*.{ts,js}', 'scripts/*.ts', 'tests/*.spec.ts'],
   // sidecar/pkg is generated wasm glue, not source we own.
   ignore: ['sidecar/pkg/**'],
   ignoreExportsUsedInFile: true,

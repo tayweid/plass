@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "plass": "cli/plass.js"
+  },
   "description": "A true WYSIWYG editor with publication-quality typesetting (oracle layout architecture)",
   "license": "MIT",
   "author": "Taylor J. Weidman",

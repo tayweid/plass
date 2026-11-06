@@ -456,6 +456,19 @@ The mean price was [5.4]{.value name=prices.0 digits=2} dollars.
 In Plass, type `{{` to pick a value (`{{slope:2` rounds to two decimals),
 or use the Value tool.
 
+**From the command line.** `plass export notes.md` writes `notes.pdf`
+beside the document, read as Plass opens it, with its values brought up
+to date from `values.json` beside it, or from the file `--values` names.
+One document can be printed many ways: a script writes a values file per
+version and exports each, so a folder holds one Markdown file, not one
+per version. A key the values file lacks stops the export by name (the
+file's last text would print, silently stale); `--allow-missing` prints
+it anyway. `-o notes.typ` writes the Typst source instead, `--per-sheet 2`
+puts two pages to a sheet. The PDF is the exact compile below, with the
+typst command-line tool (0.14.x or 0.15.x, exact on 0.14.2) and Plass's
+fonts. The command runs from a checkout of Plass: `npm ci && npm link`
+installs it (see Working on Plass in the README).
+
 ## Comments
 
 ~~~markdown
