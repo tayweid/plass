@@ -30,9 +30,11 @@ Paste this into Terminal:
 curl -fsSL https://plass.tayweid.io/install | bash
 ```
 
-This puts Plass in Applications. It works offline after that. Run the same
-line again to update. Needs macOS 13 or later. To make Plass open your
-`.md` files, choose it under **Open With** in a file's **Get Info**.
+This puts Plass in Applications, and the `plass` command on your PATH
+(a link in `/usr/local/bin`, `/opt/homebrew/bin` or `~/.local/bin`; the
+line says which). It works offline after that. Run the same line again
+to update. Needs macOS 13 or later. To make Plass open your `.md` files,
+choose it under **Open With** in a file's **Get Info**.
 
 You can also install the web version as an app: in Chrome, **⋯ → Install
 Plass** on the left rail; in Safari, **File → Add to Dock**.
@@ -52,11 +54,13 @@ the network.
 
 Older `.typ` documents still open and save as Typst.
 
-From a terminal, `plass export notes.md` makes the same PDF (with the
-[typst](https://typst.app) command-line tool installed), reading the
-document's values from a `values.json` or the file `--values` names, so
-one document can be printed in many versions by a script. It runs from a
-checkout (below): `npm link` installs the command.
+From a terminal, `plass export notes.md` makes the same PDF: the command
+the Mac app installs runs the app's own Typst and fonts, with nothing
+else installed. It reads the document's values from a `values.json` or
+the file `--values` names, so one document can be printed in many
+versions by a script; `-o notes.typ` writes the Typst source, `--per-sheet
+2` puts two pages to a sheet. (From a checkout, `npm link` installs the
+same command; below.)
 
 ## What you can write
 
@@ -136,8 +140,13 @@ no accounts, no server and no tracking ([Privacy](./PRIVACY.md)).
 ```sh
 npm ci
 npm run dev      # http://localhost:5199
-npm link         # the `plass` command (plass export notes.md)
+npm link         # the `plass` command from the checkout (plass export notes.md)
 ```
+
+`npm run build` makes the site and, beside it, `dist/cli/plass.mjs`: the
+`plass` command as Plass.app carries it, one file run by the app's own
+Electron as Node (`cli/bundle.ts`, `vite.cli.config.ts`); `npm run
+app:build` installs the app and links the command onto PATH.
 
 [CONTRIBUTING.md](./CONTRIBUTING.md) has the checks to run before a push.
 [PORT.md](./PORT.md) and [PAGE-PORT.md](./PAGE-PORT.md) explain how the

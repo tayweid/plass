@@ -6,6 +6,7 @@ export default {
   // need to be listed explicitly.
   entry: [
     'src/differ.ts',
+    'cli/bundle.ts',
     'scripts/*.ts',
     'src/**/*.test.ts',
     'tests/*.spec.ts',

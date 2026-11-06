@@ -1,9 +1,10 @@
 // The export without the editor (Taylor, 2026-11-06, for the command line):
 // a Markdown file read the way the app opens it, its values brought up to
 // date from a values.json, and the Typst source the PDF export compiles.
-// The command line (cli/plass.ts) spawns the typst binary on what this
-// returns; the app's own export (pdf.ts) compiles the same `docToTyp` call
-// in its worker. Nothing here touches the DOM.
+// The command line (cli/export.ts) compiles what this returns with the
+// app's own compiler under Node (typst-node.ts); the app's export (pdf.ts)
+// compiles the same `docToTyp` call in its worker. Nothing here touches
+// the DOM.
 
 import { EditorState } from 'prosemirror-state';
 import type { Node as PMNode } from 'prosemirror-model';

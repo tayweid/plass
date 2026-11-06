@@ -10,6 +10,7 @@
   "elsewhere": "Elsewhere, Plass runs in Chrome at https://plass.tayweid.io.",
   "defaultDocument": "Untitled.md",
   "autosave": true,
+  "commands": [{ "name": "plass", "main": "cli/plass.mjs" }],
   "window": {
     "width": 1100,
     "height": 800,

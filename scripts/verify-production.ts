@@ -1,5 +1,7 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { contentSecurityPolicy } from '../src/security-policy';
 import { MITEX_WASM_SHA256 } from '../src/math-convert';
@@ -96,5 +98,28 @@ assert(
   ),
   'built sidecar WASM differs from the provenance-checked source artifact',
 );
+
+
+// The `plass` command as Plass.app carries it (cli/bundle.ts → dist/cli/
+// plass.mjs, vite.cli.config.ts): one file beside the page, run here as
+// the app's Electron runs it as Node, on a document with a value and a
+// formula, finding the compiler, the fonts and the math converter among
+// the page's files. The PDF it writes is checked as a PDF.
+const command = join(dist, 'cli', 'plass.mjs');
+assert(statSync(command).size > 100_000, 'dist/cli/plass.mjs, the plass command, is missing or empty');
+const commandDir = readdirSync(join(dist, 'cli'));
+assert(commandDir.length === 1, `dist/cli holds more than the command: ${commandDir.join(', ')}`);
+const scratch = mkdtempSync(join(tmpdir(), 'plass-verify-'));
+try {
+  writeFileSync(join(scratch, 'notes.md'), '# Verified\n\nThe price is [4.5]{.value name="price" digits=2} and $x^2$ holds.^[A note.]\n');
+  writeFileSync(join(scratch, 'values.json'), '{"price": 7.25}\n');
+  const run = spawnSync(process.execPath, [command, 'export', join(scratch, 'notes.md'), '-o', join(scratch, 'out', 'notes.pdf')], { encoding: 'utf8' });
+  assert(run.status === 0, `the plass command failed (${run.status}): ${run.stdout}${run.stderr}`);
+  const pdf = readFileSync(join(scratch, 'out', 'notes.pdf'));
+  assert(pdf.subarray(0, 5).equals(Buffer.from('%PDF-')), 'the plass command wrote no PDF');
+  assert(/LibertinusSerif-Regular|NewCM10-Regular|STIXTwoText-Regular|texgyrepagella-regular/i.test(pdf.toString('latin1')), 'the plass command did not print with the bundled fonts');
+} finally {
+  rmSync(scratch, { recursive: true, force: true });
+}
 
 console.log('production security artifact verified');

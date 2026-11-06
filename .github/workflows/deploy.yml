@@ -164,7 +164,7 @@ jobs:
       # day: a sibling clone needs the exact Electron). Its own checkout
       # carries Electron and the packager; Plass's node_modules are not
       # needed here.
-      CLAERBOUT_TAG: v0.2.20
+      CLAERBOUT_TAG: v0.2.22
       CLAERBOUT_SHELL: ${{ github.workspace }}/../claerbout
       # The packager fetches Electron for each architecture itself.
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
@@ -191,7 +191,16 @@ jobs:
       # document fronts the window that has it (shell 0.2.1's focus
       # request; an older shell is said and skipped).
       - name: Install it with the install line
-        run: PLASS_SITE="$PWD/published" PLASS_APP="$RUNNER_TEMP/Plass.app" PLASS_SIBLINGS="" bash public/install
+        run: PLASS_SITE="$PWD/published" PLASS_APP="$RUNNER_TEMP/Plass.app" PLASS_SIBLINGS="" PLASS_BIN="$RUNNER_TEMP/bin" bash public/install
+      # The smoke test runs the bundle's own command too (the app's
+      # Electron as Node on dist/cli/plass.mjs, the same PDF as the
+      # checkout's); this is the link the install line put on PATH.
+      - name: Run the plass command the install line linked
+        run: |
+          test -L "$RUNNER_TEMP/bin/plass"
+          printf '# Linked\n\nA document exported by the linked command, $x^2$ included.\n' > "$RUNNER_TEMP/linked.md"
+          "$RUNNER_TEMP/bin/plass" export "$RUNNER_TEMP/linked.md"
+          head -c 5 "$RUNNER_TEMP/linked.pdf" | grep -q '%PDF-'
       - name: Smoke-test the installed app
         run: node app/smoke.mjs "$RUNNER_TEMP/Plass.app"
       # The page's download: the app completing itself on its first launch,

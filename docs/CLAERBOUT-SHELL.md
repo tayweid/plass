@@ -291,6 +291,41 @@ install section says macOS 13 and the Electron download.
 - macOS 13 or later (Electron 44). The Swift app's floor was lower;
   README's install section says so.
 
+DONE 2026-11-06, the `plass` command inside the app (Taylor, 2026-11-06:
+the command must not be a checkout tool; it ships with the app, on the
+pipeline the viewer's Export uses, nothing installed). Settled first:
+the app's compiler runs under Node. `@myriaddreamin/typst-ts-web-compiler`
+0.7.0 is wasm-bindgen's web target, and it instantiates from its bytes
+under Node 22 and under Electron 44's Node (`ELECTRON_RUN_AS_NODE=1`)
+with the fonts `src/typst-config.ts` lists read from disk by the same
+font-loader provider the worker uses; the worker's protocol is the
+browser's isolation, not something the compiler needs, so
+`src/typst-node.ts` drives typst.ts in process. One source compiles to
+the same bytes under Node, under Electron's Node and in the app's worker,
+but for the compile's stamps (the dates and the ids Typst derives from
+them, `pdfStampsBlanked` in `src/pdf-sheets.ts`), which
+`tests/cli-export.spec.ts` checks against Export › PDF. The typst binary
+is gone from the command. The bundle: `vite build --config
+vite.cli.config.ts` (part of `npm run build`) makes `dist/cli/plass.mjs`
+from `cli/bundle.ts`, everything in one file for Node; the compiler's
+wasm, the math converter's wasm and the fonts are the page's own, found
+beside the bundle among `dist/assets` and `dist/fonts`, so the app carries
+nothing twice (`scripts/verify-production.ts` runs it). The shell (0.2.22)
+gained `commands` in the config: `package.mjs` writes
+`Contents/Resources/bin/<name>`, a bash script that follows the link it
+was run through back to the bundle and execs the bundle's launcher with
+`ELECTRON_RUN_AS_NODE=1` on `Resources/web/cli/plass.mjs` (through the
+launcher, so an app without Electron yet completes itself first), and
+`link-commands.sh`, which the install line runs once the app is in place
+and `package.mjs --install` after installing: a link in `/usr/local/bin`,
+`/opt/homebrew/bin` or `~/.local/bin`, the first on PATH and writable
+(`PLASS_BIN` names the folder; the deploy's smoke uses it). `app/plass.json`
+declares `{"name": "plass", "main": "cli/plass.mjs"}`; `app/smoke.mjs`
+runs the bundle's command on the document it saved and holds it to the
+checkout's `dist/cli` bytes; the deploy's app job runs the linked command
+too. The checkout's `cli/plass.js` (tsx) runs the same `cli/export.ts` on
+the checkout's node_modules wasm and `public/fonts`.
+
 ### 6. Tests
 
 DONE 2026-09-30 for what does not wait on step 3: the `webkit-app`

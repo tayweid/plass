@@ -480,10 +480,16 @@ version and exports each, so a folder holds one Markdown file, not one
 per version. A key the values file lacks stops the export by name (the
 file's last text would print, silently stale); `--allow-missing` prints
 it anyway. `-o notes.typ` writes the Typst source instead, `--per-sheet 2`
-puts two pages to a sheet. The PDF is the exact compile below, with the
-typst command-line tool (0.14.x or 0.15.x, exact on 0.14.2) and Plass's
-fonts. The command runs from a checkout of Plass: `npm ci && npm link`
-installs it (see Working on Plass in the README).
+puts two pages to a sheet. The PDF is the one Export › PDF writes: the
+same source, compiled by the app's own Typst (0.14.2) with Plass's fonts,
+the same bytes but for the compile's date. The command comes with the
+Mac app (the install line puts it on PATH; nothing else to install) and
+runs the app's own Electron as Node on the export bundled inside the
+app; a checkout installs the same command with `npm ci && npm link` (see
+Working on Plass in the README). Figures are files beside the document,
+as the app keeps them; a figure that is not there, or an image on the
+web, stops the export by name (the app would print a placeholder and
+say so, which a script cannot hear).
 
 ## Comments
 

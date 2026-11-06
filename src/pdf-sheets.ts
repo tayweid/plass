@@ -1,7 +1,8 @@
 // Sheets of a PDF Typst wrote, without the compiler (Taylor, 2026-10-21):
 // its page count, and the two-up source that puts two pages to a sheet.
-// Node-safe (the command line, cli/plass.ts, compiles the two-up source
-// with the typst binary); pdf.ts compiles it in the app's worker.
+// Node-safe (the command line, cli/export.ts, compiles the two-up source
+// with the app's compiler under Node); pdf.ts compiles it in the app's
+// worker.
 
 /** The page count of a PDF Typst wrote: its page tree's `/Count` (an
  *  outline's `/Count` is in a dictionary of another type), else its page
@@ -34,4 +35,20 @@ export function twoUpSource(path: string, pages: number, widthIn: number, height
     '}',
     '',
   ].join('\n');
+}
+
+/** A PDF Typst wrote with its stamps blanked: the creation and
+ *  modification dates (the compile's clock) and the identifiers Typst
+ *  derives from them (the XMP instance and document ids, the trailer's
+ *  /ID). Two compiles of one source by one compiler are then equal byte
+ *  for byte, which is how the `plass` command is checked against the
+ *  app's Export (tests/cli-export.spec.ts, app/smoke.mjs). */
+export function pdfStampsBlanked(data: Uint8Array): string {
+  let text = '';
+  for (let i = 0; i < data.length; i += 0x8000) text += String.fromCharCode(...data.subarray(i, i + 0x8000));
+  return text
+    .replace(/\(D:\d{14}Z\)/g, '(D:)')
+    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})/g, 'T')
+    .replace(/<xmpMM:(InstanceID|DocumentID)>[^<]*/g, '<xmpMM:$1>')
+    .replace(/\/ID \[\([^)]*\) \([^)]*\)\]/g, '/ID []');
 }

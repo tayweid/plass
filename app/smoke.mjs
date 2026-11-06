@@ -16,9 +16,11 @@
 //   node app/smoke.mjs                 # the checkout: the shell on dist/
 //   node app/smoke.mjs path/to/Plass.app
 //
-// Needs dist/ (npx vite build) and the shell (app/shell-path.mjs). The
-// open relies on the shell's drop-based launch (docs/CLAERBOUT-SHELL.md,
-// step 1): the page reports `ready` and the shell drops the file on it.
+// Needs dist/ (npm run build: the page and dist/cli/plass.mjs, the
+// command) and the shell (app/shell-path.mjs). The open relies on the
+// shell's drop-based launch (docs/CLAERBOUT-SHELL.md, step 1): the page
+// reports `ready` and the shell drops the file on it. Last, the `plass`
+// command: the bundle's own against the checkout's dist/cli.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -637,6 +639,37 @@ if (hasHistory) {
     console.log('smoke: history: the recent papers put it away on the press and opened their menu over the paper');
   }
 } else console.log('smoke: the shell has no history view; the rewind is not checked');
+
+// The `plass` command (cli/export.ts; the shell's README, Commands): the
+// bundle's Contents/Resources/bin/plass runs the app's own Electron as Node
+// on the command bundled beside the page (Resources/web/cli/plass.mjs),
+// which compiles with the page's own wasm and fonts. On the document just
+// saved: a PDF of its pages (two or more), the same bytes as the
+// checkout's dist/cli/plass.mjs makes under node but for the compile's
+// stamps (the dates and the ids Typst derives from them: src/pdf-sheets.ts
+// pdfStampsBlanked).
+const stamps = (pdf) => pdf.toString('latin1')
+  .replace(/\(D:\d{14}Z\)/g, '(D:)')
+  .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})/g, 'T')
+  .replace(/<xmpMM:(InstanceID|DocumentID)>[^<]*/g, '<xmpMM:$1>')
+  .replace(/\/ID \[\([^)]*\) \([^)]*\)\]/g, '/ID []');
+const pages = (pdf) => Number(/\/Type\s*\/Pages\b[^>]*?\/Count\s+(\d+)|\/Count\s+(\d+)[^>]*?\/Type\s*\/Pages\b/.exec(pdf.toString('latin1'))?.slice(1).find(Boolean));
+const exported = (command, args, out) => {
+  const run = spawnSync(command, [...args, 'export', doc, '-o', out, '-q'], { encoding: 'utf8' });
+  if (run.status !== 0) return fail(`${path.basename(command)} export failed (${run.status}):\n${run.stdout}${run.stderr}`);
+  const pdf = fs.readFileSync(out);
+  if (!pdf.subarray(0, 5).equals(Buffer.from('%PDF-'))) return fail(`${path.basename(command)} export wrote no PDF at ${out}`);
+  if (!(pages(pdf) >= 2)) return fail(`${path.basename(command)} export wrote ${pages(pdf)} page(s), not the document's`);
+  return pdf;
+};
+const fromCheckout = await exported(process.execPath, [path.join(repo, 'dist', 'cli', 'plass.mjs')], path.join(work, 'checkout.pdf'));
+if (bundle) {
+  const command = path.join(bundle, 'Contents', 'Resources', 'bin', 'plass');
+  if (!fs.existsSync(command)) await fail(`the bundle has no plass command at ${command}`);
+  const fromApp = await exported(command, [], path.join(work, 'app.pdf'));
+  if (stamps(fromApp) !== stamps(fromCheckout)) await fail(`the app's plass command and the checkout's dist/cli/plass.mjs wrote different PDFs (${fromApp.length} and ${fromCheckout.length} bytes)`);
+  console.log(`smoke: the plass command: ${fromApp.length} bytes, ${pages(fromApp)} pages, the checkout's bytes`);
+} else console.log(`smoke: the plass command (dist/cli): ${fromCheckout.length} bytes, ${pages(fromCheckout)} pages`);
 
 await app.close();
 fs.rmSync(work, { recursive: true, force: true });

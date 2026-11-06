@@ -79,7 +79,7 @@ function hex(bytes: ArrayBuffer): string {
 
 /** The vendored wasm's bytes: the Vite asset in the app, the file under node. */
 async function wasmBytes(): Promise<ArrayBuffer> {
-  if (import.meta.env) {
+  if (import.meta.env && !isNode()) {
     const { default: url } = await import('./mitex/mitex.wasm?url');
     const response = await fetch(url, { credentials: 'same-origin', redirect: 'error' });
     if (!response.ok) throw new Error(`the math converter returned HTTP ${response.status}`);
@@ -92,14 +92,22 @@ async function wasmBytes(): Promise<ArrayBuffer> {
   return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
 }
 
+/** A Node process (the command line, the unit tests): the wasm is a file
+ * beside this module, never a Vite asset to fetch, wherever Vite put the
+ * module (the bundled `plass` command is a Vite build run under Node). */
+function isNode(): boolean {
+  return typeof process === 'object' && typeof process.versions?.node === 'string';
+}
+
 /** Load the converter once. Resolves when `convertMath` may be called;
  * rejects (and may be retried) when the wasm cannot be loaded or fails its
- * integrity check. */
-export function ensureMathConverter(): Promise<void> {
+ * integrity check. `source` reads the wasm from somewhere else (the
+ * `plass` command, whose bundle has it beside the app's other assets). */
+export function ensureMathConverter(source: () => Promise<ArrayBuffer> = wasmBytes): Promise<void> {
   if (plugin) return Promise.resolve();
   if (!loading) {
     loading = (async () => {
-      const bytes = await wasmBytes();
+      const bytes = await source();
       const digest = hex(await crypto.subtle.digest('SHA-256', bytes));
       if (digest !== MITEX_WASM_SHA256) throw new Error('the math converter failed its integrity check');
       const { module, instance } = await WebAssembly.instantiate(bytes, imports);
