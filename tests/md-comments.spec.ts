@@ -15,7 +15,7 @@ const FILLER =
 // Every HTML comment in a .md file is an editorial comment: it goes
 // through the editor — the load, the edit-time normalizers (which turn a
 // prose `--` into an en dash and would otherwise break `<!--`), the save —
-// as a "Comment · Not printed" strip, and comes back verbatim. Any other
+// as a shaded strip marked with the comment glyph, and comes back verbatim. Any other
 // HTML block (the styled empty `<div>`) is an island shown as a code block,
 // also verbatim. MD_FILE=path runs the same check on a real file (whose
 // nested comments may move to a block boundary on that first save).

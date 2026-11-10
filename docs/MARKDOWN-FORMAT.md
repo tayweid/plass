@@ -498,7 +498,7 @@ say so, which a script cannot hear).
 ~~~
 
 Every HTML comment is an editorial comment. Plass keeps it in the file and
-shows it as a "Comment · Not printed" strip. It is left out of the PDF,
+shows it as a shaded strip marked with a comment icon. It is left out of the PDF,
 the Typst export and the LaTeX export, and kept in a Markdown export. Put
 it on its own lines, with a blank line before and after. A comment cannot
 contain `-->`: write `--&gt;` instead, and Plass shows it as `-->`. The old

@@ -162,3 +162,80 @@ test('a comment refuses a footnote in its table; Backspace under a table goes in
   await page.keyboard.press('Backspace');
   expect(await notes(page)).toEqual([['Before\nAfter']]);
 });
+
+test('an empty line beside a comment’s table takes no room; ↓ from the last row types below the table', async ({ page }) => {
+  await openMd(page, 'space.md', '# Notes\n\nA paragraph.\n\n<!--\n| A | B |\n|---|---|\n| x | y |\n-->\n\nEnd.\n');
+  expect(await notes(page)).toEqual([['', 'T(ABxy)', '']]);
+  const gaps = () =>
+    page.evaluate(() => {
+      const note = document.querySelector<HTMLElement>('.ProseMirror .editor-comment')!;
+      const box = note.getBoundingClientRect();
+      const table = note.querySelector<HTMLElement>('.editor-comment-body table')!.getBoundingClientRect();
+      const lines = [...note.querySelectorAll<HTMLElement>('.editor-comment-text')].map((l) => l.getBoundingClientRect().height);
+      const fontPx = parseFloat(getComputedStyle(note.querySelector('.editor-comment-text')!).fontSize);
+      return { above: table.top - box.top, below: box.bottom - table.bottom, lines, fontPx };
+    });
+  const before = await gaps();
+  // The lines are there, holding no room: only the table's margins (and
+  // the strip's own padding below) are space.
+  expect(before.lines).toEqual([0, 0]);
+  expect(before.above).toBeLessThan(before.fontPx);
+  // The same space above and below (the strip's padding; a border each).
+  expect(Math.abs(before.above - before.below)).toBeLessThan(1);
+
+  // ↓ from the table's last row: the caret on the line under it; typing
+  // makes it a line again.
+  // (ProseMirror reads a click's caret on selectionchange, a moment later.)
+  const inCell = (text: string) =>
+    expect.poll(() => page.evaluate(() => window.view.state.selection.$from.parent.textContent)).toBe(text);
+  await page.locator('.ProseMirror .editor-comment-body table td').last().click();
+  await inCell('y');
+  await page.keyboard.press('End');
+  await page.keyboard.press('ArrowDown');
+  expect(await page.evaluate(() => window.view.state.selection.$from.parent.type.name)).toBe('comment_text');
+  await page.keyboard.type('More');
+  expect(await notes(page)).toEqual([['', 'T(ABxy)', 'More']]);
+  const after = await gaps();
+  expect(after.lines[0]).toBe(0);
+  expect(after.lines[1]).toBeGreaterThan(before.fontPx);
+
+  // ↑ from the first row: the (empty) line over the table.
+  await page.locator('.ProseMirror .editor-comment-body table th').first().click();
+  await inCell('A');
+  await page.keyboard.press('Home');
+  await page.keyboard.press('ArrowUp');
+  expect(await page.evaluate(() => {
+    const { $from } = window.view.state.selection;
+    return [$from.parent.type.name, $from.index(1)];
+  })).toEqual(['comment_text', 0]);
+  await page.keyboard.type('Top');
+  expect(await notes(page)).toEqual([['Top', 'T(ABxy)', 'More']]);
+});
+
+test('a comment is marked by its glyph in the left margin, always shown, taking no room', async ({ page }) => {
+  await openMd(page, 'mark.md', '# Notes\n\nA paragraph.\n\n<!-- A plain note. -->\n\nEnd.\n');
+  const note = page.locator('.ProseMirror .editor-comment');
+  const read = () =>
+    note.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const line = el.querySelector('.editor-comment-text')!.getBoundingClientRect();
+      const glyph = el.querySelector('.editor-comment-header svg')!.getBoundingClientRect();
+      const header = el.querySelector<HTMLElement>('.editor-comment-header')!;
+      return {
+        height: box.height,
+        above: line.top - box.top,
+        below: box.bottom - line.bottom,
+        glyphInLeftMargin: glyph.right <= line.left && glyph.left >= box.left,
+        glyphLevelWithLine: Math.abs((glyph.top + glyph.bottom) / 2 - (line.top + line.bottom) / 2) < 2,
+        shown: getComputedStyle(header).opacity === '1' && getComputedStyle(header).visibility === 'visible',
+        words: header.textContent,
+      };
+    });
+  await page.mouse.move(5, 5);
+  const rest = await read();
+  expect(rest).toMatchObject({ glyphInLeftMargin: true, glyphLevelWithLine: true, shown: true, words: '' });
+  // The same space above the note's line as below it.
+  expect(Math.abs(rest.above - rest.below)).toBeLessThan(1);
+  await note.hover();
+  expect((await read()).height).toBe(rest.height);
+});

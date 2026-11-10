@@ -8,14 +8,18 @@
    own painted height — the height the paginator subtracts back out. The
    negative horizontal margins reach the sheet edges through #editor's
    page-margin padding; the matching padding puts the text back on the
-   column. Never hide overflow: selection and caret must stay visible. */
+   column. Never hide overflow: selection and caret must stay visible.
+   The same padding above and below (Taylor, 2026-11-09: "the top and
+   bottom margins are the same"), and no header row: the comment glyph
+   sits in the left margin. */
 .ProseMirror .editor-comment {
   --comment-bg: #eeeadf;
   --comment-border: #cfc2a7;
   --comment-ink: #5a4d37;
   box-sizing: border-box;
   margin: 0 calc(-1 * var(--page-margin-right, 1in)) 0 calc(-1 * var(--page-margin-left, 1in));
-  padding: 0.55em var(--page-margin-right, 1in) 0.7em var(--page-margin-left, 1in);
+  position: relative;
+  padding: 0.5em var(--page-margin-right, 1in) 0.5em var(--page-margin-left, 1in);
   border-top: 1px dashed var(--comment-border);
   border-bottom: 1px dashed var(--comment-border);
   background: var(--comment-bg);
@@ -23,15 +27,23 @@
   text-indent: 0;
 }
 
-/* Header: a comment glyph and "Comment" on the left; "NOT PRINTED" on
-   the right. Chrome, not content (contenteditable=false). */
+/* The note's mark: the comment glyph in the left margin, level with
+   the note's first line, at all times (Taylor, 2026-11-09). Out of the
+   flow, so it takes no room. Chrome, not content (contenteditable=false),
+   never in a press's way. */
 .ProseMirror .editor-comment-header {
+  position: absolute;
+  top: 0.5em;
+  left: 0;
+  width: var(--page-margin-left, 1in);
+  height: calc(0.86em * 1.45);
+  box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 0.5em;
-  margin-bottom: 0.4em;
-  font: 500 12px/1.4 var(--sans);
+  justify-content: flex-end;
+  padding-right: 10px;
   color: var(--comment-ink);
+  pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -42,26 +54,11 @@
   flex: none;
 }
 
-.ProseMirror .editor-comment-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5em;
-}
-
-.ProseMirror .editor-comment-tag {
-  margin-left: auto;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  opacity: 0.8;
-}
-
 /* A note's tables (editor-comments.ts): the page's own table, drawn by
    the browser in the note's quieter face, a little air above and below.
    Never printed, so nothing here is held to Typst's geometry. */
 .ProseMirror .editor-comment-body > :not(.editor-comment-text) {
-  margin: 0.35em 0 0.45em;
+  margin: 0.4em 0;
   font-family: var(--sans);
   font-size: 0.86em;
 }
@@ -78,6 +75,27 @@
   min-height: 1.45em;
   text-align: left;
   caret-color: var(--comment-ink);
+}
+
+/* An empty line beside a note's table takes no room: the table's own
+   margins are the space above and below it. The line is there for the
+   caret (commentShape keeps one before and after every table; ↓ from the
+   last row lands in it) and is a full line again once it holds text. An
+   empty textblock is ProseMirror's one trailing <br>. */
+.ProseMirror .editor-comment-body > :not(.editor-comment-text) + .editor-comment-text:has(> br.ProseMirror-trailingBreak:only-child),
+.ProseMirror .editor-comment-body > .editor-comment-text:has(> br.ProseMirror-trailingBreak:only-child):has(+ :not(.editor-comment-text)) {
+  min-height: 0;
+  height: 0;
+}
+
+/* A table that opens or closes the note (the line beside it empty) has
+   no margin on that side: the note's padding is the space, as for text. */
+.ProseMirror .editor-comment-body > .editor-comment-text:first-child:has(> br.ProseMirror-trailingBreak:only-child) + :not(.editor-comment-text) {
+  margin-top: 0;
+}
+
+.ProseMirror .editor-comment-body > :not(.editor-comment-text):has(+ .editor-comment-text:last-child > br.ProseMirror-trailingBreak:only-child) {
+  margin-bottom: 0;
 }
 
 /* Classic mode: a note between two paragraphs is invisible to print, so

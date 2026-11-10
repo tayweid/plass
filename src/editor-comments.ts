@@ -70,19 +70,18 @@ export class EditorCommentView implements NodeView {
     this.dom = document.createElement('div');
     this.dom.className = 'editor-comment';
     this.dom.setAttribute('data-editor-comment', '');
-    // The label is chrome, not content: never editable, never parsed back
-    // into the note. No delete button (removed 2026-11-09): Backspace in
-    // an emptied note deletes it.
+    this.dom.setAttribute('aria-label', 'Comment, not printed');
+    // The mark is chrome, not content: the comment glyph in the left
+    // margin, level with the note's first line, never editable, never
+    // parsed back into the note (Taylor, 2026-11-09: the glyph only, no
+    // "Comment" or "Not printed", shown at all times; editor-comments
+    // .css). No delete button (removed 2026-11-09): Backspace in an
+    // emptied note deletes it.
     this.header = document.createElement('div');
     this.header.className = 'editor-comment-header';
     this.header.contentEditable = 'false';
-    const label = document.createElement('span');
-    label.className = 'editor-comment-label';
-    label.innerHTML = `${ICON_COMMENT}<span>Comment</span>`;
-    const tag = document.createElement('span');
-    tag.className = 'editor-comment-tag';
-    tag.textContent = 'Not printed';
-    this.header.append(label, tag);
+    this.header.setAttribute('aria-hidden', 'true');
+    this.header.innerHTML = ICON_COMMENT;
     // Its lines and tables.
     this.contentDOM = document.createElement('div');
     this.contentDOM.className = 'editor-comment-body';
@@ -172,16 +171,42 @@ const backspaceInEditorComment: Command = (state, dispatch) => {
   return true;
 };
 
+/** ↓ from a note's table's last row (↑ from its first) goes to the
+ *  note's line under (over) the table. An empty one takes no room
+ *  (editor-comments.css), so the caret's motion by geometry
+ *  (editing.ts verticalCaret) would pass it by and leave the note. */
+function lineBesideTable(dir: 1 | -1): Command {
+  return (state, dispatch, view) => {
+    const sel = state.selection;
+    if (!view || !(sel instanceof TextSelection) || !sel.empty || !enclosingNote(state)) return false;
+    const $h = sel.$head;
+    // doc > note > table > row > cell > paragraph
+    if ($h.depth !== 5 || $h.node(2).type !== schema.nodes.table) return false;
+    const table = $h.node(2);
+    const cell = $h.node(4);
+    const lastRow = dir > 0 ? $h.index(2) === table.childCount - 1 : $h.index(2) === 0;
+    const edgeBlock = dir > 0 ? $h.index(4) === cell.childCount - 1 : $h.index(4) === 0;
+    if (!lastRow || !edgeBlock || !view.endOfTextblock(dir > 0 ? 'down' : 'up')) return false;
+    const beside = Selection.near(state.doc.resolve(dir > 0 ? $h.after(2) : $h.before(2)), dir);
+    if (!(beside.$head.parent.type === lineType())) return false;
+    dispatch?.(state.tr.setSelection(beside).scrollIntoView());
+    return true;
+  };
+}
+
 /** Registered before the general editing keymap, whose Mod-Enter inserts a
  *  page break. Inside a note: Enter/Shift-Enter newline, Mod-Enter exits,
- *  Backspace at the start deletes an empty note. Elsewhere every binding
- *  declines, so the ordinary commands run. */
+ *  Backspace at the start deletes an empty note, ↓/↑ leave a table for
+ *  the note's line beside it. Elsewhere every binding declines, so the
+ *  ordinary commands run. */
 export function editorCommentKeymap(): Plugin {
   return keymap({
     Enter: newlineInEditorComment,
     'Shift-Enter': newlineInEditorComment,
     'Mod-Enter': exitEditorComment,
     Backspace: backspaceInEditorComment,
+    ArrowDown: lineBesideTable(1),
+    ArrowUp: lineBesideTable(-1),
   });
 }
 
