@@ -31,6 +31,15 @@ export const TEXT_COLORS = {
 } as const;
 export type TextColorName = keyof typeof TEXT_COLORS;
 
+/** Links (Taylor, 2026-11-09: "links should always show up as that blue
+ *  link text, everywhere and should be clickable everywhere"): the
+ *  browser's link blue, underlined, on the page (style.css, a Markdown
+ *  link's <a> and a bare URL's decoration, link-open.ts) and in print
+ *  (`parityRules`' show rule on every web or mail link, a Markdown link
+ *  printed as `#link`, a bare URL as Typst links it); TeX colors its
+ *  `\href`s with it. Paint only, as the red is. */
+export const LINK_COLOR = { css: '#0000ee', typst: 'rgb("#0000ee")', tex: 'plasslink' } as const;
+
 /** A palette name from text (a class, an attribute, a Typst fill), or null. */
 export function textColorName(value: unknown): TextColorName | null {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(TEXT_COLORS, value) ? (value as TextColorName) : null;

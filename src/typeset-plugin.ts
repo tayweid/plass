@@ -2731,6 +2731,8 @@ class TypesetView {
     };
 
     state.doc.descendants((node, pos) => {
+      // A note's table never prints: the browser lays it out.
+      if (node.type.name === 'editor_comment') return false;
       if (node.type.name === 'table') {
         // Explicit column tracks use the same breaker as Typst. Browser
         // wrapping alone can change a row's height and its page boundary.

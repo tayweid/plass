@@ -8,7 +8,8 @@ import { typToDoc } from './typ-parser';
 import { mdToDoc } from './md-parser';
 import { docToMd } from './md-serializer';
 import { docToTex } from './tex-serializer';
-import { commentToMd, commentToTyp, readMdComment, readMdComments, readTypComment } from './editor-comments-format';
+import { commentRefusal, commentToMd, commentToTyp, readMdComment, readMdComments, readTypComment } from './editor-comments-format';
+import { migrateNoteJSON } from './editor-comments';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = '') {
@@ -17,7 +18,7 @@ function check(name: string, ok: boolean, detail = '') {
 }
 
 const p = (text: string) => schema.nodes.paragraph.create(null, text ? [schema.text(text)] : []);
-const note = (text: string) => schema.nodes.editor_comment.create(null, text ? [schema.text(text)] : []);
+const note = (text: string) => schema.nodes.editor_comment.create(null, schema.nodes.comment_text.create(null, text ? [schema.text(text)] : []));
 const docOf = (...blocks: ReturnType<typeof p>[]) => schema.nodes.doc.create(null, blocks);
 
 const PAYLOADS = [
@@ -104,6 +105,43 @@ for (const text of PAYLOADS) {
   const { doc } = typToDoc(src);
   check('typ: a leading note survives the header pass', doc.firstChild!.type.name === 'editor_comment' && doc.firstChild!.textContent === 'first');
   check('typ: a trailing note survives', doc.lastChild!.type.name === 'editor_comment' && doc.lastChild!.textContent === 'last');
+}
+
+// --- 6. a note's tables (2026-11-09): the page's own table, kept inside the comment ---
+{
+  const src = 'Body.\n\n<!--\nGrading notes:\n\n| Q | Points |\n| --- | --- |\n| 1 | **5** |\n\nThen more.\n-->\n\nAfter.\n';
+  const doc = mdToDoc(src).doc;
+  const kids: string[] = [];
+  doc.child(1).forEach((c) => kids.push(c.type.name));
+  check('md: a table in a comment is the page\'s table, between the note\'s lines', kids.join(' ') === 'comment_text table comment_text', kids.join(' '));
+  check('md: a note with a table is written back byte for byte', docToMd(doc) === src, docToMd(doc));
+  const typ = typToDoc(docToTyp(doc)).doc;
+  check('typ: a note with a table survives a legacy .typ save', docToMd(typ) === src, docToMd(typ));
+  const plainDoc = mdToDoc('Body.\n\nAfter.\n').doc;
+  check('print compile leaves a note\'s table out whole', docToTyp(doc, { islands: 'print' }) === docToTyp(plainDoc, { islands: 'print' }));
+  check('TeX export leaves it out too', docToTex(doc) === docToTex(plainDoc));
+  const dense = 'X\n\n<!--\n| A |\n|---|\n| x |\n-->\n';
+  const lone = mdToDoc(dense).doc.child(1);
+  check('md: a note that is only a table gets its empty lines back', lone.childCount === 3 && lone.child(1).type.name === 'table' && !lone.firstChild!.textContent && !lone.lastChild!.textContent);
+  check('md: …and writes none of them', docToMd(mdToDoc(dense).doc) === 'X\n\n<!--\n| A |\n| --- |\n| x |\n-->\n', JSON.stringify(docToMd(mdToDoc(dense).doc)));
+  check('md: text shaped like a table but not set off by blank lines stays text', mdToDoc('<!--\nsee: | a |\n|---|\n-->\n').doc.firstChild!.childCount === 1);
+  check('md: a table holding what a note may not (a citation) stays text, as written', (() => {
+    const d = mdToDoc('<!--\n| A |\n|---|\n| [@smith] |\n-->\n').doc.firstChild!;
+    return d.childCount === 1 && d.textContent.includes('[@smith]');
+  })());
+  const fn = schema.nodes.footnote.create(null, schema.text('n'));
+  const cell = schema.nodes.table_cell.create(null, schema.nodes.paragraph.create(null, [schema.text('x'), fn]));
+  const withNote = schema.nodes.editor_comment.create(null, [
+    schema.nodes.comment_text.create(),
+    schema.nodes.table.create(null, schema.nodes.table_row.create(null, cell)),
+    schema.nodes.comment_text.create(),
+  ]);
+  check('a note refuses a footnote in its table', commentRefusal(withNote) === 'a footnote', String(commentRefusal(withNote)));
+  check('a note of lines and a plain table holds', commentRefusal(doc.child(1)) === null);
+  const old = { type: 'doc', content: [{ type: 'editor_comment', content: [{ type: 'text', text: 'old note' }] }, { type: 'editor_comment' }] };
+  const migrated = schema.nodeFromJSON(migrateNoteJSON(old));
+  migrated.check();
+  check('a stored session from before keeps its notes as lines', migrated.firstChild!.firstChild!.type.name === 'comment_text' && migrated.firstChild!.textContent === 'old note' && migrated.lastChild!.childCount === 1);
 }
 
 if (failures) {

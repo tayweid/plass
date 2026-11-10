@@ -242,11 +242,10 @@ const richTable = table.create(
 
   const linked = paragraph.create(null, [schema.text('linked', [schema.marks.link.create({ href: 'https://example.test' })])]);
   const linkedTable = table.create(null, [table_row.create(null, [table_cell.create(null, [linked])])]);
-  expectThrow(
-    'unsupported table-cell mark fails without silent loss',
-    () => docToTyp(docType.create(null, [linkedTable])),
-    /unsupported link mark; content was not discarded/,
-  );
+  // A link in a cell prints as one (Taylor, 2026-11-09: links clickable
+  // everywhere), so no mark is left that a cell cannot print.
+  const linkedTyp = docToTyp(docType.create(null, [linkedTable]));
+  check('a link in a table cell prints as #link', linkedTyp.includes('[#link("https://example.test")[linked]]'), linkedTyp.split('\n').filter((l) => l.includes('linked')).join(' | '));
 
   const rawInline = paragraph.create(null, [schema.nodes.typst_inline.create({ src: '#h(1em)' })]);
   const rawInlineTable = table.create(null, [table_row.create(null, [table_cell.create(null, [rawInline])])]);

@@ -163,7 +163,7 @@ test('the .typ export writes embedded images to figures/ and leaves comments out
     app.__loadDemo();
     const { schema } = app.view.state;
     app.view.dispatch(
-      app.view.state.tr.insert(0, schema.nodes.editor_comment.create(null, schema.text('Check the sign before posting.'))),
+      app.view.state.tr.insert(0, schema.nodes.editor_comment.create(null, schema.nodes.comment_text.create(null, schema.text('Check the sign before posting.')))),
     );
     const root = await navigator.storage.getDirectory();
     const dir = await root.getDirectoryHandle('typ-export', { create: true });

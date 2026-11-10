@@ -44,6 +44,8 @@ function collectLabels(state: EditorState): LabelEntry[] {
   let tab = 0;
   const sec = [0, 0, 0, 0, 0, 0];
   state.doc.descendants((node, pos) => {
+    // A note's tables never print, so nothing refers to them.
+    if (node.type.name === 'editor_comment') return false;
     if (node.type.name === 'heading') {
       if (!numberSections) return true;
       const level = Math.min(6, node.attrs.level as number);

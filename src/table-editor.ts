@@ -5,6 +5,7 @@
 // cells into a parallel string grid and compiled a second visual table; that
 // made ordinary typing modal and could flatten rich cell content on save.
 
+import { linkedText } from './link-open';
 import type { Node as PMNode, ResolvedPos } from 'prosemirror-model';
 import { NodeSelection, Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
@@ -160,8 +161,18 @@ export function insertStructuredTable(view: EditorView): void {
     table_row.create(null, [cell(false), cell(false), cell(false)]),
   ]);
   const { $from } = view.state.selection;
-  const insertPos = $from.depth > 0 ? $from.after(1) : view.state.selection.to;
-  const tr = view.state.tr.insert(insertPos, node);
+  const tr = view.state.tr;
+  let insertPos: number;
+  if ($from.depth >= 1 && $from.node(1).type === schema.nodes.editor_comment) {
+    // In a note (editor-comments.ts) the table goes inside it: its line
+    // splits at the caret, text before the table and after. From a
+    // note's table, after that table (a line goes between).
+    if ($from.parent.type === schema.nodes.comment_text) {
+      tr.split($from.pos);
+      insertPos = $from.pos + 1;
+    } else insertPos = $from.after(2);
+  } else insertPos = $from.depth > 0 ? $from.after(1) : view.state.selection.to;
+  tr.insert(insertPos, node);
   const inserted = tr.doc.nodeAt(insertPos);
   if (!inserted) return;
   // The caret lands in the first (empty) header cell.
@@ -745,7 +756,8 @@ interface CaptionOwnerDecorationSpec {
 let nextTableCaptionId = 1;
 
 function captionWidget(pos: number, caption: string, label: string, number: number, id: string): Decoration {
-  const text = caption ? `Table ${number}: ${caption}` : `Table ${number}`;
+  // A table in a note is not numbered: print never counts it (number 0).
+  const text = !number ? caption : caption ? `Table ${number}: ${caption}` : `Table ${number}`;
   const spec: CaptionDecorationSpec = { nativeTableCaptionWidget: true, id, caption, label, number };
   return Decoration.widget(pos, () => {
     const element = document.createElement('div');
@@ -753,7 +765,8 @@ function captionWidget(pos: number, caption: string, label: string, number: numb
     element.id = id;
     element.setAttribute('role', 'note');
     element.contentEditable = 'false';
-    element.textContent = text;
+    // A URL in the caption is a link, as print links it (link-open.ts).
+    element.append(...linkedText(text));
     return element;
   }, { side: -1, key: `table-caption-${id}-${text}`, ...spec });
 }
@@ -777,11 +790,19 @@ function captionDecorationPair(
 function captionDecorations(doc: PMNode): DecorationSet {
   const decorations: Decoration[] = [];
   let tableNumber = 0;
+  let inNote = 0;
   doc.descendants((node, pos) => {
+    if (node.type.name === 'editor_comment') {
+      // A note's tables: their captions show, unnumbered.
+      inNote = pos + node.nodeSize;
+      return true;
+    }
     if (node.type.spec.tableRole !== 'table') return true;
     const caption = String(node.attrs.caption ?? '');
     const label = String(node.attrs.label ?? '');
-    if (caption || label) {
+    if (pos < inNote) {
+      if (caption) decorations.push(...captionDecorationPair(pos, node, caption, label, 0));
+    } else if (caption || label) {
       tableNumber++;
       decorations.push(...captionDecorationPair(pos, node, caption, label, tableNumber));
     }
@@ -793,7 +814,7 @@ function captionDecorations(doc: PMNode): DecorationSet {
 function tableNumberAt(doc: PMNode, targetPos: number): number {
   let number = 0;
   doc.descendants((node, pos) => {
-    if (pos > targetPos) return false;
+    if (pos > targetPos || node.type.name === 'editor_comment') return false;
     if (node.type.spec.tableRole !== 'table') return true;
     if (node.attrs.caption || node.attrs.label) number++;
     return false;

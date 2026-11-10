@@ -14,6 +14,7 @@ import { TableMap } from 'prosemirror-tables';
 import { schema } from './schema';
 import { packGridRows } from './grid-spans';
 import { TYP_COMMENT_OPEN, readTypComment } from './editor-comments-format';
+import { commentFromPayload } from './md-parser';
 import { unwrapAligned } from './math-src';
 import { DEFAULT_SETTINGS, normalizeSettings, type DocSettings, FOOTNOTE_NUMBERINGS, type FootnoteNumbering } from './settings';
 import { trimSpaceBeforeMarker } from './collapse-spaces';
@@ -40,11 +41,16 @@ let importBib: { name: string; content: string } | null = null;
 let importBibKeys = new Set<string>();
 let preserveImportBibLine = false;
 
-// Plass's own inline math, `#mi(`…`)`, can open a line: a paragraph (or a
-// wrapped line of one) that starts with math is exported that way. It is
-// prose, not an unknown directive, so it must not end a paragraph or become
-// a raw island.
-const INLINE_MATH_START = /^#mi\(`/;
+// Plass's own inline calls can open a line: a paragraph (or a wrapped
+// line of one) that starts with math (`#mi(`…`)`), struck or red text
+// (`#strike[`, `#text(fill: …)[` in a palette color), or a Markdown link
+// (`#link("…")[`) is exported that way. It is prose, not an unknown
+// directive, so it must not end a paragraph or become a raw island.
+const INLINE_MATH_START = new RegExp(
+  '^#(?:mi\\(`|strike\\[|link\\("|text\\(fill: (?:' +
+    Object.entries(TEXT_COLORS).flatMap(([name, c]) => [c.typst, name]).map((f) => f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') +
+    ')\\)\\[)',
+);
 
 const BIB_LINE = /^#bibliography\(bytes\((".*")\)(?:,\s*title:\s*"[^"]*")?(?:,\s*style:\s*"([^"]*)")?\)$/;
 
@@ -134,6 +140,7 @@ export function typToDoc(src: string): TypImport {
       /^#show heading: it => \{ show strong: set text\(top-edge: "cap-height"\); it \}$/.test(line) ||
       /^#show heading\.where\(level: \d+\): set (text|block|par)\(/.test(line) ||
       /^#show raw\.where\(block: false\): set text\(/.test(line) ||
+      /^#show link: it => if type\(it\.dest\) == str \{/.test(line) ||
       /^#show math\.equation\.where\(block: true\): set block\(/.test(line) ||
       /^#show table: set block\(breakable: false\)$/.test(line)
     ) {
@@ -396,7 +403,7 @@ function parseBlocks(lines: string[], warnings: string[]): PMNode[] {
     // document content, not a discarded remark.
     const frame = readTypComment(lines, i);
     if (frame) {
-      out.push(schema.nodes.editor_comment.create(null, frame.text ? [schema.text(frame.text)] : []));
+      out.push(commentFromPayload(frame.text));
       i = frame.next;
       continue;
     }
@@ -1631,6 +1638,15 @@ function typstExprLength(src: string, start: number): number {
   return i - start;
 }
 
+/** The `#link("…")[` at `i` (typ-serializer's typString: `\\` and `"`
+ *  escaped), with its address and the index of its `[`, or null. */
+function linkOpening(src: string, i: number): { href: string; open: number } | null {
+  const m = /#link\("((?:[^"\\\n]|\\["\\])*)"\)\[/y;
+  m.lastIndex = i;
+  const read = m.exec(src);
+  return read ? { href: read[1].replace(/\\(["\\])/g, '$1'), open: m.lastIndex - 1 } : null;
+}
+
 /** The `#text(fill: …)[` at `i` that opens a palette color (text-color.ts),
  *  with its name, or null. */
 function textColorOpening(src: string, i: number): { name: TextColorName; length: number } | null {
@@ -1750,6 +1766,17 @@ function scanInline(src: string, marks: Mark[], out: PMNode[]) {
         flush();
         trimSpaceBeforeMarker(out);
         out.push(schema.nodes.footnote.create(null, parseInline(src.slice(open + 1, end))));
+        i = end + 1;
+        continue;
+      }
+    }
+    // A Markdown link as the export writes it: `#link("…")[body]`.
+    const linked = src.startsWith('#link("', i) ? linkOpening(src, i) : null;
+    if (linked) {
+      const end = matchBracket(src, linked.open);
+      if (end > 0) {
+        flush();
+        scanInline(src.slice(linked.open + 1, end), [...marks, schema.marks.link.create({ href: linked.href })], out);
         i = end + 1;
         continue;
       }

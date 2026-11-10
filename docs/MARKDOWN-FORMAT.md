@@ -136,7 +136,7 @@ plass:
 | emphasis, strong, strike | `*em*`, `**strong**`, `~~gone~~` | |
 | red text | `[text]{.red}` | a pandoc span with the class `red`: the solution block's red (`#c00000`) on the page and in print, a formula inside it too; pandoc and GitHub show the plain text. The only color. ⌘⇧R, or the rail's Red text |
 | inline code | `` `x = 1` `` | |
-| a link | `[Typst](https://typst.app)` | |
+| a link | `[Typst](https://typst.app)` | blue and underlined, on the page and in the PDF, where it is clickable; a bare `https://…` address is a link too, everywhere but in code. ⌘-click opens either from the page (Ctrl-click off a Mac); a plain click places the caret. Web and email addresses open, a path does not |
 | a line break | `\` at the end of the line | |
 | a footnote | `a claim.[^1]` and, below, `[^1]: The note.`; or `a claim.^[The note.]` | one paragraph per footnote |
 | a bullet list | `- item` | |
@@ -504,6 +504,28 @@ it on its own lines, with a blank line before and after. A comment cannot
 contain `-->`: write `--&gt;` instead, and Plass shows it as `-->`. The old
 `<!-- plass:comment` form is still read. A `<!--` that no `-->` follows
 anywhere after it is not a comment: it is text, as pandoc reads it.
+
+A comment can hold a table: write a pipe table inside it, with a blank
+line before and after, as you would in the document.
+
+~~~markdown
+<!--
+Grading notes:
+
+| Q | Points |
+|---|--------|
+| 1 | 5      |
+
+Check the totals before posting.
+-->
+~~~
+
+On the page it is the same table the document uses, drawn inside the
+comment strip (the Table tool puts one there when the caret is in a
+comment). Like the rest of the comment it is never printed. Its cells hold
+text, formatting, links and inline math. A footnote, a citation, a figure
+or a display equation cannot go in a comment, since print numbers them.
+Lines of `|` that are not set off by blank lines stay text.
 
 A comment can also sit inside a block: a solution, a column, a list item, a
 quote, a table cell or a footnote, or in the middle of a paragraph. It is

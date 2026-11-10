@@ -10,7 +10,8 @@
 import { VAL_RE } from './math-src';
 import type { Node as PMNode } from 'prosemirror-model';
 import { normalizeSettings, parseMathMacros, type DocSettings, paperInches } from './settings';
-import { TEXT_COLORS, textColorName } from './text-color';
+import { LINK_COLOR, TEXT_COLORS, textColorName } from './text-color';
+import { bareUrls } from './urls';
 
 let macros: Record<string, string> = {};
 let unnumberedEq = new Set<string>();
@@ -48,19 +49,50 @@ function texColor(child: PMNode, t: string): string {
   return color ? `\\textcolor{${TEXT_COLORS[color].tex}}{${t}}` : t;
 }
 
+/** A URL as `\href`'s first argument. Where the `\href` sits in another
+ *  command's argument (a footnote, a cell, emphasis) TeX has read its
+ *  characters already, so `#`, `%` and `&` go as hyperref's `\#`, `\%`
+ *  and `\&`, and what TeX would take as syntax there (a brace, a
+ *  backslash, `^`, `~`, `$`, a space) is percent-encoded: the same
+ *  address. */
+function texUrl(url: string): string {
+  return url
+    .replace(/[\\{}^~$\s]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
+    .replace(/[%#&]/g, '\\$&');
+}
+
+/** `t` linked when `child` carries a Markdown link (hyperref colors every
+ *  `\href` the page's link blue, text-color.ts LINK_COLOR). */
+function texLink(child: PMNode, t: string): string {
+  const href = child.marks.find((m) => m.type.name === 'link')?.attrs.href as string | undefined;
+  return href ? `\\href{${texUrl(href)}}{${t}}` : t;
+}
+
+/** Plain text with each bare URL in it linked, as Typst links it. */
+function texText(text: string): string {
+  let out = '';
+  let at = 0;
+  for (const u of bareUrls(text)) {
+    out += escapeTex(text.slice(at, u.from)) + `\\href{${texUrl(u.url)}}{${escapeTex(u.url)}}`;
+    at = u.to;
+  }
+  return out + escapeTex(text.slice(at));
+}
+
 function inlineToTex(node: PMNode): string {
   let out = '';
   node.forEach((child) => {
     if (child.isText && child.text) {
       const marks = new Set(child.marks.map((m) => m.type.name));
-      let t = escapeTex(child.text);
+      // A URL in code or in a link's text is text.
+      let t = marks.has('code') || marks.has('link') ? escapeTex(child.text) : texText(child.text);
       if (marks.has('code')) t = `\\texttt{${t}}`;
       if (marks.has('strong')) t = `\\textbf{${t}}`;
       if (marks.has('em')) t = `\\emph{${t}}`;
       if (marks.has('strike')) t = `\\sout{${t}}`;
-      out += texColor(child, t);
+      out += texLink(child, texColor(child, t));
     } else if (child.type.name === 'math_inline') {
-      out += texColor(child, `$${child.attrs.src}$`);
+      out += texLink(child, texColor(child, `$${child.attrs.src}$`));
     } else if (child.type.name === 'eq_ref') {
       const label = child.attrs.label as string;
       out += unnumberedEq.has(label)
@@ -378,6 +410,7 @@ export function docToTex(doc: PMNode): string {
   let usesStrike = false;
   let usesVal = false;
   let usesColor = false;
+  let usesLinks = false;
   doc.forEach((n) => {
     if (n.type.name === 'doc_title') title = inlineToTex(n);
     else if (n.type.name === 'doc_authors') authors = inlineToTex(n);
@@ -392,6 +425,8 @@ export function docToTex(doc: PMNode): string {
     if (n.isText && n.marks.some((m) => m.type.name === 'strike')) usesStrike = true;
     if ((n.type.name === 'math_inline' || n.type.name === 'math_display') && VAL_RE.test(String(n.attrs.src))) usesVal = true;
     if (n.isInline && n.marks.some((m) => m.type.name === 'color')) usesColor = true;
+    if (n.isInline && n.marks.some((m) => m.type.name === 'link')) usesLinks = true;
+    if (n.isText && bareUrls(n.text ?? '').length) usesLinks = true;
     return true;
   });
   unnumberedEq = new Set();
@@ -414,12 +449,16 @@ export function docToTex(doc: PMNode): string {
   if (usesMultirow) out += '\\usepackage{multirow}\n';
   // normalem: ulem must not hijack \emph into underlining.
   if (usesStrike) out += '\\usepackage[normalem]{ulem}\n';
+  if (usesColor || usesLinks) out += '\\usepackage{xcolor}\n';
   if (usesColor) {
-    out += '\\usepackage{xcolor}\n';
     for (const { css, tex } of Object.values(TEXT_COLORS)) out += `\\definecolor{${tex}}{HTML}{${css.slice(1).toUpperCase()}}\n`;
   }
+  if (usesLinks) out += `\\definecolor{${LINK_COLOR.tex}}{HTML}{${LINK_COLOR.css.slice(1).toUpperCase()}}\n`;
   if (!s.parIndent) out += '\\usepackage{parskip}\n';
   out += `\\usepackage[${paper},top=${s.marginTop}in,right=${s.marginRight}in,bottom=${s.marginBottom}in,left=${s.marginLeft}in]{geometry}\n`;
+  // Links, last as hyperref asks: web and mail links in the page's link
+  // blue; references and citations keep the text's color, as in print.
+  if (usesLinks) out += `\\usepackage[colorlinks=true,urlcolor=${LINK_COLOR.tex},linkcolor=black,citecolor=black]{hyperref}\n`;
   for (const [name, expansion] of Object.entries(macros)) {
     out += `\\newcommand{\\${name}}{${expansion}}\n`;
   }

@@ -79,7 +79,7 @@ const mi = (src: string) => N.math_inline.create({ src });
 const cite = (key: string) => N.citation.create({ key });
 const ref = (label: string) => N.eq_ref.create({ label });
 const fn = (...content: PMNode[]) => N.footnote.create(null, content);
-const note = (text: string) => N.editor_comment.create(null, text ? [t(text)] : []);
+const note = (text: string) => N.editor_comment.create(null, N.comment_text.create(null, text ? [t(text)] : []));
 const island = () => N.code_block.create({ params: 'md-raw' }, [t('<raw>')]);
 const doc = (...blocks: PMNode[]) => N.doc.create(null, blocks);
 const rec = (kind: string, depth: number, fields: Partial<SkeletonRecord> = {}): SkeletonRecord => ({ kind, depth, printed: true, ...fields });

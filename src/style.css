@@ -889,6 +889,60 @@ body {
   }
 }
 
+/* A link's hover hint (src/link-open.ts): the rail label's dark glass,
+   under the line the pointer rests on. A Markdown link's address, then
+   the gesture that opens it. */
+#link-hint {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: min(420px, calc(100vw - 16px));
+  padding: 4px 9px 5px;
+  border-radius: 6px;
+  background: rgba(27, 26, 30, 0.94);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  font: 11.5px/1.35 var(--sans);
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s, visibility 0s 0.12s;
+  pointer-events: none;
+}
+
+#link-hint.show {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.12s;
+}
+
+#link-hint .u {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(240, 238, 233, 0.92);
+}
+
+#link-hint .g {
+  color: rgba(240, 238, 233, 0.5);
+}
+
+/* ⌘ held over a link: the pointer is a hand (link-open.ts). */
+.ProseMirror.ts-link-armed,
+.ProseMirror.ts-link-armed * {
+  cursor: pointer !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #link-hint {
+    transition: none;
+  }
+}
+
 /* ---------- file menu ---------- */
 
 .file-menu {
@@ -4133,13 +4187,32 @@ body {
 }
 
 .ProseMirror .ts-color [fill="#000"],
-.ProseMirror .ts-color [fill="#000000"] {
+.ProseMirror .ts-color [fill="#000000"],
+.ProseMirror a[href] [fill="#000"],
+.ProseMirror a[href] [fill="#000000"] {
   fill: currentColor;
 }
 
 .ProseMirror .ts-color [stroke="#000"],
-.ProseMirror .ts-color [stroke="#000000"] {
+.ProseMirror .ts-color [stroke="#000000"],
+.ProseMirror a[href] [stroke="#000"],
+.ProseMirror a[href] [stroke="#000000"] {
   stroke: currentColor;
+}
+
+/* Links (text-color.ts LINK_COLOR, link-open.ts): a Markdown link, a bare
+   URL in the text (a decoration), and a URL in a table caption or a
+   running header, all in the link blue, underlined, as print shows them
+   (typ-serializer's `#show link`). Visited or not: print has no history.
+   A formula in a Markdown link is blue too (Typst's math inherits the
+   fill; the ink rules above). Red text inside a link stays red, in print
+   too (the inner fill wins). Paint only. */
+.ProseMirror a[href],
+.ProseMirror a[href]:visited,
+.ts-url {
+  color: #0000ee;
+  text-decoration: underline;
+  text-decoration-thickness: from-font;
 }
 
 /* The spread: two pages side by side (paper-scale.ts). The stack is two

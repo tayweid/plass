@@ -145,7 +145,7 @@ test('editorial comments: a grown sheet keeps its length, the next row starts be
   await page.evaluate(() => {
     const { state } = window.view;
     const s = state.schema;
-    const note = (t: string) => s.nodes.editor_comment.create(null, s.text(t));
+    const note = (t: string) => s.nodes.editor_comment.create(null, s.nodes.comment_text.create(null, s.text(t)));
     // One note on page 1, a longer one further on.
     const tr = state.tr.insert(state.doc.child(0).nodeSize, note('A note to self.'));
     tr.insert(tr.doc.content.size - tr.doc.lastChild!.nodeSize, note('A longer note to self that runs over several lines of the comment strip, so its sheet grows more than the first one does. '.repeat(3)));

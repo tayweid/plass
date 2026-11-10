@@ -23,8 +23,8 @@
   text-indent: 0;
 }
 
-/* Header: a comment glyph and "Comment" on the left; "NOT PRINTED" and
-   the delete on the right. Chrome, not content (contenteditable=false). */
+/* Header: a comment glyph and "Comment" on the left; "NOT PRINTED" on
+   the right. Chrome, not content (contenteditable=false). */
 .ProseMirror .editor-comment-header {
   display: flex;
   align-items: center;
@@ -57,23 +57,13 @@
   opacity: 0.8;
 }
 
-.ProseMirror .editor-comment-delete {
-  display: inline-flex;
-  align-items: center;
-  border: 0;
-  padding: 2px;
-  background: none;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0.7;
-  border-radius: 4px;
-}
-
-.ProseMirror .editor-comment-delete:hover,
-.ProseMirror .editor-comment-delete:focus-visible {
-  opacity: 1;
-  background: color-mix(in srgb, var(--comment-ink) 12%, transparent);
-  outline: none;
+/* A note's tables (editor-comments.ts): the page's own table, drawn by
+   the browser in the note's quieter face, a little air above and below.
+   Never printed, so nothing here is held to Typst's geometry. */
+.ProseMirror .editor-comment-body > :not(.editor-comment-text) {
+  margin: 0.35em 0 0.45em;
+  font-family: var(--sans);
+  font-size: 0.86em;
 }
 
 /* Plain text, as typed: newlines and space runs are content here. The

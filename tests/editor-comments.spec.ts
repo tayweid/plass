@@ -147,7 +147,8 @@ const caretIntoNote = (page: Page, index: number, where: 'end' | 'start' | 'all'
       let target: { off: number; size: number } | null = null;
       let i = 0;
       state.doc.forEach((n, off) => {
-        if (n.type.name === 'editor_comment' && i++ === index) target = { off, size: n.content.size };
+        // Into the note's first line (a note holds lines and tables).
+        if (n.type.name === 'editor_comment' && i++ === index) target = { off: off + 1, size: n.firstChild!.content.size };
       });
       if (!target) throw new Error('no such note');
       const t = target as { off: number; size: number };
@@ -318,18 +319,8 @@ test('editing a note: newlines, exit, live sheet growth, insert, delete, undo', 
   // the tile shows it.
   await expect(page.getByRole('button', { name: 'Comment', exact: true })).toBeDisabled();
 
-  // The header's delete is one undoable step (a beat after typing, so the
-  // history does not group the two).
-  await page.waitForTimeout(700);
-  const noteEls = page.locator('.ProseMirror .editor-comment');
-  await noteEls.nth(2).locator('.editor-comment-delete').click();
-  expect(await page.evaluate(() => window.view.state.doc.childCount)).toBe(kidsAfter.length - 1);
-  await page.keyboard.press('ControlOrMeta+z');
-  const restored = await page.evaluate(() => {
-    const n = window.view.state.doc.child(5);
-    return { type: n.type.name, text: n.textContent, count: window.view.state.doc.childCount };
-  });
-  expect(restored).toEqual({ type: 'editor_comment', text: 'Fresh note from the toolbar.', count: kidsAfter.length });
+  // The header has no delete button: the label is all it holds.
+  await expect(page.locator('.ProseMirror .editor-comment').nth(2).locator('.editor-comment-header button')).toHaveCount(0);
 
   // Backspace at the start of a filled note holds; an emptied note deletes.
   await caretIntoNote(page, 2, 'start');

@@ -19,7 +19,8 @@ import { CELL_FILL_TYPST, type CellFill } from './table-fills';
 import { borderSides, borderStrokeArg, borderValue, coloredStroke } from './table-borders';
 import type { CitationStyle } from './citation-styles';
 import { commentToTyp } from './editor-comments-format';
-import { TEXT_COLORS, textColorName } from './text-color';
+import { commentPayload } from './md-serializer';
+import { LINK_COLOR, TEXT_COLORS, textColorName } from './text-color';
 import { MITEX_IMPORT, TYPST_EXACT_VERSION } from './typst-config';
 import { convertMath, displayEquation, inlineEquation, mathConverterReady } from './math-convert';
 import { mathPrelude } from './typst-math-prelude';
@@ -516,6 +517,13 @@ export function parityRules(s: DocSettings): string {
   // in a table at 0.8em or a footnote its top edge rose above the line's
   // and grew it.
   out += `#show raw.where(block: false): set text(font: "DejaVu Sans Mono")\n`;
+  // Links (text-color.ts LINK_COLOR): every web or mail link, a Markdown
+  // link's #link and a bare URL Typst links on its own, prints blue and
+  // underlined, as the page draws it. Typst's own links (a footnote
+  // marker, a citation, a reference) go to a place, not a string, and
+  // keep the text's color. Paint only: neither fill nor underline moves a
+  // glyph or a line.
+  out += `#show link: it => if type(it.dest) == str { underline(text(fill: ${LINK_COLOR.typst}, it)) } else { it }\n`;
   // Display math: the editor shows Typst's own ink inside 0.5em padding.
   const { above: eqAbove, below: eqBelow } = equationBlockSpacingEm(s);
   out += `#show math.equation.where(block: true): set block(above: ${pt(eqAbove)}, below: ${pt(eqBelow)})\n`;
@@ -677,13 +685,6 @@ function escapeLineHead(t: string): string {
   );
 }
 
-/** Table cells keep their established, narrower encoding: a URL's
- * slashes escape like any other, so a URL in a cell prints as text, not a
- * link. */
-function escapeTableCellText(text: string): string {
-  return writeLinks(escapePieces(text, false));
-}
-
 function portableTableLabel(label: unknown): string {
   const value = String(label ?? '');
   if (!value) return '';
@@ -719,6 +720,13 @@ function wrapRun(t: Piece[], sig: string): Piece[] {
   return t;
 }
 
+/** A Typst string literal: `\\` and `"` escaped; a control character
+ *  (never in a real address) percent-encoded, Typst's escapes not being
+ *  JSON's. */
+function typString(text: string): string {
+  return '"' + text.replace(/[\\"]/g, '\\$&').replace(/[\u0000-\u001f\u007f]/g, (c) => encodeURIComponent(c)) + '"';
+}
+
 /**
  * Inline content -> Typst markup. Text and inline math sharing the same
  * strong/em/strike marks form one run wrapped once (`*#mi(\`2\`) drinks*`):
@@ -729,7 +737,7 @@ function wrapRun(t: Piece[], sig: string): Piece[] {
  * `head`: the content starts a Typst line (escapeLineHead), as everything
  * but a heading's text does.
  */
-function inlineToTyp(node: PMNode, tableCell = false, head = true): string {
+function inlineToTyp(node: PMNode, tableCell = false, head = true, urls = !(tableCell && exportOpts.cellLinks)): string {
   const out: Piece[] = [];
   let run: Piece[] = [];
   let sig = '';
@@ -737,7 +745,27 @@ function inlineToTyp(node: PMNode, tableCell = false, head = true): string {
     if (run.length) out.push(...wrapRun(run, sig));
     run = [];
   };
-  node.forEach((child) => {
+  // A Markdown link: one #link over every child it spans, its body the
+  // children without it. A content block, so its body starts a line; a
+  // URL in the body is the link's text, not a link of its own.
+  const linkType = node.type.schema.marks.link;
+  let linkEnd = -1;
+  node.forEach((child, _offset, index) => {
+    if (index < linkEnd) return;
+    const link = linkType?.isInSet(child.marks);
+    if (link && (link.attrs.href as string)) {
+      let end = index + 1;
+      while (end < node.childCount && link.isInSet(node.child(end).marks)) end++;
+      linkEnd = end;
+      flush();
+      sig = '';
+      head = node.child(end - 1).type.name === 'hard_break';
+      const parts: PMNode[] = [];
+      for (let k = index; k < end; k++) parts.push(node.child(k).mark(link.removeFromSet(node.child(k).marks)));
+      const body = inlineToTyp(node.type.create(null, parts), tableCell, true, false);
+      out.push(tableCell && exportOpts.cellLinks ? body : `#link(${typString(link.attrs.href as string)})[${body}]`);
+      return;
+    }
     // Plain text first on its line could read as markup; a run opening
     // with `*` or `_` is guarded by its delimiter, a code span by its
     // backtick, but a content block's opens a line of its own (openLine).
@@ -756,7 +784,7 @@ function inlineToTyp(node: PMNode, tableCell = false, head = true): string {
           ? `#raw(${JSON.stringify(child.text)}, block: false)`
           : '`' + child.text + '`');
       } else {
-        const pieces = escapePieces(child.text, !tableCell);
+        const pieces = escapePieces(child.text, urls);
         if (atHead && openLine(s) && typeof pieces[0] === 'string') pieces[0] = escapeLineHead(pieces[0]);
         run.push(...pieces);
       }
@@ -805,7 +833,7 @@ function inlineToTyp(node: PMNode, tableCell = false, head = true): string {
   return writeLinks(out);
 }
 
-const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code', 'value', 'color']);
+const TABLE_CELL_MARKS = new Set(['strong', 'em', 'strike', 'code', 'value', 'color', 'link']);
 const TABLE_CELL_INLINE = new Set([
   'text',
   'hard_break',
@@ -833,8 +861,10 @@ function tableCellContentToTyp(cell: PMNode, row: number, column: number): strin
       if (!TABLE_CELL_INLINE.has(child.type.name)) {
         throw new Error(`Cannot export ${where}: unsupported inline ${child.type.name}; content was not discarded`);
       }
-      const markNames = child.marks.map((mark) => mark.type.name);
-      const unsupported = markNames.find((name) => !TABLE_CELL_MARKS.has(name));
+      // A link spans whatever it covers (inlineToTyp's #link): the checks
+      // below are about the marks inside it.
+      const markNames = child.marks.map((mark) => mark.type.name).filter((name) => name !== 'link');
+      const unsupported = child.marks.map((mark) => mark.type.name).find((name) => !TABLE_CELL_MARKS.has(name));
       if (unsupported) {
         throw new Error(`Cannot export ${where}: unsupported ${unsupported} mark; content was not discarded`);
       }
@@ -957,7 +987,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
       // compile (PDF, the audit) omits it whole — no separator, no trace —
       // so the printed body equals that of the same document without it.
       if (exportOpts.islands === 'print') return '';
-      return indent + commentToTyp(node.textContent) + '\n\n';
+      return indent + commentToTyp(commentPayload(node)) + '\n\n';
     case 'code_block':
       // Islands: a raw-Typst block stays verbatim in the .typ file and is
       // printed as a raw block; a Markdown block has no Typst form and is
@@ -1270,7 +1300,7 @@ function blockToTyp(node: PMNode, indent = ''): string {
       const tLabel = (node.attrs.label as string) || '';
       if (caption || tLabel) {
         // A captioned table is a figure: numbered "Table N", referenceable.
-        const cap = caption ? `,\n  caption: [${escapeLineHead(escapeTableCellText(caption))}]` : '';
+        const cap = caption ? `,\n  caption: [${escapeLineHead(escapeTyp(caption))}]` : '';
         const kind = fontSize ? ',\n  kind: table' : '';
         const lab = portableTableLabel(tLabel);
         return indent + directive + `#figure(\n${tableCall.split('\n').map((l) => '  ' + l).join('\n')}${cap}${kind},\n)${lab}\n\n`;

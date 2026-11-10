@@ -27,7 +27,7 @@
 import MarkdownIt from 'markdown-it';
 import type { Node as PMNode, Mark } from 'prosemirror-model';
 import type { DocSettings } from './settings';
-import { commentToMd } from './editor-comments-format';
+import { commentPayloadWith, commentToMd } from './editor-comments-format';
 import { writeAttrBlock, writeFenceAttrs, readAttrBlock, type PandocAttrs } from './md-attrs';
 import { pipeTableMd, tableDivAttrs } from './md-tables';
 import { readFrontmatter, writeFrontmatter, type TextKey } from './md-frontmatter';
@@ -161,6 +161,12 @@ function escMarker(line: string): string {
  *  (title/author/date live in the frontmatter) get the offset of whatever
  *  follows them. Block-level caret mapping for the source view
  *  (SOURCE-VIEW.md, decision 5). */
+/** A note's payload as the .md writes it inside `<!-- … -->`: its lines,
+ *  and each table as this writer writes one (editor-comments-format.ts). */
+export function commentPayload(note: PMNode): string {
+  return commentPayloadWith(note, (table) => docToMd(note.type.schema.nodes.doc.create(null, [table])).replace(/\n+$/, ''));
+}
+
 export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offsets?: number[]): string {
   const out: string[] = [];
   /** Plass's notes, label and text, written after the body. */
@@ -773,7 +779,7 @@ export function docToMd(doc: PMNode, warn: (m: string) => void = () => {}, offse
         return `$$\n${src ? src + '\n' : ''}$$${attrs.id || attrs.classes.length ? ' ' + writeAttrBlock(attrs) : ''}`;
       }
       case 'editor_comment':
-        return commentToMd(node.textContent);
+        return commentToMd(commentPayloadWith(node, (table) => block(table)));
       case 'code_block': {
         const params = node.attrs.params as string;
         // A Markdown island is the file's own text: back verbatim.

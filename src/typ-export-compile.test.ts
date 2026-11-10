@@ -95,7 +95,7 @@ function exportedDoc(): PMNode {
   const n = schema.nodes;
   const para = (...content: PMNode[]) => n.paragraph.create(null, content);
   const extra = [
-    n.editor_comment.create(null, schema.text('Check the sign before posting. #panic("an editorial comment printed")')),
+    n.editor_comment.create(null, n.comment_text.create(null, schema.text('Check the sign before posting. #panic("an editorial comment printed")'))),
     n.code_block.create(
       { params: 'typst-raw' },
       schema.text('#let width = 3cm\n#panic("a raw-Typst island ran")\n```inner fence```'),

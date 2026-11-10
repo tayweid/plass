@@ -45,7 +45,8 @@ not an implemented product API.
 The preferred comment treatment is a full-sheet-width, warm-gray strip with
 fine dashed top/bottom borders. Align its editable text with the document's
 prose column. A small sans-serif header says **Comment** and **Not printed**,
-with an undoable delete action. Keep the paper edges continuous through the
+with an undoable delete action (removed 2026-11-09: Backspace in an
+emptied note deletes it). Keep the paper edges continuous through the
 strip. Alternate inset/margin-rule treatments in the mockup are explorations,
 not required v1 settings.
 

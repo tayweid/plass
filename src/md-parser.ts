@@ -50,7 +50,7 @@ import { Fragment, type Node as PMNode, type Mark } from 'prosemirror-model';
 import { GRID_ALIGNS, GRID_VALIGNS, gridAlign, gridValign, schema } from './schema';
 import { packGridRows } from './grid-spans';
 import { sameSplit } from './grid-split';
-import { readMdComment, readMdComments } from './editor-comments-format';
+import { commentPartsFromPayload, commentRefusal, readMdComment, readMdComments } from './editor-comments-format';
 import { DEFAULT_SETTINGS, normalizeSettings } from './settings';
 import { INPUT_LIMITS, textSizeError } from './input-limits';
 import { printedForm, trimSpaceBeforeMarker } from './collapse-spaces';
@@ -1005,6 +1005,22 @@ interface BodyRead {
  *  that follow it (the settings panel's rule, settings.ts). */
 const FRONT_BLOCKS = new Set(['doc_title', 'doc_authors', 'doc_date', 'abstract']);
 
+/** A note from its payload, the text inside `<!-- … -->` (or a .typ
+ *  comment frame): its lines, and each table in it read as the page's
+ *  own (a chunk that does not read as one table a note may hold stays
+ *  text, as written). editor-comments-format.ts has the grammar. */
+export function commentFromPayload(text: string): PMNode {
+  const { editor_comment, comment_text } = schema.nodes;
+  const line = (t: string) => comment_text.create(null, t ? [schema.text(t)] : []);
+  const readTable = (chunk: string): PMNode | null => {
+    const read = mdToDoc(chunk).doc;
+    const table = read.childCount === 1 ? read.firstChild! : null;
+    if (table?.type !== schema.nodes.table) return null;
+    return commentRefusal(editor_comment.create(null, [line(''), table, line('')])) ? null : table;
+  };
+  return editor_comment.create(null, commentPartsFromPayload(text, readTable, line));
+}
+
 export function mdToDoc(src: string): MdImport {
   src = src.replace(/\r\n?/g, '\n').replace(/^﻿/, '');
 
@@ -1318,7 +1334,7 @@ function readMarkdown(src: string, skipped: number, fields: FrontText | null, si
   const cuts: Cut[] = [];
   /** The source lines of the inline run being read (for an inline cut). */
   let inlineLines: [number, number] = [0, 0];
-  const comment = (text: string) => schema.nodes.editor_comment.create(null, text ? [schema.text(text)] : []);
+  const comment = commentFromPayload;
   /** `stays`: a comment on the last lines of a top-level paragraph. It
    *  goes after the paragraph like any other, but that is where it already
    *  stands, so it is not counted as moved. */

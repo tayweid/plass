@@ -27,11 +27,12 @@ import './editor-comments.css';
 import { equationsPlugin } from './equations';
 import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
+import { linkOpenPlugin, linkedText } from './link-open';
 import { BibliographyView, citationsPlugin } from './citations';
 import { TypstInlineView } from './inline-raw';
 import { GridCellView, gridPlugin } from './grid-editor';
 import { blockKeys } from './block-keys';
-import { EditorCommentView, editorCommentKeymap, editorCommentPaste } from './editor-comments';
+import { EditorCommentView, commentShape, editorCommentKeymap, editorCommentPaste, migrateNoteJSON } from './editor-comments';
 import { refAutocomplete } from './ref-autocomplete';
 import { PAGE_GAP, applySettings, formatPageNumber, getSettings, pageSize, runningPageFormat, runningText, type DocSettings } from './settings';
 import { FileManager } from './file-manager';
@@ -106,7 +107,7 @@ function loadDoc(): PMNode {
     if (own) {
       restoredSessionDoc = true;
       restoredSessionDirty = sessionStorage.getItem(SESSION_DIRTY_KEY) === '1';
-      return migrateLegacyTableGeometry(PMNode.fromJSON(schema, JSON.parse(own)));
+      return migrateLegacyTableGeometry(PMNode.fromJSON(schema, migrateNoteJSON(JSON.parse(own))));
     }
   } catch (e) {
     console.warn('Could not restore tab session.', e);
@@ -119,7 +120,7 @@ function loadDoc(): PMNode {
   if (standalone) return schema.nodes.doc.createAndFill()!;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return migrateLegacyTableGeometry(PMNode.fromJSON(schema, JSON.parse(raw)));
+    if (raw) return migrateLegacyTableGeometry(PMNode.fromJSON(schema, migrateNoteJSON(JSON.parse(raw))));
   } catch (e) {
     console.warn('Could not restore saved document, starting fresh.', e);
   }
@@ -160,6 +161,8 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       // Before the editing keymap: its Mod-Enter is the page break.
       editorCommentKeymap(),
       editorCommentPaste(),
+      // A note's shape, and what it may hold (editor-comments.ts).
+      commentShape(),
       // Before the editing keymap too: ⌘⏎ in a table or grid cell adds a
       // row (the page break cannot live there); Escape selects the block.
       ...blockKeys(),
@@ -171,6 +174,8 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       citationsPlugin(),
       figuresPlugin(),
       footnoteGuard(),
+      // ⌘-click opens a link (link-open.ts); resting on one says so.
+      linkOpenPlugin(),
       collapseSpaces(),
       // The space a line breaks at survives an edit beside it.
       breakSpaceInput(),
@@ -368,7 +373,8 @@ function renderPages(info: PageInfo, settled: boolean) {
           el.style.width = `${pageW}px`;
           el.style.boxSizing = 'border-box';
         }
-        el.textContent = text;
+        // A URL in a running text is a link, as print links it.
+        el.append(...linkedText(text));
         frag.appendChild(el);
       };
       for (const [edge, text, align, first] of [
@@ -490,7 +496,7 @@ const view = new EditorView(editorEl, {
     bibliography: (node, v) => new BibliographyView(node, v),
     typst_inline: (node, v, getPos) => new TypstInlineView(node, v, getPos),
     grid_cell: (node, v) => new GridCellView(node, v),
-    editor_comment: (node, v, getPos) => new EditorCommentView(node, v, getPos),
+    editor_comment: (node) => new EditorCommentView(node),
   },
   // No inline writing suggestions (macOS predictive text in WebKit, and the
   // browsers' own): accepted ghost text would enter the document unasked,

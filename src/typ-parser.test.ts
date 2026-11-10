@@ -530,7 +530,7 @@ function firstDiff(a: string, b: string): string {
   check('a URL ends before a no-break space; its own _ # ~ * @ $ are the link\'s; unbalanced brackets take the link function', out.includes('\nGlue #link("https://example.com")~here, https://example.com/a_b#c~d*e@f$g, and #link("https://example.com/a(b") too.\n'), out);
   check('a URL ends where the formatting changes', out.includes('\nPath #link("https://x.com")*\\/path*, word #link("https://example.com")*bold*.\n'), out);
   check('a ; keeps the period after a link in a strong run; a ; or a formula after a URL', out.includes('\n*See #link("https://example.com");.* After https://example.com; then a formula #link("https://example.com")#mi(`x^2`) now.\n'), out);
-  check('a URL in a table cell stays text, its slashes all escaped', out.includes('[https:\\/\\/x.com\\/*b*]'), out);
+  check('a URL in a table cell is a link, as one in a paragraph is (2026-11-09)', out.includes('[#link("https://x.com/")*b*]'), out);
   check('a URL right before {page} in the running header ends before it', out.includes('[Notes at #link("https://example.com/n_1")#context counter(page).display()]'), out);
   const back = typToDoc(out).doc;
   check('every URL reads back as written', JSON.stringify(back.content.toJSON()) === JSON.stringify(doc.content.toJSON()), firstDiff(JSON.stringify(back.content.toJSON(), null, 1), JSON.stringify(doc.content.toJSON(), null, 1)));

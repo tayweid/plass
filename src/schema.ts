@@ -432,14 +432,25 @@ export const gridValign = (value: string | null | undefined): GridValign | null 
 // group on purpose: only the document accepts it, never a list item, a
 // quote, a cell, or a footnote. `code` keeps input rules and the printed-
 // form normalizer out of it; the note holds exactly what was typed.
-const editorComment: NodeSpec = {
+// A note (editor-comments.ts): lines of plain text and the page's own
+// tables, `comment_text (table comment_text)*` as commentShape keeps it.
+// A line is text as typed, newlines and spaces included, no marks.
+const commentText: NodeSpec = {
   content: 'text*',
   marks: '',
   code: true,
   defining: true,
+  parseDOM: [{ tag: 'div.editor-comment-text', preserveWhitespace: 'full' }],
+  toDOM: () => ['div', { class: 'editor-comment-text' }, 0],
+};
+
+const editorComment: NodeSpec = {
+  content: '(comment_text | table)+',
+  defining: true,
   isolating: true,
-  parseDOM: [{ tag: 'div[data-editor-comment]', contentElement: '.editor-comment-text', preserveWhitespace: 'full' }],
-  toDOM: () => ['div', { 'data-editor-comment': '', class: 'editor-comment' }, ['div', { class: 'editor-comment-text' }, 0]],
+  // An older copy (one text div inside) parses to one line.
+  parseDOM: [{ tag: 'div[data-editor-comment]' }],
+  toDOM: () => ['div', { 'data-editor-comment': '', class: 'editor-comment' }, 0],
 };
 
 const nodes = listNodes
@@ -642,7 +653,8 @@ const nodes = listNodes
   .addToEnd('doc_authors', docAuthors)
   .addToEnd('doc_date', docDate)
   .addToEnd('abstract', abstract)
-  .addToEnd('editor_comment', editorComment);
+  .addToEnd('editor_comment', editorComment)
+  .addToEnd('comment_text', commentText);
 
 // Strikethrough is not in schema-basic; Typst has it natively (#strike),
 // so it round-trips through both formats. Paint-only — line-through never

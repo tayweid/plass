@@ -150,6 +150,7 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from './schema';
+import { commentPayload } from './md-serializer';
 import { printedForm, trimSpaceBeforeMarker } from './collapse-spaces';
 import { OBJECT, createQuoteState, lastVisible, smartenText, type QuoteState } from './smart-quotes';
 
@@ -578,7 +579,7 @@ function pmBlock(node: PMNode, depth: number, out: SkeletonRecord[]): void {
       out.push(record('bibliography', depth));
       return;
     case 'editor_comment':
-      out.push(record('comment', depth, { printed: false, text: node.textContent.trim() }));
+      out.push(record('comment', depth, { printed: false, text: commentPayload(node).trim() }));
       return;
     case 'numbering_restart':
       // YAML-only (`plass.page-numbers.front-matter`): no pandoc content.

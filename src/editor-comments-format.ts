@@ -7,6 +7,8 @@
 // is visibly not paper, and is absent from every rendered export (PDF, the
 // audit's compile, semantic TeX).
 
+import type { Node as PMNode } from 'prosemirror-model';
+
 /** Typst: a framed run of line comments. Every payload line is prefixed
  *  `// | `, so a payload holding a framing token cannot close the frame,
  *  and the whole frame is comment text to Typst whatever it holds. */
@@ -91,4 +93,118 @@ export function readMdComments(content: string): { comments: string[]; rest: str
 export function readMdComment(content: string): string | null {
   const read = readMdComments(content);
   return read && read.comments.length === 1 && !read.rest ? read.comments[0] : null;
+}
+
+/** What a note may not hold, in words for a refusal, or null when it
+ *  holds only what a note may: lines, and tables whose cells hold
+ *  paragraphs. Never what print counts or numbers (a footnote, a citation,
+ *  a figure, a display equation), nor what a Markdown table cannot write
+ *  (a list or another table in a cell). */
+export function commentRefusal(note: PMNode): string | null {
+  let found: string | null = null;
+  const name = (n: PMNode) => REFUSED_NAMES[n.type.name] ?? `a ${n.type.name.replace(/_/g, ' ')}`;
+  note.forEach((child) => {
+    if (found || child.type.name === 'comment_text') return;
+    if (child.type.name !== 'table') {
+      found = name(child);
+      return;
+    }
+    child.descendants((n, _pos, parent) => {
+      if (found) return false;
+      const kind = n.type.name;
+      if (kind === 'table_row' || kind === 'table_cell' || kind === 'table_header') return true;
+      if (kind === 'paragraph' && parent && /^table_(cell|header)$/.test(parent.type.name)) return true;
+      if (n.isBlock || kind === 'footnote' || kind === 'citation') {
+        found = kind === 'table' ? 'a table inside a table' : name(n);
+        return false;
+      }
+      return true;
+    });
+  });
+  return found;
+}
+
+const REFUSED_NAMES: Record<string, string> = {
+  footnote: 'a footnote',
+  citation: 'a citation',
+  figure: 'a figure',
+  math_display: 'a display equation',
+  grid: 'a grid',
+  page_break: 'a page break',
+  bullet_list: 'a list',
+  ordered_list: 'a list',
+  blockquote: 'a quote',
+  code_block: 'a code block',
+  heading: 'a heading',
+};
+
+/** A note's payload: its lines as typed and each table as the Markdown
+ *  writer writes it (`tableMd`), a blank line on either side of a table.
+ *  A note's first or last line, when empty beside a table, is not
+ *  written (the reader puts it back). */
+export function commentPayloadWith(note: PMNode, tableMd: (table: PMNode) => string): string {
+  const n = note.childCount;
+  let out = '';
+  let prevTable = false;
+  note.forEach((child, _offset, i) => {
+    const table = child.type.name === 'table';
+    const text = table ? tableMd(child) : child.textContent;
+    if (!table && !text && n > 1 && (i === 0 || i === n - 1)) return;
+    if (out || i > 0) out += table || prevTable ? '\n\n' : '\n';
+    out += text;
+    prevTable = table;
+  });
+  return out.replace(/^\n\n/, '');
+}
+
+/** A table's lines at `lines[i]` in a note's payload, as their end index,
+ *  or -1: a pipe table (a `|` row over a delimiter row, then its `|`
+ *  rows), or a `::: {.table …}` div holding one, to its closing fence. */
+export function payloadTableEnd(lines: readonly string[], i: number): number {
+  const fence = /^(:{3,})\s*\{[^}]*\.table\b[^}]*\}\s*$/.exec(lines[i]);
+  if (fence) {
+    for (let j = i + 1; j < lines.length; j++) if (lines[j].trim() === fence[1]) return j + 1;
+    return -1;
+  }
+  if (!/^\s*\|/.test(lines[i]) || !DELIMITER_ROW.test(lines[i + 1] ?? '')) return -1;
+  let j = i + 2;
+  while (j < lines.length && /^\s*\|/.test(lines[j])) j++;
+  return j;
+}
+
+const DELIMITER_ROW = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+/** A note's children from its payload: the lines between tables, the
+ *  tables `readTable` makes of their chunks (a chunk it declines stays
+ *  text, as written), in the shape `comment_text (table comment_text)*`.
+ *  A table stands between blank lines (or the payload's ends); the blank
+ *  line on each side is the writer's separator, not text. */
+export function commentPartsFromPayload(
+  text: string,
+  readTable: (chunk: string) => PMNode | null,
+  line: (text: string) => PMNode,
+): PMNode[] {
+  const lines = text === '' ? [''] : text.split('\n');
+  const parts: PMNode[] = [];
+  let buf: string[] = [];
+  let started = false;
+  let i = 0;
+  while (i < lines.length) {
+    const blankBefore = i === 0 || lines[i - 1].trim() === '';
+    const end = blankBefore ? payloadTableEnd(lines, i) : -1;
+    const blankAfter = end > 0 && (end === lines.length || lines[end].trim() === '');
+    const table = blankAfter ? readTable(lines.slice(i, end).join('\n')) : null;
+    if (!table) {
+      buf.push(lines[i++]);
+      started = true;
+      continue;
+    }
+    if (i > 0 && started && buf.length) buf.pop();
+    parts.push(line(buf.join('\n')), table);
+    buf = [];
+    started = false;
+    i = end < lines.length ? end + 1 : end;
+  }
+  parts.push(line(buf.join('\n')));
+  return parts;
 }
