@@ -143,7 +143,7 @@ plass:
 | a numbered list | `3. item` | keeps its starting number, 0 included, on the page and in print. Later items' numbers are not read (as in pandoc): `3.` `3.` is 3, 4 |
 | a loose list | a blank line between items | spaced like paragraphs. With no blank lines, the list is tight. A tight list cannot hold an item whose blocks need a blank line between them (a second paragraph, an empty one too, a quote, a div, a table): Plass saves such a list loose, with a warning. Empty paragraphs at the end of a tight list's last item are saved after the list instead, where they print the same |
 | a quote | `> text`, with a bare `>` line between paragraphs | |
-| a code listing | ```` ```python ```` … ```` ``` ```` | printed as a monospace block |
+| a code listing | ```` ```python ```` … ```` ``` ```` | printed as a monospace block, colored by Typst's highlighter when it knows the language (`python`, `r`, `julia`, `sql`, `latex` and many more; not Stata), on the page as in print. The language is the fence's first word, or the first class of `{.python .numberLines}`; the rest of the info string is kept in the file and not printed. On the page: type ```` ```python ```` and Enter, or set the language in the block's bottom-right corner |
 | a horizontal rule | `---`, with a blank line above and below it | without them, pandoc can read `---` as the start of a metadata block and drop the text up to the next `---` |
 | a page break | `\newpage` on its own line, with blank lines around it | `\pagebreak` also works |
 | a nonbreaking space | `Fig.\ 3`, or the U+00A0 character | |

@@ -18,6 +18,7 @@ import { rowRuleArg, type RowRule } from './table-rules';
 import { CELL_FILL_TYPST, type CellFill } from './table-fills';
 import { borderSides, borderStrokeArg, borderValue, coloredStroke } from './table-borders';
 import type { CitationStyle } from './citation-styles';
+import { fenceLang, rawBlockTyp } from './code-language';
 import { commentToTyp } from './editor-comments-format';
 import { commentPayload } from './md-serializer';
 import { LINK_COLOR, TEXT_COLORS, textColorName } from './text-color';
@@ -994,7 +995,10 @@ function blockToTyp(node: PMNode, indent = ''): string {
       // a raw block in both.
       if (node.attrs.params === 'typst-raw' && exportOpts.islands !== 'print') return indent + node.textContent + '\n\n';
       if (node.attrs.params === 'typst-raw' || node.attrs.params === 'md-raw') return islandBlock(node.textContent, indent);
-      return indent + '```' + (node.attrs.params ?? '') + '\n' + node.textContent + '\n```\n\n';
+      // A listing: the language the fence names (code-language.ts) and
+      // nothing else of its info string, in a fence no backtick run of the
+      // code can close. The page asks its colors with this same source.
+      return indent + rawBlockTyp(fenceLang(node.attrs.params as string), node.textContent) + '\n\n';
     case 'math_display': {
       const numberedAttr = node.attrs.numbered as boolean | null;
       const effNumbered = numberedAttr ?? emitNumberEquations;

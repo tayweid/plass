@@ -14,6 +14,7 @@ import type { EditorView } from 'prosemirror-view';
 import { NodeRange, type Node as PMNode } from 'prosemirror-model';
 import { wrapInList } from 'prosemirror-schema-list';
 import { schema } from './schema';
+import { isIslandParams } from './code-language';
 import { cycleHeading, headingLevelAt, nextHeadingLevel, toggleListSpacing } from './editing';
 import { insertMath } from './math';
 import { toggleTextColor } from './text-color';
@@ -809,11 +810,15 @@ export function buildToolbar(container: HTMLElement, rail: HTMLElement, view: Ed
   commandTool(blocksGroup, 'Comment', insertEditorComment, {
     rest: true, glyph: icon('comment'), hint: 'never printed', title: 'Editorial comment — a note on the page and in the file, never printed',
   });
-  const inCode = () => view.state.selection.$from.parent.type === schema.nodes.code_block && !view.state.selection.$from.parent.attrs.params;
+  // A listing in any language is a code block; an island is not this tool's.
+  const inCode = () => {
+    const block = view.state.selection.$from.parent;
+    return block.type === schema.nodes.code_block && !isIslandParams(block.attrs.params as string);
+  };
   const toggleCode: Command = (state, dispatch) =>
     inCode() ? setBlockType(schema.nodes.paragraph)(state, dispatch) : setBlockType(schema.nodes.code_block, { params: '' })(state, dispatch);
   commandTool(blocksGroup, 'Code block', toggleCode, {
-    rest: true, glyph: icon('terminal'), hint: '```', title: 'Code block — monospaced source listing', checked: inCode,
+    rest: true, glyph: icon('terminal'), hint: '``` ⏎', title: 'Code block — a listing; type ``` or ```python and Enter, or set its language in the block’s corner', checked: inCode,
   });
 
   // LAYOUT

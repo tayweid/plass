@@ -1943,6 +1943,87 @@ body {
   margin: 0 0 var(--code-mb, 0.99em);
 }
 
+/* A code block's colors are the compiler's, painted as highlight ranges
+   (code-block.ts writes one `::highlight()` rule per color): no element,
+   no box, nothing here. */
+
+/* The language field (code-block.ts): Typora's place, the block's
+   bottom-right corner, inside the chip. Out of the flow (the `pre` is its
+   containing block and gains no height), shown while the caret is in the
+   block or the field is typed in, never printed. The holder keeps the
+   block's em, so the corner is the chip's (its 0.6em spread). */
+.ProseMirror pre {
+  position: relative;
+}
+
+.ProseMirror pre .code-lang {
+  position: absolute;
+  right: calc(-0.6em + 3px);
+  bottom: calc(-0.6em + 3px);
+  line-height: 0;
+  visibility: hidden;
+  user-select: none;
+}
+
+.ProseMirror pre.code-active .code-lang,
+.ProseMirror pre .code-lang:focus-within {
+  visibility: visible;
+}
+
+.ProseMirror pre[data-params='typst-raw'] .code-lang,
+.ProseMirror pre[data-params='md-raw'] .code-lang {
+  display: none;
+}
+
+.ProseMirror pre .code-lang-field {
+  box-sizing: content-box;
+  font: 10.5px/1.5 var(--mono);
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--chrome) 82%, transparent);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 5px;
+  margin: 0;
+  text-align: right;
+  outline: none;
+  cursor: pointer;
+}
+
+.ProseMirror pre .code-lang-field::placeholder {
+  color: var(--ink-soft);
+  opacity: 0.6;
+}
+
+.ProseMirror pre .code-lang-field:hover {
+  border-color: var(--chrome-border);
+}
+
+.ProseMirror pre .code-lang-field:focus {
+  color: var(--ink);
+  background: var(--chrome);
+  border-color: var(--accent);
+  cursor: text;
+  text-align: left;
+}
+
+/* The list under the field: the `{{` picker's menu, narrower, scrolling. */
+.code-lang-menu {
+  min-width: 170px;
+  max-width: 240px;
+  max-height: 232px;
+  overflow-y: auto;
+}
+
+.code-lang-menu .ref-menu-item {
+  justify-content: space-between;
+}
+
+@media print {
+  .ProseMirror pre .code-lang {
+    display: none;
+  }
+}
+
 /* Inline raw Typst: an island shown as inline code — the same DejaVu Sans
    Mono at 0.8em the code mark uses, which is how it prints (`#raw`), and
    like it out of the line box (`.ProseMirror code`). */
@@ -1968,11 +2049,6 @@ body {
    view; raw Markdown (an HTML block, an unknown div) from a .md file — are
    code blocks with a tag in the margin. They print as the same code block,
    never run. The tag is out of flow: no block height depends on it. */
-.ProseMirror pre[data-params='typst-raw'],
-.ProseMirror pre[data-params='md-raw'] {
-  position: relative;
-}
-
 .ProseMirror pre[data-params='typst-raw']::before,
 .ProseMirror pre[data-params='md-raw']::before {
   position: absolute;

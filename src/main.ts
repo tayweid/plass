@@ -28,6 +28,7 @@ import { equationsPlugin } from './equations';
 import { FigureView, ImageView, figuresPlugin, isPathSrc, migrateEmbeddedFigures, refreshAssets, setFigureFileManager, startAssetWatch } from './figures';
 import { FootnoteView, footnoteGuard, footnoteMarkerClick } from './footnotes';
 import { linkOpenPlugin, linkedText } from './link-open';
+import { CodeBlockView, codeBlockPlugin } from './code-block';
 import { BibliographyView, citationsPlugin } from './citations';
 import { TypstInlineView } from './inline-raw';
 import { GridCellView, gridPlugin } from './grid-editor';
@@ -176,6 +177,9 @@ function makeState(doc: PMNode, onStats: (s: TypesetStats) => void): EditorState
       footnoteGuard(),
       // ⌘-click opens a link (link-open.ts); resting on one says so.
       linkOpenPlugin(),
+      // A code block's colors, the compiler's, and its language field
+      // (code-block.ts).
+      codeBlockPlugin(),
       collapseSpaces(),
       // The space a line breaks at survives an edit beside it.
       breakSpaceInput(),
@@ -497,6 +501,7 @@ const view = new EditorView(editorEl, {
     typst_inline: (node, v, getPos) => new TypstInlineView(node, v, getPos),
     grid_cell: (node, v) => new GridCellView(node, v),
     editor_comment: (node) => new EditorCommentView(node),
+    code_block: (node, v, getPos) => new CodeBlockView(node, v, getPos),
   },
   // No inline writing suggestions (macOS predictive text in WebKit, and the
   // browsers' own): accepted ghost text would enter the document unasked,

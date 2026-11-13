@@ -24,6 +24,7 @@ import type { Command, EditorState } from 'prosemirror-state';
 import { schema } from './schema';
 import { insertMath, mathDisplayRule, mathInlineRule } from './math';
 import { toggleTextColor } from './text-color';
+import { enterFence } from './code-block';
 import { eqRefRule } from './equations';
 import { exitFigure } from './figures';
 import { exitFootnote, footnoteCloseRule, footnoteOpenRules, insertFootnote, skipFootnote } from './footnotes';
@@ -72,8 +73,8 @@ export function buildInputRules(): Plugin {
       (m) => ({ order: +m[1] }),
       (m, node) => node.childCount + node.attrs.order === +m[1],
     ),
-    // ``` code block
-    textblockTypeInputRule(/^```$/, schema.nodes.code_block),
+    // A code block is made by Enter on its fence, not by the third
+    // backtick (`enterFence`): the language is typed after it.
     // marks
     markInputRule(/\*\*([^*]+)\*\*$/, schema.marks.strong),
     // Emphasis openers must sit at a word boundary: an intra-word _ or *
@@ -349,7 +350,7 @@ export function buildKeymap(): Plugin {
     'Mod-Alt-5': setBlockType(schema.nodes.heading, { level: 5 }),
     'Mod-Alt-6': setBlockType(schema.nodes.heading, { level: 6 }),
     'Ctrl->': wrapIn(schema.nodes.blockquote),
-    'Enter': chainCommands(exitFootnote, exitFigure, exitFrontMatter, enterInTable, enterInList),
+    'Enter': chainCommands(enterFence, exitFootnote, exitFigure, exitFrontMatter, enterInTable, enterInList),
     'Mod-Alt-f': insertFootnote,
     'Mod-Enter': (state, dispatch) => {
       const { $from } = state.selection;
