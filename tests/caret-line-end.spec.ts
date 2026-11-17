@@ -20,6 +20,21 @@ async function demo(page: Page) {
   await page.goto('/?new=1');
   await page.waitForFunction(() => Boolean((window as unknown as Hooks).view && (window as unknown as Hooks).__loadDemo));
   await page.evaluate(() => (window as unknown as Hooks).__loadDemo());
+  // The demo's page starts move with each load that lands (the port, the
+  // fonts, each formula's ink: 1437, 1273, then 1523 for page 2), and on a
+  // busy runner two of those passes can be further apart than settleLocal's
+  // quiet window. The last to land is the formulas' ink, so the layout is
+  // read only once every formula is drawn and the passes have gone quiet
+  // after that; a line picked from an earlier layout is on another page by
+  // the time it is edited, and the pass that moves it scrolls the panel.
+  await page.waitForFunction(
+    () => {
+      const formulas = [...document.querySelectorAll('.math-inline, .math-display')];
+      return formulas.length > 0 && formulas.every((el) => el.querySelector('svg')) && !document.querySelector('.math-unmeasured');
+    },
+    undefined,
+    { timeout: 45_000 },
+  );
   await settleLocal(page);
 }
 
