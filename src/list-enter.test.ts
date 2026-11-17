@@ -5,7 +5,7 @@
 import { baseKeymap, chainCommands } from 'prosemirror-commands';
 import type { Node as PMNode } from 'prosemirror-model';
 import { EditorState, TextSelection } from 'prosemirror-state';
-import { enterInList } from './list-enter';
+import { clearLineBetweenQuotes, enterInList, exitEmptyQuoteLine } from './list-enter';
 import { mdToDoc } from './md-parser';
 import { docToMd } from './md-serializer';
 import { schema } from './schema';
@@ -74,7 +74,7 @@ const caretAfter = (d: PMNode, text: string): number => {
 /** The view's Enter as far as a list is concerned: the editing keymap's
  *  other chain members (footnote, figure, front matter, table) are no-ops
  *  outside their contexts, and baseKeymap's Enter is registered after it. */
-const enter = chainCommands(enterInList, baseKeymap.Enter);
+const enter = chainCommands(enterInList, exitEmptyQuoteLine, baseKeymap.Enter);
 const press = (state: EditorState): EditorState => {
   let next = state;
   const handled = enter(state, (tr) => {
@@ -221,6 +221,46 @@ const depth = (state: EditorState) => state.selection.$from.depth;
   const mdEmpty = docToMd(empty);
   check('empty paragraph: Markdown writes a no-break space line between the halves', mdEmpty === '- a\n\n\u00a0\n\n- x\n- y\n- b\n', JSON.stringify(mdEmpty));
   check('empty paragraph: Markdown reopens as list, paragraph, list', outline(mdToDoc(mdEmpty).doc) === 'ul("a") "\u00a0" ul("x","y","b")', outline(mdToDoc(mdEmpty).doc));
+}
+
+{
+  // A quote or a solution block: Enter on an empty line takes the line out
+  // of the block in one press, cutting the block in two around it.
+  const sol = (...blocks: PMNode[]) => blockquote.create({ kind: 'solution' }, blocks);
+  let s = at(doc.create(null, sol(p('one'), p('two'), p('three'))), 'one');
+  s = press(s);
+  check('quote: Enter at the end of a line opens an empty line inside', outline(s.doc) === 'bq("one" "" "two" "three")' && depth(s) === 2, outline(s.doc));
+  s = press(s);
+  check('quote: Enter again puts the line between two halves', outline(s.doc) === 'bq("one") "" bq("two" "three")' && depth(s) === 1, outline(s.doc));
+  check('quote: both halves keep the kind', s.doc.child(0).attrs.kind === 'solution' && s.doc.child(2).attrs.kind === 'solution');
+  let e = press(press(at(doc.create(null, sol(p('one'), p('two'))), 'two')));
+  check('quote: its last line leaves below it', outline(e.doc) === 'bq("one" "two") ""' && depth(e) === 1, outline(e.doc));
+  e = press(at(doc.create(null, sol(p(''), p('two'))), ''));
+  check('quote: its first line leaves above it', outline(e.doc) === '"" bq("two")' && depth(e) === 1, outline(e.doc));
+  e = press(at(doc.create(null, sol(p(''))), ''));
+  check('quote: its only line becomes a paragraph', outline(e.doc) === '""' && depth(e) === 1, outline(e.doc));
+  // Backspace on the line between the halves clears it and keeps the
+  // halves two; Backspace at the head of the lower half joins them.
+  const back = chainCommands(clearLineBetweenQuotes, baseKeymap.Backspace);
+  const backspace = (state: EditorState): EditorState => {
+    let next = state;
+    back(state, (tr) => {
+      next = state.apply(tr);
+    });
+    return next;
+  };
+  s = backspace(s);
+  check('quote: Backspace on the line between clears it, two blocks stay', outline(s.doc) === 'bq("one") bq("two" "three")' && s.selection.$from.parent.textContent === 'one' && s.selection.$from.parentOffset === 3, outline(s.doc));
+  const head = EditorState.create({ doc: s.doc, selection: TextSelection.create(s.doc, caretAfter(s.doc, 'two') - 3) });
+  check('quote: Backspace at the head of the lower block joins the two', outline(backspace(head).doc) === 'bq("one" "two" "three")', outline(backspace(head).doc));
+  const lone = at(doc.create(null, [sol(p('one')), p(''), p('after')]), '');
+  check('quote: a line under a block with no block after it is left to the stock Backspace', !clearLineBetweenQuotes(lone));
+  // A list in the block: two presses leave the list, a third the block.
+  let l = at(doc.create(null, sol(ul(li(p('a')), li(p('b'))))), 'a');
+  l = press(press(l));
+  check('quote: a list in it is cut inside the block first', outline(l.doc) === 'bq(ul("a") "" ul("b"))' && depth(l) === 2, outline(l.doc));
+  l = press(l);
+  check('quote: the next Enter cuts the block', outline(l.doc) === 'bq(ul("a")) "" bq(ul("b"))' && depth(l) === 1, outline(l.doc));
 }
 
 if (failures) {

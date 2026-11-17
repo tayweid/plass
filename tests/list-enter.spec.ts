@@ -69,3 +69,40 @@ test('Enter twice in the middle of a flat list cuts it in half (unchanged)', asy
     inEmptyParagraph: true,
   });
 });
+
+test('Enter on an empty line of a solution block cuts the block in two; Backspace clears the line, and joins the halves from the lower one', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.evaluate(() => {
+    const { state } = window.view;
+    const { schema } = state;
+    const p = (text: string) => schema.nodes.paragraph.create(null, schema.text(text));
+    const block = schema.nodes.blockquote.create({ kind: 'solution' }, [p('one'), p('two')]);
+    let tr = state.tr.replaceWith(0, state.doc.content.size, block);
+    const TS = state.selection.constructor as typeof import('prosemirror-state').TextSelection;
+    // After "one": the block, its paragraph open, then three letters.
+    tr = tr.setSelection(TS.create(tr.doc, 5));
+    window.view.dispatch(tr);
+    window.view.focus();
+  });
+  const shape = () =>
+    page.evaluate(() => {
+      const out: string[] = [];
+      window.view.state.doc.forEach((node) => out.push(`${node.type.name}${node.attrs.kind ? ':' + node.attrs.kind : ''}(${node.textContent})`));
+      return out;
+    });
+  await page.keyboard.press('Enter');
+  expect(await shape()).toEqual(['blockquote:solution(onetwo)']);
+  await page.keyboard.press('Enter');
+  expect(await shape()).toEqual(['blockquote:solution(one)', 'paragraph()', 'blockquote:solution(two)']);
+  // Backspace clears the line and leaves two blocks, the caret after "one".
+  await page.keyboard.press('Backspace');
+  expect(await shape()).toEqual(['blockquote:solution(one)', 'blockquote:solution(two)']);
+  await page.keyboard.type('!');
+  expect(await shape()).toEqual(['blockquote:solution(one!)', 'blockquote:solution(two)']);
+  // Backspace at the head of the lower block joins the two again.
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => page.evaluate(() => window.view.state.selection.$from.parent.textContent)).toBe('two');
+  await page.keyboard.press('Backspace');
+  expect(await shape()).toEqual(['blockquote:solution(one!two)']);
+  expect(await page.evaluate(() => window.view.state.doc.firstChild!.childCount)).toBe(2);
+});

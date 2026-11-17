@@ -17,11 +17,11 @@
 import { chainCommands } from 'prosemirror-commands';
 import type { Node as PMNode } from 'prosemirror-model';
 import { splitListItem } from 'prosemirror-schema-list';
-import type { Command } from 'prosemirror-state';
+import { type Command, Selection } from 'prosemirror-state';
 import { canJoin, liftTarget } from 'prosemirror-transform';
 import { schema } from './schema';
 
-const { list_item, paragraph, bullet_list, ordered_list } = schema.nodes;
+const { list_item, paragraph, bullet_list, ordered_list, blockquote } = schema.nodes;
 const isList = (node: PMNode) => node.type === bullet_list || node.type === ordered_list;
 
 /** Enter on an empty paragraph of a list item that has blocks after it:
@@ -65,3 +65,42 @@ const exitEmptyListItem: Command = (state, dispatch) => {
 
 /** The list member of the Enter chain (editing.ts). */
 export const enterInList: Command = chainCommands(exitEmptyListItem, splitListItem(list_item));
+
+/** Enter on an empty line of a quote or a solution block: the line leaves
+ *  the block, which is cut in two around it (above the block for its first
+ *  line, below it for its last, in its place for its only one). The stock
+ *  liftEmptyBlock takes two presses for a line with blocks after it: it
+ *  first splits the block at the line, which is how an empty list item
+ *  exits, and in a quote leaves the empty line heading the lower half,
+ *  still inside, so the press looked like nothing but a nick in the rule.
+ */
+export const exitEmptyQuoteLine: Command = (state, dispatch) => {
+  const { $from, empty } = state.selection;
+  if (!empty || $from.parent.type !== paragraph || $from.parent.content.size || $from.depth < 2) return false;
+  if ($from.node(-1).type !== blockquote) return false;
+  const range = $from.blockRange();
+  const target = range && liftTarget(range);
+  if (!range || target == null) return false;
+  if (dispatch) dispatch(state.tr.lift(range, target).scrollIntoView());
+  return true;
+};
+
+/** Backspace on an empty line that sits between two quotes or solution
+ *  blocks (where exitEmptyQuoteLine leaves one): the line goes and the two
+ *  blocks stay two, the caret at the end of the upper one. The stock
+ *  joinBackward pulls the line back into the upper block, which then joins
+ *  the lower: the cut could be made only with a line left in it. Backspace
+ *  at the start of the lower block still joins the two (stock).
+ */
+export const clearLineBetweenQuotes: Command = (state, dispatch) => {
+  const { $from, empty } = state.selection;
+  if (!empty || $from.parent.type !== paragraph || $from.parent.content.size || $from.depth < 1) return false;
+  const $line = state.doc.resolve($from.before());
+  const after = $line.parent.maybeChild($line.index() + 1);
+  if ($line.nodeBefore?.type !== blockquote || after?.type !== blockquote) return false;
+  if (dispatch) {
+    const tr = state.tr.delete($line.pos, $line.pos + $from.parent.nodeSize);
+    dispatch(tr.setSelection(Selection.near(tr.doc.resolve($line.pos), -1)).scrollIntoView());
+  }
+  return true;
+};
