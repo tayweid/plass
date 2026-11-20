@@ -468,6 +468,23 @@ function leafOf(node: PMNode, el: Element | null, last: boolean): { node: PMNode
   return n && e ? { node: n, el: e } : null;
 }
 
+/** The spacing above a heading that its box does not hold, layout px. A
+ *  heading's padding-top is its spacing from the block above, and Typst
+ *  drops that at a cell's top; style.css takes it off a heading that opens
+ *  a cell, so the cell's box starts at the heading's line and never lies
+ *  over the block above the grid (the box used to be pulled up over it by
+ *  a negative margin: a click or an arrow key aimed at that block landed in
+ *  the cell, and the cell's wash was painted across it). The frame model
+ *  (`blockFrameSlackEm`) counts the padding, so the fit takes the missing
+ *  part back out. */
+function headingPadDropped(leaf: { node: PMNode; el: Element }): number {
+  if (leaf.node.type !== schema.nodes.heading) return 0;
+  const level = Math.min(3, (leaf.node.attrs.level as number) || 1);
+  const model = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(`--h${level}-pad`));
+  const painted = parseFloat(getComputedStyle(leaf.el).paddingTop);
+  return Number.isFinite(model) && Number.isFinite(painted) ? model - painted : 0;
+}
+
 /** Every mounted cell, for the re-fits nothing in the cell's own node
  *  announces (geometry variables, late fonts). */
 const liveCells = new Set<GridCellView>();
@@ -621,7 +638,7 @@ export class GridCellView implements NodeView {
     const ref = blockFrameSlackEm(schema.nodes.paragraph.create(), s);
     const above = blockFrameSlackEm(first.node, s).above;
     const below = blockFrameSlackEm(last.node, s).below;
-    const extraAbove = first.el.getBoundingClientRect().top - box.top;
+    const extraAbove = first.el.getBoundingClientRect().top - box.top - headingPadDropped(first);
     const extraBelow = box.bottom - last.el.getBoundingClientRect().bottom;
     const marginTop = ref.above * F - (extraAbove + above * F);
     const marginBottom = ref.below * F - (extraBelow + below * F);

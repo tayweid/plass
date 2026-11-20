@@ -511,3 +511,43 @@ test('merging across: the pill merges and splits cells, a merged cell spans its 
   const [first, below] = [await box(0, 0), await box(1, 0)];
   expect(Math.abs(first.right - below.right), JSON.stringify({ first, below })).toBeLessThan(0.5);
 });
+
+test('a heading that opens a cell: the cell starts under the line above the grid, and ↑ / ↓ pass through that line', async ({ page }) => {
+  await page.goto('/?new=1');
+  await page.waitForFunction(() => Boolean(window.view));
+  await page.evaluate(() => {
+    const view = window.view;
+    const s = view.state.schema;
+    const n = s.nodes;
+    const para = (t: string) => n.paragraph.create(null, s.text(t));
+    const cell = (h: string, t: string) => n.grid_cell.create(null, [n.heading.create({ level: 3 }, s.text(h)), para(t)]);
+    const grid = n.grid.create({ columns: [1, 1], gutter: 1.5 }, [n.grid_row.create(null, [cell('Left head', 'Left text.'), cell('Right head', 'Right text.')])]);
+    view.dispatch(view.state.tr.replaceWith(0, view.state.doc.content.size, [para('First line.'), para('The line above the grid, long enough to run over both of its columns from side to side.'), grid]));
+  });
+  await settleLocal(page);
+  const boxes = await page.evaluate(() => {
+    const line = [...window.view.dom.querySelectorAll(':scope > p')][1].getBoundingClientRect();
+    return { lineBottom: line.bottom, cells: [...document.querySelectorAll('.ts-grid-cell')].map((c) => c.getBoundingClientRect().top) };
+  });
+  // The cell's box used to be pulled up over the line (the heading's
+  // spacing above, kept as padding and taken back by a negative margin).
+  for (const top of boxes.cells) expect(top).toBeGreaterThanOrEqual(boxes.lineBottom);
+  const where = () => page.evaluate(() => window.view.state.selection.$from.parent.textContent.slice(0, 14));
+  await page.evaluate(() => {
+    const view = window.view;
+    let pos = 0;
+    view.state.doc.descendants((node, at) => {
+      if (node.isText && node.text === 'Right head') pos = at + node.nodeSize;
+    });
+    const TS = view.state.selection.constructor as typeof import('prosemirror-state').TextSelection;
+    view.focus();
+    view.dispatch(view.state.tr.setSelection(TS.create(view.state.doc, pos)));
+  });
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(where).toBe('The line above');
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(where).toBe('Right head');
+  // Page and print still agree on where the grid sits.
+  const audit = await page.evaluate(() => window.__audit());
+  expect(audit!.summary).toMatchObject({ mismatch: 0, pagesAgree: true });
+});

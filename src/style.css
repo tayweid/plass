@@ -2140,6 +2140,14 @@ body {
   position: relative;
 }
 
+/* A heading that opens a cell has no spacing above it (Typst drops it at
+   the cell's top), so its box starts at its line: with the padding left on,
+   the cell's fit pulled the box up over the block above the grid.
+   GridCellView's fit accounts for the padding taken off (headingPadDropped). */
+.ProseMirror .ts-grid-cell > :is(h1, h2, h3, h4, h5, h6):first-child {
+  padding-top: 0;
+}
+
 /* grid.cell(align:), painted as a table cell's (schema.ts cellAttributes).
    Across: the cell's text-align-last places each paragraph's final line;
    the port-laid lines above it end in <br> and are already justified by

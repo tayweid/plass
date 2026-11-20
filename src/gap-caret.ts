@@ -333,7 +333,18 @@ function gapAtClick(view: EditorView, pos: number, event: MouseEvent): ResolvedP
       if (!dom) continue;
       const r = dom.getBoundingClientRect();
       if (event.clientX < r.left - 24 || event.clientX > r.right + 24) continue;
-      if (side > 0 ? event.clientY < r.top : event.clientY > r.bottom) return $gap;
+      if (!(side > 0 ? event.clientY < r.top : event.clientY > r.bottom)) continue;
+      // The room is the gap itself: it ends at the block on its other
+      // side. Two tables with nothing between them share a gap, and a
+      // press inside the upper one is above the lower one too; it used to
+      // land the caret in the gap, out of the table that was clicked.
+      const other = side > 0 ? $gap.nodeBefore : $gap.nodeAfter;
+      const otherDom = other ? (view.nodeDOM(side > 0 ? at - other.nodeSize : at) as HTMLElement | null) : null;
+      if (otherDom?.getBoundingClientRect) {
+        const o = otherDom.getBoundingClientRect();
+        if (side > 0 ? event.clientY < o.bottom : event.clientY > o.top) continue;
+      }
+      return $gap;
     }
   }
   return null;

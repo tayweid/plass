@@ -180,3 +180,19 @@ test('the place is paint only: no block or cell moves while the caret is there',
   await settleLocal(page);
   expect(await boxes()).toEqual(before);
 });
+
+test('a click in the upper of two tables with nothing between them lands in that table', async ({ page }) => {
+  // The gap between the tables is above the lower one, and so is every
+  // point of the upper one: the click's room is the gap alone.
+  for (const spec of [
+    [{ p: 'Top.' }, { grid: [[{ p: 'Cell.' }, { table: [['A1', 'B1'], ['A2', 'B2']] }, { table: [['C1', 'D1']] }], [{ p: 'Right cell.' }]] }] as Spec,
+    [{ p: 'Top.' }, { table: [['A1', 'B1'], ['A2', 'B2']] }, { table: [['C1', 'D1']] }, { p: 'End.' }] as Spec,
+  ]) {
+    await load(page, spec);
+    for (const text of ['A1', 'B2']) {
+      const box = (await page.locator('.ProseMirror td', { hasText: text }).boundingBox())!;
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      await expect.poll(() => caret(page)).toEqual({ kind: 'text', text, in: 'paragraph' });
+    }
+  }
+});
