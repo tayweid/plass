@@ -253,6 +253,10 @@ const depth = (state: EditorState) => state.selection.$from.depth;
   check('quote: Backspace on the line between clears it, two blocks stay', outline(s.doc) === 'bq("one") bq("two" "three")' && s.selection.$from.parent.textContent === 'one' && s.selection.$from.parentOffset === 3, outline(s.doc));
   const head = EditorState.create({ doc: s.doc, selection: TextSelection.create(s.doc, caretAfter(s.doc, 'two') - 3) });
   check('quote: Backspace at the head of the lower block joins the two', outline(backspace(head).doc) === 'bq("one" "two" "three")', outline(backspace(head).doc));
+  // The line as a .md file reopens it: one no-break space.
+  const reopened = doc.create(null, [sol(p('one')), p('\u00a0'), sol(p('two'))]);
+  const onBlank = EditorState.create({ doc: reopened, selection: TextSelection.create(reopened, caretAfter(reopened, '\u00a0')) });
+  check('quote: Backspace clears a reopened blank line between two blocks', outline(backspace(onBlank).doc) === 'bq("one") bq("two")', outline(backspace(onBlank).doc));
   const lone = at(doc.create(null, [sol(p('one')), p(''), p('after')]), '');
   check('quote: a line under a block with no block after it is left to the stock Backspace', !clearLineBetweenQuotes(lone));
   // A list in the block: two presses leave the list, a third the block.

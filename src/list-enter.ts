@@ -19,6 +19,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { splitListItem } from 'prosemirror-schema-list';
 import { type Command, Selection } from 'prosemirror-state';
 import { canJoin, liftTarget } from 'prosemirror-transform';
+import { emptyLine } from './collapse-spaces';
 import { schema } from './schema';
 
 const { list_item, paragraph, bullet_list, ordered_list, blockquote } = schema.nodes;
@@ -94,7 +95,7 @@ export const exitEmptyQuoteLine: Command = (state, dispatch) => {
  */
 export const clearLineBetweenQuotes: Command = (state, dispatch) => {
   const { $from, empty } = state.selection;
-  if (!empty || $from.parent.type !== paragraph || $from.parent.content.size || $from.depth < 1) return false;
+  if (!empty || !emptyLine($from.parent) || $from.depth < 1) return false;
   const $line = state.doc.resolve($from.before());
   const after = $line.parent.maybeChild($line.index() + 1);
   if ($line.nodeBefore?.type !== blockquote || after?.type !== blockquote) return false;

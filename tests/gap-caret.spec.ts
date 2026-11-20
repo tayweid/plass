@@ -196,3 +196,23 @@ test('a click in the upper of two tables with nothing between them lands in that
     }
   }
 });
+
+test('⌫ at the start of a table takes away the blank line above it, as a .md file reopens one', async ({ page }) => {
+  // A blank line read from Markdown holds one no-break space, not nothing.
+  for (const blank of ['', ' ']) {
+    await load(page, [{ p: 'Before the grid.' }, { grid: [[{ p: 'Text above.' }, { p: blank }, { table: [['A1', 'B1']] }], [{ p: 'Right cell.' }]] }]);
+    expect(await firstCell(page)).toEqual(['p:Text above.', `p:${blank}`, 'table']);
+    await caretAt(page, 'A1');
+    await page.keyboard.press('Backspace');
+    expect(await firstCell(page)).toEqual(['p:Text above.', 'table']);
+    expect(await caret(page)).toEqual({ kind: 'text', text: 'A1', in: 'paragraph' });
+    // With a line of text above, a further ⌫ leaves the table where it is.
+    await page.keyboard.press('Backspace');
+    expect(await firstCell(page)).toEqual(['p:Text above.', 'table']);
+  }
+  // The blank line that opens the cell goes from inside it, too.
+  await load(page, [{ p: 'Before the grid.' }, { grid: [[{ p: ' ' }, { table: [['A1', 'B1']] }], [{ p: 'Right cell.' }]] }]);
+  await caretAt(page, ' ');
+  await page.keyboard.press('Backspace');
+  expect(await firstCell(page)).toEqual(['table']);
+});

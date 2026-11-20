@@ -87,6 +87,14 @@ function typedNbspInsertions(tr: Transaction): number[] {
   return found;
 }
 
+/** A line with nothing on it: an empty paragraph, or the blank line a
+ *  `.md` file reopens as (its one character a no-break space). What a
+ *  Backspace that takes an empty line away tests, so a line that was saved
+ *  and reopened goes as one just made does. */
+export function emptyLine(node: PMNode): boolean {
+  return node.type.name === 'paragraph' && (node.content.size === 0 || blankLine(node));
+}
+
 /** A paragraph whose one character is a no-break space: a blank line. */
 function blankLine(node: PMNode): boolean {
   const only = node.childCount === 1 ? node.firstChild! : null;

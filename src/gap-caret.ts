@@ -32,6 +32,7 @@ import { Plugin, Selection, TextSelection, type Command } from 'prosemirror-stat
 import { keydownHandler } from 'prosemirror-keymap';
 import type { Mappable } from 'prosemirror-transform';
 import type { EditorView } from 'prosemirror-view';
+import { emptyLine } from './collapse-spaces';
 import { schema } from './schema';
 
 const isTable = (node: PMNode | null | undefined) => node?.type.spec.tableRole === 'table';
@@ -266,7 +267,7 @@ export const deleteEmptyLineBeforeTable: Command = (state, dispatch) => {
   for (let k = d; k <= d + 2; k++) if ($head.index(k) !== 0) return false;
   const $table = state.doc.resolve($head.before(d));
   const before = $table.nodeBefore;
-  if (!before || before.type !== schema.nodes.paragraph || before.content.size) return false;
+  if (!before || !emptyLine(before)) return false;
   if (dispatch) {
     const to = $table.pos;
     dispatch(state.tr.delete(to - before.nodeSize, to).scrollIntoView());
@@ -282,7 +283,7 @@ export const deleteEmptyLineAtContainerStart: Command = (state, dispatch) => {
   if (!(sel instanceof TextSelection) || !sel.empty) return false;
   const $head = sel.$head;
   const para = $head.parent;
-  if (para.type !== schema.nodes.paragraph || para.content.size || $head.depth < 1) return false;
+  if (!emptyLine(para) || $head.depth < 1) return false;
   const $para = state.doc.resolve($head.before());
   const after = $para.parent.maybeChild($para.index() + 1);
   if ($para.nodeBefore || !after || after.isTextblock) return false;
